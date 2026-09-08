@@ -6,8 +6,9 @@
  * `requestId`, causing the tedious driver to reject the running `.query()`
  * promise with `RequestError('Canceled.', 'ECANCEL')`. The /query route's catch
  * block then surfaces this to the client as
- * `{ ok: false, error: 'Canceled.', code: 'ECANCEL' }` — that response IS the
- * "TDS reports cancellation" receipt.
+ * `{ ok: false, canceled: true, error: 'Query canceled by user.', code: 'ECANCEL' }`
+ * with HTTP 200 — the same shape every sibling SQL query route returns — and
+ * THAT response IS the "TDS reports cancellation" receipt.
  *
  * `requestId` is generated client-side (crypto.randomUUID()) and passed in the
  * /query POST body so the BFF registers the Request in `liveRequests` BEFORE

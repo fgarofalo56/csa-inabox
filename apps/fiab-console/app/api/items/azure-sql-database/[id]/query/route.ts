@@ -93,24 +93,44 @@ export const POST = withSession<{ id: string }>(async (req, { session, params })
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
-    const status = e instanceof AzureSqlError ? e.status : 502;
     // #3400 — a cancellation is not a backend fault. tedious rejects a
     // cancelled request with RequestError('Canceled.', 'ECANCEL'), and THIS
     // response is the only thing that establishes that the query actually
     // stopped (the cancel route can only establish that the signal was sent —
     // for a cross-replica cancel it never observes the request at all).
-    // `cancelled: true` is ADDITIVE: jobs-store already keys off the body's
-    // `code === 'ECANCEL'`, and the status is deliberately left as it was so no
-    // existing consumer changes behaviour.
+    //
+    // The shape is the one the rest of the SQL family already publishes, field
+    // for field: warehouse/[id]/query:142-151, synapse-dedicated-sql-pool
+    // /[id]/query:140-150, synapse-serverless-sql-pool/[id]/query:88-99 and
+    // databricks-sql-warehouse/[id]/query:266-274 all return `canceled: true`
+    // (ONE l), `error: 'Query canceled by user.'` and HTTP 200. Their editors
+    // read exactly that field — lib/editors/phase3/warehouse-editor.tsx:89/826,
+    // lib/editors/synapse-sql-editors.tsx:92/142 and
+    // lib/editors/databricks/shared.tsx:162/256 render a warning MessageBar
+    // "Query canceled" off `result.canceled`.
+    //
+    // R7 — WHAT THIS DOES **NOT** ESTABLISH. This route's own front end does
+    // not consume the flag yet. lib/state/jobs-store.ts:336 branches on `j.ok`
+    // alone, so a cancelled query still lands in the jobs list as status
+    // 'error'; :356 forwards only `code` to onDone, and
+    // unified-sql-database-editor.tsx:927-934 stores that code without ever
+    // comparing it. Both files are outside this change's file ownership, so
+    // this is NOT a claim that a cancel now renders as a cancellation in the
+    // SQL editor. What it does claim, and all it claims: the response carries
+    // the family's field and the human message instead of the raw driver text
+    // 'Canceled.', so the editors that already read `canceled` are correct and
+    // the remaining consumer change is a one-line follow-up on #3400 rather
+    // than a second spelling nobody reads.
     if (e?.code === 'ECANCEL') {
       return NextResponse.json({
         ok: false,
-        cancelled: true,
-        error: e?.message || 'Canceled.',
+        canceled: true,
+        error: 'Query canceled by user.',
         code: 'ECANCEL',
         sqlNumber: e?.number,
-      }, { status });
+      }, { status: 200 });
     }
+    const status = e instanceof AzureSqlError ? e.status : 502;
     return NextResponse.json({
       ok: false,
       error: e?.message || String(e),

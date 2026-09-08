@@ -445,11 +445,15 @@ let _cosmosIntentStore: CancelIntentStore | null = null;
 let _cosmosIntentInitTried = false;
 
 /**
- * TEST HOOK — swap the intent store (and reset the watcher). Not part of the
- * runtime contract; the production path always resolves the Cosmos-backed store.
+ * TEST HOOK — swap the intent store, reset the watcher, and drop the memoised
+ * Cosmos store so the REAL Cosmos init path can be driven more than once in a
+ * suite. Not part of the runtime contract; the production path always resolves
+ * the Cosmos-backed store and never calls this.
  */
 export function _setCancelIntentStore(store: CancelIntentStore | null): void {
   _injectedIntentStore = store;
+  _cosmosIntentStore = null;
+  _cosmosIntentInitTried = false;
   stopCancelWatcher();
 }
 

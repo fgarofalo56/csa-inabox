@@ -1,14 +1,25 @@
 /**
- * Unit tests for /api/items/azure-sql-database/[id]/query/cancel BFF route.
+ * Unit tests for /api/items/azure-sql-database/[id]/query/cancel BFF route, and
+ * for the cross-replica cancel-intent mechanism in azure-sql-client that backs
+ * it (#3400).
  *
+ * ROUTE
  *   1. unauthenticated → 401
  *   2. missing requestId → 400
  *   3. unknown requestId, no intent store → idempotent { ok:true, cancelled:false }
  *   4. unknown requestId, intent store up → { ok:true, cancelled:'requested' }
  *   5. live request → calls request.cancel() (TDS ATTENTION) and removes it
  *   6. cancel() throwing → 502
+ *
+ * MECHANISM (added after review; see the M3/M4 note further down)
+ *   7. the watcher's LIFECYCLE — registering a request is what starts the poll
+ *   8. recordCancelIntent's PERSISTENCE — the claim the route's answer rests on
+ *   9. the REAL Cosmos-backed store — container, document shape, point-read
+ *
+ * The /query route's ECANCEL receipt (M5) lives in the sibling suite
+ * app/api/items/azure-sql-database/[id]/query/__tests__/query-cancel-receipt.test.ts.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -21,6 +32,81 @@ const { liveRequests, recordCancelIntent } = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/azure-sql-client', () => ({ liveRequests, recordCancelIntent }));
+
+/**
+ * A fake Cosmos SDK, so the REAL `cancelIntentStore()` init path — the client,
+ * `databases.createIfNotExists`, `containers.createIfNotExists`, the upsert
+ * document shape and the `(id, id)` point-read — is exercised rather than
+ * skipped by an injected store. The describe block that uses it is the only
+ * consumer; nothing else in this file imports @azure/cosmos.
+ */
+const cosmos = vi.hoisted(() => ({
+  failInit: false,
+  clientOpts: null as any,
+  databases: [] as any[],
+  containers: [] as any[],
+  upserts: [] as any[],
+  reads: [] as Array<[string, string]>,
+  deletes: [] as Array<[string, string]>,
+  docs: new Map<string, any>(),
+  reset() {
+    this.failInit = false;
+    this.clientOpts = null;
+    this.databases.length = 0;
+    this.containers.length = 0;
+    this.upserts.length = 0;
+    this.reads.length = 0;
+    this.deletes.length = 0;
+    this.docs.clear();
+  },
+}));
+
+vi.mock('@azure/cosmos', () => {
+  const container = {
+    items: {
+      upsert: async (doc: any) => { cosmos.upserts.push(doc); cosmos.docs.set(doc.id, doc); },
+    },
+    item: (id: string, partitionKey: string) => ({
+      read: async () => { cosmos.reads.push([id, partitionKey]); return { resource: cosmos.docs.get(id) }; },
+      delete: async () => { cosmos.deletes.push([id, partitionKey]); cosmos.docs.delete(id); },
+    }),
+  };
+  return {
+    CosmosClient: class {
+      databases = {
+        createIfNotExists: async (spec: any) => {
+          cosmos.databases.push(spec);
+          return { database: { containers: { createIfNotExists: async (cspec: any) => { cosmos.containers.push(cspec); return { container }; } } } };
+        },
+      };
+      constructor(opts: any) {
+        if (cosmos.failInit) throw new Error('Cosmos endpoint unreachable');
+        cosmos.clientOpts = opts;
+      }
+    },
+  };
+});
+
+type SqlClient = typeof import('@/lib/azure/azure-sql-client');
+/** The real module — the describe blocks above mock the whole thing. */
+function realClient(): Promise<SqlClient> {
+  return vi.importActual<SqlClient>('@/lib/azure/azure-sql-client');
+}
+
+/** An in-memory CancelIntentStore that records what was asked of it. */
+function memStore(seed: string[] = []) {
+  const intents = new Set(seed);
+  const recorded: string[] = [];
+  const cleared: string[] = [];
+  return {
+    intents, recorded, cleared,
+    store: {
+      record: async (id: string) => { recorded.push(id); intents.add(id); },
+      has: async (id: string) => intents.has(id),
+      clear: async (id: string) => { cleared.push(id); intents.delete(id); },
+    },
+  };
+}
 
 import { POST } from '../route';
 import { getSession } from '@/lib/auth/session';
@@ -193,16 +279,9 @@ describe('cancel route honesty (#3400)', () => {
  */
 describe('azure-sql-client cancel-intent watcher (#3400)', () => {
   it('cancels a locally-owned request when an intent exists for its id', async () => {
-    const client = await vi.importActual<typeof import('@/lib/azure/azure-sql-client')>(
-      '@/lib/azure/azure-sql-client',
-    );
-    const intents = new Set<string>(['mine']);
-    const cleared: string[] = [];
-    client._setCancelIntentStore({
-      record: async (id) => { intents.add(id); },
-      has: async (id) => intents.has(id),
-      clear: async (id) => { intents.delete(id); cleared.push(id); },
-    });
+    const client = await realClient();
+    const m = memStore(['mine']);
+    client._setCancelIntentStore(m.store);
 
     const cancel = vi.fn();
     const untouched = vi.fn();
@@ -217,16 +296,14 @@ describe('azure-sql-client cancel-intent watcher (#3400)', () => {
     expect(client.liveRequests.has('mine')).toBe(false);
     expect(client.liveRequests.has('no-intent')).toBe(true);
     // The spent intent is cleaned up so it can never cancel a later request.
-    expect(cleared).toContain('mine');
+    expect(m.cleared).toContain('mine');
 
     client.liveRequests.clear();
     client._setCancelIntentStore(null);
   });
 
   it('does nothing when no intent store is configured', async () => {
-    const client = await vi.importActual<typeof import('@/lib/azure/azure-sql-client')>(
-      '@/lib/azure/azure-sql-client',
-    );
+    const client = await realClient();
     client._setCancelIntentStore(null);
     const cancel = vi.fn();
     client.liveRequests.set('mine', { cancel } as any);
@@ -236,5 +313,311 @@ describe('azure-sql-client cancel-intent watcher (#3400)', () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(client.liveRequests.has('mine')).toBe(true);
     client.liveRequests.clear();
+  });
+});
+
+/**
+ * ═══ WHAT THE FIRST ROUND OF THIS PR DID NOT GUARD (review, #3400) ═══
+ *
+ * Review authored three mutations that each restore the original defect and
+ * each left the suite fully green. They are the spec for everything below:
+ *
+ *   M3  azure-sql-client.ts `registerLiveRequest` — drop the
+ *       `startCancelWatcher()` call. The watcher then never starts on ANY
+ *       replica, `_pollCancelIntentsOnce` is never invoked in production, and
+ *       cross-replica cancel is the exact permanent no-op #3400 describes.
+ *       Only `_pollCancelIntentsOnce` was tested — never the thing that CALLS
+ *       it. Killed by 'watcher lifecycle' below.
+ *
+ *   M4  `recordCancelIntent` — replace the body's first statement with
+ *       `return true;`. The route then reports `cancelled:'requested'` while
+ *       nothing was stored, which is precisely the R7 lie its own comment
+ *       forbids. The route specs vi.mock the module, so the real function and
+ *       the whole Cosmos store path had ZERO coverage. Killed by
+ *       'recordCancelIntent persistence' and 'the Cosmos-backed store' below.
+ *
+ *   M5  ../../route.ts (the /query route) — delete the `e?.code === 'ECANCEL'`
+ *       block, i.e. the only thing that establishes a query stopped. Killed in
+ *       app/api/items/azure-sql-database/[id]/query/__tests__/
+ *       query-cancel-receipt.test.ts, which did not exist and now does.
+ */
+
+describe('watcher lifecycle — registering a request is what STARTS the poll (#3400, M3)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null); // also stops any interval left running
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    if (savedEndpoint === undefined) delete process.env.LOOM_COSMOS_ENDPOINT;
+    else process.env.LOOM_COSMOS_ENDPOINT = savedEndpoint;
+  });
+
+  /**
+   * THE M3 KILLER, and the closest thing this suite has to the real scenario:
+   * NOTHING in this spec calls `_pollCancelIntentsOnce`. The request is
+   * registered exactly as `executeQuery` registers it, another replica publishes
+   * an intent, time passes — and the TDS ATTENTION must happen on its own.
+   *   MUTATION: remove `startCancelWatcher()` from `registerLiveRequest`.
+   */
+  it('a request registered by executeQuery is cancelled by the watcher alone', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    const cancel = vi.fn();
+
+    client.registerLiveRequest('mine', { cancel } as any);
+    // ...meanwhile, the cancel POST lands on a DIFFERENT replica, which writes:
+    m.intents.add('mine');
+
+    expect(cancel).not.toHaveBeenCalled(); // nothing has polled yet
+    await vi.advanceTimersByTimeAsync(1_100); // one default poll interval
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('mine')).toBe(false);
+    expect(m.cleared).toContain('mine');
+  });
+
+  /**
+   * The watcher must exist only while this replica has work. An always-on
+   * interval would point-read Cosmos forever on every idle replica.
+   *   MUTATION: remove `stopCancelWatcherIfIdle()` from
+   *   `unregisterLiveRequest` → the timer survives the last request.
+   */
+  it('stops the watcher once the replica goes idle', async () => {
+    client._setCancelIntentStore(memStore().store);
+    client.registerLiveRequest('mine', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    client.unregisterLiveRequest('mine');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * ...and it must never start where there is no store to poll (local dev, or
+   * the documented `LOOM_SQL_CANCEL_INTENTS_DISABLED=1` opt-out).
+   *   MUTATION: drop the `!cancelIntentStoreConfigured()` guard from
+   *   `startCancelWatcher`.
+   */
+  it('never starts a watcher when no intent store is configured', async () => {
+    client._setCancelIntentStore(null);
+    client.registerLiveRequest('mine', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /** A single watcher, not one per concurrent query. */
+  it('registering a second request does not start a second watcher', async () => {
+    client._setCancelIntentStore(memStore().store);
+    client.registerLiveRequest('a', { cancel: vi.fn() } as any);
+    const after1 = vi.getTimerCount();
+    client.registerLiveRequest('b', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBe(after1);
+  });
+});
+
+describe('recordCancelIntent persistence — the claim the route relies on (#3400, M4)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    if (savedEndpoint === undefined) delete process.env.LOOM_COSMOS_ENDPOINT;
+    else process.env.LOOM_COSMOS_ENDPOINT = savedEndpoint;
+  });
+
+  /**
+   * R7. The cancel route answers `cancelled:'requested'` on a TRUE here, so a
+   * `true` that stored nothing is the route asserting a persistence that never
+   * happened.
+   *   MUTATION: `return true;` as the first statement of recordCancelIntent.
+   */
+  it('returns FALSE when there is no store — it never claims a write it could not make', async () => {
+    await expect(client.recordCancelIntent('nowhere')).resolves.toBe(false);
+  });
+
+  it('WRITES the intent, and only then returns true', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    await expect(client.recordCancelIntent('r-42')).resolves.toBe(true);
+    expect(m.recorded).toEqual(['r-42']);
+  });
+
+  /** A store that throws is not a store that stored. */
+  it('returns FALSE when the store throws', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+    await expect(client.recordCancelIntent('r-43')).resolves.toBe(false);
+  });
+
+  /**
+   * The full loop in one process: replica A publishes through the PUBLIC api
+   * the route calls, replica B (holding the request) consumes it. Kills M4 even
+   * if the `false` cases above were somehow satisfied, because a
+   * `recordCancelIntent` that stores nothing leaves nothing for the poll to find.
+   */
+  it('an intent published by recordCancelIntent is what the owning replica acts on', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+
+    // Replica A: the cancel POST landed here, the request is not local.
+    expect(await client.recordCancelIntent('cross')).toBe(true);
+
+    // Replica B: it owns the request and polls for its own keys.
+    const cancel = vi.fn();
+    client.liveRequests.set('cross', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('cross')).toBe(false);
+  });
+
+  /** Nobody else's request is touched by an intent that names one id. */
+  it('an intent cancels ONLY the request it names', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    await client.recordCancelIntent('theirs');
+
+    const mine = vi.fn();
+    client.liveRequests.set('mine', { cancel: mine } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(mine).not.toHaveBeenCalled();
+    expect(client.liveRequests.has('mine')).toBe(true);
+  });
+});
+
+/**
+ * The REAL Cosmos-backed store (#3400, M4 second half).
+ *
+ * Everything above injects a store, so `cancelIntentStore()`'s own init path —
+ * the one that actually runs in production — had no coverage at all: the
+ * container it provisions, the document it writes, and whether the `(id, id)`
+ * point-read it does on the other replica can even find that document. A
+ * partition-key path that disagreed with the point-read would make every
+ * cross-replica cancel silently miss, with every injected-store test green.
+ *
+ * @azure/cosmos is faked at module scope; the azure-sql-client code under test
+ * is the real thing.
+ */
+describe('the Cosmos-backed intent store (#3400, M4)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+  let savedDb: string | undefined;
+  let savedDisabled: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    savedDb = process.env.LOOM_COSMOS_DATABASE;
+    savedDisabled = process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    process.env.LOOM_COSMOS_DATABASE = 'loom';
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    cosmos.reset();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null); // clears the injected store AND the memo
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    cosmos.reset();
+    for (const [k, v] of [
+      ['LOOM_COSMOS_ENDPOINT', savedEndpoint],
+      ['LOOM_COSMOS_DATABASE', savedDb],
+      ['LOOM_SQL_CANCEL_INTENTS_DISABLED', savedDisabled],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  /**
+   * auto-bind-by-default: the container is provisioned by the platform on first
+   * use. No operator step, no separate ARM deployment.
+   */
+  it('provisions its own TTL container and writes a document keyed for the point-read', async () => {
+    expect(await client.recordCancelIntent('xrep')).toBe(true);
+
+    expect(cosmos.databases).toEqual([{ id: 'loom' }]);
+    expect(cosmos.containers).toEqual([{
+      id: client.CANCEL_INTENT_CONTAINER,
+      partitionKey: { paths: ['/requestId'] },
+      defaultTtl: client.CANCEL_INTENT_TTL_SECONDS,
+    }]);
+
+    const doc = cosmos.upserts.at(-1);
+    expect(doc.id).toBe('xrep');
+    // id === the partition-key VALUE, which is what makes `item(id, id)` a
+    // legal point read on the other replica. If these ever diverge the read
+    // below misses and every cross-replica cancel silently no-ops.
+    expect(doc.requestId).toBe('xrep');
+    expect(doc.ttl).toBe(client.CANCEL_INTENT_TTL_SECONDS);
+    expect(typeof doc.requestedAt).toBe('number');
+  });
+
+  /** The other half of the round trip, through the real Cosmos accessors. */
+  it('the owning replica point-reads that document and cancels the request', async () => {
+    await client.recordCancelIntent('xrep');
+
+    const cancel = vi.fn();
+    client.liveRequests.set('xrep', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(cosmos.reads).toContainEqual(['xrep', 'xrep']);
+    expect(cancel).toHaveBeenCalledOnce();
+    // clear() is fire-and-forget, so wait for it rather than assume ordering.
+    await vi.waitFor(() => expect(cosmos.deletes).toContainEqual(['xrep', 'xrep']));
+  });
+
+  /** No intent for this replica's key → no read result, no cancel. */
+  it('a request with no intent is left running', async () => {
+    const cancel = vi.fn();
+    client.liveRequests.set('untouched', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+    expect(cosmos.reads).toContainEqual(['untouched', 'untouched']);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  /**
+   * R7 — an unreachable store must surface as "could not persist", never as a
+   * claimed request. This is what the cancel route's `cancelled:false` branch
+   * is built on.
+   */
+  it('an init failure yields FALSE, not a claimed write', async () => {
+    cosmos.failInit = true;
+    await expect(client.recordCancelIntent('boom')).resolves.toBe(false);
+    expect(cosmos.upserts).toEqual([]);
+  });
+
+  /** The documented opt-out really opts out — no Cosmos client is constructed. */
+  it('LOOM_SQL_CANCEL_INTENTS_DISABLED=1 disables the store entirely', async () => {
+    process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED = '1';
+    client._setCancelIntentStore(null);
+    expect(client.cancelIntentStoreConfigured()).toBe(false);
+    await expect(client.recordCancelIntent('nope')).resolves.toBe(false);
+    expect(cosmos.databases).toEqual([]);
+    expect(cosmos.clientOpts).toBeNull();
   });
 });
