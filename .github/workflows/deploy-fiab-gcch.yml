@@ -239,7 +239,18 @@ jobs:
 
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC-High
-    needs: [precheck, build-gov-images]
+    # `pause-declaration` is in `needs:` for the TEARDOWN REFUSAL, not for the
+    # deploy: `steps.adx_preflight.outputs.estate_paused` is the ONLY verdict the
+    # refusal used to read, and its producer returns early on
+    # `topology=dlz-attach` (see the ADX preflight below) — so on a
+    # `topology=dlz-attach` + `run_mode=full` + `keep_resources=false` dispatch
+    # that output is the EMPTY STRING, `[ "" = "true" ]` is false, and
+    # `.github/scripts/fiab-teardown.sh` (which enumerates every
+    # `rg-csa-loom-*` group and deletes each) ran against a DECLARED-PAUSED
+    # sovereign estate with no refusal at all. The declaration verdict costs no
+    # Azure read, so it is populated on EVERY topology and every trigger; the
+    # Teardown step below refuses on either half.
+    needs: [precheck, pause-declaration, build-gov-images]
     if: always() && needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1675,15 +1686,44 @@ jobs:
       # So it fails loudly and names the one-line, reviewable action that
       # authorises the destruction: delete the boundary's entry from
       # scripts/ci/estate-pause-declaration.json and dispatch again.
+      #
+      # TWO VERDICTS, BECAUSE ONE OF THEM IS EMPTY ON A REACHABLE PATH (review
+      # round 8). The refusal used to branch on `ESTATE_PAUSED` alone, bound to
+      # `steps.adx_preflight.outputs.estate_paused`. That producer returns at the
+      # top of its body on `topology=dlz-attach` (line ~791) WITHOUT writing the
+      # output, and `dlz-attach` is one of the four `workflow_dispatch` topology
+      # choices. Teardown's own condition needs `run_mode == 'full'`, which also
+      # satisfies the preflight's `if:` — so the producer step RUNS, returns
+      # early, and publishes nothing. `[ "" = "true" ]` is false, the refusal
+      # was never taken, and `.github/scripts/fiab-teardown.sh` — which
+      # enumerates every `rg-csa-loom-*` resource group (`:40`) and deletes each
+      # (`:150`) — ran against a DECLARED-PAUSED sovereign estate. Every static
+      # chain assertion in gcch-standdown-completeness.test.mjs held while the
+      # verdict was empty at runtime.
+      #
+      # `ESTATE_DECLARED` is the declaration half, computed by the
+      # `pause-declaration` job from a checked-in file with no Azure read and no
+      # condition of its own, so it is populated on EVERY topology and EVERY
+      # trigger. The refusal fires on either half.
+      #
+      # AND ON NEITHER. `estate-pause-declared.mjs` always writes `true` or
+      # `false`, so an EMPTY `ESTATE_DECLARED` means the declaration job did not
+      # produce a verdict at all — `deploy-validate` runs on `always()`, so a
+      # failed `pause-declaration` does not stop it. An unknown must not be
+      # recorded as a no on the one step in this lane that destroys a sovereign
+      # estate, so unknown refuses too. That is fail-CLOSED here and deliberately
+      # the opposite of the script's own fail-OPEN default, which governs whether
+      # the image phase RUNS — a different question with a different safe answer.
       - name: Teardown
         if: success() && github.event_name != 'schedule' && inputs.run_mode == 'full' && !inputs.keep_resources
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
           ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+          ESTATE_DECLARED: ${{ needs.pause-declaration.outputs.declared }}
         run: |
           set -euo pipefail
-          if [ "${ESTATE_PAUSED:-}" = "true" ]; then
-            echo "::error::REFUSING to tear down the GCC-High estate: it is DECLARED PAUSED in scripts/ci/estate-pause-declaration.json, and this run already stood down without measuring it (the apply, the what-if and the image gates were all skipped). Tearing down an estate a run has declared UNMEASURED is not something this lane will do implicitly. To proceed: delete the GCC-High entry from that file, merge, and dispatch again with keep_resources=false."
+          if [ "${ESTATE_PAUSED:-}" = "true" ] || [ "${ESTATE_DECLARED:-}" != "false" ]; then
+            echo "::error::REFUSING to tear down the GCC-High estate: this step did not establish that it is safe to destroy. Declaration verdict (scripts/ci/estate-pause-declaration.json, no Azure read) = '${ESTATE_DECLARED:-}' — 'true' means an owned, unexpired entry names this boundary, and EMPTY means the 'Is the GCC-High estate DECLARED paused?' job published no verdict at all, which is an unknown and not a no. ADX observed-stopped verdict = '${ESTATE_PAUSED:-}' — EMPTY means the preflight returned before measuring, which is what it does on topology=dlz-attach. Tearing down an estate this run has not established as measured, or has declared UNMEASURED, is not something this lane will do implicitly. To proceed on a DECLARED estate: delete the GCC-High entry from that file, merge, and dispatch again with keep_resources=false. To proceed on an UNKNOWN verdict: re-run the failed 'Is the GCC-High estate DECLARED paused?' job first."
             exit 1
           fi
           bash .github/scripts/fiab-teardown.sh

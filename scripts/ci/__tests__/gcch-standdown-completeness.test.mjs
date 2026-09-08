@@ -293,6 +293,8 @@ const VERDICT_OUTPUT = STEP_GUARD_SOURCE[2];
 const VERDICT_SCRIPT = 'ensure-adx-cluster-running.mjs';
 /** The declaration step every disposition below is measured relative to. */
 const DECLARATION_STEP = 'Estate is DECLARED paused — this run measures nothing';
+/** The job whose steps `parseSteps` walks and `judge` dispositions. */
+const STEP_JOB = 'deploy-validate';
 
 function workflowText() {
   // NORMALISED. `.github/workflows/**` is checked in CRLF here (measured: 1544
@@ -324,18 +326,14 @@ function blankLiterals(expr) {
 }
 
 /**
- * The TOP-LEVEL disjuncts (paren depth 0) of a GitHub `if:` expression, with any
- * `${{ }}` wrapper stripped.
+ * Split `expr` on a TOP-LEVEL (paren depth 0) doubled operator.
  *
  * @param {string} expr
+ * @param {'|'|'&'} op
  * @returns {string[]}
  */
-export function topLevelDisjuncts(expr) {
-  const src = String(expr)
-    .trim()
-    .replace(/^\$\{\{/, '')
-    .replace(/\}\}$/, '')
-    .trim();
+function splitTopLevel(expr, op) {
+  const src = String(expr).trim();
   const scan = blankLiterals(src);
   const parts = [];
   let depth = 0;
@@ -344,7 +342,7 @@ export function topLevelDisjuncts(expr) {
     const c = scan[i];
     if (c === '(') depth += 1;
     else if (c === ')') depth -= 1;
-    else if (depth === 0 && c === '|' && scan[i + 1] === '|') {
+    else if (depth === 0 && c === op && scan[i + 1] === op) {
       parts.push(src.slice(start, i));
       i += 1;
       start = i + 1;
@@ -352,6 +350,83 @@ export function topLevelDisjuncts(expr) {
   }
   parts.push(src.slice(start));
   return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/**
+ * The TOP-LEVEL disjuncts (paren depth 0) of a GitHub `if:` expression, with any
+ * `${{ }}` wrapper stripped.
+ *
+ * @param {string} expr
+ * @returns {string[]}
+ */
+export function topLevelDisjuncts(expr) {
+  return splitTopLevel(stripWrapper(expr), '|');
+}
+
+/**
+ * Strip a `${{ … }}` wrapper and surrounding whitespace.
+ *
+ * @param {string} expr
+ * @returns {string}
+ */
+function stripWrapper(expr) {
+  return String(expr)
+    .trim()
+    .replace(/^\$\{\{/, '')
+    .replace(/\}\}$/, '')
+    .trim();
+}
+
+/**
+ * Does the leading `(` of `t` close on its LAST character?
+ *
+ * @param {string} t
+ * @returns {boolean}
+ */
+function isFullyParenthesised(t) {
+  if (!t.startsWith('(') || !t.endsWith(')')) return false;
+  const scan = blankLiterals(t);
+  let depth = 0;
+  for (let i = 0; i < scan.length; i += 1) {
+    if (scan[i] === '(') depth += 1;
+    else if (scan[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return i === scan.length - 1;
+    }
+  }
+  return false;
+}
+
+/**
+ * Evaluate `expr` under the assignment "the guard atom is FALSE, EVERY other
+ * atom is TRUE" — i.e. is there any way for this `if:` to be satisfied WITHOUT
+ * the guard?
+ *
+ * Maximally permissive on purpose: an atom this parser does not understand is
+ * assumed TRUE, so an unrecognised spelling can only ever make the expression
+ * look MORE satisfiable, never less. The check that consumes this then fails
+ * closed.
+ *
+ * @param {string} expr
+ * @param {string} guard
+ * @returns {boolean}
+ */
+export function satisfiableWithoutGuard(expr, guard) {
+  const src = stripWrapper(expr);
+  if (src.length === 0) return true;
+  const ors = splitTopLevel(src, '|');
+  if (ors.length > 1) return ors.some((o) => satisfiableWithoutGuard(o, guard));
+  const ands = splitTopLevel(src, '&');
+  if (ands.length > 1) return ands.every((a) => satisfiableWithoutGuard(a, guard));
+  let t = src;
+  let negated = false;
+  while (t.startsWith('!')) {
+    negated = !negated;
+    t = t.slice(1).trim();
+  }
+  if (isFullyParenthesised(t)) return negated !== satisfiableWithoutGuard(t.slice(1, -1), guard);
+  // The atom. The guard reads FALSE; anything else reads TRUE.
+  return negated !== !t.includes(guard);
 }
 
 /**
@@ -369,18 +444,34 @@ export function topLevelDisjuncts(expr) {
  * was still true. A guard can be PRESENT and INERT, and a substring test cannot
  * tell the two apart — this is the narrow bypass that keeps every spelling.
  *
- * What is asserted is the semantic property, not a spelling: the guard must
- * appear in EVERY top-level disjunct, i.e. no truth assignment satisfies the
- * `if:` without it. `(a && G) || (b && G)` therefore passes and `a || b && G`
- * does not.
+ * ROUND 8, on a review finding, and the reason it is now an EVALUATION rather
+ * than a top-level-disjunct membership test. Membership at depth 0 is NECESSARY
+ * and not SUFFICIENT: the reviewer rewrote the image-tag revert gate — the step
+ * whose failure produced the incident this PR fixes — to
+ *
+ *   (github.event_name == 'schedule' || inputs.run_mode == 'full')
+ *     && (steps.adx_preflight.outputs.estate_paused != 'true'
+ *         || github.event_name == 'schedule')
+ *
+ * which has exactly ONE top-level disjunct, that disjunct contains the guard,
+ * `guardIsBinding` said true, and the suite stayed at 45 pass / 0 fail — while
+ * the guard is inert on `schedule`, the exact trigger the stand-down exists for.
+ * A guard nested inside a disjunction inside a conjunct is as dead as one at the
+ * top level, and the same bypass applied to `job-guard`, `out-guard` and
+ * `via-provision`.
+ *
+ * What is asserted is therefore the semantic property directly, not a spelling
+ * and not a shape: NO truth assignment satisfies the `if:` with the guard false.
+ * `(a && G) || (b && G)` passes, `a || b && G` fails, and so does
+ * `(a || b) && (G || c)`.
  *
  * @param {string} ifExpr
  * @param {string} guard
  * @returns {boolean}
  */
 export function guardIsBinding(ifExpr, guard) {
-  const disjuncts = topLevelDisjuncts(ifExpr);
-  return disjuncts.length > 0 && disjuncts.every((d) => d.includes(guard));
+  if (!String(ifExpr).includes(guard)) return false;
+  return !satisfiableWithoutGuard(ifExpr, guard);
 }
 
 /**
@@ -392,9 +483,11 @@ export function guardIsBinding(ifExpr, guard) {
  */
 function inertGuardProblem(kind, name, ifExpr, guard) {
   return (
-    `${kind} '${name}' CONTAINS \`${guard}\` but the guard is INERT: GitHub binds && tighter than ||, so ` +
-    `\`${ifExpr}\` has a top-level disjunct with no guard in it and is satisfied without ever reading it — ` +
-    "on 'schedule', the exact trigger this stand-down exists for. Parenthesise the disjunction."
+    `${kind} '${name}' CONTAINS \`${guard}\` but the guard is INERT: there is a truth assignment that satisfies ` +
+    `\`${ifExpr}\` with the guard FALSE, so the step runs without ever needing it — on 'schedule', the exact ` +
+    'trigger this stand-down exists for. GitHub binds && tighter than ||, and a guard nested inside a ' +
+    'disjunction inside a conjunct is as dead as one at the top level. Make the guard a conjunct of the ' +
+    'whole condition.'
   );
 }
 
@@ -465,6 +558,16 @@ export function refusalBlock(body) {
  * that writes (MUTATING_AZ) — never from `fiab-teardown.sh`, so renaming the
  * script does not silently move the refusal back above it.
  *
+ * ROUND 8, on a review finding: the shape had exactly three spellings and the
+ * reviewer named two more that reach the same script — `bash -c '… .sh …'`
+ * (flags between the shell and its argument) and a BARE exec of an executable
+ * `.github/scripts/fiab-teardown.sh`, which needs no shell word at all. Both are
+ * covered now. `echo "see .github/scripts/fiab-teardown.sh"` still is not: the
+ * bare form only fires at a COMMAND POSITION — start of line, or after `;`,
+ * `&&`, `||`, `|` or `(` — which is where a script gets executed and is not
+ * where a filename gets mentioned. Both directions are pinned by unit
+ * assertions below.
+ *
  * @param {string[]} lines
  * @param {number} from
  * @param {number} skipFrom
@@ -475,7 +578,11 @@ export function destructiveHandoffAt(lines, from, skipFrom, skipTo) {
   for (let i = Math.max(0, from); i < lines.length; i += 1) {
     if (i >= skipFrom && i <= skipTo) continue;
     const l = lines[i];
-    if (/(?:^|[\s;&|(])(?:bash|sh|source|\.)\s+[^\s;&|]*\.sh\b/.test(l)) return i;
+    // `bash foo.sh`, `sh ./foo.sh`, `. foo.sh`, and `bash -c "… foo.sh …"`.
+    if (/(?:^|[\s;&|(])(?:bash|sh|source|\.)\s+(?:-\S+\s+)*['"]?[^\s;&|'"]*\.sh\b/.test(l)) return i;
+    if (/(?:^|[\s;&|(])(?:bash|sh)\s+(?:-\S+\s+)*['"][^'"]*\.sh\b/.test(l)) return i;
+    // A bare exec at a command position: `./x.sh`, `.github/scripts/x.sh`.
+    if (/(?:^|[;&|(])\s*['"]?[\w./-]*\.sh\b/.test(l)) return i;
     if (estateMutatingAz(l)) return i;
   }
   return -1;
@@ -505,6 +612,27 @@ const MUTATING_AZ =
   /\baz\s+(?:[a-z][a-z0-9-]*\s+)*(create|delete|update|set|start|stop|restart|purge|upload|import|assign|add|remove|patch|deploy|invoke|replace|publish|enable|disable|revoke|regenerate|reset|attach|detach|move|renew|rotate)\b/;
 
 /**
+ * `az rest`, the OTHER spelling — it takes its verb in `--method`, not as a
+ * command word, so `MUTATING_AZ` cannot see it: that pattern's intermediate-token
+ * loop requires each token to start with a letter and therefore stops dead at
+ * the first flag.
+ *
+ * ROUND 8, on a review finding, MEASURED. The reviewer appended
+ *
+ *   az rest --method DELETE --url "https://management.usgovcloudapi.net/
+ *     subscriptions/SUB/resourcegroups/rg-csa-loom-admin-usgovvirginia?api-version=2021-04-01"
+ *
+ * to the EXEMPT `Note dry-run completion` step of the real workflow and this
+ * suite stayed at 45 pass / 0 fail — the same shape as the round-3 finding
+ * (`az group delete` in an exempt step) that `estateMutatingAz` was written to
+ * close, in a spelling this repo actually uses: `grep -c 'az rest'` over
+ * .github/workflows returns 16 occurrences across 6 files.
+ *
+ * `az rest --method GET` stays exempt, which is correct — it is a read.
+ */
+const MUTATING_AZ_REST = /\baz\s+rest\b[^\n]*?--method[=\s]+['"]?(PUT|POST|PATCH|DELETE)\b/i;
+
+/**
  * `az` command groups that configure the CLI ON THE RUNNER and can reach no
  * Azure resource at all: `az cloud set` (which endpoint list to use),
  * `az extension add` (install a CLI extension), `az config set`.
@@ -523,9 +651,15 @@ const RUNNER_LOCAL_AZ = /^az\s+(?:cloud|extension|config|version)\b/;
  * @returns {string|null}
  */
 export function estateMutatingAz(body) {
-  const m = MUTATING_AZ.exec(String(body || ''));
+  const src = String(body || '');
+  const rest = MUTATING_AZ_REST.exec(src);
+  const m = MUTATING_AZ.exec(src);
+  const runnerLocal = m ? RUNNER_LOCAL_AZ.test(m[0]) : true;
+  // Report whichever WRITE comes first in the body, so the message points at the
+  // line a human has to look at.
+  if (rest && (!m || runnerLocal || rest.index < m.index)) return `az rest --method ${rest[1].toUpperCase()}`;
   if (!m) return null;
-  return RUNNER_LOCAL_AZ.test(m[0]) ? null : m[0];
+  return runnerLocal ? null : m[0];
 }
 
 /**
@@ -572,10 +706,10 @@ function judgeExemption(d, member, kind) {
  */
 export function parseSteps(src) {
   const lines = String(src).split(/\r?\n/);
-  const start = lines.findIndex((l) => /^  deploy-validate:\s*$/.test(l));
-  assert.ok(start >= 0, 'deploy-validate job not found');
+  const start = lines.findIndex((l) => new RegExp(`^  ${STEP_JOB}:\\s*$`).test(l));
+  assert.ok(start >= 0, `${STEP_JOB} job not found`);
   let i = lines.findIndex((l, n) => n > start && /^    steps:\s*$/.test(l));
-  assert.ok(i > start, 'deploy-validate has no steps: block');
+  assert.ok(i > start, `${STEP_JOB} has no steps: block`);
 
   const steps = [];
   let cur = null;
@@ -1031,6 +1165,14 @@ export function judgeGuardProducer(jobs, clause = JOB_GUARD, script = PRODUCER_S
  *                      this table would rot into an allowlist.
  */
 const DISPOSITIONS = new Map([
+  // Arrived from `main` in #4409 (the program budget's immutable startDate) and
+  // was UNDISPOSITIONED the moment that merge landed on this branch — the
+  // census went red on it before any human read the diff, which is the whole
+  // point of deriving the population from the parsed YAML instead of listing
+  // it. It calls `az consumption budget list` and REFUSES (exit 1) when that
+  // read does not complete, so against a declared-paused estate it would turn a
+  // deliberate stand-down into a red job. It carries GUARD already.
+  ["Resolve the program budget's IMMUTABLE start date (#4253)", { mode: 'guard' }],
   ['Bicep what-if', { mode: 'guard' }],
   ['Deploy-verification evidence receipt (§7)', { mode: 'guard' }],
   ['Upload GCC-High verification receipt', { mode: 'guard' }],
@@ -1166,10 +1308,88 @@ function judgePreVerdict(step) {
 }
 
 /**
+ * A refusal on a DESTRUCTIVE step has to branch on a verdict that is POPULATED
+ * on every path that step can run on.
+ *
+ * ROUND 8, on a review finding, and it is the only class rounds 4-7 left open.
+ * Each of those rounds asserted one more property of the refusal's TEXT or its
+ * BINDING: the guard is a conjunct (4), the branch exits non-zero (4), every
+ * name it reads is an `env:` key (7), nothing reassigns the verdict (7), the
+ * refusal comes before the handoff (7), and `steps.<id>.outputs.<verdict>`
+ * resolves to a step that invokes the producing script (6). ALL of them held
+ * while the verdict was the EMPTY STRING at runtime:
+ *
+ *   `steps.adx_preflight.outputs.estate_paused` is produced by a step whose
+ *   body returns at line 5 — `if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
+ *   … exit 0; fi` — WITHOUT writing the output. `dlz-attach` is one of four
+ *   `workflow_dispatch` topology choices, and Teardown's own condition
+ *   (`run_mode == 'full'`) also satisfies the producer's `if:`, so on
+ *   `topology=dlz-attach` + `run_mode=full` + `keep_resources=false` the
+ *   producer RAN, produced nothing, `[ "" = "true" ]` was false, and
+ *   `.github/scripts/fiab-teardown.sh` — every `rg-csa-loom-*` group enumerated
+ *   at `:40` and deleted at `:150` — ran against a DECLARED-PAUSED sovereign
+ *   estate with no refusal. `judgeVerdictReferences` requires the producer to
+ *   INVOKE the script; it does, on a branch that is not taken.
+ *
+ * "Populated on every path" is undecidable in general, so what is required is a
+ * cheap SUFFICIENT form: at least one of the names the refusal branches on must
+ * be bound to a `needs.<job>.outputs.<key>` of a job that has no `if:` of its
+ * own — a job with no condition runs on every trigger and every input
+ * combination, so its output is written whenever the refusing step can run. The
+ * whole value chain behind that clause is then asserted by `judgeGuardProducer`,
+ * exactly as it is for the image phase's own guard, so a renamed key or a
+ * gutted producer step reds this too.
+ *
+ * @param {{name:string, body:string}} step
+ * @param {{name:string, if:string, needs:string, body:string}[]} jobs
+ * @param {Map<string,string>} env the refusing step's `env:` map
+ * @returns {string[]}
+ */
+export function judgeUnconditionalVerdict(step, jobs, env) {
+  const problems = [];
+  const candidates = [];
+  for (const [key, value] of env) {
+    const m = /needs\.([\w-]+)\.outputs\.([\w-]+)/.exec(String(value));
+    if (m) candidates.push({ key, job: m[1], output: m[2], clause: `needs.${m[1]}.outputs.${m[2]}` });
+  }
+  const unconditional = candidates.filter((c) => {
+    const producer = jobs.find((j) => j.name === c.job);
+    return producer && String(producer.if || '').trim().length === 0;
+  });
+  if (unconditional.length === 0) {
+    problems.push(
+      `step '${step.name}' REFUSES on a destructive action, but its env: binds no verdict to a ` +
+        '`needs.<job>.outputs.<key>` of a job that carries NO `if:` of its own. Every verdict it does read is ' +
+        'produced by something that can decline to produce — a step that returns early, or a job that is ' +
+        'conditioned out — and an unproduced verdict is the EMPTY STRING, which is not `true`, so the refusal ' +
+        `never fires and the estate is destroyed. Its env: is {${[...env.keys()].join(', ') || 'empty'}}` +
+        `; the job-output bindings it has are {${candidates.map((c) => c.clause).join(', ') || 'none'}}.`,
+    );
+    return problems;
+  }
+  // …and that clause's whole value chain, the same assertion the image phase's
+  // guard gets: the producer job publishes THAT key, from a step output, whose
+  // id exists in that job, and the job invokes the script that computes it.
+  for (const c of unconditional) {
+    problems.push(...judgeGuardProducer(jobs, c.clause, PRODUCER_SCRIPT));
+    const owner = jobs.find((j) => j.name === STEP_JOB);
+    if (owner && !new RegExp(`\\b${c.job}\\b`).test(String(owner.needs))) {
+      problems.push(
+        `step '${step.name}' reads \`${c.clause}\`, but job '${STEP_JOB}' does not declare '${c.job}' in ` +
+          `its needs: — the expression evaluates to EMPTY and the refusal never fires. Its needs: is ` +
+          `\`${owner.needs || '(none)'}\`.`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
  * @param {{name:string, if:string, body:string}[]} steps
+ * @param {{name:string, if:string, needs:string, body:string}[]} [jobs]
  * @returns {string[]} one problem string per violation; empty means compliant.
  */
-export function judge(steps) {
+export function judge(steps, jobs = parseJobs(workflowText())) {
   const at = steps.findIndex((s) => s.name === DECLARATION_STEP);
   if (at < 0) return [`the declaration step '${DECLARATION_STEP}' is gone — the stand-down has no anchor at all`];
   const problems = [];
@@ -1270,6 +1490,11 @@ export function judge(steps) {
       // names bound to nothing — which is exactly E1.
       if (refusal) {
         const env = stepEnv(step.body);
+        // ROUND 8. Before any property of the SHELL: at least one verdict the
+        // refusal reads must come from a producer that cannot decline to
+        // produce. See judgeUnconditionalVerdict — every check below this point
+        // held while the value was empty at runtime on topology=dlz-attach.
+        problems.push(...judgeUnconditionalVerdict(step, jobs, env));
         const lines = String(step.body).split('\n');
         const condition = refusal.text.split('\n')[0];
         const read = [...new Set([...condition.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
@@ -1369,6 +1594,25 @@ test('the runner-local carve-out is a namespace, not an allowlist', () => {
   assert.equal(estateMutatingAz('az group delete -n rg-csa-loom-admin-usgovvirginia --yes'), 'az group delete');
   assert.equal(estateMutatingAz('az containerapp update --set-env-vars X=1'), 'az containerapp update');
   assert.equal(estateMutatingAz('az account show --query id -o tsv'), null);
+  // ROUND 8. `az rest` takes its verb in `--method`, so the command-word scan
+  // above stops at the first flag and cannot see it. MEASURED: the reviewer
+  // appended an `az rest --method DELETE` of the GCC-High admin RG to the
+  // EXEMPT `Note dry-run completion` step of the real workflow and this suite
+  // stayed at 45 pass / 0 fail. `grep -c 'az rest'` over .github/workflows
+  // returns 16 across 6 files, so this is a spelling the repo actually uses.
+  assert.equal(
+    estateMutatingAz(
+      'az rest --method DELETE --url "https://management.usgovcloudapi.net/subscriptions/S/resourcegroups/rg-csa-loom-admin-usgovvirginia?api-version=2021-04-01"',
+    ),
+    'az rest --method DELETE',
+  );
+  assert.equal(estateMutatingAz('az rest --method put --url https://x'), 'az rest --method PUT');
+  assert.equal(estateMutatingAz('az rest --method=PATCH --url https://x'), 'az rest --method PATCH');
+  assert.equal(estateMutatingAz("az rest --method POST --url 'https://x' --body @b.json"), 'az rest --method POST');
+  // A REST READ stays exempt — a scan that flagged it would be pressure to
+  // delete the scan rather than fix a lane.
+  assert.equal(estateMutatingAz('az rest --method GET --url https://x --query value'), null);
+  assert.equal(estateMutatingAz('az rest --url https://x'), null);
 });
 
 test('every step after the declaration stands down, refuses, or is dispositioned', () => {
@@ -1504,6 +1748,18 @@ test('the disjunct parse reads STRUCTURE, not text', () => {
   // A guard repeated in EVERY disjunct is still necessary — a check that
   // rejected it would be pressure to delete the check rather than fix a lane.
   assert.equal(guardIsBinding('(a && G) || (b && G)', 'G'), true);
+  // ROUND 8. Top-level-disjunct MEMBERSHIP is necessary and not sufficient: a
+  // guard nested inside a disjunction inside the single top-level conjunct is
+  // just as dead, and the membership test called it binding. What is asserted
+  // now is that NO truth assignment satisfies the condition with the guard
+  // false, so these fail and the legitimate shapes above still pass.
+  assert.equal(guardIsBinding('(a || b) && (G || c)', 'G'), false);
+  assert.equal(guardIsBinding('((a && G) || c) && d', 'G'), false);
+  assert.equal(guardIsBinding('a && (b || (c && G))', 'G'), false);
+  // …and the semantics survive a `!`, a `${{ }}` wrapper and a literal.
+  assert.equal(guardIsBinding('${{ !a && G }}', 'G'), true);
+  assert.equal(guardIsBinding("contains(x, 'a || b') && G", 'G'), true);
+  assert.equal(guardIsBinding('a && b', 'G'), false, 'an ABSENT guard is not a binding guard');
 });
 
 test('MUTATION: the guard survives as a substring and stops binding (&& over ||)', () => {
@@ -1521,6 +1777,45 @@ test('MUTATION: the guard survives as a substring and stops binding (&& over ||)
   const problems = judge(mutated);
   assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
   assert.match(problems[0], /INERT/);
+});
+
+test('MUTATION R8: a NESTED disjunction leaves the guard inert, at every guarded mode', () => {
+  // Reviewer probe, round 8, MEASURED green before this: rewriting the
+  // image-tag revert gate's condition to
+  //   (event_name == 'schedule' || run_mode == 'full') && (GUARD || event_name == 'schedule')
+  // gives it exactly ONE top-level disjunct, that disjunct contains the guard,
+  // the membership test said binding, and the suite stayed at 45 pass / 0 fail
+  // — while the guard is inert on `schedule`, the trigger it exists for. The
+  // same bypass applied to `job-guard`, `out-guard` and `via-provision`, so all
+  // four modes are probed here rather than only the one that was reported.
+  const nest = (ifExpr, guard) =>
+    `(github.event_name == 'schedule' || inputs.run_mode == 'full') && (${guard} || github.event_name == 'schedule')`;
+
+  const stepTargets = [
+    ['Image-tag revert gate — never flatten a pinned app to the default', GUARD],
+    ['Provision (with full Gov dispatch)', GUARD],
+    ['Apply ACR compliance tags (merge-patch, out-of-band — #3714)', "steps.provision.conclusion == 'success'"],
+  ];
+  for (const [name, guard] of stepTargets) {
+    const mutated = parseSteps(workflowText()).map((s) => (s.name === name ? { ...s, if: nest(s.if, guard) } : s));
+    assert.ok(mutated.find((s) => s.name === name).if.includes(guard), 'the mutant must KEEP the guard substring');
+    const problems = judge(mutated);
+    assert.equal(problems.length, 1, `${name}: expected exactly one problem, got: ${problems.join(' | ')}`);
+    assert.match(problems[0], /INERT/);
+    assert.match(problems[0], new RegExp(name.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  const jobTargets = [
+    ['build-gov-images', JOB_GUARD],
+    ['post-deploy-bootstrap', "needs.deploy-validate.outputs.estate_paused != 'true'"],
+  ];
+  for (const [name, guard] of jobTargets) {
+    const mutated = parseJobs(workflowText()).map((j) => (j.name === name ? { ...j, if: nest(j.if, guard) } : j));
+    const problems = judgeJobs(mutated);
+    assert.equal(problems.length, 1, `${name}: expected exactly one problem, got: ${problems.join(' | ')}`);
+    assert.match(problems[0], /INERT/);
+    assert.match(problems[0], new RegExp(`job '${name}'`));
+  }
 });
 
 test('MUTATION: a refusal that PRINTS and carries on is caught', () => {
@@ -1631,6 +1926,30 @@ test('MUTATION: binding the refusal to a step that does NOT compute the verdict 
  * moves the block. The first two are still assertions about the text; only E4's
  * is about the OUTCOME — that the refusal is reached before the estate is gone.
  */
+/**
+ * Rewrite the FIRST LINE of the Teardown's refusal conditional — the `if …; then`
+ * — DERIVED from `refusalBlock` rather than pinned to its current spelling.
+ *
+ * ROUND 8. These mutations used to `.replace()` a hardcoded
+ * `if [ "${ESTATE_PAUSED:-}" = "true" ]; then`. When the refusal grew its second
+ * verdict (see judgeUnconditionalVerdict) every one of them silently stopped
+ * applying — and each one's own "the mutation must have applied" assertion is
+ * the only reason that showed up as a red rather than as four tests quietly
+ * proving nothing. Anchoring on the block means the next change to the condition
+ * mutates whatever is actually there.
+ *
+ * @param {string} body
+ * @param {(condition:string) => string} rewrite
+ * @returns {string}
+ */
+function mutateRefusal(body, rewrite) {
+  const block = refusalBlock(body);
+  assert.ok(block, 'the real Teardown must have a refusal block to mutate');
+  const lines = String(body).split('\n');
+  lines.splice(block.start, 1, ...rewrite(lines[block.start]).split('\n'));
+  return lines.join('\n');
+}
+
 test('MUTATION E1: a conjunct bound to NOTHING disarms the refusal', () => {
   // `[ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]` is false on every run, because
   // nothing anywhere sets it — so the AND is false on every run and a declared-
@@ -1642,9 +1961,8 @@ test('MUTATION E1: a conjunct bound to NOTHING disarms the refusal', () => {
     s.name === 'Teardown'
       ? {
           ...s,
-          body: s.body.replace(
-            /(^\s*if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]); then$/m,
-            '$1 && [ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]; then',
+          body: mutateRefusal(s.body, (c) =>
+            c.replace(/; then$/, ' && [ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]; then'),
           ),
         }
       : s,
@@ -1669,13 +1987,7 @@ test('MUTATION E1b: a second conjunct that IS bound stays green', () => {
   // blanket ban on conjunctions rather than a ban on unbound names.
   const mutated = parseSteps(workflowText()).map((s) =>
     s.name === 'Teardown'
-      ? {
-          ...s,
-          body: s.body.replace(
-            /(^\s*if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]); then$/m,
-            '$1 && [ -n "${RG_NAME:-}" ]; then',
-          ),
-        }
+      ? { ...s, body: mutateRefusal(s.body, (c) => c.replace(/; then$/, ' && [ -n "${RG_NAME:-}" ]; then')) }
       : s,
   );
   const teardown = mutated.find((s) => s.name === 'Teardown');
@@ -1689,13 +2001,7 @@ test('MUTATION E3: overwriting the verdict above the branch is caught', () => {
   // empty string by the time the branch reads it. One inserted line, +28 B.
   const mutated = parseSteps(workflowText()).map((s) =>
     s.name === 'Teardown'
-      ? {
-          ...s,
-          body: s.body.replace(
-            /^(\s*)(if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]; then)$/m,
-            '$1ESTATE_PAUSED=""\n$1$2',
-          ),
-        }
+      ? { ...s, body: mutateRefusal(s.body, (c) => `${c.match(/^\s*/)[0]}ESTATE_PAUSED=""\n${c}`) }
       : s,
   );
   const teardown = mutated.find((s) => s.name === 'Teardown');
@@ -1750,6 +2056,90 @@ test('the destructive-handoff scan is keyed to the SHAPE of the call, not to fia
   assert.equal(destructiveHandoffAt(['echo "see .github/scripts/fiab-teardown.sh"'], 0, -1, -1), -1);
   assert.equal(destructiveHandoffAt(['az account show --query id -o tsv'], 0, -1, -1), -1);
   assert.equal(destructiveHandoffAt(['bash x.sh'], 0, 0, 0), -1, 'lines inside the refusal are skipped');
+  // ROUND 8, on a review finding: two more spellings of the SAME handoff that
+  // the shell-word pattern could not see. `bash -c` puts flags between the
+  // shell and its argument; a bare exec needs no shell word at all.
+  assert.equal(destructiveHandoffAt(['bash -c "cd /tmp && ./fiab-teardown.sh --yes"'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  .github/scripts/fiab-teardown.sh'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  ./scripts/x.sh --yes'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  echo hi && ./teardown.sh'], 0, -1, -1), 0);
+  // …and the bare form fires only at a COMMAND POSITION, so a filename that is
+  // merely MENTIONED is still not a handoff. Both directions, or this is a ban
+  // on writing the word rather than a scan for the call.
+  assert.equal(destructiveHandoffAt(['          echo "run .github/scripts/fiab-teardown.sh to remove it"'], 0, -1, -1), -1);
+  assert.equal(destructiveHandoffAt(['          RG_NAME=rg-csa-loom-admin-usgovvirginia'], 0, -1, -1), -1);
+});
+
+test('MUTATION R8: a BARE exec above the refusal is caught', () => {
+  // M4 of round 8. `.github/scripts/fiab-teardown.sh` is executable, so it needs
+  // no `bash` in front of it — and the round-7 shape required one.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? { ...s, body: mutateRefusal(s.body, (c) => `${c.match(/^\s*/)[0]}.github/scripts/fiab-teardown.sh\n${c}`) }
+      : s,
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /REFUSES too late/);
+  assert.match(problems[0], /fiab-teardown\.sh/);
+});
+
+test('MUTATION R8: the refusal reading only a verdict its producer can DECLINE to write', () => {
+  // THE ROUND-8 BLOCKING FINDING, pinned. `steps.adx_preflight.outputs.estate_paused`
+  // is written by a step that returns at line 5 of its own body on
+  // `topology=dlz-attach` — one of four workflow_dispatch topology choices, and
+  // one that satisfies Teardown's own `run_mode == 'full'` condition. So the
+  // producer RAN, produced nothing, `[ "" = "true" ]` was false, and
+  // fiab-teardown.sh destroyed a DECLARED-PAUSED sovereign estate while every
+  // static chain assertion in this file held. Deleting the second binding — the
+  // one whose producer job carries no `if:` at all — must go red.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? {
+          ...s,
+          body: s.body
+            .split('\n')
+            .filter((l) => !/^ {10}ESTATE_DECLARED:/.test(l))
+            .join('\n')
+            .replace(/ \|\| \[ "\$\{ESTATE_DECLARED:-\}" != "false" \]; then$/m, '; then'),
+        }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.ok(!stepEnv(teardown.body).has('ESTATE_DECLARED'), 'the mutation must have applied');
+  assert.equal(
+    stepEnv(teardown.body).get('ESTATE_PAUSED'),
+    '${{ steps.adx_preflight.outputs.estate_paused }}',
+    'the step-output binding must SURVIVE — round 6 and round 7 both stay green on this mutant',
+  );
+  assert.match(refusalBlock(teardown.body).text, /exit 1/, 'the refusal still refuses, on a value that is empty');
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /binds no verdict to a `needs\.<job>\.outputs\.<key>` of a job that carries NO `if:`/);
+});
+
+test('MUTATION R8: conditioning the producer JOB disarms the same refusal', () => {
+  // The narrower bypass on the same arm: keep the binding, give its producer a
+  // condition. A job with an `if:` can be skipped, a skipped job publishes no
+  // output, and an unpublished output is the empty string.
+  const jobs = parseJobs(workflowText()).map((j) =>
+    j.name === 'pause-declaration' ? { ...j, if: "github.event_name == 'schedule'" } : j,
+  );
+  const problems = judge(parseSteps(workflowText()), jobs);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /binds no verdict to a `needs\.<job>\.outputs\.<key>` of a job that carries NO `if:`/);
+});
+
+test('MUTATION R8: dropping the producer from deploy-validate needs: is caught', () => {
+  // The third way the same expression goes empty: `needs.<job>.outputs.<key>`
+  // evaluates to nothing at all when the job is not declared as a need, so the
+  // binding is present and the value never is.
+  const jobs = parseJobs(workflowText()).map((j) =>
+    j.name === 'deploy-validate' ? { ...j, needs: '[precheck, build-gov-images]' } : j,
+  );
+  const problems = judge(parseSteps(workflowText()), jobs);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /does not declare 'pause-declaration' in its needs:/);
 });
 
 test('refusalBlock anchors on the SHAPE of the conditional, not on the variable name', () => {
@@ -1767,10 +2157,10 @@ test('refusalBlock anchors on the SHAPE of the conditional, not on the variable 
   );
   // …and anchoring on the FIRST variable-reading conditional is fail-closed: a
   // decoy planted above the real refusal is returned, and it has no exit in it.
-  const decoyed = teardown.body.replace(
-    /^(\s*)(if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]; then)$/m,
-    '$1if [ -n "${RG_NAME:-}" ]; then\n$1  echo "decoy"\n$1fi\n$1$2',
-  );
+  const decoyed = mutateRefusal(teardown.body, (c) => {
+    const pad = c.match(/^\s*/)[0];
+    return `${pad}if [ -n "\${RG_NAME:-}" ]; then\n${pad}  echo "decoy"\n${pad}fi\n${c}`;
+  });
   assert.notEqual(decoyed, teardown.body, 'the decoy must have been inserted');
   const decoyProblems = judge(parseSteps(workflowText()).map((s) => (s.name === 'Teardown' ? { ...s, body: decoyed } : s)));
   assert.ok(
