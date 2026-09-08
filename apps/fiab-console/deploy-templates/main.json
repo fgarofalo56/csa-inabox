@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "6761831504111777107"
+      "templateHash": "8307824790879655577"
     }
   },
   "definitions": {
@@ -954,7 +954,7 @@
       "type": "object",
       "defaultValue": {},
       "metadata": {
-        "description": "Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below). Also carries `backendOverrides` — an object unioned over the loomBackends selector bag so an operator can opt OUT of a default-ON backend that has no dedicated root param, e.g. { backendOverrides: { risingwave: 'disabled' } } to skip the always-on RisingWave streaming tier, or { loomMigrate: 'disabled' } for the estate-assessment reader. Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param."
+        "description": "Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below) PROVIDED programBudgetStartDate is supplied: that value is DISCOVERED from the live estate by scripts/ci/resolve-program-budget-start-date.mjs because timePeriod.startDate is IMMUTABLE (#4253), and when it is empty the budget module is not declared at all, which leaves any live budget untouched rather than proposing a start it cannot change. Also carries `backendOverrides` — an object unioned over the loomBackends selector bag so an operator can opt OUT of a default-ON backend that has no dedicated root param, e.g. { backendOverrides: { risingwave: 'disabled' } } to skip the always-on RisingWave streaming tier, or { loomMigrate: 'disabled' } for the estate-assessment reader. Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param."
       }
     },
     "adxEnabled": {
@@ -2131,6 +2131,7 @@
     "topologyManifestDlzs": "[if(variables('useSingleDlz'), variables('topologyManifestDlzsSingle'), if(variables('deployLandingZones'), variables('topologyManifestDlzsMulti'), createArray()))]",
     "wsIdentityRbacRg": "[if(not(empty(coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityRg'), ''))), coalesce(tryGet(parameters('workspaceIdentityConfig'), 'wsIdentityRg'), ''), if(variables('useSingleDlz'), format('rg-csa-loom-dlz-single-{0}', parameters('location')), ''))]",
     "programBudgetEnabled": "[bool(coalesce(tryGet(parameters('observabilityConfig'), 'programBudgetEnabled'), true()))]",
+    "programBudgetStartDate": "[string(coalesce(tryGet(parameters('observabilityConfig'), 'programBudgetStartDate'), ''))]",
     "dlzAttachConsoleEnvWired": "[and(and(equals(parameters('topology'), 'dlz-attach'), equals(parameters('containerPlatform'), 'containerApps')), variables('dlzAttachHasHubConsoleUami'))]"
   },
   "resources": {
@@ -2600,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "16940406414311410786"
+              "templateHash": "15571450694091208709"
             }
           },
           "definitions": {
@@ -3028,6 +3029,13 @@
                   "nullable": true,
                   "metadata": {
                     "description": "COST0 — optional extra notification emails (finops DL) beyond the shared action group + subscription Owners. Consumed at the top-level orchestrator."
+                  }
+                },
+                "programBudgetStartDate": {
+                  "type": "string",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "COST0 / #4253 — the budget period start, YYYY-MM-01. DISCOVERED FROM THE ESTATE by scripts/ci/resolve-program-budget-start-date.mjs and passed in by the deploy lane; never computed in bicep. timePeriod.startDate is IMMUTABLE, so a value that moves (the old `utcNow('yyyy-MM-01')` default) fails every apply in a later month than the budget's creation month. EMPTY (default) means the top-level orchestrator does NOT declare the budget at all — an incremental deploy then leaves any live budget untouched and still alerting, rather than overwriting its start with a guess. Consumed at the top-level orchestrator."
                   }
                 },
                 "alertWebhookEnabled": {
@@ -67054,7 +67062,7 @@
       ]
     },
     "programBudget": {
-      "condition": "[variables('programBudgetEnabled')]",
+      "condition": "[and(variables('programBudgetEnabled'), not(empty(variables('programBudgetStartDate'))))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "loom-program-budget",
@@ -67071,6 +67079,9 @@
           "contactEmails": {
             "value": "[coalesce(tryGet(parameters('observabilityConfig'), 'programBudgetContactEmails'), createArray())]"
           },
+          "startDate": {
+            "value": "[variables('programBudgetStartDate')]"
+          },
           "actionGroupId": "[if(variables('deployAdminPlane'), createObject('value', reference('adminPlane').outputs.alertActionGroupId.value), createObject('value', ''))]"
         },
         "template": {
@@ -67080,7 +67091,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "5643346024820822136"
+              "templateHash": "10344755527666688076"
             }
           },
           "parameters": {
@@ -67101,9 +67112,10 @@
             },
             "startDate": {
               "type": "string",
-              "defaultValue": "[utcNow('yyyy-MM-01')]",
+              "minLength": 10,
+              "maxLength": 10,
               "metadata": {
-                "description": "First day of the budget period. Must be the first of a month; defaults to the first of the current month (UTC)."
+                "description": "First day of the budget period, as YYYY-MM-01. REQUIRED — no default, deliberately (see the block above): timePeriod.startDate is IMMUTABLE, so this must be the value the LIVE budget already holds, or the first of the current month when creating one. Supplied by scripts/ci/resolve-program-budget-start-date.mjs via observabilityConfig.programBudgetStartDate; never computed here."
               }
             },
             "actionGroupId": {

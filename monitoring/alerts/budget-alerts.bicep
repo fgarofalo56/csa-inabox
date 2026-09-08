@@ -11,8 +11,36 @@ targetScope = 'subscription'
 @description('Budget name prefix')
 param budgetNamePrefix string = 'csa-budget'
 
-@description('Start date for budget period (YYYY-MM-DD)')
-param startDate string = utcNow('yyyy-MM-01')
+// ── WHY startDate IS REQUIRED AND HAS NO DEFAULT (#4253) ───────────────────
+// This defaulted to `utcNow('yyyy-MM-01')`, which is the SAME defect that broke
+// deploy-fiab-commercial for eight consecutive days — found here by widening
+// the anti-rotator sweep in scripts/ci/__tests__/program-budget-start-date.test.mjs
+// past platform/fiab/bicep, where it had been looking.
+//
+// `timePeriod.startDate` on Microsoft.Consumption/budgets is IMMUTABLE. utcNow()
+// re-evaluates on every deployment, so on the 1st of each month the template
+// starts asking for a start the live budget can never accept, and ARM refuses
+// every apply from then on:
+//   400 → "Start date of budgets cannot be updated. Please delete and create a
+//   new budget."
+//
+// NOTHING CURRENTLY DEPLOYS THIS FILE — measured: the only references are a
+// comment in the sibling action-group.bicep and monitoring/README.md, no
+// workflow — so this was armed but not firing, and is not a second P0. It is
+// fixed rather than allowlisted because "no caller today" is not a property that
+// stays true, and the fix is the same two lines either way.
+//
+// A caller must now supply the value: the LIVE budget's existing start when one
+// exists, or the first of the current month when creating (Azure accepts only
+// the current month's first on a create — Learn, BudgetProperties.timePeriod:
+// "Past start date should be selected within the timegrain period"). The Loom
+// program budget resolves exactly this from the estate in
+// scripts/ci/resolve-program-budget-start-date.mjs; that is the pattern to
+// follow if this module is ever wired to a lane.
+@description('First day of the budget period, as YYYY-MM-01. REQUIRED — no default, deliberately: timePeriod.startDate is IMMUTABLE, so a value computed at deploy time breaks every apply in a later month than the budget\'s creation month (#4253). Pass the live budget\'s existing start, or the first of the current month when creating.')
+@minLength(10)
+@maxLength(10)
+param startDate string
 
 @description('Time grain for the budget')
 @allowed(['Monthly', 'Quarterly', 'Annually'])

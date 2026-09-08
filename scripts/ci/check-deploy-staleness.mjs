@@ -483,6 +483,23 @@ export const WATCHED = [
       'scripts/ci/ensure-adx-cluster-running.mjs',
       'scripts/ci/resolve-dns-inbound-allocation.mjs',
       'scripts/ci/assert-no-silent-image-tag-revert.mjs',
+      // ── #4253 — the program budget's IMMUTABLE start date ─────────────────
+      // The exact class of resolve-dns-inbound-allocation.mjs above, and watched
+      // for the same stated reason: it DECIDES a value ARM treats as IMMUTABLE.
+      // `timePeriod.startDate` on Microsoft.Consumption/budgets cannot be
+      // updated after creation, so what this script resolves determines whether
+      // the apply succeeds or dies on a 400 — and it died on exactly that for
+      // eight consecutive days once `utcNow('yyyy-MM-01')` crossed a month
+      // boundary. main.bicep declares the budget ONLY when this script produced
+      // a value, so editing it can also silently remove a resource from the
+      // deployment.
+      //
+      // It is NOT CI_PLUMBING, by the boundary the plumbing loans state: those
+      // are "shapes how a run behaves, deploys nothing". This one decides a
+      // property value that reaches Azure, and decides whether a resource is
+      // declared at all. A commit touching it without a subsequent successful
+      // run IS drift.
+      'scripts/ci/resolve-program-budget-start-date.mjs',
       // ── #3948 — the AAS preflight, the ADX preflight's exact sibling ──────
       // Same class as ensure-adx-cluster-running.mjs above and watched for the
       // same reason: it MUTATES the estate. It resumes a Paused Analysis
@@ -639,6 +656,13 @@ export const WATCHED = [
       // than closed by whoever remembered to add a line here.
       'scripts/ci/resolve-dns-inbound-allocation.mjs',
       'scripts/ci/ensure-adx-cluster-running.mjs',
+      // #4253, ported to this lane for the reason cloud-parity.md gives: the
+      // program budget's `timePeriod.startDate` is IMMUTABLE on EVERY boundary,
+      // and programBudgetEnabled defaults true, so this lane carries the same
+      // bomb on its own month boundary. This script decides that value — and
+      // whether main.bicep declares the budget at all — so it is watched here
+      // exactly as resolve-dns-inbound-allocation.mjs is.
+      'scripts/ci/resolve-program-budget-start-date.mjs',
       // The shared rule BOTH of the above import to tell "definitely absent"
       // from "I could not read it". Editing it changes both preflights at once,
       // which is the point of sharing it — and the reason it has to be watched
@@ -757,6 +781,13 @@ export const WATCHED = [
       // gates whether the apply proceeds at all — the #3449 defect, ported to
       // this lane so GCC does not carry it unmitigated (cloud-parity.md).
       'scripts/ci/ensure-adx-cluster-running.mjs',
+      // #4253, ported here for the same cloud-parity reason. The program
+      // budget's `timePeriod.startDate` is IMMUTABLE, this script decides it,
+      // and main.bicep declares the budget only when it produced a value. GCC
+      // is supported-in-code and never exercised, so the failure would fire on
+      // the FIRST run after re-enablement — the worst moment to find it, and
+      // the same argument gcc.bicepparam already records for its MSAL wiring.
+      'scripts/ci/resolve-program-budget-start-date.mjs',
       // ── #3948, ported to this lane by #4098 ───────────────────────────────
       // The AAS preflight, watched here for exactly the reason the Commercial
       // entry gives: it MUTATES the estate. It resumes a Paused Analysis
@@ -887,6 +918,13 @@ export const WATCHED = [
       'scripts/ci/reconcile-policy.mjs',
       'scripts/csa-loom/discover-dlz-adopt-plan.sh',
       'scripts/csa-loom/resolve-dlz-coordinates.mjs',
+      // #4253, ported here per cloud-parity.md. Same class as the entries above
+      // that decide parameter VALUES reaching the estate: the program budget's
+      // `timePeriod.startDate` is IMMUTABLE, this script resolves it, and
+      // main.bicep declares the budget only when it produced one. IL5 has no
+      // recorded deploy receipt at all, so like GCC this would first bite on a
+      // run nobody has made yet.
+      'scripts/ci/resolve-program-budget-start-date.mjs',
       // THE IMPORT EDGE. `_arm-absence.mjs` is the shared rule
       // ensure-adx-cluster-running.mjs imports to tell "definitely absent" from
       // "I could not read it". It is `import`ed and NEVER argv, so NO execution
