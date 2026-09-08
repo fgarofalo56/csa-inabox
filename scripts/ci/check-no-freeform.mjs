@@ -409,6 +409,26 @@ const MIN_FREETEXT_SITES = 1800;
  *  and shortcut paths, and one PostgreSQL admin password that is now minted
  *  server-side into Key Vault instead of being asked for at all.
  *
+ *  WHAT THAT -24 DOES AND DOES NOT SAY (re-review 2026-09-08, finding 3). It
+ *  says 24 sites are no longer CLASSIFIER-VISIBLE. It does not say 24 hand-
+ *  typing paths ceased to exist. `AzureResourcePicker`'s manual-entry arm is a
+ *  real free-text `<Input>` whose `allowManualEntry` prop defaults to TRUE, and
+ *  none of this wave's adopting call sites passes it false — so most of those
+ *  24 asks became "picker first, typing behind an Enter-manually button or
+ *  after discovery fails". This guard scores that arm at ZERO, measured:
+ *  `--report` finds no site in `lib/components/azure/azure-resource-picker.tsx`
+ *  or `azure-backed-field.tsx`, and neither file is in the baseline or in
+ *  ACCEPTED. The cause is that the placeholder there is
+ *  `MANUAL_PLACEHOLDER[matchBy]`, a dynamic lookup, and the classifier reads
+ *  site-local literals; inlining the `id` literal takes the population to 188
+ *  across 83 files and fails the gate on a new key. The BEHAVIOUR is the hybrid
+ *  this table already blesses three times over (api-marketplace,
+ *  workspace-egress-pane, mirror-source-wizard) and `ux-baseline.md` G2 forbids
+ *  the dead-end alternative — so this is a disclosure about what the number
+ *  measures, not a defect in the design. Whether the picker's manual arm should
+ *  itself be classified, and whether adopters that can always enumerate should
+ *  pass `allowManualEntry={false}`, is tracked in #4404.
+ *
  *  This floor reads the MEASURED population, BEFORE ACCEPTED is applied. An
  *  acceptance is a judgement about a site the detector correctly found, so
  *  netting it off here would let the ACCEPTED table walk the floor down without

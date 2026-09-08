@@ -639,7 +639,7 @@ function CreateConnectionDialog({
                   {effectiveTarget && (
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                       Target:{' '}
-                      <span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{effectiveTarget}</span>
+                      <span style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{effectiveTarget}</span>
                     </Caption1>
                   )}
                 </>

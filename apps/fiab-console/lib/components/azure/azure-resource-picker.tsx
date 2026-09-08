@@ -48,8 +48,26 @@ import { clientFetch } from '@/lib/client-fetch';
  * enumerate — and the alternative (a disabled box) is the forbidden dead end.
  * It is never the primary surface: it appears only after discovery has actually
  * failed or returned nothing, under the gate that offers to fix the cause, and
- * the typed value is shape-validated before it is accepted. check-no-freeform
- * SHOULD see it; it is one site in one file rather than the ~40 it replaces.
+ * the typed value is shape-validated before it is accepted.
+ *
+ * AND `check-no-freeform` DOES NOT SEE IT. Measured, not assumed:
+ * `node scripts/ci/check-no-freeform.mjs --report` finds ZERO sites in this
+ * file, and this file appears in neither the ratchet baseline nor ACCEPTED.
+ * An earlier revision of this comment claimed the opposite ("check-no-freeform
+ * SHOULD see it") — that claim was never true. The classifier keys on a
+ * site-local placeholder LITERAL, and the Input below passes
+ * `MANUAL_PLACEHOLDER[matchBy]`, a dynamic table lookup. Counterfactual:
+ * inlining that literal at the call site moves the classifier from 187 sites /
+ * 82 files to 188 / 83 and turns the gate RED with this file as a NEW baseline
+ * key. So when a surface swaps a hand-typed Input for this picker, the honest
+ * reading of the ratchet delta is "N sites are no longer classifier-VISIBLE",
+ * not "N hand-typing paths were removed": `allowManualEntry` defaults to true,
+ * so every adopting call site retains a typing path the ratchet cannot count.
+ * Whether that arm should itself be classified — and whether adopters that can
+ * always enumerate should pass `allowManualEntry={false}` — is tracked in
+ * #4404. The BEHAVIOUR is the sanctioned hybrid (`ux-baseline.md` G2: a picker
+ * with no escape hatch is a dead end when discovery fails); only the
+ * MEASUREMENT was overstated.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -220,16 +238,20 @@ const MANUAL_LABEL: Record<MatchBy, string> = {
 /**
  * The SHAPE of the value the escape hatch wants, spelled out.
  *
- * Two jobs, both deliberate. For the user it turns "type something" into "type
- * this shape" — the thing that makes a hand-entered ARM id right the first
- * time. For CI it makes the site CLASSIFIABLE: a free-text ask whose
- * placeholder literally reads `/subscriptions/<sub>/resourceGroups/<rg>/…`
- * classifies as `arm-id`, which is what it is, so `check-no-freeform`'s
- * classifier counts it as a ratcheted violation instead of an unlabelled
- * `sites` entry. That matters precisely because ~40 editors are about to adopt
- * this component: their own classified asks drop to zero, and if this one
- * stayed invisible the free-text ask would have RELOCATED here rather than
- * gone. An escape hatch we intend to keep should be baselined out loud.
+ * For the user it turns "type something" into "type this shape" — the thing
+ * that makes a hand-entered ARM id right the first time.
+ *
+ * It does NOT make the site classifiable, and an earlier revision of this
+ * comment said it did ("for CI it makes the site CLASSIFIABLE … the classifier
+ * counts it as a ratcheted violation"). That was an assertion about a tool's
+ * behaviour that the tool refutes: `check-no-freeform --report` reports zero
+ * sites in this file. The classifier reads a placeholder LITERAL at the call
+ * site, and line ~593 passes `MANUAL_PLACEHOLDER[matchBy]` — a table lookup it
+ * cannot resolve. Inlining the `id` literal there is the counterfactual: the
+ * population goes 187 -> 188 and the gate fails on a new key. The table stays
+ * a table because four value kinds need four shapes; the consequence for the
+ * ratchet is disclosed in the file header and tracked in #4404 rather than
+ * asserted away here.
  */
 const MANUAL_PLACEHOLDER: Record<MatchBy, string> = {
   id: '/subscriptions/<sub>/resourceGroups/<rg>/providers/<provider>/<type>/<name>',

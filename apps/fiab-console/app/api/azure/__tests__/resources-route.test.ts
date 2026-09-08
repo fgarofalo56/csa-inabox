@@ -156,10 +156,30 @@ describe('query construction', () => {
    * disagreement this whole change removed. This asserts the decision so a
    * later "tidy-up" that adds a `!contains 'workflowapp'` has to argue with a
    * red test rather than a comment.
+   *
+   * The predicate the population is scored by is PARSED BACK OUT of the emitted
+   * KQL, not restated here (re-review 2026-09-08, nit 4). The earlier version
+   * declared `kind => kind.toLowerCase().includes('functionapp')` locally and
+   * asserted against its own declaration, which restated the intent instead of
+   * measuring the route: it stayed green if `buildQuery` regressed to `=~`.
+   * Deriving the operator and the literal from `q` means an equality regression
+   * turns `functionapp,linux` red.
    */
   it('the contains predicate deliberately admits Logic App Standard sites', () => {
     const q = buildQuery('Microsoft.Web/sites', 'functionapp', undefined, undefined, 'contains');
-    const admits = (kind: string) => kind.toLowerCase().includes('functionapp');
+    const m = /\| where kind (contains|=~) '([^']+)'/.exec(q);
+    if (!m) throw new Error(`no kind predicate found in the emitted query: ${q}`);
+    const [, op, literal] = m;
+    expect(op).toBe('contains');
+    expect(literal).toBe('functionapp');
+    // KQL `contains` is case-insensitive SUBSTRING; `=~` is case-insensitive
+    // EQUALITY. Model whichever one the route actually chose, so the population
+    // below is scored by the emitted predicate rather than by this file's idea
+    // of it.
+    const admits = (kind: string) =>
+      op === 'contains'
+        ? kind.toLowerCase().includes(literal.toLowerCase())
+        : kind.toLowerCase() === literal.toLowerCase();
     expect(admits('functionapp')).toBe(true);
     expect(admits('functionapp,linux')).toBe(true);
     expect(admits('functionapp,linux,container')).toBe(true);
