@@ -2023,11 +2023,48 @@ jobs:
         # and /admin/security would have stayed on its 503 gate for a reason
         # that has nothing to do with Dataverse.
         #
-        # `if: always()` restores the decoupling; `continue-on-error: true`
-        # encodes the non-fatality this step's own comment declares below, and
-        # matches its four `if: always()` + `continue-on-error: true` neighbours.
+        # `if: always()` restores the decoupling. That is the WHOLE fix, and it
+        # is deliberately NOT accompanied by a `continue-on-error` excusal.
+        #
+        # WHY NOT, MEASURED. The review that raised the cascade asked for
+        # `if: always()` plus a `continue-on-error` excusal, "matching its four
+        # neighbours". The second half is wrong here, for two independent
+        # reasons, and adding it turned a guard red:
+        #
+        #   1. It is FORBIDDEN for this specific step, on purpose.
+        #      scripts/ci/__tests__/deploy-bootstrap-approles.test.mjs:154
+        #      asserts this step carries no `continue-on-error` excusal, with the
+        #      reason recorded at :45-48 — `bash script.sh` inherits no `set -e`
+        #      from an inline `run:`, so this step's RC is the ONLY thing that
+        #      can ever report a broken grant, and excusing it wholesale is the
+        #      "gate that cannot fail" shape. deploy-integrity.md lists
+        #      continue-on-error in its forbidden set for exactly this. Adding
+        #      it produced a real red: `node --test
+        #      scripts/ci/__tests__/deploy-bootstrap-approles.test.mjs` RC=1,
+        #      "the step is excused with continue-on-error — its result cannot
+        #      fail anything" (also seen in CI as `node:test suites (node 20)`).
+        #      The guard is right; the prescription was not, so the guard stays
+        #      as written and the edit was withdrawn.
+        #
+        #      NOTE for whoever edits this comment: that guard greps the raw
+        #      step text, so it cannot tell prose from YAML. Spelling the
+        #      excusal key followed by a literal `true` ANYWHERE in this block —
+        #      even inside a sentence explaining why it is absent — turns the
+        #      suite red. Measured: the first draft of this very comment did
+        #      exactly that. Name the key alone, never the key-and-value pair.
+        #
+        #   2. It would have protected against NOTHING. Read the `run:` below:
+        #      `set +e` brackets the invocation, the RC is captured into AR_RC,
+        #      `set -e` is restored, and the trailing `if`/`elif` only ever
+        #      `echo`s a ::warning. There is no path on which this step exits
+        #      non-zero today, so the excusal changed no behaviour while
+        #      disarming the one signal that would matter if that ever changed.
+        #
+        # The four neighbours it was told to match do not invoke a script whose
+        # RC is the sole failure signal, so the guard does not apply to them.
+        # Matching a neighbour's shape is not a reason; the step's own failure
+        # semantics are.
         if: always()
-        continue-on-error: true
         # THE PLATFORM RUNS THE SHIPPED SCRIPT (#3374, auto-bind-by-default.md §5).
         #
         # WHAT WAS HERE, AND WHY IT WAS A DEFECT. This step carried ~75 lines of
