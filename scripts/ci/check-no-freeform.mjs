@@ -313,12 +313,18 @@
  *     props, order the only difference: `freeform` first → 1 match; the arrow
  *     handler first → 0 matches. So treat a hit list as "at least these".
  *
- *     Two of the hits are INFRASTRUCTURE ADDRESSES in the sense
+ *     Three of the hits are INFRASTRUCTURE ADDRESSES in the sense
  *     `auto-bind-by-default.md` §5 means, and are called out because they are
- *     the ones this rule would otherwise be expected to cover:
+ *     the ones this rule would otherwise be expected to cover. TWO of the three
+ *     are in the SAME file — an earlier revision of this note listed only the
+ *     first and so read as though foundry-sub-editors.tsx contributed one site:
  *       lib/editors/foundry-sub-editors.tsx  the Azure OpenAI vectorizer ENDPOINT
+ *       lib/editors/foundry-sub-editors.tsx  the evaluation MODEL DEPLOYMENT name
  *       lib/components/shared/honest-gate.tsx  an arbitrary `LOOM_*` value, typed
  *                                            into the G2 Fix-it wizard itself
+ *     A deployment NAME is an address by the criterion that site applies to
+ *     itself — "Loom enumerates both, so it asks the backend" — so it belongs
+ *     in THIS list, not in the user's-own-data clause below.
  *     The rest name something that lives in the USER's own data, directory or
  *     repo rather than an address the platform could have bound — read at head
  *     as: a source/sink column and its type (pipeline copy mapping-tab), a git
@@ -332,14 +338,16 @@
  *     second reason a single number here was always going to mislead — and it
  *     is why this enumeration is dated to head rather than asserted as durable.
  *
- *     That endpoint is rendered ONLY on the branch where `/api/foundry/accounts`
- *     FAILED or genuinely returned zero accounts — the discovered-rows branch is
- *     a plain `<Dropdown>`. It is the ux-baseline G2 escape hatch (the
- *     alternative measured there was a DISABLED control asserting "No accounts
- *     found" over a failed call), not a config surface that asks for an address
- *     by default. Both are recorded here because this guard cannot see any
- *     `<Combobox>` at all, so the count staying at baseline says nothing about
- *     these sites either way.
+ *     BOTH foundry sites render ONLY on the branch where their discovery call is
+ *     still loading, FAILED, or genuinely returned zero rows —
+ *     `/api/foundry/accounts` for the vectorizer endpoint,
+ *     `/api/foundry/model-deployments` for the deployment name. On the
+ *     discovered-rows branch each is a plain `<Dropdown>`. They are the
+ *     ux-baseline G2 escape hatch (the alternative measured there was a DISABLED
+ *     control asserting "No accounts found" over a failed call), not config
+ *     surfaces that ask for an address by default. All three are recorded here
+ *     because this guard cannot see any `<Combobox>` at all, so the count
+ *     staying at baseline says nothing about these sites either way.
  *
  *     Of the three earlier revisions, exactly ONE published a command and it
  *     was a line-anchored grep; the other two published none. Verified against

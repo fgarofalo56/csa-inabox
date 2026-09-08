@@ -31,8 +31,14 @@
  * drop-in. Adopting it would also swap that editor's DLZ-containers-first
  * first-open for an account-picker-first one — a behaviour change with its own
  * tests. Promoting the body of this dialog to an exported `AdlsBrowsePanel` and
- * deleting the private ~112-line copy is tracked as #4381, with an owner,
- * instead of as an assumption about a future wave.
+ * deleting the private ~112-line copy is tracked as #4381 — a filed, open issue
+ * naming that exact work, labelled `lane:console` — instead of as an assumption
+ * about a future wave. No OWNER is claimed: an earlier revision of this comment
+ * said "with an owner" and #4381 had no assignee, which is the same R7 defect
+ * the paragraph above corrects. Assignment is also not how this repo tracks
+ * ownership — 1 of 259 open issues carried an assignee when this was measured
+ * (2026-09-08), against 219 of 259 carrying labels — so an assignee added here
+ * would be a signal with nothing behind it rather than a fix.
  *
  * ── WHAT IT ADDS OVER THE PRIVATE ONE ───────────────────────────────────────
  *   - ANY storage account, not just the four DLZ containers. The private dialog
