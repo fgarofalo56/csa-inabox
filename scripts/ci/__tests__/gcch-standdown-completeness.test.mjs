@@ -52,6 +52,33 @@
  * relearning: a complete enumeration of the wrong set reads exactly like a
  * complete enumeration.
  *
+ * ── ROUND 4: THE GUARD WAS PRESENT AND THE OUTCOME WAS NOT ASSERTED ────────
+ * Rounds 1-3 asserted that the right TEXT was in the right place. A reviewer
+ * then found four ways to keep every substring and lose the effect, each
+ * MEASURED green at 22 pass / 0 fail against the real workflow file:
+ *
+ *   1. Delete the single `exit 1` in the Teardown refusal. `refuse` checked
+ *      only for /ESTATE_PAUSED/ and /::error::/ in the body — and `::error::`
+ *      is an ANNOTATION, not a failure. A declared-paused sovereign estate
+ *      gets torn down with a red note printed above the teardown.
+ *   2. Drop the parentheses on a guarded `if:`. GitHub binds `&&` tighter than
+ *      `||`, so `A || B && GUARD` is `A || (B && GUARD)` — inert on `schedule`,
+ *      the exact trigger this file exists for, while `.includes(GUARD)` stays
+ *      true.
+ *   3. Rename the `pause-declaration` job's output key `declared:`.
+ *   4. Replace that job's producing `run:` with `echo noop`.
+ *      In 3 and 4 `needs.pause-declaration.outputs.declared` evaluates to EMPTY,
+ *      `'' != 'true'` is TRUE, and the image phase opens the sovereign ACR on a
+ *      declared pause. Round 3 caught only the third route to the same empty
+ *      (a missing `needs:`).
+ *
+ * The fix is not four more spellings. Each assertion now names the OUTCOME the
+ * text was standing in for: a refusal EXITS non-zero inside its own conditional
+ * (refusalBlock), a guard is NECESSARY rather than merely present
+ * (guardIsBinding, a paren-depth parse, not a substring), and the value a guard
+ * reads is actually PUBLISHED by a job that actually computes it
+ * (judgeGuardProducer, derived from JOB_GUARD so the two cannot drift).
+ *
  * ── SCOPE, AND WHAT IS STILL OUTSIDE IT ────────────────────────────────────
  * Stated because the round-1 header said "EVERY step after the declaration",
  * and that was only ever true of ONE job. Precisely what this file frames:
@@ -65,6 +92,15 @@
  *             added in round 3, because before it `exempt` asserted nothing at
  *             all and rewriting `Note dry-run completion` to `az group delete`
  *             kept the suite green.
+ *   IN FRAME  whether a guard that is PRESENT actually BINDS (guardIsBinding),
+ *             whether a refusal actually REFUSES (refusalBlock), and whether
+ *             the job-level guard's value is PUBLISHED at all
+ *             (judgeGuardProducer) — round 4.
+ *   OUT OF FRAME  whether the guard is CORRECT — that the ADX preflight really
+ *             sets `estate_paused`, and that the register really says what the
+ *             operator meant. That is estate-preflight.test.mjs's population,
+ *             not this one's; this file asserts that the verdict, whatever it
+ *             is, reaches every member of both populations.
  *   OUT OF FRAME  the steps of `precheck` and `pause-declaration`. Both are
  *             `exempt` JOBS, so the mutating-`az` scan runs over their whole
  *             body — but they are not step-dispositioned individually.
@@ -101,6 +137,15 @@ const DEFAULT_WF = path.join(REPO_ROOT, '.github', 'workflows', 'deploy-fiab-gcc
 const GUARD = "steps.adx_preflight.outputs.estate_paused != 'true'";
 /** The JOB-level clause, which reads the declaration alone (no Azure). */
 const JOB_GUARD = "needs.pause-declaration.outputs.declared != 'true'";
+/**
+ * Where JOB_GUARD's value has to come from — DERIVED from the clause itself, so
+ * the guard and the thing that checks its producer cannot drift apart.
+ */
+const GUARD_SOURCE = /needs\.([\w-]+)\.outputs\.([\w-]+)/.exec(JOB_GUARD);
+const PRODUCER_JOB = GUARD_SOURCE[1];
+const PRODUCER_OUTPUT = GUARD_SOURCE[2];
+/** The script that computes the declaration half with no Azure credential. */
+const PRODUCER_SCRIPT = 'estate-pause-declared.mjs';
 /** The declaration step every disposition below is measured relative to. */
 const DECLARATION_STEP = 'Estate is DECLARED paused — this run measures nothing';
 
@@ -110,6 +155,136 @@ function workflowText() {
   // against it — a guard that reads as "compliant" because it found no lines
   // at all is the shape this repo keeps re-finding.
   return readFileSync(process.env.LOOM_GCCH_WORKFLOW_PATH || DEFAULT_WF, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * Blank the CONTENT of single-quoted literals, length-preserved, so a `(`, `)`
+ * or `|` inside a string cannot be read as expression structure.
+ *
+ * @param {string} expr
+ * @returns {string}
+ */
+function blankLiterals(expr) {
+  let out = '';
+  let inStr = false;
+  for (const c of String(expr)) {
+    if (c === "'") {
+      inStr = !inStr;
+      out += c;
+      continue;
+    }
+    out += inStr && '()|&'.includes(c) ? '_' : c;
+  }
+  return out;
+}
+
+/**
+ * The TOP-LEVEL disjuncts (paren depth 0) of a GitHub `if:` expression, with any
+ * `${{ }}` wrapper stripped.
+ *
+ * @param {string} expr
+ * @returns {string[]}
+ */
+export function topLevelDisjuncts(expr) {
+  const src = String(expr)
+    .trim()
+    .replace(/^\$\{\{/, '')
+    .replace(/\}\}$/, '')
+    .trim();
+  const scan = blankLiterals(src);
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < scan.length; i += 1) {
+    const c = scan[i];
+    if (c === '(') depth += 1;
+    else if (c === ')') depth -= 1;
+    else if (depth === 0 && c === '|' && scan[i + 1] === '|') {
+      parts.push(src.slice(start, i));
+      i += 1;
+      start = i + 1;
+    }
+  }
+  parts.push(src.slice(start));
+  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/**
+ * Is `guard` NECESSARY for this `if:` to be true?
+ *
+ * ROUND 4, on a review finding, and the reason this is a PARSE and not a
+ * `.includes()`. GitHub binds `&&` tighter than `||`, so
+ *
+ *   A || B && GUARD      parses as      A || (B && GUARD)
+ *
+ * and on `schedule` — the exact trigger this whole stand-down exists for — the
+ * left disjunct is true on its own and the guard is never evaluated. MEASURED
+ * before this check existed: drop the parentheses from the `Image preflight`
+ * if: and the suite stayed at 22 pass / 0 fail, because `step.if.includes(GUARD)`
+ * was still true. A guard can be PRESENT and INERT, and a substring test cannot
+ * tell the two apart — this is the narrow bypass that keeps every spelling.
+ *
+ * What is asserted is the semantic property, not a spelling: the guard must
+ * appear in EVERY top-level disjunct, i.e. no truth assignment satisfies the
+ * `if:` without it. `(a && G) || (b && G)` therefore passes and `a || b && G`
+ * does not.
+ *
+ * @param {string} ifExpr
+ * @param {string} guard
+ * @returns {boolean}
+ */
+export function guardIsBinding(ifExpr, guard) {
+  const disjuncts = topLevelDisjuncts(ifExpr);
+  return disjuncts.length > 0 && disjuncts.every((d) => d.includes(guard));
+}
+
+/**
+ * @param {'step'|'job'} kind
+ * @param {string} name
+ * @param {string} ifExpr
+ * @param {string} guard
+ * @returns {string}
+ */
+function inertGuardProblem(kind, name, ifExpr, guard) {
+  return (
+    `${kind} '${name}' CONTAINS \`${guard}\` but the guard is INERT: GitHub binds && tighter than ||, so ` +
+    `\`${ifExpr}\` has a top-level disjunct with no guard in it and is satisfied without ever reading it — ` +
+    "on 'schedule', the exact trigger this stand-down exists for. Parenthesise the disjunction."
+  );
+}
+
+/**
+ * The body of the shell conditional that reads ESTATE_PAUSED, or null when
+ * there is no such conditional (or it is never closed).
+ *
+ * ROUND 4, on a review finding. The `refuse` disposition checked only that the
+ * body mentioned ESTATE_PAUSED and printed `::error::` — and `::error::` is an
+ * ANNOTATION, not a failure. MEASURED: delete the single `exit 1` inside the
+ * Teardown refusal and the suite stayed at 22 pass / 0 fail, while a declared-
+ * paused sovereign estate would be torn down with a red annotation printed
+ * above the teardown. What has to be asserted is the OUTCOME — the refusal
+ * refuses — so the exit has to be inside THIS block and not merely somewhere
+ * in the step.
+ *
+ * @param {string} body
+ * @returns {string|null}
+ */
+export function refusalBlock(body) {
+  const lines = String(body).split('\n');
+  const at = lines.findIndex((l) => /^\s*if\s.*ESTATE_PAUSED/.test(l));
+  if (at < 0) return null;
+  let depth = 0;
+  const out = [];
+  for (let i = at; i < lines.length; i += 1) {
+    const t = lines[i].trim();
+    if (/^if\s/.test(t)) depth += 1;
+    out.push(lines[i]);
+    if (/^fi\b/.test(t)) {
+      depth -= 1;
+      if (depth <= 0) return out.join('\n');
+    }
+  }
+  return null;
 }
 
 /**
@@ -300,6 +475,8 @@ export function judgeJobs(jobs) {
             '(ACR firewall lease + az acr build) and runs before the approval gate. Its if: is ' +
             `\`${job.if || '(none)'}\``,
         );
+      } else if (!guardIsBinding(job.if, JOB_GUARD)) {
+        problems.push(inertGuardProblem('job', job.name, job.if, JOB_GUARD));
       }
       if (!/pause-declaration/.test(job.needs)) {
         problems.push(
@@ -308,11 +485,15 @@ export function judgeJobs(jobs) {
         );
       }
     }
-    if (d.mode === 'out-guard' && !job.if.includes("needs.deploy-validate.outputs.estate_paused != 'true'")) {
-      problems.push(
-        `job '${job.name}' must carry \`needs.deploy-validate.outputs.estate_paused != 'true'\` in its if: — ` +
-          `found \`${job.if || '(none)'}\``,
-      );
+    if (d.mode === 'out-guard') {
+      const outGuard = "needs.deploy-validate.outputs.estate_paused != 'true'";
+      if (!job.if.includes(outGuard)) {
+        problems.push(
+          `job '${job.name}' must carry \`${outGuard}\` in its if: — found \`${job.if || '(none)'}\``,
+        );
+      } else if (!guardIsBinding(job.if, outGuard)) {
+        problems.push(inertGuardProblem('job', job.name, job.if, outGuard));
+      }
     }
     if (d.mode === 'exempt') problems.push(...judgeExemption(d, job, 'job'));
     if (d.mode === 'internal' && (typeof d.why !== 'string' || d.why.trim().length === 0)) {
@@ -321,6 +502,70 @@ export function judgeJobs(jobs) {
       // design. DISPOSITIONS below is its census; the reason is what says which.
       problems.push(`job '${job.name}' is dispositioned 'internal' with no reason naming the census that covers it`);
     }
+  }
+  if ([...JOB_DISPOSITIONS.values()].some((d) => d.mode === 'job-guard')) {
+    problems.push(...judgeGuardProducer(jobs));
+  }
+  return problems;
+}
+
+/**
+ * The guard clause is only worth its words if the value it reads is actually
+ * PUBLISHED.
+ *
+ * ROUND 4, on a review finding. `judgeJobs` caught ONE of the three ways
+ * `needs.pause-declaration.outputs.declared` goes empty — the missing `needs:` —
+ * and missed two, both MEASURED green at 22 pass / 0 fail while the sovereign
+ * ACR would open on a declared pause:
+ *
+ *   (a) rename the job's output key `declared:` to anything else;
+ *   (b) replace the producing step's `run:` with `echo noop`.
+ *
+ * In both, the expression evaluates to empty, `'' != 'true'` is TRUE, and the
+ * image phase runs. Empty is the failure mode of EVERY `needs.*.outputs.*` read,
+ * so what is asserted here is the whole chain rather than one more spelling: the
+ * producer job exists, it publishes THAT key, the key reads a step output, that
+ * step id exists in that job, and the job invokes the script that writes it.
+ *
+ * @param {{name:string, body:string}[]} jobs
+ * @returns {string[]}
+ */
+export function judgeGuardProducer(jobs) {
+  const problems = [];
+  const producer = jobs.find((j) => j.name === PRODUCER_JOB);
+  if (!producer) {
+    return [
+      `the image phase stands down on \`${JOB_GUARD}\`, but there is no '${PRODUCER_JOB}' job to produce it. ` +
+        "An absent producer makes the clause read '' != 'true', which is TRUE — present, and never suppressing.",
+    ];
+  }
+  const outLine = String(producer.body)
+    .split('\n')
+    .find((l) => new RegExp(`^ {6}${PRODUCER_OUTPUT}:`).test(l));
+  if (!outLine) {
+    problems.push(
+      `job '${PRODUCER_JOB}' must publish an output named \`${PRODUCER_OUTPUT}\` — that is the exact key ` +
+        `\`${JOB_GUARD}\` reads, and any other name leaves the clause empty and never suppressing.`,
+    );
+  } else {
+    const ref = /steps\.([\w-]+)\.outputs\.([\w-]+)/.exec(outLine);
+    if (!ref) {
+      problems.push(
+        `job '${PRODUCER_JOB}' publishes \`${PRODUCER_OUTPUT}\` as \`${outLine.trim()}\`, which reads no step ` +
+          'output. The guard would then read whatever that expression evaluates to, including empty.',
+      );
+    } else if (!new RegExp(`^ {6,}(?:- )?id: ${ref[1]}\\s*$`, 'm').test(String(producer.body))) {
+      problems.push(
+        `job '${PRODUCER_JOB}' publishes \`${PRODUCER_OUTPUT}\` from \`steps.${ref[1]}.outputs.${ref[2]}\`, but ` +
+          `no step in that job carries \`id: ${ref[1]}\` — the output is empty and the guard never suppresses.`,
+      );
+    }
+  }
+  if (!String(producer.body).includes(PRODUCER_SCRIPT)) {
+    problems.push(
+      `job '${PRODUCER_JOB}' no longer invokes ${PRODUCER_SCRIPT}, so nothing computes the declaration ` +
+        'verdict. The output would be empty and the image phase would open the sovereign ACR on a declared pause.',
+    );
   }
   return problems;
 }
@@ -399,14 +644,24 @@ export function judge(steps) {
       );
       continue;
     }
-    if (d.mode === 'guard' && !step.if.includes(GUARD)) {
-      problems.push(`step '${step.name}' must carry \`${GUARD}\` in its if:, but its if: is \`${step.if || '(none)'}\``);
+    if (d.mode === 'guard') {
+      if (!step.if.includes(GUARD)) {
+        problems.push(
+          `step '${step.name}' must carry \`${GUARD}\` in its if:, but its if: is \`${step.if || '(none)'}\``,
+        );
+      } else if (!guardIsBinding(step.if, GUARD)) {
+        problems.push(inertGuardProblem('step', step.name, step.if, GUARD));
+      }
     }
-    if (d.mode === 'via-provision' && !step.if.includes(d.needle)) {
-      problems.push(
-        `step '${step.name}' is dispositioned as transitively guarded through Provision, ` +
-          `which requires \`${d.needle}\` in its if: — found \`${step.if || '(none)'}\``,
-      );
+    if (d.mode === 'via-provision') {
+      if (!step.if.includes(d.needle)) {
+        problems.push(
+          `step '${step.name}' is dispositioned as transitively guarded through Provision, ` +
+            `which requires \`${d.needle}\` in its if: — found \`${step.if || '(none)'}\``,
+        );
+      } else if (!guardIsBinding(step.if, d.needle)) {
+        problems.push(inertGuardProblem('step', step.name, step.if, d.needle));
+      }
     }
     if (d.mode === 'refuse') {
       if (step.if.includes(GUARD)) {
@@ -419,6 +674,21 @@ export function judge(steps) {
         problems.push(
           `step '${step.name}' must read the estate_paused verdict into its body and fail with an ::error:: ` +
             'naming the action that authorises the destruction',
+        );
+      }
+      // …and the refusal has to REFUSE. `::error::` is an annotation; it does
+      // not fail a step. See refusalBlock() for the measurement.
+      const refusal = refusalBlock(step.body);
+      if (!refusal) {
+        problems.push(
+          `step '${step.name}' has no closed shell conditional on ESTATE_PAUSED, so it is not established ` +
+            'that the refusal refuses at all — only that the words appear somewhere in the step.',
+        );
+      } else if (!/\bexit\s+[1-9]/.test(refusal)) {
+        problems.push(
+          `step '${step.name}' PRINTS its refusal and then carries on: the ESTATE_PAUSED branch of its run: ` +
+            'contains no non-zero exit, and ::error:: is an annotation rather than a failure. A declared-paused ' +
+            'sovereign estate would be torn down with a red annotation printed above the teardown.',
         );
       }
     }
@@ -549,6 +819,53 @@ test('the exempt scan does NOT flag a read, or a GitHub-side write', () => {
   );
 });
 
+test('the disjunct parse reads STRUCTURE, not text', () => {
+  assert.deepEqual(topLevelDisjuncts('a || b'), ['a', 'b']);
+  assert.deepEqual(topLevelDisjuncts('(a || b) && c'), ['(a || b) && c']);
+  assert.deepEqual(topLevelDisjuncts('${{ (a || b) && c }}'), ['(a || b) && c']);
+  // A `||` inside a string literal is text, not structure.
+  assert.deepEqual(topLevelDisjuncts("contains(x, 'a || b') && c"), ["contains(x, 'a || b') && c"]);
+  assert.equal(guardIsBinding('(a || b) && G', 'G'), true);
+  assert.equal(guardIsBinding('a || b && G', 'G'), false);
+  // A guard repeated in EVERY disjunct is still necessary — a check that
+  // rejected it would be pressure to delete the check rather than fix a lane.
+  assert.equal(guardIsBinding('(a && G) || (b && G)', 'G'), true);
+});
+
+test('MUTATION: the guard survives as a substring and stops binding (&& over ||)', () => {
+  // Reviewer probe, round 4. GitHub binds && tighter than ||, so dropping the
+  // parentheses leaves `event_name == 'schedule' || (run_mode == 'full' && GUARD)`
+  // — TRUE on schedule with the guard never read. Measured against the real file
+  // before this assertion existed: RC=0, 22 pass / 0 fail.
+  const target = 'Image preflight — Gov ACR must already hold every referenced tag';
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === target ? { ...s, if: s.if.replace(/^\((.*?)\)/, '$1') } : s,
+  );
+  const mutatedIf = mutated.find((s) => s.name === target).if;
+  assert.ok(mutatedIf.includes(GUARD), 'the mutant must KEEP the guard substring — that is the whole point');
+  assert.notEqual(mutatedIf, parseSteps(workflowText()).find((s) => s.name === target).if);
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /INERT/);
+});
+
+test('MUTATION: a refusal that PRINTS and carries on is caught', () => {
+  // Reviewer probe, round 4. `::error::` does not fail a step; only the exit
+  // does. Measured against the real file with the single `exit 1` deleted,
+  // before this assertion existed: RC=0, 22 pass / 0 fail.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown' ? { ...s, body: s.body.replace(/\n\s*exit 1\b/, '') } : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.ok(
+    /::error::/.test(teardown.body) && /ESTATE_PAUSED/.test(teardown.body),
+    'the mutant must keep the annotation and the variable read — only the exit goes',
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /non-zero exit/);
+});
+
 test('every JOB is dispositioned, and the image phase stands down on the declaration', () => {
   const problems = judgeJobs(parseJobs(workflowText()));
   assert.deepEqual(problems, [], `deploy-fiab-gcch job-level stand-down is incomplete:\n  - ${problems.join('\n  - ')}`);
@@ -595,6 +912,40 @@ test('MUTATION: a NEW job must be dispositioned', () => {
   const problems = judgeJobs(mutated);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /job 'roll-something' has no disposition/);
+});
+
+test('MUTATION: the producer publishes a DIFFERENT key than the guard reads', () => {
+  // Reviewer probe, round 4(a). `needs.pause-declaration.outputs.declared` then
+  // evaluates to empty, `'' != 'true'` is TRUE, and the image phase opens the
+  // sovereign ACR on a declared pause. Measured green at 22/0 before this.
+  const mutated = parseJobs(workflowText()).map((j) =>
+    j.name === PRODUCER_JOB ? { ...j, body: j.body.replace(/^ {6}declared:/m, '      declared_paused:') } : j,
+  );
+  const problems = judgeJobs(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /must publish an output named/);
+});
+
+test('MUTATION: the producer stops invoking the gate script', () => {
+  // Reviewer probe, round 4(b): the job, the output key and the `needs:` all
+  // survive, and nothing writes the value. Measured green at 22/0 before this.
+  const mutated = parseJobs(workflowText()).map((j) =>
+    j.name === PRODUCER_JOB
+      ? { ...j, body: j.body.replace(/run: node scripts\/ci\/estate-pause-declared\.mjs.*/, 'run: echo noop') }
+      : j,
+  );
+  const problems = judgeJobs(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /no longer invokes estate-pause-declared\.mjs/);
+});
+
+test('MUTATION: deleting the producer job leaves the guard present and inert', () => {
+  const mutated = parseJobs(workflowText()).filter((j) => j.name !== PRODUCER_JOB);
+  const problems = judgeJobs(mutated);
+  assert.ok(
+    problems.some((p) => new RegExp(`no '${PRODUCER_JOB}' job to produce it`).test(p)),
+    `expected the absent-producer problem, got: ${problems.join(' | ')}`,
+  );
 });
 
 test('the stand-down summary claims only what the run established (R7)', () => {

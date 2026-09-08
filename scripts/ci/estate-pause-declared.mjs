@@ -34,16 +34,26 @@
  * the ADX preflight says `false`, so the image phase stands down while the
  * deploy proceeds. That is the SAFE direction and it is not silent:
  *
- *   - The deploy's own `Image preflight — Gov ACR must already hold every
- *     referenced tag` still runs in that case and REFUSES if a referenced tag is
- *     absent, so a missing manifest fails closed with a named remediation rather
- *     than as a MANIFEST_UNKNOWN inside a Container App PUT.
- *   - Skipping a rebuild does not remove a manifest. `v0.1` keeps whatever
- *     content was last pushed; the estate is left as-is, which is what a
- *     declaration of pause asks for.
+ *   - Skipping a rebuild does not remove a manifest. `build-gov-images` passes
+ *     `image_tag: v0.1`, a fixed MUTABLE tag, so what the deploy resolves is
+ *     unchanged by not rebuilding: `v0.1` keeps whatever content was last
+ *     pushed. The estate is left as-is, which is what a declaration of pause
+ *     asks for.
  *   - The register's own resume instruction is "resume the estate, then delete
  *     the entry". An operator validating a resumed estate has already removed
  *     the declaration, so they never reach the divergent case.
+ *
+ * WHAT DOES **NOT** COVER THE DIVERGENT CASE — stated because an earlier
+ * revision of this header claimed it did, which is the same R7 shape this whole
+ * change is about. The deploy's own `Image preflight — Gov ACR must already
+ * hold every referenced tag` does still run in that case, but MEASURED against
+ * .github/workflows/deploy-fiab-gcch.yml it asserts exactly three refs:
+ * `loom-duckdb:$LOOM_DUCKDB_TAG`, `loom-unity:$LOOM_UNITY_TAG`, and the
+ * valkey ref derived from platform/fiab/images/upstream-images.json. It does
+ * NOT assert `loom-migrate` or `loom-risingwave` — the two images the job this
+ * gate stands down actually produces (`grep loom-migrate` on that lane returns
+ * comment lines only). So the safety of the divergent case rests on the
+ * mutable-tag argument above and NOT on that preflight.
  *
  * ── NEVER THROWS, AND ALWAYS WRITES A VALUE ────────────────────────────────
  *
