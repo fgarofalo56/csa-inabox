@@ -297,9 +297,21 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
    * `kindMatch: 'contains'` emits `| where kind contains 'functionapp'`, KQL's
    * case-insensitive substring operator, which is the same predicate the
    * function-apps route applies in JS. The agreement is now a property of the
-   * operators and not an assertion: both admit every `functionapp*` list,
-   * including Logic App Standard sites (`functionapp,workflowapp`), which that
-   * route also returns.
+   * operators and not an assertion.
+   *
+   * LOGIC APP STANDARD IS ADMITTED ON PURPOSE (re-review 2026-09-07, nit 5).
+   * `contains 'functionapp'` also matches `functionapp,workflowapp`, a Logic
+   * App Standard site. That is a DECISION, not a side effect of the operator:
+   * a Logic App Standard site IS a Function-App-hosted site — it runs on the
+   * Functions runtime, it is `Microsoft.Web/sites`, its resource id is the
+   * shape this picker stores, and Event Grid delivers to it through the same
+   * `…/sites/{app}/functions/{fn}` endpoint as any other function. Excluding
+   * it would need an extra `and kind !contains 'workflowapp'` that would (a)
+   * make this picker narrower than `/api/azure/function-apps`, which returns
+   * those rows, reintroducing exactly the two-predicates-disagree defect above,
+   * and (b) hide a valid destination the operator deployed on purpose. If a
+   * future surface genuinely needs "no workflow apps", it asks for that
+   * narrowing explicitly rather than getting it silently here.
    */
   'function-app-id': {
     label: 'Function App',

@@ -147,6 +147,30 @@ describe('query construction', () => {
     }
   });
 
+  /**
+   * The population `contains 'functionapp'` admits, written down (re-review
+   * 2026-09-07, nit 5). `functionapp,workflowapp` — a Logic App Standard site —
+   * is IN, deliberately: it is a Functions-runtime `Microsoft.Web/sites` with
+   * the id shape the picker stores, and `/api/azure/function-apps` returns it
+   * too, so excluding it here would put the two predicates back into the
+   * disagreement this whole change removed. This asserts the decision so a
+   * later "tidy-up" that adds a `!contains 'workflowapp'` has to argue with a
+   * red test rather than a comment.
+   */
+  it('the contains predicate deliberately admits Logic App Standard sites', () => {
+    const q = buildQuery('Microsoft.Web/sites', 'functionapp', undefined, undefined, 'contains');
+    const admits = (kind: string) => kind.toLowerCase().includes('functionapp');
+    expect(admits('functionapp')).toBe(true);
+    expect(admits('functionapp,linux')).toBe(true);
+    expect(admits('functionapp,linux,container')).toBe(true);
+    expect(admits('functionapp,workflowapp')).toBe(true); // Logic App Standard — IN
+    expect(admits('app,linux')).toBe(false);              // a plain Web App — OUT
+    expect(admits('workflowapp')).toBe(false);            // Consumption Logic App — OUT
+    // And the emitted KQL carries no workflow-app exclusion.
+    expect(q).not.toContain('workflowapp');
+    expect(q).not.toContain('!contains');
+  });
+
   it('resource groups come from `resourcecontainers`, not `resources`', () => {
     // The live defect: the route hard-coded `resources`, so the ADF
     // "Target resource group" picker asked for a type that table does not carry

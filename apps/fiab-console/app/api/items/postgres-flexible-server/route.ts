@@ -37,17 +37,35 @@
  * operator, the loss of the working credential of a running server (Key Vault
  * versioning is the only reason it was recoverable at all).
  *
- * So the server is RESOLVED FIRST, and there are exactly three outcomes:
+ * So the server is RESOLVED FIRST, and there are exactly FOUR outcomes:
  *   - a server of that name exists in this subscription → 409, nothing is
  *     minted and nothing is written. The existing secret is untouched.
  *   - the lookup itself fails → 503, nothing is minted and nothing is written.
  *     Absence was NOT established, so it is not assumed.
- *   - the lookup returns and the name is free → mint, write, create.
+ *   - the lookup TRUNCATES → 503, same refusal. See below; this is the third
+ *     state that a "did I find it?" boolean cannot represent.
+ *   - the lookup completes and the name is free → mint, write, create.
+ *
+ * ── AND A LIST IS NOT A LOOKUP UNTIL IT IS WHOLE (re-review, 2026-09-07) ────
+ * The first version of that gate called a `listServers()` that read ONE ARM
+ * page and returned `res.value` — no `nextLink` walk. So it established only
+ * that the name was absent from the FIRST page of the subscription list, and a
+ * server on page 2+ took the "free" branch: mint, overwrite `pg-admin-<name>`,
+ * fail at ARM, and then assert subscription-wide absence — the exact R7 shape
+ * this route was rewritten to remove, reintroduced one layer down.
+ * `postgres-flex-client` now walks `nextLink` under the shared `PagingBudget`
+ * like every other ARM client here, and `listServersResult()` reports
+ * `truncatedBy` so this route can tell "I read every page and it is not there"
+ * apart from "I stopped early". TRUNCATED IS NOT ABSENT: it takes the same
+ * fail-closed 503 as a lookup that threw, because the cost of guessing is the
+ * same overwritten credential either way.
+ *
  * The failure text after a create failure now says only what the lookup
- * established, in the scope it established it (this subscription, at the
- * moment the request began) — a name in use in ANOTHER subscription or tenant
- * is invisible to `listServers()` and the message says so rather than
- * asserting the secret belongs to nothing.
+ * established, in the scope it established it: no server of that name was
+ * VISIBLE TO THE CONSOLE IDENTITY in this subscription across every page ARM
+ * returned, at the moment the request began. A server in a subscription or
+ * tenant this identity cannot enumerate is invisible to that check and the
+ * message says so rather than asserting the secret belongs to nothing.
  *
  * NO KEY VAULT MEANS NO PROVISION. `kvSecretsConfigGate()` is checked first and
  * returned as an honest gate naming the exact env var and role
@@ -63,7 +81,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, randomInt } from 'node:crypto';
-import { listServers, createServer, PostgresError } from '@/lib/azure/postgres-flex-client';
+import { listServers, listServersResult, createServer, PostgresError } from '@/lib/azure/postgres-flex-client';
 import { kvSecretsConfigGate, putKeyVaultSecret, KeyVaultError } from '@/lib/azure/kv-secrets-client';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -134,14 +152,43 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   }
 
   /**
-   * RESOLVE BEFORE MINTING. `listServers()` is the same call the GET above
-   * makes, over `LOOM_SUBSCRIPTION_ID`. A hit means the ARM create is going to
-   * fail on a name collision, so nothing may be minted and nothing written —
-   * the secret already under that name is the LIVE server's credential.
+   * RESOLVE BEFORE MINTING. `listServersResult()` walks every `nextLink` page of
+   * the subscription list under the shared PagingBudget, and reports whether it
+   * got to the end. A hit means the ARM create is going to fail on a name
+   * collision, so nothing may be minted and nothing written — the secret already
+   * under that name is the LIVE server's credential.
+   *
+   * A direct ARM GET on `<resourceGroup>/<name>` was considered as a complement
+   * (404 = absent). It is not added: the KV secret name is RG-independent, so it
+   * could not replace the list, and it sees exactly what the list sees — both
+   * are the same identity against the same RBAC — so behind a COMPLETE walk it
+   * adds a round-trip and no information.
    */
   let existing: Awaited<ReturnType<typeof listServers>>;
   try {
-    existing = await listServers();
+    const lookup = await listServersResult();
+    if (lookup.truncatedBy) {
+      // The THIRD state. The walk stopped on its own ceiling, not on the end of
+      // the list, so the pages it never read may hold this exact name. Refuse
+      // for the same reason as a thrown lookup: absence was not established.
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'existence_check_failed',
+          error:
+            `Could not determine whether a PostgreSQL flexible server named '${name}' already exists in this ` +
+            `subscription: the listing stopped on its ${lookup.truncatedBy} budget after ${lookup.pagesFetched} ` +
+            'page(s), so pages of the subscription were never read. Nothing was minted, nothing was written to ' +
+            'Key Vault, and no server was created — a name on an unread page would have had its live admin ' +
+            `password overwritten in '${adminSecretNameFor(name)}'. Raise LOOM_ARM_PAGING_MAX_PAGES or ` +
+            'LOOM_ARM_PAGING_BUDGET_MS and retry.',
+          truncatedBy: lookup.truncatedBy,
+          pagesFetched: lookup.pagesFetched,
+        },
+        { status: 503 },
+      );
+    }
+    existing = lookup.servers;
   } catch (e: any) {
     // Fail CLOSED. Not finding out is not the same as finding nothing, and the
     // cost of assuming absence here is overwriting a live credential.
@@ -208,10 +255,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         ok: false,
         error:
           `${result.error} — the admin password had already been written to Key Vault as '${adminSecretName}'. ` +
-          `No PostgreSQL flexible server named '${name}' existed in THIS subscription when the request began, ` +
-          'so that secret is not the credential of any server Loom can see here; the next attempt with this ' +
-          'name overwrites it. Flexible-server names are globally unique, so if the name is taken in another ' +
-          'subscription or tenant that server is invisible to this check and may be why the create failed.',
+          `Before it was written, a full listing of THIS subscription (every page ARM returned to the console ` +
+          `identity) showed no PostgreSQL flexible server named '${name}', so that secret is not the credential ` +
+          'of any server Loom can see here; the next attempt with this name overwrites it. Flexible-server names ' +
+          'are globally unique, so if the name is taken in another subscription or tenant — or in a scope this ' +
+          'identity cannot enumerate — that server is invisible to this check and may be why the create failed.',
         adminSecretName,
       },
       { status: result.status },

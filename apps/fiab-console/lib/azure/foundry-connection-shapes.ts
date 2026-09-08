@@ -103,24 +103,47 @@ export const CONNECTION_CATEGORIES: {
  * Exactly one slash between the two halves, no trailing slash, and an empty
  * container yields the endpoint unchanged so a half-filled form does not
  * produce `https://acct.blob…net/`.
+ *
+ * `path` is the OPTIONAL remainder below the container. The form never
+ * produces one — the picker chooses a container — but a target stored by the
+ * REST API or by an older client can carry `…/bronze/raw/2026`, and dropping
+ * that on an edit would silently repoint the connection. It is carried so the
+ * round trip `compose(split(t)) === t` holds for those too (re-review
+ * 2026-09-07, nit 4). An empty container with a non-empty path is a shape
+ * nothing can produce, so the path is dropped rather than joined onto the
+ * account.
  */
-export function composeBlobTarget(accountEndpoint: string, container: string): string {
+export function composeBlobTarget(accountEndpoint: string, container: string, path = ''): string {
   const base = trimTrailingSlashes((accountEndpoint || '').trim());
   const c = trimSlashes((container || '').trim());
+  const p = trimSlashes((path || '').trim());
   if (!base) return '';
-  return c ? `${base}/${c}` : base;
+  if (!c) return base;
+  return p ? `${base}/${c}/${p}` : `${base}/${c}`;
 }
 
 /**
- * The inverse, for prefilling the EDIT dialog from a stored target. Anything
- * after the host is the container path; a target with no path yields an empty
- * container (which the picker then renders as "choose one"), never a guess.
+ * The inverse, for prefilling the EDIT dialog from a stored target.
+ *
+ * The FIRST path segment is the container — that is what an `AzureBlob`
+ * connection is scoped to and what `BlobContainerPicker` can match against the
+ * account's real containers. Everything below it is returned separately as
+ * `path`: folding `bronze/raw/2026` into `container` handed the picker a
+ * "container name" containing slashes, which matches nothing it lists and which
+ * `composeBlobTarget` would then re-emit as though the user had chosen it
+ * (re-review 2026-09-07, nit 4). A target with no path yields an empty container
+ * and an empty path (which the picker renders as "choose one"), never a guess.
  */
-export function splitBlobTarget(target: string): { accountEndpoint: string; container: string } {
+export function splitBlobTarget(target: string): { accountEndpoint: string; container: string; path: string } {
   const raw = (target || '').trim();
   const m = /^(https?:\/\/[^/]+)(?:\/(.*))?$/i.exec(raw);
-  if (!m) return { accountEndpoint: raw, container: '' };
-  return { accountEndpoint: m[1], container: trimTrailingSlashes(m[2] || '') };
+  if (!m) return { accountEndpoint: raw, container: '', path: '' };
+  const rest = trimSlashes(m[2] || '');
+  if (!rest) return { accountEndpoint: m[1], container: '', path: '' };
+  const slash = rest.indexOf('/');
+  return slash === -1
+    ? { accountEndpoint: m[1], container: rest, path: '' }
+    : { accountEndpoint: m[1], container: rest.slice(0, slash), path: trimSlashes(rest.slice(slash + 1)) };
 }
 
 /**

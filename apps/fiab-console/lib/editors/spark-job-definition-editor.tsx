@@ -801,11 +801,17 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
               </div>
 
               <div className={styles.field}>
-                <Caption1>Main definition file ({langDef.accept} — browse the lake or upload from local)</Caption1>
                 <div className={styles.fileRow}>
                   <div className={styles.field}>
+                    {/* The label lives ON the picker, not in a sibling Caption1
+                        with `label=""` — an empty Field label rendered an empty
+                        label element AND gave the readonly Input an
+                        `aria-label` of " (selected)" (re-review 2026-09-07,
+                        nit 3). The Upload button beside it carries its own
+                        text, so nothing else depended on the caption. */}
                     <AdlsPathPicker
-                      label=""
+                      label="Main definition file"
+                      hint={`${langDef.accept} — browse the lake, or upload from local with the button beside it`}
                       mode="file"
                       value={file}
                       onChange={(loc) => { setFile(loc?.uri || ''); markDirty(); }}

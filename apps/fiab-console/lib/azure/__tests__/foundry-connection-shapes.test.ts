@@ -180,13 +180,55 @@ describe('composeBlobTarget / splitBlobTarget — the container half', () => {
 
   it('round-trips a stored target back into the two controls that made it', () => {
     const t = composeBlobTarget('https://acct.blob.core.usgovcloudapi.net/', 'bronze');
-    expect(splitBlobTarget(t)).toEqual({ accountEndpoint: 'https://acct.blob.core.usgovcloudapi.net', container: 'bronze' });
-    expect(composeBlobTarget(splitBlobTarget(t).accountEndpoint, splitBlobTarget(t).container)).toBe(t);
+    expect(splitBlobTarget(t)).toEqual({ accountEndpoint: 'https://acct.blob.core.usgovcloudapi.net', container: 'bronze', path: '' });
+    const s = splitBlobTarget(t);
+    expect(composeBlobTarget(s.accountEndpoint, s.container, s.path)).toBe(t);
   });
 
   it('splits an account-only target to an EMPTY container rather than guessing one', () => {
-    expect(splitBlobTarget('https://acct.blob.core.windows.net')).toEqual({ accountEndpoint: 'https://acct.blob.core.windows.net', container: '' });
-    expect(splitBlobTarget('https://acct.blob.core.windows.net/')).toEqual({ accountEndpoint: 'https://acct.blob.core.windows.net', container: '' });
+    expect(splitBlobTarget('https://acct.blob.core.windows.net')).toEqual({ accountEndpoint: 'https://acct.blob.core.windows.net', container: '', path: '' });
+    expect(splitBlobTarget('https://acct.blob.core.windows.net/')).toEqual({ accountEndpoint: 'https://acct.blob.core.windows.net', container: '', path: '' });
+  });
+
+  /**
+   * Re-review 2026-09-07, nit 4. Everything after the host used to be folded
+   * into `container`, so a stored `…/bronze/raw/2026` prefilled the container
+   * picker with `bronze/raw/2026` — a "container name" containing slashes,
+   * which matches none of the containers the picker lists and which compose
+   * would then re-emit as though the user had chosen it.
+   */
+  describe('a deeper stored path is kept, not folded into the container', () => {
+    it('takes the FIRST segment as the container and returns the rest as path', () => {
+      expect(splitBlobTarget('https://acct.blob.core.windows.net/bronze/raw/2026')).toEqual({
+        accountEndpoint: 'https://acct.blob.core.windows.net', container: 'bronze', path: 'raw/2026',
+      });
+      // Never a slash in the container half — that is what broke the picker.
+      expect(splitBlobTarget('https://acct.blob.core.windows.net/bronze/raw/2026').container).not.toContain('/');
+    });
+
+    it('round-trips a nested path losslessly — an edit must not repoint the connection', () => {
+      const t = 'https://acct.blob.core.usgovcloudapi.net/bronze/raw/2026';
+      const s = splitBlobTarget(t);
+      expect(composeBlobTarget(s.accountEndpoint, s.container, s.path)).toBe(t);
+    });
+
+    it('normalises stray slashes on the way back out', () => {
+      expect(splitBlobTarget('https://acct.blob.core.windows.net/bronze/raw/')).toEqual({
+        accountEndpoint: 'https://acct.blob.core.windows.net', container: 'bronze', path: 'raw',
+      });
+      expect(composeBlobTarget('https://acct.blob.core.windows.net/', '/bronze/', '/raw/2026/'))
+        .toBe('https://acct.blob.core.windows.net/bronze/raw/2026');
+    });
+
+    it('drops a path with no container — a shape nothing can produce', () => {
+      expect(composeBlobTarget('https://acct.blob.core.windows.net', '', 'raw/2026'))
+        .toBe('https://acct.blob.core.windows.net');
+    });
+
+    it('omitting the path argument is the old two-arg behaviour, unchanged', () => {
+      expect(composeBlobTarget('https://acct.blob.core.windows.net', 'bronze'))
+        .toBe('https://acct.blob.core.windows.net/bronze');
+    });
   });
 
   it('reads the account name out of either boundary host, and nothing else', () => {

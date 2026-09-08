@@ -35,6 +35,14 @@ vi.mock('@/lib/azure/postgres-flex-client', async () => {
   return {
     ...actual,
     listServers: vi.fn(),
+    // The CREATE path's existence check calls `listServersResult()`, not
+    // `listServers()`, because a name it did not see must be distinguishable
+    // from a listing that stopped on its paging budget (re-review 2026-09-07).
+    // Left in `actual` it would reach the real ARM walk, fail for want of
+    // `LOOM_SUBSCRIPTION_ID`, and the route's fail-closed 503 would make this
+    // whole file look like a route regression — MEASURED: `expected 503 to be
+    // 201` on `POST create — delegates and returns 201`.
+    listServersResult: vi.fn(),
     createServer: vi.fn(),
     listDatabases: vi.fn(),
     listFirewallRules: vi.fn(),
@@ -81,7 +89,7 @@ import { POST as pgQueryPOST } from '../postgres-flexible-server/[id]/query/rout
 import { getSession } from '@/lib/auth/session';
 import { listServers as listSqlServers, listManagedInstances, createDatabase, executeQueryBatch } from '@/lib/azure/azure-sql-client';
 import {
-  listServers as listPgServers, createServer as createPgServer,
+  listServers as listPgServers, listServersResult as listPgServersResult, createServer as createPgServer,
   listDatabases as listPgDatabases, listFirewallRules as listPgFw,
   upsertFirewallRule as upsertPgFw, deleteFirewallRule as deletePgFw,
 } from '@/lib/azure/postgres-flex-client';
@@ -324,6 +332,10 @@ describe('PostgreSQL flexible server routes', () => {
   it('POST create — delegates and returns 201', async () => {
     (getSession as any).mockReturnValue(session);
     (listPgServers as any).mockResolvedValue([]);
+    // A COMPLETE listing that found nothing — the only shape the create path
+    // treats as "the name is free". A truncated one is refused with a 503; that
+    // contract is asserted in provision-credentials.test.ts.
+    (listPgServersResult as any).mockResolvedValue({ servers: [], truncatedBy: null, pagesFetched: 1 });
     (createPgServer as any).mockResolvedValue({ ok: true, id: '/subs/.../pg', provisioningState: 'Creating' });
     const res = await pgCreatePOST(bodyReq('http://x/', {
       name: 'pg', resourceGroup: 'rg', location: 'eastus2',

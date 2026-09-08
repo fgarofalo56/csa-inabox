@@ -21,6 +21,13 @@
  *      server's name overwrote that LIVE server's password and then told the
  *      operator the secret "belongs to no server" — a claim the code had
  *      checked nothing about.
+ *   5. A PARTIAL LIST IS NOT A LOOKUP. Added after the re-review of 2026-09-07:
+ *      the pre-check's `listServers()` read one ARM page, so a server on page 2+
+ *      was invisible to it and took the "free" branch — the same overwrite, one
+ *      layer down, with the same false subscription-wide claim on top. Only
+ *      `truncatedBy: null` licenses the write; every other value is refused with
+ *      `existence_check_failed`, in a message that names the paging ceiling
+ *      rather than a missing resource.
  *
  * MUTATION RECEIPT (measured 2026-09-07, each mutation applied alone, reverted
  * after; `npx vitest run app/api/items/postgres-flexible-server/__tests__/`):
@@ -33,6 +40,11 @@
  *   - restore the old "it belongs to no server" sentence → RC=1, the R7 case
  *     fails on `expected '… belongs to no server …' not to contain 'belongs to
  *     no server'`.
+ *   - drop the `lookup.truncatedBy` branch (read only `lookup.servers`, the
+ *     single-page semantics) → RC=1, 3 failed / 17 passed: all three truncation
+ *     cases return 201 instead of 503, i.e. the credential was minted and
+ *     written over a list that was never whole. The paging walk itself is
+ *     measured in `lib/azure/__tests__/postgres-flex-paging.test.ts`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -51,12 +63,23 @@ class KeyVaultError extends Error {
 }
 
 const listServersMock = vi.fn(async (..._a: any[]) => [] as any[]);
+/**
+ * The route resolves the name through `listServersResult()`, not `listServers()`
+ * — it needs the third state (`truncatedBy`) that a plain array cannot carry.
+ * The default mirrors a COMPLETE walk: rows, `truncatedBy: null`.
+ */
+const listServersResultMock = vi.fn(async (..._a: any[]) => ({ servers: [] as any[], truncatedBy: null as any, pagesFetched: 1 }));
 const createServerMock = vi.fn(async (..._a: any[]) => ({ ok: true, id: '/subscriptions/s/…/flexibleServers/pg1', provisioningState: 'Ready' }) as any);
 vi.mock('@/lib/azure/postgres-flex-client', () => ({
   listServers: (...a: any[]) => listServersMock(...a),
+  listServersResult: (...a: any[]) => listServersResultMock(...a),
   createServer: (...a: any[]) => createServerMock(...a),
   PostgresError,
 }));
+
+/** Set the pre-check to a COMPLETE walk that found `servers`. */
+const lookupFound = (servers: any[]) =>
+  listServersResultMock.mockResolvedValue({ servers, truncatedBy: null, pagesFetched: 1 });
 
 const kvGateMock = vi.fn(() => null as { missing: string; detail: string } | null);
 const putKeyVaultSecretMock = vi.fn(async (name: string, _value?: string) => ({ name }));
@@ -90,6 +113,7 @@ beforeEach(() => {
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-1', upn: UPN, tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 } as any);
   kvGateMock.mockReturnValue(null);
   listServersMock.mockResolvedValue([]);
+  listServersResultMock.mockResolvedValue({ servers: [], truncatedBy: null, pagesFetched: 1 });
   createServerMock.mockResolvedValue({ ok: true, id: '/subscriptions/s/x/flexibleServers/pg1', provisioningState: 'Ready' });
   putKeyVaultSecretMock.mockImplementation(async (name: string) => ({ name }));
 });
@@ -128,7 +152,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
     const { POST } = await import('../route');
     const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(401);
-    expect(listServersMock).not.toHaveBeenCalled();
+    expect(listServersResultMock).not.toHaveBeenCalled();
     expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
     expect(createServerMock).not.toHaveBeenCalled();
   });
@@ -163,7 +187,7 @@ describe('POST — nothing is provisioned behind a gate', () => {
 
 describe('POST — the name is RESOLVED before the password is written (blocking review 2026-09-07)', () => {
   it('409s a name this subscription already uses, and does NOT overwrite its secret', async () => {
-    listServersMock.mockResolvedValue([
+    lookupFound([
       { id: '/subscriptions/s/resourceGroups/rg-loom/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg1', name: 'pg1', location: 'eastus', fqdn: 'pg1.postgres.database.azure.com' },
     ]);
     const { POST } = await import('../route');
@@ -177,7 +201,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   });
 
   it('matches the existing name case-insensitively — ARM names are not case-sensitive', async () => {
-    listServersMock.mockResolvedValue([{ id: '/subscriptions/s/x/PG1', name: 'PG1', location: 'eastus', fqdn: 'pg1.x' }]);
+    lookupFound([{ id: '/subscriptions/s/x/PG1', name: 'PG1', location: 'eastus', fqdn: 'pg1.x' }]);
     const { POST } = await import('../route');
     const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(409);
@@ -185,7 +209,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   });
 
   it('FAILS CLOSED when the lookup itself fails — absence was never established', async () => {
-    listServersMock.mockRejectedValue(new PostgresError('Resource Graph unavailable', 500));
+    listServersResultMock.mockRejectedValue(new PostgresError('Resource Graph unavailable', 500));
     const { POST } = await import('../route');
     const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(503);
@@ -197,7 +221,7 @@ describe('POST — the name is RESOLVED before the password is written (blocking
   });
 
   it('propagates an AUTHORIZATION failure of the lookup as 403, still writing nothing', async () => {
-    listServersMock.mockRejectedValue(new PostgresError('forbidden', 403));
+    listServersResultMock.mockRejectedValue(new PostgresError('forbidden', 403));
     const { POST } = await import('../route');
     const r = await POST(postReq(VALID), NO_PARAMS);
     expect(r.status).toBe(403);
@@ -216,6 +240,72 @@ describe('POST — the name is RESOLVED before the password is written (blocking
     // The minted value reaches ARM and Key Vault, and they agree.
     expect(createServerMock.mock.calls[0][0].administratorLoginPassword)
       .toBe(putKeyVaultSecretMock.mock.calls[0][1]);
+  });
+});
+
+/**
+ * TRUNCATED IS NOT ABSENT (independent re-review, 2026-09-07, blocking 1).
+ *
+ * The pre-check called a `listServers()` that read ONE ARM page, so "not in the
+ * list" meant "not on page 1". A server on page 2+ took the FREE branch and its
+ * live admin password was overwritten — the precise hazard the check exists to
+ * prevent — and the response then asserted subscription-wide absence.
+ *
+ * `listServersResult()` now walks `nextLink` and reports `truncatedBy`, and this
+ * route treats a truncated walk exactly like a thrown one: refuse, mint nothing,
+ * write nothing. `truncatedBy: null` is the ONLY value that licenses the write.
+ */
+describe('POST — a truncated listing is refused, not read as absence', () => {
+  it.each(['pages', 'time'] as const)(
+    'refuses with existence_check_failed when the walk stopped on its %s budget',
+    async (truncatedBy) => {
+      listServersResultMock.mockResolvedValue({ servers: [], truncatedBy, pagesFetched: 50 });
+      const { POST } = await import('../route');
+      const r = await POST(postReq(VALID), NO_PARAMS);
+      expect(r.status).toBe(503);
+      const j = JSON.parse(await bodyText(r));
+      expect(j.code).toBe('existence_check_failed');
+      expect(j.truncatedBy).toBe(truncatedBy);
+      // The whole point: no credential is minted or written over a partial list.
+      expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
+      expect(createServerMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('names the reason as a paging ceiling, not a missing resource (R7)', async () => {
+    listServersResultMock.mockResolvedValue({ servers: [], truncatedBy: 'pages', pagesFetched: 50 });
+    const { POST } = await import('../route');
+    const j = JSON.parse(await bodyText(await POST(postReq(VALID), NO_PARAMS)));
+    expect(j.error).toMatch(/Could not determine whether/);
+    expect(j.error).toMatch(/never read/);
+    expect(j.error).toMatch(/LOOM_ARM_PAGING_MAX_PAGES/);
+    // It must NOT claim the name is free.
+    expect(j.error).not.toMatch(/no PostgreSQL flexible server named/i);
+  });
+
+  it('a name found on a LATER page is a 409, not a free name', async () => {
+    // What the single-page read could not see: the walk reached page 3 and the
+    // collision is in those rows.
+    listServersResultMock.mockResolvedValue({
+      servers: [
+        { id: '/subscriptions/s/x/other-1', name: 'other-1', location: 'eastus', fqdn: 'o1.x' },
+        { id: '/subscriptions/s/resourceGroups/rg-loom/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg1', name: 'pg1', location: 'eastus', fqdn: 'pg1.x' },
+      ],
+      truncatedBy: null,
+      pagesFetched: 3,
+    });
+    const { POST } = await import('../route');
+    const r = await POST(postReq(VALID), NO_PARAMS);
+    expect(r.status).toBe(409);
+    expect(putKeyVaultSecretMock).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: only a COMPLETE walk licenses the write', async () => {
+    listServersResultMock.mockResolvedValue({ servers: [], truncatedBy: null, pagesFetched: 4 });
+    const { POST } = await import('../route');
+    const r = await POST(postReq(VALID), NO_PARAMS);
+    expect(r.status).toBe(201);
+    expect(putKeyVaultSecretMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -252,6 +342,11 @@ describe('POST — the password never leaves the function, and the error text is
     expect(j.error).not.toContain('belongs to no server');
     expect(j.error).toMatch(/THIS subscription/);
     expect(j.error).toMatch(/another\s+subscription or tenant/);
+    // Re-review 2026-09-07: the scope claimed must be the scope READ. A
+    // single-page read cannot support "existed in THIS subscription", so the
+    // sentence names the completeness of the walk and the identity it ran as.
+    expect(j.error).toMatch(/every page ARM returned/);
+    expect(j.error).toMatch(/cannot enumerate/);
     expect(j.adminSecretName).toBe('pg-admin-pg1');
   });
 });

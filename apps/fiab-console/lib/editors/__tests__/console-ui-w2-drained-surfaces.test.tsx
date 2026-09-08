@@ -101,6 +101,16 @@
  * was first written — and the picker's continued presence is guarded by the
  * surface's own behavioural specs, not by this file.
  *
+ * ── THE THREE FILES ADDED IN RE-REVIEW (nit 6, 2026-09-07) ─────────────────
+ * `shortcut-wizard.tsx`, `lakehouse-shortcut-editor.tsx` and
+ * `foundry-hub-editor.tsx` are touched by this wave but had no case here — the
+ * ratchet's baseline exit covered them in CI while this spec said nothing about
+ * what they are allowed to KEEP. They now have per-file arms, all ACCEPTED or
+ * PARTIAL: the first two keep only credentials minted on someone else's cloud
+ * plus two addresses that are not Azure resources at all, and the third keeps
+ * only Key Vault secret IDENTIFIERS. Their assertions read the `[name:…]`
+ * bracket as well as `[shape:…]` — see `hasTag`.
+ *
  * ONE LIMIT THAT REMAINS, stated because an unstated one reads as coverage:
  * when the ACCEPTED count drifts, `check-no-freeform.mjs` returns before it
  * prints the ratchet listing, so `--report` loses the baselined population
@@ -254,6 +264,24 @@ function hasShape(line: string, tag: string): boolean {
   return new RegExp(`\\[shape:(?:[^\\]]*,)?${esc(tag)}(?:,[^\\]]*)?\\]`).test(line);
 }
 
+/**
+ * The same bounded match over EITHER bracket the classifier emits. It tags a
+ * site by HOW it matched: `[shape:…]` when a placeholder/hint pattern fired,
+ * `[name:…]` when the field or variable NAME did. Measured in the current
+ * report, the three files added below carry both kinds on adjacent lines —
+ * `lakehouse-shortcut-editor.tsx:412 [shape:password-field]` next to
+ * `:445 [name:secret-value,secret-ref]` — so a helper that read only `shape:`
+ * would silently answer "no such site" for half of each file's population, and
+ * an assertion built on it would pass for the wrong reason.
+ *
+ * `hasShape` is deliberately NOT redefined in terms of this: the cases above
+ * were measured against the shape bracket specifically, and widening them now
+ * would change what those receipts mean.
+ */
+function hasTag(line: string, tag: string): boolean {
+  return new RegExp(`\\[(?:shape|name):(?:[^\\]]*,)?${esc(tag)}(?:,[^\\]]*)?\\]`).test(line);
+}
+
 describe('console-ui-w2 — the converted surfaces stay converted', () => {
   /**
    * THE CLASS GUARD for the blocking defect above, and it runs FIRST because
@@ -318,6 +346,19 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
     // The helpers and the tag test compose: the multi-tag ANNOTATION is both a
     // site line for this file and an arm-id site.
     expect(allSites(multi, rel).filter((l) => hasShape(l, 'arm-id'))).toHaveLength(1);
+
+    // `hasTag` reads the NAME bracket too — the per-file arms below need it,
+    // because `[name:secret-value,secret-ref]` and `[shape:password-field]`
+    // both appear in those files and `hasShape` sees only the second.
+    const named = '    [accepted] x.tsx:1027 [name:secret-value,secret-ref] Service-account JSON';
+    expect(hasShape(named, 'secret-ref'), 'hasShape must NOT read the name bracket').toBe(false);
+    expect(hasTag(named, 'secret-ref'), 'name bracket, LAST tag').toBe(true);
+    expect(hasTag(named, 'secret-value'), 'name bracket, FIRST tag').toBe(true);
+    expect(hasTag(sole, 'arm-id'), 'shape bracket still matches').toBe(true);
+    expect(hasTag(multi, 'azure-host'), 'shape bracket, middle of three').toBe(true);
+    // …with the same bounds, so a shorter or longer neighbouring tag is no hit.
+    expect(hasTag(named, 'secret')).toBe(false);
+    expect(hasTag(named, 'secret-values')).toBe(false);
   });
 
   it('#4201 spark-job-definition-editor is fully DRAINED — no site, accepted or otherwise', () => {
@@ -375,10 +416,119 @@ describe('console-ui-w2 — the converted surfaces stay converted', () => {
   });
 
   /**
+   * ── THE THREE FILES THAT HAD ONLY THE RATCHET (re-review 2026-09-07, nit 6) ─
+   * `shortcut-wizard.tsx`, `lakehouse-shortcut-editor.tsx` and
+   * `foundry-hub-editor.tsx` are all touched by this wave and were covered only
+   * by the ratchet's baseline exit — a regression in them fails
+   * `check-no-freeform.mjs` in CI, but this spec, which is where the per-file
+   * INTENT is written down, said nothing about what they are ALLOWED to keep.
+   *
+   * Each is an ACCEPTED or PARTIAL case in the taxonomy at the top, never a
+   * DRAINED one: none of these three is empty of sites, and asserting that any
+   * of them was would be false.
+   *
+   * The counts and tag sets below are read from the CURRENT report
+   * (`node scripts/ci/check-no-freeform.mjs --report`, RC=0, 0 B on stderr),
+   * not from the baseline JSON, so they describe what the classifier says today.
+   *
+   * MUTATION RECEIPT — one per arm, each measured on 2026-09-07 by reverting a
+   * picker in THAT file and reverting it back. These are three separate arms so
+   * they get three separate measurements; a receipt taken on one and asserted
+   * of the other two would be the over-assertion this PR was blocked for:
+   *
+   *   foundry-hub-editor  `BlobContainerPicker` -> `<Field label="Container /
+   *     filesystem" hint="abfss://<container>@<account>.dfs.core.windows.net">
+   *     <Input placeholder=… /></Field>`. Guard RC=1, 1996 B stderr,
+   *     `foundry-hub-editor.tsx: 3 (baseline 2)` with the new site annotated
+   *     `[shape:adls-uri,azure-host]`. Spec `Tests 1 failed | 11 passed`, the
+   *     foundry arm alone, on `expected [ …(3) ] to have a length of 2 but got 3`.
+   *   shortcut-wizard  the Dataverse `AdlsPathPicker` -> a placeholder-shaped
+   *     `<Input>`. Guard RC=1, 2869 B stderr, `ACCEPTED entry … declares 4
+   *     site(s); the classifier now finds 5`. Spec `Tests 3 failed | 9 passed`:
+   *     the wizard arm on `expected [ …(5) ] to deeply equal []` (liveSites —
+   *     the five `[accepted-file drift]` annotations are NOT `[accepted]`).
+   *   lakehouse-shortcut-editor  the "Path / prefix" `<Input>` given an
+   *     abfss-shaped placeholder + hint. Guard RC=1, 3760 B stderr, same
+   *     accepted-drift shape. Spec `Tests 3 failed | 9 passed`, this arm on
+   *     `expected [ …(6) ] to deeply equal []`.
+   *
+   * THE COLLATERAL IN THE TWO ACCEPTED CASES IS THE DOCUMENTED LIMIT, NOT A
+   * BONUS: an accepted-count drift makes the guard return before it prints the
+   * ratchet listing, so the baselined population vanishes from `--report` and
+   * the foundry arm (`expected [] to have a length of 2`) and the embedded
+   * control fail too. That is the limit stated at the top of this file, and it
+   * is why an accepted-file mutation cannot be used as the receipt for a
+   * DIFFERENT file's arm — each arm above was measured against its own file.
+   */
+  it('#3718 the OneLake shortcut wizard keeps ONLY foreign-cloud credentials', () => {
+    const rel = 'apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx';
+    const report = guardReport();
+    // Every survivor is a reviewed exception, so nothing here is un-accepted.
+    expect(liveSites(report, rel)).toEqual([]);
+    const sites = allSites(report, rel);
+    expect(sites).toHaveLength(4);
+    // …and all four are CREDENTIALS — an AWS key pair, a GCS service-account
+    // JSON, a SAS: values minted on someone else's cloud that no Azure
+    // discovery call could ever produce.
+    for (const s of sites) {
+      expect(
+        hasTag(s, 'secret-value') || hasTag(s, 'secret-ref') || hasTag(s, 'password-field'),
+        s,
+      ).toBe(true);
+    }
+    // The Azure-side asks this wave replaced with pickers (the ADLS account,
+    // its container, the Synapse Link export path) may not come back in any of
+    // the shapes the classifier would name them by.
+    for (const tag of ['adls-uri', 'arm-id', 'storage-loc', 'bare-locator']) {
+      expect(sites.filter((l) => hasTag(l, tag)), `${tag} came back`).toEqual([]);
+    }
+  });
+
+  it('#3718 lakehouse-shortcut-editor keeps 3 credentials + 2 NON-Azure locators', () => {
+    const rel = 'apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx';
+    const report = guardReport();
+    expect(liveSites(report, rel)).toEqual([]);
+    const sites = allSites(report, rel);
+    expect(sites).toHaveLength(5);
+    // The two that are NOT credentials are addresses outside Azure entirely: an
+    // S3-compatible API host (MinIO / Wasabi) and a Dataverse environment URL.
+    // Resource Graph cannot enumerate either, which is why they are the two
+    // exceptions — and why they are NAMED here rather than merely counted, so a
+    // different locator taking their place is still a failure.
+    const locators = sites.filter(
+      (l) => !hasTag(l, 'secret-value') && !hasTag(l, 'secret-ref') && !hasTag(l, 'password-field'),
+    );
+    expect(locators).toHaveLength(2);
+    expect(locators.some((l) => /Endpoint host/.test(l)), String(locators)).toBe(true);
+    expect(locators.some((l) => /Dataverse environment URL/.test(l)), String(locators)).toBe(true);
+    for (const tag of ['adls-uri', 'arm-id', 'storage-loc']) {
+      expect(sites.filter((l) => hasTag(l, tag)), `${tag} came back`).toEqual([]);
+    }
+  });
+
+  it('#3518 foundry-hub-editor asks only for Key Vault secret IDENTIFIERS, never an address', () => {
+    const rel = 'apps/fiab-console/lib/editors/foundry-hub-editor.tsx';
+    const report = guardReport();
+    const sites = allSites(report, rel);
+    // Two remain, both the `https://<vault>.vault.…/secrets/<name>` boxes on the
+    // ApiKey / CustomKeys branches: a REFERENCE to a secret, typed because the
+    // secret belongs to whoever minted it, and validated to be a KV identifier
+    // rather than a raw key (`RawSecretRejectedError`).
+    expect(sites).toHaveLength(2);
+    for (const s of sites) expect(hasTag(s, 'azure-host'), s).toBe(true);
+    // The AzureBlob target is composed from a storage-account picker, a
+    // container picker and the stored path (`composeBlobTarget`), so no address
+    // may be asked for here in any shape — and no raw credential either.
+    for (const tag of ['adls-uri', 'arm-id', 'storage-loc', 'bare-locator', 'password-field']) {
+      expect(sites.filter((l) => hasTag(l, tag)), `${tag} came back`).toEqual([]);
+    }
+  });
+
+  /**
    * The embedded control. Every assertion above is of the form "this file is
    * absent from / thin in the report", and all of them pass against an empty
    * report. This one fails if the guard ever stops naming files, which is the
-   * only way the six above could go green while measuring nothing.
+   * only way the cases above could go green while measuring nothing.
    */
   it('and the guard still NAMES files that DO carry an un-accepted site', () => {
     const report = guardReport();

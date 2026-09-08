@@ -458,16 +458,21 @@ function CreateConnectionDialog({
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   /**
-   * The CONTAINER half of a container-scoped target (`AzureBlob`). The picker
+   * The three parts of a container-scoped target (`AzureBlob`). The picker
    * above returns the account ENDPOINT from ARM — which is what makes the host
    * right in every boundary — and the container is chosen from the ones that
    * exist in the picked account, the same cascade the other four storage
    * surfaces in this wave use. `blobAccount` is the ARM id when the value came
    * from a pick and a bare account name when it was parsed back out of a
-   * stored target on edit; `BlobContainerPicker` accepts either.
+   * stored target on edit; `BlobContainerPicker` accepts either. `blobPath` is
+   * the remainder BELOW the container (`…/bronze/raw/2026`): the form never
+   * produces one, it exists so an edit-prefill of a deeper target round-trips
+   * instead of being silently repointed at the container root, and any change
+   * of account, container or category clears it.
    */
   const [blobAccount, setBlobAccount] = useState('');
   const [blobContainer, setBlobContainer] = useState('');
+  const [blobPath, setBlobPath] = useState('');
 
   const catRow = useMemo(() => CONNECTION_CATEGORIES.find((c) => c.value === category) || CONNECTION_CATEGORIES[0], [category]);
 
@@ -479,8 +484,8 @@ function CreateConnectionDialog({
    * reads and the value the PUT carries the same string.
    */
   const effectiveTarget = useMemo(
-    () => (catRow.containerScoped ? composeBlobTarget(target, blobContainer) : target),
-    [catRow.containerScoped, target, blobContainer],
+    () => (catRow.containerScoped ? composeBlobTarget(target, blobContainer, blobPath) : target),
+    [catRow.containerScoped, target, blobContainer, blobPath],
   );
 
   // Prefill from the connection being edited whenever the edit target changes.
@@ -492,13 +497,15 @@ function CreateConnectionDialog({
     // A container-scoped target is stored composed, so it is split back into the
     // two controls that produced it rather than dropped into the endpoint box.
     if (cat?.containerScoped) {
-      const { accountEndpoint, container } = splitBlobTarget(editConn.target || '');
+      const { accountEndpoint, container, path } = splitBlobTarget(editConn.target || '');
       setTarget(accountEndpoint);
       setBlobContainer(container);
+      setBlobPath(path);
       setBlobAccount(blobAccountFromEndpoint(accountEndpoint));
     } else {
       setTarget(editConn.target || '');
       setBlobContainer('');
+      setBlobPath('');
       setBlobAccount('');
     }
     setAuthMode(authTypeToMode(editConn.authType));
@@ -518,7 +525,7 @@ function CreateConnectionDialog({
   const reset = () => {
     setName(''); setCategory('AzureOpenAI'); setTarget(''); setAuthMode('AAD');
     setKvUri(''); setCustomRows([{ key: '', uri: '' }]); setShared(true); setMsg(null);
-    setBlobAccount(''); setBlobContainer('');
+    setBlobAccount(''); setBlobContainer(''); setBlobPath('');
   };
 
   const nameValid = !name || isValidConnectionName(name);
@@ -576,7 +583,18 @@ function CreateConnectionDialog({
               </Field>
               <Field label="Category" required hint={isEdit ? 'Category is fixed for an existing connection.' : undefined}>
                 <Dropdown value={catRow.label} disabled={isEdit} selectedOptions={[category]}
-                  onOptionSelect={(_, d) => { if (d.optionValue) setCategory(d.optionValue as ConnectionCategory); }}>
+                  onOptionSelect={(_, d) => {
+                    if (!d.optionValue) return;
+                    // CLEAR THE CASCADE — the class fixed in
+                    // `event-grid-topic-editor`'s Handler-type dropdown, found
+                    // here by the re-review of 2026-09-07: pick AzureBlob,
+                    // choose an account and a container, switch to AzureOpenAI,
+                    // and the composed blob endpoint survives as the AOAI
+                    // target. `target`, `blobAccount`, `blobContainer` and
+                    // `blobPath` all describe the OLD category.
+                    setCategory(d.optionValue as ConnectionCategory);
+                    setTarget(''); setBlobAccount(''); setBlobContainer(''); setBlobPath('');
+                  }}>
                   {CONNECTION_CATEGORIES.map((c) => (<Option key={c.value} value={c.value} text={c.label}>{c.label}</Option>))}
                 </Dropdown>
               </Field>
@@ -589,11 +607,14 @@ function CreateConnectionDialog({
                   onChange={(v, r) => {
                     setTarget(v || '');
                     // The ARM id off the SAME pick feeds the container listing,
-                    // so the two controls can never describe different accounts.
-                    // A hand-typed endpoint has no row, so fall back to the
-                    // account name in the host.
+                    // so WITHIN a category the two controls can never describe
+                    // different accounts; across a category CHANGE they could,
+                    // which is why the Category dropdown clears all three
+                    // rather than relying on this handler. A hand-typed
+                    // endpoint has no row — fall back to the host's account.
                     setBlobAccount(r?.id || blobAccountFromEndpoint(v || ''));
                     setBlobContainer('');
+                    setBlobPath('');
                   }}
                 />
               ) : (
@@ -610,7 +631,7 @@ function CreateConnectionDialog({
                   <BlobContainerPicker
                     account={blobAccount}
                     value={blobContainer}
-                    onChange={setBlobContainer}
+                    onChange={(c) => { setBlobContainer(c); setBlobPath(''); }}
                     surface="AI Foundry hub connection"
                     required
                     hint="The connection targets this container, not the account."
