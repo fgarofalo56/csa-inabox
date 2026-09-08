@@ -950,8 +950,9 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
-      // Drop the raw material from memory; keep only the secret name.
-      setSecretKey(''); setSaJson(''); setSasToken('');
+      // Drop the raw material from memory; keep only the secret name. `dvPath`
+      // is here because for a Dataverse source the path IS the stashed value.
+      setSecretKey(''); setSaJson(''); setSasToken(''); setDvPath('');
       set({ secretName: j.data.secretName });
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -1062,13 +1063,33 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       )}
 
       {sourceType === 'dataverse' && (
-        <AdlsPathPicker
-          label="Synapse-Link export path"
-          mode="folder"
-          value={dvPath}
-          onChange={(loc) => setDvPath(loc?.uri || '')}
-          hint="The ADLS Gen2 folder Azure Synapse Link for Dataverse writes tables to. Browse runs on the Console identity."
-        />
+        /**
+         * The `<Input>` this picker replaced carried `disabled={!!value.secretName}`
+         * like every other control here, and `AdlsPathPicker` has no `disabled`
+         * prop. Left live, the picker stayed browsable after the stash while
+         * nothing consumed the result: `dvPath` feeds only `stash()`, whose
+         * button the "Credential stored" bar has already replaced. A control
+         * that accepts input and discards it is the shape `no-vaporware.md`
+         * forbids, so the stashed state renders the same read-only affordance
+         * the SAS-token and service-account fields do, and does not echo the
+         * stored value back for the same reason theirs do not.
+         */
+        value.secretName ? (
+          <Field
+            label="Synapse-Link export path"
+            hint="Stored in Key Vault. Choose Replace… below to browse for a different folder."
+          >
+            <Input value="" disabled placeholder="Stored — the value is not shown again" />
+          </Field>
+        ) : (
+          <AdlsPathPicker
+            label="Synapse-Link export path"
+            mode="folder"
+            value={dvPath}
+            onChange={(loc) => setDvPath(loc?.uri || '')}
+            hint="The ADLS Gen2 folder Azure Synapse Link for Dataverse writes tables to. Browse runs on the Console identity."
+          />
+        )
       )}
 
       {/* Stash / stashed status */}

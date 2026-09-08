@@ -179,4 +179,27 @@ describe('the field itself', () => {
     expect(screen.getByRole('alert').textContent).toContain("unknown kind 'not-a-kind'");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * The hint is what a replaced `<Field>` used to carry. `app/catalog/unity`
+   * lost "Omit for the connector's system-assigned identity" when its
+   * hand-rolled Field became a picker, leaving "(optional)" in the label to
+   * carry a meaning it does not carry — the label says the value MAY be
+   * omitted, never what omitting it DOES. This asserts the prop reaches the
+   * rendered Field rather than being accepted and dropped.
+   */
+  it('renders the hint under the control, and renders none when none is passed', async () => {
+    const hint = "Omit for the connector's system-assigned identity.";
+    const { unmount } = wrap(
+      <AzureBackedField kind="user-assigned-identity" hint={hint} onChange={() => {}} />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    unmount();
+
+    fetchMock.mockClear();
+    wrap(<AzureBackedField kind="user-assigned-identity" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByText(hint)).toBeNull();
+  });
 });

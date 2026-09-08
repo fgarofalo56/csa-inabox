@@ -149,6 +149,17 @@ export interface AzureResourcePickerProps {
   /** Fires with the selected resource, or null when cleared. */
   onChange: (r: AzureResourceSelection | null) => void;
   label?: string;
+  /**
+   * Sub-label text under the control, rendered by Fluent's `<Field hint>`.
+   *
+   * Not decoration: several call sites replaced a hand-rolled `<Field>` whose
+   * hint said what an EMPTY value means — "Omit for the connector's
+   * system-assigned identity" — and a picker with no `hint` silently dropped
+   * that sentence, leaving "(optional)" in the label to carry a meaning it
+   * does not carry. The hint is how a picker keeps the guidance the control it
+   * replaced already had (`ux-baseline.md`).
+   */
+  hint?: string;
   placeholder?: string;
   /** Human name of the surface, for the honest gate ("<surface> needs …"). */
   surface?: string;
@@ -311,7 +322,7 @@ function fetchSource(url: string): Promise<{ j: ApiResponse; status: number }> {
 }
 
 export function AzureResourcePicker({
-  type, kind, select, sources, value, matchBy = 'id', onChange, label, placeholder,
+  type, kind, select, sources, value, matchBy = 'id', onChange, label, hint, placeholder,
   surface, manualLabel, allowManualEntry = true,
 }: AzureResourcePickerProps) {
   const s = useStyles();
@@ -511,7 +522,7 @@ export function AzureResourcePicker({
         </MessageBar>
       )}
 
-      <Field label={label || 'Azure resource'}>
+      <Field label={label || 'Azure resource'} hint={hint}>
         <div className={s.row}>
           {/* DEFECT 2 — `disabled` is now bound to the in-flight query ALONE. A
               failed discovery never leaves the user without a working control:

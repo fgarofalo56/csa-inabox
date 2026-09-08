@@ -479,6 +479,13 @@ export interface AzureBackedFieldProps {
   onChange: (value: string | null, resource: AzureResourceSelection | null) => void;
   /** Overrides the kind's default label. */
   label?: string;
+  /**
+   * Sub-label text under the control. Threaded straight to the picker's
+   * `<Field hint>`: a call site that replaced a hand-rolled `<Field>` keeps the
+   * sentence explaining what an EMPTY value means, instead of losing it with
+   * the wrapper (`ux-baseline.md`).
+   */
+  hint?: string;
   placeholder?: string;
   /** Human name of the calling surface, for the honest gate. */
   surface?: string;
@@ -487,7 +494,7 @@ export interface AzureBackedFieldProps {
 }
 
 export function AzureBackedField({
-  kind, value, onChange, label, placeholder, surface, allowManualEntry,
+  kind, value, onChange, label, hint, placeholder, surface, allowManualEntry,
 }: AzureBackedFieldProps) {
   // `Object.hasOwn`, not a bare index: `AZURE_BACKED_FIELDS` is a plain object,
   // so `AZURE_BACKED_FIELDS['toString']` returns a FUNCTION — truthy, and then
@@ -524,6 +531,7 @@ export function AzureBackedField({
       matchBy={matchByFor(def.valueFrom)}
       onChange={handle}
       label={label ?? def.label}
+      hint={hint}
       placeholder={placeholder}
       surface={surface ?? label ?? def.label}
       manualLabel={def.manualLabel}

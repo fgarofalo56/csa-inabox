@@ -1175,6 +1175,7 @@ function CreateStorageCredentialDialog({ oss, onCreated }: { oss: boolean; onCre
             <AzureBackedField
               kind="user-assigned-identity"
               label="User-assigned managed identity (optional)"
+              hint="Omit for the connector's system-assigned identity."
               value={mi}
               surface="Unity Catalog storage credentials"
               onChange={(v) => setMi(v || '')}

@@ -37,14 +37,19 @@
  * operator, the loss of the working credential of a running server (Key Vault
  * versioning is the only reason it was recoverable at all).
  *
- * So the server is RESOLVED FIRST, and there are exactly FOUR outcomes:
+ * So the server is RESOLVED FIRST, and — with the name gate added below — there
+ * are exactly SIX outcomes, only the last of which writes anything:
+ *   - the name is outside the ARM charset, or folds onto another server's
+ *     secret → 400, before the vault is even consulted.
  *   - a server of that name exists in this subscription → 409, nothing is
  *     minted and nothing is written. The existing secret is untouched.
+ *   - a DIFFERENT server owns the secret slot this name derives → 409, same
+ *     refusal, and the message names that server.
  *   - the lookup itself fails → 503, nothing is minted and nothing is written.
  *     Absence was NOT established, so it is not assumed.
  *   - the lookup TRUNCATES → 503, same refusal. See below; this is the third
  *     state that a "did I find it?" boolean cannot represent.
- *   - the lookup completes and the name is free → mint, write, create.
+ *   - the lookup completes and the slot is free → mint, write, create.
  *
  * ── AND A LIST IS NOT A LOOKUP UNTIL IT IS WHOLE (re-review, 2026-09-07) ────
  * The first version of that gate called a `listServers()` that read ONE ARM
@@ -66,6 +71,37 @@
  * returned, at the moment the request began. A server in a subscription or
  * tenant this identity cannot enumerate is invisible to that check and the
  * message says so rather than asserting the secret belongs to nothing.
+ *
+ * ── AND THE CHECK MUST BE KEYED ON WHERE THE WRITE LANDS (re-review, 2026-09-08)
+ * Both versions above compared the RAW request name against the listing, while
+ * the write went to `sanitizeSecretName('pg-admin-<name>')` — and that map is
+ * MANY-TO-ONE: `prod_pg`, `prod.pg`, `prod pg`, `prod--pg`, `prod%pg` and
+ * `prod-pg-` all land in `pg-admin-prod-pg`, the slot holding the live
+ * `prod-pg` server's credential. None of them equals `prod-pg`, so the exact
+ * comparison passed, the mint ran, the write clobbered a live credential, and
+ * ARM then rejected the name anyway. Two changes close it, and both are here
+ * because each covers a case the other does not:
+ *
+ *   1. `name` is VALIDATED FIRST against the documented flexible-server rule —
+ *      3-63 characters of lowercase letters, digits and hyphens, not starting
+ *      or ending with one (`resource-name-rules.md`,
+ *      Microsoft.DBforPostgreSQL). Every folding character above is outside
+ *      that charset, so the 400 lands before anything is minted or written.
+ *      Repeated hyphens are legal at ARM but still fold, so a name whose
+ *      derived secret is not itself (`prod--pg`) is refused separately and
+ *      says exactly why, rather than being called an invalid server name it
+ *      is not.
+ *   2. The collision check is keyed on the DESTINATION SLOT, not the input:
+ *      an EXISTING server may itself carry a folding name (`prod--pg` is a
+ *      legal server), so a brand-new, perfectly legal `prod-pg` would still
+ *      write into its slot. Validation alone cannot see that; the slot
+ *      comparison can.
+ *
+ * `adminSecretNameFor()` therefore returns the slot the write actually uses —
+ * the folded string `putKeyVaultSecret` would have produced anyway — so every
+ * branch that names the secret at risk names the SAME string. Before this, four
+ * branches printed the unfolded form and two printed the folded one, for the
+ * same slot.
  *
  * NO KEY VAULT MEANS NO PROVISION. `kvSecretsConfigGate()` is checked first and
  * returned as an honest gate naming the exact env var and role
@@ -106,9 +142,50 @@ export function mintAdminPassword(): string {
   return `${core}${pick(UPPER)}${pick(LOWER)}${pick(DIGIT)}${pick(PUNCT)}`;
 }
 
-/** Where the minted password lives, derived from the server it belongs to. */
+/**
+ * Azure PostgreSQL flexible-server names: 3-63 characters of lowercase letters,
+ * digits and hyphens, not starting or ending with a hyphen — the documented
+ * rule for `Microsoft.DBforPostgreSQL` servers (azure-resource-manager
+ * `resource-name-rules.md`). ARM enforces it, but only AFTER the Key Vault
+ * write in this route's ordering, which is why the route enforces it FIRST.
+ */
+export const SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+/**
+ * Where the minted password lives, derived from the server it belongs to.
+ *
+ * This returns the SLOT THE WRITE ACTUALLY USES. `putKeyVaultSecret` runs its
+ * argument through `sanitizeSecretName`, so a function that stopped at
+ * `pg-admin-${serverName}` would name a secret that does not exist whenever the
+ * server name carries a character Key Vault folds. Every branch below reports
+ * this string, and the collision check compares it, so the name in the message
+ * and the name on the write are the same name (`deploy-integrity.md` R7).
+ *
+ * WHY THE FOLD IS SPELLED OUT HERE rather than calling `sanitizeSecretName`:
+ * this function's whole domain is names ARM already accepts — the request name
+ * has passed `SERVER_NAME_RE` before the first call, and every other argument
+ * comes back from the ARM listing, so ARM enforced the same rule on it. Over
+ * that domain `sanitizeSecretName('pg-admin-' + n)` reduces, term by term, to
+ * one hyphen-run collapse:
+ *   - `[^0-9a-zA-Z-] -> '-'` is a no-op: `[a-z0-9-]` is inside the kept set;
+ *   - `-+ -> '-'` is the only step that can fire, and only inside `n`, since
+ *     `n` starts with an alphanumeric so the `pg-admin-` join is never a run;
+ *   - trimming a leading/trailing `-` is a no-op: the string starts `p` and
+ *     ends on `n`'s last character, which the rule forces to be alphanumeric;
+ *   - `slice(0, 127)` is a no-op: 9 + at most 63 characters.
+ * `postgres-flexible-server/__tests__/provision-credentials.test.ts` mocks
+ * `@/lib/azure/kv-secrets-client` for the write, and a route that imported the
+ * sanitizer from that module would be reaching through the mock for a pure
+ * string function. The equality above is not assumed: it is asserted against
+ * the REAL `sanitizeSecretName` over this whole domain in
+ * `app/api/items/__tests__/azure-sql-databases-routes.test.ts`, so a change to
+ * the sanitizer turns that test red instead of silently splitting the two.
+ *
+ * Collapsing is idempotent, so passing this to `putKeyVaultSecret` — which
+ * sanitizes again — is a no-op the second time round.
+ */
 export function adminSecretNameFor(serverName: string): string {
-  return `pg-admin-${serverName}`;
+  return `pg-admin-${serverName}`.replace(/-+/g, '-');
 }
 
 export const GET = withSession(async () => {
@@ -132,6 +209,51 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   if (!name || !resourceGroup || !location || !administratorLogin || !skuName || !tier) {
     return NextResponse.json(
       { ok: false, error: 'name, resourceGroup, location, administratorLogin, skuName, tier are required' },
+      { status: 400 },
+    );
+  }
+
+  /**
+   * NAME BEFORE ANYTHING ELSE. Everything downstream — the collision check, the
+   * mint, the Key Vault write — assumes `name` identifies exactly one secret
+   * slot. `sanitizeSecretName` is many-to-one over arbitrary strings, so that
+   * assumption only holds once the name is inside the charset ARM allows.
+   * Rejecting here costs the caller a 400 on a name ARM would have rejected
+   * anyway; NOT rejecting costs a live server its recorded password.
+   */
+  if (!SERVER_NAME_RE.test(name)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'invalid_name',
+        error:
+          `'${name}' is not a valid PostgreSQL flexible-server name: Azure requires 3-63 characters of ` +
+          'lowercase letters, digits and hyphens, not starting or ending with a hyphen. Nothing was minted, ' +
+          'nothing was written to Key Vault, and no server was created — the name is refused here rather than ' +
+          'at ARM because the admin-password secret is written before the create, and characters outside that ' +
+          "set collapse onto another server's secret.",
+      },
+      { status: 400 },
+    );
+  }
+  const adminSecretSlot = adminSecretNameFor(name);
+  if (adminSecretSlot !== `pg-admin-${name}`) {
+    // A legal server name that still FOLDS. Repeated hyphens are the only case
+    // that survives the charset check, and it is a real one: `prod--pg` is a
+    // name ARM accepts whose secret slot is `pg-admin-prod-pg`. Calling it an
+    // invalid server name would be false, so it gets its own reason.
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'ambiguous_secret_name',
+        error:
+          `'${name}' is a legal server name, but Key Vault secret names collapse repeated hyphens, so its ` +
+          `admin password would be stored in '${adminSecretSlot}' — the same secret another server's name ` +
+          'maps to. Loom will not write a credential into a slot that does not identify one server. Nothing ' +
+          'was minted, nothing was written to Key Vault, and no server was created. Choose a name without ' +
+          'repeated hyphens.',
+        adminSecretName: adminSecretSlot,
+      },
       { status: 400 },
     );
   }
@@ -180,7 +302,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
             `subscription: the listing stopped on its ${lookup.truncatedBy} budget after ${lookup.pagesFetched} ` +
             'page(s), so pages of the subscription were never read. Nothing was minted, nothing was written to ' +
             'Key Vault, and no server was created — a name on an unread page would have had its live admin ' +
-            `password overwritten in '${adminSecretNameFor(name)}'. Raise LOOM_ARM_PAGING_MAX_PAGES or ` +
+            `password overwritten in '${adminSecretSlot}'. Raise LOOM_ARM_PAGING_MAX_PAGES or ` +
             'LOOM_ARM_PAGING_BUDGET_MS and retry.',
           truncatedBy: lookup.truncatedBy,
           pagesFetched: lookup.pagesFetched,
@@ -206,20 +328,37 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       { status: status === 401 || status === 403 ? status : 503 },
     );
   }
-  const hit = existing.find((s) => s.name.toLowerCase() === name.toLowerCase());
-  if (hit) {
+  /**
+   * COLLISION IS A PROPERTY OF THE SLOT, NOT OF THE NAME. `name` is already
+   * known to derive its own slot one-to-one (validated above), but an EXISTING
+   * server need not: `prod--pg` is a legal server whose slot is
+   * `pg-admin-prod-pg`, so a brand-new, perfectly legal `prod-pg` would write
+   * over its credential. Comparing slots catches that; comparing names cannot.
+   * The exact-name hit is looked for first only so the 409 can say which of the
+   * two things happened.
+   */
+  const named = existing.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  const slotOwner = named ?? existing.find(
+    (s) => adminSecretNameFor(s.name).toLowerCase() === adminSecretSlot.toLowerCase(),
+  );
+  if (slotOwner) {
     return NextResponse.json(
       {
         ok: false,
-        code: 'server_exists',
-        error:
-          `A PostgreSQL flexible server named '${name}' already exists in this subscription ` +
-          `(${hit.id}). Flexible-server names are globally unique, so the create would have failed at ARM — ` +
-          `and the attempt would have overwritten '${adminSecretNameFor(name)}', which holds that server's ` +
-          'live admin password. Nothing was minted, written or created. Choose a different name, or manage ' +
-          'the existing server from its item page.',
-        existingId: hit.id,
-        adminSecretName: adminSecretNameFor(name),
+        code: named ? 'server_exists' : 'secret_slot_taken',
+        error: named
+          ? `A PostgreSQL flexible server named '${name}' already exists in this subscription ` +
+            `(${slotOwner.id}). Flexible-server names are globally unique, so the create would have failed at ` +
+            `ARM — and the attempt would have overwritten '${adminSecretSlot}', which holds that server's ` +
+            'live admin password. Nothing was minted, written or created. Choose a different name, or manage ' +
+            'the existing server from its item page.'
+          : `The admin password for '${name}' would be stored in '${adminSecretSlot}', and that secret already ` +
+            `holds the live admin password of a DIFFERENT server in this subscription, '${slotOwner.name}' ` +
+            `(${slotOwner.id}): Key Vault collapses repeated hyphens, so both names map onto the one slot. ` +
+            'Nothing was minted, written or created. Choose a name that differs by more than a repeated hyphen.',
+        existingId: slotOwner.id,
+        existingName: slotOwner.name,
+        adminSecretName: adminSecretSlot,
       },
       { status: 409 },
     );
@@ -228,7 +367,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const administratorLoginPassword = mintAdminPassword();
   let adminSecretName: string;
   try {
-    ({ name: adminSecretName } = await putKeyVaultSecret(adminSecretNameFor(name), administratorLoginPassword));
+    ({ name: adminSecretName } = await putKeyVaultSecret(adminSecretSlot, administratorLoginPassword));
   } catch (e: any) {
     const status = e instanceof KeyVaultError ? e.status : 502;
     return NextResponse.json(
@@ -256,10 +395,12 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
         error:
           `${result.error} — the admin password had already been written to Key Vault as '${adminSecretName}'. ` +
           `Before it was written, a full listing of THIS subscription (every page ARM returned to the console ` +
-          `identity) showed no PostgreSQL flexible server named '${name}', so that secret is not the credential ` +
-          'of any server Loom can see here; the next attempt with this name overwrites it. Flexible-server names ' +
-          'are globally unique, so if the name is taken in another subscription or tenant — or in a scope this ' +
-          'identity cannot enumerate — that server is invisible to this check and may be why the create failed.',
+          `identity) showed no PostgreSQL flexible server whose admin-password secret is '${adminSecretName}' — ` +
+          `neither one named '${name}' nor one whose name folds onto the same secret — so that secret is not ` +
+          'the credential of any server Loom can see here; the next attempt with this name overwrites it. ' +
+          'Flexible-server names are globally unique, so if the name is taken in another subscription or ' +
+          'tenant — or in a scope this identity cannot enumerate — that server is invisible to this check and ' +
+          'may be why the create failed.',
         adminSecretName,
       },
       { status: result.status },

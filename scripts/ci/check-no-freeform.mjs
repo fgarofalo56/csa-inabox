@@ -1938,7 +1938,7 @@ export const TOUCH_EXEMPT = new Map([
   //      `/api/items/azure-sql-database/[id]/principal-search`. The claim
   //      described a state of the tree that no longer existed.
   //
-  // What is TRUE at the time of this rewrite: one site remains, :2198, an ADF
+  // What is TRUE at the time of this rewrite: one site remains, :2205, an ADF
   // pipeline run ID typed as a receipt. The precedent the issue names for it,
   // `app/api/items/adf-pipeline/[id]/runs/route.ts`, cannot be reused here —
   // it resolves the pipeline from a Loom `adf-pipeline` ITEM binding
@@ -1954,10 +1954,13 @@ export const TOUCH_EXEMPT = new Map([
   // means for a credential no discovery call could ever supply.
   //
   // Named acceptance: delete this entry when the factory-scoped runs route
-  // lands and :2198 becomes a Dropdown. Tracked in #3626.
+  // lands and :2205 becomes a Dropdown. Tracked in #3626. (Every `:N` in this
+  // block and in the entry below is re-measured from `--report` at the head
+  // that carries it; a number that moved and a sentence that did not is the
+  // §11 "prose out-lives the measurement" failure this file exists to catch.)
   [
     'apps/fiab-console/lib/editors/unified-sql-database-editor.tsx',
-    'GHSA-v8r7-c2p5-mjf2 required binding the server selection here. Of the sites this entry once covered the Entra sid picker shipped (#3516, EntraAdminPicker at :669) and the PG admin password is minted server-side into Key Vault in this diff; the one that remains, :2198, is an ADF run ID needing a FACTORY-scoped runs route (the existing one resolves an adf-pipeline item binding this editor does not have) — #3626',
+    'GHSA-v8r7-c2p5-mjf2 required binding the server selection here. Of the sites this entry once covered the Entra sid picker shipped (#3516, EntraAdminPicker at :669) and the PG admin password is minted server-side into Key Vault in this diff; the one that remains, :2205, is an ADF run ID needing a FACTORY-scoped runs route (the existing one resolves an adf-pipeline item binding this editor does not have) — #3626',
   ],
   // #4201 RETIRED (this diff). Both Spark editors carried a TOUCH_EXEMPT entry
   // deferring their `abfss://` sites; the sites are gone, so the entries are
@@ -1966,7 +1969,7 @@ export const TOUCH_EXEMPT = new Map([
   //     an `AdlsPathPicker`; the three reference-file lists browse the lake
   //     through `AdlsBrowseDialog`. The file has LEFT the baseline entirely.
   //   azure-services-editors.tsx       2 sites → 1. :541 is now an
-  //     `AdlsPathPicker`. The survivor, :1127, is an ADF pagination JSONPath and
+  //     `AdlsPathPicker`. The survivor, :1135, is an ADF pagination JSONPath and
   //     is declared in ACCEPTED below as a classifier false positive, which
   //     removes the file from the ratchet and therefore from the boy-scout rule
   //     too — an exemption is not what is holding it up.
@@ -2062,7 +2065,7 @@ export const TOUCH_EXEMPT = new Map([
   //                         dialog has neither id, so `EntraAdminPicker` cannot
   //                         be reused here without a tenant-scoped route that
   //                         does not exist yet.
-  //                         :1991 :2005 :2006 :2009 are a Lakehouse Federation
+  //                         :1978 :1992 :1993 :1996 are a Lakehouse Federation
   //                         CONNECTION to a system outside this estate — host,
   //                         Databricks secret scope + key, or a literal
   //                         password. The enumerable half is ALREADY a picker:
@@ -2092,7 +2095,7 @@ export const TOUCH_EXEMPT = new Map([
   // rest when a tenant-scoped principal-search route exists.
   [
     'apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx',
-    '#3540 replaced the Access Connector + managed-identity ARM-id boxes here with AzureBackedField pickers (11→9 sites). The 4 abfss:// storage locations belong to the #3718 picker sweep, :1024 needs a tenant-scoped principal search (both existing routes are item-scoped), and :1991/:2005/:2006/:2009 are an external federation connection whose enumerable half is already the connectables Dropdown',
+    '#3540 replaced the Access Connector + managed-identity ARM-id boxes here with AzureBackedField pickers (11→9 sites). The 4 abfss:// storage locations belong to the #3718 picker sweep, :1024 needs a tenant-scoped principal search (both existing routes are item-scoped), and :1978/:1992/:1993/:1996 are an external federation connection whose enumerable half is already the connectables Dropdown',
   ],
   [
     'apps/fiab-console/app/catalog/unity/page.tsx',
@@ -2481,7 +2484,7 @@ export const ACCEPTED = [
     why:
       'The WEB HOOK destination of an event subscription — an HTTPS receiver that by definition lives ' +
       'outside this estate (Event Grid performs a validation handshake against it), and which nothing in ' +
-      'Azure could enumerate. Both sites are that one field: :605 is the Input and :58 is the ' +
+      'Azure could enumerate. Both sites are that one field: :620 is the Input and :58 is the ' +
       'destination-table hint describing it. Every OTHER destination this editor offers now composes its ' +
       'ARM id from a PICKED parent (`function-app-id`, `eventhubs-namespace-id`, ' +
       '`servicebus-namespace-id`, `storage-account-id`) plus a child that is either picked — Service Bus ' +
@@ -2514,12 +2517,15 @@ export const ACCEPTED = [
     ref: 'auto-bind-by-default.md §Allowed',
     why:
       'Credentials minted on someone ELSE\'S cloud, for a shortcut that reads a bucket Loom does not own: ' +
-      'an AWS access key id and secret (:999/:1002), a Google service-account JSON (:1027), and a SAS for ' +
-      'a storage account the Console UAMI cannot reach (:1058). No Azure discovery call could produce any ' +
+      'an AWS access key id and secret (:1000/:1003), a Google service-account JSON (:1028), and a SAS for ' +
+      'a storage account the Console UAMI cannot reach (:1059). No Azure discovery call could produce any ' +
       'of them, and all four are already the compliant shape — each field disables once the value is ' +
       'stashed (`value.secretName`), which is this wizard writing the secret to Key Vault and then ' +
       'referring to it by name rather than holding it. The SAS one is explicitly the escape hatch, not the ' +
       'default: its hint says "only needed for accounts the UAMI cannot reach". ' +
+      'The Dataverse export path is held to the same rule: `AdlsPathPicker` has no `disabled` prop, so ' +
+      'the stashed state renders a read-only field in its place rather than a live browser whose result ' +
+      'nothing would consume. ' +
       'The AZURE-side asks in this file are gone, which is why the count is 4 and not 6: #3718 replaced ' +
       'the ADLS storage account with an `AzureBackedField` (`storage`), the container with a ' +
       '`BlobContainerPicker` cascaded off it, and the Dataverse Synapse-Link export path with an ' +
@@ -2573,7 +2579,7 @@ export const ACCEPTED = [
     kind: 'false-positive',
     ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
     why:
-      'The ADF REST-dataset PAGINATION RULE (:1127), whose placeholder is `$.paging.next` — a JSONPath ' +
+      'The ADF REST-dataset PAGINATION RULE (:1135), whose placeholder is `$.paging.next` — a JSONPath ' +
       'expression read out of the RESPONSE BODY of whatever API the linked service fronts, which is how ' +
       'ADF expresses "where the next page link lives". It addresses a field in someone else\'s JSON, not a ' +
       'resource in this deployment, so there is nothing for a discovery call to enumerate and ' +
