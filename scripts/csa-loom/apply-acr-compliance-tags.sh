@@ -305,13 +305,25 @@ _note "tags AFTER merge:  $(printf '%s' "$AFTER" | tr -d '\n')"
 # Report explicitly on the lease keys. This is the invariant the whole design
 # exists to protect, so it is MEASURED and printed, not assumed. A lease that
 # was held before the merge and is absent after it is the #3676 regression.
-LEASE_BEFORE="$(printf '%s' "${BEFORE:-{\}}" | jq -r '[to_entries[] | select(.key | startswith("loomAcrFw")) | .key] | sort | join(" ")')"
-LEASE_AFTER="$(printf '%s' "$AFTER" | jq -r '[to_entries[] | select(.key | startswith("loomAcrFw")) | .key] | sort | join(" ")')"
-_note "firewall-lease keys before: ${LEASE_BEFORE:-<none>}"
-_note "firewall-lease keys after:  ${LEASE_AFTER:-<none>}"
-if [ "$LEASE_BEFORE" != "$LEASE_AFTER" ]; then
-  _err "the compliance-tag merge CHANGED the firewall-lease key set ('$LEASE_BEFORE' -> '$LEASE_AFTER'). That is the #3676 clobber returning; \`--operation Merge\` must never do this. Failing loudly rather than leaving a silently broken mutex."
+#
+# BOTH MUTEXES, NOT JUST THE FIRST ONE. This registry now carries two: the ACR
+# firewall lease (`loomAcrFw*`) and the estate image-write lease
+# (`loomEstateImg*`, #3676 bullet 1). They are distinct keys on the same
+# resource and this step runs on that resource, so a guard that watched only one
+# prefix would let the other be clobbered exactly as silently.
+CLOBBERED=""
+for PREFIX in loomAcrFw loomEstateImg; do
+  KEYS_BEFORE="$(printf '%s' "${BEFORE:-{\}}" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
+  KEYS_AFTER="$(printf '%s' "$AFTER" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
+  _note "${PREFIX}* keys before: ${KEYS_BEFORE:-<none>}"
+  _note "${PREFIX}* keys after:  ${KEYS_AFTER:-<none>}"
+  if [ "$KEYS_BEFORE" != "$KEYS_AFTER" ]; then
+    CLOBBERED="${CLOBBERED}${CLOBBERED:+; }${PREFIX}* ('$KEYS_BEFORE' -> '$KEYS_AFTER')"
+  fi
+done
+if [ -n "$CLOBBERED" ]; then
+  _err "the compliance-tag merge CHANGED a lease key set: $CLOBBERED. That is the #3676 clobber returning; \`--operation Merge\` must never do this. Failing loudly rather than leaving a silently broken mutex."
   exit 4
 fi
 
-_note "OK — '$ACR_NAME' carries every compliance tag, verified by read-back, with the firewall lease intact."
+_note "OK — '$ACR_NAME' carries every compliance tag, verified by read-back, with the firewall lease and the estate image-write lease intact."

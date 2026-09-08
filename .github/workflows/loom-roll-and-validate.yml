@@ -998,6 +998,8 @@ jobs:
           fi
 
           HELD=false
+          CLAIMED=false
+          CONFIRM_READ=unattempted
           RESULT=1
           DEADLINE=$(( $(date -u +%s) + LEASE_WAIT_SECONDS ))
           ATTEMPT=0
@@ -1031,10 +1033,13 @@ jobs:
               continue
             fi
             if [ "$DRC" -eq 4 ]; then
-              # Degraded-proceed. Never selected on this lane (unknown-policy is
-              # `refuse` above); the branch exists because the SAME shell body
-              # runs on the roll lane, which does choose it, and roll-race.test.mjs
-              # asserts the two bodies are byte-identical so they cannot drift.
+              # Degraded-proceed: the mutex could not be established and this
+              # lane's LEASE_UNKNOWN_POLICY is `degrade`. WHICH lane chooses it
+              # is an `env:` value in the step header above, not a property of
+              # this shell — the same bytes run on both image writers and
+              # roll-race.test.mjs asserts they stay identical, so nothing here
+              # may name one lane. Note this branch is reached BEFORE any claim
+              # write, so a degraded run leaves the tags untouched.
               RESULT=0
               break
             fi
@@ -1045,7 +1050,14 @@ jobs:
 
             # ARM tags have no compare-and-swap: write, settle, read back. Two
             # simultaneous claimants both write and last write wins, so each
-            # re-reads and at most one sees itself.
+            # re-reads and at most one sees itself — PROVIDED both writes have
+            # landed before either read-back. That is what LEASE_SETTLE_SECONDS
+            # buys, and it is a probabilistic guarantee, not an absolute one: if
+            # one claimant's `az tag update` takes longer than the settle window
+            # to become visible, both can confirm. Real ARM write-to-read latency
+            # has not been measured here, so the settle is deliberately generous
+            # relative to a tag write and the post-apply estate gate (#4318) plus
+            # its auto-heal (#3799) remain the backstop for the residue.
             EXPIRES="$(tr -d '\r\n' < "$EXP")"
             : > "$TAGS_ERR"
             set +e
@@ -1061,6 +1073,15 @@ jobs:
               READ_ERR="az tag update --operation Merge on ${ACR_ID} exited ${WRC}, so this run does NOT hold the image-write lease. The deploy identity may be missing Microsoft.Resources/tags/write — grant it 'Tag Contributor' on the registry. Detail: $(trim400 "$TAGS_ERR")"
               continue
             fi
+            # THE CLAIM LANDED. From here this run's owner id may be recorded in
+            # the registry whether or not the read-back below can be performed,
+            # so the RELEASE step must run even when `held` ends up false. A
+            # claim that lands and is never cleared strands the mutex for a full
+            # TTL, and every write on the other lane then queues behind a run
+            # that has already exited — the outage this lease exists to prevent,
+            # reintroduced on a different key. `claimed` is emitted below and the
+            # release step's `if:` reads it.
+            CLAIMED=true
 
             sleep "${LEASE_SETTLE_SECONDS:-6}"
             : > "$TAGS_ERR"
@@ -1070,8 +1091,10 @@ jobs:
             set -e
             CARGS=()
             if [ "$TRC" -ne 0 ]; then
+              CONFIRM_READ=unreadable
               CARGS=(--tags-error "az tag list --resource-id ${ACR_ID} exited ${TRC} on the claim read-back: $(trim400 "$TAGS_ERR")")
             else
+              CONFIRM_READ=ok
               CARGS=(--tags "$TAGS")
             fi
             set +e
@@ -1085,7 +1108,16 @@ jobs:
               break
             fi
             if [ "$(date -u +%s)" -ge "$DEADLINE" ]; then
-              echo "::error::estate-image-lease: lost the claim race and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. Re-run once the holding run finishes."
+              # R7: the two ways to fail the read-back are NOT the same fact, and
+              # the message may not substitute one for the other. "Lost the race"
+              # names a holding run; when the read-back could not be PERFORMED
+              # there is no established holder at all, and the last id this run
+              # put in the registry was its own.
+              if [ "$CONFIRM_READ" = "unreadable" ]; then
+                echo "::error::estate-image-lease: the claim read-back could NOT be performed, so whether this run holds the estate image-write lease is UNKNOWN, and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. It HAS written its own claim tags: the release step below clears them if the registry still records this run. If that step also cannot read the tags, clear them by hand once this run is finished: az tag update --resource-id ${ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0"
+              else
+                echo "::error::estate-image-lease: lost the claim race — the read-back named another run as the holder — and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. Re-run once the holding run finishes."
+              fi
               RESULT=1
               break
             fi
@@ -1095,54 +1127,20 @@ jobs:
           # WRITTEN EXACTLY ONCE. Appending the same key to $GITHUB_OUTPUT twice
           # leaves the result depending on undocumented runner precedence — the
           # same trap acr-firewall-lease.sh records against its own lease_state.
+          #
+          # `claimed` IS NOT A WEAKER `held`. `held` says the read-back confirmed
+          # this run as the holder and is what gates the image WRITE. `claimed`
+          # says this run's owner id reached the registry, and is what decides
+          # whether the release step has anything to clean up. They are different
+          # questions and collapsing them is what strands the mutex.
           echo "held=$HELD" >> "$GITHUB_OUTPUT"
+          echo "claimed=$CLAIMED" >> "$GITHUB_OUTPUT"
           echo "acr_id=$ACR_ID" >> "$GITHUB_OUTPUT"
           if [ "$HELD" = "true" ]; then
-            echo "::notice::estate-image-lease: HELD by ${ME} for ${LEASE_TTL_SECONDS}s after ${ATTEMPT} attempt(s). No other lane may write a Container App image until this run releases it."
+            echo "::notice::estate-image-lease: HELD by ${ME} for ${LEASE_TTL_SECONDS}s after ${ATTEMPT} attempt(s). No other lane that can READ this mutex will write a Container App image until this run releases it. That is the whole of what is established: a lane whose LEASE_UNKNOWN_POLICY is 'degrade' and which cannot read the tags at all still writes, loudly, by design."
           fi
           exit "$RESULT"
 
-      # ── SILENT-REVERT GATE (#3460, the Commercial half of #3161) ────────────
-      #
-      # CLOUD PARITY, MEASURED. `assert-no-silent-image-tag-revert` runs on
-      # deploy-fiab-gcch, deploy-fiab-il5 and gov-console-roll — and did NOT run
-      # here, on the one lane that deploys every day. Commercial adopts image
-      # tags (`Resolve reconcile target` reads the running estate) and then
-      # re-pins them, so it performs exactly the write this gate exists to
-      # police, ungated. cloud-parity.md calls a capability present in one
-      # boundary and absent in another INCOMPLETE; here the missing boundary is
-      # the busiest one.
-      #
-      # ADOPTION IS NOT THE SAME GUARANTEE. `Resolve reconcile target` and the
-      # re-pin below both try to carry the running tag forward, and where they
-      # succeed this gate is a no-op that simply prints the table. The population
-      # it exists for is what they CANNOT resolve: a digest-pinned container (an
-      # ACA revision pins the digest it was created with, so a rolled app
-      # frequently reports no tag at all), one repository running at two tags, or
-      # a container-app query that failed. Each of those leaves the key at
-      # params/commercial.bicepparam's OWN default, and a default about to
-      # overwrite a live app running something else is the silent revert. The
-      # script treats all three as UNKNOWN and refuses, because "I could not
-      # look" spent as "there is nothing there" is the collapse R7 forbids.
-      #
-      # ABOVE THE RE-PIN, NOT BETWEEN IT AND THE APPLY. This gate does its own
-      # `az containerapp list` and registry reads, and roll-race.test.mjs asserts
-      # ADJACENCY — `Re-pin appImageTags…` must be the step IMMEDIATELY before
-      # `Provision`, because "a measurement is only as fresh as the last thing
-      # that happens before it is used". Slotting this gate into that gap would
-      # add its whole duration to the staleness of the pin, reopening the exact
-      # #3676 window the re-pin exists to narrow — the same defect the ACR lease
-      # step (bounded wait: EIGHT MINUTES) already caused there once.
-      #
-      # AND THE VERDICT SURVIVES THE RE-PIN THAT FOLLOWS. pin-refresh only ever
-      # moves a tag TOWARD what is currently running, so it cannot manufacture
-      # the one state this gate refuses (a param-file DEFAULT about to overwrite
-      # a live app running something else). A pass here therefore cannot be
-      # invalidated by the step below it; the re-pin can only make the write more
-      # conservative.
-      #
-      # Same trigger as the apply: a whatif-only dispatch writes no image and has
-      # nothing to revert.
       - name: Roll Container App to new image
         id: roll
         run: |
@@ -1530,10 +1528,24 @@ jobs:
       # IT CAN FAIL THE JOB. `erased` and `stolen` mean this roll's write was not
       # exclusive after all — the exact condition #3676 is about — so they go red
       # rather than being tidied away.
+      #
+      # AND IT RUNS ON `claimed`, NOT ONLY ON `held`. A claim write that LANDS
+      # and a read-back that then FAILS leaves this run's owner id in the
+      # registry while the acquire step reports held=false. Gating this step on
+      # `held` alone would leave that id there for the whole TTL and the nightly
+      # apply would queue behind a roll that has already exited. The policy file
+      # decides what to do with the tags; exit 5 means "correct, and do NOT write
+      # the clear" — on a lost claim race those tags belong to another run.
       - name: Release the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
-        if: always() && steps.img_lease.outputs.held == 'true'
+        if: always() && (steps.img_lease.outputs.held == 'true' || steps.img_lease.outputs.claimed == 'true')
         env:
           LEASE_ACR_ID: ${{ steps.img_lease.outputs.acr_id }}
+          # What this run believes about its own lease is an INPUT to the policy
+          # file, never something it guesses. `held` = the read-back CONFIRMED
+          # this run as the holder. `claimed` = the claim write returned 0 and
+          # the confirmation could not be taken, so the tags may still name this
+          # run but nothing may be asserted about exclusivity.
+          LEASE_STATE: ${{ steps.img_lease.outputs.held == 'true' && 'held' || 'claimed' }}
           DEPLOY_SUB: ''
         run: |
           set -uo pipefail
@@ -1556,15 +1568,25 @@ jobs:
             ARGS=(--tags "$TAGS")
           fi
 
-          # `--state held` is a constant because the step's own `if:` already
-          # established it from this run's recorded output. The policy file still
-          # takes it as an INPUT rather than inferring it, so the one thing a
-          # releasing run knows about itself is never guessed.
+          # `--state` comes from the step's `env:`, which the step's own `if:`
+          # already narrowed to 'held' or 'claimed'. The policy file still takes
+          # it as an INPUT rather than inferring it, so the one thing a releasing
+          # run knows about itself is never guessed — and the two values are not
+          # interchangeable: only `held` may assert exclusivity was lost.
+          #
+          # EXIT 5 IS NOT A FAILURE AND NOT A CLEAR. It means the tags name
+          # another run (a lost claim race, which is the ORDINARY outcome for a
+          # `claimed` run) or there is nothing of this run's left. Writing
+          # `owner=none` there would erase the other run's live lease, which is
+          # the exact erasure this whole mutex exists to make impossible.
           set +e
           node scripts/ci/reconcile-policy.mjs estate-image-lease-release "${ARGS[@]}" \
-            --me "$ME" --state held
+            --me "$ME" --state "$LEASE_STATE"
           DRC=$?
           set -e
+          if [ "$DRC" -eq 5 ]; then
+            exit 0
+          fi
           if [ "$DRC" -ne 0 ]; then
             exit "$DRC"
           fi
@@ -1580,30 +1602,11 @@ jobs:
           WRC=$?
           set -e
           if [ "$WRC" -ne 0 ]; then
-            echo "::error::estate-image-lease: this run holds the image-write lease and could NOT clear it (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
+            echo "::error::estate-image-lease: the registry records THIS run as the estate image-write lease holder and it could NOT be cleared (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
             exit 1
           fi
           echo "::notice::estate-image-lease: RELEASED by ${ME}. The other image writer may proceed."
 
-      # ── PUT THE AAS SERVER BACK (#3948) ──────────────────────────────────
-      #
-      # Analysis Services has NO auto-pause, unlike the ADX cluster above whose
-      # `enableAutoStop: true` caps the cost of starting it. A resume that is
-      # never undone bills an S1 indefinitely and silently defeats the estate
-      # PAUSE tier, so the preflight's resume is explicitly bounded to the
-      # deploy window by this step.
-      #
-      # `always()` because the whole point is that it runs when the apply
-      # FAILED — that is exactly the path that would otherwise leave a resumed
-      # server running. Gated on the preflight's own `aas_resumed` output, so a
-      # server that was ALREADY running when we arrived is never suspended by
-      # this lane: it belongs to whoever started it, and suspending it could
-      # take a live workload down.
-      #
-      # `set -uo pipefail` without `-e`, matching the lease release above: a
-      # cleanup step must report a failure rather than abort and leave the rest
-      # of the cleanup unrun. The suspend's own exit code is checked and
-      # surfaced as a warning, never swallowed.
       - name: Purge Front Door (endpoint discovered, never assumed)
         id: fdpurge
         env:
@@ -1874,7 +1877,7 @@ jobs:
               Failed|Degraded|Cancelled) break ;;
             esac
             if (( $(date +%s) >= DEADLINE )); then STATUS="TimedOut"; break; fi
-            sleep "${LEASE_RETRY_SECONDS:-20}"
+            sleep 20
           done
 
           # Best-effort: surface the UAT_RESULT line from Log Analytics.

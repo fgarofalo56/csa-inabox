@@ -1932,7 +1932,16 @@ const AZ_STUB = [
   '  printf "%s\\n" "${AZ_ACR_ID:-/subscriptions/s/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acrtest}"; exit 0',
   'fi',
   'if [ "$1" = "tag" ] && [ "$2" = "list" ]; then',
-  '  if [ -n "${AZ_TAG_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_LIST_ERR" >&2; exit 1; fi',
+  // COUNTED, so a test can make the read succeed and then STOP succeeding. The
+  // claim protocol is read -> write -> settle -> read back, and the state the
+  // review found (the write LANDS, the read-back cannot be performed) is only
+  // reachable with a stub whose answer CHANGES between those two reads. A stub
+  // that fails every time never gets as far as writing anything.
+  '  N=$(cat "$AZ_TAG_LIST_COUNT"); N=$((N + 1)); printf "%s" "$N" > "$AZ_TAG_LIST_COUNT"',
+  '  if [ -n "${AZ_TAG_LIST_ERR_AFTER:-}" ] && [ "$N" -gt "${AZ_TAG_LIST_ERR_AFTER}" ]; then',
+  '    printf "%s\\n" "${AZ_TAG_LIST_ERR:-ERROR: (GatewayTimeout) the gateway did not receive a timely response}" >&2; exit 1',
+  '  fi',
+  '  if [ -z "${AZ_TAG_LIST_ERR_AFTER:-}" ] && [ -n "${AZ_TAG_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_LIST_ERR" >&2; exit 1; fi',
   '  cat "$AZ_TAG_FILE"; exit 0',
   'fi',
   'if [ "$1" = "tag" ] && [ "$2" = "update" ]; then',
@@ -2048,6 +2057,10 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     // whatever the previous step left, which is the property these tests need.
     const tagFile = join(dir, 'az-tags.json');
     const tagWriteLog = join(dir, 'az-tag-writes.log');
+    const tagListCount = join(dir, 'az-tag-list.count');
+    // Reset per STEP, like AZ_REV_COUNT: "how many reads has this step done" is
+    // a per-step question even when the tag STORE is shared across steps.
+    writeFileSync(tagListCount, '0');
     if (leaseTags) writeFileSync(tagFile, JSON.stringify(leaseTags));
 
     const script = join(dir, 'step.sh');
@@ -2079,6 +2092,7 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
         AZ_REV_COUNT: azRevCount,
         AZ_TAG_FILE: tagFile,
         AZ_TAG_WRITE_LOG: tagWriteLog,
+        AZ_TAG_LIST_COUNT: tagListCount,
       },
     });
     return {
@@ -4363,6 +4377,62 @@ test('LEASE RELEASE: an ERASED lease is its own verdict, and names no culprit it
 test('LEASE RELEASE: a run that never took the lease releases nothing', () => {
   assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'none' }).action, 'noop');
   assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: '' }).action, 'usage');
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'maybe' }).action, 'usage');
+});
+
+// ---------------------------------------------------------------------------
+// THE CLAIM THAT LANDS AND IS NEVER CONFIRMED. `az tag update` returns 0 and
+// the read-back cannot be performed: this run's owner id is in the registry
+// while it holds nothing. If that state never reaches the release path the
+// mutex is stranded for a FULL TTL and every write on the other lane queues
+// behind a run that has already exited — a transient ARM tag read turned into
+// a 45-minute estate freeze, i.e. the outage this lease exists to prevent,
+// reintroduced on a different key.
+//
+// `claimed` differs from `held` in what may be ASSERTED, not in whether the
+// tags get cleaned up: a run that never confirmed cannot have lost exclusivity,
+// so another run's id in the tag is an ordinary lost race, not the `stolen`
+// incident.
+// ---------------------------------------------------------------------------
+
+test('LEASE RELEASE: a CLAIMED-but-unconfirmed run still clears the id it left behind', () => {
+  const mine = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: ME,
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900),
+  });
+  const v = decideEstateImageLeaseRelease({ doc: mine, me: ME, state: 'claimed' });
+  assert.equal(v.action, 'clear', 'a claim that landed and was never cleared strands the mutex for a whole TTL');
+  assert.match(v.reason, /never CONFIRMED/);
+  // R7: it did not establish exclusivity, so it may not report on it either way.
+  assert.doesNotMatch(v.reason, /was NOT exclusive\./);
+});
+
+test('LEASE RELEASE: a CLAIMED run that LOST the race leaves the winner alone, and does not call it theft', () => {
+  const v = decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 900), me: ME, state: 'claimed' });
+  assert.equal(v.action, 'noop', 'clearing here would erase the WINNER\'s live lease — the erasure this mutex exists to prevent');
+  assert.match(v.reason, /LOSING the claim race/);
+  assert.doesNotMatch(v.reason, /Two lanes believed they held the same mutex/,
+    'R7: a run that never confirmed cannot assert that two lanes held the mutex');
+
+  // The same tags under `held` ARE the incident, and must still go red.
+  assert.equal(decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 900), me: ME, state: 'held' }).action, 'stolen');
+});
+
+test('LEASE RELEASE: a CLAIMED run over free tags has nothing stranded, so it is NOT the erasure case', () => {
+  const v = decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'claimed' });
+  assert.equal(v.action, 'noop');
+  assert.match(v.reason, /nothing to clear/);
+  // ... while the confirmed holder seeing the same thing is still the incident.
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'held' }).action, 'erased');
+});
+
+test('LEASE RELEASE: an unreadable read-back under CLAIMED names the strand and the exact clearing command', () => {
+  const v = decideEstateImageLeaseRelease({ readError: 'ARM said no', me: ME, state: 'claimed' });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /is NOT established/, 'R7: it may not report a strand it could not observe');
+  assert.match(v.reason, /az tag update --resource-id/, 'deploy-integrity R6: the remediation must be concrete');
+  assert.doesNotMatch(v.reason, /this run holds the estate image-write lease and/,
+    'R7: a claimed-but-unconfirmed run does not hold anything');
 });
 
 // ---------------------------------------------------------------------------
@@ -4438,18 +4508,34 @@ test('LEASE CLI: confirm is 0 only when the registry names THIS run', () => {
     '--tags-error', 'read failed']).rc, 1, 'an unreadable read-back is not a confirmation');
 });
 
-test('LEASE CLI: release is 0 for clear/noop and 1 for erased/stolen/unreadable', () => {
+test('LEASE CLI: release exit codes distinguish CLEAR from "do not touch those tags"', () => {
   const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
-    { doc: mine }).rc, 0);
+    { doc: mine }).rc, 0, '0 is the ONLY code that instructs the caller to write the clearing tags');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0, 'a claim that landed and still names this run must be cleared, or it strands the mutex');
+
+  // 5 = fine, and DO NOT WRITE. Collapsing these into 0 would make the release
+  // step write `owner=none` over the winner of a claim race — the erasure this
+  // whole mutex exists to make impossible, performed by the release path.
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'none', '--tags', TAGS_PATH],
-    { doc: tagDoc({}) }).rc, 0);
+    { doc: tagDoc({}) }).rc, 5);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 5, 'a lost claim race must not clear the winner\'s tags');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 5, 'nothing of this run\'s is stranded, so there is nothing to write');
+
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
     { doc: tagDoc({}) }).rc, 1, "ERASED must go red — it means this run's writes were not exclusive");
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
     { doc: foreignLease(NOW + 900) }).rc, 1, 'STOLEN must go red for the same reason');
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held',
     '--tags-error', 'ARM said no']).rc, 1);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed',
+    '--tags-error', 'ARM said no']).rc, 1, 'a possible strand this run cannot see must be LOUD, not tidied away');
+
+  // `--state` has no default, for the same reason `--unknown-policy` has none.
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--tags', TAGS_PATH], { doc: mine }).rc, 2);
 });
 
 // ---------------------------------------------------------------------------
@@ -4471,6 +4557,33 @@ test('WIRING: BOTH image writers take the lease, and the two shells are the SAME
     'the two lanes\' lease-acquire shells have drifted apart');
   assert.equal(runBodyOf(deploy, LEASE_RELEASE_STEP), runBodyOf(roll, LEASE_RELEASE_STEP),
     'the two lanes\' lease-release shells have drifted apart');
+});
+
+test('WIRING: the acquire step can actually RUN on both writers — its `if:` is pinned, not merely present', () => {
+  // PRESENCE IS NOT REACHABILITY. The assertion above only says the step NAME is
+  // in each file. Narrowing `if:` to `false` on either lane switches the mutex
+  // off for one of the exactly two image writers and the whole suite stayed
+  // green through it — the file's own stated property ("a decision nobody calls
+  // arbitrates nothing") going unasserted. So the gate STRING is pinned on the
+  // deploy lane and its ABSENCE is pinned on the roll lane.
+  const ifOf = (yaml) => {
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    assert.notEqual(at, -1, 'the acquire step is not in this workflow at all');
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    return /\n {8}if: (.+)/.exec(seg)?.[1]?.trim() ?? null;
+  };
+
+  // The deploy lane's ONLY legitimate reason to skip is that no registry was
+  // resolved, in which case there is nothing to write the lease onto and the
+  // apply cannot run either. Any other condition — including a narrowing to
+  // `false` — takes one of the two writers out of the mutex.
+  assert.equal(ifOf(readNorm(DEPLOY_WORKFLOW)), "steps.acr_apply_lease.outputs.acr != ''",
+    'the deploy lane acquire gate changed: it is one of exactly TWO image writers, and a narrower gate means it can write an image without the mutex');
+
+  // The roll lane has no gate at all, and must not acquire one: every path
+  // through that job writes the image field.
+  assert.equal(ifOf(readNorm(ROLL_WORKFLOW)), null,
+    'the roll lane acquire step grew an `if:` — every path through that job writes a Container App image, so any gate is a path that writes unleased');
 });
 
 test('WIRING: each lane declares its OWN unknown-policy, and they are the opposite tie-breaks', () => {
@@ -4510,13 +4623,30 @@ test('WIRING: the deploy takes the lease BEFORE the re-pin, and the roll BEFORE 
   assert.ok(rRelease > rHealth, 'the roll releases the lease before the revision is running the new image');
 });
 
-test('WIRING: the release runs on always(), so a FAILED writer cannot outlive its own mutex', () => {
+test('WIRING: the release runs on always(), and on a CLAIM that was never confirmed', () => {
   for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
     const yaml = readNorm(wf);
     const at = yaml.indexOf(`      - name: ${LEASE_RELEASE_STEP}`);
     const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
-    assert.match(seg, /if: always\(\) && steps\.img_lease\.outputs\.held == 'true'/,
-      `${wf}: the lease release is not unconditional — a failed apply/roll would hold the mutex until its TTL`);
+    // `held` alone is not enough: a claim write that LANDS and a read-back that
+    // then FAILS reports held=false while this run's owner id sits in the
+    // registry. Gated on `held` only, the release step can never clear it and
+    // the other writer queues behind a run that has already exited for a full
+    // TTL — the outage this lease exists to prevent, on a different key.
+    assert.match(
+      seg,
+      /if: always\(\) && \(steps\.img_lease\.outputs\.held == 'true' \|\| steps\.img_lease\.outputs\.claimed == 'true'\)/,
+      `${wf}: the lease release cannot clear a claim that landed without being confirmed`,
+    );
+    // The two states are not interchangeable: only `held` may assert that
+    // exclusivity was lost, so the state is passed in rather than guessed.
+    assert.match(
+      seg,
+      /LEASE_STATE: \$\{\{ steps\.img_lease\.outputs\.held == 'true' && 'held' \|\| 'claimed' \}\}/,
+      `${wf}: the release step does not tell the policy file which state this run is in`,
+    );
+    assert.match(runBodyOf(yaml, LEASE_RELEASE_STEP), /--state "\$LEASE_STATE"/,
+      `${wf}: the release hard-codes its own state instead of reporting it`);
   }
 });
 
@@ -4537,7 +4667,7 @@ test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () 
   // runner precedence — the trap acr-firewall-lease.sh records against its own
   // lease_state, and one this step's early `held=false` would have walked into.
   const body = runBodyOf(readNorm(DEPLOY_WORKFLOW), LEASE_ACQUIRE_STEP);
-  for (const key of ['held', 'acr_id']) {
+  for (const key of ['held', 'claimed', 'acr_id']) {
     const n = body.split('\n').filter((l) => l.includes(`echo "${key}=`) && l.includes('GITHUB_OUTPUT')).length;
     assert.equal(n, 1, `the lease step appends ${key} to $GITHUB_OUTPUT ${n} times`);
   }
@@ -4589,8 +4719,14 @@ const leaseEnv = (over = {}) => ({
   ...over,
 });
 
-/** The env the release step needs. */
-const leaseReleaseEnv = (acrId) => ({ ...LEASE_GH, LEASE_ACR_ID: acrId, DEPLOY_SUB: '' });
+/**
+ * The env the release step needs. `state` mirrors what the step's own `if:`
+ * narrows LEASE_STATE to: 'held' when the read-back confirmed this run,
+ * 'claimed' when only the claim WRITE landed.
+ */
+const leaseReleaseEnv = (acrId, state = 'held') => ({
+  ...LEASE_GH, LEASE_ACR_ID: acrId, LEASE_STATE: state, DEPLOY_SUB: '',
+});
 
 test('SHELL: the deploy lane TAKES the lease on a free registry and records itself in the tags', { skip: shellSkip }, () => {
   const r = runStep(LEASE_ACQUIRE_STEP, {
@@ -4713,4 +4849,109 @@ test('SHELL: releasing a lease that was ERASED under this run goes RED, and does
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /WAS ERASED WHILE THIS RUN/);
   assert.match(r.out, /is NOT established/, 'R7: it may not name a culprit it did not establish');
+});
+
+// ---------------------------------------------------------------------------
+// THE CLAIM THAT LANDS AND THE READ-BACK THAT DOES NOT — end to end through the
+// real `run:` bodies. The suite could not see this before: the only claim-race
+// arm asserted a STEALER had overwritten our id, and nothing covered the branch
+// where nothing overwrote it. One transient ARM tag read then left this run's
+// owner id in the registry for a full TTL with the release step gated so it
+// could never clear it, which is precisely the "roll fails after a 20-minute
+// wait" outage the PR body gives as the reason NOT to reuse the #2603 lease.
+// ---------------------------------------------------------------------------
+
+test('SHELL: a claim that LANDS with an unreadable read-back reports claimed=true, and says UNKNOWN not "lost the race"', { skip: shellSkip }, () => {
+  // The first `az tag list` (the free registry) succeeds; every read after it
+  // fails, so the claim write lands and the confirmation cannot be taken.
+  const unreadableAfterClaim = {
+    AZ_TAG_LIST_ERR_AFTER: '1',
+    AZ_TAG_LIST_ERR: 'ERROR: (GatewayTimeout) the gateway did not receive a timely response',
+  };
+
+  // DEPLOY LANE, wait budget exhausted: this is the message finding 2 is about.
+  const deploy = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ ...unreadableAfterClaim, LEASE_WAIT_SECONDS: '0' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(deploy.status, 1, deploy.out);
+  assert.match(deploy.outFile, /held=false/, 'an unconfirmed claim is NOT a held lease');
+  assert.match(deploy.outFile, /claimed=true/,
+    'the claim write LANDED — without this output the release step can never clear it and the mutex is stranded for a whole TTL');
+  assert.equal(deploy.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1',
+    "this run's id really is in the registry, which is why the release step has to run");
+  // R7 (finding 2): there is no holding run. The registry records THIS one.
+  assert.doesNotMatch(deploy.out, /lost the claim race/,
+    'the read-back could not be PERFORMED, so a lost race is a cause the code did not establish');
+  assert.doesNotMatch(deploy.out, /Re-run once the holding run finishes/,
+    "there is no holding run to wait for — the last id written was this run's own");
+  assert.match(deploy.out, /is UNKNOWN/, 'it must say what it does not know');
+  assert.match(deploy.out, /loomEstateImgOwner=none/,
+    'deploy-integrity R6 — the remediation must be the exact command');
+
+  // ROLL LANE with a real wait budget: the next attempt reads UNKNOWN and its
+  // `degrade` policy proceeds, so the step exits 0 — while this run's id sits
+  // in the registry for the full TTL. Exactly the state the review measured.
+  const roll = runStep(LEASE_ACQUIRE_STEP, {
+    workflow: ROLL_WORKFLOW,
+    env: leaseEnv({ ...unreadableAfterClaim, LEASE_UNKNOWN_POLICY: 'degrade', LEASE_WAIT_SECONDS: '600' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(roll.status, 0, roll.out);
+  assert.match(roll.out, /PROCEEDING UNLEASED/);
+  assert.match(roll.outFile, /held=false/);
+  assert.match(roll.outFile, /claimed=true/,
+    'the roll wrote the image AND left its own id in the tags; without claimed the apply queues behind a run that has exited');
+  assert.equal(roll.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
+});
+
+test('SHELL: the stranded claim is CLEARED by the release step, so the other writer is not blocked for a TTL', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    const acq = runStep(LEASE_ACQUIRE_STEP, {
+      ctx,
+      env: leaseEnv({ AZ_TAG_LIST_ERR_AFTER: '1', AZ_TAG_LIST_ERR: 'ERROR: (GatewayTimeout) no timely response' }),
+      leaseTags: { properties: { tags: {} } },
+    });
+    assert.equal(acq.status, 1, acq.out);
+    assert.match(acq.outFile, /claimed=true/);
+    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(acrId, '');
+
+    // This is the step the workflow's `if:` now reaches on claimed=true. The
+    // tag store is the SAME document the acquire left behind (shared ctx), so
+    // "was the mutex actually freed" is answerable rather than assumed.
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId, 'claimed') });
+    assert.equal(rel.status, 0, rel.out);
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
+      'the claim is still in the registry: every write on the other lane now queues behind a run that has already exited');
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
+    assert.match(rel.out, /never CONFIRMED/,
+      'R7: it cleared the tags, but it may not report that it held the mutex');
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', { skip: shellSkip }, () => {
+  // Exit 5 exists for exactly this: `noop` collapsed into 0 would send the shell
+  // on to write `owner=none` over a LIVE holder — the erasure this mutex exists
+  // to make impossible, performed by the release path itself.
+  const r = runStep(LEASE_RELEASE_STEP, {
+    env: leaseReleaseEnv('acr-resource-id', 'claimed'),
+    leaseTags: {
+      properties: {
+        tags: {
+          [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:owner/repo:777:1',
+          [ESTATE_IMAGE_LEASE_TAGS.expires]: String(Math.floor(Date.now() / 1000) + 600),
+        },
+      },
+    },
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(r.tagWrites.length, 0, 'the release wrote to a lease that belongs to another run');
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:777:1');
+  assert.match(r.out, /LOSING the claim race/);
+  assert.doesNotMatch(r.out, /Two lanes believed they held the same mutex/,
+    'R7: this run never confirmed, so it cannot assert that two lanes held the mutex');
 });

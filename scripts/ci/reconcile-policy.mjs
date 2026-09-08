@@ -2330,14 +2330,25 @@ export function decideEstateImageLeaseAcquire({
  * message asserts WHO did it: this code cannot establish that, and R7 says it
  * therefore may not claim it.
  *
+ * THREE INPUT STATES, NOT TWO. `held` is "the read-back CONFIRMED this run as
+ * the holder". `claimed` is "the claim write returned 0 and the confirmation
+ * could not be taken" — the registry may therefore still carry this run's owner
+ * id even though the run holds nothing. That state MUST reach this function: a
+ * claim that lands and is never cleared strands the mutex for a full TTL and
+ * every write on the other lane queues behind a run that has already exited,
+ * which is the outage this lease exists to prevent. The two states differ in
+ * what may be ASSERTED, not in whether the tags get cleaned up — a `claimed`
+ * run never established exclusivity, so losing the tag to another run is the
+ * ORDINARY outcome of a lost claim race and is not the `stolen` incident.
+ *
  * @param {{doc?:unknown, readError?:string, me?:string, state?:string}} [input]
  * @returns {{action:'clear'|'noop'|'erased'|'stolen'|'unknown'|'usage', reason:string, holder:string}}
  */
 export function decideEstateImageLeaseRelease({ doc = null, readError = '', me = '', state = '' } = {}) {
   const owner = String(me || '').trim();
   const heldState = String(state || '').trim();
-  if (heldState !== 'held' && heldState !== 'none') {
-    return { action: 'usage', holder: '', reason: `--state ${JSON.stringify(heldState)} must be 'held' or 'none' — what this run believes about its own lease is an INPUT, not something this file may guess.` };
+  if (heldState !== 'held' && heldState !== 'claimed' && heldState !== 'none') {
+    return { action: 'usage', holder: '', reason: `--state ${JSON.stringify(heldState)} must be 'held', 'claimed' or 'none' — what this run believes about its own lease is an INPUT, not something this file may guess.` };
   }
   if (heldState === 'none') {
     return { action: 'noop', holder: '', reason: 'this run never took the estate image-write lease, so it has nothing to release.' };
@@ -2345,21 +2356,48 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
   if (!LEASE_OWNER_RE.test(owner)) {
     return { action: 'usage', holder: '', reason: `--me ${JSON.stringify(owner)} is not a holder id this lease may record (see the acquire path for the character class).` };
   }
+  const confirmed = heldState === 'held';
   if (readError) {
-    return { action: 'unknown', holder: '', reason: `this run holds the estate image-write lease and the tags could NOT be read back, so it is NOT established whether it still holds it: ${String(readError).slice(0, 400)}` };
+    return {
+      action: 'unknown',
+      holder: '',
+      reason: confirmed
+        ? `this run holds the estate image-write lease and the tags could NOT be read back, so it is NOT established whether it still holds it: ${String(readError).slice(0, 400)}`
+        : `this run's claim write LANDED but it was never confirmed as the holder, and now the tags could NOT be read back either, so whether this run's owner id is still stranded in the registry is NOT established: ${String(readError).slice(0, 400)}. If it is, the other image writer queues behind a run that has already exited until the lease expires. Clear it once this run is finished: az tag update --resource-id <acr-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
+    };
   }
   const parsed = readEstateImageLease(doc);
   if (parsed.status !== 'read') {
     return { action: 'unknown', holder: '', reason: parsed.reason };
   }
   if (parsed.owner === owner) {
-    return { action: 'clear', holder: owner, reason: `this run ('${owner}') is the recorded holder — clearing the estate image-write lease.` };
+    return {
+      action: 'clear',
+      holder: owner,
+      reason: confirmed
+        ? `this run ('${owner}') is the recorded holder — clearing the estate image-write lease.`
+        : `this run ('${owner}') never CONFIRMED the estate image-write lease, but its claim write is what the registry still records — clearing it, because leaving it would block the other image writer behind a run that has already exited. Nothing is asserted here about whether this run's write (if it made one) was exclusive; it was not established either way.`,
+    };
   }
   if (!parsed.owner || parsed.owner === LEASE_OWNER_NONE) {
+    if (!confirmed) {
+      return {
+        action: 'noop',
+        holder: '',
+        reason: `this run ('${owner}') wrote a claim it never confirmed, and the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' — nothing of this run's is left stranded, so there is nothing to clear. This is NOT the erasure case: this run never established that it held the mutex, so no exclusivity was lost.`,
+      };
+    }
     return {
       action: 'erased',
       holder: '',
       reason: `THE ESTATE IMAGE-WRITE LEASE WAS ERASED WHILE THIS RUN ('${owner}') HELD IT: the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' and no other holder took over. The mutex did NOT hold for this write, so another lane may have written the same image field concurrently. What removed the tags is NOT established here; the shapes to check are a template that PUTs the ACR resource (an ARM PUT replaces a resource's tags — this is why registry.bicep carries no 'tags:' since #3681) and a manual 'az tag' write.`,
+    };
+  }
+  if (!confirmed) {
+    return {
+      action: 'noop',
+      holder: parsed.owner,
+      reason: `this run ('${owner}') wrote a claim it never confirmed and the registry now records '${parsed.owner}' (${parsed.holderUrl || 'no holder url'}) — that is what LOSING the claim race looks like, and those tags belong to that run. NOT clearing them. This run holds nothing to release and asserted no exclusivity.`,
     };
   }
   return {
@@ -2447,13 +2485,21 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
 //        at most one sees itself. Exit 0 = confirmed holder, 1 = not.
 //   node scripts/ci/reconcile-policy.mjs estate-image-lease-release
 //        (--tags <file> | --tags-error <text>) --me <holder-id>
-//        --state held|none
-//        Exit 0 = clear it / nothing to do, 1 = erased / stolen / unreadable —
-//        each of which means the mutex did not hold for this run's write.
+//        --state held|claimed|none
+//        Exit 0 = CLEAR the tags (this run is what the registry records),
+//        5 = nothing to clear and that is correct (this run never claimed, or
+//        it claimed without confirming and lost the race — the tags belong to
+//        another run and clearing them would strand IT), 1 = erased / stolen /
+//        unreadable, each of which means the mutex did not hold for a run that
+//        had CONFIRMED it held.
+//        `--state` has no default: `held` (confirmed) and `claimed` (the write
+//        landed, the read-back did not) differ in what may be asserted, and
+//        guessing between them is how a stranded mutex reads as a clean release.
 //
 // Exit 0 = proceed / ok, 1 = refuse / regression / unknown, 2 = usage error.
 // 3 and 4 are used ONLY by estate-image-lease-acquire, and mean "ask again"
-// and "proceed unleased, loudly" respectively.
+// and "proceed unleased, loudly" respectively. 5 is used ONLY by
+// estate-image-lease-release and means "ok, and do NOT write the clearing tags".
 
 /** `--name value`, or '' when absent. Last occurrence wins. */
 function cliArg(argv, name) {
@@ -2980,9 +3026,20 @@ export function cliMain(argv, io) {
         log(`::error::estate-image-lease: ${v.reason}`);
         return 2;
       }
-      if (v.action === 'clear' || v.action === 'noop') {
+      // `clear` and `noop` are BOTH fine outcomes and they are NOT the same
+      // instruction. The caller writes `owner=none` on 0 and must not write it
+      // on 5: on a lost claim race the tags name the OTHER run, and clearing
+      // them would strand it — the erasure this lease exists to make impossible,
+      // performed by the release path. A step output cannot carry that decision
+      // (it is collected at step end, and the shell needs it on the next line),
+      // so it is an exit code, like the acquire loop's.
+      if (v.action === 'clear') {
         log(`::notice::estate-image-lease: ${v.reason}`);
         return 0;
+      }
+      if (v.action === 'noop') {
+        log(`::notice::estate-image-lease: ${v.reason}`);
+        return 5;
       }
       log(`::error::estate-image-lease: ${v.reason}`);
       return 1;
