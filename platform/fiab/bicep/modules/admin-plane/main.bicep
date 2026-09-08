@@ -386,6 +386,9 @@ type observabilityConfigT = {
   @description('COST0 — optional extra notification emails (finops DL) beyond the shared action group + subscription Owners. Consumed at the top-level orchestrator.')
   programBudgetContactEmails: string[]?
 
+  @description('COST0 / #4253 — the budget period start, YYYY-MM-01. DISCOVERED FROM THE ESTATE by scripts/ci/resolve-program-budget-start-date.mjs and passed in by the deploy lane; never computed in bicep. timePeriod.startDate is IMMUTABLE, so a value that moves (the old `utcNow(\'yyyy-MM-01\')` default) fails every apply in a later month than the budget\'s creation month. EMPTY (default) means the top-level orchestrator does NOT declare the budget at all — an incremental deploy then leaves any live budget untouched and still alerting, rather than overwriting its start with a guess. Consumed at the top-level orchestrator.')
+  programBudgetStartDate: string?
+
   @description('O1 — wire the OPTIONAL on-call webhook bridge: the Console reads LOOM_ALERT_WEBHOOK_URL via a Key Vault secretRef so lib/azure/alert-dispatch.ts pages the webhook on P1/P2 (P3 stays email-band). PRE-REQ: store the webhook URL in the Loom Key Vault first (secret name alertWebhookSecretName, default loom-alert-webhook-url) — see docs/fiab/runbooks/on-call.md. Default false (empty-safe): alerting delivers via the shared action group\'s email + subscription-Owner receivers.')
   alertWebhookEnabled: bool?
 
