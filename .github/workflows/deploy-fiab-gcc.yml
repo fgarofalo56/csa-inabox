@@ -569,6 +569,49 @@ jobs:
             echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
           fi
 
+      # ── THE PROGRAM BUDGET'S IMMUTABLE START DATE (#4253) ─────────────────
+      # `timePeriod.startDate` on Microsoft.Consumption/budgets CANNOT be updated
+      # after creation, and program-budget.bicep defaulted it to
+      # `utcNow('yyyy-MM-01')` — a value that moves on the 1st of every month.
+      # Once it moves past the month the budget was created in, EVERY apply dies
+      # on that one leaf and takes the whole subscription deployment with it:
+      #   400 on 'loom-program-budget' → "Start date of budgets cannot be
+      #   updated. Please delete and create a new budget."
+      #
+      # MEASURED ON COMMERCIAL (green 2026-08-29/30/31, then 8 for 8 red from
+      # 09-01). Wired here for the same reason every other boundary is: the bomb
+      # is in the shared module, not in one lane (cloud-parity.md).
+      #
+      # THIS LANE IS SUPPORTED-IN-CODE AND HAS NEVER BEEN EXERCISED — no GCC
+      # tenant exists to authenticate against, 0 of 75 recorded runs ever
+      # executed a deploy step, and the lane is disabled_manually. So nothing
+      # here has been measured against a live GCC estate and none is claimed.
+      # It is wired anyway precisely because the failure would otherwise fire on
+      # the FIRST run after re-enablement, which is the worst moment to find it —
+      # the same reasoning gcc.bicepparam already records for LOOM_MSAL_CLIENT_ID.
+      #
+      # The value is DISCOVERED, never computed: the live budget's own start when
+      # one exists, the first of the current month only on a genuine create, and
+      # a REFUSAL when the read did not complete (deploy-integrity.md R7). Runs
+      # before the what-if so the preview and the apply describe the same
+      # deployment; gcc.bicepparam reads LOOM_PROGRAM_BUDGET_START_DATE.
+      - name: Resolve the program budget's IMMUTABLE start date (#4253)
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane and targets another subscription; the program budget is not managed there."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the live program budget cannot be read. It comes from the AZURE_GCC_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/resolve-program-budget-start-date.mjs \
+            --subscription "$DEPLOY_SUB"
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \
