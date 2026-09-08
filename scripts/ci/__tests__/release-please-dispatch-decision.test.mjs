@@ -536,7 +536,7 @@ test('CONTROL: the fatal rollup set is exactly the four conclusions the pre-#403
   // apart from the behavioural tests above. This is a CONTROL on the split, not
   // the proof — the proof is the exit codes asserted in the tests around it.
   const fatal = new Set();
-  for (const varName of ['failing', 'unmeasured']) {
+  for (const varName of ['failing', 'rollup_unmeasured']) {
     const at = STEP_SRC.indexOf(`${varName}=$(printf`);
     assert.ok(at > 0, `the ${varName} rollup expression is missing`);
     const chunk = STEP_SRC.slice(at, STEP_SRC.indexOf("join(\", \")')", at));
@@ -546,6 +546,22 @@ test('CONTROL: the fatal rollup set is exactly the four conclusions the pre-#403
     [...fatal].sort(),
     ['CANCELLED', 'ERROR', 'FAILURE', 'TIMED_OUT'],
     'the rollup arm blocks on a different set than the pre-#4038 code did',
+  );
+});
+
+test('CONTROL: the post-verify scalar does not reuse the bridge loop ARRAY name', () => {
+  // shellcheck SC2178/SC2128, caught by the repo's own workflow-actionlint gate
+  // and not by a local actionlint run with `-shellcheck=` disabled. The bridge
+  // loop declares `unmeasured=()` and reads `${#unmeasured[@]}`; the post-verify
+  // originally assigned a STRING to the same name, which destroys the array for
+  // the remainder of the script. They are different variables and must read as
+  // different variables.
+  assert.match(STEP_SRC, /\bunmeasured=\(\)/, 'the bridge loop array declaration vanished');
+  assert.match(STEP_SRC, /\brollup_unmeasured=\$\(printf/, 'the post-verify scalar is not distinctly named');
+  assert.doesNotMatch(
+    STEP_SRC,
+    /(?<!rollup_)\bunmeasured=\$\(/,
+    'a string is being assigned to the bridge loop array name again',
   );
 });
 

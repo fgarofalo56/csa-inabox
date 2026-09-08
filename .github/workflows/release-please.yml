@@ -891,12 +891,12 @@ jobs:
               # with FAILING required contexts" over a superseded run, asserting
               # a red result nothing produced.
               #
-              # THE FATAL SET IS UNCHANGED BY THIS EDIT. `failing` + `unmeasured`
-              # together are exactly the four conclusions the single pre-#4038
-              # `failing` expression matched (FAILURE, ERROR, CANCELLED,
-              # TIMED_OUT), and both arms below still exit 1. Only the sentence
-              # printed for CANCELLED/TIMED_OUT changed. That restraint is
-              # deliberate and was MEASURED: an earlier revision of this edit
+              # THE FATAL SET IS UNCHANGED BY THIS EDIT. `failing` +
+              # `rollup_unmeasured` together are exactly the four conclusions the
+              # single pre-#4038 `failing` expression matched (FAILURE, ERROR,
+              # CANCELLED, TIMED_OUT), and both arms below still exit 1. Only the
+              # sentence printed for CANCELLED/TIMED_OUT changed. That restraint
+              # is deliberate and was MEASURED: an earlier revision of this edit
               # also moved SKIPPED / ACTION_REQUIRED / STALE into the fatal set,
               # which flipped this job from exit 0 to exit 1 on a fixture where
               # all 14 required contexts were measured GREEN by the check-run
@@ -907,11 +907,17 @@ jobs:
               # verdict including skipped; re-deciding it from a second, coarser
               # view here only manufactures false reds. They are NAMED below
               # instead, without blocking on them.
+              #
+              # The `rollup_` prefix is load-bearing, not decoration: the bridge
+              # loop above uses `unmeasured` as an ARRAY, and reusing that name
+              # for a string here made shellcheck right about a real hazard
+              # (SC2178/SC2128) — the two are different variables and now read as
+              # different variables.
               failing=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
                        | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR"))
                        | .name // .context] | unique | join(", ")')
-              unmeasured=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+              rollup_unmeasured=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
                        | select(((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT"))
                        | .name // .context] | unique | join(", ")')
@@ -965,9 +971,9 @@ jobs:
                 echo "::error::concluded success on this exact commit, so a red one here is a"
                 echo "::error::genuine result — the release is broken and must not merge."
                 exit 1
-              elif [ -n "$unmeasured" ]; then
+              elif [ -n "$rollup_unmeasured" ]; then
                 echo "::error::Release PR #${num} is BLOCKED and required context(s) ended WITHOUT a"
-                echo "::error::verdict: ${unmeasured}."
+                echo "::error::verdict: ${rollup_unmeasured}."
                 echo "::error::CANCELLED / TIMED_OUT mean the run did not measure the context. This"
                 echo "::error::job does NOT call that a failing check — but it cannot call it a pass"
                 echo "::error::either, so the release stays blocked, exactly as it did before this"
