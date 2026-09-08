@@ -118,6 +118,42 @@
  * reason it is safe to run against an unmeasured estate, its body is scanned
  * for estate-mutating `az`, and the reviewer's `az group delete` probe FAILS.
  *
+ * ── ROUND 6: FIXED FOR `needs.*`, UNFIXED FOR `steps.*` ────────────────────
+ * Round 4 built judgeGuardProducer, which asserts the whole value chain behind
+ * `needs.pause-declaration.outputs.declared`. Nothing asserted the chain behind
+ * `steps.adx_preflight.outputs.estate_paused`. A reviewer MEASURED the cost by
+ * deleting ONE line — the Teardown step's
+ *
+ *   ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+ *
+ * With it gone the shell is byte-identical, `${ESTATE_PAUSED:-}` is the empty
+ * string, `'' = "true"` is false, the refusal branch is never taken and
+ * `fiab-teardown.sh` destroys a declared-paused sovereign estate. Measured with
+ * the line deleted: this suite 34 pass / 0 fail RC=0, estate-preflight.test.mjs
+ * 78 pass / 0 fail RC=0, all five scripts/ci/check-* workflow guards RC=0. One
+ * deleted line disarmed the lane's only destructive step with every guard in the
+ * repo green — because refusalBlock reads the shell TEXT and stops at the text.
+ *
+ * Empty is the failure mode of every `steps.*.outputs.*` read exactly as it is
+ * of every `needs.*.outputs.*` read, so the fix is the same shape and not one
+ * more spelling. judgeVerdictReferences DERIVES the population from the parsed
+ * YAML — every `if:` and every `env:` value in `deploy-validate` that names
+ * `steps.<id>.outputs.<verdict>` — and asserts, per reference: the id belongs to
+ * a step that exists in this job, and that step invokes the script that WRITES
+ * the value (ensure-adx-cluster-running.mjs). The refuse disposition then adds
+ * the half a census cannot see: the shell variable the refusal actually branches
+ * on, extracted from the refusal itself, must be one the step's `env:` binds to
+ * that verdict. Both ends are derived — the output name from GUARD, the variable
+ * name from the shell — so a rename moves them together and only a genuine
+ * disconnection goes red.
+ *
+ * The SAME hole existed one level up and is closed in the same pass, because
+ * closing one instance of a class and leaving its twin is the shape this file's
+ * own history is made of: `post-deploy-bootstrap` stands down on
+ * `needs.deploy-validate.outputs.estate_paused`, and nothing asserted that
+ * `deploy-validate` publishes it. judgeGuardProducer is now parameterised by the
+ * clause and the producing script, and is applied to both.
+ *
  * ── SCOPE, AND WHAT IS STILL OUTSIDE IT ────────────────────────────────────
  * Stated because the round-1 header said "EVERY step after the declaration",
  * and that was only ever true of ONE job. Precisely what this file frames:
@@ -145,6 +181,10 @@
  *             what is asserted is accounting: a named entry with a written
  *             reason, and no estate-mutating `az` in the body. A new step
  *             inserted up there FAILS until someone writes that reason down.
+ *   IN FRAME  the VALUE CHAIN behind every `steps.<id>.outputs.<verdict>` read
+ *             in `deploy-validate` — in an `if:` or an `env:` — and the binding
+ *             the Teardown refusal's shell variable actually arrives through
+ *             (judgeVerdictReferences, and the refuse branch of judge) — round 6.
  *   OUT OF FRAME  whether the guard is CORRECT — that the ADX preflight really
  *             sets `estate_paused`, and that the register really says what the
  *             operator meant. That is estate-preflight.test.mjs's population,
@@ -196,6 +236,16 @@ const PRODUCER_JOB = GUARD_SOURCE[1];
 const PRODUCER_OUTPUT = GUARD_SOURCE[2];
 /** The script that computes the declaration half with no Azure credential. */
 const PRODUCER_SCRIPT = 'estate-pause-declared.mjs';
+/**
+ * The STEP-level half of the same derivation (round 6). `steps.*.outputs.*` goes
+ * empty exactly the way `needs.*.outputs.*` does, and an empty verdict inverts
+ * every reader of it. Derived from GUARD so the clause and the chain assertion
+ * behind it cannot drift apart.
+ */
+const STEP_GUARD_SOURCE = /steps\.([\w-]+)\.outputs\.([\w-]+)/.exec(GUARD);
+const VERDICT_OUTPUT = STEP_GUARD_SOURCE[2];
+/** The script that computes the observed half — the one that writes the value. */
+const VERDICT_SCRIPT = 'ensure-adx-cluster-running.mjs';
 /** The declaration step every disposition below is measured relative to. */
 const DECLARATION_STEP = 'Estate is DECLARED paused — this run measures nothing';
 
@@ -419,8 +469,12 @@ function judgeExemption(d, member, kind) {
  * its own comment blocks and a naive scan would read one as live config (the
  * exact false positive recorded in check-required-lane-concurrency.mjs).
  *
+ * `id:` is captured because round 6 asserts the VALUE CHAIN behind every
+ * `steps.<id>.outputs.<verdict>` reference, and that chain terminates in a step
+ * id. See judgeVerdictReferences.
+ *
  * @param {string} src
- * @returns {{name:string, if:string, body:string}[]}
+ * @returns {{name:string, id:string, if:string, body:string}[]}
  */
 export function parseSteps(src) {
   const lines = String(src).split(/\r?\n/);
@@ -439,16 +493,124 @@ export function parseSteps(src) {
     const stepStart = raw.match(/^ {6}- (?:name: (.*)|(uses|id|if|run): .*)$/);
     if (/^ {6}- /.test(raw)) {
       if (cur) steps.push(cur);
-      cur = { name: stepStart && stepStart[1] ? stepStart[1].trim() : '(unnamed)', if: '', body: raw };
+      cur = { name: stepStart && stepStart[1] ? stepStart[1].trim() : '(unnamed)', id: '', if: '', body: raw };
+      const idStart = raw.match(/^ {6}- id: (.*)$/);
+      if (idStart) cur.id = idStart[1].trim();
       continue;
     }
     if (!cur) continue;
     cur.body += `\n${raw}`;
     const ifKey = raw.match(/^ {8}if: (.*)$/);
     if (ifKey) cur.if = ifKey[1].trim();
+    const idKey = raw.match(/^ {8}id: (.*)$/);
+    if (idKey) cur.id = idKey[1].trim();
   }
   if (cur) steps.push(cur);
   return steps;
+}
+
+/**
+ * The `env:` map of a single step, as written.
+ *
+ * ROUND 6. The Teardown refusal's ONLY input is `ESTATE_PAUSED`, and it arrives
+ * through this map. `refusalBlock` reads the shell and stops at the shell, so
+ * nothing until now looked at where the shell's variable comes FROM.
+ *
+ * parseSteps has already dropped comment and blank lines, so the first line that
+ * is not a 10-space `KEY: value` ends the map.
+ *
+ * @param {string} body
+ * @returns {Map<string,string>}
+ */
+export function stepEnv(body) {
+  const lines = String(body || '').split('\n');
+  const map = new Map();
+  const at = lines.findIndex((l) => /^ {8}env:\s*$/.test(l));
+  if (at < 0) return map;
+  for (let i = at + 1; i < lines.length; i += 1) {
+    const m = lines[i].match(/^ {10}([A-Za-z_][\w.-]*):\s*(.*)$/);
+    if (!m) break;
+    map.set(m[1], m[2].trim());
+  }
+  return map;
+}
+
+/**
+ * Every step id a fragment reads the estate-paused VERDICT from.
+ *
+ * The output name is DERIVED from GUARD, exactly as PRODUCER_OUTPUT is derived
+ * from JOB_GUARD, so the clause and the chain check behind it cannot drift into
+ * different spellings. Keyed to the SHAPE — any `steps.<id>.outputs.<verdict>` —
+ * never to `adx_preflight`, so renaming the producing step does not silently
+ * empty the population this walks.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function verdictRefs(text) {
+  const re = new RegExp(`steps\\.([\\w-]+)\\.outputs\\.${VERDICT_OUTPUT}\\b`, 'g');
+  return [...String(text || '').matchAll(re)].map((m) => m[1]);
+}
+
+/**
+ * Every `steps.<id>.outputs.<verdict>` read in `deploy-validate` resolves to a
+ * step that EXISTS and actually COMPUTES the verdict.
+ *
+ * ROUND 6, on a review finding, and it is the `steps.*` half of what round 4
+ * built for `needs.*`. `judgeGuardProducer` asserts the whole value chain behind
+ * `needs.pause-declaration.outputs.declared`; nothing asserted the chain behind
+ * `steps.adx_preflight.outputs.estate_paused`. The reviewer MEASURED the cost by
+ * deleting ONE line — the Teardown step's
+ *
+ *   ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+ *
+ * — after which `${ESTATE_PAUSED:-}` is the empty string, `'' = "true"` is
+ * false, the refusal branch is never taken and `fiab-teardown.sh` destroys a
+ * declared-paused sovereign estate. This suite stayed at 34/34 RC=0, the sibling
+ * estate-preflight suite at 78/78 RC=0, and all five `scripts/ci/check-*`
+ * workflow guards at RC=0. One deleted line disarmed the lane's only destructive
+ * step with every guard in the repo green.
+ *
+ * Empty is the failure mode of EVERY `steps.*.outputs.*` read, the same way it
+ * is for `needs.*.outputs.*`, so what is asserted is the chain and not one more
+ * spelling: the reference names a step id, a step in this job carries that id,
+ * and that step invokes the script that writes the value. The population is
+ * DERIVED from the parsed YAML — every `if:` and every `env:` value in the job —
+ * so a NEW reader of the verdict is in frame the day it is added.
+ *
+ * @param {{name:string, id?:string, if?:string, body?:string}[]} steps
+ * @returns {string[]}
+ */
+export function judgeVerdictReferences(steps) {
+  const problems = [];
+  const byId = new Map();
+  for (const s of steps) if (s.id) byId.set(s.id, s);
+  for (const step of steps) {
+    const sites = [];
+    for (const id of verdictRefs(step.if)) sites.push([id, 'its if:']);
+    for (const [key, value] of stepEnv(step.body)) {
+      for (const id of verdictRefs(value)) sites.push([id, `its env.${key}`]);
+    }
+    for (const [id, where] of sites) {
+      const producer = byId.get(id);
+      if (!producer) {
+        problems.push(
+          `step '${step.name}' reads \`steps.${id}.outputs.${VERDICT_OUTPUT}\` in ${where}, but no step of ` +
+            `deploy-validate carries \`id: ${id}\`. A dangling step reference evaluates to EMPTY, which silently ` +
+            'inverts every use of it: a `!= \'true\'` guard never suppresses and a refusal never refuses.',
+        );
+        continue;
+      }
+      if (!String(producer.body || '').includes(VERDICT_SCRIPT)) {
+        problems.push(
+          `step '${step.name}' reads \`steps.${id}.outputs.${VERDICT_OUTPUT}\` in ${where}, but step ` +
+            `'${producer.name}' (\`id: ${id}\`) does not invoke ${VERDICT_SCRIPT}, so nothing computes that ` +
+            'value. It would be EMPTY, and an empty verdict never suppresses and never refuses.',
+        );
+      }
+    }
+  }
+  return problems;
 }
 
 /** The one script in this repo that flips `publicNetworkAccess` on an ACR. */
@@ -667,6 +829,14 @@ export function judgeJobs(jobs) {
       } else if (!guardIsBinding(job.if, outGuard)) {
         problems.push(inertGuardProblem('job', job.name, job.if, outGuard));
       }
+      // ROUND 6. `needs.deploy-validate.outputs.estate_paused` goes empty for
+      // the same reasons `needs.pause-declaration.outputs.declared` does — and
+      // empty is TRUE against `!= 'true'`, so the chained bootstrap would wire
+      // Synapse SQL, Purview and Databricks SCIM on a declared-paused estate.
+      // Same chain assertion, now that judgeGuardProducer is parameterised: the
+      // producing job publishes THAT key, from a step output, whose id exists,
+      // in a job that invokes the script that writes the value.
+      problems.push(...judgeGuardProducer(jobs, outGuard, VERDICT_SCRIPT));
     }
     if (d.mode === 'exempt') problems.push(...judgeExemption(d, job, 'job'));
     if (d.mode === 'internal' && (typeof d.why !== 'string' || d.why.trim().length === 0)) {
@@ -701,42 +871,47 @@ export function judgeJobs(jobs) {
  * step id exists in that job, and the job invokes the script that writes it.
  *
  * @param {{name:string, body:string}[]} jobs
+ * @param {string} clause the guard clause whose value chain is being asserted
+ * @param {string} script the script that must compute it
  * @returns {string[]}
  */
-export function judgeGuardProducer(jobs) {
+export function judgeGuardProducer(jobs, clause = JOB_GUARD, script = PRODUCER_SCRIPT) {
+  const source = /needs\.([\w-]+)\.outputs\.([\w-]+)/.exec(clause);
+  assert.ok(source, `judgeGuardProducer was handed \`${clause}\`, which reads no job output at all`);
+  const [, producerJob, producerOutput] = source;
   const problems = [];
-  const producer = jobs.find((j) => j.name === PRODUCER_JOB);
+  const producer = jobs.find((j) => j.name === producerJob);
   if (!producer) {
     return [
-      `the image phase stands down on \`${JOB_GUARD}\`, but there is no '${PRODUCER_JOB}' job to produce it. ` +
+      `the image phase stands down on \`${clause}\`, but there is no '${producerJob}' job to produce it. ` +
         "An absent producer makes the clause read '' != 'true', which is TRUE — present, and never suppressing.",
     ];
   }
   const outLine = String(producer.body)
     .split('\n')
-    .find((l) => new RegExp(`^ {6}${PRODUCER_OUTPUT}:`).test(l));
+    .find((l) => new RegExp(`^ {6}${producerOutput}:`).test(l));
   if (!outLine) {
     problems.push(
-      `job '${PRODUCER_JOB}' must publish an output named \`${PRODUCER_OUTPUT}\` — that is the exact key ` +
-        `\`${JOB_GUARD}\` reads, and any other name leaves the clause empty and never suppressing.`,
+      `job '${producerJob}' must publish an output named \`${producerOutput}\` — that is the exact key ` +
+        `\`${clause}\` reads, and any other name leaves the clause empty and never suppressing.`,
     );
   } else {
     const ref = /steps\.([\w-]+)\.outputs\.([\w-]+)/.exec(outLine);
     if (!ref) {
       problems.push(
-        `job '${PRODUCER_JOB}' publishes \`${PRODUCER_OUTPUT}\` as \`${outLine.trim()}\`, which reads no step ` +
+        `job '${producerJob}' publishes \`${producerOutput}\` as \`${outLine.trim()}\`, which reads no step ` +
           'output. The guard would then read whatever that expression evaluates to, including empty.',
       );
     } else if (!new RegExp(`^ {6,}(?:- )?id: ${ref[1]}\\s*$`, 'm').test(String(producer.body))) {
       problems.push(
-        `job '${PRODUCER_JOB}' publishes \`${PRODUCER_OUTPUT}\` from \`steps.${ref[1]}.outputs.${ref[2]}\`, but ` +
+        `job '${producerJob}' publishes \`${producerOutput}\` from \`steps.${ref[1]}.outputs.${ref[2]}\`, but ` +
           `no step in that job carries \`id: ${ref[1]}\` — the output is empty and the guard never suppresses.`,
       );
     }
   }
-  if (!String(producer.body).includes(PRODUCER_SCRIPT)) {
+  if (!String(producer.body).includes(script)) {
     problems.push(
-      `job '${PRODUCER_JOB}' no longer invokes ${PRODUCER_SCRIPT}, so nothing computes the declaration ` +
+      `job '${producerJob}' no longer invokes ${script}, so nothing computes the declaration ` +
         'verdict. The output would be empty and the image phase would open the sovereign ACR on a declared pause.',
     );
   }
@@ -904,6 +1079,9 @@ export function judge(steps) {
   const at = steps.findIndex((s) => s.name === DECLARATION_STEP);
   if (at < 0) return [`the declaration step '${DECLARATION_STEP}' is gone — the stand-down has no anchor at all`];
   const problems = [];
+  // ROUND 6. Before any disposition is read: every reader of the verdict, in an
+  // `if:` or an `env:`, must resolve to a step that exists and computes it.
+  problems.push(...judgeVerdictReferences(steps));
   for (const step of steps.slice(0, at)) problems.push(...judgePreVerdict(step));
   for (const step of steps.slice(at + 1)) {
     const d = DISPOSITIONS.get(step.name);
@@ -960,6 +1138,30 @@ export function judge(steps) {
             'contains no non-zero exit, and ::error:: is an annotation rather than a failure. A declared-paused ' +
             'sovereign estate would be torn down with a red annotation printed above the teardown.',
         );
+      }
+      // …and the value the refusal branches on has to be BOUND to the verdict.
+      // ROUND 6, on a review finding. Everything above reads the SHELL and stops
+      // at the shell. Delete the one `env:` line that supplies it and the shell
+      // is unchanged, every assertion above still passes, `${ESTATE_PAUSED:-}`
+      // is the empty string, and the sovereign estate is torn down. So the shell
+      // variable the conditional actually tests is extracted from the refusal
+      // itself and traced back through `env:` to the verdict — a spelling-free
+      // chain, since a rename of the variable moves both ends together.
+      // At least ONE of the variables read has to carry the verdict: requiring
+      // all of them would forbid `[ "$ESTATE_PAUSED" = true ] && [ "$X" ]`.
+      if (refusal) {
+        const env = stepEnv(step.body);
+        const condition = refusal.split('\n')[0];
+        const read = [...new Set([...condition.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
+        const bound = read.filter((v) => env.has(v) && verdictRefs(env.get(v)).length > 0);
+        if (bound.length === 0) {
+          problems.push(
+            `step '${step.name}' branches on ${read.length > 0 ? read.map((v) => `\`$${v}\``).join(', ') : '(no shell variable)'} ` +
+              `but its env: binds none of them to \`steps.<id>.outputs.${VERDICT_OUTPUT}\`. The variable is then the ` +
+              'EMPTY STRING on every run, the refusal branch is never taken, and a declared-paused sovereign estate ' +
+              `is torn down. Its env: is {${[...env.keys()].join(', ') || 'empty'}}.`,
+          );
+        }
       }
     }
     if (d.mode === 'exempt') problems.push(...judgeExemption(d, step, 'step'));
@@ -1179,6 +1381,102 @@ test('MUTATION: a refusal that PRINTS and carries on is caught', () => {
   assert.match(problems[0], /non-zero exit/);
 });
 
+test('the verdict chain: every step reference resolves to a step that COMPUTES it', () => {
+  // The positive half. The `if:`/`env:` population is derived from the parsed
+  // YAML, so this must be non-empty — a chain check over zero references is the
+  // vacuous-green shape this file exists to avoid.
+  const steps = parseSteps(workflowText());
+  const readers = steps.filter(
+    (s) => verdictRefs(s.if).length > 0 || [...stepEnv(s.body).values()].some((v) => verdictRefs(v).length > 0),
+  );
+  assert.ok(readers.length >= 10, `expected the job's verdict readers, found ${readers.length}`);
+  // The Teardown refusal is the one that reads it through `env:` rather than
+  // `if:`, and it is the reference that had no chain assertion at all.
+  const teardown = steps.find((s) => s.name === 'Teardown');
+  const bindings = [...stepEnv(teardown.body)].filter(([, v]) => verdictRefs(v).length > 0);
+  assert.equal(bindings.length, 1, `Teardown must bind the verdict through env:, found ${bindings.length}`);
+  assert.equal(bindings[0][0], 'ESTATE_PAUSED');
+  assert.deepEqual(judgeVerdictReferences(steps), []);
+});
+
+test('MUTATION: the reviewer probe — deleting the Teardown env: binding is caught', () => {
+  // Reviewer probe, round 6, VERBATIM: delete the single line
+  //   ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+  // Measured green before this assertion existed: this suite 34/34 RC=0, the
+  // sibling estate-preflight suite 78/78 RC=0, all five scripts/ci/check-*
+  // workflow guards RC=0 — with `fiab-teardown.sh` free to destroy a declared-
+  // paused sovereign estate.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? { ...s, body: s.body.split('\n').filter((l) => !/^ {10}ESTATE_PAUSED:/.test(l)).join('\n') }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.ok(
+    /ESTATE_PAUSED/.test(teardown.body) && /exit 1/.test(teardown.body) && /::error::/.test(teardown.body),
+    'the mutant must keep the whole shell refusal — only the env: binding goes, which is what makes it a bypass',
+  );
+  assert.equal(stepEnv(teardown.body).has('ESTATE_PAUSED'), false);
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /binds none of them/);
+});
+
+test('MUTATION: renaming the producing step id leaves every reference dangling', () => {
+  // The `steps.*` twin of round 4's "delete the producer job". Every reader —
+  // the ten guards, the declaration summary and the Teardown env: binding —
+  // resolves to nothing, evaluates to EMPTY, and stops suppressing or refusing.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.id === 'adx_preflight' ? { ...s, id: 'adx_preflight_renamed' } : s,
+  );
+  const problems = judgeVerdictReferences(mutated);
+  assert.ok(problems.length >= 10, `expected every reader to be caught, got ${problems.length}`);
+  assert.ok(problems.every((p) => /no step of deploy-validate carries `id: adx_preflight`/.test(p)));
+  assert.ok(
+    problems.some((p) => /^step 'Teardown' reads .* in its env\.ESTATE_PAUSED/.test(p)),
+    `the Teardown env: binding must be in the population, got: ${problems.join(' | ')}`,
+  );
+});
+
+test('MUTATION: binding the refusal to a step that does NOT compute the verdict is caught', () => {
+  // The narrower bypass: keep the `env:` line, keep a REAL step id, and point it
+  // at a step that never writes the value. `steps.provision.outputs.estate_paused`
+  // is empty on every run, so the refusal never refuses — while every substring
+  // and every id-existence check stays satisfied.
+  const steps = parseSteps(workflowText());
+  assert.ok(steps.some((s) => s.id === 'provision'), 'the decoy id must be a REAL step id, or this proves nothing');
+  const mutated = steps.map((s) =>
+    s.name === 'Teardown'
+      ? { ...s, body: s.body.replace(/steps\.adx_preflight\.outputs\.estate_paused/, 'steps.provision.outputs.estate_paused') }
+      : s,
+  );
+  assert.equal(
+    stepEnv(mutated.find((s) => s.name === 'Teardown').body).get('ESTATE_PAUSED'),
+    '${{ steps.provision.outputs.estate_paused }}',
+    'the mutant must still BIND ESTATE_PAUSED — only the producer changes',
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /does not invoke ensure-adx-cluster-running\.mjs/);
+});
+
+test('MUTATION: deleting the deploy-validate job OUTPUT unbinds the chained bootstrap', () => {
+  // ROUND 6, the same class one level up. `post-deploy-bootstrap` stands down on
+  // `needs.deploy-validate.outputs.estate_paused != 'true'`; delete the single
+  // line that PUBLISHES that key and the clause reads '' != 'true' — TRUE — so
+  // the bootstrap wires Synapse SQL, Purview and Databricks SCIM against a
+  // declared-paused estate whose SQL pool is paused alongside its ADX cluster.
+  // The if: is untouched, so every guard-presence and guard-binding check passes.
+  const mutated = parseJobs(workflowText()).map((j) =>
+    j.name === 'deploy-validate'
+      ? { ...j, body: j.body.split('\n').filter((l) => !/^ {6}estate_paused:/.test(l)).join('\n') }
+      : j,
+  );
+  const problems = judgeJobs(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /job 'deploy-validate' must publish an output named `estate_paused`/);
+});
+
 test('every JOB is dispositioned, and the image phase stands down on the declaration', () => {
   const problems = judgeJobs(parseJobs(workflowText()));
   assert.deepEqual(problems, [], `deploy-fiab-gcch job-level stand-down is incomplete:\n  - ${problems.join('\n  - ')}`);
@@ -1232,7 +1530,9 @@ test('MUTATION: the producer publishes a DIFFERENT key than the guard reads', ()
   // evaluates to empty, `'' != 'true'` is TRUE, and the image phase opens the
   // sovereign ACR on a declared pause. Measured green at 22/0 before this.
   const mutated = parseJobs(workflowText()).map((j) =>
-    j.name === PRODUCER_JOB ? { ...j, body: j.body.replace(/^ {6}declared:/m, '      declared_paused:') } : j,
+    j.name === PRODUCER_JOB
+      ? { ...j, body: j.body.replace(new RegExp(`^ {6}${PRODUCER_OUTPUT}:`, 'm'), `      ${PRODUCER_OUTPUT}_renamed:`) }
+      : j,
   );
   const problems = judgeJobs(mutated);
   assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
