@@ -28,6 +28,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, type PagingTruncation } from './paging-budget';
 import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
+import { composeActionGroupBody, type ActionGroupInput } from './action-group-body';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -1381,62 +1382,18 @@ export async function enableDiagnostics(resourceId: string): Promise<{ settingNa
   throw lastErr instanceof Error ? lastErr : new MonitorError('enableDiagnostics failed', 500);
 }
 
-export interface SmsReceiverInput {
-  /** Numeric country/dialing code, e.g. '1' for US. */
-  countryCode: string;
-  /** Phone number (digits only). */
-  phoneNumber: string;
-}
-
-export interface WebhookReceiverInput {
-  /** HTTPS endpoint the alert POSTs the Common Alert Schema payload to. */
-  serviceUri: string;
-  useCommonAlertSchema?: boolean;
-}
-
-export interface LogicAppReceiverInput {
-  /** ARM resource id of the Logic App (Consumption) workflow. */
-  resourceId: string;
-  /** The workflow trigger's listCallbackUrl (SAS). Fetch via getLogicAppCallbackUrl(). */
-  callbackUrl: string;
-  useCommonAlertSchema?: boolean;
-}
-
-export interface ActionGroupInput {
-  /** Resource name e.g. 'loom-activator-ag', OR a full action-group ARM id (the
-   *  repair path, which must write back to the group it read). */
-  name: string;
-  /**
-   * 1-12 char short name shown in notifications, supplied EXPLICITLY by a
-   * caller that has one to say — the health-check editor's "Short name" field
-   * and `/api/monitor/action-groups`. An explicit value is an INSTRUCTION and
-   * is applied even to a group that already exists, exactly like the receiver
-   * arrays below: absent means "leave it alone", present means "make it this".
-   *
-   * Omit it (and pass {@link ActionGroupInput.shortNameIfNew} instead) when the
-   * value is DERIVED rather than chosen — see below.
-   */
-  shortName?: string;
-  /**
-   * Create-only fallback short name. Used when the group does not already carry
-   * one, and ignored otherwise.
-   *
-   * This is what the activator bind/repair paths pass: they derive a short name
-   * from the activator's display name, so it is a default, never a rename
-   * request. Sending it as `shortName` would rename `loom-default-alerts` (and
-   * every operator-named group a repair touches) to whatever activator happened
-   * to reconcile last.
-   */
-  shortNameIfNew?: string;
-  /** Email receivers; each becomes an emailReceiver. */
-  emails?: string[];
-  /** SMS receivers (Teams/pager-style escalation). */
-  smsReceivers?: SmsReceiverInput[];
-  /** Webhook receivers (Teams incoming webhook, PagerDuty, custom HTTPS sink). */
-  webhookReceivers?: WebhookReceiverInput[];
-  /** Logic App receivers (Teams adaptive-card / pipeline-trigger workflows). */
-  logicAppReceivers?: LogicAppReceiverInput[];
-}
+/**
+ * The action-group INPUT shapes and PUT-body composition live in
+ * `./action-group-body` (dependency-free, so the two modules are not circular)
+ * and are re-exported here — every importer of `monitor-client` keeps working
+ * unchanged.
+ */
+export type {
+  SmsReceiverInput,
+  WebhookReceiverInput,
+  LogicAppReceiverInput,
+  ActionGroupInput,
+} from './action-group-body';
 
 /**
  * The receiver taxonomy lives in `./action-group-receivers` (dependency-free,
@@ -1460,28 +1417,10 @@ function actionGroupPath(c: { sub: string; rg: string; name: string }): string {
 }
 
 /**
- * `groupShortName` for the PUT body, in the same precedence order the receiver
- * arrays use (#4354 review):
- *
- *   1. an EXPLICIT `shortName` — a caller that has one to say is instructing;
- *   2. the short name the group already carries — so a derived-name caller
- *      cannot rename a group somebody else named;
- *   3. `shortNameIfNew` — the derived default, which only lands on create;
- *   4. `'loom'` — ARM requires 1-12 chars, so the field is never empty.
- *
- * Empty/whitespace at any level falls through to the next: ARM rejects an empty
- * `groupShortName`, and `''` is not an instruction.
+ * `groupShortName` precedence and the receiver merge live in
+ * `./action-group-body`; see {@link resolveGroupShortName} there for the
+ * explicit-beats-existing-beats-derived rule.
  */
-function resolveGroupShortName(
-  input: Pick<ActionGroupInput, 'shortName' | 'shortNameIfNew'>,
-  existingShortName: string | undefined,
-): string {
-  for (const candidate of [input.shortName, existingShortName, input.shortNameIfNew]) {
-    const trimmed = String(candidate ?? '').trim();
-    if (trimmed) return trimmed.slice(0, 12);
-  }
-  return 'loom';
-}
 
 /**
  * Read an action group's receivers — ALL of them.
@@ -1552,32 +1491,6 @@ export async function readActionGroupReceivers(nameOrId: string): Promise<Action
  * attached.
  */
 export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
-  const emailReceivers = (input.emails || [])
-    .filter((e) => e && e.includes('@'))
-    .map((e, i) => ({ name: `email${i}`, emailAddress: e.trim(), useCommonAlertSchema: true }));
-  const smsReceivers = (input.smsReceivers || [])
-    .filter((r) => r && r.phoneNumber)
-    .map((r, i) => ({
-      name: `sms${i}`,
-      countryCode: String(r.countryCode || '1').replace(/[^0-9]/g, '') || '1',
-      phoneNumber: String(r.phoneNumber).replace(/[^0-9]/g, ''),
-    }));
-  const webhookReceivers = (input.webhookReceivers || [])
-    .filter((r) => r && r.serviceUri && /^https?:\/\//i.test(r.serviceUri))
-    .map((r, i) => ({
-      name: `webhook${i}`,
-      serviceUri: r.serviceUri.trim(),
-      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
-    }));
-  const logicAppReceivers = (input.logicAppReceivers || [])
-    .filter((r) => r && r.resourceId && r.callbackUrl)
-    .map((r, i) => ({
-      name: `logicapp${i}`,
-      resourceId: r.resourceId.trim(),
-      callbackUrl: r.callbackUrl.trim(),
-      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
-    }));
-
   // ── the READ half. Throws on anything that is not a clean 404. ──
   // Coordinates come from `input.name`, so a full ARM id writes back to the
   // group it was read from rather than minting a same-named copy in the Loom
@@ -1585,34 +1498,10 @@ export async function upsertActionGroup(input: ActionGroupInput): Promise<string
   const coords = actionGroupCoordinates(input.name);
   const existing = await readActionGroupReceivers(input.name);
 
-  const supplied: Partial<Record<ActionGroupReceiverKind, any[]>> = {
-    ...(input.emails !== undefined ? { emailReceivers } : {}),
-    ...(input.smsReceivers !== undefined ? { smsReceivers } : {}),
-    ...(input.webhookReceivers !== undefined ? { webhookReceivers } : {}),
-    ...(input.logicAppReceivers !== undefined ? { logicAppReceivers } : {}),
-  };
-  const receivers = emptyReceiverMap();
-  for (const kind of ACTION_GROUP_RECEIVER_KINDS) {
-    receivers[kind] = supplied[kind] ?? existing.byKind[kind];
-  }
+  // ── the MODIFY half. Pure, and unit-tested in `action-group-body`. ──
+  const body = composeActionGroupBody(input, existing);
 
-  const path = actionGroupPath(coords);
-  const body = {
-    location: 'Global',
-    properties: {
-      // Same precedence as the receiver arrays: EXPLICIT beats existing, and a
-      // merely-derived name (`shortNameIfNew`) loses to whatever the group
-      // already carries. #4354 review — the previous form was
-      // `existing.shortName || input.shortName`, which made the health-check
-      // editor's "Short name" field unable to ever apply to an existing group
-      // while the route still persisted the submitted value to Cosmos and
-      // returned ok:true. ARM caps this at 12 chars.
-      groupShortName: resolveGroupShortName(input, existing.shortName),
-      enabled: true,
-      ...receivers,
-    },
-  };
-  const res = await armPut(path, body);
+  const res = await armPut(actionGroupPath(coords), body);
   return res?.id || `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/microsoft.insights/actionGroups/${coords.name}`;
 }
 
