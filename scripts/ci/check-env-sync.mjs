@@ -548,6 +548,13 @@ const ALLOWLIST = new Set([
   'LOOM_QUERY_CACHE_COSMOS_DISABLED', // opt-OUT of the distributed (Cosmos) result-cache tier (PSR-5 default-ON; set '1' to disable)
   'LOOM_QUERY_CACHE_DISABLED',      // query-cache toggle (code default)
   'LOOM_QUERY_CACHE_MAX',           // query-cache size cap (code default)
+  // #3400 cross-replica SQL query cancel. The FEATURE is default-ON and needs no
+  // env var: azure-sql-client.ts opens the cancel-intent store whenever
+  // LOOM_COSMOS_ENDPOINT (already emitted, already delivered) is set. This name
+  // is the opt-OUT kill switch only, read as `=== '1'` and unset by every
+  // deployment — same class as LOOM_QUERY_CACHE_COSMOS_DISABLED above. Emitting
+  // it from bicep would be the wrong fix: the deploy has no value to supply.
+  'LOOM_SQL_CANCEL_INTENTS_DISABLED', // opt-OUT of cross-replica cancel intents (default-ON wherever Cosmos is configured; set '1' to disable)
   'LOOM_ADMIN_CENTER_MCP_ENDPOINT', // opt-in M365 Admin Center MCP
   'LOOM_DATAVERSE_MCP_ENDPOINT',    // opt-in Dataverse MCP
   'LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT', // opt-in OneDrive/SharePoint MCP
