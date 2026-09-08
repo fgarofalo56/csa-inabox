@@ -120,7 +120,7 @@
  * not something these helpers can repair.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 
 // vitest runs with `apps/fiab-console` as its root, so the repo root is two up.
@@ -146,46 +146,72 @@ const REPO = path.resolve(process.cwd(), '../..');
  * have nothing to do with these files. What must NOT be ignored is the guard
  * failing to run, so that is asserted.
  *
- * ── SPAWNED ONCE, NOT ONCE PER CASE ────────────────────────────────────────
- * `spawnSync` BLOCKS the vitest worker's event loop, and the guard takes ~4s
- * over the whole tree. Seven cases meant seven serial blocking spawns, which
- * starved vitest's `onTaskUpdate` RPC heartbeat: measured 2026-09-07 on this
- * workstation, 3 of 5 consecutive runs of an otherwise-passing file ended
- * RC=1 — twice on `[vitest-worker]: Timeout calling "onTaskUpdate"` with all
- * 9 tests reported PASSED, and once on three cases hitting the 30s
- * `testTimeout` outright. A spec that reds on machine load is not measuring
- * its subject, which is the same class of defect as one that greens over a
- * regression.
+ * ── SPAWNED ONCE, AND ASYNCHRONOUSLY ───────────────────────────────────────
+ * The guard takes ~4s over the whole tree unloaded and was measured at 144s on
+ * this workstation under agent load. Two consequences follow, and the first
+ * fix addressed only one of them.
  *
- * The report is a pure function of the working tree and the tree does not
- * change during a run, so one spawn serves every case, and it happens in a
- * `beforeAll` with its own generous timeout rather than inside whichever case
- * happens to run first. That matters: on a loaded machine a SINGLE guard run
- * was measured at 144s, so leaving the spawn under the 30s per-test
- * `testTimeout` would just move the same load-dependent red onto one case.
- * This is a scheduling change only — the command, its arguments and the two
- * streams read are unchanged.
+ * (a) PER-CASE spawns starve the run. Seven cases meant seven serial spawns:
+ * measured 2026-09-07, 3 of 5 consecutive runs of an otherwise-passing file
+ * ended RC=1 — twice on `[vitest-worker]: Timeout calling "onTaskUpdate"` with
+ * all 9 tests reported PASSED, once on three cases hitting the 30s
+ * `testTimeout`. The report is a pure function of the working tree and the
+ * tree does not change during a run, so ONE spawn in `beforeAll` serves every
+ * case.
+ *
+ * (b) A SYNCHRONOUS spawn starves it even when there is only one, which (a)
+ * did not fix. `beforeAll(…, 600_000)` bought a longer clock, but `spawnSync`
+ * still BLOCKS the worker's event loop for the child's entire lifetime, so
+ * vitest's `onTaskUpdate` RPC heartbeat cannot be serviced and times out
+ * regardless of the timeout. MEASURED 2026-09-07 at the tip of this branch,
+ * before this change: two consecutive runs of this file alone, each
+ * `12 passed (12)` with `1 error` and **RC=1**, the error being exactly
+ * `Error: [vitest-worker]: Timeout calling "onTaskUpdate"`. A file that
+ * reports every case green and still exits non-zero reds the required
+ * `vitest (node 20)` context for a reason that has nothing to do with its
+ * subject — the same class of defect as one that greens over a regression.
+ *
+ * So the spawn is `execFile` awaited as a promise. The child still runs to
+ * completion before any case executes, but the worker's loop stays free to
+ * answer the heartbeat while it does. Scheduling only — the command, its
+ * arguments and the two streams read are unchanged.
  */
 let CACHED: string | null = null;
 
-function runGuard(): string {
-  const r = spawnSync(process.execPath, ['scripts/ci/check-no-freeform.mjs', '--report'], {
-    cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+/**
+ * `execFile` rejects on a non-zero exit, and this guard EXITS NON-ZERO by
+ * design whenever the ratchet is over baseline — a state several cases here
+ * are written to read. So the rejection is not fatal: an ExecFileException
+ * from a child that RAN carries its `stdout`/`stderr`, and those are the two
+ * streams this helper exists to return. Only a failure to LAUNCH — nothing on
+ * either stream — is rethrown, which is the case the old `r.error` assertion
+ * covered.
+ */
+async function runGuard(): Promise<string> {
+  const out = await new Promise<string>((resolve, reject) => {
+    execFile(
+      process.execPath,
+      ['scripts/ci/check-no-freeform.mjs', '--report'],
+      { cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && !stdout && !stderr) reject(err);
+        else resolve(`${stdout || ''}\n${stderr || ''}`);
+      },
+    );
   });
-  expect(r.error, String(r.error)).toBeUndefined();
-  const out = `${r.stdout || ''}\n${r.stderr || ''}`;
   expect(out, 'guard produced no report').toMatch(/asking for an infrastructure value/);
   return out;
 }
 
-/** The one spawn, off the per-test clock. */
-beforeAll(() => { CACHED = runGuard(); }, 600_000);
+/** The one spawn, off the per-test clock AND off the worker's event loop. */
+beforeAll(async () => { CACHED = await runGuard(); }, 600_000);
 
 function guardReport(): string {
-  // Lazy fallback, so the helper is still correct if a future case runs
-  // outside this file's `beforeAll`.
-  if (CACHED === null) CACHED = runGuard();
-  return CACHED;
+  // `beforeAll` is file-scoped, so every case here sees a populated cache. If
+  // that ever stops being true the failure must be LOUD — a case that quietly
+  // re-ran the guard itself would reintroduce (a) above.
+  expect(CACHED, 'the beforeAll guard spawn did not run — see SPAWNED ONCE above').not.toBeNull();
+  return CACHED as string;
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
