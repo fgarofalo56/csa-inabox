@@ -212,5 +212,10 @@ describe('ontologySqlRefViolation — the pure policy, exercised directly', () =
     // CODE does, not what the server would do.
     expect(ontologySqlRefViolation('sysobjects', 'db')).toBeNull();
     expect(ontologySqlRefViolation('sysdatabases', 'db')).toBeNull();
+    // The asymmetry the resolver comment now names, pinned as a PAIR so the two
+    // halves cannot drift apart: the same object, two name parts, opposite
+    // answers.
+    expect(ontologySqlRefViolation('syslogins', 'db')).toBeNull();
+    expect(ontologySqlRefViolation('sys.syslogins', 'db')).toContain('SQL engine metadata');
   });
 });

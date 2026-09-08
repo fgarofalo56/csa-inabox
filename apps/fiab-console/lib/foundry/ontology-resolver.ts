@@ -96,9 +96,23 @@ function asOfDesc(asOf: AsOfSpec): string {
 //
 // WHAT LANDED: the NAME-SPACE half — `ontologySqlRefViolation` (pure, in
 // ontology-binding.ts). No engine-metadata schema (`sys`, `INFORMATION_SCHEMA`,
-// …), and no 3-part ref naming a database other than the one the binding
-// declares. That refuses the exact read the issue names, and every variant of
-// it, before a query is built.
+// …) named as the SCHEMA of a `schema.table` or `db.schema.table` ref, and no
+// 3-part ref naming a database other than the one the binding declares. That
+// refuses the read the issue names — `master.sys.sql_logins`, and its bare
+// `sys.`, cased and bracketed spellings — before a query is built.
+//
+// AND WHERE IT IS SILENT, IN THE SAME BREATH AS THE CLAIM. The schema test sits
+// behind `parts.length >= 2`, so a ONE-PART ref (`syslogins`, `sysobjects`,
+// `sysdatabases`) gets no schema test at all: there is no schema in the string
+// to test, and which schema the engine resolves it against is a server-side
+// decision a pure string function cannot see. Measured at head: `sys.sql_logins`
+// REFUSED, `syslogins` ALLOWED. Whether Synapse resolves those legacy
+// compatibility names out of `sys` for an unqualified ref was NOT established
+// here — no Synapse endpoint was reached — so this is "the guard does not cover
+// it", not "there is a hole". The full paragraph is on
+// `ontologySqlRefViolation` (WHERE THIS GUARD IS SILENT, SAID OUT LOUD); this
+// comment used to say the guard refused "every variant" of the read, which was
+// a security-scope claim the code does not support.
 //
 // WHAT DID NOT LAND, STATED PLAINLY RATHER THAN IMPLIED AWAY: the LIVE half —
 // "is this ref actually one of the objects the binding's catalog EXPOSES?",
@@ -113,9 +127,10 @@ function asOfDesc(asOf: AsOfSpec): string {
 //
 // SO BE PRECISE ABOUT WHAT IS AND IS NOT TRUE NOW: a ref naming a real user
 // table in the binding's own database that the caller was never meant to read
-// is STILL resolved. What is closed is the engine-metadata and cross-database
-// class — the class the sink was reported for. Anything more would be a claim
-// this code does not support.
+// is STILL resolved, and a ONE-PART ref gets no schema test at all. What is
+// closed is the engine-metadata and cross-database class FOR `schema.table` and
+// `db.schema.table` refs — the spelling the sink was reported for. Anything
+// more would be a claim this code does not support.
 // ===========================================================================
 
 /**
