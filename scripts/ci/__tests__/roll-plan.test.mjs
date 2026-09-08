@@ -23,6 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -34,6 +35,7 @@ import {
   imageRef,
   planRoll,
   verifyLive,
+  reconcileSplitConsequence,
 } from '../roll-plan.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -393,4 +395,101 @@ test('CLI --verify exits 1 when nothing was verified', () => {
 test('CLI --verify exits 2 on malformed JSON rather than treating it as empty', () => {
   const r = cli(['--verify', '--expected', '{oops', '--observed', '{}']);
   assert.equal(r.code, 2);
+});
+
+/* ── #4290 — the notice may not state a version literal it did not derive ─── */
+
+// The two branches that fire for a repository the CLI's own registry cannot
+// reach today (loom-unity declares a canonicalApp, loom-trino has an entry), so
+// they are driven directly against a synthetic key table. Both used to end in a
+// hard-coded 'v0.1'.
+//
+// WHY IT MATTERS. That literal was neither derived nor checked. The fallback is
+// `readEnvironmentVariable(<envVar>, <default>)` and the default is written PER
+// KEY, PER PARAM FILE: commercial-full.bicepparam alone carries v2.1 (console),
+// v0.7 (mcp/orchestrator/activator/mirroring/directLake) and v0.1 (the rest),
+// and a param file that omits the key falls through to a THIRD default inlined
+// in admin-plane/main.bicep. The first branch, by construction, fires for a
+// repository the table does NOT name — so that sentence cannot know the default
+// at all. Stating one is a deploy-integrity R7 assertion the code never
+// established.
+const VERSION_LITERAL = /\bv\d+(\.\d+)?\b/;
+
+test('#4290 the no-appImageTags-entry consequence states NO version literal', () => {
+  const s = reconcileSplitConsequence('loom-console', []);
+  assert.match(s, /has NO appImageTags entry/);
+  assert.doesNotMatch(
+    s, VERSION_LITERAL,
+    'this branch fires for a repository the key table does not name, so it cannot know which '
+    + 'bicep default the next apply would fall back to — naming one asserts what it never established',
+  );
+  // …and it must still say WHAT happens, or the R7 fix has just deleted the
+  // consequence instead of making it true.
+  assert.match(s, /resets every app on the repository to that param file's bicep default/);
+});
+
+test('#4290 the no-canonicalApp consequence DERIVES the env var and states NO version literal', () => {
+  const table = [{ key: 'trino', repo: 'loom-trino', envVar: 'LOOM_TRINO_TAG' }];
+  const s = reconcileSplitConsequence('loom-trino', table);
+  // Derived, not restated.
+  assert.match(s, /appImageTags\.trino/);
+  assert.match(s, /readEnvironmentVariable\(LOOM_TRINO_TAG, <its per-param-file default>\)/);
+  assert.doesNotMatch(
+    s, VERSION_LITERAL,
+    'the env var is derived from the table but the tag was hard-coded in the same sentence — '
+    + 'no single literal is right for both, so neither may be stated',
+  );
+  assert.match(s, /DOWN to the deployment's configured default/);
+  assert.match(s, /revert, not a convergence/);
+});
+
+test('#4290 the canonicalApp branch is unchanged and also literal-free', () => {
+  const table = [{ key: 'unity', repo: 'loom-unity', envVar: 'LOOM_UNITY_TAG', canonicalApp: 'loom-unity' }];
+  const s = reconcileSplitConsequence('loom-unity', table);
+  assert.match(s, /pins appImageTags\.unity from canonical app 'loom-unity'/);
+  assert.match(s, /does NOT freeze the estate-wide reconcile/);
+  assert.doesNotMatch(s, VERSION_LITERAL);
+});
+
+test('#4290 the LIVE notice the CLI actually emits carries no version literal', () => {
+  // The real path, over the real key table — the branch an operator sees.
+  const r = cli(['--apps', 'loom-unity', '--acr', 'a.azurecr.io', '--tag', 'sha9']);
+  assert.equal(r.code, 0);
+  const notice = r.stderr.split('\n').find((l) => l.includes('::notice::roll-plan pulled in'));
+  assert.ok(notice, 'expected the atomic-closure notice on stderr');
+  assert.doesNotMatch(notice, VERSION_LITERAL);
+});
+
+test('#4290 SOURCE SCAN: no consequence sentence in roll-plan.mjs carries a version literal', () => {
+  // The behavioural assertions above only reach the branches through the new
+  // export, so at HEAD they fail on the import rather than on the text. This
+  // one fails on the TEXT at head, and it also covers any future branch added
+  // straight into the notice without going through the exported function.
+  //
+  // Scoped to the emitted sentences (`Repository '${repo}' …`) on purpose: the
+  // file legitimately QUOTES real bicep source elsewhere
+  // (`appImageTags.?unity ?? 'v0.1'` is admin-plane/main.bicep:7138, verbatim
+  // and true), and MUTABLE_TAGS legitimately lists 'v0.1' as a mutable tag.
+  const src = readFileSync(CLI, 'utf8');
+  const sentences = src.split('\n').filter((l) => l.includes("Repository '${repo}'"));
+  assert.ok(sentences.length >= 3, `expected the three consequence branches, found ${sentences.length}`);
+  const offenders = sentences.filter((l) => VERSION_LITERAL.test(l));
+  assert.deepEqual(
+    offenders, [],
+    'a consequence sentence states a tag the code did not derive; the bicep fallback default is '
+    + 'per-key and per-param-file, so no literal is right for every repository (deploy-integrity R7):\n'
+    + offenders.join('\n'),
+  );
+});
+
+test('#4290 the VERSION_LITERAL detector has teeth', () => {
+  // A guard whose regex never matches anything is the failure mode this file
+  // keeps pinning. The exact head strings it must catch:
+  assert.match("resets every app on the repository to the bicep 'v0.1' default.", VERSION_LITERAL);
+  assert.match('rewrites the whole repository DOWN to v0.1.', VERSION_LITERAL);
+  assert.match("readEnvironmentVariable(LOOM_CONSOLE_TAG, 'v2.1')", VERSION_LITERAL);
+  // …and shapes it must not flag: a sha tag, a key name, an issue reference.
+  assert.doesNotMatch('rolls onto 36b765e4', VERSION_LITERAL);
+  assert.doesNotMatch('appImageTags.directLakeSvc', VERSION_LITERAL);
+  assert.doesNotMatch('since #4240 the divergence is logged', VERSION_LITERAL);
 });
