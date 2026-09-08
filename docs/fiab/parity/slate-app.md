@@ -29,6 +29,11 @@ The sources this pass was read against — and the date the freshness guard
 (`scripts/ci/check-parity-doc-freshness.mjs`) measures them from — are declared
 in the `parity-doc-meta` block at the top of this file, so a later commit to any
 of them makes this doc report itself stale instead of going quietly out of date.
+**That guard warns; it does not block.** It prints its findings and exits **0**
+unless `PARITY_DOC_FRESHNESS_ENFORCE=1` is set (`check-parity-doc-freshness.mjs:53`
+reads it, `:173` is the only `exit(1)`), and `loom-guardrails.yml:784` invokes it
+with no such env — zero matches for that variable anywhere in the workflow. So a
+stale entry here surfaces in the log of a green check; it will not fail CI.
 Since the 2026-07-01 pass the builder gained a **variables + events/actions
 reactivity layer** (`SlateVariable` / `SlateEventTrigger` / `SlateEventEffect`,
 `slate-app-builder.tsx:71-99`, executed by `runInteractions` at `:1091-1129`),
@@ -38,12 +43,14 @@ reactivity layer** (`SlateVariable` / `SlateEventTrigger` / `SlateEventEffect`,
 → `deployZipToStaticSite` → `waitForContentLive` → `state.versions[]`).
 
 Measured against the previous revision of this file, the delta of this pass is:
-row **21 flips ❌ MISSING → ✅ BUILT**, and rows **14, 16, 18, 22, 23 flip
-❌ MISSING → ⚠️ partial**. Rows **4 and 29 were already ⚠️ partial** and are
-**re-described, not flipped** — 4 gains real row-selection, 29 goes copy-only
-bundle → real ARM deploy. Every row still MISSING is now tracked (see **Tracked
-gaps** below) — this doc carries **one** grade, at the end of the Loom coverage
-table.
+rows **14, 16, 18, 21, 22, 23 flip ❌ MISSING → ⚠️ partial**. Rows **4 and 29
+were already ⚠️ partial** and are **re-described, not flipped** — 4 gains real
+row-selection, 29 goes copy-only bundle → real ARM deploy. One row moves the
+other way: **12 is re-scored ✅ BUILT → ⚠️ 3 of 5**, correcting a pre-existing
+overstatement rather than recording new code (its Queries panel has never had
+Slate's editor toolbar or raw-JSON view). Every row still MISSING is now tracked
+(see **Tracked gaps** below) — this doc carries **one** grade, at the end of the
+Loom coverage table.
 
 Slate is Foundry's **pro-code application builder**: a drag-and-drop widget grid, a first-class
 Queries panel (Ontology / Function / SQL / HTTP-JSON), a Variables + Events/Actions reactivity
@@ -94,7 +101,7 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 
 | # | Status | Notes | Tracked |
 |---|---|---|---|
-| 1 | ✅ BUILT | Real drag-resize `CanvasWidget` (pointer-drag `startDrag` `:546`, corner `startResize` `:555`, snap-to-grid, persisted `{x,y,w,h}`) — `slate-app-builder.tsx:535-593`. Add is click-from-palette; move/resize are real drag. | — |
+| 1 | ⚠️ 2 of 3 | Real drag-resize `CanvasWidget` (pointer-drag `startDrag` `:546`, corner `startResize` `:555`, snap-to-grid, persisted `{x,y,w,h}`) — `slate-app-builder.tsx:535-593`. The `N of M` counts **inventory row 1's three**: **move and resize are real drag (2)**; **place is not drag-and-drop (1 absent, #4360)** — `WidgetPalette :597-609` adds via `Button onClick` (`:604`), and the builder contains zero case-insensitive matches for `draggable` / `onDragStart` / `onDrop`. Scored ✅ BUILT by the 2026-07-01 pass; that was an overstatement of a bundled row, corrected here. | #4360 |
 | 2 | ❌ MISSING | Only `mode:'design'\|'preview'`; single canvas, no page model/nav. The `navigate` effect goes to a URL, not a page. | #4363 |
 | 3 | ⚠️ partial | `WidgetPalette` `:597-609` renders `KIND_META`'s 5 kinds as buttons — a flat list, not Slate's 8 categories. Widens with #4360/#4361/#4362. | #4360 |
 | 4 | ⚠️ partial | Real client sort + Prev/Next paging + columns, **single-row selection** (`selectable`/`selectedRow`/`onSelectRow`, `:420-489`) feeding `onSelect` interactions, and widget-level click events. No column order/width/align, no per-cell tooltips, no transpose, no multi/checkbox selection. Server-side paging is #4364. | #4360 |
@@ -105,8 +112,8 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 9 | ❌ MISSING | No button/action/tabs/toast widgets. | #4360 |
 | 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :281`); no iframe/PDF/video. **`{{var}}` is NOT interpolated in widget text**: `interpolate()` is called at exactly two sites in the builder — `:1098` (setVariable literal) and `:1108` (navigate URL) — and `WidgetView :501` hands `widget.text` straight to `renderMarkdownLite(text: string) :281`, which takes no variables. The inspector hint at `:670` ("Use {{variable}} to show a live value") promises behaviour the renderer does not implement; filed as **#4374**. | #4360, #4374 |
 | 11 | ❌ MISSING | `container` kind is a decorative dashed frame only (`:503-505`); does not nest child widgets. | #4363 |
-| 12 | ✅ BUILT | `QueriesPanel :843` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route. | — |
-| 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. | #4364 |
+| 12 | ⚠️ 3 of 5 | `QueriesPanel :843-913` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route and renders rowCount + executionMs. The `N of M` counts **inventory row 12's five**: named queries / datasource picker / Test-Preview are built (3); **no editor toolbar** (zero case-insensitive matches for `toolbar` in the builder) and **no raw-JSON view** (`JSON.stringify` occurs twice in the whole file, `:221` and `:1121`, both of them fetch bodies) (2 absent, #4364). Scored ✅ BUILT by the 2026-07-01 pass; that was an overstatement of a bundled row, corrected here. | #4364 |
+| 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. The `N of M` counts **inventory row 13's five**, and the mapping is stated because it is not one-to-one: **HTTP-JSON → `rest-dab`**, **API Gateway → `rest-dab`** (the same client, pointed at APIM rather than DAB — one Loom type satisfies two inventory entries), **legacy SQL (Postgres) → `sql`** (Synapse serverless T-SQL, a dialect substitution, not Postgres) — 3 built; **Ontology/OSDK object-set and Foundry Function are absent (#4364)**. `kql` is a Loom addition the Slate inventory row does not list, so — by the same rule row 18 applies to `date` and row 21 to `onChange` — it does not raise the numerator. | #4364 |
 | 14 | ⚠️ partial | `applyVarsToQuery :189-212` substitutes `{{var}}` **injection-safely per type** — bound `@parameters` for SQL, encoded path segments for REST, escaped literals for KQL. No Slate security helpers (`schema`/`table`/`column`/`alias`/`param`), no server-fetched user vars. | #4364 |
 | 15 | ❌ MISSING | No query partials. | #4364 |
 | 16 | ⚠️ partial | Auto-runs on entering Preview and re-runs on any variable change (`setRuntimeScalar :1148`); manual **Run** in Design. No conditional trigger ("deps non-null" / handlebar) and no per-query auto-vs-manual switch. | #4364 |
@@ -114,7 +121,7 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 18 | ⚠️ 3 of 5 | `VariablesPanel :785-837` — add/rename/remove typed variables with defaults, a live runtime editor in Run mode, and `{{name}}` consumption in every query type. The `N of M` counts **inventory row 18's five variable types**: `SlateVarType :71` is `string\|number\|boolean\|date`, so **string / number / boolean are built (3)** and **struct and object-set are absent (#4365)** — `date` is a Loom addition the Slate inventory row does not list, so it does not raise the numerator. `SlateVariable :73-79` carries no scope field: **app-scope only, no page scope (#4363)**. Defaults are built. | #4363, #4365 |
 | 19 | ❌ MISSING | No transformations / filter vars. | #4365 |
 | 20 | ❌ MISSING | Runtime is in-memory, re-seeded from defaults on each Preview entry (`runtimeFromDefaults :412`); nothing persists per viewer. | #4365 |
-| 21 | ✅ BUILT | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. Narrower than Slate on one axis: **`onChange` fires on Preview entry only** (`:1143`); editing a variable re-runs the bound queries (`setRuntimeScalar :1148` → `runPreview`) but does **not** dispatch `onChange` interactions — tracked in #4360 alongside the control widgets that would drive it. `didOpen`/`didClose` have no analog until containers/dialogs land (#4363). | — |
+| 21 | ⚠️ 2 of 3 | Per-widget event triggers wired live: `onClick`, `onSelect` (table row-select) and `onChange` — `SlateEventTrigger :81`, dispatched by `runInteractions :1091`, authored in `InteractionsDialog :688`. The `N of M` counts **inventory row 21's three**: **click and selection-change are built (2)**; **`didOpen`/`didClose` are absent (#4363)** — they have no analog until containers/dialogs land. `onChange` is a Loom addition the Slate inventory row does not list, so (like `date` in row 18) it does not raise the numerator; it also **fires on Preview entry only** (`:1143`) — editing a variable re-runs the bound queries (`setRuntimeScalar :1148` → `runPreview`) but does **not** dispatch `onChange` interactions, tracked in #4360 alongside the control widgets that would drive it. | #4360, #4363 |
 | 22 | ⚠️ 4 of 6 | `setVariable` (literal or selected-row column), `runQuery` (refresh preview), `navigate` (interpolated URL) and `writeBack` (POST) all execute for real in Preview — `:1097-1128`. No toast effect and no run-Function effect. | #4360 |
 | 23 | ⚠️ partial | The `writeBack` effect POSTs the chosen variables as JSON to the app's DAB/APIM REST base and surfaces the real HTTP status (`:1110-1126`). No ontology object create/update/delete, no column-derived action form. | #4367 |
 | 24 | ✅ BUILT | `runPreview :1076` executes each bound widget's query against the real backend; `WidgetView :493-531` renders live rows with Spinner / honest-gate / error / empty states. | — |
@@ -122,34 +129,52 @@ and maps every gap to an Azure-native build (no Microsoft Fabric on the default 
 | 26 | ❌ MISSING | No custom HTML/CSS/JS authoring surface, no custom widget sets. | #4366 |
 | 27 | ❌ MISSING | Only an `apiBaseUrl` data-base field; no app parameters / module interface. | #4367 |
 | 28 | ❌ MISSING | No public-app / upload support. | #4367 |
-| 29 | ⚠️ partial | **Real** publish: `publish/route.ts:75-96` provisions/updates `Microsoft.Web/staticSites` via ARM, zip-deploys the generated bundle, polls `waitForContentLive`, and appends a version record to Cosmos `state.versions[]`; the editor renders the version table + "Open live app" (`palantir/slate-app-editor.tsx:195-229`). Two limits the word "real" does not carry: **(a) honest gate** — `publish/route.ts:48-52` returns **503 `swa_not_configured`** when `swaConfig()` (`lib/azure/swa-publish.ts:31-40`) finds `LOOM_SWA_SUBSCRIPTION_ID` / `LOOM_SWA_RESOURCE_GROUP` unset; the builder and Preview still work, only Publish is gated. **(b) the published bundle is narrower than the app** — `publish/route.ts:54-65` keeps only widgets whose query resolves to a `rest-dab` path and coerces kind to table/chart/metric, so **KQL and SQL widgets, text and container widgets, variables and interactions run in Preview but are not in the deployed site** (the editor discloses this itself at `slate-app-editor.tsx:187`). No import/export/duplicate, no kiosk/redact mode. | #4367 |
+| 29 | ⚠️ partial | **Real** publish: `publish/route.ts:75-96` provisions/updates `Microsoft.Web/staticSites` via ARM, zip-deploys the generated bundle, polls `waitForContentLive`, and appends a version record to Cosmos `state.versions[]`; the editor renders the version table + "Open live app" (`palantir/slate-app-editor.tsx:195-229`). Two limits the word "real" does not carry: **(a) honest gate** — `publish/route.ts:48-52` returns **503 `swa_not_configured`** when `swaConfig()` (`lib/azure/swa-publish.ts:31-40`) finds `LOOM_SWA_SUBSCRIPTION_ID` / `LOOM_SWA_RESOURCE_GROUP` unset; the builder and Preview still work, only Publish is gated. **(b) the published bundle is narrower than the app** — `publish/route.ts:54-65` keeps only widgets whose query resolves to a `rest-dab` path and coerces kind to table/chart/metric, so **KQL and SQL widgets, text and container widgets, variables and interactions run in Preview but are not in the deployed site**. The editor discloses **the KQL/SQL half of that** itself, and only that half — `slate-app-editor.tsx:187` reads "REST-bound widgets are embedded; KQL / SQL widgets run live in Preview but aren't part of the static bundle", which says nothing about text/container widgets, variables or interactions; those three are established from the route's filter above, not from the editor's copy. No import/export/duplicate, no kiosk/redact mode. | #4367 |
 | 30 | n/a | Out of scope for this editor (Loom Marketplace is separate). | — |
 | 31 | ❌ MISSING | Only a property inspector; no debug/dependency/perf surface. | #4368 |
 | 32 | ❌ MISSING | `state.lastGeneratedAt` / `state.lastPublishedAt` are written, but there is no usage/edit-history UI. | #4368 |
 
 ## Grade
 
-**Grade today: ~C+.** Counting the 31 in-scope rows (30 is n/a): **5 ✅ BUILT**
-(1, 5, 12, 21, 24), **10 ⚠️ partial** (3, 4, 10, 13, 14, 16, 18, 22, 23, 29),
+**Grade today: ~C.** Counting the 31 in-scope rows (30 is n/a): **2 ✅ BUILT**
+(5, 24), **13 ⚠️ partial** (1, 3, 4, 10, 12, 13, 14, 16, 18, 21, 22, 23, 29),
 **16 ❌ MISSING** (2, 6, 7, 8, 9, 11, 15, 17, 19, 20, 25, 26, 27, 28, 31, 32).
 `ui-parity.md` grades a surface **A only at zero ❌**, so slate-app cannot be A
-until the sixteen rows below land.
+until the sixteen rows below land. An earlier revision of this pass read ~C+ off
+**5 ✅ BUILT / 10 ⚠️ partial**; applying the `N of M` rule below to rows 1, 12
+and 21 moved three rows out of ✅ into ⚠️ **without changing what the code does**,
+and the grade is stated at the lower reading rather than the flattering one. Row
+21 still improves on the previous revision of this file — it was ❌ MISSING and
+is now ⚠️ 2 of 3 — it is simply not the ✅ BUILT an earlier draft claimed.
 
 Where an inventory row bundles several capabilities, this table scores it
-`⚠️ N of M` rather than ✅ — rows 13 (3 of 5 query types), 18 (3 of 5 variable
-types) and 22 (4 of 6 action effects) follow that rule, so a bundled row's gaps
-stay visible to the "every non-BUILT row names its issue" check below. **Two
-rows do not follow it yet and are called out rather than quietly left:** row 5
-(inventory names 8 chart widgets; Loom has Chart-XY, Pie and Metric Card — Vega,
-Gantt, Pivot Table, Timeline and Time-Series Analysis are absent) and row 24
-(inventory names object sets / individual objects / OSDK / Foundry Functions;
-Loom reads through the generic query engine, and row 13 says in this same table
-that ontology and function query types are not first-class). This pass did not
-re-score them — re-scoring both would move the counts above, and that re-derivation
-is tracked in **#4384** rather than done here on an unmeasured guess.
+`⚠️ N of M` rather than ✅ — rows 1 (2 of 3 canvas verbs), 12 (3 of 5
+Queries-panel capabilities), 13 (3 of 5 query types), 18 (3 of 5 variable types),
+21 (2 of 3 event triggers) and 22 (4 of 6 action effects) follow that rule, so a
+bundled row's gaps stay visible to the "every non-BUILT row names its issue"
+check below. **Two rows do not follow it yet and are called out rather than
+quietly left:** row 5 (inventory names 8 chart widgets; Loom has Chart-XY, Pie
+and Metric Card — Vega, Gantt, Pivot Table, Timeline and Time-Series Analysis are
+absent) and row 24 (inventory names object sets / individual objects / OSDK /
+Foundry Functions; Loom reads through the generic query engine, and row 13 says
+in this same table that ontology and function query types are not first-class).
+This pass did not re-score them — re-scoring both would move the counts above
+again, and that re-derivation is tracked in **#4384** rather than done here on an
+unmeasured guess.
 
-What is genuinely real today, verified against code on 2026-09-07: a drag-resize
-canvas; a multi-type query engine (`/query/run` → `kusto-client` ADX /
+That "two" is now a **checkable** claim rather than an assertion: rows 5 and 24
+are the **only** ✅ BUILT rows left in the table, so the exception set and
+#4384's row list are the same two rows, and a reader can falsify the sentence by
+grepping the Status column for ✅. An earlier draft of this section said "two"
+while the table still carried ✅ on rows 1, 12 and 21 — three bundled rows whose
+gaps sat outside #4384 *and* outside the row-to-issue derivation, because ✅
+removed them from its population. That was the same defect this file exists to
+fix, one screen below the paragraph declaring the invariant; it is corrected
+here, and the correction is what moved the grade from ~C+ to ~C.
+
+What is genuinely real today, verified against code on 2026-09-07: a canvas whose
+widgets really drag and resize (placement is still click-from-palette); a
+multi-type query engine (`/query/run` → `kusto-client` ADX /
 `synapse-sql-client` Synapse serverless / DAB-APIM REST) with injection-safe
 `{{var}}` binding; scalar app variables with a live runtime; per-widget
 click/row-select/load interactions driving setVariable / runQuery / navigate /
@@ -169,15 +194,22 @@ Every ❌ / ⚠️ row above is tracked. No row is left as an untracked aspirati
 The last row is the exception that proves the rule: #4384 covers rows 5 and 24,
 which are ✅ BUILT and therefore carry `—` in the Tracked column — so a
 row-to-issue bijection derived from that column will not contain it. It is listed
-here deliberately, per the Grade section above.
+here deliberately, per the Grade section above. Rows 5 and 24 are also the only
+✅ rows left in the table, so nothing else can hide from this list behind a ✅.
+
+Rows in parentheses are **secondary** — the row's primary owner is elsewhere in
+this table, and each of the sixteen ❌ MISSING rows appears exactly once as a
+primary. Rows 1, 12 and 21 are secondaries added by this pass's re-score; the
+scope they add to their owning issue is recorded as a comment on that issue, not
+only here.
 
 | Issue | Rows | Size | Gap |
 |---|---|---|---|
-| #4360 | 8, 9 (+3, 4, 10, 22) | M | Control / input and action widgets — text, numeric, date, dropdown, button, tabs, toast |
+| #4360 | 8, 9 (+1, 3, 4, 10, 21, 22) | M | Control / input and action widgets — text, numeric, date, dropdown, button, tabs, toast. Also drag-from-palette placement (row 1's missing verb) and `onChange` dispatch on variable edit (row 21) |
 | #4361 | 6 | M | Map widget — Azure Maps **and** OSS MapLibre backends (location / heatmap / shape / choropleth). Azure-Maps-only would be Commercial-only |
 | #4362 | 7 | M | Graph / tree / image-gallery widgets |
-| #4363 | 2, 11 (+18) | M | Multi-page apps, real container nesting, and page-scoped variables (row 18's missing scope axis) |
-| #4364 | 14, 15, 16, 17 (+13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort |
+| #4363 | 2, 11 (+18, 21) | M | Multi-page apps, real container nesting, page-scoped variables (row 18's missing scope axis), and the `didOpen`/`didClose` triggers containers/dialogs would carry (row 21) |
+| #4364 | 14, 15, 16, 17 (+12, 13) | M | Handlebars query helpers, partials, conditional triggers, server-side paging/sort. Also the Queries-panel editor toolbar and raw-JSON view (row 12's two missing capabilities) |
 | #4365 | 19, 20 (+18) | M | Variable transformations, object-set filter variables, per-user persisted storage, struct/object-set variable types (row 18's missing type axis) |
 | #4366 | 25, 26 | M | Per-widget styles, global stylesheet, custom HTML/Handlebars widget |
 | #4367 | 27, 28, 29 (+23) | M | App parameters / module interface, public apps, import-export-duplicate, kiosk mode |
@@ -194,9 +226,9 @@ annotated with what has actually landed:
 
 | Item | Status |
 |---|---|
-| P0-1 live preview · P0-2 query engine · P0-3 drag-resize canvas | **LANDED** (rows 1, 12, 24) |
+| P0-1 live preview · P0-2 query engine · P0-3 drag-resize canvas | **LANDED for the core** (row 24 ✅; rows 1 and 12 are ⚠️) — move/resize are real drag but placement is click-from-palette (#4360), and the Queries panel has no editor toolbar or raw-JSON view (#4364) |
 | P0-4 typed widget set | **PARTIAL** — table / chart / metric / text / container only; controls, buttons, iframe and tabs are #4360 |
-| P1-5 variables + events/actions | **LANDED for the scalar/effect core** (rows 18, 21, 22) — helpers, partials and conditional triggers are #4364; transformations and per-user storage are #4365 |
+| P1-5 variables + events/actions | **LANDED for the scalar/effect core** (rows 18, 21, 22 — all three ⚠️, none ✅) — helpers, partials and conditional triggers are #4364; transformations and per-user storage are #4365; `didOpen`/`didClose` are #4363 |
 | P1-6 write-back | **PARTIAL** — generic REST POST effect only; ontology object CRUD is #4367 |
 | P1-7 multi-page | **NOT STARTED** — #4363 |
 | P1-8 publish → Azure Static Web Apps | **LANDED** (real ARM provision + zip deploy + versions); import/export/duplicate and kiosk are #4367 |
@@ -326,7 +358,7 @@ is not the same vocabulary the bicep uses (`Commercial / GCC / GCC-High / IL5`):
 | Static Web Apps (publish) | GA in Commercial, Gov FedRAMP High, IL4, IL5 (that table scores no IL6) | `docs/GOV_SERVICE_MATRIX.md:78` |
 | Cosmos DB (persistence) | GA in Commercial, Gov FedRAMP High, IL4, IL5 (that table scores no IL6) | `docs/GOV_SERVICE_MATRIX.md:99` |
 | Data API Builder (DAB) | OSS, container-hosted by Loom — boundary-independent | — |
-| **Azure Maps** | **NOT parity-clean.** `maps-client.ts:96` records "Azure Maps has limited Gov availability", and `GOV_SERVICE_MATRIX.md` does not score it at all (zero matches for "maps"; positive control: 36 matches for "GA" in the same file). | `maps-client.ts:96` |
+| **Azure Maps** | **NOT parity-clean.** `maps-client.ts:96` records "Azure Maps has limited Gov availability", and `GOV_SERVICE_MATRIX.md` does not score it at all (`grep -ic maps` = **0 matching lines**; positive control on the same file: `grep -c GA` = **36 matching lines**, `grep -o GA \| wc -l` = **132 occurrences** — the control's job is only to show the file is non-empty of scores, so the zero above is a real absence and not a broken grep). | `maps-client.ts:96` |
 
 The publish path's role grant is boundary-aware in bicep, but in the **opposite**
 direction to what a "Gov gets a different role" reading suggests, and the
