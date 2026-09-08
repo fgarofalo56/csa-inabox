@@ -700,14 +700,17 @@ async function provisionAzureNative(
     // 3a. RECORD the seed CSV's real path, before anything else in this hook.
     //
     //     #3904 moved the seed CSV out of `Tables/<name>/<name>.csv` and into
-    //     `Files/_seed/`. Two consumers RE-DERIVE the old location rather than
-    //     reading it — `app/api/apps/[id]/install/route.ts` (which persists the
-    //     result into every auto-bound report's `dataSource` as an
+    //     `Files/_seed/`. Two consumers USED TO RE-DERIVE the old location
+    //     rather than reading it — `app/api/apps/[id]/install/route.ts` (which
+    //     persists the result into every auto-bound report's `dataSource` as an
     //     `OPENROWSET(… FORMAT='CSV')` URL) and `lib/editors/lakehouse/
-    //     lakehouse-editor-shell.tsx`. Both would point at a blob that no
-    //     longer exists. Worse, their two derivations do not even agree with
-    //     each other or with this module: the install route sanitizes a schema
-    //     with `replace(/[^A-Za-z0-9_]/g, '')` while the seeder uses `'_'`.
+    //     lakehouse-editor-shell.tsx`. Both pointed at a blob that no longer
+    //     existed. Worse, their two derivations did not even agree with each
+    //     other or with this module: the install route sanitized a schema with
+    //     `replace(/[^A-Za-z0-9_]/g, '')` while the seeder uses `'_'`.
+    //     Both re-derivations were deleted in #3919 — each consumer now reads
+    //     the recorded value through `seedCsvPathLookup`, so exactly one
+    //     sanitizer survives (#3920).
     //
     //     So the path is RECORDED here and stamped into `secondaryIds` below,
     //     for consumers to read instead of guessing — the same principle #3911

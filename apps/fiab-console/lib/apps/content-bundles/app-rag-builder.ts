@@ -626,7 +626,14 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
         // `azure-identity` is deliberately NOT listed: it IS in the Synapse
         // Spark runtime image, and `pip install`ing it on top of the runtime's
         // copy is a needless minute on every Run-all.
-        requiredLibraries: ['azure-search-documents', 'openai'],
+        //
+        // `langchain-text-splitters` was MISSING until the #3530 systemic sweep
+        // (bundle-notebook-libraries.test.ts) derived the declaration from the
+        // cells instead of hand-listing it: the `cell-chunk` cell does
+        // `from langchain_text_splitters import RecursiveCharacterTextSplitter`,
+        // so Run-all cleared the cell-2 failure this issue reported and then
+        // stopped on the SAME ModuleNotFoundError two cells later.
+        requiredLibraries: ['azure-search-documents', 'openai', 'langchain-text-splitters'],
         cells: [
           {
             id: 'cell-md-intro',

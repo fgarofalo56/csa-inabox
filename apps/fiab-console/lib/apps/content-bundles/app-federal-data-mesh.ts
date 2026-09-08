@@ -153,7 +153,7 @@ no copy, query-in-place over the open Delta Sharing protocol.`;
 const NB_CODE_CONSUMER = `# ── Consumer side: poll share + register tables (Agency B) ────────────────
 # Uses the delta-sharing client against the recipient profile (bearer token
 # bootstrapped from the recipient activation link, stored in Key Vault).
-import delta_sharing  # pip install delta-sharing (preinstalled in env)
+import delta_sharing  # installed by Loom's %pip bootstrap (requiredLibraries)
 
 PROFILE_PATH = "/dbfs/mnt/secrets/agency_a_performance.share"  # KV-backed
 
@@ -721,6 +721,10 @@ const bundle: AppBundle = {
       content: {
         kind: 'notebook',
         defaultLang: 'pyspark',
+        // #3530 — the consumer cell does `import delta_sharing`, which is NOT in
+        // the Spark stock image. Without this the golden path (install → open →
+        // Run all) stops on ModuleNotFoundError before the adapter runs.
+        requiredLibraries: ['delta-sharing'],
         cells: [
           { id: 'fdm-nb-0', type: 'markdown', source: NB_MD_INTRO },
           { id: 'fdm-nb-1', type: 'code', lang: 'pyspark', source: NB_CODE_CONFIG },

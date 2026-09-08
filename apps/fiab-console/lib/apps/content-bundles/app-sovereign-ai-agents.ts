@@ -840,6 +840,12 @@ You get five runnable surfaces from the first install:
         // (pyspark in Fabric/Synapse); each code cell below pins lang:'python'
         // since the Foundry Agent Service SDK runs as plain Python.
         defaultLang: 'pyspark',
+        // #3530 — the setup cell imports `azure.ai.projects` and
+        // `azure.ai.agents.models`; neither is in the Spark stock image, so
+        // Run-all stopped on ModuleNotFoundError before any agent was created.
+        // `azure-identity` is deliberately absent: it IS runtime-provided, and
+        // pip-installing over the runtime copy costs a minute on every Run-all.
+        requiredLibraries: ['azure-ai-projects', 'azure-ai-agents'],
         cells: [
           { id: 'cell-md-intro', type: 'markdown', source: NB_INTRO },
           { id: 'cell-setup', type: 'code', lang: 'python', source: NB_SETUP },

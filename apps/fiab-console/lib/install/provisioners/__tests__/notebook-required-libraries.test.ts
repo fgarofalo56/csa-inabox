@@ -21,7 +21,7 @@
  *   a) In `notebook.ts` make `withRequiredLibraryBootstrap` `return content`
  *      unconditionally -> RED:
  *        "an installed rag-builder notebook's FIRST code cell is the %pip bootstrap"
- *        "the bootstrap names BOTH declared packages"
+ *        "the bootstrap names EVERY declared package"
  *        "the Synapse artifact carries the bootstrap too, not just Loom's copy"
  *   b) Delete the `firstSource.includes(PIP_BOOTSTRAP_MARKER)` early return ->
  *      RED: "re-provisioning does not stack a second bootstrap cell" — the arm
@@ -96,19 +96,27 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
     expect(out.cells[0].lang).toBe('pyspark');
   });
 
-  it('the bootstrap names BOTH declared packages', () => {
-    // The two distributions the cells import and the images do not ship.
-    expect(pipPackagesFor(ragNotebookContent())).toEqual(['azure-search-documents', 'openai']);
+  it('the bootstrap names EVERY declared package', () => {
+    // The distributions the cells import and the images do not ship.
+    // `langchain-text-splitters` joined the list when the #3530 systemic sweep
+    // (content-bundles/__tests__/bundle-notebook-libraries.test.ts) derived the
+    // declaration from the cells rather than hand-listing it.
+    expect(pipPackagesFor(ragNotebookContent()))
+      .toEqual(['azure-search-documents', 'openai', 'langchain-text-splitters']);
     const out: any = withRequiredLibraryBootstrap(ragNotebookContent());
-    expect(sourceOf(out.cells[0])).toMatch(/%pip install azure-search-documents openai/);
+    expect(sourceOf(out.cells[0]))
+      .toMatch(/%pip install azure-search-documents openai langchain-text-splitters/);
   });
 
   it('the declared packages match what the cells actually import', () => {
     // Anti-drift: a declaration nobody checks against the code is a comment.
+    // Note this arm is per-bundle and hand-written; the DERIVED sweep over all
+    // bundles lives in content-bundles/__tests__/bundle-notebook-libraries.test.ts.
     const cells: any[] = ragNotebookContent().cells;
     const allSource = cells.map(sourceOf).join('\n');
     expect(allSource).toMatch(/from azure\.search\.documents import/);
     expect(allSource).toMatch(/from openai import/);
+    expect(allSource).toMatch(/from langchain_text_splitters import/);
   });
 
   it('the Synapse artifact carries the bootstrap too, not just Loom\'s copy', async () => {
@@ -126,9 +134,10 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
     const artifact = (h.upsertSynapseNotebook.mock.calls.at(-1) as unknown as any[] | undefined)?.[1] as any;
     const first = artifact.properties.cells[0];
     expect(first.cell_type).toBe('code');
-    expect(first.source.join('')).toMatch(/%pip install azure-search-documents openai/);
+    expect(first.source.join('')).toMatch(/%pip install azure-search-documents openai langchain-text-splitters/);
     // The receipt names what it arranged, so the outcome is inspectable.
-    expect(r.secondaryIds?.sessionPackages).toBe('azure-search-documents openai');
+    expect(r.secondaryIds?.sessionPackages)
+      .toBe('azure-search-documents openai langchain-text-splitters');
   });
 
   it('re-provisioning does not stack a second bootstrap cell', () => {
