@@ -84,6 +84,13 @@ param forceUpdateTag string = utcNow()
 // LOOM_ADLS_ACCOUNT). One module, so Commercial and Gov get the same value.
 @description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240.')
 @minValue(16)
+// BOTH ENDS OF THE RANGE, NOT ONE (#4373 review §5). The description and the
+// note above both state the settable range as 16-240, and `maxDuration: 300`
+// is called out as exceeding it — but only the floor was enforced, so a caller
+// passing 300 compiled fine and was rejected by ARM at deploy time. A bound
+// that the docs assert and the type does not is the cheap half of an honest
+// claim; 240 makes the rejection a compile-time one.
+@maxValue(240)
 param originResponseTimeoutSeconds int = 120
 
 resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = {

@@ -436,3 +436,105 @@ test('poll: trigger_refused reports a SINGLE POST attempt as 1, not 2', () => {
   assert.match(r.message, /All 1 POST attempt\(s\)/);
   assert.doesNotMatch(r.message, /All 2 POST attempt/);
 });
+
+/**
+ * R7 on the POLL count — the #4373 review's second blocking finding, MEASURED
+ * against the real harness at 10 claimed / 8 observed.
+ *
+ * The clause asserts a `freshness=stale job=idle` reading with an unchanged
+ * chunk count. Only the TRAILING streak established that; `attempts` is every
+ * poll the loop made, including unreachable ones and any that read something
+ * else before the streak began. The two numbers must not be conflated.
+ *
+ * MUTATION-PROOF: make the message print `attempts` where it prints `idleStreak`
+ * and the first assertion goes RED (it would read "the LAST 10 of 10").
+ */
+test('poll: trigger_refused claims the TRAILING streak, not every poll', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 10,
+    idleStreak: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /Of the 10 poll\(s\) over 128s that followed, the LAST 8 read freshness=stale/);
+  // The refuted sentence: the total presented as the polls that did the reading.
+  assert.doesNotMatch(r.message, /10 poll\(s\) over 128s since then read freshness=stale/);
+  assert.doesNotMatch(r.message, /the LAST 10/);
+});
+
+/**
+ * Same rule as the attempt count: with no streak handed over, do not invent one.
+ * The message drops the number and says "the TRAILING" instead.
+ */
+test('poll: trigger_refused with no idleStreak does not invent a poll COUNT for the reading', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 10,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /the TRAILING ones read freshness=stale/);
+  assert.doesNotMatch(r.message, /the LAST \d+ read/);
+});
+
+/**
+ * PER-ATTEMPT STATUS CODES (#4373 review §4). `postCode` is the LAST attempt's
+ * status and the sentence is plural, so naming it alone attributed one sample to
+ * every attempt: "All 2 POST attempt(s) were answered by the EDGE (HTTP 502…)"
+ * when attempt 1 was a 504. With `postCodes` the message names each in order.
+ *
+ * MUTATION-PROOF: drop the `postCodes` branch and this reads "(HTTP 502 on the
+ * LAST attempt…)" — RED on the first assertion.
+ */
+test('poll: trigger_refused names EVERY attempt\'s status when it has them', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCode: 502,
+    postCodes: '504,502',
+    postAttempts: 2,
+  });
+  assert.match(r.message, /HTTP 504 then 502, one per attempt, no application body/);
+  assert.doesNotMatch(r.message, /\(HTTP 502, no application body\)/);
+});
+
+/**
+ * And with only the LAST code available it must SAY that is what it is, rather
+ * than letting the plural sentence imply it covered them all.
+ */
+test('poll: trigger_refused with only postCode scopes it to the LAST attempt', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCode: 502,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /HTTP 502 on the LAST attempt, no application body/);
+});
+
+/** One attempt, one code: no "then", no "LAST attempt" hedge — it IS all of them. */
+test('poll: trigger_refused with a single collected code names it plainly', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCodes: '504',
+    postAttempts: 1,
+  });
+  assert.match(r.message, /\(HTTP 504, no application body\)/);
+  assert.doesNotMatch(r.message, /HTTP 504 then/);
+  assert.doesNotMatch(r.message, /LAST attempt/);
+});

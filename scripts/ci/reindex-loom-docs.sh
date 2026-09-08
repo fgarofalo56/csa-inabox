@@ -246,6 +246,12 @@ get_status() {
 # freshness signal settle it. Every OTHER non-zero stays a failure.
 do_post
 POST_ATTEMPTS=1
+# EVERY attempt's status, in order. The verdict's parenthetical is plural ("All
+# 2 POST attempt(s) were answered by the EDGE (HTTP …)") and `$CODE` is only the
+# LAST attempt's status, so naming that one code described attempt 1 with
+# attempt 2's sample (#4373 review §4). Both are edge refusals whenever the
+# rename fires, so the verdict was sound — the parenthetical was not.
+POST_CODES="$CODE"
 HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
 CRC=$?
 
@@ -291,6 +297,7 @@ while [ "$CRC" -eq 75 ] && [ "$POST_ATTEMPTS" -le "$POST_RETRIES" ]; do
   sleep "$POST_RETRY_DELAY_S"
   do_post
   POST_ATTEMPTS=$(( POST_ATTEMPTS + 1 ))
+  POST_CODES="$POST_CODES,$CODE"
   HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
   CRC=$?
 done
@@ -377,6 +384,13 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   get_status
   if [ "$GCODE" = "000" ]; then
     echo "  poll: unreachable (curl 000)"
+    # THE STREAK IS A RUN OF *OBSERVATIONS*, AND AN UNREACHABLE POLL IS NOT ONE
+    # (#4373 review §2). This `continue` used to skip the streak bookkeeping
+    # entirely, so a poll that never got a body sat INSIDE a "trailing run of
+    # polls that read stale/idle" without having read anything. The verdict then
+    # asserted a reading for it. Reset: a poll that produced no observation
+    # breaks the run, exactly as a poll that observed something else does.
+    IDLE_STREAK=0
     continue
   fi
   REACHED=true
@@ -438,8 +452,11 @@ done
 # of the loop with a verdict of their own, and `unreachable` (below) means no
 # poll ever parsed a body, so no streak can exist. Every condition is re-read at
 # its FINAL value — SAW_RUNNING covers the whole run, IDLE_STREAK is the
-# trailing run of idle polls, which is what the message claims ("the polls since
-# then"). Exit code: unchanged, in every branch.
+# trailing run of idle polls. IDLE_STREAK IS ALSO WHAT THE MESSAGE MUST CLAIM,
+# so it is handed to the classifier below: this comment used to say the message
+# claimed the trailing polls while the code passed POLL_ATTEMPTS (every poll),
+# which is the #4373 review's second finding — the comment described a plumbing
+# that did not exist. Exit code: unchanged, in every branch.
 if [ "$OUTCOME" = "timeout" ] && [ "$POST_REFUSED" = "true" ] && \
    [ "$SAW_RUNNING" = "false" ] && [ "$REFUSED_IDLE_POLLS" -gt 0 ] && \
    [ "$IDLE_STREAK" -ge "$REFUSED_IDLE_POLLS" ]; then
@@ -455,11 +472,18 @@ fi
 WAITED=$(( $(date +%s) - STARTED ))
 emit "reindex_poll=$OUTCOME"
 
-# POST_CODE / POST_ATTEMPTS are handed over so the `trigger_refused` message can
-# NAME the status the edge actually returned and how many attempts got it,
-# instead of describing a gateway failure it did not observe (R7).
+# POST_CODE / POST_CODES / POST_ATTEMPTS are handed over so the
+# `trigger_refused` message can NAME the statuses the edge actually returned and
+# how many attempts got them, instead of describing a gateway failure it did not
+# observe (R7). POLL_IDLE_STREAK is handed over for the same reason: the message
+# claims a `stale`/`idle`/unchanged-count reading, and the only polls that
+# established one are the TRAILING streak — POLL_ATTEMPTS is every poll the loop
+# made, including unreachable ones and any that read something else before the
+# streak began. Passing only POLL_ATTEMPTS made the message claim a reading for
+# polls that never produced it (#4373 review, measured at 10 claimed / 8 seen).
 if ! MODE=poll POLL_OUTCOME="$OUTCOME" POLL_WAITED_S="$WAITED" POLL_ATTEMPTS="$ATTEMPTS" \
-  POST_CODE="$CODE" POST_ATTEMPTS="$POST_ATTEMPTS" \
+  POLL_IDLE_STREAK="$IDLE_STREAK" \
+  POST_CODE="$CODE" POST_CODES="$POST_CODES" POST_ATTEMPTS="$POST_ATTEMPTS" \
   POLL_BODY="$(cat "$POLL_BODY_FILE")" node "$CLASSIFIER"; then
   fail
 fi

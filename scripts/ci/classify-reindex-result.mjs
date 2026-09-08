@@ -57,7 +57,13 @@
  *   # the poll verdict (after polling GET to a terminal state)
  *   MODE=poll POLL_OUTCOME=fresh|failed|timeout|unreachable|trigger_refused \
  *     POLL_BODY="$(cat get.json)" POLL_WAITED_S=$SECS POLL_ATTEMPTS=$N \
- *     POST_CODE=$CODE POST_ATTEMPTS=$N node scripts/ci/classify-reindex-result.mjs
+ *     POLL_IDLE_STREAK=$K POST_CODE=$CODE POST_CODES=504,502 POST_ATTEMPTS=$N \
+ *     node scripts/ci/classify-reindex-result.mjs
+ *
+ * POLL_ATTEMPTS is EVERY poll the loop made; POLL_IDLE_STREAK is the TRAILING
+ * run of them that read `stale`/`idle` with an unchanged chunk count. They are
+ * different numbers and the `trigger_refused` message may only claim a reading
+ * for the second (#4373).
  */
 import { pathToFileURL } from 'node:url';
 
@@ -264,10 +270,10 @@ export function classifyReindexResult({ code, body }) {
  *                     "a rebuild is in flight" signal exists to end a wait on
  *                     (#3472; see the header note in reindex-loom-docs.sh).
  *
- * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, postCode?: number|string, postAttempts?: number|string }} input
+ * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, idleStreak?: number|string, postCode?: number|string, postCodes?: string, postAttempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, postCode, postAttempts }) {
+export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, idleStreak, postCode, postCodes, postAttempts }) {
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
   try {
@@ -370,16 +376,51 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, po
       // Same rule for the status: `trigger_refused` is only produced after a
       // gateway 5xx, but this function is pure and a caller that passes no code
       // has not established one. Name it only when it was handed over.
-      const edge = postCode ? ` (HTTP ${postCode}, no application body)` : ' (no application body)';
-      const polls = Number.isFinite(Number(attempts)) && Number(attempts) > 0
-        ? `${Number(attempts)} poll(s) over ${waited}`
-        : `the polls over ${waited}`;
+      //
+      // AND NAME IT PER ATTEMPT, NOT ONCE FOR ALL OF THEM (#4373 review §4).
+      // `postCode` alone is the LAST attempt's status, and the sentence around
+      // it is plural ("All 2 POST attempt(s) were answered by the EDGE (HTTP
+      // 502…)") — so a run whose attempt 1 was a 504 and attempt 2 a 502 was
+      // reporting one sample as if it described both. The shell now hands over
+      // EVERY attempt's code (`postCodes`, in order); when it does, each is
+      // named. `postCode` remains the fallback for a caller that only has the
+      // last one, and it says so ("on the LAST attempt") instead of implying it
+      // covers all of them.
+      const codes = String(postCodes ?? '')
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      let edge;
+      if (codes.length > 1) edge = ` (HTTP ${codes.join(' then ')}, one per attempt, no application body)`;
+      else if (codes.length === 1) edge = ` (HTTP ${codes[0]}, no application body)`;
+      else if (postCode) edge = ` (HTTP ${postCode} on the LAST attempt, no application body)`;
+      else edge = ' (no application body)';
+      // ── SAY WHICH POLLS. THE COUNT USED TO BE THE WRONG ONE (#4373 review §2).
+      // This clause asserts that the polls it names read `freshness=stale
+      // job=idle` with an unchanged chunk count. The shell establishes that for
+      // the TRAILING streak only — `POLL_ATTEMPTS` is every poll the loop made,
+      // including any that were unreachable, unparseable, or reported a
+      // different state before the streak began. Printing the total therefore
+      // claimed a reading for polls that never produced it: measured by the
+      // reviewer at 10 claimed / 8 observed. The streak is now plumbed through
+      // as `idleStreak` and the sentence names it explicitly; with no streak
+      // handed over it says "the TRAILING" and no number, per the same rule that
+      // forbids inventing the attempt count.
+      const streak = Number(idleStreak);
+      const total = Number(attempts);
+      const haveStreak = Number.isFinite(streak) && streak > 0;
+      const haveTotal = Number.isFinite(total) && total > 0;
+      let polls;
+      if (haveStreak && haveTotal) polls = `Of the ${total} poll(s) over ${waited} that followed, the LAST ${streak}`;
+      else if (haveStreak) polls = `Over ${waited} of polling, the LAST ${streak} poll(s)`;
+      else if (haveTotal) polls = `Of the ${total} poll(s) over ${waited} that followed, the TRAILING ones`;
+      else polls = `Over ${waited} of polling, the TRAILING poll(s)`;
       return {
         verdict: 'fail',
         level: 'error',
         message:
           `loom-docs reindex TRIGGER REFUSED — ${detail}. ${tries} POST attempt(s) were answered by ` +
-          `the EDGE${edge}, and ${polls} since then read freshness=stale ` +
+          `the EDGE${edge}. ${polls} read freshness=stale ` +
           'job=idle with the indexed chunk count unchanged. So the rebuild was never OBSERVED to be ' +
           'accepted or running, and the evals would measure the same STALE index they started with. ' +
           'This is a REQUEST-PATH problem, not a slow rebuild: look at the origin response timeout on ' +
@@ -427,7 +468,9 @@ function main() {
           body: process.env.POLL_BODY ?? '',
           waitedSeconds: process.env.POLL_WAITED_S ?? '',
           attempts: process.env.POLL_ATTEMPTS ?? '',
+          idleStreak: process.env.POLL_IDLE_STREAK ?? '',
           postCode: process.env.POST_CODE ?? '',
+          postCodes: process.env.POST_CODES ?? '',
           postAttempts: process.env.POST_ATTEMPTS ?? '',
         })
       : classifyReindexResult({

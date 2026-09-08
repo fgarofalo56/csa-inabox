@@ -44,8 +44,16 @@ function pollBody({ freshness, job = 'running', chunks = 49593 }) {
 
 /**
  * Stand up a console stub.
- * @param {(n:number)=>{status:number,body:unknown}} onPost
- * @param {(n:number)=>{status:number,body:unknown}} onGet
+ *
+ * A handler may return `{ destroy: true }` instead of a response to model a
+ * poll that never gets an answer at all: the socket is torn down, `curl` prints
+ * `000` for `%{http_code}`, and the script takes its `unreachable` branch. That
+ * is the only way to reach that branch with a real curl, and it is load-bearing
+ * — an unreachable poll observed NOTHING, so it may not sit inside a run of
+ * polls the verdict claims a `stale`/`idle` reading for (#4373).
+ *
+ * @param {(n:number)=>{status:number,body:unknown}|{destroy:true}} onPost
+ * @param {(n:number)=>{status:number,body:unknown}|{destroy:true}} onGet
  */
 async function withServer(onPost, onGet, run) {
   let posts = 0;
@@ -54,7 +62,12 @@ async function withServer(onPost, onGet, run) {
     const isPost = req.method === 'POST';
     const handler = isPost ? onPost : onGet;
     const n = isPost ? ++posts : ++gets;
-    const { status, body } = handler(n);
+    const result = handler(n);
+    if (result && result.destroy) {
+      req.socket.destroy();
+      return;
+    }
+    const { status, body } = result;
     const payload = typeof body === 'string' ? body : JSON.stringify(body);
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(payload);
@@ -612,6 +625,158 @@ test('#3472 a MOVING indexedChunkCount restarts the streak', async () => {
       assert.equal(res.status, 1, res.stdout + res.stderr);
       assert.equal(counts().gets, 5, '1 pre-retry probe + 4 polls');
       assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/, 'the count moved every poll — no streak of 2 completes');
+    },
+  );
+});
+
+/**
+ * THE STREAK MUST BE TRAILING, AND NOTHING TESTED THAT (#4373 review §3).
+ *
+ * `else IDLE_STREAK=0` is the ONE line that makes the streak a trailing run
+ * rather than a cumulative tally. The reviewer deleted it and the whole 27-case
+ * suite still passed — a guard with no test on its own defining property, which
+ * is this repo's most-repeated defect shape.
+ *
+ * The discriminating fixture is a run where the CUMULATIVE idle count clears the
+ * threshold but the TRAILING run does not: threshold 3, five idle polls in
+ * total, and a non-idle poll third-from-last so only 2 idle polls trail. The
+ * interrupting poll reports a body with `job.state` ABSENT (`job=unknown`) —
+ * a real shape, and one that is neither `idle` (so it cannot extend the streak)
+ * nor `running` (so it must not trip the SAW_RUNNING latch and mask the
+ * property under test).
+ *
+ * MUTATION-PROOF: delete `else IDLE_STREAK=0` and the streak becomes the
+ * cumulative 5, clears the threshold of 3, and this goes RED on
+ * `TRIGGER REFUSED`.
+ */
+test('#4373 the streak must be TRAILING: 5 idle polls broken 3rd-from-last do NOT rename', async () => {
+  const NO_JOB_STATE = {
+    status: 200,
+    body: {
+      ok: true,
+      backend: 'ai-search',
+      job: { jobId: null, error: null },
+      freshness: { state: 'stale', indexedChunkCount: 49593 },
+    },
+  };
+  await withServer(
+    () => EDGE_504,
+    // GET 1 is the pre-retry probe; polls are GETs 2..7.
+    // polls 1-3 idle (streak 3), poll 4 job.state absent (streak 0),
+    // polls 5-6 idle (streak 2). Cumulative idle = 5, trailing = 2.
+    (n) => (n === 5 ? NO_JOB_STATE : STALE_IDLE),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '6' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 7, '1 pre-retry probe + 6 polls');
+      assert.doesNotMatch(
+        res.stdout,
+        /TRIGGER REFUSED/,
+        'the trailing run is 2, below the threshold of 3 — only a CUMULATIVE tally would rename',
+      );
+      // And the verdict it does get is the ordinary ceiling refusal.
+      assert.match(res.stdout, /did NOT reach a fresh state/);
+    },
+  );
+});
+
+/**
+ * THE VERDICT MAY ONLY CLAIM THE POLLS THAT PRODUCED THE READING (#4373 review §2).
+ *
+ * The message asserts `freshness=stale job=idle with the indexed chunk count
+ * unchanged`. The shell establishes that for the TRAILING streak; it was handing
+ * the classifier `POLL_ATTEMPTS`, i.e. EVERY poll, including ones that read
+ * something else. The reviewer measured the exact sentence at 10 claimed / 8
+ * observed. `POLL_IDLE_STREAK` is now plumbed through and the message names it.
+ *
+ * Fixture: polls 1-2 report a body with `job.state` absent, polls 3-10 are the
+ * normal `stale`/`idle`/49593. 10 polls, of which 8 trail.
+ *
+ * MUTATION-PROOF: stop passing POLL_IDLE_STREAK (or pass ATTEMPTS as it) and the
+ * message reads "the LAST 10 of 10" / drops the number — RED either way.
+ */
+test('#4373 the verdict names the TRAILING streak (8), not every poll (10)', async () => {
+  const NO_JOB_STATE = {
+    status: 200,
+    body: {
+      ok: true,
+      backend: 'ai-search',
+      job: { jobId: null, error: null },
+      freshness: { state: 'stale', indexedChunkCount: 49593 },
+    },
+  };
+  await withServer(
+    () => EDGE_504,
+    // GET 1 = pre-retry probe. Polls are GETs 2..11; GETs 2-3 are the two that
+    // never report a job state.
+    (n) => (n <= 3 && n >= 2 ? NO_JOB_STATE : STALE_IDLE),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '4', POLL_MAX_ATTEMPTS: '10' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 11, '1 pre-retry probe + 10 polls');
+      assert.match(res.stdout, /TRIGGER REFUSED/);
+      assert.match(res.stdout, /Of the 10 poll\(s\) over \d+s that followed, the LAST 8 read/);
+      // The refuted sentence shape: the total presented as the polls that read
+      // stale/idle. This is the string the reviewer measured.
+      assert.doesNotMatch(res.stdout, /10 poll\(s\) over \d+s since then read freshness=stale/);
+    },
+  );
+});
+
+/**
+ * PER-ATTEMPT STATUS CODES (#4373 review §4). `POST_CODE` is only the LAST
+ * attempt's status, and the sentence around it is plural — so a 504 then a 502
+ * was reported as "All 2 POST attempt(s) were answered by the EDGE (HTTP 502…)",
+ * attributing one sample to both. The shell now collects every attempt's code.
+ *
+ * MUTATION-PROOF: stop collecting POST_CODES and the message falls back to the
+ * last code alone — no `504 then 502`.
+ */
+test('#4373 the verdict names EVERY POST attempt\'s status, not just the last', async () => {
+  await withServer(
+    (n) => (n === 1 ? EDGE_504 : { status: 502, body: '<html><title>502 Bad Gateway</title></html>' }),
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().posts, 2, 'both POSTs were indeterminate gateway answers');
+      assert.match(res.stdout, /TRIGGER REFUSED/);
+      assert.match(res.stdout, /HTTP 504 then 502, one per attempt/);
+    },
+  );
+});
+
+/**
+ * AN UNREACHABLE POLL OBSERVED NOTHING, SO IT MAY NOT SIT INSIDE THE CLAIM
+ * (#4373 review §2, the other half).
+ *
+ * The `curl 000` branch used to `continue` past the streak bookkeeping
+ * entirely, so a poll that never got a body neither extended nor broke the
+ * trailing run — it was simply invisible to it. The verdict then asserted
+ * `freshness=stale job=idle` for a span of polls one of which read nothing at
+ * all. Resetting is the honest reading: no observation breaks the run exactly
+ * as a different observation does.
+ *
+ * MUTATION-PROOF: delete the `IDLE_STREAK=0` before that `continue` and the
+ * trailing run spans the dead poll, reaching 5 against a threshold of 3 — RED
+ * on `TRIGGER REFUSED`.
+ */
+test('#4373 an UNREACHABLE poll breaks the trailing streak (it observed nothing)', async () => {
+  await withServer(
+    () => EDGE_504,
+    // GET 1 = pre-retry probe; polls are GETs 2..7. GET 5 (poll 4) is answered
+    // by tearing down the socket, which is what a real curl 000 looks like.
+    (n) => (n === 5 ? { destroy: true } : STALE_IDLE),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '6' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 7, '1 pre-retry probe + 6 polls');
+      assert.match(res.stdout, /poll: unreachable \(curl 000\)/, 'the 000 branch must actually be taken');
+      assert.doesNotMatch(
+        res.stdout,
+        /TRIGGER REFUSED/,
+        'only 2 polls trail the dead one — a streak that ignored it would reach 5',
+      );
     },
   );
 });
