@@ -85,17 +85,21 @@ import {
   CONSOLE_APP_NAME,
   CONSOLE_IMAGE_KEY,
   CONSOLE_ROLL_SOURCES,
+  ESTATE_IMAGE_LEASE_TAGS,
   ESTATE_ROLL_LANES,
   SHA_TAG_RE,
   buildHealRequests,
   cliMain,
   comparePins,
+  decideEstateImageLeaseAcquire,
+  decideEstateImageLeaseRelease,
   decideEstateRegression,
   decideEstateRegressionAll,
   decidePinRefresh,
   describeRevisionReadFailure,
   parseRollRunTitle,
   pinsFromEnv,
+  readEstateImageLease,
   resolveRunningImageTags,
   selectLastConsoleRoll,
   selectRevisionOverwrite,
@@ -1918,6 +1922,38 @@ const AZ_STUB = [
   '  if [ -n "${AZ_SHOW_ERR:-}" ]; then printf "%s\\n" "$AZ_SHOW_ERR" >&2; exit 1; fi',
   '  printf "%s\\n" "$AZ_SHOW_IMAGE"; exit 0',
   'fi',
+  // ── THE ESTATE IMAGE-WRITE LEASE (#3676 bullet 1) ─────────────────────────
+  // A REAL tag store, not a canned answer: `az tag update` mutates the same
+  // file `az tag list` reads back. A stub that replayed a fixed document could
+  // not tell a lease that was TAKEN from one that was merely asked for, which
+  // is the only thing the acquire loop is trying to establish.
+  'if [ "$1" = "acr" ] && [ "$2" = "show" ]; then',
+  '  if [ -n "${AZ_ACR_ID_ERR:-}" ]; then printf "%s\\n" "$AZ_ACR_ID_ERR" >&2; exit 1; fi',
+  '  printf "%s\\n" "${AZ_ACR_ID:-/subscriptions/s/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acrtest}"; exit 0',
+  'fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "list" ]; then',
+  '  if [ -n "${AZ_TAG_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_LIST_ERR" >&2; exit 1; fi',
+  '  cat "$AZ_TAG_FILE"; exit 0',
+  'fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "update" ]; then',
+  '  if [ -n "${AZ_TAG_WRITE_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_WRITE_ERR" >&2; exit 1; fi',
+  '  SEEN=0; KVS=()',
+  '  for A in "$@"; do',
+  '    if [ "$SEEN" = "1" ]; then KVS+=("$A"); fi',
+  '    if [ "$A" = "--tags" ]; then SEEN=1; fi',
+  '  done',
+  '  for KV in "${KVS[@]}"; do',
+  '    printf "%s\\n" "$KV" >> "$AZ_TAG_WRITE_LOG"',
+  '    K="${KV%%=*}"; V="${KV#*=}"',
+  "    jq --arg k \"$K\" --arg v \"$V\" '.properties.tags[$k] = $v' < \"$AZ_TAG_FILE\" > \"$AZ_TAG_FILE.tmp\" && mv \"$AZ_TAG_FILE.tmp\" \"$AZ_TAG_FILE\"",
+  '  done',
+  // The claim race, made reproducible: another claimant's id lands in the tag
+  // AFTER this run's write, so the read-back cannot see itself.
+  '  if [ -n "${AZ_TAG_STEAL:-}" ]; then',
+  "    jq --arg v \"$AZ_TAG_STEAL\" '.properties.tags.loomEstateImgOwner = $v' < \"$AZ_TAG_FILE\" > \"$AZ_TAG_FILE.tmp\" && mv \"$AZ_TAG_FILE.tmp\" \"$AZ_TAG_FILE\"",
+  '  fi',
+  '  exit 0',
+  'fi',
   'echo "unstubbed az: $*" >&2; exit 99',
 ].join('\n');
 
@@ -1937,8 +1973,8 @@ function newStepCtx() {
   return { dir, binDir, fixDir, runnerTemp, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, azRevisionsByApp = null, ctx = null } = {}) {
-  const yaml = readNorm(DEPLOY_WORKFLOW);
+function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, azRevisionsByApp = null, ctx = null, workflow = DEPLOY_WORKFLOW, leaseTags = null } = {}) {
+  const yaml = readNorm(workflow);
   const body = runBodyOf(yaml, namePrefix);
   const declared = envKeysOf(yaml, namePrefix);
   for (const k of declared) {
@@ -1992,6 +2028,16 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     const dispatchLog = join(dir, 'gh-dispatch.log');
     writeFileSync(dispatchLog, '');
 
+    // The lease's tag store, SHARED across steps in one ctx so an acquire and
+    // the release that follows it read the same document — the hand-off that
+    // makes "did the mutex actually hold" answerable at all.
+    const tagFile = join(dir, 'az-tags.json');
+    const tagWriteLog = join(dir, 'az-tag-writes.log');
+    if (leaseTags || !existsSync(tagFile)) {
+      writeFileSync(tagFile, JSON.stringify(leaseTags ?? { properties: { tags: {} } }));
+    }
+    if (!existsSync(tagWriteLog)) writeFileSync(tagWriteLog, '');
+
     const script = join(dir, 'step.sh');
     writeFileSync(script, body, 'utf8');
     const ghEnvFile = join(dir, 'github_env');
@@ -2019,6 +2065,8 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
         ...(azRevisions2 ? { AZ_REV_FILE2: azRevFile2 } : {}),
         ...(azRevisionsByApp ? { AZ_REV_DIR: azRevDir } : {}),
         AZ_REV_COUNT: azRevCount,
+        AZ_TAG_FILE: tagFile,
+        AZ_TAG_WRITE_LOG: tagWriteLog,
       },
     });
     return {
@@ -2027,6 +2075,8 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
       envFile: readFileSync(ghEnvFile, 'utf8'),
       outFile: readFileSync(ghOutFile, 'utf8'),
       dispatches: readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean),
+      tags: JSON.parse(readFileSync(tagFile, 'utf8'))?.properties?.tags ?? null,
+      tagWrites: readFileSync(tagWriteLog, 'utf8').split('\n').filter(Boolean),
     };
   } finally {
     if (!ctx) own.dispose();
@@ -4160,4 +4210,495 @@ test('the digest re-assertion step carries the id the rollback gate reads', () =
   assert.ok(at >= 0, 'the digest re-assertion step was renamed — the rollback gate now reads a dead id');
   assert.equal(lines[at + 1].trim(), 'id: digest',
     'the digest re-assertion step lost its `id: digest`, so steps.digest.outcome is empty in the rollback gate');
+});
+
+// ===========================================================================
+// THE ESTATE IMAGE-WRITE LEASE — #3676 acceptance bullet 1
+// ===========================================================================
+//
+// Bullet 2 (the post-apply gate) shipped in #4318 and was measured executing on
+// two live scheduled runs. Bullet 1 — "the two writers cannot both win" — was
+// re-measured NOT DONE on 2026-09-07: `grep -c '^concurrency:'` returned 0 on
+// all four deploy lanes and no image-write mutex existed. These tests cover the
+// lease that closes it.
+//
+// A `concurrency:` group is deliberately NOT the mechanism (GitHub keeps one
+// pending run per group and CANCELS the previous one, converting a visible
+// self-healing revert into a silently dropped roll), so nothing here asserts
+// the presence of one.
+
+const LEASE_ACQUIRE_STEP = 'Take the ESTATE IMAGE-WRITE lease';
+const LEASE_RELEASE_STEP = 'Release the ESTATE IMAGE-WRITE lease';
+
+/** A tag document in the shape `az tag list --resource-id` returns. */
+const tagDoc = (tags = {}) => ({ id: 'acr-resource-id/providers/Microsoft.Resources/tags/default', name: 'default', properties: { tags } });
+
+/** A live lease held by somebody else — the run id is the 2026-08-17 deploy. */
+const foreignLease = (expires) => tagDoc({
+  [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:fgarofalo56/csa-inabox:32004118361:1',
+  [ESTATE_IMAGE_LEASE_TAGS.expires]: String(expires),
+  [ESTATE_IMAGE_LEASE_TAGS.holder]: 'https://github.com/fgarofalo56/csa-inabox/actions/runs/32004118361',
+  [ESTATE_IMAGE_LEASE_TAGS.since]: '2026-08-17T07:09:09Z',
+});
+
+const ME = 'gha:fgarofalo56/csa-inabox:99:1';
+const NOW = 1755420000;
+
+test('LEASE: a free registry is CLAIMED, with an expiry derived from the TTL', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: tagDoc({}), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'claim');
+  assert.equal(v.expiresEpoch, NOW + 900);
+});
+
+test('LEASE: a LIVE foreign holder is WAITED for, never claimed — this is the whole point', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW + 600), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 300,
+  });
+  assert.equal(v.action, 'wait');
+  assert.equal(v.remainingSeconds, 600);
+  assert.match(v.reason, /held by 'gha:fgarofalo56\/csa-inabox:32004118361:1'/);
+});
+
+test('LEASE: the wait is BOUNDED — at the deadline it REFUSES rather than writing anyway', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW + 600), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW,
+  });
+  assert.equal(v.action, 'refuse');
+  assert.match(v.reason, /wrote NOTHING/);
+});
+
+test('LEASE: an EXPIRED holder is taken over, loudly', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW - 30), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'claim');
+  assert.match(v.reason, /STALE .* expired 30s ago/);
+});
+
+test('LEASE: this run RE-ENTERS its own lease instead of deadlocking against itself', () => {
+  const doc = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: ME,
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 10),
+  });
+  const v = decideEstateImageLeaseAcquire({ doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW });
+  assert.equal(v.action, 'reentrant');
+  assert.equal(v.expiresEpoch, NOW + 900);
+});
+
+test('LEASE: an UNREADABLE mutex is unknown and NEVER free — the fail-open that would void it', () => {
+  const v = decideEstateImageLeaseAcquire({
+    readError: "AuthorizationFailed: does not have authorization to perform action 'Microsoft.Resources/tags/read'",
+    me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /NOT established whether another lane is mid-write/);
+});
+
+test('LEASE: a CHANGED az projection is unknown, not an untagged registry', () => {
+  // If `az tag list` ever stops returning `properties`, reading that as "no
+  // tags" would report the mutex FREE to both lanes at the same instant — a
+  // guard that fails open at the exact moment it stopped working.
+  for (const doc of [{ tags: {} }, [], 'nope', null]) {
+    const v = decideEstateImageLeaseAcquire({
+      doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+    });
+    assert.equal(v.action, 'unknown', `doc ${JSON.stringify(doc)} must not resolve to a claimable lease`);
+  }
+  assert.equal(readEstateImageLease(tagDoc({})).status, 'read');
+});
+
+test('LEASE: an owner with an UNPARSEABLE expiry is unknown, not expired', () => {
+  // Treating it as expired would let a second writer in; waiting on it forever
+  // would deadlock the estate. It is UNKNOWN, with the exact clearing command.
+  const doc = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:other:1:1',
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: 'soon',
+  });
+  const v = decideEstateImageLeaseAcquire({ doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60 });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /--operation Merge --tags loomEstateImgOwner=none/);
+});
+
+test('LEASE: a holder id carrying "=" is refused before it can be written', () => {
+  // `az tag update --tags k=v` splits on the first '=', so such an id would be
+  // stored truncated and could never match itself on read-back — a lease held
+  // by a name nobody can spell.
+  const v = decideEstateImageLeaseAcquire({
+    doc: tagDoc({}), me: 'gha:repo:1:1=x', nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'usage');
+});
+
+test('LEASE RELEASE: the recorded holder CLEARS; a stranger does NOT', () => {
+  const mineDoc = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 10) });
+  assert.equal(decideEstateImageLeaseRelease({ doc: mineDoc, me: ME, state: 'held' }).action, 'clear');
+
+  const stolen = decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 600), me: ME, state: 'held' });
+  assert.equal(stolen.action, 'stolen');
+  assert.match(stolen.reason, /NOT clearing the tags/);
+});
+
+test('LEASE RELEASE: an ERASED lease is its own verdict, and names no culprit it did not establish', () => {
+  const v = decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'held' });
+  assert.equal(v.action, 'erased');
+  assert.match(v.reason, /is NOT established/);
+  // R7: it may describe shapes to check, never assert which one happened.
+  assert.doesNotMatch(v.reason, /was (erased|removed|deleted) by (the|an) (apply|ARM)/i);
+});
+
+test('LEASE RELEASE: a run that never took the lease releases nothing', () => {
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'none' }).action, 'noop');
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: '' }).action, 'usage');
+});
+
+// ---------------------------------------------------------------------------
+// The CLI, driven at its real entrypoint — the exit codes ARE the protocol the
+// workflow loop branches on, so they are asserted rather than assumed.
+// ---------------------------------------------------------------------------
+
+const TAGS_PATH = 'tags.json';
+
+function leaseCli(argv, { doc = null } = {}) {
+  const out = [];
+  const written = new Map();
+  const files = new Map();
+  if (doc !== null) files.set(TAGS_PATH, JSON.stringify(doc));
+  const rc = cliMain(argv, {
+    readFile: (p) => {
+      if (!files.has(p)) throw new Error(`ENOENT ${p}`);
+      return files.get(p);
+    },
+    writeFile: (p, body) => written.set(p, body),
+    writeEnv: () => {},
+    writeOutput: (line) => out.push(line),
+    log: (s) => out.push(s),
+    env: {},
+  });
+  return { rc, out: out.join('\n'), written };
+}
+
+test('LEASE CLI: the exit codes are the protocol — 0 claim, 3 wait, 1 refuse, 4 degrade, 2 usage', () => {
+  const base = ['--me', ME, '--now', String(NOW), '--ttl-seconds', '900', '--tags', TAGS_PATH];
+
+  const claim = leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW + 60),
+    '--unknown-policy', 'refuse', '--expires-out', 'exp.txt'], { doc: tagDoc({}) });
+  assert.equal(claim.rc, 0);
+  assert.equal(claim.written.get('exp.txt'), `${NOW + 900}\n`,
+    'the expiry must reach a FILE: the shell loop needs it on the next line, and a step output is collected at step end');
+
+  assert.equal(leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW + 300),
+    '--unknown-policy', 'refuse'], { doc: foreignLease(NOW + 600) }).rc, 3, 'a live holder before the deadline = WAIT');
+
+  assert.equal(leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW),
+    '--unknown-policy', 'refuse'], { doc: foreignLease(NOW + 600) }).rc, 1, 'at the deadline = REFUSE');
+
+  const unknownArgs = ['estate-image-lease-acquire', '--me', ME, '--now', String(NOW), '--ttl-seconds', '900',
+    '--wait-deadline', String(NOW + 60), '--tags-error', 'ARM said no'];
+  assert.equal(leaseCli([...unknownArgs, '--unknown-policy', 'refuse']).rc, 1);
+  const degraded = leaseCli([...unknownArgs, '--unknown-policy', 'degrade']);
+  assert.equal(degraded.rc, 4);
+  assert.match(degraded.out, /PROCEEDING UNLEASED/,
+    'the degraded path must be LOUD — a silent unleased write is the defect, not the fix');
+
+  // --unknown-policy has NO default: a lane must not inherit the other lane's
+  // risk appetite by omitting the flag.
+  assert.equal(leaseCli([...unknownArgs]).rc, 2);
+  assert.equal(leaseCli([...unknownArgs, '--unknown-policy', 'maybe']).rc, 2);
+});
+
+test('LEASE CLI: neither --tags nor --tags-error, or BOTH, is a usage error on every subcommand', () => {
+  for (const cmd of ['estate-image-lease-acquire', 'estate-image-lease-confirm', 'estate-image-lease-release']) {
+    assert.equal(leaseCli([cmd, '--me', ME, '--now', String(NOW)]).rc, 2, `${cmd}: neither`);
+    assert.equal(leaseCli([cmd, '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH,
+      '--tags-error', 'x'], { doc: tagDoc({}) }).rc, 2, `${cmd}: both`);
+  }
+});
+
+test('LEASE CLI: confirm is 0 only when the registry names THIS run', () => {
+  const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0);
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 1, 'another id in the tag means this run LOST the claim race');
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW),
+    '--tags-error', 'read failed']).rc, 1, 'an unreadable read-back is not a confirmation');
+});
+
+test('LEASE CLI: release is 0 for clear/noop and 1 for erased/stolen/unreadable', () => {
+  const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'none', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 0);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 1, "ERASED must go red — it means this run's writes were not exclusive");
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 1, 'STOLEN must go red for the same reason');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held',
+    '--tags-error', 'ARM said no']).rc, 1);
+});
+
+// ---------------------------------------------------------------------------
+// THE WIRING. A decision nobody calls arbitrates nothing, and this whole issue
+// is a case of every part working and the whole not.
+// ---------------------------------------------------------------------------
+
+test('WIRING: BOTH image writers take the lease, and the two shells are the SAME BYTES', () => {
+  const deploy = readNorm(DEPLOY_WORKFLOW);
+  const roll = readNorm(ROLL_WORKFLOW);
+  for (const [label, yaml] of [['deploy-fiab-commercial', deploy], ['loom-roll-and-validate', roll]]) {
+    assert.ok(yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`), `${label} does not take the image-write lease`);
+    assert.ok(yaml.includes(`      - name: ${LEASE_RELEASE_STEP}`), `${label} never releases the image-write lease`);
+  }
+  // Every difference between the lanes is an `env:` value. If the bodies ever
+  // diverge, one lane gets a fix and the other silently does not — the exact
+  // shape of #3888 (a re-pin ported to gcch/il5 without its guard).
+  assert.equal(runBodyOf(deploy, LEASE_ACQUIRE_STEP), runBodyOf(roll, LEASE_ACQUIRE_STEP),
+    'the two lanes\' lease-acquire shells have drifted apart');
+  assert.equal(runBodyOf(deploy, LEASE_RELEASE_STEP), runBodyOf(roll, LEASE_RELEASE_STEP),
+    'the two lanes\' lease-release shells have drifted apart');
+});
+
+test('WIRING: each lane declares its OWN unknown-policy, and they are the opposite tie-breaks', () => {
+  // The asymmetry is deliberate and is each lane's existing policy: a nightly
+  // reconcile that skips a night costs a night; a roll blocked by an ARM tag
+  // read is a security fix that does not ship.
+  const envOf = (yaml) => {
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    return /LEASE_UNKNOWN_POLICY: (\S+)/.exec(seg)?.[1] ?? '';
+  };
+  assert.equal(envOf(readNorm(DEPLOY_WORKFLOW)), 'refuse');
+  assert.equal(envOf(readNorm(ROLL_WORKFLOW)), 'degrade');
+});
+
+test('WIRING: the deploy takes the lease BEFORE the re-pin, and the roll BEFORE the image write', () => {
+  const dSteps = stepsWithIds(readNorm(DEPLOY_WORKFLOW)).map((s) => s.name);
+  const acquireAt = dSteps.findIndex((n) => n.startsWith(LEASE_ACQUIRE_STEP));
+  const repinAt = dSteps.findIndex((n) => n.startsWith('Re-pin appImageTags to the RUNNING images'));
+  const releaseAt = dSteps.findIndex((n) => n.startsWith(LEASE_RELEASE_STEP));
+  const provisionAt = stepsWithIds(readNorm(DEPLOY_WORKFLOW)).findIndex((s) => s.id === 'provision');
+  assert.ok(acquireAt !== -1 && repinAt !== -1 && releaseAt !== -1 && provisionAt !== -1);
+  // The window this closes is between the re-pin's MEASUREMENT and the apply
+  // that spends it, so the lease must be held before the measurement is taken.
+  assert.ok(acquireAt < repinAt, 'the lease is taken after the re-pin measured — the stale-measurement window is still open');
+  assert.ok(releaseAt > provisionAt, 'the lease is released before the apply that writes the images');
+
+  const rSteps = stepsWithIds(readNorm(ROLL_WORKFLOW)).map((s) => s.name);
+  const rAcquire = rSteps.findIndex((n) => n.startsWith(LEASE_ACQUIRE_STEP));
+  const rWrite = rSteps.findIndex((n) => n.startsWith('Roll Container App to new image'));
+  const rRelease = rSteps.findIndex((n) => n.startsWith(LEASE_RELEASE_STEP));
+  const rHealth = rSteps.findIndex((n) => n.startsWith('Wait for revision health'));
+  assert.ok(rAcquire !== -1 && rWrite !== -1 && rRelease !== -1 && rHealth !== -1);
+  assert.equal(rAcquire + 1, rWrite, 'a step was inserted between the lease and the image write it guards');
+  // Held until the revision is actually RUNNING the image: until then a
+  // concurrent apply's re-pin could still read the old image and write it back.
+  assert.ok(rRelease > rHealth, 'the roll releases the lease before the revision is running the new image');
+});
+
+test('WIRING: the release runs on always(), so a FAILED writer cannot outlive its own mutex', () => {
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const yaml = readNorm(wf);
+    const at = yaml.indexOf(`      - name: ${LEASE_RELEASE_STEP}`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    assert.match(seg, /if: always\(\) && steps\.img_lease\.outputs\.held == 'true'/,
+      `${wf}: the lease release is not unconditional — a failed apply/roll would hold the mutex until its TTL`);
+  }
+});
+
+test('WIRING: neither lease step discards a result (no || true, no 2>/dev/null)', () => {
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const yaml = readNorm(wf);
+    for (const step of [LEASE_ACQUIRE_STEP, LEASE_RELEASE_STEP]) {
+      const body = runBodyOf(yaml, step);
+      assert.doesNotMatch(body, /\|\| true/, `${wf} / ${step}: a discarded result`);
+      assert.doesNotMatch(body, /2>\/dev\/null/, `${wf} / ${step}: stderr discarded (deploy-integrity R7)`);
+      assert.doesNotMatch(body, /2>&1/, `${wf} / ${step}: stderr spliced into a value`);
+    }
+  }
+});
+
+test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () => {
+  // Appending the same key twice leaves the result depending on undocumented
+  // runner precedence — the trap acr-firewall-lease.sh records against its own
+  // lease_state, and one this step's early `held=false` would have walked into.
+  const body = runBodyOf(readNorm(DEPLOY_WORKFLOW), LEASE_ACQUIRE_STEP);
+  for (const key of ['held', 'acr_id']) {
+    const n = body.split('\n').filter((l) => l.includes(`echo "${key}=`) && l.includes('GITHUB_OUTPUT')).length;
+    assert.equal(n, 1, `the lease step appends ${key} to $GITHUB_OUTPUT ${n} times`);
+  }
+});
+
+test('PRECONDITION: registry.bicep must NOT declare tags on the ACR, or this mutex evaporates', () => {
+  // An ARM resource PUT replaces a resource's top-level `tags`, which is how the
+  // firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:`
+  // from the ACR for exactly that reason, and this lease is stored in the same
+  // place. That is a PRECONDITION of the mutex, not a coincidence: if it comes
+  // back, this guard goes red instead of the lease silently arbitrating nothing.
+  const bicep = readNorm(join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'modules', 'admin-plane', 'registry.bicep'));
+  const at = bicep.indexOf("resource acr 'Microsoft.ContainerRegistry/registries@");
+  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this precondition before trusting the lease');
+  const decl = bicep.slice(at, bicep.indexOf('\n}\n', at));
+  assert.doesNotMatch(decl, /^ {2}tags:/m,
+    'registry.bicep declares `tags:` on the ACR again. An ARM PUT replaces a resource\'s tags, so every apply '
+    + 'would erase the estate image-write lease mid-apply and both writers would proceed (#3681 / #3676).');
+});
+
+// ---------------------------------------------------------------------------
+// THE SHELL, EXECUTED. Not grepped.
+//
+// `bash -e {0}` is GitHub's own invocation, and the `az` stub keeps a REAL tag
+// store: `az tag update` mutates the same document `az tag list` reads back, so
+// a claim that was merely REQUESTED is distinguishable from one that was TAKEN.
+// A DOM-string / grep assertion could not tell those apart, and this issue is
+// entirely about a control that ran and measured nothing.
+// ---------------------------------------------------------------------------
+
+/** The run identity both lease steps derive their holder id from. */
+const LEASE_GH = {
+  GITHUB_REPOSITORY: 'owner/repo',
+  GITHUB_RUN_ID: '4242',
+  GITHUB_RUN_ATTEMPT: '1',
+  GITHUB_SERVER_URL: 'https://github.com',
+};
+
+/** The env every lease-acquire run needs; `envKeysOf` asserts nothing is missing. */
+const leaseEnv = (over = {}) => ({
+  ...LEASE_GH,
+  LEASE_ACR: 'acrtest',
+  DEPLOY_SUB: '',
+  LEASE_TTL_SECONDS: '900',
+  LEASE_WAIT_SECONDS: '0',
+  LEASE_UNKNOWN_POLICY: 'refuse',
+  LEASE_SETTLE_SECONDS: '0',
+  LEASE_RETRY_SECONDS: '0',
+  ...over,
+});
+
+/** The env the release step needs. */
+const leaseReleaseEnv = (acrId) => ({ ...LEASE_GH, LEASE_ACR_ID: acrId, DEPLOY_SUB: '' });
+
+test('SHELL: the deploy lane TAKES the lease on a free registry and records itself in the tags', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv(),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.outFile, /held=true/);
+  assert.match(r.outFile, /acr_id=.+ContainerRegistry/);
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
+  assert.ok(Number(r.tags[ESTATE_IMAGE_LEASE_TAGS.expires]) > Math.floor(Date.now() / 1000),
+    'the lease was written without a future expiry, so it is stale the instant it is taken');
+  assert.match(r.tags[ESTATE_IMAGE_LEASE_TAGS.holder], /actions\/runs\/4242/);
+  assert.match(r.out, /HELD by gha:owner\/repo:4242:1/);
+});
+
+test('SHELL: a lane BLOCKED by the other writer refuses and writes NOTHING — the mutual exclusion', { skip: shellSkip }, () => {
+  // The other writer is live with 10 minutes left and this run's bounded wait is
+  // exhausted, which is the state that used to produce a silent overwrite.
+  const held = {
+    properties: {
+      tags: {
+        [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:owner/repo:32004118361:1',
+        [ESTATE_IMAGE_LEASE_TAGS.expires]: String(Math.floor(Date.now() / 1000) + 600),
+        [ESTATE_IMAGE_LEASE_TAGS.holder]: 'https://github.com/owner/repo/actions/runs/32004118361',
+      },
+    },
+  };
+  for (const [label, workflow, policy] of [
+    ['deploy', DEPLOY_WORKFLOW, 'refuse'],
+    ['roll', ROLL_WORKFLOW, 'degrade'],
+  ]) {
+    const r = runStep(LEASE_ACQUIRE_STEP, {
+      workflow,
+      env: leaseEnv({ LEASE_UNKNOWN_POLICY: policy }),
+      leaseTags: held,
+    });
+    assert.equal(r.status, 1, `${label}: a live foreign holder must REFUSE on both lanes — degrade covers UNKNOWN, not a holder that is provably there.\n${r.out}`);
+    assert.match(r.outFile, /held=false/, `${label}: held must be false`);
+    assert.equal(r.tagWrites.length, 0, `${label}: the blocked lane wrote to the lease anyway`);
+    assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:32004118361:1',
+      `${label}: the holder's own lease was overwritten by the lane that was supposed to be excluded`);
+  }
+});
+
+test('SHELL: an UNREADABLE mutex refuses on the deploy lane and degrades LOUDLY on the roll lane', { skip: shellSkip }, () => {
+  const azErr = "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Resources/tags/read'";
+
+  const deploy = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_LIST_ERR: azErr }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(deploy.status, 1, deploy.out);
+  assert.match(deploy.outFile, /held=false/);
+  assert.equal(deploy.tagWrites.length, 0);
+  assert.match(deploy.out, /REFUSING/);
+  assert.match(deploy.out, /AuthorizationFailed/, 'the az error must reach the log verbatim, not be replaced by a guess (R7)');
+
+  const roll = runStep(LEASE_ACQUIRE_STEP, {
+    workflow: ROLL_WORKFLOW,
+    env: leaseEnv({ LEASE_UNKNOWN_POLICY: 'degrade', AZ_TAG_LIST_ERR: azErr }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(roll.status, 0, roll.out);
+  assert.match(roll.outFile, /held=false/,
+    'a degraded roll must NOT claim to hold the lease — it would then "release" one it never took');
+  assert.match(roll.out, /PROCEEDING UNLEASED/);
+  assert.match(roll.out, /NOT mutually exclusive/,
+    'the degraded path must say what it gave up, or it reads as a pass');
+});
+
+test('SHELL: losing the CLAIM RACE is not a claim — the read-back is what decides', { skip: shellSkip }, () => {
+  // ARM tags have no compare-and-swap. Both claimants write; the stub puts the
+  // other one's id in after ours, which is exactly what the settle-and-read-back
+  // exists to catch. Without it both runs would believe they hold the mutex.
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_STEAL: 'gha:owner/repo:777:1' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.outFile, /held=false/);
+  assert.match(r.out, /lost the claim race/);
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:777:1');
+});
+
+test('SHELL: a write the identity cannot perform is a REFUSAL, and names the missing permission', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_WRITE_ERR: 'ERROR: (AuthorizationFailed) tags/write denied' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.outFile, /held=false/);
+  assert.match(r.out, /Tag Contributor/, 'deploy-integrity R6: the remediation must be concrete');
+});
+
+test('SHELL: acquire then release round-trips — the holder clears the lease it took', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    const acq = runStep(LEASE_ACQUIRE_STEP, { ctx, env: leaseEnv(), leaseTags: { properties: { tags: {} } } });
+    assert.equal(acq.status, 0, acq.out);
+    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(acrId, '');
+
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId) });
+    assert.equal(rel.status, 0, rel.out);
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
+      'the release did not free the mutex, so the other lane stays blocked until the TTL');
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
+    assert.match(rel.out, /RELEASED by/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL: releasing a lease that was ERASED under this run goes RED, and does not pretend', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_RELEASE_STEP, {
+    env: leaseReleaseEnv('acr-resource-id'),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /WAS ERASED WHILE THIS RUN/);
+  assert.match(r.out, /is NOT established/, 'R7: it may not name a culprit it did not establish');
 });

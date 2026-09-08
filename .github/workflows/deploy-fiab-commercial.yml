@@ -353,7 +353,7 @@ jobs:
               STATE=$(az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress --query properties.state -o tsv 2>/dev/null)
               echo "[$i] AllowBringYourOwnPublicIpAddress: $STATE"
               [ "$STATE" = "Registered" ] && break
-              sleep 20
+              sleep "${LEASE_RETRY_SECONDS:-20}"
             done
             az provider register --namespace Microsoft.Network >/dev/null 2>&1
           fi
@@ -1732,6 +1732,197 @@ jobs:
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
           echo "held=true" >> "$GITHUB_OUTPUT"
 
+      # ── THE OTHER MUTEX: THE IMAGE FIELD ITSELF (#3676 acceptance bullet 1) ─
+      #
+      # The lease above arbitrates the REGISTRY. It does not arbitrate
+      # `properties.template.containers[0].image` on the Container Apps, which
+      # is the field this issue is actually about, and which has exactly two
+      # writers: this apply, and `az containerapp update` in
+      # loom-roll-and-validate.yml. #4318 made the POST-apply gate estate-wide,
+      # so an overwrite is now seen and healed — it is still an overwrite. The
+      # issue's acceptance opens with "the two writers cannot both win", and the
+      # 2026-09-07 re-measurement scored that bullet NOT DONE.
+      #
+      # A `concurrency:` GROUP IS STILL REFUSED, for the reason recorded at the
+      # estate gate below: GitHub keeps ONE pending run per group and CANCELS
+      # the previously pending one, which converts a visible, self-healing
+      # revert into a silently dropped roll. That comment ends "Elimination
+      # needs a LEASE, which does not cancel". This is that lease. It queues; it
+      # never cancels.
+      #
+      # IT IS A DIFFERENT MUTEX FROM THE ONE ABOVE, ON PURPOSE. The firewall
+      # lease is held by PUSHERS for up to 120 minutes and a push does not write
+      # an image field; sharing it would block every roll behind every build for
+      # no safety gain. Distinct tag keys, no interaction.
+      #
+      # ABOVE THE RE-PIN, NOT BETWEEN THE RE-PIN AND THE APPLY. Two reasons: the
+      # window this closes is precisely the one between the re-pin's measurement
+      # and the apply that spends it (reconcile-policy.mjs records that gap as
+      # sixteen minutes on 2026-08-17), so the lease has to be held BEFORE the
+      # measurement is taken; and roll-race.test.mjs asserts the re-pin is
+      # adjacent to the apply, so nothing may be inserted after it.
+      #
+      # UNKNOWN REFUSES ON THIS LANE. If the mutex cannot be read or written,
+      # this run does not apply. That is the same tie-break the firewall lease
+      # above already takes and for the same reason: a nightly reconcile that
+      # skips a night costs a night and runs again tomorrow, while an
+      # unarbitrated apply costs a rolled security fix. The roll lane takes the
+      # opposite tie-break, in its own words, at its own step.
+      - name: Take the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
+        id: img_lease
+        if: steps.acr_apply_lease.outputs.acr != ''
+        env:
+          LEASE_ACR: ${{ steps.acr_apply_lease.outputs.acr }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          # An apply has historically taken ~15m; 45m covers it with room for the
+          # retry classes deploy-retry.mjs allows and bounds how long a crashed
+          # reconcile can block a roll.
+          LEASE_TTL_SECONDS: '2700'
+          # Longer than a roll's whole leased window (its TTL is 15m), so the
+          # ordinary case is that this lane QUEUES behind a roll rather than
+          # refusing. Refusal is the exception, not the mechanism.
+          LEASE_WAIT_SECONDS: '1200'
+          LEASE_UNKNOWN_POLICY: refuse
+        run: |
+          set -uo pipefail
+          TMP="$RUNNER_TEMP/estate-img-lease"
+          rm -rf "$TMP"
+          mkdir -p "$TMP"
+          TAGS="$TMP/tags.json"
+          TAGS_ERR="$TMP/tags.err"
+          EXP="$TMP/expires"
+          : > "$TAGS_ERR"
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+
+          # The holder id names the run and the attempt, which is what a reviewer
+          # needs when a lease blocks their lane. Sanitised to the character class
+          # the policy file will accept — `az tag update --tags k=v` splits on the
+          # first '=', so an id carrying one would be stored truncated and could
+          # never match itself on read-back.
+          ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
+          URL="$(printf '%s/%s/actions/runs/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" | tr -c 'A-Za-z0-9._:@/-' '_')"
+
+          # The lease lives on the ACR because #3681 removed `tags:` from that
+          # resource in registry.bicep, so an apply no longer replaces its tag
+          # dictionary. roll-race.test.mjs asserts that precondition directly
+          # against the bicep; if it regresses, the guard goes red rather than
+          # this mutex quietly evaporating.
+          READ_ERR=""
+          set +e
+          ACR_ID=$(az acr show --name "$LEASE_ACR" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} --query id -o tsv 2> "$TAGS_ERR")
+          IDRC=$?
+          set -e
+          ACR_ID="$(printf '%s' "$ACR_ID" | tr -d '\r')"
+          ACR_ID="${ACR_ID%%$'\n'*}"
+          if [ "$IDRC" -ne 0 ] || [ -z "$ACR_ID" ]; then
+            READ_ERR="az acr show --name ${LEASE_ACR} --query id exited ${IDRC} and returned '${ACR_ID}', so the resource that CARRIES the image-write mutex could not be located. That is not evidence that no other lane is writing. Detail: $(trim400 "$TAGS_ERR")"
+          fi
+
+          HELD=false
+          RESULT=1
+          DEADLINE=$(( $(date -u +%s) + LEASE_WAIT_SECONDS ))
+          ATTEMPT=0
+          while :; do
+            ATTEMPT=$(( ATTEMPT + 1 ))
+            ARGS=()
+            if [ -n "$READ_ERR" ]; then
+              ARGS=(--tags-error "$READ_ERR")
+            else
+              : > "$TAGS_ERR"
+              set +e
+              az tag list --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+              TRC=$?
+              set -e
+              if [ "$TRC" -ne 0 ]; then
+                ARGS=(--tags-error "az tag list --resource-id ${ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
+              else
+                ARGS=(--tags "$TAGS")
+              fi
+            fi
+
+            set +e
+            node scripts/ci/reconcile-policy.mjs estate-image-lease-acquire "${ARGS[@]}" \
+              --me "$ME" --now "$(date -u +%s)" --ttl-seconds "$LEASE_TTL_SECONDS" \
+              --wait-deadline "$DEADLINE" --unknown-policy "$LEASE_UNKNOWN_POLICY" \
+              --expires-out "$EXP"
+            DRC=$?
+            set -e
+            if [ "$DRC" -eq 3 ]; then
+              sleep "${LEASE_RETRY_SECONDS:-20}"
+              continue
+            fi
+            if [ "$DRC" -eq 4 ]; then
+              # Degraded-proceed. Never selected on this lane (unknown-policy is
+              # `refuse` above); the branch exists because the SAME shell body
+              # runs on the roll lane, which does choose it, and roll-race.test.mjs
+              # asserts the two bodies are byte-identical so they cannot drift.
+              RESULT=0
+              break
+            fi
+            if [ "$DRC" -ne 0 ]; then
+              RESULT="$DRC"
+              break
+            fi
+
+            # ARM tags have no compare-and-swap: write, settle, read back. Two
+            # simultaneous claimants both write and last write wins, so each
+            # re-reads and at most one sees itself.
+            EXPIRES="$(tr -d '\r\n' < "$EXP")"
+            : > "$TAGS_ERR"
+            set +e
+            az tag update --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+              --operation Merge -o none --tags \
+              "loomEstateImgOwner=${ME}" \
+              "loomEstateImgExpiresEpoch=${EXPIRES}" \
+              "loomEstateImgSinceUtc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              "loomEstateImgHolderUrl=${URL}" 2> "$TAGS_ERR"
+            WRC=$?
+            set -e
+            if [ "$WRC" -ne 0 ]; then
+              READ_ERR="az tag update --operation Merge on ${ACR_ID} exited ${WRC}, so this run does NOT hold the image-write lease. The deploy identity may be missing Microsoft.Resources/tags/write — grant it 'Tag Contributor' on the registry. Detail: $(trim400 "$TAGS_ERR")"
+              continue
+            fi
+
+            sleep "${LEASE_SETTLE_SECONDS:-6}"
+            : > "$TAGS_ERR"
+            set +e
+            az tag list --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+            TRC=$?
+            set -e
+            CARGS=()
+            if [ "$TRC" -ne 0 ]; then
+              CARGS=(--tags-error "az tag list --resource-id ${ACR_ID} exited ${TRC} on the claim read-back: $(trim400 "$TAGS_ERR")")
+            else
+              CARGS=(--tags "$TAGS")
+            fi
+            set +e
+            node scripts/ci/reconcile-policy.mjs estate-image-lease-confirm "${CARGS[@]}" \
+              --me "$ME" --now "$(date -u +%s)"
+            CRC=$?
+            set -e
+            if [ "$CRC" -eq 0 ]; then
+              HELD=true
+              RESULT=0
+              break
+            fi
+            if [ "$(date -u +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::estate-image-lease: lost the claim race and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. Re-run once the holding run finishes."
+              RESULT=1
+              break
+            fi
+            sleep "${LEASE_RETRY_SECONDS:-20}"
+          done
+
+          # WRITTEN EXACTLY ONCE. Appending the same key to $GITHUB_OUTPUT twice
+          # leaves the result depending on undocumented runner precedence — the
+          # same trap acr-firewall-lease.sh records against its own lease_state.
+          echo "held=$HELD" >> "$GITHUB_OUTPUT"
+          echo "acr_id=$ACR_ID" >> "$GITHUB_OUTPUT"
+          if [ "$HELD" = "true" ]; then
+            echo "::notice::estate-image-lease: HELD by ${ME} for ${LEASE_TTL_SECONDS}s after ${ATTEMPT} attempt(s). No other lane may write a Container App image until this run releases it."
+          fi
+          exit "$RESULT"
+
       # ── SILENT-REVERT GATE (#3460, the Commercial half of #3161) ────────────
       #
       # CLOUD PARITY, MEASURED. `assert-no-silent-image-tag-revert` runs on
@@ -2010,6 +2201,71 @@ jobs:
           set -uo pipefail
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" \
             ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"}
+
+      # Released the moment the apply is done, so the roll lane queues for
+      # minutes rather than the full TTL. `always()` because a FAILED apply has
+      # written Container App images just as surely as a successful one, and the
+      # mutex must not outlive the writer.
+      #
+      # IT CAN FAIL THE RUN, AND THAT IS THE POINT. `erased` and `stolen` both
+      # mean this apply's image writes were NOT exclusive after all — exactly
+      # the condition #3676 is about — so they go red here rather than being
+      # tidied away. A green release over a mutex that did not hold would be the
+      # same shape as the gate that reported OK across the 2026-08-19 revert.
+      - name: Release the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
+        if: always() && steps.img_lease.outputs.held == 'true'
+        env:
+          LEASE_ACR_ID: ${{ steps.img_lease.outputs.acr_id }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+        run: |
+          set -uo pipefail
+          TMP="$RUNNER_TEMP/estate-img-lease"
+          mkdir -p "$TMP"
+          TAGS="$TMP/rel-tags.json"
+          TAGS_ERR="$TMP/rel-tags.err"
+          : > "$TAGS_ERR"
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+          ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
+
+          set +e
+          az tag list --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+          TRC=$?
+          set -e
+          ARGS=()
+          if [ "$TRC" -ne 0 ]; then
+            ARGS=(--tags-error "az tag list --resource-id ${LEASE_ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
+          else
+            ARGS=(--tags "$TAGS")
+          fi
+
+          # `--state held` is a constant because the step's own `if:` already
+          # established it from this run's recorded output. The policy file still
+          # takes it as an INPUT rather than inferring it, so the one thing a
+          # releasing run knows about itself is never guessed.
+          set +e
+          node scripts/ci/reconcile-policy.mjs estate-image-lease-release "${ARGS[@]}" \
+            --me "$ME" --state held
+          DRC=$?
+          set -e
+          if [ "$DRC" -ne 0 ]; then
+            exit "$DRC"
+          fi
+
+          : > "$TAGS_ERR"
+          set +e
+          az tag update --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --operation Merge -o none --tags \
+            "loomEstateImgOwner=none" \
+            "loomEstateImgExpiresEpoch=0" \
+            "loomEstateImgSinceUtc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "loomEstateImgHolderUrl=none" 2> "$TAGS_ERR"
+          WRC=$?
+          set -e
+          if [ "$WRC" -ne 0 ]; then
+            echo "::error::estate-image-lease: this run holds the image-write lease and could NOT clear it (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
+            exit 1
+          fi
+          echo "::notice::estate-image-lease: RELEASED by ${ME}. The other image writer may proceed."
 
       # ── PUT THE AAS SERVER BACK (#3948) ──────────────────────────────────
       #
