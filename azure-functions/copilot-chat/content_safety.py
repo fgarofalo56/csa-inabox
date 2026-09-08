@@ -26,7 +26,8 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Tuple
+from http.client import HTTPMessage
+from typing import IO, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def _origin(url: str) -> tuple:
+def _origin(url: str) -> tuple[str, str, int | None]:
     """The (scheme, host, port) triple two URLs must share to be same-origin."""
     parts = urllib.parse.urlsplit(url)
     scheme = (parts.scheme or "").lower()
     return (scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme))
 
 
-def _origin_str(origin: tuple) -> str:
+def _origin_str(origin: tuple[str, str, int | None]) -> str:
     scheme, host, port = origin
     return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
 
@@ -74,7 +75,18 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     entirely. Same-origin redirects still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        # ANNOTATED (#4184) — see `apps/loom-migrate/app/connectors.py`. An
+        # untyped override is `Any` in both directions, so signature drift would
+        # only surface at 302 time. This is typeshed's signature.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise urllib.error.HTTPError(
@@ -158,7 +170,7 @@ def _cs_token() -> str | None:
     return _cs_token_provider()
 
 
-def _cs_post(path: str, payload: dict) -> dict:
+def _cs_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     """POST to the Content Safety data plane. Returns {} on any error
     (fail-open)."""
     url = f"{_CONTENT_SAFETY_ENDPOINT}{path}"
@@ -184,7 +196,8 @@ def _cs_post(path: str, payload: dict) -> dict:
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with _OPENER.open(req, timeout=5) as resp:
-            return json.loads(resp.read())
+            parsed: dict[str, Any] = json.loads(resp.read())
+            return parsed
     except urllib.error.HTTPError as e:
         body = e.read()[:200] if hasattr(e, "read") else b""
         logger.warning("[content-safety] %s failed %d: %s", path, e.code, body)

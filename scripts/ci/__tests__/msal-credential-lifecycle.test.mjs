@@ -30,7 +30,11 @@
  *
  * MUTATION-PROVEN while writing: removing the reuse gate turns REUSE-1/2 red;
  * dropping `--append` turns MINT-2 red; deleting the in-use exclusion turns
- * PRUNE-3 red; removing the ceiling turns CEILING-1 red.
+ * PRUNE-3 red; removing the ceiling turns CEILING-1 red. For the #3637 incident
+ * path the mutation is the whole feature: reverting
+ * `bootstrap-msal-app-reg.sh` to its pre-#3637 state turns ROTATE-1 (the flag
+ * mints nothing, the reuse gate still wins) and REVOKE-1/2/8 red while every
+ * case above stays green.
  *
  * Run: node --test scripts/ci/__tests__/msal-credential-lifecycle.test.mjs
  */
@@ -64,6 +68,11 @@ const cred = (keyId, startDays, endDays, label = '-') =>
  * @param {string[]} [o.revisions]  active revision createdTimes (ISO)
  * @param {number}  [o.kvUpdatedDays] age of the KV secret's `updated` attribute
  * @param {boolean} [o.labelLookupFails] make the post-mint key-id lookup return nothing
+ * @param {boolean} [o.deleteIsNoop] make `credential delete` exit 0 without removing anything
+ * @param {boolean} [o.consoleUpdateFails] make `containerapp update` exit non-zero (the roll the CLI refused)
+ * @param {string}  [o.armEndpoint] what `az cloud show --query endpoints.resourceManager` answers
+ * @param {string}  [o.adEndpoint]  what `az cloud show --query endpoints.activeDirectory` answers
+ * @param {string[]} [o.args]       CLI arguments passed to the script itself
  * @param {object}  [o.env]         extra environment for the run
  */
 function run({
@@ -74,16 +83,26 @@ function run({
   revisions = [iso(-0.01 * DAY)],
   kvUpdatedDays = -1,
   labelLookupFails = false,
+  deleteIsNoop = false,
+  consoleUpdateFails = false,
+  // Commercial by default. MEASURED 2026-09-07 from `az cloud list`: these are
+  // the literal endpoint values the CLI reports, and the Gov ones a parity
+  // case overrides them with are different HOSTS, not a different path.
+  armEndpoint = 'https://management.azure.com/',
+  adEndpoint = 'https://login.microsoftonline.com/',
+  args = [],
   env = {},
 }) {
   const dir = mkdtempSync(join(tmpdir(), 'msalcred-'));
   const credFile = join(dir, 'creds.tsv');
   const tagFile = join(dir, 'kvtag');
+  const tagBodyFile = join(dir, 'kvtagbody');
   const updFile = join(dir, 'kvupdated');
   const revFile = join(dir, 'revisions');
   const calls = join(dir, 'calls.log');
   writeFileSync(credFile, creds.length ? `${creds.join('\n')}\n` : '');
   writeFileSync(tagFile, kvTag);
+  writeFileSync(tagBodyFile, '');
   writeFileSync(updFile, String(Math.floor((Date.now() + kvUpdatedDays * DAY) / 1000)));
   writeFileSync(revFile, revisions.length ? `${revisions.join('\n')}\n` : '');
 
@@ -94,10 +113,19 @@ function run({
   //   • `credential list` never returns a password, only metadata
   const az = `#!/usr/bin/env bash
 echo "$*" >> ${q(calls)}
-CREDS=${q(credFile)}; TAG=${q(tagFile)}; UPD=${q(updFile)}; REV=${q(revFile)}
+CREDS=${q(credFile)}; TAG=${q(tagFile)}; UPD=${q(updFile)}; REV=${q(revFile)}; TAGBODY=${q(tagBodyFile)}
 case "$*" in
   "account show"*)  echo "11111111-2222-3333-4444-555555555555"; exit 0 ;;
-  "cloud show"*)    echo "https://login.microsoftonline.com/"; exit 0 ;;
+  "cloud show"*)
+    # Answered PER QUERY, because the script asks this two different things:
+    # endpoints.activeDirectory (the token host) and endpoints.resourceManager
+    # (the ARM host every Key Vault call is built on). One canned answer for
+    # both would be a fixture that models the code rather than az.
+    case "$*" in
+      *resourceManager*) echo ${q(armEndpoint)} ;;
+      *)                 echo ${q(adEndpoint)} ;;
+    esac
+    exit 0 ;;
   "keyvault show"*) echo "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-loom-test"; exit 0 ;;
 esac
 case "$*" in
@@ -117,9 +145,11 @@ case "$*" in
   "ad app credential delete"*)
     kid=""; prev=""
     for a in "$@"; do case "$prev" in --key-id) kid="$a" ;; esac; prev="$a"; done
-    grep -v "^\${kid}|" "$CREDS" > "$CREDS.tmp" || true
+    ${deleteIsNoop
+      ? '# deleteIsNoop: exit 0 having removed NOTHING — the R5 case.\n    exit 0'
+      : `grep -v "^\${kid}|" "$CREDS" > "$CREDS.tmp" || true
     mv "$CREDS.tmp" "$CREDS"
-    exit 0 ;;
+    exit 0`} ;;
   "ad app credential list"*)
     case "$*" in
       *"[].keyId"*) cut -d'|' -f1 < "$CREDS"; exit 0 ;;
@@ -159,6 +189,7 @@ case "$*" in
     case "$body" in
       *msalKeyId*)
         printf '%s' "$body" | sed 's/.*"msalKeyId":"\\([^"]*\\)".*/\\1/' > "$TAG"
+        printf '%s\\n' "$body" >> "$TAGBODY"
         date -u +%s > "$UPD" ;;
     esac
     exit 0 ;;
@@ -166,6 +197,9 @@ esac
 case "$*" in
   "containerapp secret list"*) printf '%s\\n' ${q(caSecretUrl)}; exit 0 ;;
   "containerapp revision list"*) cat "$REV"; exit 0 ;;
+  "containerapp update"*) ${consoleUpdateFails
+    ? 'echo \'ERROR: (AuthorizationFailed) does not have authorization to perform action\' >&2; exit 1'
+    : 'exit 0'} ;;
   "containerapp show"*) exit 1 ;;
 esac
 exit 0
@@ -178,7 +212,7 @@ exit 0
   writeFileSync(curlPath, '#!/usr/bin/env bash\necho \'{"access_token":"stub"}\'\n');
   chmodSync(curlPath, 0o755);
 
-  const r = spawnSync('bash', [SCRIPT], {
+  const r = spawnSync('bash', [SCRIPT, ...args], {
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -198,6 +232,7 @@ exit 0
     calls: existsSync(calls) ? readFileSync(calls, 'utf8') : '',
     finalCreds: readFileSync(credFile, 'utf8').trim().split('\n').filter(Boolean),
     kvTag: readFileSync(tagFile, 'utf8').trim(),
+    kvTagBody: readFileSync(tagBodyFile, 'utf8'),
   };
 }
 
@@ -488,4 +523,482 @@ test('CONFIG-2: a keep count below 1 is rejected', () => {
   });
   assert.equal(r.rc, 1);
   assert.match(r.out, /The floor is 1/);
+});
+
+// ── 6. ROTATE + REVOKE — the incident path (#3637) ──────────────────────────
+//
+// WHY THESE ARE NOT MORE PRUNE CASES. Every rule above optimises for NOT
+// minting and NOT deleting, which is right for hygiene and exactly wrong after
+// a disclosure: a credential that leaked this morning has ~300 days left, so
+// the reuse gate kept serving it, and the 7-day grace plus the keep window made
+// it un-prunable at any setting. The two things an incident needs — "mint a
+// replacement even though this one looks healthy" and "delete THIS id now" —
+// had no expression in the script at all. ROTATE-1 is the direct
+// counterfactual: the SAME inputs that produce REUSE without the flag must
+// produce a mint with it.
+
+const HEALTHY = [cred('leaked-key', -30, 300, 'loom-console-leaked')];
+
+test('ROTATE-1: --rotate mints even though the recorded credential is healthy', () => {
+  // The counterfactual first: without the flag these inputs REUSE and mint
+  // nothing. That is the defect, and asserting it here is what makes the second
+  // half a measurement rather than an assumption.
+  const without = run({ creds: HEALTHY, kvTag: 'leaked-key' });
+  assert.equal(mintCalls(without.calls).length, 0, 'baseline: the reuse gate keeps serving the leaked credential');
+  assert.match(without.out, /REUSE — .*holds credential leaked-key/);
+  assert.equal(without.finalCreds.length, 1);
+
+  const rotated = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.equal(rotated.rc, 0, rotated.out);
+  assert.equal(mintCalls(rotated.calls).length, 1, '--rotate must mint regardless of remaining lifetime');
+  assert.match(rotated.out, /ROTATE — --rotate given, so the reuse gate is SKIPPED for credential leaked-key/);
+  assert.doesNotMatch(rotated.out, /REUSE — /, 'the reuse gate must not also fire');
+  assert.equal(rotated.finalCreds.length, 2, 'the inventory must grow by exactly one');
+  assert.ok(rotated.finalCreds.some((c) => c.startsWith('leaked-key|')), 'the outgoing credential must survive the rotation');
+});
+
+test('ROTATE-2: the mint is still APPENDED and still validated before Key Vault', () => {
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  const [call] = mintCalls(r.calls);
+  assert.match(call, /--append/, 'a rotation that wiped every credential would strand the console mid-roll');
+  assert.match(r.out, /validating the new secret against Entra/);
+  assert.match(r.kvTag, /^minted-key-\d+$/, 'Key Vault must record the NEW credential as in use');
+});
+
+test('ROTATE-3: --rotate DELETES NOTHING and says so', () => {
+  // A rotation run must not reach any delete path. The rolled revision is not
+  // Healthy when the script exits, so the old credential is still what live
+  // replicas present.
+  const r = run({
+    creds: [...HEALTHY, cred('ancient-1', -400, 300, 'loom-console-old')],
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    // Even with the prune AUTHORIZED, a rotate run must not delete.
+    env: { LOOM_MSAL_PRUNE: '1', LOOM_MSAL_PRUNE_MIN_AGE_DAYS: '0' },
+  });
+  assert.equal(deleteCalls(r.calls).length, 0, 'a rotation must not delete, even with the prune authorized');
+  assert.match(r.out, /NOTHING was deleted/);
+  assert.equal(r.finalCreds.length, 3, 'both pre-existing credentials plus the new one');
+});
+
+test('ROTATE-4: the reason is recorded as a Key Vault TAG (an env var would be re-rendered away)', () => {
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate', '--rotate-reason', 'disclosed-in-ci-log'],
+  });
+  assert.match(r.kvTagBody, /"msalRotateReason":"disclosed-in-ci-log"/);
+  assert.match(r.kvTagBody, /"msalProvenance":"rotated"/);
+  assert.match(r.kvTagBody, /"msalRotatedFrom":"leaked-key"/, 'the tag must name which credential was replaced');
+  assert.match(r.out, /msalRotateReason=disclosed-in-ci-log/);
+});
+
+test('ROTATE-4b: with NO provenance tag written, the receipt must not claim one', () => {
+  // R7, and the inverse of ROTATE-4 — which pins only the happy path.
+  //
+  // The whole tag block is gated on the post-mint label lookup resolving
+  // NEW_KEY_ID. When it does not, the else branch calls the TWO-argument
+  // `kv_secret_put "$MSAL_SECRET_NAME" "$SECRET"`, and per kv_secret_put an
+  // empty third argument means the ARM body carries `properties.value` and no
+  // `tags` key AT ALL — so msalProvenance/msalRotateReason/msalRotatedAt/
+  // msalRotatedFrom are never written. The ROTATE COMPLETE line printed
+  // "(msalRotateReason=…)" unconditionally, so three lines after the run said
+  // out loud "provenance is not recorded", the summary an operator reads
+  // mid-incident asserted the tag exists. That defeats the stated rationale for
+  // choosing a Key Vault tag ("a marker that vanishes reads during triage as
+  // never rotated") by producing the inverse: no marker, and a receipt saying
+  // there is one.
+  //
+  // The assertion is the IMPLICATION, not a string: an empty kvTagBody must
+  // imply the receipt does not name a tag.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    labelLookupFails: true,
+    args: ['--rotate', '--rotate-reason', 'disclosed-in-ci-log'],
+  });
+  assert.equal(r.rc, 0, 'this path still succeeds — a working secret with no provenance beats neither');
+  assert.equal(r.kvTagBody, '', 'precondition: this path writes NO tag body at all');
+  assert.match(r.out, /ROTATE COMPLETE/, 'precondition: the receipt under test was printed');
+  assert.doesNotMatch(
+    r.out,
+    /msalRotateReason=/,
+    'the receipt must not name a provenance tag this run did not write (R7)',
+  );
+  // ...and must say so plainly, rather than merely omitting it.
+  assert.match(r.out, /NO provenance tag/i);
+  assert.match(r.out, /disclosed-in-ci-log/, 'the reason is still reported — as this run\'s input, not as a stored tag');
+});
+
+test('ROTATE-5: the receipt names what the run could NOT establish, and the next step', () => {
+  // R7. This process cannot see whether the rolled revision reached Healthy or
+  // whether interactive sign-in works, so it must not imply either.
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.match(r.out, /NOT VERIFIED BY THIS RUN/);
+  assert.match(r.out, /IRREVERSIBLE|no undo|Entra never returns/i);
+  assert.match(r.out, /--revoke <key-id>/);
+});
+
+test('ROTATE-5b: with NO Container App supplied the receipt says NOT ROLLED, and claims no revision', () => {
+  // R7 again, on the half the first cut got wrong. CONSOLE_APP_NAME/CONSOLE_RG
+  // are documented OPTIONAL and the wiring block is gated on both, but the
+  // receipt below it was not — so a rotate without them printed "whether the
+  // rolled revision is Healthy", naming a revision that was never created. The
+  // honest reading of that line is "it rolled, go check it"; the truth is the
+  // new credential is sitting in Key Vault with nothing serving it, and the
+  // console is still presenting the compromised one.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    env: { CONSOLE_APP_NAME: '', CONSOLE_RG: '' },
+  });
+  assert.equal(r.rc, 0, r.out);
+  assert.equal(mintCalls(r.calls).length, 1, 'the mint half genuinely happened — that is why the receipt must be precise about the other half');
+  assert.match(r.out, /CONSOLE NOT ROLLED/);
+  assert.match(r.out, /NOTHING IS SERVING THE NEW\s+CREDENTIAL YET/);
+  assert.match(r.out, /still presenting the COMPROMISED credential/);
+  // The specific false assertion, gone:
+  assert.doesNotMatch(r.out, /the rolled revision/, 'must not name a revision that was never rolled');
+  assert.doesNotMatch(r.out, /CONSOLE ROLLED:/);
+  // And it must not send the operator on to the revoke, which would refuse anyway.
+  assert.match(r.out, /Do NOT proceed to --revoke/);
+  assert.equal(
+    r.calls.split('\n').filter((l) => l.startsWith('containerapp update')).length,
+    0,
+    'no revision roll may have been attempted',
+  );
+});
+
+test('ROTATE-5c: with a Container App supplied the receipt says ROLLED — the counterfactual', () => {
+  // Same inputs, console named. This is what makes 5b a measurement of the
+  // BRANCH rather than of a string that is simply always absent.
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.equal(r.rc, 0, r.out);
+  assert.match(r.out, /CONSOLE ROLLED:/);
+  assert.match(r.out, /NOT VERIFIED BY THIS RUN: whether that rolled revision is Healthy/);
+  assert.doesNotMatch(r.out, /CONSOLE NOT ROLLED/);
+  assert.equal(
+    r.calls.split('\n').filter((l) => l.startsWith('containerapp update')).length,
+    1,
+    'exactly one revision roll',
+  );
+});
+
+test('ROTATE-5d: a roll the CLI refused is never reported as rolled', () => {
+  // The third state, and the one that must not collapse into either branch:
+  // the console WAS supplied but `az containerapp update` failed. The run
+  // already exits 1 there; what this pins is that it does so without printing
+  // a ROLLED receipt over a roll that did not happen.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    consoleUpdateFails: true,
+  });
+  assert.equal(r.rc, 1, r.out);
+  assert.match(r.out, /the env-var update on .* FAILED/);
+  assert.doesNotMatch(r.out, /CONSOLE ROLLED:/);
+  assert.doesNotMatch(r.out, /ROTATE COMPLETE/, 'a failed roll must not reach the rotate success receipt');
+});
+
+test('ROTATE-6: --rotate and --revoke in one invocation are REFUSED', () => {
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate', '--revoke', 'leaked-key'],
+  });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /--rotate and --revoke cannot be combined/);
+  assert.equal(mintCalls(r.calls).length, 0, 'the refusal must happen before anything is minted');
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+// The state AFTER a rotation: a fresh credential in service, the leaked one
+// still live and only hours old — inside every grace window the prune honours.
+const AFTER_ROTATION = [
+  cred('fresh-key', -0.05, 365, 'loom-console-fresh'),
+  cred('leaked-key', -1, 300, 'loom-console-leaked'),
+];
+
+test('REVOKE-1: removes exactly the named credential, bypassing PRUNE_MIN_AGE_DAYS', () => {
+  // The counterfactual: an authorized PRUNE at the default grace cannot touch
+  // it — the leaked credential is 1 day old and one of the newest two. That is
+  // precisely why --revoke had to exist.
+  const pruned = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', env: { LOOM_MSAL_PRUNE: '1' } });
+  assert.equal(deleteCalls(pruned.calls).length, 0, 'baseline: no prune setting removes a 1-day-old credential');
+  assert.ok(pruned.finalCreds.some((c) => c.startsWith('leaked-key|')));
+
+  const revoked = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'leaked-key'] });
+  assert.equal(revoked.rc, 0, revoked.out);
+  assert.deepEqual(
+    revoked.finalCreds.map((c) => c.split('|')[0]),
+    ['fresh-key'],
+    'exactly the named credential goes, and only it',
+  );
+  assert.equal(deleteCalls(revoked.calls).length, 1, 'one credential named, one delete issued');
+  assert.match(revoked.out, /REVOKED — leaked-key is confirmed absent/);
+  assert.match(revoked.out, /BYPASSES the 7-day hygiene grace/, 'bypassing the grace must be stated, not silent');
+});
+
+test('REVOKE-2: revoking the credential the console SERVES is refused', () => {
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'fresh-key'] });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /REFUSING to revoke: fresh-key IS the credential/);
+  assert.equal(deleteCalls(r.calls).length, 0, 'the refusal must precede any delete');
+  assert.equal(r.finalCreds.length, 2, 'nothing may be removed');
+  assert.match(r.out, /--rotate/, 'the refusal must name the route that does work');
+});
+
+test('REVOKE-3: a target NEWER than the in-use credential is refused', () => {
+  // R2 alone is not enough. Here the target is not the in-use one, but it was
+  // minted AFTER it — so "a newer credential is what the console serves" is
+  // false, and this may be the successor rather than the superseded one.
+  const r = run({
+    creds: [cred('older-in-use', -30, 300, 'loom-console-a'), cred('newer-other', -1, 700, 'loom-console-b')],
+    kvTag: 'older-in-use',
+    args: ['--revoke', 'newer-other'],
+  });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /is NOT older than the in-use credential/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('REVOKE-4: an UNPROVEN console binding refuses the revoke', () => {
+  // The same P3 evidence the prune requires. An inline (non-KV-reference)
+  // console secret means the Key Vault tag records what the estate is
+  // CONFIGURED to present, not what running replicas actually present.
+  const r = run({
+    creds: AFTER_ROTATION,
+    kvTag: 'fresh-key',
+    caSecretUrl: '',
+    args: ['--revoke', 'leaked-key'],
+  });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /REFUSING to revoke: what the console actually serves is NOT proven/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('REVOKE-5: a stale active revision (P3b) also refuses the revoke', () => {
+  const r = run({
+    creds: AFTER_ROTATION,
+    kvTag: 'fresh-key',
+    kvUpdatedDays: -0.5,
+    revisions: [iso(-5 * DAY)],
+    args: ['--revoke', 'leaked-key'],
+  });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /PREDATES the Key Vault write/);
+  assert.match(r.out, /REFUSING to revoke/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('REVOKE-6: an unknown key id FAILS and does not claim it was already removed', () => {
+  // R7. The credential list shows what is present now; it cannot distinguish
+  // "already deleted" from "never existed", so the message must not assert
+  // either.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'no-such-key'] });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /has no password credential with key id no-such-key/);
+  assert.match(r.out, /cannot tell you whether that id was already removed or never existed/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('REVOKE-7: no provenance means no revoke — an unresolvable key id is refused', () => {
+  // NOT an untagged Key Vault secret: that case MINTS (MINT-1), and the mint
+  // records provenance, so the run ends up knowing exactly what is in use. The
+  // state where provenance is genuinely unknown is the one MINT-6 pins — the
+  // secret was written but the new credential's key id could not be resolved by
+  // its label. Measured while writing this: the first draft asserted the
+  // untagged case and failed here, refusing at R4 instead of R2.
+  const r = run({
+    creds: AFTER_ROTATION,
+    kvTag: '',
+    labelLookupFails: true,
+    args: ['--revoke', 'leaked-key'],
+  });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /could not establish which credential the estate is configured to present/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('REVOKE-8: a delete that reports success but removes nothing FAILS the run', () => {
+  // R5, and the reason the post-delete re-read exists: `az ad app credential
+  // delete` exiting 0 is not evidence the credential is gone. Without the
+  // assertion this run would print REVOKED over a live credential — the worst
+  // possible outcome of an incident procedure.
+  const r = run({
+    creds: AFTER_ROTATION,
+    kvTag: 'fresh-key',
+    deleteIsNoop: true,
+    args: ['--revoke', 'leaked-key'],
+  });
+  assert.equal(r.rc, 1, 'an unconfirmed deletion must not be reported as a revocation');
+  assert.match(r.out, /is STILL present on .* after a delete that reported success/);
+  assert.doesNotMatch(r.out, /REVOKED — leaked-key is confirmed absent/);
+});
+
+test('REVOKE-9: a revoke run mints nothing — it is not a rotation in disguise', () => {
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'leaked-key'] });
+  assert.equal(mintCalls(r.calls).length, 0, 'the in-use credential is healthy, so the reuse gate must still hold');
+});
+
+test('REVOKE-10: neither rotate nor revoke prints a secret value', () => {
+  const rot = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.doesNotMatch(rot.out, /STUB-PASSWORD-NEVER-LOGGED/);
+  const rev = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', 'leaked-key'] });
+  assert.doesNotMatch(rev.out, /STUB-PASSWORD-NEVER-LOGGED/);
+});
+
+// ── 6b. A REQUESTED revoke with NO TARGET must refuse ───────────────────────
+//
+// The destructive half had no equivalent of ROTATE's REUSED=1 belt-and-braces
+// guard. Every REVOKE case above names a key id, so all of them entered the
+// revoke block and none could see what happens when the id is EMPTY: the block
+// was gated on `[ -n "${REVOKE_KEY_ID}" ]`, so an empty id skipped it entirely,
+// ran the ordinary bootstrap to completion and printed the normal "==> Done."
+// success banner with exit 0. Mid-incident that reads as "the leaked credential
+// is gone" when it is still live — the worst possible false receipt, and the
+// exact failure mode the whole R1–R5 chain exists to prevent.
+//
+// The shared assertions are the load-bearing ones: rc=1, zero deletes, and the
+// ABSENCE of the success banner. A refusal that still printed "==> Done." would
+// satisfy an rc check alone.
+const NO_TARGET_CASES = [
+  ['a bare --revoke with no following value', { args: ['--revoke'] }],
+  ['--revoke "$KID" where KID is unset or empty', { args: ['--revoke', ''] }],
+  ['--revoke= with nothing after the equals', { args: ['--revoke='] }],
+  ['a value that was only whitespace', { args: ['--revoke', '   '] }],
+  ['LOOM_MSAL_REVOKE_KEY_ID defined as an empty string', { env: { LOOM_MSAL_REVOKE_KEY_ID: '' } }],
+];
+
+for (const [label, extra] of NO_TARGET_CASES) {
+  test(`REVOKE-11 (${label}): refuses, deletes nothing, and never prints the success banner`, () => {
+    const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', ...extra });
+    assert.equal(r.rc, 1, `a revoke with no target must exit non-zero.\n${r.out}`);
+    assert.match(r.out, /a revoke was requested but NO credential key id was given/);
+    assert.match(r.out, /NOTHING was revoked/);
+    assert.equal(deleteCalls(r.calls).length, 0, 'nothing may be deleted');
+    assert.equal(mintCalls(r.calls).length, 0, 'and nothing minted');
+    assert.doesNotMatch(r.out, /==> Done\./, 'the ordinary success banner must NOT appear over a revoke that did nothing');
+    assert.equal(r.finalCreds.length, AFTER_ROTATION.length, 'the inventory must be untouched');
+  });
+}
+
+test('REVOKE-12: the refusal happens before ANY Entra or Key Vault call', () => {
+  // "Exits 1" is not enough on a destructive path: it must exit before the run
+  // can have had a side effect. The stub logs every az invocation, so an empty
+  // call log is the measurement.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke'] });
+  assert.equal(r.calls.trim(), '', `no az call may be made at all, got:\n${r.calls}`);
+});
+
+test('REVOKE-13: --revoke --prune does not swallow the flag as a key id', () => {
+  // A key id is a GUID and can never start with `--`, so a flag-shaped follower
+  // is an ABSENT value. Before this, `--prune` was shifted into REVOKE_KEY_ID:
+  // the operator lost the prune they asked for AND a missing target became a
+  // bogus one, so the run failed with "no password credential with key id
+  // --prune" — an accurate-sounding message about the wrong problem.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key', args: ['--revoke', '--prune'] });
+  assert.equal(r.rc, 1);
+  assert.match(r.out, /a revoke was requested but NO credential key id was given/);
+  assert.doesNotMatch(r.out, /key id --prune/, 'the flag must not be reported as the target');
+});
+
+test('REVOKE-14: an UNSET LOOM_MSAL_REVOKE_KEY_ID is still "no revoke", not a refusal', () => {
+  // The counterfactual for REVOKE-11's env case, and the regression guard for
+  // the deploy path: csa-loom-post-deploy-bootstrap.yml runs this script bare,
+  // so if "unset" were also read as a requested revoke, every bootstrap in every
+  // boundary would exit 1.
+  const r = run({ creds: AFTER_ROTATION, kvTag: 'fresh-key' });
+  assert.equal(r.rc, 0, r.out);
+  assert.match(r.out, /==> Done\./);
+  assert.doesNotMatch(r.out, /revoke was requested/);
+  assert.equal(deleteCalls(r.calls).length, 0);
+});
+
+test('DEFAULT-1: with no new flag the behaviour is byte-for-byte the old behaviour', () => {
+  // The regression guard for the flag-parsing rewrite (`for arg in "$@"` became
+  // `while … shift` so `--revoke` could take a value). A parser change that
+  // silently dropped `--prune` would be invisible in every case above.
+  const r = run({ creds: SPRAWL, kvTag: 'in-use', args: ['--prune'] });
+  assert.equal(r.rc, 0, r.out);
+  assert.deepEqual(r.finalCreds.map((c) => c.split('|')[0]).sort(), ['in-use', 'recent-1', 'recent-2']);
+  const dry = run({ creds: SPRAWL, kvTag: 'in-use', args: ['--dry-run-prune'] });
+  assert.equal(deleteCalls(dry.calls).length, 0);
+  assert.match(dry.out, /DRY RUN — \d+ credential\(s\) above are marked PRUNE/);
+});
+
+// ── 5. CLOUD PARITY — the ARM host is the ACTIVE cloud's, never a literal ────
+
+const armCallsIn = (calls) => calls.split('\n').filter((l) => l.startsWith('rest --method'));
+
+test('PARITY-1: in a sovereign boundary every Key Vault ARM call uses THAT cloud host', () => {
+  // cloud-parity.md. `az rest` given an ABSOLUTE url does NOT resolve its host
+  // from `az cloud set` — unlike `az ad` and `az containerapp`, which do. So the
+  // `https://management.azure.com` literal kv_arm_base used to carry made every
+  // Key Vault call in this script (the secret write, the msalKeyId read the
+  // reuse gate turns on, and the whole provenance record --rotate/--revoke
+  // depend on) a Commercial-only code path inside a script Gov, GCC-High, IL5
+  // and DoD all run through csa-loom-post-deploy-bootstrap.
+  //
+  // MEASURED 2026-09-07, `az cloud list --query "[].{n:name,rm:endpoints.resourceManager}" -o tsv`:
+  //   AzureCloud        https://management.azure.com/
+  //   AzureUSGovernment https://management.usgovcloudapi.net/
+  // Different HOSTS, so the literal cannot reach a sovereign vault at all.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate', '--rotate-reason', 'gov-parity-check'],
+    armEndpoint: 'https://management.usgovcloudapi.net/',
+    adEndpoint: 'https://login.microsoftonline.us/',
+  });
+  assert.equal(r.rc, 0, r.out);
+  const armCalls = armCallsIn(r.calls);
+  assert.ok(armCalls.length > 0, 'precondition: the run must have made ARM calls to judge');
+  assert.ok(
+    armCalls.every((l) => l.includes('https://management.usgovcloudapi.net/subscriptions/')),
+    `every ARM call must address the Gov host: ${armCalls.join(' | ')}`,
+  );
+  assert.ok(
+    !armCalls.some((l) => l.includes('management.azure.com')),
+    `no ARM call may address Commercial ARM in a Gov boundary: ${armCalls.join(' | ')}`,
+  );
+  // The trailing slash az reports must not survive into the url.
+  assert.ok(!armCalls.some((l) => l.includes('net//')), 'the endpoint trailing slash must be trimmed');
+});
+
+test('PARITY-2: an unresolvable ARM endpoint REFUSES rather than defaulting to Commercial', () => {
+  // Fail closed. Silently falling back to a hardcoded host would address the
+  // WRONG CLOUD, which is the defect PARITY-1 exists to end — a write that
+  // "succeeded" against Commercial ARM while the operator's Gov vault is
+  // untouched is worse than a refusal (R7: never report an unverified outcome).
+  // `az cloud show` reads local CLI config and makes no network call, so it
+  // failing means the CLI is broken, not that the cloud is unreachable.
+  const r = run({
+    creds: HEALTHY,
+    kvTag: 'leaked-key',
+    args: ['--rotate'],
+    armEndpoint: '',
+  });
+  assert.notEqual(r.rc, 0, `an unknown ARM endpoint must not be a successful run: ${r.out}`);
+  assert.match(r.out, /could not resolve the ARM endpoint of the active cloud/);
+  assert.match(r.out, /REFUSING to fall back to a hardcoded host/);
+  assert.ok(
+    !armCallsIn(r.calls).some((l) => l.includes('management.azure.com')),
+    'it must not have addressed Commercial ARM on the way to refusing',
+  );
+});
+
+test('PARITY-3: the Commercial default is unchanged — the counterfactual for PARITY-1', () => {
+  // Without this, PARITY-1 could pass on a script that simply broke the
+  // Commercial path. Same run, default endpoints.
+  const r = run({ creds: HEALTHY, kvTag: 'leaked-key', args: ['--rotate'] });
+  assert.equal(r.rc, 0, r.out);
+  const armCalls = armCallsIn(r.calls);
+  assert.ok(armCalls.length > 0);
+  assert.ok(
+    armCalls.every((l) => l.includes('https://management.azure.com/subscriptions/')),
+    `Commercial must still address Commercial ARM: ${armCalls.join(' | ')}`,
+  );
 });

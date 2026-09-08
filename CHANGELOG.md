@@ -25,6 +25,57 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.2...csa-inabox-v0.105.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** IL5's deploy-failure notice is inert when the repo variable is unset and a time bomb when it is set ([#3844](https://github.com/fgarofalo56/csa-inabox/issues/3844)) ([#4370](https://github.com/fgarofalo56/csa-inabox/issues/4370)) ([2a94906](https://github.com/fgarofalo56/csa-inabox/commit/2a94906febfd048c9af15a11ff911f8e5873a097))
+* **ci:** three CI verdicts asserted things they never established — unevaluated ARM expression counted as drift, a baseline fetch that failed open, and a tag literal derived from nothing ([#2874](https://github.com/fgarofalo56/csa-inabox/issues/2874), [#4277](https://github.com/fgarofalo56/csa-inabox/issues/4277), [#4290](https://github.com/fgarofalo56/csa-inabox/issues/4290)) ([#4351](https://github.com/fgarofalo56/csa-inabox/issues/4351)) ([9dd05a0](https://github.com/fgarofalo56/csa-inabox/commit/9dd05a0f06a5062672e60bbad002984462988d9a))
+* **console:** a11y guard that could not see a dangling aria-labelledby; settle the collab push loop on 404 (partial [#3697](https://github.com/fgarofalo56/csa-inabox/issues/3697), does NOT clear [#3169](https://github.com/fgarofalo56/csa-inabox/issues/3169)) ([#4350](https://github.com/fgarofalo56/csa-inabox/issues/4350)) ([99815bf](https://github.com/fgarofalo56/csa-inabox/commit/99815bfadfcdb0585501d22d1f41d85945012b08))
+* **msal,typing:** rotate-after-compromise for the MSAL provisioner, and typed redirect_request overrides (Refs [#3637](https://github.com/fgarofalo56/csa-inabox/issues/3637), [#4184](https://github.com/fgarofalo56/csa-inabox/issues/4184)) ([#4353](https://github.com/fgarofalo56/csa-inabox/issues/4353)) ([a0f7c0f](https://github.com/fgarofalo56/csa-inabox/commit/a0f7c0f23f29b99935e3519bd993f4c395949dea))
+
+
+### Tests
+
+* **brain:** close four measured guard holes and one wiring hole ([#3963](https://github.com/fgarofalo56/csa-inabox/issues/3963), [#3964](https://github.com/fgarofalo56/csa-inabox/issues/3964), [#4251](https://github.com/fgarofalo56/csa-inabox/issues/4251)) ([#4355](https://github.com/fgarofalo56/csa-inabox/issues/4355)) ([d7ca194](https://github.com/fgarofalo56/csa-inabox/commit/d7ca1940da30bcd956d50f233ecd218ca41fb270))
+
+## [0.105.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.1...csa-inabox-v0.105.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* **ci:** guards that credited a neighbour's probe, floors that never measured, and publication sinks reachable by a spelling the walk never tried ([#3344](https://github.com/fgarofalo56/csa-inabox/issues/3344), [#3819](https://github.com/fgarofalo56/csa-inabox/issues/3819), [#3850](https://github.com/fgarofalo56/csa-inabox/issues/3850), [#3857](https://github.com/fgarofalo56/csa-inabox/issues/3857), [#3876](https://github.com/fgarofalo56/csa-inabox/issues/3876)) ([#4349](https://github.com/fgarofalo56/csa-inabox/issues/4349)) ([a594101](https://github.com/fgarofalo56/csa-inabox/commit/a5941018599d0e8b7b5a0ab181c6436ab5f93fbf))
+
+## [0.105.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.0...csa-inabox-v0.105.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **bicep:** drift verdict counted 61 documented ARM defaults as real, and svc-servicebus/svc-batch bound to a convention no shipped cloud takes ([#3191](https://github.com/fgarofalo56/csa-inabox/issues/3191), [#3317](https://github.com/fgarofalo56/csa-inabox/issues/3317)) ([#4343](https://github.com/fgarofalo56/csa-inabox/issues/4343)) ([18f27bb](https://github.com/fgarofalo56/csa-inabox/commit/18f27bb6631b63edc7e7551febbd1cc417f91497))
+* **brain:** a stale-comment refusal, an illegible default graph, a proxy for reachability, a silently zeroable population, and a partial pull stored as complete ([#3934](https://github.com/fgarofalo56/csa-inabox/issues/3934), [#4251](https://github.com/fgarofalo56/csa-inabox/issues/4251), [#4258](https://github.com/fgarofalo56/csa-inabox/issues/4258), [#3967](https://github.com/fgarofalo56/csa-inabox/issues/3967), [#4016](https://github.com/fgarofalo56/csa-inabox/issues/4016)) ([#4317](https://github.com/fgarofalo56/csa-inabox/issues/4317)) ([10d50db](https://github.com/fgarofalo56/csa-inabox/commit/10d50db8f72400c6bd97c40f6a9da679bbf8c3d1))
+* **brain:** the Perform 503 could not say which 503 it was, and an unevaluated replica shape read as permission ([#4283](https://github.com/fgarofalo56/csa-inabox/issues/4283), [#4293](https://github.com/fgarofalo56/csa-inabox/issues/4293)) ([#4342](https://github.com/fgarofalo56/csa-inabox/issues/4342)) ([27ba44e](https://github.com/fgarofalo56/csa-inabox/commit/27ba44eeb7ea82ec1788b617d2b19b47afc4e67c))
+* **console:** app-installed notebooks Spark packages, RTD tile database binding, secondaryIds list encoding, engine-object scoping, mirror table discovery ([#3530](https://github.com/fgarofalo56/csa-inabox/issues/3530), [#3537](https://github.com/fgarofalo56/csa-inabox/issues/3537), [#3920](https://github.com/fgarofalo56/csa-inabox/issues/3920), [#3960](https://github.com/fgarofalo56/csa-inabox/issues/3960), [#3511](https://github.com/fgarofalo56/csa-inabox/issues/3511)) ([#4315](https://github.com/fgarofalo56/csa-inabox/issues/4315)) ([b0d71f8](https://github.com/fgarofalo56/csa-inabox/commit/b0d71f8d8a1573e57f92093117d50dc03f6ec605))
+* **console:** freeform infra inputs become pickers, the Copilot Studio admission gate gets its Fix-it, and two UAT graders stop disagreeing ([#3541](https://github.com/fgarofalo56/csa-inabox/issues/3541), [#3544](https://github.com/fgarofalo56/csa-inabox/issues/3544), [#3565](https://github.com/fgarofalo56/csa-inabox/issues/3565), [#3526](https://github.com/fgarofalo56/csa-inabox/issues/3526), [#3528](https://github.com/fgarofalo56/csa-inabox/issues/3528), [#3167](https://github.com/fgarofalo56/csa-inabox/issues/3167)) ([#4314](https://github.com/fgarofalo56/csa-inabox/issues/4314)) ([e1b9d07](https://github.com/fgarofalo56/csa-inabox/commit/e1b9d07d950bb7d7ecd2388054767846792393d6))
+* **console:** six API-layer defects that reported a wrong or invented answer ([#3400](https://github.com/fgarofalo56/csa-inabox/issues/3400), [#3747](https://github.com/fgarofalo56/csa-inabox/issues/3747), [#3793](https://github.com/fgarofalo56/csa-inabox/issues/3793), [#3801](https://github.com/fgarofalo56/csa-inabox/issues/3801), [#3878](https://github.com/fgarofalo56/csa-inabox/issues/3878), [#4183](https://github.com/fgarofalo56/csa-inabox/issues/4183)) ([#4316](https://github.com/fgarofalo56/csa-inabox/issues/4316)) ([77ae50e](https://github.com/fgarofalo56/csa-inabox/commit/77ae50ed67821e9821cf613bfa7611dd16441a4b))
+* **deploy:** a skipped roll now says whether the estate is stranded or a build is still coming ([#4298](https://github.com/fgarofalo56/csa-inabox/issues/4298)) ([#4300](https://github.com/fgarofalo56/csa-inabox/issues/4300)) ([5047395](https://github.com/fgarofalo56/csa-inabox/commit/504739547ab8a6bc15acf4fe2e0219d7d6e890b9))
+* **deploy:** the live roll lane never reindexed loom-docs ([#4276](https://github.com/fgarofalo56/csa-inabox/issues/4276)) ([#4341](https://github.com/fgarofalo56/csa-inabox/issues/4341)) ([f529b29](https://github.com/fgarofalo56/csa-inabox/commit/f529b29cc9269d9b2d2b08f88084414878a2db9c))
+* **deploy:** the post-apply estate gate watched one Container App out of twenty, so nineteen image writers could be reverted mid-apply in silence ([#3676](https://github.com/fgarofalo56/csa-inabox/issues/3676)) ([#4318](https://github.com/fgarofalo56/csa-inabox/issues/4318)) ([8cdba0e](https://github.com/fgarofalo56/csa-inabox/commit/8cdba0e47acb1da45ec203e6ecfbff6c4c57b67b))
+* **deps:** clear the six high Dependabot alerts on main (browserslist 4.28.8, fast-uri 3.1.7) ([#4308](https://github.com/fgarofalo56/csa-inabox/issues/4308)) ([5544b94](https://github.com/fgarofalo56/csa-inabox/commit/5544b94dc3bb60ad64262b4a72b900b831ba14c6))
+* **security:** audit the Unity Catalog securable transport and correct the tid-less-session residue ([#3845](https://github.com/fgarofalo56/csa-inabox/issues/3845), [#2622](https://github.com/fgarofalo56/csa-inabox/issues/2622)) ([#4312](https://github.com/fgarofalo56/csa-inabox/issues/4312)) ([5a11b0a](https://github.com/fgarofalo56/csa-inabox/commit/5a11b0a084f8277ed9e092e53e8dfafdfa726396))
+
+
+### Documentation
+
+* **cloud-parity:** record GCC as supported-in-code, never exercised — no tenant ([#3078](https://github.com/fgarofalo56/csa-inabox/issues/3078)) ([#4305](https://github.com/fgarofalo56/csa-inabox/issues/4305)) ([cd18dd6](https://github.com/fgarofalo56/csa-inabox/commit/cd18dd6a3573ea33e962774213a2d13b74a7dcb5))
+* **drain:** override-log rows for [#4304](https://github.com/fgarofalo56/csa-inabox/issues/4304), [#4265](https://github.com/fgarofalo56/csa-inabox/issues/4265), [#4262](https://github.com/fgarofalo56/csa-inabox/issues/4262), [#4267](https://github.com/fgarofalo56/csa-inabox/issues/4267) and the 2026-09-03 operator decisions ([#4307](https://github.com/fgarofalo56/csa-inabox/issues/4307)) ([e265a43](https://github.com/fgarofalo56/csa-inabox/commit/e265a438e26b43e0bf523b49f92b61b9e39d8552))
+
+
+### Continuous Integration
+
+* **capacity-broker:** compile, vet and test the Go the repo had never built ([#4270](https://github.com/fgarofalo56/csa-inabox/issues/4270)) ([#4303](https://github.com/fgarofalo56/csa-inabox/issues/4303)) ([05a67cb](https://github.com/fgarofalo56/csa-inabox/commit/05a67cb92894f07577a830a709500fa3d8c28afd))
+* **guards:** probeGates literals, CHECK 3B membership, union-half floors, a filesystem-walking drift gate, and the zero-check-run merge class ([#3958](https://github.com/fgarofalo56/csa-inabox/issues/3958), [#4029](https://github.com/fgarofalo56/csa-inabox/issues/4029), [#4039](https://github.com/fgarofalo56/csa-inabox/issues/4039), [#4046](https://github.com/fgarofalo56/csa-inabox/issues/4046), [#4216](https://github.com/fgarofalo56/csa-inabox/issues/4216)) ([#4347](https://github.com/fgarofalo56/csa-inabox/issues/4347)) ([609f863](https://github.com/fgarofalo56/csa-inabox/commit/609f863012de39f68304525123eb9e93e6c4ae6f))
+
 ## [0.105.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.104.0...csa-inabox-v0.105.0) (2026-09-03)
 
 

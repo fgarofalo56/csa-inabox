@@ -367,49 +367,91 @@ const WORKSPACE_PARAM = /\bworkspace(Id|_id)?\b|\bitem(Id|Type|_id)?\b/i;
  *
  * REMOVING AN ENTRY IS A SECURITY REVIEW, not a maintenance chore: it asserts the
  * function genuinely no longer exists, not that the guard stopped seeing it.
+ *
+ * #3850 residual 3 — EACH ENTRY IS CONTENT-PINNED, because a `file:name` string
+ * is not a function. Until this pin existed, 8i was satisfied by anything the
+ * derivation happened to produce under that key: gut `authorizeWorkspace` down
+ * to `return null;` in place and 8i still printed it as checked, because the
+ * name it keys on had not moved. That is the same defect NON_AUTHORIZER_BODY_PINS
+ * closed on the other list — a reason (or here, a requirement) that outlives the
+ * body it was written about.
+ *
+ * `pin` is the 12-hex `functionBodyDigest` of the function as reviewed. A
+ * MISMATCH IS NOT A FAILURE OF THE GUARD — it is the guard doing its job, and it
+ * says: this authorizer's body changed, so re-read it against 8a-8e and only
+ * then re-pin, in the same commit, and say so in the PR. There is no
+ * `--update-pins` flag here either, for the reason stated on NON_AUTHORIZER_BODY_PINS.
  */
 const REQUIRED_AUTHORIZERS = new Map([
   [
     'lib/auth/workspace-guard.ts:authorizeWorkspace',
-    'the primary workspace authorizer — the function #3825 was filed against ' +
-      '(`if (isTenantAdmin(session)) return null;` ahead of any Cosmos read).',
+    {
+      pin: 'ab02a7a437d4',
+      why:
+        'the primary workspace authorizer — the function #3825 was filed against ' +
+        '(`if (isTenantAdmin(session)) return null;` ahead of any Cosmos read).',
+    },
   ],
   [
     'lib/auth/workspace-guard.ts:authorizeItemWorkspace',
-    "the item-scoped authorizer; it carries one of the two pinned pre-delegation " +
-      'ALLOWs (PROLOGUE_PINS), which is unverifiable if it is not being checked.',
+    {
+      pin: 'c1e48321592d',
+      why:
+        'the item-scoped authorizer; it carries one of the two pinned pre-delegation ' +
+        'ALLOWs (PROLOGUE_PINS), which is unverifiable if it is not being checked.',
+    },
   ],
   [
     'lib/auth/workspace-guard.ts:requireWorkspace',
-    'the one-call route guard most API handlers use; it delegates to ' +
-      '`authorizeWorkspace` and is the shape a route-level bypass would be written in.',
+    {
+      pin: 'a769903d2d6f',
+      why:
+        'the one-call route guard most API handlers use; it delegates to ' +
+        '`authorizeWorkspace` and is the shape a route-level bypass would be written in.',
+    },
   ],
   [
     'lib/auth/workspace-guard.ts:resolveAdminWorkspace',
-    'the admin-plane resolver — the second #3825 defect (`loadWorkspaceAdmin`, an ' +
-      'unfiltered cross-partition `SELECT *`). It carries the other PROLOGUE_PINS ' +
-      'entry and the only isTenantAdmin narrowing gate 8e admits.',
+    {
+      pin: '92e0d3767854',
+      why:
+        'the admin-plane resolver — the second #3825 defect (`loadWorkspaceAdmin`, an ' +
+        'unfiltered cross-partition `SELECT *`). It carries the other PROLOGUE_PINS ' +
+        'entry and the only isTenantAdmin narrowing gate 8e admits.',
+    },
   ],
   [
     'lib/auth/workspace-list-access.ts:authorizeWorkspaceList',
-    'the LIST authorizer (N10) — a third workspace authorizer the round-2 table never ' +
-      'named, which took the literal #3825 bypass at exit 0. It ALLOWs with a NON-NULL ' +
-      'value, so it is also the module that proves both ALLOW conventions are modelled.',
+    {
+      pin: '1b240ae7670a',
+      why:
+        'the LIST authorizer (N10) — a third workspace authorizer the round-2 table never ' +
+        'named, which took the literal #3825 bypass at exit 0. It ALLOWs with a NON-NULL ' +
+        'value, so it is also the module that proves both ALLOW conventions are modelled.',
+    },
   ],
   [
     'lib/auth/item-access.ts:resolveItemAccessByOid',
-    'the item-access resolver, and the only holder of a POST_DELEGATION_PINS entry — ' +
-      'the item-grant path whose own tid comparison R4 showed could be DELETED with the ' +
-      'pin byte-identical.',
+    {
+      pin: '6c394525b9be',
+      why:
+        'the item-access resolver, and the only holder of a POST_DELEGATION_PINS entry — ' +
+        'the item-grant path whose own tid comparison R4 showed could be DELETED with the ' +
+        'pin byte-identical.',
+    },
   ],
   [
     'lib/auth/workspace-role.ts:resolveWorkspaceRole',
-    'the FOURTH copy of the tenant decision, consolidated onto the resolver by #3840. It ' +
-      'was a NON_AUTHORIZERS entry — an exemption whose own reason called it "a finding, ' +
-      'not a clearance" — and it carried a private truthiness-guarded comparison in front ' +
-      'of a route ladder that grants on `isTenantAdmin` alone. It now delegates and holds ' +
-      'the second POST_DELEGATION_PINS entry (its `workspace-permissions` ACL). If it ' +
-      'stops being checked, that pin is unverifiable and the exemption is silently back.',
+    {
+      pin: 'd647d08f2485',
+      why:
+        'the FOURTH copy of the tenant decision, consolidated onto the resolver by #3840. It ' +
+        'was a NON_AUTHORIZERS entry — an exemption whose own reason called it "a finding, ' +
+        'not a clearance" — and it carried a private truthiness-guarded comparison in front ' +
+        'of a route ladder that grants on `isTenantAdmin` alone. It now delegates and holds ' +
+        'the second POST_DELEGATION_PINS entry (its `workspace-permissions` ACL). If it ' +
+        'stops being checked, that pin is unverifiable and the exemption is silently back.',
+    },
   ],
 ]);
 
@@ -695,9 +737,13 @@ function stripComments(src) {
   return out.join('');
 }
 
-/** The #3850 content pin for one exempted function: 12 hex of sha256 over its
- *  comment-free, whitespace-normalised RAW text (declaration through `}`). */
-function nonAuthorizerDigest(rawSrc, fn) {
+/** The #3850 content pin for ONE function: 12 hex of sha256 over its
+ *  comment-free, whitespace-normalised RAW text (declaration through `}`).
+ *
+ *  Used from BOTH directions — for a NON_AUTHORIZERS exemption (the body it was
+ *  written about) and for a REQUIRED_AUTHORIZERS entry (the body 8i is asserting
+ *  is still being checked). Same digest, same review obligation. */
+function functionBodyDigest(rawSrc, fn) {
   const text = norm(stripComments(rawSrc.slice(fn.declAt, fn.bodyEnd)));
   return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
 }
@@ -2681,8 +2727,16 @@ function isWorkspaceAuthzModule(rel, masked) {
  *     and the same pair in `workspace-list-access.ts`. Not an exotic spelling:
  *     `.eslintrc.json` extends only `next/core-web-vitals` and sets neither
  *     `explicit-module-boundary-types` nor `explicit-function-return-type`, and
- *     this console carries 2999 unannotated exported function declarations
- *     against 7719 annotated.
+ *     an unannotated export is the ORDINARY case here, not the odd one. Measured
+ *     2026-09-07 by `node scripts/ci/count-exported-fn-annotations.mjs`, whose
+ *     population is every `export [default] [async] function <name>(…)`
+ *     declaration in apps/fiab-console (*.ts/*.tsx, excluding node_modules,
+ *     .next, dist, build, coverage and __generated__): 6129 files, 11687
+ *     declarations, 3198 UNANNOTATED against 8489 annotated. The earlier text
+ *     here cited 2999/7719 with no population and no command; #3850 residual 1
+ *     is that a number stated as established and never re-derived goes stale
+ *     silently, and the re-derivation is now a script anyone can re-run rather
+ *     than a figure to trust.
  *   - A NON-VERDICT ANNOTATION does the same:
  *     `export async function canListWorkspace(…): Promise<boolean>` with an
  *     env-oid `return true` exited 0, and a boolean verdict is an ordinary
@@ -2771,6 +2825,7 @@ const usedProloguePins = new Set();
 const usedPostPins = new Set();
 const authorizerNames = [];
 const checkedKeys = new Set();
+const checkedDigests = new Map();
 
 for (const c of candidates) {
   const key = `${c.rel}:${c.fn.name}`;
@@ -2778,7 +2833,7 @@ for (const c of candidates) {
     usedNonAuthorizers.add(key);
     // #3850 — the exemption clears the FUNCTION THAT WAS REVIEWED, not the name.
     const pinned = NON_AUTHORIZER_BODY_PINS.get(key);
-    const actual = nonAuthorizerDigest(readFileSync(c.file, 'utf8'), c.fn);
+    const actual = functionBodyDigest(readFileSync(c.file, 'utf8'), c.fn);
     nonAuthorizerPinsUsed.add(key);
     if (pinned === undefined) {
       fail(
@@ -2802,6 +2857,12 @@ for (const c of candidates) {
   }
   authorizerNames.push(`${c.fn.name}[${c.trigger}]`);
   checkedKeys.add(key);
+  // #3850 residual 3 — record WHICH BODY satisfied a REQUIRED_AUTHORIZERS entry,
+  // so 8i can assert the identity of the function it says is being checked and
+  // not merely that something answered to the name.
+  if (REQUIRED_AUTHORIZERS.has(key)) {
+    checkedDigests.set(key, functionBodyDigest(readFileSync(c.file, 'utf8'), c.fn));
+  }
 
   const body = c.fn.body;
   const allowIsNull = allowIsNullFor(c.expanded);
@@ -4645,7 +4706,7 @@ for (const p of PREFILTER_CONTROLS) {
  *
  * Related: #3850 makes the same point about `NON_AUTHORIZERS`, which is exempt
  * BY NAME with nothing pinning what the name resolves to. That list has its own
- * digest mechanism (`nonAuthorizerDigest`) and is deliberately not folded in
+ * digest mechanism (`functionBodyDigest`) and is deliberately not folded in
  * here — it is a different lane's file scope in flight.
  */
 
@@ -6431,7 +6492,7 @@ const missingRequired = [...REQUIRED_AUTHORIZERS.keys()].filter((k) => !checkedK
 for (const k of missingRequired) {
   const derived = candidates.some((c) => `${c.rel}:${c.fn.name}` === k);
   fail(
-    `REQUIRED AUTHORIZER \`${k}\` IS NOT BEING CHECKED. ${REQUIRED_AUTHORIZERS.get(k)}` +
+    `REQUIRED AUTHORIZER \`${k}\` IS NOT BEING CHECKED. ${REQUIRED_AUTHORIZERS.get(k).why}` +
       `\n        derived as a candidate: ${derived ? 'YES — but then classified a NON_AUTHORIZER' : 'NO — section 8a never saw it'}` +
       `\n        checked this run:       ${[...checkedKeys].sort().join(', ') || '(none)'}` +
       '\n        This is the failure mode section 8 is most vulnerable to and least likely ' +
@@ -6439,6 +6500,30 @@ for (const k of missingRequired) {
       'bypass. If the function was genuinely renamed or removed, update REQUIRED_AUTHORIZERS ' +
       'in this guard as part of that change and say so in the PR. If it still exists, the ' +
       'DERIVATION is broken — fix that, do not delete the entry.',
+  );
+}
+
+// #3850 residual 3 — …AND IT IS STILL THE SAME FUNCTION.
+//
+// The loop above asks whether something answered to `file:name`. That is a
+// string, and a string is satisfied by any body: gut `authorizeWorkspace` to
+// `return null;` in place and every assertion above stays green, because the key
+// never moved. So each required entry also carries the digest of the body it was
+// written about, and a mismatch is reported HERE rather than being absorbed as
+// "checked". Same mechanism, same review obligation, as NON_AUTHORIZER_BODY_PINS.
+for (const [k, spec] of REQUIRED_AUTHORIZERS) {
+  const actual = checkedDigests.get(k);
+  if (actual === undefined) continue; // already reported by the loop above
+  if (actual === spec.pin) continue;
+  fail(
+    `REQUIRED AUTHORIZER \`${k}\` is pinned to body \`${spec.pin}\` but the function now ` +
+      `digests to \`${actual}\`. The entry says: ${spec.why}` +
+      '\n        The name still resolves, so 8i above is satisfied — which is exactly why this ' +
+      'second check exists. A `file:name` key is cleared by ANY body, including one with the ' +
+      'authorization removed. Re-read the function against 8a-8e: does it still make the ' +
+      'tenant decision this entry says it makes? Only then update `pin` here, in the same ' +
+      'commit as the change that moved it, and say so in the PR body. Do not paste the ' +
+      'digest to make the build green.',
   );
 }
 

@@ -41,8 +41,49 @@ param budgetName string = 'loom-next-level-program'
 @minValue(1)
 param amount int = 1000
 
-@description('First day of the budget period. Must be the first of a month; defaults to the first of the current month (UTC).')
-param startDate string = utcNow('yyyy-MM-01')
+// ── WHY startDate IS REQUIRED AND HAS NO DEFAULT (#4253) ───────────────────
+// This parameter USED to default to `utcNow('yyyy-MM-01')`. That is the
+// rotator shape (`csa_loom_bicep_newguid_is_a_rotator`, already documented on
+// cost-export.bicep:159): utcNow() re-evaluates on EVERY deployment that does
+// not pass the parameter, so the value moved to a new month on the 1st.
+//
+// `timePeriod.startDate` on Microsoft.Consumption/budgets is IMMUTABLE. ARM
+// refuses any PUT naming a start different from the one the live budget was
+// created with:
+//     400 on 'loom-program-budget' → "Start date of budgets cannot be updated.
+//     Please delete and create a new budget."
+// So the rotator was a time bomb on a monthly fuse: every deploy in a later
+// month than the budget's creation month failed, permanently, and took the
+// WHOLE `az deployment sub create` down with it. Measured on
+// deploy-fiab-commercial: the three scheduled runs before the break (08-29/30/
+// 31) succeeded and every run from 09-01 on failed on this one leaf.
+//
+// A HARD-CODED LITERAL WAS REJECTED, for two independent reasons:
+//   1. Azure accepts only the first of the CURRENT month on a CREATE — Learn:
+//      "Past start date should be selected within the timegrain period" — so a
+//      constant goes stale and breaks a genuinely fresh estate. (Same trap
+//      cost-export.bicep:180 records for its own start window.)
+//   2. Each boundary froze a DIFFERENT value, because each created its budget
+//      on its own date. No single literal can be right for all of them, and
+//      pinning it per-boundary in a .bicepparam only relocates the guess —
+//      exactly what #3754 established for the DNS resolver's immutable field.
+//
+// Therefore the value is DISCOVERED FROM THE ESTATE and passed in:
+// scripts/ci/resolve-program-budget-start-date.mjs reads the live budget,
+// emits its existing start unchanged (so the PUT proposes no change), computes
+// the first of the current month only when the budget is genuinely absent, and
+// REFUSES the run when the read did not complete — "I could not look" must
+// never render as "it is not there" (deploy-integrity.md R7).
+//
+// No default: this module must not be able to invent a deploy-time value
+// again. Callers that have not resolved one do not deploy the budget at all —
+// main.bicep gates the module on a non-empty value — which, because the
+// deployment is INCREMENTAL, leaves any live budget untouched and still
+// alerting rather than overwriting it with a guess.
+@description('First day of the budget period, as YYYY-MM-01. REQUIRED — no default, deliberately (see the block above): timePeriod.startDate is IMMUTABLE, so this must be the value the LIVE budget already holds, or the first of the current month when creating one. Supplied by scripts/ci/resolve-program-budget-start-date.mjs via observabilityConfig.programBudgetStartDate; never computed here.')
+@minLength(10)
+@maxLength(10)
+param startDate string
 
 @description('Resource id of the shared default action group (monitoring-default-alerts.bicep::loom-default-alerts) the threshold notifications route through. Empty (action group skipped) → notifications fall back to the subscription Owner contact role only.')
 param actionGroupId string = ''

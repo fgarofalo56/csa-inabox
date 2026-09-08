@@ -225,6 +225,25 @@ else
     printf '%s' "${CID}"
     exit 0
   fi
+  # #3344 — WHICH EMPTY IS THIS? The read above returned nothing, and `.value`
+  # returns nothing both when the app carries no LOOM_MSAL_CLIENT_ID binding and
+  # when it carries one that is empty. This script's whole contract is keeping
+  # ABSENCE distinct from UNKNOWN (#4127); the same care is owed one level down,
+  # because the two empties have different remedies — deploy an app registration,
+  # versus find what wired an existing binding blank. A NAME query settles it,
+  # and a NAME query that itself fails is recorded as UNKNOWN, never as absence.
+  raw_bound="$(az containerapp show -n "${CONSOLE_APP}" -g "${RG}" \
+    --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].name | [0]" \
+    -o tsv 2>"$ERRF")"
+  rc_bound=$?
+  if [ "$rc_bound" -ne 0 ]; then
+    defer_unknown "read the ${CONSOLE_APP} Container App but could not establish whether it carries a LOOM_MSAL_CLIENT_ID binding at all (the NAME query exited $rc_bound): $(az_err)"
+  else
+    bound="$(printf '%s' "$raw_bound" | tr -d '\r')"
+    if [ -n "${bound:-}" ] && [ "${bound}" != "None" ]; then
+      CONSOLE_BINDING_EMPTY=1
+    fi
+  fi
 fi
 
 # Nothing resolved. Whether that is ABSENCE or UNKNOWN turns entirely on whether
@@ -234,5 +253,10 @@ if [ -n "$DEFERRED_UNKNOWN" ]; then
 fi
 
 log "no existing app registration found in ${RG} — every read SUCCEEDED and returned nothing (this is absence, not an unreadable estate). The deploy will render an empty client id; sign-in stays unconfigured until deploy phase 3 runs."
+if [ -n "${CONSOLE_BINDING_EMPTY:-}" ]; then
+  # #3344 — narrower and more useful than "absence": the console DOES carry the
+  # binding, so nothing needs to create it. Something wired it blank.
+  log "NOTE — ${CONSOLE_APP} in ${RG} DOES carry a LOOM_MSAL_CLIENT_ID env entry; its VALUE is empty. The binding exists, so this is not a missing app registration on the app: find what set it to an empty string before assuming phase 3 has not run."
+fi
 printf ''
 exit 0

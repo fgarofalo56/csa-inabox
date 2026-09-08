@@ -57,6 +57,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPMessage
+from typing import IO, Any
 
 API = "/api/2.1/unity-catalog"
 TIMEOUT = 60
@@ -115,7 +117,18 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     somewhere else entirely. Same-origin redirects still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        # ANNOTATED (#4184) — see `apps/loom-migrate/app/connectors.py`. An
+        # untyped override is `Any` in both directions, so signature drift would
+        # only surface at 302 time. This is typeshed's signature.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise urllib.error.HTTPError(
@@ -186,7 +199,7 @@ class UnityClient:
         self.token = token
         self.label = label
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self.base}{API}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -210,10 +223,10 @@ class UnityClient:
             raw = resp.read().decode("utf-8")
         return json.loads(raw) if raw.strip() else {}
 
-    def list_all(self, path: str, key: str, params: dict | None = None) -> list[dict]:
+    def list_all(self, path: str, key: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Follow next_page_token to the end. Returns [] when the server has no
         such surface (404/501) -- an honest 'this server does not do that'."""
-        out: list[dict] = []
+        out: list[dict[str, Any]] = []
         page: str | None = None
         while True:
             query = dict(params or {})
@@ -231,7 +244,7 @@ class UnityClient:
             if not page:
                 return out
 
-    def create(self, path: str, body: dict) -> tuple[bool, str]:
+    def create(self, path: str, body: dict[str, Any]) -> tuple[bool, str]:
         """Returns (created, note). An already-existing object is a success."""
         try:
             self._request("POST", path, body)
@@ -243,7 +256,7 @@ class UnityClient:
             return False, f"HTTP {exc.code}: {detail}"
 
 
-def pick(source: dict, *keys: str) -> dict:
+def pick(source: dict[str, Any], *keys: str) -> dict[str, Any]:
     return {k: source[k] for k in keys if source.get(k) not in (None, "")}
 
 
@@ -252,7 +265,7 @@ def migrate(src: UnityClient, dst: UnityClient, dry_run: bool) -> int:
     created = 0
     skipped = 0
 
-    def do(kind: str, path: str, body: dict, label: str) -> None:
+    def do(kind: str, path: str, body: dict[str, Any], label: str) -> None:
         nonlocal failures, created, skipped
         if dry_run:
             print(f"  [dry-run] would create {kind} {label}")

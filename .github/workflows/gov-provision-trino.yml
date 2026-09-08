@@ -165,6 +165,30 @@ jobs:
           LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
           # The lake account the Iceberg connector reads. Read it off the console's
           # OWN env so this never invents a name that does not exist.
+          # #3344 — PRESENCE FIRST, VALUE SECOND. `.value` returns the same empty
+          # string for "there is no such binding" and "the binding is there and
+          # empty". Both captures below drive a decision far down the job:
+          # `$LAKE` gates the read grant, and `$MSAL_CLIENT_ID` decides
+          # SEALED-vs-entra and then prints "the live console has no
+          # LOOM_MSAL_CLIENT_ID" — a cause the value oracle cannot establish
+          # (deploy-integrity R7), on a path that leaves the engine accepting no
+          # caller. So the NAME query runs BEFORE each read and the binding state
+          # travels with the value.
+          BIND_ERR=$(mktemp)
+          if ! LAKE_BOUND=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].name | [0]" -o tsv 2>"$BIND_ERR"); then
+            LAKE_BOUND="?"
+            echo "::warning::could not read $APP's env bindings, so this run cannot say whether LOOM_ADLS_ACCOUNT is set. az said: $(tr '\n' ' ' < "$BIND_ERR" | head -c 300)"
+          else
+            LAKE_BOUND=$(printf '%s' "$LAKE_BOUND" | tr -d '\r')
+          fi
+          if ! MSAL_BOUND=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].name | [0]" -o tsv 2>"$BIND_ERR"); then
+            MSAL_BOUND="?"
+            echo "::warning::could not read $APP's env bindings, so this run cannot say whether LOOM_MSAL_CLIENT_ID is set. az said: $(tr '\n' ' ' < "$BIND_ERR" | head -c 300)"
+          else
+            MSAL_BOUND=$(printf '%s' "$MSAL_BOUND" | tr -d '\r')
+          fi
           LAKE=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv | tr -d '\r')
           # ROUND-3: the audience the engine will accept. Read off the LIVE
@@ -188,10 +212,17 @@ jobs:
           if [ -n "${LAKE:-}" ]; then
             LAKE_RG=$(az storage account show -n "$LAKE" --query resourceGroup -o tsv 2>/dev/null | tr -d '\r' || echo "")
             [ -n "$LAKE_RG" ] || echo "::warning::lake account '$LAKE' not resolvable by name — the read grant will be skipped."
+          elif [ "$LAKE_BOUND" = "?" ]; then
+            echo "::warning::the read grant will be skipped: the console's env bindings could not be read this run, so LOOM_ADLS_ACCOUNT's state is UNKNOWN — not established as absent."
+          elif [ -z "$LAKE_BOUND" ] || [ "$LAKE_BOUND" = "None" ]; then
+            echo "::warning::the read grant will be skipped: LOOM_ADLS_ACCOUNT is NOT BOUND on $APP at all, so there is no lake account to grant on."
+          else
+            echo "::warning::the read grant will be skipped: LOOM_ADLS_ACCOUNT is bound on $APP but its VALUE is empty. The env entry exists, so the console was wired to an empty account name rather than to none."
           fi
           { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";
             echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE";
             echo "LAKE_RG=$LAKE_RG"; echo "MSAL_CLIENT_ID=${MSAL_CLIENT_ID:-}";
+            echo "LAKE_BOUND=${LAKE_BOUND:-}"; echo "MSAL_BOUND=${MSAL_BOUND:-}";
             echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"; } >> "$GITHUB_ENV"
           echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>} lakeRg=${LAKE_RG:-<none>} consoleImage=$CONSOLE_IMAGE audience=${MSAL_CLIENT_ID:-<none — engine will deploy SEALED>}"
           [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
@@ -392,7 +423,20 @@ jobs:
           else
             TRINO_MODE=sealed
             TRINO_AUD=""
-            echo "::warning::the live console has no LOOM_MSAL_CLIENT_ID, so loom-trino was deployed SEALED — authorization ENFORCED against a sentinel audience nothing can mint. The engine is up and costs nothing at minReplicas 0; it accepts no caller until an app registration is pinned."
+            # #3344 — SAY WHICH OF THE THREE STATES WAS OBSERVED. This used to
+            # read "the live console has no LOOM_MSAL_CLIENT_ID", which the value
+            # oracle cannot establish: an absent binding, a bound-but-empty one
+            # and an unreadable console all arrive here as the same empty string,
+            # and the consequence — an engine that accepts no caller — is the
+            # same in all three but the REMEDY is not (deploy-integrity R7).
+            case "${MSAL_BOUND:-}" in
+              '?')
+                echo "::warning::loom-trino was deployed SEALED — authorization ENFORCED against a sentinel audience nothing can mint. The console's env bindings could not be read this run, so whether LOOM_MSAL_CLIENT_ID is set is UNKNOWN; it was NOT established as absent. Re-run once the console is readable before concluding an app registration is missing." ;;
+              ''|None)
+                echo "::warning::loom-trino was deployed SEALED — authorization ENFORCED against a sentinel audience nothing can mint. LOOM_MSAL_CLIENT_ID is NOT BOUND on the live console at all, so no app registration has been pinned on this estate. The engine is up and costs nothing at minReplicas 0; it accepts no caller until one is. Run csa-loom-post-deploy-bootstrap.yml (MSAL app reg) and re-dispatch." ;;
+              *)
+                echo "::warning::loom-trino was deployed SEALED — authorization ENFORCED against a sentinel audience nothing can mint. LOOM_MSAL_CLIENT_ID IS bound on the live console but its VALUE is empty, so the binding exists and was wired with nothing in it. That is a wiring defect, not a missing app registration — check what set it." ;;
+            esac
           fi
           az containerapp update -n "$APP" -g "$RG" \
             --set-env-vars "LOOM_TRINO_URL=https://$FQDN" "LOOM_TRINO_AUTH_MODE=$TRINO_MODE" "LOOM_TRINO_AUDIENCE=$TRINO_AUD" -o none
