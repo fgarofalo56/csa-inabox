@@ -1736,12 +1736,43 @@ jobs:
       #
       # The lease above arbitrates the REGISTRY. It does not arbitrate
       # `properties.template.containers[0].image` on the Container Apps, which
-      # is the field this issue is actually about, and which has exactly two
-      # writers: this apply, and `az containerapp update` in
-      # loom-roll-and-validate.yml. #4318 made the POST-apply gate estate-wide,
-      # so an overwrite is now seen and healed — it is still an overwrite. The
-      # issue's acceptance opens with "the two writers cannot both win", and the
-      # 2026-09-07 re-measurement scored that bullet NOT DONE.
+      # is the field this issue is actually about. #4318 made the POST-apply
+      # gate estate-wide, so an overwrite is now seen and healed — it is still
+      # an overwrite. The issue's acceptance opens with "the two writers cannot
+      # both win", and the 2026-09-07 re-measurement scored that bullet NOT
+      # DONE.
+      #
+      # SCOPE: THE TWO WRITERS THAT COLLIDED ON 2026-08-19, NOT EVERY WRITER.
+      # This lease covers this apply and `az containerapp update` in
+      # loom-roll-and-validate.yml — the pair from the incident. An earlier
+      # revision of this comment said the image field has "exactly two writers".
+      # That was FALSE and is corrected here rather than defended. Measured over
+      # `.github/workflows/*.yml` on 2026-09-08, these Commercial admin-plane
+      # image writers do NOT take this lease:
+      #
+      #   loom-dataplane-roll.yml    the roll write and its rollback, over
+      #                              loom-unity / iceberg-catalog / loom-trino.
+      #                              UNCOVERED AND AUTOMATIC — it fires on the
+      #                              SAME `workflow_run:` completion of
+      #                              build-fiab-images-acr-tasks that the leased
+      #                              roll lane does, and this apply re-renders
+      #                              those apps too (the #3799 auto-heal further
+      #                              down dispatches that very lane for "the
+      #                              image this apply overwrote"). The #3676
+      #                              shape therefore SURVIVES on the data-plane
+      #                              trio; this PR does not close it.
+      #   full-app-deploy-commercial.yml   workflow_dispatch, loops every app.
+      #   console-bluegreen-roll.yml       workflow_dispatch, loom-console —
+      #                              the same app the leased roll lane writes.
+      #   loom-roll-and-validate.yml's own `Rollback on validation failure`,
+      #                              disclosed at that step and in #3676.
+      #
+      # THE POPULATION IS PINNED, NOT ASSERTED IN PROSE. roll-race.test.mjs's
+      # POPULATION test reads every workflow off disk, counts the
+      # `az containerapp update … --image` sites in each, and requires each file
+      # to either take this lease or sit on a dated, reasoned allowlist with an
+      # exact count. A fifth writer added tomorrow goes red instead of quietly
+      # inheriting a coverage claim nobody made for it.
       #
       # A `concurrency:` GROUP IS STILL REFUSED, for the reason recorded at the
       # estate gate below: GitHub keeps ONE pending run per group and CANCELS

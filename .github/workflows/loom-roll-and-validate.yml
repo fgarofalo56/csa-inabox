@@ -904,7 +904,7 @@ jobs:
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${{ env.ACR_NAME }}"
 
-      # ── THE IMAGE FIELD HAS TWO WRITERS, AND THIS IS THE OTHER ONE ─────
+      # ── THE 2026-08-19 IMAGE-WRITE COLLISION: THIS IS THE OTHER WRITER ──
       #
       # `az containerapp update` below writes
       # `properties.template.containers[0].image`. So does
@@ -922,6 +922,21 @@ jobs:
       # pending run per group and CANCELS the previously pending one, which would
       # turn a visible, self-healing revert into a silently dropped roll at a
       # specific SHA.
+      #
+      # THOSE ARE THE TWO WRITERS FROM THE INCIDENT — NOT THE WHOLE POPULATION.
+      # This header used to read "THE IMAGE FIELD HAS TWO WRITERS". That was
+      # FALSE. Measured over `.github/workflows/*.yml` on 2026-09-08, the
+      # Commercial admin-plane image writers that do NOT take this lease are
+      # loom-dataplane-roll.yml (roll + rollback, over loom-unity /
+      # iceberg-catalog / loom-trino — UNCOVERED AND AUTOMATIC, on the SAME
+      # `workflow_run: build-fiab-images-acr-tasks` completion that triggers
+      # THIS lane), full-app-deploy-commercial.yml (dispatch, every app),
+      # console-bluegreen-roll.yml (dispatch, loom-console — the same app this
+      # lane writes), and this lane's own rollback below. The #3676 shape
+      # survives on the data-plane trio and #3676 stays open for it.
+      # roll-race.test.mjs's POPULATION test pins that set by exact per-file
+      # count off the workflow directory, so a new writer is a red test and not
+      # a coverage claim nobody made.
       #
       # NOT THE #2603 FIREWALL LEASE THIS JOB ALREADY USES. That one is released
       # by the step above, one step before the write it would need to cover, and
@@ -957,10 +972,25 @@ jobs:
           # A roll writes one image and waits for one revision to come up. 15m
           # bounds how long a crashed roll can block the nightly apply.
           LEASE_TTL_SECONDS: '900'
-          # Longer than an apply has ever taken (~15m), so the ordinary case is
-          # that a roll QUEUES behind a running deploy and then rolls — which is
-          # the outcome the 2026-08-19 incident should have had.
-          LEASE_WAIT_SECONDS: '1500'
+          # AT LEAST THE DEPLOY LANE'S TTL (2700), plus the same 300s margin the
+          # deploy lane keeps over this lane's TTL. The first cut of this was
+          # 1500, justified as "longer than an apply has ever taken (~15m)" —
+          # and that number contradicted the lane it was waiting on: the deploy
+          # chose a 45m TTL precisely because an apply CAN exceed 15m. In the
+          # 20-minute gap decideEstateImageLeaseAcquire returns `refuse`, not
+          # `unknown`, so `LEASE_UNKNOWN_POLICY: degrade` does not apply, this
+          # step exits 1, and a workflow_run-triggered roll is DROPPED at a
+          # specific SHA — louder than a cancellation but the same lost
+          # delivery this design rejected `concurrency:` to avoid.
+          #
+          # At >= the holder's TTL the bounded wait always terminates in an
+          # acquire rather than a refusal: either the holder releases, or its
+          # lease is past `loomEstateImgExpiresEpoch` and this run takes it over
+          # as STALE (reconcile-policy.mjs `decideEstateImageLeaseAcquire`,
+          # the `expiresEpoch <= nowEpoch` branch). The cost is that a roll can
+          # now sit for up to 50 minutes behind a wedged apply; that is the
+          # trade this lane already declares — it queues, it never drops.
+          LEASE_WAIT_SECONDS: '3000'
           LEASE_UNKNOWN_POLICY: degrade
         run: |
           set -uo pipefail
@@ -1428,6 +1458,94 @@ jobs:
           fi
           echo "::notice::Revision $REV is Healthy+Running on $GOT (matches the requested image)."
 
+      # Released once the revision is actually RUNNING the image, not merely
+      # once ARM accepted the update: until then a concurrent apply's re-pin
+      # could still read the old image and write it back. `always()` because a
+      # roll that failed has written the image field just as surely as one that
+      # succeeded, and the mutex must not outlive the writer.
+      #
+      # IT CAN FAIL THE JOB. `erased` and `stolen` mean this roll's write was not
+      # exclusive after all — the exact condition #3676 is about — so they go red
+      # rather than being tidied away.
+      #
+      # AND IT RUNS ON `claimed`, NOT ONLY ON `held`. A claim write that LANDS
+      # and a read-back that then FAILS leaves this run's owner id in the
+      # registry while the acquire step reports held=false. Gating this step on
+      # `held` alone would leave that id there for the whole TTL and the nightly
+      # apply would queue behind a roll that has already exited. The policy file
+      # decides what to do with the tags; exit 5 means "correct, and do NOT write
+      # the clear" — on a lost claim race those tags belong to another run.
+      - name: Release the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
+        if: always() && (steps.img_lease.outputs.held == 'true' || steps.img_lease.outputs.claimed == 'true')
+        env:
+          LEASE_ACR_ID: ${{ steps.img_lease.outputs.acr_id }}
+          # What this run believes about its own lease is an INPUT to the policy
+          # file, never something it guesses. `held` = the read-back CONFIRMED
+          # this run as the holder. `claimed` = the claim write returned 0 and
+          # the confirmation could not be taken, so the tags may still name this
+          # run but nothing may be asserted about exclusivity.
+          LEASE_STATE: ${{ steps.img_lease.outputs.held == 'true' && 'held' || 'claimed' }}
+          DEPLOY_SUB: ''
+        run: |
+          set -uo pipefail
+          TMP="$RUNNER_TEMP/estate-img-lease"
+          mkdir -p "$TMP"
+          TAGS="$TMP/rel-tags.json"
+          TAGS_ERR="$TMP/rel-tags.err"
+          : > "$TAGS_ERR"
+          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
+          ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
+
+          set +e
+          az tag list --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+          TRC=$?
+          set -e
+          ARGS=()
+          if [ "$TRC" -ne 0 ]; then
+            ARGS=(--tags-error "az tag list --resource-id ${LEASE_ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
+          else
+            ARGS=(--tags "$TAGS")
+          fi
+
+          # `--state` comes from the step's `env:`, which the step's own `if:`
+          # already narrowed to 'held' or 'claimed'. The policy file still takes
+          # it as an INPUT rather than inferring it, so the one thing a releasing
+          # run knows about itself is never guessed — and the two values are not
+          # interchangeable: only `held` may assert exclusivity was lost.
+          #
+          # EXIT 5 IS NOT A FAILURE AND NOT A CLEAR. It means the tags name
+          # another run (a lost claim race, which is the ORDINARY outcome for a
+          # `claimed` run) or there is nothing of this run's left. Writing
+          # `owner=none` there would erase the other run's live lease, which is
+          # the exact erasure this whole mutex exists to make impossible.
+          set +e
+          node scripts/ci/reconcile-policy.mjs estate-image-lease-release "${ARGS[@]}" \
+            --me "$ME" --state "$LEASE_STATE"
+          DRC=$?
+          set -e
+          if [ "$DRC" -eq 5 ]; then
+            exit 0
+          fi
+          if [ "$DRC" -ne 0 ]; then
+            exit "$DRC"
+          fi
+
+          : > "$TAGS_ERR"
+          set +e
+          az tag update --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            --operation Merge -o none --tags \
+            "loomEstateImgOwner=none" \
+            "loomEstateImgExpiresEpoch=0" \
+            "loomEstateImgSinceUtc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "loomEstateImgHolderUrl=none" 2> "$TAGS_ERR"
+          WRC=$?
+          set -e
+          if [ "$WRC" -ne 0 ]; then
+            echo "::error::estate-image-lease: the registry records THIS run as the estate image-write lease holder and it could NOT be cleared (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
+            exit 1
+          fi
+          echo "::notice::estate-image-lease: RELEASED by ${ME}. The other image writer may proceed."
+
       # #2828 — the purge that had NEVER executed.
       #
       # This lived at the tail of "Wait for revision health" and read:
@@ -1519,94 +1637,6 @@ jobs:
       # PUBLIC REPO: `az afd route list --query "[].customDomains[].id"` returns
       # ARM ids containing the subscription. They are basenamed here and never
       # printed.
-      # Released once the revision is actually RUNNING the image, not merely
-      # once ARM accepted the update: until then a concurrent apply's re-pin
-      # could still read the old image and write it back. `always()` because a
-      # roll that failed has written the image field just as surely as one that
-      # succeeded, and the mutex must not outlive the writer.
-      #
-      # IT CAN FAIL THE JOB. `erased` and `stolen` mean this roll's write was not
-      # exclusive after all — the exact condition #3676 is about — so they go red
-      # rather than being tidied away.
-      #
-      # AND IT RUNS ON `claimed`, NOT ONLY ON `held`. A claim write that LANDS
-      # and a read-back that then FAILS leaves this run's owner id in the
-      # registry while the acquire step reports held=false. Gating this step on
-      # `held` alone would leave that id there for the whole TTL and the nightly
-      # apply would queue behind a roll that has already exited. The policy file
-      # decides what to do with the tags; exit 5 means "correct, and do NOT write
-      # the clear" — on a lost claim race those tags belong to another run.
-      - name: Release the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
-        if: always() && (steps.img_lease.outputs.held == 'true' || steps.img_lease.outputs.claimed == 'true')
-        env:
-          LEASE_ACR_ID: ${{ steps.img_lease.outputs.acr_id }}
-          # What this run believes about its own lease is an INPUT to the policy
-          # file, never something it guesses. `held` = the read-back CONFIRMED
-          # this run as the holder. `claimed` = the claim write returned 0 and
-          # the confirmation could not be taken, so the tags may still name this
-          # run but nothing may be asserted about exclusivity.
-          LEASE_STATE: ${{ steps.img_lease.outputs.held == 'true' && 'held' || 'claimed' }}
-          DEPLOY_SUB: ''
-        run: |
-          set -uo pipefail
-          TMP="$RUNNER_TEMP/estate-img-lease"
-          mkdir -p "$TMP"
-          TAGS="$TMP/rel-tags.json"
-          TAGS_ERR="$TMP/rel-tags.err"
-          : > "$TAGS_ERR"
-          trim400() { local s; s="$(tr '\n' ' ' < "$1")"; printf '%s' "${s:0:400}"; }
-          ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
-
-          set +e
-          az tag list --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
-          TRC=$?
-          set -e
-          ARGS=()
-          if [ "$TRC" -ne 0 ]; then
-            ARGS=(--tags-error "az tag list --resource-id ${LEASE_ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
-          else
-            ARGS=(--tags "$TAGS")
-          fi
-
-          # `--state` comes from the step's `env:`, which the step's own `if:`
-          # already narrowed to 'held' or 'claimed'. The policy file still takes
-          # it as an INPUT rather than inferring it, so the one thing a releasing
-          # run knows about itself is never guessed — and the two values are not
-          # interchangeable: only `held` may assert exclusivity was lost.
-          #
-          # EXIT 5 IS NOT A FAILURE AND NOT A CLEAR. It means the tags name
-          # another run (a lost claim race, which is the ORDINARY outcome for a
-          # `claimed` run) or there is nothing of this run's left. Writing
-          # `owner=none` there would erase the other run's live lease, which is
-          # the exact erasure this whole mutex exists to make impossible.
-          set +e
-          node scripts/ci/reconcile-policy.mjs estate-image-lease-release "${ARGS[@]}" \
-            --me "$ME" --state "$LEASE_STATE"
-          DRC=$?
-          set -e
-          if [ "$DRC" -eq 5 ]; then
-            exit 0
-          fi
-          if [ "$DRC" -ne 0 ]; then
-            exit "$DRC"
-          fi
-
-          : > "$TAGS_ERR"
-          set +e
-          az tag update --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --operation Merge -o none --tags \
-            "loomEstateImgOwner=none" \
-            "loomEstateImgExpiresEpoch=0" \
-            "loomEstateImgSinceUtc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            "loomEstateImgHolderUrl=none" 2> "$TAGS_ERR"
-          WRC=$?
-          set -e
-          if [ "$WRC" -ne 0 ]; then
-            echo "::error::estate-image-lease: the registry records THIS run as the estate image-write lease holder and it could NOT be cleared (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
-            exit 1
-          fi
-          echo "::notice::estate-image-lease: RELEASED by ${ME}. The other image writer may proceed."
-
       - name: Purge Front Door (endpoint discovered, never assumed)
         id: fdpurge
         env:

@@ -2101,11 +2101,43 @@ export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes 
 //
 // WHAT THE LEASE ARBITRATES. Exactly one field:
 // `properties.template.containers[0].image` on the admin-plane Container Apps.
-// It has precisely two writers — `az deployment sub create` (the deploy lane's
-// apply, which re-renders every app from appImageTags) and `az containerapp
-// update` (the roll lane's image write, and its rollback). Both now take this
-// lease around their write, so the two orders are the only two outcomes:
-// deploy-then-roll, or roll-then-deploy-that-re-pins-to-the-rolled-image.
+// Two writers take it: `az deployment sub create` (the deploy lane's apply,
+// which re-renders every app from appImageTags) and `az containerapp update`
+// (loom-roll-and-validate's image write). Between those two the orders are the
+// only two outcomes: deploy-then-roll, or roll-then-deploy-that-re-pins-to-the-
+// rolled-image.
+//
+// THAT IS THE INCIDENT PAIR, NOT THE POPULATION. An earlier revision of this
+// header said the field "has precisely two writers". That was FALSE, and the
+// design conclusion drawn from it — that the two orders are the only two
+// outcomes, full stop — did not hold. Measured over `.github/workflows/*.yml`
+// on 2026-09-08, these Commercial admin-plane image writers do NOT take this
+// lease:
+//
+//   loom-dataplane-roll.yml            roll + rollback, over loom-unity /
+//                                      iceberg-catalog / loom-trino. UNCOVERED
+//                                      AND AUTOMATIC: it is triggered by the
+//                                      SAME `workflow_run:` completion of
+//                                      build-fiab-images-acr-tasks that fires
+//                                      the leased roll lane, and the scheduled
+//                                      apply re-renders those apps from
+//                                      appImageTags. ESTATE_ROLL_LANES above is
+//                                      this file's own authoritative roll
+//                                      population and it names that lane for
+//                                      three of the four apps.
+//   full-app-deploy-commercial.yml     workflow_dispatch, loops every app.
+//   console-bluegreen-roll.yml         workflow_dispatch, loom-console — the
+//                                      same app the leased roll lane writes.
+//   loom-roll-and-validate.yml         its `Rollback on validation failure`
+//                                      write, disclosed at that step.
+//
+// So the #3676 shape SURVIVES on the data-plane trio and on the two dispatch
+// lanes. #3676 stays open for them; nothing here closes it. The population is
+// not left as prose: roll-race.test.mjs's POPULATION test reads the workflow
+// directory, counts each file's `az containerapp update … --image` sites, and
+// requires every such file to either take this lease or carry a dated, reasoned
+// allowlist entry with an exact count — so a new writer, or a new write inside
+// an already-listed file, is a red test rather than an unexamined gap.
 //
 // WHY ITS OWN TAG KEYS AND NOT THE #2603 ACR FIREWALL LEASE. That mutex is held
 // by PUSHERS — `az acr build` holds it for up to 120 minutes — and a push does

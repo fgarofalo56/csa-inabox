@@ -4246,7 +4246,12 @@ test('the digest re-assertion step carries the id the rollback gate reads', () =
 // two live scheduled runs. Bullet 1 — "the two writers cannot both win" — was
 // re-measured NOT DONE on 2026-09-07: `grep -c '^concurrency:'` returned 0 on
 // all four deploy lanes and no image-write mutex existed. These tests cover the
-// lease that closes it.
+// lease that arbitrates the deploy lane's apply against loom-roll-and-validate,
+// which is the pair that collided on 2026-08-19 — NOT every writer of the
+// field. The POPULATION test below reads the writers off the workflow directory
+// and holds the uncovered ones (loom-dataplane-roll, full-app-deploy-commercial,
+// console-bluegreen-roll, this lane's own rollback) on a dated allowlist.
+// Bullet 1 is therefore narrowed, not closed, and #3676 stays open.
 //
 // A `concurrency:` group is deliberately NOT the mechanism (GitHub keeps one
 // pending run per group and CANCELS the previous one, converting a visible
@@ -4543,7 +4548,7 @@ test('LEASE CLI: release exit codes distinguish CLEAR from "do not touch those t
 // is a case of every part working and the whole not.
 // ---------------------------------------------------------------------------
 
-test('WIRING: BOTH image writers take the lease, and the two shells are the SAME BYTES', () => {
+test('WIRING: BOTH LEASED image writers take the lease, and the two shells are the SAME BYTES', () => {
   const deploy = readNorm(DEPLOY_WORKFLOW);
   const roll = readNorm(ROLL_WORKFLOW);
   for (const [label, yaml] of [['deploy-fiab-commercial', deploy], ['loom-roll-and-validate', roll]]) {
@@ -4559,13 +4564,211 @@ test('WIRING: BOTH image writers take the lease, and the two shells are the SAME
     'the two lanes\' lease-release shells have drifted apart');
 });
 
+// ---------------------------------------------------------------------------
+// THE POPULATION. The test above asserts a step name is present in two NAMED
+// files. It cannot notice a third image writer, and it could not notice a
+// fourth added tomorrow — which is how this PR shipped a review round asserting
+// the image field has "exactly two writers" in five places when the tree held
+// more. Presence is not reachability, and neither is coverage: a claim about a
+// POPULATION has to be measured against the population.
+//
+// So the writers are read off `.github/workflows/` rather than listed, exactly
+// as DEPLOY_LANES is (#3907), and every file that writes the field must EITHER
+// take this lease OR carry a dated, reasoned allowlist entry with an exact
+// count. Adding a writer, or a second write inside an already-listed file, goes
+// red until someone records why it is allowed to race.
+// ---------------------------------------------------------------------------
+
+/**
+ * The `az containerapp update … --image` sites in one workflow.
+ *
+ * Line-continued: the repo's real writers are wrapped over four or five lines
+ * and several go through `deploy-retry.mjs -- az containerapp update …`, so a
+ * per-physical-line search finds neither. Comment lines are dropped, because
+ * this file's own #2828-style commentary quotes the command it is describing
+ * and a guard that counts prose is a guard that reds on an edit to a comment.
+ *
+ * NOT boundary-filtered, on purpose. Which resource group a `-g "$RG"` resolves
+ * to is a runtime fact, and a guard that guesses it would exclude the writer it
+ * guessed wrong about. Every writer is in the population; the allowlist is
+ * where the boundary and the reason get stated by a human.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @returns {number[]} 1-based line numbers of the write sites
+ */
+function imageWriteSites(yaml) {
+  const lines = yaml.split('\n');
+  const hits = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*#/.test(lines[i])) continue;
+    let logical = lines[i];
+    let j = i;
+    while (/\\\s*$/.test(lines[j]) && j + 1 < lines.length) {
+      j += 1;
+      logical += ` ${lines[j].replace(/^\s+/, '')}`;
+    }
+    if (/az\s+containerapp\s+update\b/.test(logical) && /(^|\s)--image[\s=]/.test(logical)) {
+      hits.push(i + 1);
+    }
+    i = j;
+  }
+  return hits;
+}
+
+/** The two lanes this lease is wired into. Asserted, not assumed. */
+const LEASED_WRITER_FILES = Object.freeze(['deploy-fiab-commercial.yml', 'loom-roll-and-validate.yml']);
+
+/**
+ * Image writers that do NOT take the estate image-write lease, with the reason
+ * and the date the reason was taken. `writes` is the exact site count, so a new
+ * write inside an already-listed file is also a red.
+ *
+ * An entry here is a DISCLOSED GAP, not an exemption: #3676 stays open for
+ * every one of them.
+ */
+const UNLEASED_IMAGE_WRITERS = Object.freeze({
+  'loom-dataplane-roll.yml': {
+    writes: 2,
+    recorded: '2026-09-08',
+    reason:
+      'THE REAL SURVIVING GAP. Roll + rollback over loom-unity / iceberg-catalog / loom-trino, on the SAME `workflow_run: build-fiab-images-acr-tasks` completion that triggers the leased roll lane, against apps the nightly apply re-renders from appImageTags (reconcile-policy.mjs ESTATE_ROLL_LANES names this lane for three of the four apps, and deploy-fiab-commercial dispatches it in the #3799 auto-heal for "the image this apply overwrote"). The #3676 shape survives here. Not leased in this PR because it is a second lane with its own rollback and boundary inputs; #3676 stays open for it.',
+  },
+  'full-app-deploy-commercial.yml': {
+    writes: 1,
+    recorded: '2026-09-08',
+    reason:
+      'workflow_dispatch only, loops every app. A human-run full app deploy racing the nightly apply is a possible collision, but it is not automatic and it is not the 2026-08-19 shape. #3676.',
+  },
+  'console-bluegreen-roll.yml': {
+    writes: 1,
+    recorded: '2026-09-08',
+    reason:
+      'workflow_dispatch only, loom-console — the same app the leased roll lane writes, so a dispatched blue/green roll CAN still race the apply. Not automatic. #3676.',
+  },
+  'gov-console-roll.yml': {
+    writes: 3,
+    recorded: '2026-09-08',
+    reason:
+      'Gov boundary. Two real writes (roll + rollback) and one `ROLLBACK_ADVICE=` string that quotes the command for the operator; the string is counted rather than pattern-excluded, because a scanner clever enough to drop it is a scanner that can drop a real write. No estate image-write lease exists in GCC/GCC-High/IL5 at all: per cloud-parity.md this capability is INCOMPLETE until ported. #3676.',
+  },
+  'gov-provision-mongo.yml': {
+    writes: 1,
+    recorded: '2026-09-08',
+    reason:
+      'Gov boundary, provisioning-time write of a pinned upstream image (loom-mongo:7) on a dispatch lane, not a roll of a Loom-built app. Same unported-to-Gov gap as above. #3676.',
+  },
+  'deploy-portal.yml': {
+    writes: 2,
+    recorded: '2026-09-08',
+    reason:
+      'Different estate entirely: rg-csa-portal-<env>, csa-portal-backend / csa-portal-frontend. The admin-plane apply never renders those apps, so there is no shared field to arbitrate.',
+  },
+});
+
+test('POPULATION: every image writer in the tree is LEASED or is a dated, reasoned, exactly-counted gap', () => {
+  const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+  assert.ok(files.length > 40, `only ${files.length} workflows were read — the population scan found nothing to scan`);
+
+  /** @type {Record<string, number[]>} */
+  const writers = {};
+  const leaseTakers = [];
+  for (const f of files) {
+    const yaml = readNorm(join(WORKFLOW_DIR, f));
+    if (yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`)) leaseTakers.push(f);
+    const sites = imageWriteSites(yaml);
+    if (sites.length) writers[f] = sites;
+  }
+
+  // The scan has to actually find the writers it is counting. If the needle
+  // rots (a rename of `az containerapp update`, a new wrapper), every file
+  // reads zero and the guard congratulates the tree on having no writers.
+  assert.ok(
+    Object.keys(writers).length >= 6,
+    `the image-write scan found only ${Object.keys(writers).length} workflow(s) with an \`az containerapp update … --image\` site. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`,
+  );
+
+  assert.deepEqual(leaseTakers, LEASED_WRITER_FILES,
+    'the set of workflows taking the estate image-write lease changed. Update LEASED_WRITER_FILES and say in the lane comments which writers are covered.');
+
+  // 1. Nothing writes the field un-leased and un-disclosed.
+  for (const [file, sites] of Object.entries(writers)) {
+    if (LEASED_WRITER_FILES.includes(file)) continue;
+    const entry = UNLEASED_IMAGE_WRITERS[file];
+    assert.ok(entry,
+      `${file} writes a Container App image field at line(s) ${sites.join(', ')} and neither takes the estate image-write lease nor appears in UNLEASED_IMAGE_WRITERS. Either wire the lease into it, or record here WHY it may race the apply — an undisclosed writer is the #3676 shape with nobody watching.`);
+    assert.equal(sites.length, entry.writes,
+      `${file} now has ${sites.length} image-write site(s) (line(s) ${sites.join(', ')}), not the ${entry.writes} recorded on ${entry.recorded}. The recorded reason was taken against the old set and does not carry over by itself.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s allowlist entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s allowlist entry has no real reason`);
+    assert.ok(/#\d{3,}|rg-csa-portal/.test(entry.reason),
+      `${file}'s allowlist entry names no tracking issue and no reason it is out of scope`);
+  }
+
+  // 2. No stale entries. A file that stopped writing the field must leave the
+  //    list, or the list becomes a record of things that used to be true — the
+  //    failure mode a hand-listed population always ends in.
+  for (const file of Object.keys(UNLEASED_IMAGE_WRITERS)) {
+    assert.ok(writers[file],
+      `UNLEASED_IMAGE_WRITERS lists ${file}, but it has no \`az containerapp update … --image\` site any more. Drop the entry.`);
+  }
+
+  // 3. The leased lanes' own counts are pinned too, so an image write added
+  //    OUTSIDE the leased window in a lane that happens to take the lease
+  //    somewhere is not silently covered by the file-level check above.
+  //    loom-roll-and-validate writes twice: the leased roll, and the rollback
+  //    (disclosed at its step). deploy-fiab-commercial writes through
+  //    `az deployment sub create`, never `az containerapp update`.
+  assert.equal((writers['loom-roll-and-validate.yml'] ?? []).length, 2,
+    'loom-roll-and-validate.yml no longer has exactly 2 image writes (the leased roll + the disclosed rollback). A third write needs its own disclosure at the step.');
+  assert.equal(writers['deploy-fiab-commercial.yml'], undefined,
+    'deploy-fiab-commercial.yml grew an `az containerapp update --image`. Its image write is the ARM apply, which the lease is placed around; a direct CLI write is a second, unarbitrated path.');
+});
+
+test('POPULATION: the roll lane waits AT LEAST as long as the deploy lane can hold the lease', () => {
+  // The two numbers used to contradict each other: the deploy chose a 2700s TTL
+  // because an apply CAN exceed the ~15m it historically takes, while the roll
+  // waited 1500s. In that 20-minute gap decideEstateImageLeaseAcquire returns
+  // `refuse` — not `unknown`, so the roll's `degrade` policy does not apply —
+  // the step exits non-zero, and a `workflow_run`-triggered roll is DROPPED at a
+  // specific SHA. That is the same lost delivery the design rejected a
+  // `concurrency:` group to avoid, just louder.
+  const envNum = (path, key) => {
+    const yaml = readNorm(path);
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    assert.notEqual(at, -1, `${path} has no acquire step`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    // `env:` mapping only. Both of these numbers are quoted in the surrounding
+    // commentary that explains them, and a guard a comment can answer for is
+    // not measuring the workflow.
+    const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const m = new RegExp(`^ {10}${key}: '(\\d+)'$`, 'm').exec(code);
+    assert.ok(m, `${path} does not set ${key} on the acquire step`);
+    return Number(m[1]);
+  };
+
+  const deployTtl = envNum(DEPLOY_WORKFLOW, 'LEASE_TTL_SECONDS');
+  const rollWait = envNum(ROLL_WORKFLOW, 'LEASE_WAIT_SECONDS');
+  assert.ok(rollWait >= deployTtl,
+    `the roll lane waits ${rollWait}s for a lease the deploy lane may hold for ${deployTtl}s, so there is a ${deployTtl - rollWait}s window in which the roll REFUSES and the roll is dropped at that SHA. The wait must be at least the other lane's TTL: past expiresEpoch the wait ends in a stale takeover instead of a refusal.`);
+
+  // Symmetrically, and for the same reason: the deploy queues behind a roll
+  // rather than refusing.
+  const rollTtl = envNum(ROLL_WORKFLOW, 'LEASE_TTL_SECONDS');
+  const deployWait = envNum(DEPLOY_WORKFLOW, 'LEASE_WAIT_SECONDS');
+  assert.ok(deployWait >= rollTtl,
+    `the deploy lane waits ${deployWait}s for a lease the roll lane may hold for ${rollTtl}s — a nightly apply that refuses is a night of drift.`);
+});
+
 test('WIRING: the acquire step can actually RUN on both writers — its `if:` is pinned, not merely present', () => {
   // PRESENCE IS NOT REACHABILITY. The assertion above only says the step NAME is
   // in each file. Narrowing `if:` to `false` on either lane switches the mutex
-  // off for one of the exactly two image writers and the whole suite stayed
+  // off for one of the two LEASED image writers and the whole suite stayed
   // green through it — the file's own stated property ("a decision nobody calls
   // arbitrates nothing") going unasserted. So the gate STRING is pinned on the
   // deploy lane and its ABSENCE is pinned on the roll lane.
+  //
+  // "The two leased writers" is not "the two writers": see the POPULATION test
+  // below for the writers this lease does NOT cover.
   const ifOf = (yaml) => {
     const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
     assert.notEqual(at, -1, 'the acquire step is not in this workflow at all');
@@ -4576,9 +4779,9 @@ test('WIRING: the acquire step can actually RUN on both writers — its `if:` is
   // The deploy lane's ONLY legitimate reason to skip is that no registry was
   // resolved, in which case there is nothing to write the lease onto and the
   // apply cannot run either. Any other condition — including a narrowing to
-  // `false` — takes one of the two writers out of the mutex.
+  // `false` — takes one of the two leased writers out of the mutex.
   assert.equal(ifOf(readNorm(DEPLOY_WORKFLOW)), "steps.acr_apply_lease.outputs.acr != ''",
-    'the deploy lane acquire gate changed: it is one of exactly TWO image writers, and a narrower gate means it can write an image without the mutex');
+    'the deploy lane acquire gate changed: it is one of the two LEASED image writers, and a narrower gate means it can write an image without the mutex');
 
   // The roll lane has no gate at all, and must not acquire one: every path
   // through that job writes the image field.
@@ -4590,10 +4793,15 @@ test('WIRING: each lane declares its OWN unknown-policy, and they are the opposi
   // The asymmetry is deliberate and is each lane's existing policy: a nightly
   // reconcile that skips a night costs a night; a roll blocked by an ARM tag
   // read is a security fix that does not ship.
+  // The regex reads the `env:` MAPPING, not the step's prose. It used to scan
+  // the whole segment, and a comment in that segment quoting
+  // `LEASE_UNKNOWN_POLICY: degrade` matched first and won — a guard whose
+  // subject a comment can impersonate is a guard reading the wrong thing.
   const envOf = (yaml) => {
     const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
     const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
-    return /LEASE_UNKNOWN_POLICY: (\S+)/.exec(seg)?.[1] ?? '';
+    const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    return /^ {10}LEASE_UNKNOWN_POLICY: (\S+)$/m.exec(code)?.[1] ?? '';
   };
   assert.equal(envOf(readNorm(DEPLOY_WORKFLOW)), 'refuse');
   assert.equal(envOf(readNorm(ROLL_WORKFLOW)), 'degrade');
