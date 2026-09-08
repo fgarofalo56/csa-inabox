@@ -1,4 +1,4 @@
-.PHONY: help setup setup-all lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint redeploy-gov-il5 redeploy-gov-gcch
+.PHONY: help setup setup-all lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform typecheck-redirect-guards portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint redeploy-gov-il5 redeploy-gov-gcch
 
 # Default target
 help: ## Show this help
@@ -61,7 +61,31 @@ typecheck: ## Run strict mypy on governance, tests, and all three Function apps
 	mypy csa_platform/functions/aiEnrichment/functions/function_app.py
 	mypy csa_platform/functions/eventProcessing/functions/function_app.py
 	mypy csa_platform/functions/secretRotation/functions/function_app.py
+	$(MAKE) typecheck-redirect-guards
 	@echo "mypy strict passed"
+
+# The credential-safe opener from #3717 is DUPLICATED into seven deployables
+# that cannot import a shared one (the SDK, the CLI, the migrate app, the
+# Content Safety function, two operator scripts, the notebook preamble), and
+# #4184 was the untyped `redirect_request` override travelling with each copy.
+# An untyped def is `Any` in both directions, so a drifted signature type-checks
+# clean and raises only when a real 3xx arrives — in the code that exists to
+# stop a credential leaving its origin.
+#
+# THESE ARE THE COPIES THAT ARE STRICT-CLEAN TODAY, and this list is deliberately
+# NOT all seven: `cli/client.py` and `scripts/csa-loom/livy-session-census.py`
+# still carry unrelated pre-existing strict findings (bare `dict` returns,
+# untyped helpers), and `loom-semantic-link.py` cannot be strict-clean without
+# `pandas-stubs`. Adding them here as-is would put a RED line in the gate, so
+# the repo-wide cover for all seven is the AST population scan in
+# `tests/csa_platform/test_loom_migrate_connectors.py`
+# (`TestEveryRedirectHandlerOverrideIsTyped`), which runs under `make test`.
+# Widening this list is the follow-up, not a reason to weaken either check.
+typecheck-redirect-guards: ## mypy strict over the strict-clean copies of the #3717 redirect guard
+	mypy apps/loom-migrate/app/connectors.py
+	mypy azure-functions/copilot-chat/content_safety.py
+	mypy scripts/csa-loom/loom-unity-migrate-catalog.py
+	@echo "mypy strict passed on the redirect-guard copies"
 
 typecheck-platform: ## Run mypy on platform modules (progressive strictness)
 	# Use -p (package mode) instead of a directory path so mypy resolves

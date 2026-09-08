@@ -22,12 +22,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { ComponentProps, ReactElement } from 'react';
 import { BrainCanvasNode } from '@/app/admin/brain/brain-canvas-node';
-import { allocateTerminusPositions } from '@/app/admin/brain/brain-canvas';
+import { allocateTerminusPositions, buildFlow } from '@/app/admin/brain/brain-canvas';
 import {
   DANGLING_TERMINUS_HEIGHT,
   DANGLING_TERMINUS_WIDTH,
@@ -464,5 +466,139 @@ describe('#4251 — dangling termini do not overlap anything', () => {
       box({ id, ...p }, DANGLING_TERMINUS_WIDTH, DANGLING_TERMINUS_HEIGHT),
     );
     expect(overlappingPairs([...nodeBoxes, ...terminusBoxes])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4251 — the WIRING, not only the constants
+// ---------------------------------------------------------------------------
+
+/**
+ * MEASURED HOLE, closed here.
+ *
+ * The three parts of #4251 all landed, and two of the three could be DELETED
+ * with the entire brain suite green. Measured on this branch, each mutation run
+ * against `lib/brain` + `app/admin/brain`:
+ *
+ *   remove `fitViewOptions={{ minZoom: MIN_LEGIBLE_ZOOM }}` from `<ReactFlow>`
+ *       -> RC 0, 2306/2306 passed
+ *   remove `...(props.container ? { container: props.container } : {})` from
+ *   `buildFlow`'s `layoutNodes` call
+ *       -> RC 0, 2306/2306 passed
+ *
+ * The constants themselves ARE guarded — `MIN_LEGIBLE_ZOOM = 0.2` fails one
+ * test, `DANGLING_TERMINUS_STEP = 4` fails two. So the suite was watching the
+ * VALUES and not the fact that anything reads them. That is the whole shape of
+ * this class: a fix that is present, correct, and load-bearing on nothing that
+ * would notice its removal.
+ */
+
+/** Minimal `BrainCanvasProps` around a node set — only what `buildFlow` reads. */
+function canvasProps(
+  nodes: readonly WireNode[],
+  container?: { readonly width: number; readonly height: number },
+): Parameters<typeof buildFlow>[0] {
+  return {
+    nodes,
+    edges: [],
+    coverageConfigured: COVERED,
+    costByNodeId: new Map<string, number>(),
+    findingCountByNodeId: new Map<string, number>(),
+    selectedId: null,
+    onSelect: () => {},
+    ...(container ? { container } : {}),
+  };
+}
+
+describe('#4251 — the canvas actually USES the container-aware layout', () => {
+  const CONTAINER = { width: 894, height: 512 };
+
+  it('buildFlow positions match layoutNodes CALLED WITH the container', () => {
+    // Pins the hand-off exactly, rather than asserting "some layout happened".
+    // Deleting the container spread in `buildFlow` makes these two disagree.
+    const nodes = estateScaleNodes();
+    const expected = new Map(
+      layoutNodes(nodes, COVERED, { container: CONTAINER }).map((p) => [p.id, p]),
+    );
+    for (const n of buildFlow(canvasProps(nodes, CONTAINER)).nodes) {
+      const want = expected.get(n.id)!;
+      expect(n.position, `${n.id} is not where the container-aware layout put it`).toEqual({
+        x: want.x,
+        y: want.y,
+      });
+    }
+  });
+
+  it('CONTROL: WITHOUT a container the positions are the pre-#4251 ones, and they DIFFER', () => {
+    // Without this, the assertion above passes even if the container were
+    // ignored and both layouts happened to agree — which at nine nodes they do.
+    // At estate scale they must not, or the container argument does nothing.
+    const nodes = estateScaleNodes();
+    const withContainer = buildFlow(canvasProps(nodes, CONTAINER)).nodes;
+    const without = buildFlow(canvasProps(nodes)).nodes;
+    const fallback = new Map(layoutNodes(nodes, COVERED).map((p) => [p.id, p]));
+    for (const n of without) {
+      const want = fallback.get(n.id)!;
+      expect(n.position).toEqual({ x: want.x, y: want.y });
+    }
+    const byId = new Map(without.map((n) => [n.id, n.position]));
+    const moved = withContainer.filter((n) => {
+      const p = byId.get(n.id)!;
+      return p.x !== n.position.x || p.y !== n.position.y;
+    });
+    expect(moved.length, 'the container changed nothing — the layout is not container-aware').toBeGreaterThan(0);
+  });
+});
+
+describe('#4251 — the legibility floor is WIRED INTO the initial fit', () => {
+  /**
+   * A SOURCE-TEXT assertion, and the reason is stated rather than hidden.
+   *
+   * `fitViewOptions` is consumed by React Flow's own `fitView` at mount, which
+   * needs a real layout engine — jsdom reports every element as 0x0, so a
+   * mounted canvas cannot tell a floored fit from an unfloored one. The
+   * behavioural half is covered elsewhere in this file (`MIN_LEGIBLE_ZOOM`'s
+   * VALUE is asserted against NODE_WIDTH/NODE_HEIGHT); what was missing, and
+   * what this closes, is that anything reads the constant at all.
+   *
+   * WHAT THIS DOES NOT PROVE, said plainly: it does not prove React Flow honours
+   * the option, and it does not prove the rendered node is legible. Only a
+   * browser run does that — `ux-baseline.md` G1 — and the operator receipt for
+   * this issue is a screenshot at default zoom, not this test.
+   */
+  const SOURCE = readFileSync(
+    join(__dirname, '..', '..', '..', '..', 'app', 'admin', 'brain', 'brain-canvas.tsx'),
+    'utf8',
+  );
+
+  it('POPULATION: the guard read brain-canvas.tsx, and it contains the ReactFlow element', () => {
+    // A guard over an empty string is green and blind.
+    expect(SOURCE.length).toBeGreaterThan(1000);
+    expect(SOURCE).toContain('<ReactFlow');
+    expect(SOURCE).toContain('MIN_LEGIBLE_ZOOM');
+  });
+
+  it('the ReactFlow element passes MIN_LEGIBLE_ZOOM as the fitView floor', () => {
+    expect(
+      /fitViewOptions=\{\{\s*minZoom:\s*MIN_LEGIBLE_ZOOM\s*\}\}/.test(SOURCE),
+      'brain-canvas.tsx no longer passes fitViewOptions={{ minZoom: MIN_LEGIBLE_ZOOM }} — the ' +
+        'initial fit is free to shrink to the manual floor again (measured live at 0.2, i.e. a ' +
+        '36x15px node box).',
+    ).toBe(true);
+  });
+
+  it('…and the MANUAL floor stays lower, so zooming out to see the whole shape still works', () => {
+    // Collapsing the two would remove a working control, which is the other
+    // direction of the same defect.
+    expect(/minZoom=\{0\.2\}/.test(SOURCE)).toBe(true);
+  });
+
+  it('CONTROL: the matcher returns FALSE on a canvas that omits the floor', () => {
+    // Without this, a regex that matched nothing and a wired canvas produce the
+    // same verdict from a broken matcher — the failure that makes a source
+    // guard worthless.
+    const unwired = SOURCE.replace(/fitViewOptions=\{\{\s*minZoom:\s*MIN_LEGIBLE_ZOOM\s*\}\}/, '');
+    expect(unwired).not.toBe(SOURCE); // the replace really fired
+    expect(/fitViewOptions=\{\{\s*minZoom:\s*MIN_LEGIBLE_ZOOM\s*\}\}/.test(unwired)).toBe(false);
   });
 });

@@ -42,6 +42,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from http.client import HTTPMessage
+from typing import IO
 
 # Livy's documented per-request maximum. NOT a tuning knob.
 PAGE_SIZE = 20
@@ -100,7 +102,23 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     redirects (path changes, trailing-slash normalisation) still work.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: "IO[bytes]",
+        code: int,
+        msg: str,
+        headers: "HTTPMessage",
+        newurl: str,
+    ) -> "urllib.request.Request | None":
+        # ANNOTATED (#4184) — see `apps/loom-migrate/app/connectors.py`. An
+        # untyped override is `Any` in both directions, so signature drift would
+        # only surface at 302 time. This is typeshed's signature. The
+        # annotations are QUOTED because this file has no
+        # `from __future__ import annotations` and is run directly by operators
+        # on whatever interpreter the runner ships; a quoted annotation is never
+        # evaluated at import time, so the `X | None` form cannot become an
+        # import-time TypeError on a pre-3.10 interpreter.
         target = urllib.parse.urljoin(req.full_url, newurl)
         if _origin(target) != _origin(req.full_url):
             raise urllib.error.HTTPError(
