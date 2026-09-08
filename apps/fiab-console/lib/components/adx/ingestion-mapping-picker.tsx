@@ -21,6 +21,28 @@
  * offered, and a name the list does not carry can still be typed. Same shape as
  * `ai-search-tree.tsx`'s PathCombobox.
  *
+ * WHAT ACTUALLY HOLDS THAT ESCAPE HATCH (#4348 review, blocker 2 — measured,
+ * not assumed). It is `onChange` lifting the typed text to the parent plus the
+ * parent controlling `value`, NOT the `freeform` prop. `freeform` gates two
+ * `setValue(undefined)` calls in Fluent — one on collapse
+ * (`@fluentui/react-combobox@9.17.1`,
+ * `lib/utils/useComboboxBaseState.js:109`) and one on blur-while-collapsed
+ * (`lib/components/Combobox/useInputTriggerSlot.js:18-26`) — and
+ * `useControllableState` makes both inert whenever `props.value` is defined,
+ * which it always is here because `value` is a REQUIRED prop of this component.
+ *
+ * Measured, in this repo's jsdom harness: rendering this Combobox with and
+ * without `freeform` produces an `<input>` whose every attribute and whose
+ * entire class list are identical — the two strings differ only in React's
+ * render-order-generated `id`/`aria-describedby` (`field-_r_1__` vs
+ * `field-_r_5__`). The prop is NOT inert in general: with an UNCONTROLLED value,
+ * typing then blurring keeps `"Typed"` with `freeform` and resets to `""`
+ * without it. It is inert only under the controlled contract this component
+ * imposes. So the prop stays — it is the declared intent, and it is what keeps
+ * the escape working for any future caller that lets the value go uncontrolled —
+ * and it is pinned STRUCTURALLY in `wave1a-adopted-surfaces.test.tsx`, because
+ * no DOM assertion against this component can reach it.
+ *
  * WHY THE FILTER IS CLIENT-SIDE. `.show ingestion mappings` is DATABASE-scoped:
  * one call returns every mapping with its owning `Table` (absent for a
  * database-scoped mapping). The route takes no table parameter — measured, not

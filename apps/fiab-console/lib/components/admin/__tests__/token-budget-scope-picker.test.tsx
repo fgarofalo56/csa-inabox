@@ -55,6 +55,62 @@ const WORKSPACES_OK = {
   workspaces: [{ id: 'ws-1', name: 'Analytics' }],
 };
 
+/**
+ * THE SECOND REFUSAL ENCODING (#4348 review, blocker 1). `ok:false` is not the
+ * only way this route declines to answer. A caller whose session carries no
+ * Entra `tid` claim gets HTTP 200 / `ok:true` / `workspaces: []` with
+ * `degraded:true` — `listAllWorkspacesAdmin` will not run the cross-partition
+ * scan unscoped, so it establishes nothing about the tenant's contents.
+ * `legacyRemediation` is VERBATIM from lib/clients/workspaces-client.ts.
+ */
+const WORKSPACES_TENANT_UNCONFIRMED = {
+  ok: true,
+  total: 0,
+  workspaces: [],
+  degraded: true,
+  degradedReasons: ['tenant-scope-unconfirmed'],
+  legacyRemediation:
+    'Your sign-in session carries no Entra tenant (`tid`) claim, so Loom cannot scope the ' +
+    'tenant-wide workspace inventory to your tenant and will not run it unscoped. Sign out ' +
+    'and sign in again to mint a session that carries `tid`. If you are calling with the ' +
+    'CLI, re-run `loom auth login` — service-principal sessions minted before the #3845 ' +
+    'fix carry no tenant.',
+};
+
+/**
+ * A LEGACY estate: the scan succeeded, but the route says it excluded records
+ * it could not attribute to a tenant. The list that DID load is real and must
+ * stay pickable — the disclosure rides alongside it. `legacyRemediation` is
+ * VERBATIM from `unstampedRemediation` in lib/clients/workspaces-client.ts.
+ */
+const WORKSPACES_TRIMMED = {
+  ok: true,
+  total: 1,
+  workspaces: [{ id: 'ws-1', name: 'Analytics' }],
+  legacyUnstampedExcluded: 3,
+  legacyRemediation:
+    '3 workspace record(s) record no Entra tenant (workspaces created ' +
+    'before rel-T11 were not stamped) and are therefore excluded from every tenant-scoped ' +
+    'inventory — Loom will not show a record it cannot positively attribute to your tenant. ' +
+    'Run `node scripts/csa-loom/backfill-workspace-tid.mjs` to see what it would change (it is ' +
+    'DRY-RUN by default), then re-run it with `--apply`.',
+};
+
+/**
+ * THE NEGATIVE CONTROL for the disclosure above. rel-T108 degrades `degraded`
+ * for a best-effort ENRICHMENT failure (item counts, owner roles) over a
+ * COMPLETE list. Those fields are not read by this picker — it takes `id` and
+ * `name` — so flagging them would be the "an error is not an empty list"
+ * regression in the other direction: a nag on a list that is entirely correct.
+ */
+const WORKSPACES_ENRICHMENT_DEGRADED = {
+  ok: true,
+  total: 1,
+  workspaces: [{ id: 'ws-1', name: 'Analytics' }],
+  degraded: true,
+  degradedReasons: ['item-counts', 'owner-roles'],
+};
+
 /** VERBATIM shape from app/api/admin/agent-quality/route.ts, Foundry unconfigured. */
 const AGENT_QUALITY_GATED = {
   ok: true,
@@ -103,6 +159,20 @@ const BUDGETS_WITH_LEDGER_AGENT = {
     },
   ],
   totals: { tokens: 0, usd: 0, turns: 0, over: 0, warning: 0 },
+};
+
+/**
+ * THE COLLISION the union's dedup rule is written for (#4348 review, nit 5):
+ * the SAME id in both sources. The registry knows it only by its bare Foundry
+ * name; the ledger carries the friendly label the attribution table shows. No
+ * previous fixture had an id in both, so "ledger label preferred" was never
+ * exercised and the loop order could be reversed with every assertion green.
+ */
+const AGENT_QUALITY_SHARED_ID = {
+  ok: true,
+  agents: { configured: true, list: [{ name: 'sql-helper' }] },
+  redTeam: { items: [] },
+  slo: { targets: [], evaluations: [], window: {} },
 };
 
 function installFetch(opts: { workspaces?: [unknown, number]; agentQuality?: [unknown, number]; budgets?: unknown }) {
@@ -219,5 +289,78 @@ describe('budget scope picker — a failed list is reported, never rendered as a
     fireEvent.click(dd);
     expect(await screen.findByRole('option', { name: 'Analytics' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Enter an id…' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * #4348 review, BLOCKER 1 — the refusal that arrives as HTTP 200.
+ *
+ * The round-3 fix above closed `ok:false`. `/api/admin/workspaces` has a SECOND
+ * way of not answering: a 200 whose body says, in its own fields, that it did
+ * not establish what it returned. `ok === false` is false on that path, the
+ * `Array.isArray` fallback yields `[]`, `wsQ.isError` stays false, and the Field
+ * asserted "No workspace is available." — the identical deploy-integrity R7
+ * defect one encoding over, with the route's own remediation discarded.
+ */
+describe('budget scope picker — a 200 that ADMITS it established nothing is not an absence', () => {
+  it('a TID-LESS session (200, degraded, empty) shows the route remediation, not "no workspace is available"', async () => {
+    vi.stubGlobal('fetch', installFetch({ workspaces: [WORKSPACES_TENANT_UNCONFIRMED, 200] }));
+    await openNewBudget();
+
+    await waitFor(() =>
+      expect(screen.getByText(/carries no Entra tenant/i)).toBeInTheDocument());
+    // The claim the response explicitly says was never established.
+    expect(screen.queryByText(/No workspace is available/i)).toBeNull();
+    // …and it is still not a dead end: the id can be typed (auto-bind-by-default
+    // forbids "no results" over a control the operator cannot use).
+    expect(screen.getByRole('textbox', { name: 'Workspace' })).toBeEnabled();
+  });
+
+  it('a TRIMMED legacy inventory keeps the rows that DID load pickable AND discloses the exclusion', async () => {
+    // The other direction of the same rule: an admitted-incomplete list is not
+    // an error, so it must not replace a populated Dropdown with a bare Input.
+    vi.stubGlobal('fetch', installFetch({ workspaces: [WORKSPACES_TRIMMED, 200] }));
+    await openNewBudget();
+
+    const dd = await screen.findByRole('combobox', { name: 'Workspace' });
+    expect(screen.queryByRole('textbox', { name: 'Workspace' })).toBeNull();
+    fireEvent.click(dd);
+    expect(await screen.findByRole('option', { name: 'Analytics' })).toBeInTheDocument();
+    // The excluded records are named, not silently absent from the picker.
+    expect(screen.getByText(/backfill-workspace-tid/)).toBeInTheDocument();
+  });
+
+  it('an ENRICHMENT-only degradation over a COMPLETE list says nothing extra — no phantom warning', async () => {
+    // Negative control. `degraded` alone must not fire the disclosure, or every
+    // stale item-count turns into a warning about an inventory that is correct.
+    vi.stubGlobal('fetch', installFetch({ workspaces: [WORKSPACES_ENRICHMENT_DEGRADED, 200] }));
+    await openNewBudget();
+
+    const dd = await screen.findByRole('combobox', { name: 'Workspace' });
+    fireEvent.click(dd);
+    expect(await screen.findByRole('option', { name: 'Analytics' })).toBeInTheDocument();
+    expect(screen.queryByText(/reported itself incomplete/i)).toBeNull();
+    expect(screen.queryByText(/no absence was established/i)).toBeNull();
+  });
+});
+
+describe('budget scope picker — registry ∪ ledger', () => {
+  it('an agent in BOTH sources appears ONCE, under the LEDGER label (#4348 review nit 5)', async () => {
+    // The dedup rule's whole point: the registry knows `sql-helper` by its bare
+    // Foundry name, the ledger by the friendly label the attribution table
+    // already shows. Reversing the two loops leaves one option either way, so
+    // only the LABEL distinguishes correct from reversed.
+    vi.stubGlobal('fetch', installFetch({
+      agentQuality: [AGENT_QUALITY_SHARED_ID, 200],
+      budgets: BUDGETS_WITH_LEDGER_AGENT,
+    }));
+    await openNewBudget();
+    await selectAgentScope();
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Agent' }));
+    expect(await screen.findByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
+    // Not twice, and not under the bare registry name.
+    expect(screen.queryByRole('option', { name: 'sql-helper' })).toBeNull();
+    expect(screen.getAllByRole('option', { name: /SQL helper/ })).toHaveLength(1);
   });
 });

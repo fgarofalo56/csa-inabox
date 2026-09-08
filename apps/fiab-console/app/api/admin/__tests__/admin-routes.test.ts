@@ -415,6 +415,13 @@ describe('/api/admin/workspaces', () => {
     expect(j.total).toBe(0);
     expect(j.degraded).toBe(true);
     expect(j.degradedReasons).toEqual(['tenant-scope-unconfirmed']);
+    // #4348 review — AND THE REMEDIATION SHIPS WITH IT. `legacyRemediation` used
+    // to be spread only alongside a non-zero `legacyUnstampedExcluded` or
+    // `legacyCountUnavailable`; this refusal carries neither (0 and false), so
+    // the string `listAllWorkspacesAdmin` produced for exactly this case reached
+    // no client, and on the wire the refusal was indistinguishable from a tenant
+    // that genuinely owns no workspaces.
+    expect(j.legacyRemediation).toMatch(/carries no Entra tenant/i);
     // Not "filtered to nothing" — NOT QUERIED AT ALL.
     expect(scanRan).toBe(false);
   });

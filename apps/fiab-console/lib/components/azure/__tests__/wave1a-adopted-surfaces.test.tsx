@@ -22,6 +22,7 @@
  * hand-typed ARM box fails here as well as in the ratchet.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as React from 'react';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { spawnSync } from 'node:child_process';
@@ -237,23 +238,87 @@ describe('#3519 KQL ingestion mapping — picked from the live database, never t
     expect(screen.getByRole('option', { name: /identity mapping/i })).toBeTruthy();
   });
 
-  it('a name the list does not carry can STILL be typed — the picker is not a dead end', async () => {
+  it('a name the list does not carry is COMMITTED to the parent, and survives a blur', async () => {
     // Swapping a text box for a CLOSED list is how a "no items found" dead end
     // gets introduced — the shape `auto-bind-by-default.md` forbids by name
-    // ("'No pipelines found' + a disabled Bind button"). Freeform is the escape.
+    // ("'No pipelines found' + a disabled Bind button").
+    //
+    // #4348 review, BLOCKER 2 — WHAT THIS ARM ACTUALLY HOLDS, stated honestly.
+    // Its previous title said it held the `freeform` prop. It did not: the
+    // reviewer deleted `freeform` and all three specs stayed green, and I
+    // re-measured why with a throwaway probe. `freeform` gates two
+    // `setValue(undefined)` calls in @fluentui/react-combobox@9.17.1 — on
+    // collapse (lib/utils/useComboboxBaseState.js:109) and on blur-while-
+    // collapsed (lib/components/Combobox/useInputTriggerSlot.js:18-26) — and
+    // `useControllableState` makes both inert when `props.value` is defined,
+    // which it always is here because `value` is a REQUIRED prop of the picker.
+    // Probe result: the rendered `<input>` with and without `freeform` matches
+    // on every attribute and on the whole class list, differing ONLY in React's
+    // render-order-generated `id`. (It is not inert in general — uncontrolled,
+    // type-then-blur keeps "Typed" with the prop and resets to "" without it.)
+    // So no DOM assertion against THIS component can distinguish the two states.
+    //
+    // What the escape hatch is REALLY held by is what this now asserts: the
+    // typed text reaches the parent through `onChange`, and a parent that
+    // stores it renders it back — which is what a Save would persist. Deleting
+    // the `onChange` wiring, or swapping the Combobox for a Dropdown, both fail
+    // here. The `freeform` PROP is pinned separately, structurally, below.
     routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: true, mappings: [] }]]);
     const onChange = vi.fn();
-    wrap(
-      <IngestionMappingPicker
-        itemId="kdb-1" table="T1" value="" onChange={onChange}
-        label="Ingestion mapping name (optional)"
-      />,
-    );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    function Controlled() {
+      const [v, setV] = React.useState('');
+      return (
+        <IngestionMappingPicker
+          itemId="kdb-1" table="T1" value={v}
+          onChange={(next) => { onChange(next); setV(next); }}
+          label="Ingestion mapping name (optional)"
+        />
+      );
+    }
+    wrap(<Controlled />);
+    // WAIT FOR THE READ TO SETTLE, not merely to be ISSUED. `toHaveBeenCalled()`
+    // returns while the mapping fetch's `.then` is still a pending microtask;
+    // when the machine is loaded that resolution can land INSIDE the `act()`
+    // that `fireEvent.change` wraps, re-committing the controlled `value=""`
+    // over the text we just wrote and resetting React's input value-tracker —
+    // so the change event is deduped away and `onChange` is never called. That
+    // is a real flake, and I hit it: this file passed 13/13 alone but the same
+    // arm failed "Number of calls: 0" in a 4-file run on this machine. Settling
+    // on the post-read hint removes the race instead of retrying around it.
+    await screen.findByText(/No ingestion mapping is defined for T1/i);
     const box = await screen.findByRole('combobox', { name: /Ingestion mapping/i });
     expect((box as HTMLInputElement).disabled).toBe(false);
     fireEvent.change(box, { target: { value: 'NotYetDiscovered' } });
     expect(onChange).toHaveBeenCalledWith('NotYetDiscovered');
+    // The committed value, not just the keystroke: this is what the wizard holds
+    // and what a Save would write.
+    fireEvent.blur(box);
+    await waitFor(() =>
+      expect((screen.getByRole('combobox', { name: /Ingestion mapping/i }) as HTMLInputElement).value)
+        .toBe('NotYetDiscovered'));
+  });
+
+  it('the picker declares itself FREEFORM — the prop, pinned where the DOM cannot show it', () => {
+    // The companion to the arm above, and the reason it exists. `freeform` has
+    // no observable effect on a fully-controlled Fluent Combobox (measured
+    // above), so it can be deleted with every behavioural assertion green — and
+    // it would then silently change behaviour for any future caller that lets
+    // the value go uncontrolled (measured too: uncontrolled, type-then-blur
+    // keeps the text with the prop and loses it without), and it is the declared
+    // intent the component header rests on. Source-asserted in the same idiom as
+    // the editor-wiring control below.
+    const src = fs.readFileSync(
+      path.resolve(process.cwd(), 'lib/components/adx/ingestion-mapping-picker.tsx'),
+      'utf8',
+    );
+    // A Combobox, not a Dropdown — a Dropdown has no text input at all.
+    expect(src).toMatch(/<Combobox\b/);
+    expect(src).not.toMatch(/<Dropdown\b/);
+    // …and it is freeform.
+    expect(src).toMatch(/<Combobox\s[^>]*\bfreeform\b/s);
+    // A live negative: the file DOES carry other Combobox props, so the match
+    // above is not passing over a read that returned nothing.
+    expect(src).toMatch(/<Combobox\s[^>]*\bselectedOptions=/s);
   });
 
   it('a FAILED read says the read failed — it never renders as "this database has none"', async () => {

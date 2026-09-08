@@ -403,6 +403,67 @@ function listReadFailure(body: unknown, status: number, what: string): string {
     : `${what} read failed (HTTP ${status}).`;
 }
 
+/**
+ * The sentence a workspace inventory that DID NOT ESTABLISH ITS OWN CONTENT
+ * must carry — or `null` when the response stands on its own.
+ *
+ * #4348 review, blocker 1. `ok:false` is only ONE of the two ways
+ * `/api/admin/workspaces` declines to answer. The other is a 200 that is
+ * explicitly self-degraded: `listAllWorkspacesAdmin` returns
+ * `workspaces: []` + `degraded: true` + `degradedReasons:
+ * ['tenant-scope-unconfirmed']` for a caller whose session carries no Entra
+ * `tid` claim (a REFUSAL — "with no caller tenant there is no positive match to
+ * make"), and it returns a deliberately SHORT list with
+ * `legacyUnstampedExcluded` / `legacyCountUnavailable` on a legacy estate. Both
+ * used to fall straight through as `raw = []` with `isError` false, so the Field
+ * asserted "No workspace is available." — an absence the response itself says
+ * was never established. That is the same deploy-integrity R7 shape the
+ * `ok:false` fix closed, one encoding over.
+ *
+ * KEYED ON SHAPE, NOT ON A LIST OF REASON SPELLINGS, so a reason added later
+ * still lands:
+ *
+ *  - an EMPTY list from a read that flagged itself degraded — whatever the
+ *    reason — has established no absence, so the emptiness may not be reported
+ *    as one;
+ *  - a list the response says was TRIMMED (`legacyUnstampedExcluded > 0`) or
+ *    whose exclusions could not even be COUNTED (`legacyCountUnavailable`) is
+ *    disclosed whether or not it came back empty, because those rows are
+ *    missing from a picker the operator will otherwise read as exhaustive.
+ *
+ * A non-empty list degraded only in its ENRICHMENT (`item-counts`,
+ * `owner-roles`) is deliberately NOT flagged: those degrade fields this picker
+ * does not use — it reads `id` and `name` only — and nagging about them would
+ * be the "error is not an empty list" regression in the other direction.
+ *
+ * The route's OWN words are preferred verbatim when it sends them. The fallback
+ * states only what the response established: that the read reported itself
+ * degraded, and the reason codes it gave. It never names a cause.
+ */
+function inventoryNotEstablished(
+  body: {
+    degraded?: unknown;
+    degradedReasons?: unknown;
+    legacyUnstampedExcluded?: unknown;
+    legacyCountUnavailable?: unknown;
+    legacyRemediation?: unknown;
+  },
+  count: number,
+): string | null {
+  const trimmed = Number(body.legacyUnstampedExcluded) > 0 || body.legacyCountUnavailable === true;
+  const emptyAndDegraded = count === 0 && body.degraded === true;
+  if (!trimmed && !emptyAndDegraded) return null;
+  const remediation = typeof body.legacyRemediation === 'string' ? body.legacyRemediation.trim() : '';
+  if (remediation) return remediation;
+  const reasons = (Array.isArray(body.degradedReasons) ? body.degradedReasons : [])
+    .map((x) => (typeof x === 'string' ? x.trim() : ''))
+    .filter(Boolean);
+  const why = reasons.length ? ` (${reasons.join(', ')})` : '';
+  return count === 0
+    ? `The tenant workspace inventory came back empty from a read that reported itself incomplete${why}, so no absence was established.`
+    : `The tenant workspace inventory reported itself incomplete${why}, so this list may not be every workspace in the tenant.`;
+}
+
 function BudgetDialog({
   row, knownAgents, onClose, onDone, onError,
 }: { row: DashboardRow | null; knownAgents: ScopeOption[]; onClose: () => void; onDone: (msg: string) => void; onError: (msg: string) => void }) {
@@ -436,7 +497,7 @@ function BudgetDialog({
    */
   const wsQ = useQuery({
     queryKey: ['budget-scope-workspaces'],
-    queryFn: async (): Promise<ScopeOption[]> => {
+    queryFn: async (): Promise<{ workspaces: ScopeOption[]; notEstablished: string | null }> => {
       const r = await clientFetch('/api/admin/workspaces');
       const d: unknown = await r.json();
       // #4348 review — A FAILED READ IS NOT AN EMPTY ESTATE. Repointing this at
@@ -450,8 +511,16 @@ function BudgetDialog({
       if ((d as { ok?: boolean } | null)?.ok === false) {
         throw new Error(listReadFailure(d, r.status, 'Workspace list'));
       }
-      const raw = Array.isArray(d) ? d : ((d as { workspaces?: unknown[] })?.workspaces || []);
-      return (raw as Record<string, string>[])
+      const body = (d ?? {}) as {
+        workspaces?: unknown[];
+        degraded?: unknown;
+        degradedReasons?: unknown;
+        legacyUnstampedExcluded?: unknown;
+        legacyCountUnavailable?: unknown;
+        legacyRemediation?: unknown;
+      };
+      const raw = Array.isArray(d) ? d : (body.workspaces || []);
+      const workspaces = (raw as Record<string, string>[])
         // `/api/admin/workspaces` returns `WorkspaceAdminRecord[]`, whose display
         // field is `name` (lib/clients/workspaces-client.ts:45) — so `w.name` is
         // the operand that actually runs here, and `w.id` is the tail for a
@@ -461,6 +530,10 @@ function BudgetDialog({
         // green.
         .map((w) => ({ id: w.id, label: w.displayName || w.name || w.id }))
         .filter((w) => !!w.id);
+      // #4348 review, blocker 1 — the SECOND refusal encoding. A 200 that says
+      // `degraded:true` over an empty list, or that reports rows excluded, has
+      // not established an absence; see `inventoryNotEstablished`.
+      return { workspaces, notEstablished: inventoryNotEstablished(body, workspaces.length) };
     },
     // Editing an existing budget cannot change its scope id, so do not spend a
     // round-trip resolving a list the dialog will render disabled.
@@ -529,6 +602,25 @@ function BudgetDialog({
         gate: reg?.configured === false ? (reg?.gate?.error || 'The Foundry agent registry is not configured.') : null,
       };
     },
+    // #4348 review, nit 4 — THE PREFETCH IS DELIBERATE, and the narrowing was
+    // MEASURED AND REVERTED. `enabled: !row && scope === 'agent'` looks strictly
+    // better (it saves a Foundry Agent Service REST call plus the red-team and
+    // SLO reads on the `workspace` scope this dialog opens in), but the Agent
+    // Dropdown is `disabled={optionsLoading}` and `optionsLoading` IS
+    // `agentQ.isLoading` on this scope (see `optionsLoading` below and the
+    // Dropdown's `disabled` prop) — so deferring the read to the moment the
+    // operator picks `agent` makes the picker click-dead for the whole Foundry
+    // round-trip, with the LEDGER agents already in hand behind it. That is the
+    // #3632/#3528 click-dead-picker shape this file's Dropdown comment below
+    // exists to prevent.
+    //
+    // Measured, not argued — I applied the narrowing and re-ran this spec:
+    // "a failed AGENT-REGISTRY read keeps the ledger agents pickable" and the
+    // new dedup arm both went RED ("Unable to find role=option and name
+    // 'SQL helper'"), 2 failed / 7 passed, rc=1; reverting restored 9/9. The
+    // read is prefetched so the list is populated before the scope can be
+    // switched to it. If the extra Foundry call is ever worth removing, the
+    // move is to make the Dropdown usable while it loads, not to defer it.
     enabled: !row,
   });
 
@@ -545,13 +637,26 @@ function BudgetDialog({
     return [...byId.values()];
   })();
 
-  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data ?? []) : agentOptions;
+  const options: ScopeOption[] = scope === 'workspace' ? (wsQ.data?.workspaces ?? []) : agentOptions;
   const optionsLoading = scope === 'workspace' ? wsQ.isLoading : agentQ.isLoading;
   const optionsError = scope === 'workspace'
     ? (wsQ.isError ? ((wsQ.error as Error)?.message || 'Could not list workspaces.') : null)
     : (agentQ.isError ? ((agentQ.error as Error)?.message || 'Could not list agents.') : null);
-  /** Non-blocking: the registry is gated, so the list is ledger-only. Not an error. */
-  const registryGate = scope === 'agent' && !agentQ.isError ? (agentQ.data?.gate ?? null) : null;
+  /**
+   * WHAT THE LIST ITSELF SAID ABOUT ITS OWN COMPLETENESS — non-blocking, and
+   * symmetric across the two scopes. For `agent` it is the Foundry registry gate
+   * (the list is ledger-only, which is not an error). For `workspace` it is the
+   * 200-but-self-degraded case `inventoryNotEstablished` decodes: a tid-less
+   * refusal, or an inventory the route says it trimmed.
+   *
+   * #4348 review, blocker 1 — the workspace half of this did not exist, which is
+   * why a refusal rendered as "No workspace is available". The two queries are
+   * now the same shape, and the asymmetry that produced BOTH rounds of this
+   * defect is gone.
+   */
+  const scopeNotice: string | null = scope === 'workspace'
+    ? (!wsQ.isError ? (wsQ.data?.notEstablished ?? null) : null)
+    : (!agentQ.isError ? (agentQ.data?.gate ?? null) : null);
   // The honest fallback, exactly as EntraGroupPicker documents it: a picker that
   // cannot populate must not become a dead end (auto-bind-by-default forbids
   // "no items found" + a disabled control).
@@ -592,11 +697,12 @@ function BudgetDialog({
    * that has no agents.
    *
    * Order is by what the operator must know first — a real failure, then a
-   * gate, then their own choice to type, then a genuine emptiness — and the
-   * "no agents exist" sentence is now reachable ONLY when nothing failed and
-   * nothing is gated, which is the only state that establishes it. The
-   * instruction suffix follows whichever CONTROL is actually on screen, so it
-   * never tells the operator to type while a Dropdown is rendered.
+   * gate or an admitted-incomplete list, then their own choice to type, then a
+   * genuine emptiness — and BOTH absence sentences are now reachable ONLY when
+   * nothing failed and nothing is gated, which is the only state that
+   * establishes them. The instruction suffix follows whichever CONTROL is
+   * actually on screen, so it never tells the operator to type while a Dropdown
+   * is rendered.
    */
   const idHint: string = (() => {
     const noun = scope === 'workspace' ? 'workspace' : 'agent';
@@ -605,7 +711,7 @@ function BudgetDialog({
       ? `Enter the ${noun} id directly — ${exact}`
       : `The ${noun}s that did load are listed; pick "Enter an id…" for any other — ${exact}`;
     if (optionsError) return `${optionsError} ${howToProceed}`;
-    if (registryGate) return `${registryGate} ${howToProceed}`;
+    if (scopeNotice) return `${scopeNotice} ${howToProceed}`;
     if (typedIdMode) return `Entering the ${noun} id by hand — ${exact}`;
     if (listUnavailable) {
       const absence = noun === 'workspace'
