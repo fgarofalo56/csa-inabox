@@ -154,6 +154,47 @@
  * `deploy-validate` publishes it. judgeGuardProducer is now parameterised by the
  * clause and the producing script, and is applied to both.
  *
+ * ── ROUND 7: THE REFUSAL READ THE TEXT AND STOPPED AT THE TEXT ─────────────
+ * Round 6 closed the `env:` binding hole. A reviewer then found three more ways
+ * to disarm the SAME four-line refusal, each a single-line edit of the real
+ * workflow, each MEASURED green: this suite 39 pass / 0 fail RC=0, the sibling
+ * estate-preflight 78/78 RC=0, and nine `scripts/ci/check-*` workflow guards
+ * RC=0. Byte deltas +44 / +28 / **+0**.
+ *
+ *   E1  Conjoin the condition with `[ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]`,
+ *       a name nothing anywhere binds. It is the empty string on every run, so
+ *       the AND is false on every run and the refusal never fires. Round 6
+ *       permitted this ON PURPOSE, reasoning that requiring every name to be
+ *       bound "would forbid `[ "$ESTATE_PAUSED" = true ] && [ "$X" ]`". It
+ *       would not — requiring every name to be a KEY OF THE STEP'S `env:` still
+ *       permits that conjunction whenever `X` is a real env key. Round 6's own
+ *       justification for the weak form was the thing that was wrong.
+ *   E3  Insert `ESTATE_PAUSED=""` immediately above the branch. The `env:`
+ *       binding survives untouched, so round 6's chain check is satisfied; the
+ *       VALUE does not survive.
+ *   E4  Move the four-line refusal BELOW `bash .github/scripts/fiab-teardown.sh`.
+ *       **A pure reorder — zero bytes changed.** It still refuses, it still
+ *       exits 1, the log is byte-identical; the estate is already gone when it
+ *       does. The same "a move into another position" class this repo has been
+ *       burned by before, and the mirror image of round 4's mutant A ("torn down
+ *       with a red note printed above the teardown") with the order inverted.
+ *
+ * E1 and E3 are still assertions about the TEXT. Only E4's fix asserts the
+ * OUTCOME — that the refusal is REACHED before control reaches anything
+ * destructive — and the destructive set is derived from the SHAPE of the call
+ * (a `.sh` handed to a shell, or a MUTATING_AZ write), never from the filename,
+ * so renaming the script does not move the refusal back above it.
+ *
+ * The round-7 nit, fixed in the same pass: `refusalBlock` anchored on
+ * `/^ *if .*ESTATE_PAUSED/` — a hardcoded variable name sitting directly above
+ * code that derives that same name out of the shell precisely so it is not
+ * hardcoded. It now anchors on the shape (`if` … `$VAR`), which is also
+ * fail-closed: a decoy conditional planted above the real refusal is what gets
+ * returned, and it has no exit in it. The redundant `/ESTATE_PAUSED/` substring
+ * check in the `refuse` branch went with it — "the word appears somewhere in the
+ * step" is implied by "the variable the refusal branches on is bound by `env:`
+ * to the verdict", and the second is derived.
+ *
  * ── SCOPE, AND WHAT IS STILL OUTSIDE IT ────────────────────────────────────
  * Stated because the round-1 header said "EVERY step after the declaration",
  * and that was only ever true of ONE job. Precisely what this file frames:
@@ -185,6 +226,10 @@
  *             in `deploy-validate` — in an `if:` or an `env:` — and the binding
  *             the Teardown refusal's shell variable actually arrives through
  *             (judgeVerdictReferences, and the refuse branch of judge) — round 6.
+ *   IN FRAME  whether the refusal is REACHED — every name its condition reads is
+ *             a key of the step's `env:`, nothing above the branch reassigns the
+ *             verdict variable, and the block sits ABOVE the first destructive
+ *             handoff in the same run: body (destructiveHandoffAt) — round 7.
  *   OUT OF FRAME  whether the guard is CORRECT — that the ADX preflight really
  *             sets `estate_paused`, and that the register really says what the
  *             operator meant. That is estate-preflight.test.mjs's population,
@@ -354,8 +399,9 @@ function inertGuardProblem(kind, name, ifExpr, guard) {
 }
 
 /**
- * The body of the shell conditional that reads ESTATE_PAUSED, or null when
- * there is no such conditional (or it is never closed).
+ * The first shell conditional in a step body that branches on a shell VARIABLE,
+ * with the line indices it spans — or null when there is no such conditional
+ * (or it is never closed).
  *
  * ROUND 4, on a review finding. The `refuse` disposition checked only that the
  * body mentioned ESTATE_PAUSED and printed `::error::` — and `::error::` is an
@@ -366,12 +412,25 @@ function inertGuardProblem(kind, name, ifExpr, guard) {
  * refuses — so the exit has to be inside THIS block and not merely somewhere
  * in the step.
  *
+ * ROUND 7, on a review nit: the anchor used to be `/^ *if .*ESTATE_PAUSED/`, a
+ * hardcoded variable name sitting directly above code that derives that same
+ * name out of the shell precisely so it is not hardcoded. It now anchors on the
+ * SHAPE — the first `if` that reads any `$VAR` — and the caller decides whether
+ * the variable it found is the one carrying the verdict. Anchoring earlier is
+ * fail-CLOSED: a decoy `if [ "$X" ]` planted above the real refusal makes this
+ * return the decoy, which then has no `exit` in it and goes red.
+ *
+ * `start` and `end` are indices into `String(body).split('\n')`, so a caller can
+ * ask where the block sits RELATIVE to the destructive call — the E4 mutation
+ * (move the refusal below the teardown; +0 bytes, pure reorder) is invisible to
+ * anything that only reads the block's text.
+ *
  * @param {string} body
- * @returns {string|null}
+ * @returns {{text:string, start:number, end:number}|null}
  */
 export function refusalBlock(body) {
   const lines = String(body).split('\n');
-  const at = lines.findIndex((l) => /^\s*if\s.*ESTATE_PAUSED/.test(l));
+  const at = lines.findIndex((l) => /^\s*if\s.*\$\{?[A-Za-z_]/.test(l));
   if (at < 0) return null;
   let depth = 0;
   const out = [];
@@ -381,10 +440,45 @@ export function refusalBlock(body) {
     out.push(lines[i]);
     if (/^fi\b/.test(t)) {
       depth -= 1;
-      if (depth <= 0) return out.join('\n');
+      if (depth <= 0) return { text: out.join('\n'), start: at, end: i };
     }
   }
   return null;
+}
+
+/**
+ * The first line index of `lines` at or after `from`, outside `[skipFrom,
+ * skipTo]`, that hands control to something destructive — or -1.
+ *
+ * ROUND 7, on a review finding. The refusal checks all read the block's TEXT,
+ * so a reviewer moved the four-line refusal BELOW
+ * `bash .github/scripts/fiab-teardown.sh` — a PURE REORDER, +0 bytes, every
+ * assertion above still true — and measured this suite 39/39 RC=0, the sibling
+ * estate-preflight suite 78/78 RC=0 and nine `scripts/ci/check-*` guards RC=0,
+ * with a declared-paused sovereign estate destroyed and *then* refused over.
+ * Byte-identical logs; the same "a move into another position" class this repo
+ * has been burned by before. Position is the only thing that can catch it, and
+ * position is an assertion about the OUTCOME rather than one more property of
+ * the text.
+ *
+ * DERIVED from the shape of the call — a `.sh` handed to a shell, or an `az`
+ * that writes (MUTATING_AZ) — never from `fiab-teardown.sh`, so renaming the
+ * script does not silently move the refusal back above it.
+ *
+ * @param {string[]} lines
+ * @param {number} from
+ * @param {number} skipFrom
+ * @param {number} skipTo
+ * @returns {number}
+ */
+export function destructiveHandoffAt(lines, from, skipFrom, skipTo) {
+  for (let i = Math.max(0, from); i < lines.length; i += 1) {
+    if (i >= skipFrom && i <= skipTo) continue;
+    const l = lines[i];
+    if (/(?:^|[\s;&|(])(?:bash|sh|source|\.)\s+[^\s;&|]*\.sh\b/.test(l)) return i;
+    if (estateMutatingAz(l)) return i;
+  }
+  return -1;
 }
 
 /**
@@ -1118,10 +1212,17 @@ export function judge(steps) {
             'leaves the operator believing a sovereign estate was destroyed when it was not',
         );
       }
-      if (!/ESTATE_PAUSED/.test(step.body) || !/::error::/.test(step.body)) {
+      // ROUND 7, on a review nit. This used to also require the literal string
+      // `ESTATE_PAUSED` somewhere in the body — a hardcoded spelling of a
+      // variable the code below DERIVES out of the shell precisely so it is not
+      // hardcoded, and a weaker assertion than the derived one in every case:
+      // "the word appears somewhere in the step" is implied by "the variable the
+      // refusal branches on is bound by env: to the verdict". Only the annotation
+      // half is checked here now; the read is checked where it is derived.
+      if (!/::error::/.test(step.body)) {
         problems.push(
-          `step '${step.name}' must read the estate_paused verdict into its body and fail with an ::error:: ` +
-            'naming the action that authorises the destruction',
+          `step '${step.name}' must fail with an ::error:: naming the action that authorises the ` +
+            'destruction — a refusal with no annotation leaves the operator reading an exit code.',
         );
       }
       // …and the refusal has to REFUSE. `::error::` is an annotation; it does
@@ -1129,10 +1230,10 @@ export function judge(steps) {
       const refusal = refusalBlock(step.body);
       if (!refusal) {
         problems.push(
-          `step '${step.name}' has no closed shell conditional on ESTATE_PAUSED, so it is not established ` +
+          `step '${step.name}' has no closed shell conditional branching on a variable, so it is not established ` +
             'that the refusal refuses at all — only that the words appear somewhere in the step.',
         );
-      } else if (!/\bexit\s+[1-9]/.test(refusal)) {
+      } else if (!/\bexit\s+[1-9]/.test(refusal.text)) {
         problems.push(
           `step '${step.name}' PRINTS its refusal and then carries on: the ESTATE_PAUSED branch of its run: ` +
             'contains no non-zero exit, and ::error:: is an annotation rather than a failure. A declared-paused ' +
@@ -1147,11 +1248,30 @@ export function judge(steps) {
       // variable the conditional actually tests is extracted from the refusal
       // itself and traced back through `env:` to the verdict — a spelling-free
       // chain, since a rename of the variable moves both ends together.
-      // At least ONE of the variables read has to carry the verdict: requiring
-      // all of them would forbid `[ "$ESTATE_PAUSED" = true ] && [ "$X" ]`.
+      //
+      // ROUND 7, on a review finding, three mutations of the REAL workflow that
+      // were all green here (39/39 RC=0), green in estate-preflight (78/78) and
+      // green across nine scripts/ci/check-* guards, each of which destroys a
+      // declared-paused sovereign estate:
+      //
+      //   E1  conjoin the condition with `[ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]`,
+      //       a name bound NOWHERE — +44 B, one line. `''  = "true"` is false, so
+      //       the AND is false on every run and the refusal never fires.
+      //   E3  insert `ESTATE_PAUSED=""` immediately above the branch — +28 B, one
+      //       line. The binding survives, the value does not.
+      //   E4  move the four-line refusal BELOW the teardown call — +0 B, a PURE
+      //       REORDER. It still refuses; the estate is already gone.
+      //
+      // Round 6 asserted only that at LEAST ONE variable read carries the
+      // verdict, reasoning that requiring all of them "would forbid
+      // `[ "$ESTATE_PAUSED" = true ] && [ "$X" ]`". The reviewer showed it would
+      // not: requiring every name read to be a KEY OF THE STEP'S `env:` still
+      // permits that conjunction when `X` is a real env key, and rejects only
+      // names bound to nothing — which is exactly E1.
       if (refusal) {
         const env = stepEnv(step.body);
-        const condition = refusal.split('\n')[0];
+        const lines = String(step.body).split('\n');
+        const condition = refusal.text.split('\n')[0];
         const read = [...new Set([...condition.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
         const bound = read.filter((v) => env.has(v) && verdictRefs(env.get(v)).length > 0);
         if (bound.length === 0) {
@@ -1161,6 +1281,45 @@ export function judge(steps) {
               'EMPTY STRING on every run, the refusal branch is never taken, and a declared-paused sovereign estate ' +
               `is torn down. Its env: is {${[...env.keys()].join(', ') || 'empty'}}.`,
           );
+        } else {
+          // E1. Every OTHER name the condition reads must come from the same
+          // env: map. A name bound nowhere is the empty string, and one false
+          // conjunct disarms the whole refusal.
+          const unbound = read.filter((v) => !env.has(v));
+          if (unbound.length > 0) {
+            problems.push(
+              `step '${step.name}' branches on ${unbound.map((v) => `\`$${v}\``).join(', ')}, which its env: does not ` +
+                'bind at all. An unbound name is the EMPTY STRING on every run, so a conjunct reading it is false on ' +
+                'every run and the refusal never fires — while the verdict binding beside it still reads as correct. ' +
+                `Its env: is {${[...env.keys()].join(', ') || 'empty'}}.`,
+            );
+          }
+          // E3. Nothing may overwrite the verdict between the `env:` binding and
+          // the branch. The binding is then intact and the value is not.
+          const runAt = lines.findIndex((l) => /^\s{8}run:/.test(l));
+          const assign = new RegExp(`^\\s*(?:export\\s+|declare\\s+|local\\s+|readonly\\s+)?(?:${bound.join('|')})=`);
+          const unset = new RegExp(`^\\s*(?:unset|read)\\s.*\\b(?:${bound.join('|')})\\b`);
+          for (let i = Math.max(0, runAt + 1); i < refusal.start; i += 1) {
+            if (assign.test(lines[i]) || unset.test(lines[i])) {
+              problems.push(
+                `step '${step.name}' REASSIGNS the verdict variable before it branches on it: \`${lines[i].trim()}\` ` +
+                  'runs above the refusal. The env: binding is untouched and every text check still passes, but the ' +
+                  'refusal reads the reassigned value and a declared-paused sovereign estate is torn down.',
+              );
+              break;
+            }
+          }
+          // E4. And the refusal has to come FIRST. A refusal below the
+          // destructive call still refuses — after the estate is gone.
+          const handoff = destructiveHandoffAt(lines, runAt + 1, refusal.start, refusal.end);
+          if (handoff >= 0 && handoff < refusal.start) {
+            problems.push(
+              `step '${step.name}' REFUSES too late: \`${lines[handoff].trim()}\` runs at line ${handoff - runAt} of ` +
+                `its run:, above the refusal at line ${refusal.start - runAt}. The step still exits non-zero, so every ` +
+                'text check passes and the log is byte-identical — but a declared-paused sovereign estate is destroyed ' +
+                'first and refused over afterwards.',
+            );
+          }
         }
       }
     }
@@ -1458,6 +1617,166 @@ test('MUTATION: binding the refusal to a step that does NOT compute the verdict 
   const problems = judge(mutated);
   assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
   assert.match(problems[0], /does not invoke ensure-adx-cluster-running\.mjs/);
+});
+
+/**
+ * ROUND 7. The reviewer's E1 / E3 / E4, applied to the real workflow as the
+ * single-line edits they were: measured against the round-6 suite at
+ * `a6f944e1c3f` through the LOOM_GCCH_WORKFLOW_PATH seam, all three were
+ * **RC=0, 39 pass / 0 fail**, with `estate-preflight` 78/78 RC=0 and nine
+ * `scripts/ci/check-*` guards RC=0. Byte deltas +44 / +28 / **+0**.
+ *
+ * Each is a bypass of a DIFFERENT kind: E1 adds a conjunct nothing binds, E3
+ * keeps the binding and destroys the value, E4 changes no bytes at all and only
+ * moves the block. The first two are still assertions about the text; only E4's
+ * is about the OUTCOME — that the refusal is reached before the estate is gone.
+ */
+test('MUTATION E1: a conjunct bound to NOTHING disarms the refusal', () => {
+  // `[ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]` is false on every run, because
+  // nothing anywhere sets it — so the AND is false on every run and a declared-
+  // paused sovereign estate is torn down. Round 6 permitted this deliberately,
+  // on the reasoning that requiring every name to be bound "would forbid
+  // `[ "$ESTATE_PAUSED" = true ] && [ "$X" ]`". It does not: `$X` is allowed
+  // whenever `X` is a real key of the step's env:, which is asserted below.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? {
+          ...s,
+          body: s.body.replace(
+            /(^\s*if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]); then$/m,
+            '$1 && [ "${LOOM_REFUSE_TEARDOWN:-}" = "true" ]; then',
+          ),
+        }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.match(teardown.body, /LOOM_REFUSE_TEARDOWN/, 'the mutation must have applied');
+  assert.equal(
+    stepEnv(teardown.body).get('ESTATE_PAUSED'),
+    '${{ steps.adx_preflight.outputs.estate_paused }}',
+    'the verdict binding must SURVIVE — that is what makes this a bypass rather than a break',
+  );
+  assert.match(refusalBlock(teardown.body).text, /exit 1/, 'the refusal must still contain its exit');
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /which its env: does not bind at all/);
+});
+
+test('MUTATION E1b: a second conjunct that IS bound stays green', () => {
+  // The negative control for E1, and the case round 6 was protecting. `$RG_NAME`
+  // is a real key of the same env: map, so conjoining on it is a legitimate
+  // condition and must NOT be rejected. Without this, the E1 fix would be a
+  // blanket ban on conjunctions rather than a ban on unbound names.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? {
+          ...s,
+          body: s.body.replace(
+            /(^\s*if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]); then$/m,
+            '$1 && [ -n "${RG_NAME:-}" ]; then',
+          ),
+        }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.match(teardown.body, /RG_NAME:-/, 'the mutation must have applied');
+  assert.ok(stepEnv(teardown.body).has('RG_NAME'), 'the decoy must be a REAL env key, or this proves nothing');
+  assert.deepEqual(judge(mutated), []);
+});
+
+test('MUTATION E3: overwriting the verdict above the branch is caught', () => {
+  // The binding survives, every text check survives, and `ESTATE_PAUSED` is the
+  // empty string by the time the branch reads it. One inserted line, +28 B.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? {
+          ...s,
+          body: s.body.replace(
+            /^(\s*)(if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]; then)$/m,
+            '$1ESTATE_PAUSED=""\n$1$2',
+          ),
+        }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.match(teardown.body, /^\s*ESTATE_PAUSED=""$/m, 'the mutation must have applied');
+  assert.equal(
+    stepEnv(teardown.body).get('ESTATE_PAUSED'),
+    '${{ steps.adx_preflight.outputs.estate_paused }}',
+    'the env: binding must SURVIVE — the value is destroyed in the shell, not the binding',
+  );
+  assert.match(refusalBlock(teardown.body).text, /exit 1/);
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /REASSIGNS the verdict variable before it branches on it/);
+});
+
+test('MUTATION E4: a refusal moved BELOW the teardown is caught — +0 bytes', () => {
+  // The one that costs nothing to write and nothing to review: a pure reorder,
+  // log byte-identical, every assertion in this file true. The estate is
+  // destroyed and THEN refused over. Only position can see it.
+  const teardownSrc = parseSteps(workflowText()).find((s) => s.name === 'Teardown');
+  const block = refusalBlock(teardownSrc.body);
+  assert.ok(block, 'the real Teardown must have a refusal block to move');
+  const lines = teardownSrc.body.split('\n');
+  const call = destructiveHandoffAt(lines, 0, block.start, block.end);
+  assert.ok(call > block.end, 'at head the refusal must precede the destructive call');
+  const reordered = [
+    ...lines.slice(0, block.start),
+    ...lines.slice(block.end + 1, call + 1),
+    ...lines.slice(block.start, block.end + 1),
+    ...lines.slice(call + 1),
+  ];
+  assert.equal(
+    reordered.join('\n').length,
+    teardownSrc.body.length,
+    'E4 must be a PURE REORDER — byte length identical, or it is not the mutation that was measured',
+  );
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown' ? { ...s, body: reordered.join('\n') } : s,
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /REFUSES too late/);
+});
+
+test('the destructive-handoff scan is keyed to the SHAPE of the call, not to fiab-teardown.sh', () => {
+  // If this were a filename list, renaming the script would move the refusal
+  // back above it silently. A `.sh` handed to a shell and an estate-writing `az`
+  // are both handoffs; an `az` read and a bare mention of a path are not.
+  assert.equal(destructiveHandoffAt(['bash .github/scripts/anything-else.sh'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  sh ./scripts/x.sh --yes'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['az group delete -n rg --yes'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['echo "see .github/scripts/fiab-teardown.sh"'], 0, -1, -1), -1);
+  assert.equal(destructiveHandoffAt(['az account show --query id -o tsv'], 0, -1, -1), -1);
+  assert.equal(destructiveHandoffAt(['bash x.sh'], 0, 0, 0), -1, 'lines inside the refusal are skipped');
+});
+
+test('refusalBlock anchors on the SHAPE of the conditional, not on the variable name', () => {
+  // Round-7 nit: the anchor used to hardcode `ESTATE_PAUSED` directly above code
+  // that derives that same name out of the shell so it is NOT hardcoded. A
+  // consistent rename of the shell variable must keep working…
+  const teardown = parseSteps(workflowText()).find((s) => s.name === 'Teardown');
+  const renamed = teardown.body.replace(/ESTATE_PAUSED/g, 'LOOM_ESTATE_VERDICT');
+  const block = refusalBlock(renamed);
+  assert.ok(block, 'a consistent rename must not blind the anchor');
+  assert.match(block.text, /exit 1/);
+  assert.deepEqual(
+    judge(parseSteps(workflowText()).map((s) => (s.name === 'Teardown' ? { ...s, body: renamed } : s))),
+    [],
+  );
+  // …and anchoring on the FIRST variable-reading conditional is fail-closed: a
+  // decoy planted above the real refusal is returned, and it has no exit in it.
+  const decoyed = teardown.body.replace(
+    /^(\s*)(if \[ "\$\{ESTATE_PAUSED:-\}" = "true" \]; then)$/m,
+    '$1if [ -n "${RG_NAME:-}" ]; then\n$1  echo "decoy"\n$1fi\n$1$2',
+  );
+  assert.notEqual(decoyed, teardown.body, 'the decoy must have been inserted');
+  const decoyProblems = judge(parseSteps(workflowText()).map((s) => (s.name === 'Teardown' ? { ...s, body: decoyed } : s)));
+  assert.ok(
+    decoyProblems.some((p) => /contains no non-zero exit/.test(p)),
+    `a decoy conditional above the refusal must go red, got: ${decoyProblems.join(' | ') || '(none)'}`,
+  );
 });
 
 test('MUTATION: deleting the deploy-validate job OUTPUT unbinds the chained bootstrap', () => {
