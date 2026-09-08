@@ -27776,7 +27776,7 @@
             "declaredSinkCount": 23,
             "sinks": [
               {
-                "id": "stdout:member:790",
+                "id": "stdout:member:862",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27786,77 +27786,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:793",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:799",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:802",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:803",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:806",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:853",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:855",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:860",
+                "id": "stdout:member:865",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27876,7 +27806,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:876",
+                "id": "stdout:member:874",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27886,7 +27816,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:881",
+                "id": "stdout:member:875",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27896,7 +27826,77 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:734",
+                "id": "stdout:member:878",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:925",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:927",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:932",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:943",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:948",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:953",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:806",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27906,7 +27906,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:735",
+                "id": "stderr:member:807",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27916,7 +27916,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:743",
+                "id": "stderr:member:815",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27926,7 +27926,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:757",
+                "id": "stderr:member:829",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27936,57 +27936,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:764",
-                "surface": "stderr",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:774",
-                "surface": "stderr",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:781",
-                "surface": "stderr",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:825",
-                "surface": "stderr",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:832",
-                "surface": "stderr",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stderr:member:838",
+                "id": "stderr:member:836",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -27997,6 +27947,56 @@
               },
               {
                 "id": "stderr:member:846",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:853",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:897",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:904",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:910",
+                "surface": "stderr",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stderr:member:918",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49233,9 +49233,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-07T21:18:35.176Z",
-      "commit": "d7729655fa0235c5f71e3cd3bfc9c1dd8215752e",
-      "inputsDigest": "77840daabc6c9441",
+      "generatedAt": "2026-09-08T00:26:57.836Z",
+      "commit": "3b3061b1647e539de7a3ffaf734214da75a5f06d",
+      "inputsDigest": "4fd0023968fc8d47",
       "filesScanned": 2094,
       "scanScopes": [
         {
