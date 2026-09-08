@@ -419,6 +419,46 @@ export function resolveFallbackAlertEmails(session: unknown): string[] {
   return [];
 }
 
+/**
+ * The fallback address, preferring a DEPLOYMENT-WIDE one over a personal inbox.
+ *
+ * #4354 review, should-fix 4. `resolveFallbackAlertEmails` alone means whoever
+ * opens a shared activator first silently becomes the alert recipient for it —
+ * acceptable at interactive install time, poor on an open-time repair. The
+ * platform already deploys a shared action group and wires its ARM id onto the
+ * console as `LOOM_ALERT_ACTION_GROUP_ID` (admin-plane bicep), and that group
+ * carries the deployment's own operations addresses. Those are preferred; the
+ * signed-in user's address is the LAST resort, not the first.
+ *
+ * No new env var, and therefore no `check-env-sync` / bicep prerequisite — this
+ * reads a value the deploy already sets, per `auto-bind-by-default.md` §5.
+ *
+ * A shared group that cannot be READ falls through to the personal address
+ * rather than binding nobody: "I could not read it" is not "it has no
+ * addresses" (R7), and the answer this function owes its caller is a
+ * deliverable address, not a verdict on the shared group.
+ */
+export async function resolvePlatformFallbackAlertEmails(session: unknown): Promise<string[]> {
+  const shared = String(process.env.LOOM_ALERT_ACTION_GROUP_ID || '').trim();
+  if (shared) {
+    try {
+      const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+      const read = await readActionGroupReceivers(shared);
+      const emails = Array.from(
+        new Set(
+          (read.byKind.emailReceivers || [])
+            .map((r: any) => String(r?.emailAddress || '').trim())
+            .filter((e: string) => isDeliverableEmail(e)),
+        ),
+      );
+      if (emails.length > 0) return emails;
+    } catch {
+      // Fall through — see the R7 note above.
+    }
+  }
+  return resolveFallbackAlertEmails(session);
+}
+
 // ── verification (the control) ──────────────────────────────────────────────
 
 /**

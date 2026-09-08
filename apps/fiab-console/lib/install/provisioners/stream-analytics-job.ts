@@ -26,6 +26,7 @@ import {
   createOrUpdateJob,
   getJob,
   readAsaConfig,
+  asaDefaultLocation,
   AsaNotConfiguredError,
   AsaJobNotFoundError,
 } from '@/lib/azure/stream-analytics-client';
@@ -74,9 +75,22 @@ export function asaJobNameFor(displayName: string): { name: string; sanitized: b
   return { name: `${s.name}-job`, sanitized: true };
 }
 
-/** The region the streaming job is created in. Mirrors `eventstream-standup.ts`. */
+/**
+ * The region the streaming job is created in.
+ *
+ * `LOOM_ASA_LOCATION` (explicit) → `LOOM_LOCATION` (the deployment region the
+ * admin-plane bicep wires onto the console app in BOTH clouds) → the client's
+ * own Gov-aware default.
+ *
+ * #4354 review, should-fix 3: this used to end in a bare `'eastus'`, mirroring
+ * `eventstream-standup.ts`. `eastus` does not exist in the Azure Government
+ * boundary, so anywhere `LOOM_LOCATION` is absent — a locally run provisioner,
+ * a container brought up outside the bicep module, a partial env — the PUT
+ * carried a region the Gov ARM plane cannot resolve. `asaDefaultLocation()` is
+ * the resolver the rest of the ASA client already uses (`cloud-parity.md`).
+ */
 function asaLocation(): string {
-  return process.env.LOOM_ASA_LOCATION || process.env.LOOM_LOCATION || 'eastus';
+  return process.env.LOOM_ASA_LOCATION || process.env.LOOM_LOCATION || asaDefaultLocation();
 }
 
 const PERSIST_ATTEMPTS = 3;
@@ -98,7 +112,7 @@ type PersistOutcome =
  */
 async function persistJobRef(
   input: ProvisionerInput,
-  refs: { jobName: string; asaJobId: string; sanitized: boolean; provisionedAt: string },
+  refs: { jobName: string; asaJobId: string; sanitized: boolean; provisionedAt: string; location: string },
   steps: string[],
 ): Promise<PersistOutcome> {
   let reason: 'item-not-found' | 'write-failed' = 'write-failed';
@@ -122,6 +136,10 @@ async function persistJobRef(
             // Recorded so a reader can tell a sanitized name from an exact one
             // without re-running the sanitizer.
             jobNameSanitized: refs.sanitized,
+            // The region the job is actually in, so the editor can show WHERE it
+            // landed instead of re-deriving a default that may not match.
+            // ABSENT rather than guessed when ARM did not report one.
+            ...(refs.location ? { jobLocation: refs.location } : {}),
             provisionedAt: refs.provisionedAt,
           },
           updatedAt: new Date().toISOString(),
@@ -190,10 +208,10 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
     // A 404 is the only outcome that authorises the PUT. Any other failure
     // (403, throttle, DNS) falls to the outer catch and is classified there —
     // it is NOT treated as absence, because absence was not established (R7).
-    let existing: { id: string; name: string } | null = null;
+    let existing: { id: string; name: string; location: string } | null = null;
     try {
       const found = await getJob(jobName);
-      existing = { id: found.id || '', name: found.name || jobName };
+      existing = { id: found.id || '', name: found.name || jobName, location: (found as any)?.location || '' };
     } catch (e) {
       if (!(e instanceof AsaJobNotFoundError)) throw e;
     }
@@ -209,9 +227,14 @@ export const streamAnalyticsJobProvisioner: Provisioner = async (input): Promise
             '.',
     );
     const provisionedAt = new Date().toISOString();
+    // Where the job ACTUALLY is, not where we would have put it. On the create
+    // path that is the region we sent; on the exists path it is whatever ARM
+    // reported, and if ARM reported none we record none rather than writing the
+    // default as though it had been observed (R7).
+    const recordedLocation = existing ? existing.location : location;
     const persisted = await persistJobRef(
       input,
-      { jobName, asaJobId: job.id || '', sanitized, provisionedAt },
+      { jobName, asaJobId: job.id || '', sanitized, provisionedAt, location: recordedLocation },
       steps,
     );
     if (!persisted.ok) {

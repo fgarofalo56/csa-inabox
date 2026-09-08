@@ -393,6 +393,56 @@ describe('#4097 the fallback address resolves without any configuration', () => 
   });
 });
 
+describe('#4354 review should-fix 4 — the DEPLOYMENT address beats a personal inbox', () => {
+  const savedAg = process.env.LOOM_ALERT_ACTION_GROUP_ID;
+  afterEach(() => {
+    if (savedAg === undefined) delete process.env.LOOM_ALERT_ACTION_GROUP_ID;
+    else process.env.LOOM_ALERT_ACTION_GROUP_ID = savedAg;
+    readActionGroupReceivers.mockResolvedValue(emptyRead() as any);
+  });
+
+  it('uses the shared action group\'s email receivers when the deploy wired one', async () => {
+    // The residual issue: an open-time repair binds whoever opened the rules
+    // list first as the alert recipient for a SHARED group. The platform's own
+    // action group is already deployed by bicep and its ARM id is already on the
+    // console as LOOM_ALERT_ACTION_GROUP_ID, so no new env var is introduced.
+    process.env.LOOM_ALERT_ACTION_GROUP_ID = '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/loom-default-alerts';
+    const byKind: any = {};
+    for (const k of ACTION_GROUP_RECEIVER_KINDS) byKind[k] = [];
+    byKind.emailReceivers = [
+      { name: 'e0', emailAddress: 'ops@contoso.com' },
+      { name: 'e1', emailAddress: 'ops@contoso.com' },     // de-duplicated
+      { name: 'e2', emailAddress: 'noreply@example.com' }, // reserved domain, dropped
+    ];
+    readActionGroupReceivers.mockResolvedValue({ exists: true, id: 'AG', byKind, total: 3 } as any);
+    const { resolvePlatformFallbackAlertEmails } = await import('../_activator-receivers');
+    expect(await resolvePlatformFallbackAlertEmails(session({ oid: 'o', upn: 'opener@contoso.com' })))
+      .toEqual(['ops@contoso.com']);
+  });
+
+  it('falls back to the signed-in user when no shared group is wired', async () => {
+    delete process.env.LOOM_ALERT_ACTION_GROUP_ID;
+    const { resolvePlatformFallbackAlertEmails } = await import('../_activator-receivers');
+    expect(await resolvePlatformFallbackAlertEmails(session({ oid: 'o', upn: 'opener@contoso.com' })))
+      .toEqual(['opener@contoso.com']);
+  });
+
+  it('falls back to the signed-in user when the shared group is UNREADABLE or carries no address', async () => {
+    // "I could not read it" is not "it has no addresses" (R7) — and the answer
+    // this function owes its caller is a deliverable address, not a verdict on
+    // the shared group. Binding nobody would be the worse outcome.
+    process.env.LOOM_ALERT_ACTION_GROUP_ID = '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/loom-default-alerts';
+    readActionGroupReceivers.mockRejectedValue(Object.assign(new Error('AuthorizationFailed'), { status: 403 }));
+    const { resolvePlatformFallbackAlertEmails } = await import('../_activator-receivers');
+    expect(await resolvePlatformFallbackAlertEmails(session({ oid: 'o', upn: 'opener@contoso.com' })))
+      .toEqual(['opener@contoso.com']);
+
+    readActionGroupReceivers.mockResolvedValue(emptyRead(true) as any);
+    expect(await resolvePlatformFallbackAlertEmails(session({ oid: 'o', upn: 'opener@contoso.com' })))
+      .toEqual(['opener@contoso.com']);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // #4113 — the receivers that were being DELETED, and the ones nobody counted
 // ═══════════════════════════════════════════════════════════════════════════
@@ -461,6 +511,33 @@ describe('#4113 bindActionGroup — no rule is left wired to nobody in silence',
     expect(res.outcome).toBe('created');
     expect(upsertActionGroup).toHaveBeenCalledTimes(1);
     expect(res.actionGroupId).toBeTruthy();
+  });
+
+  it('the derived short name is passed as shortNameIfNew, never as an explicit rename', async () => {
+    // #4354 review, blocker 1 — the caller half. The unit test above proves
+    // `shortNameIfNew` loses to an existing group; this proves the bind/repair
+    // paths are the callers that use it. If either site regressed to
+    // `shortName`, a repair would rename the group it repaired.
+    readActionGroupReceivers.mockResolvedValue({ ...emptyRead(true), id: 'AG-ID' } as any);
+    const { bindActionGroup } = await import('@/lib/azure/activator-monitor');
+    await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert', existingActionGroupId: 'AG-ID',
+      emails: [], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [],
+      fallbackEmails: ['operator@contoso.com'],
+    });
+    const repairCall = upsertActionGroup.mock.calls.at(-1)?.[0] as any;
+    expect(repairCall.shortNameIfNew).toBe('HighRollerAl');
+    expect(repairCall.shortName).toBeUndefined();
+
+    // …and the create path (no existing group, receivers derived) too.
+    upsertActionGroup.mockClear();
+    await bindActionGroup({
+      activatorDisplayName: 'High-Roller Alert',
+      emails: ['a@b.com'], smsReceivers: [], webhookReceivers: [], logicAppReceivers: [], fallbackEmails: [],
+    });
+    const createCall = upsertActionGroup.mock.calls.at(-1)?.[0] as any;
+    expect(createCall.shortNameIfNew).toBe('HighRollerAl');
+    expect(createCall.shortName).toBeUndefined();
   });
 
   it('an UNREADABLE group is reported as unknown — never as attached, never as empty', async () => {
@@ -682,10 +759,52 @@ describe('#4113 upsertActionGroup is READ-MODIFY-WRITE (the destructive defect)'
     expect(body.properties.smsReceivers).toEqual([]);          // supplied empty => cleared
   });
 
-  it('does not rename an existing group short name', async () => {
+  it('a DERIVED short name (shortNameIfNew) does not rename an existing group', async () => {
+    // The activator bind/repair paths derive a short name from the activator's
+    // display name. Nobody chose it, so it must not rename `loom-default-alerts`
+    // (or any operator-named group a repair touches) to whichever activator
+    // reconciled last.
     const { mod, armPut } = await withArm({ id: '/x', properties: { groupShortName: 'keepme' } });
-    await mod.upsertActionGroup({ name: 'ag', shortName: 'something-else', emails: ['a@b.com'] });
+    await mod.upsertActionGroup({ name: 'ag', shortNameIfNew: 'something-else', emails: ['a@b.com'] });
     expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('keepme');
+  });
+
+  it('an EXPLICIT short name DOES rename an existing group', async () => {
+    // #4354 review, blocker 1. `existing.shortName || input.shortName` made the
+    // health-check editor's "Short name (≤12, shown in alerts)" field unable to
+    // ever apply: `ActionGroupInput.shortName` was required, so for ANY existing
+    // group the left side won. The route still persisted the submitted value to
+    // Cosmos and returned ok:true, so the form reported success for a change ARM
+    // never made — no-vaporware + R7 in one. An explicit value is an
+    // instruction, exactly like an explicitly-empty receiver array.
+    const { mod, armPut } = await withArm({ id: '/x', properties: { groupShortName: 'OLDSHORT' } });
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'NEWSHORT', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('NEWSHORT');
+  });
+
+  it('an explicit short name beats a derived one when both are supplied', async () => {
+    const { mod, armPut } = await withArm({ id: '/x', properties: { groupShortName: 'OLDSHORT' } });
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'CHOSEN', shortNameIfNew: 'derived', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('CHOSEN');
+  });
+
+  it('a derived short name IS used when the group does not exist yet', async () => {
+    const { mod, armPut } = await withArm(null);
+    await mod.upsertActionGroup({ name: 'ag', shortNameIfNew: 'derivedname', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('derivedname');
+  });
+
+  it('never writes an EMPTY groupShortName — ARM requires 1-12 chars', async () => {
+    // A whitespace-only field is not an instruction; it falls through.
+    const { mod, armPut } = await withArm(null);
+    await mod.upsertActionGroup({ name: 'ag', shortName: '  ', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('loom');
+  });
+
+  it('truncates an over-long explicit short name to ARM\'s 12 chars', async () => {
+    const { mod, armPut } = await withArm(null);
+    await mod.upsertActionGroup({ name: 'ag', shortName: 'waytoolongshortname', emails: ['a@b.com'] });
+    expect((armPut.mock.calls.at(-1)?.[1] as any).properties.groupShortName).toBe('waytoolongsh');
   });
 
   it('creates cleanly when the group does not exist (a 404 read is not an error)', async () => {

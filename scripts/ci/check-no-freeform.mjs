@@ -2095,9 +2095,17 @@ export const TOUCH_EXEMPT = new Map([
   // — once that PR removes the file's baseline key the boy-scout rule can no
   // longer fire on it, so this becomes dead code rather than a lingering
   // amnesty.
+  //
+  // #4354 review, should-fix 5: self-expiry is not enough on its own, because
+  // the expiry CONDITION is an open PR. Measured 2026-09-07,
+  // `gh pr view 4344 --json state,mergeable` answers
+  // `{"state":"OPEN","mergeable":"CONFLICTING"}`, so the date is unknown and an
+  // amnesty conditioned on it can outlive its justification in silence — the
+  // exact failure this map exists to prevent. Tracked with the deletion as
+  // acceptance in #4388, in the same shape as the #3626 / #4201 entries.
   [
     'apps/fiab-console/lib/editors/stream-analytics-editor.tsx',
-    '#3573 changed only the error MessageBar + the new 404 Fix-it here; the 4 dialog sites are cleared by open PR #4344 (4 -> 0, baseline key deleted) — delete this entry when it merges',
+    '#3573 changed only the error MessageBar + the new 404 Fix-it here; the 4 dialog sites are cleared by open PR #4344 (4 -> 0, baseline key deleted) — delete this entry when it merges, tracked in #4388',
   ],
 ]);
 

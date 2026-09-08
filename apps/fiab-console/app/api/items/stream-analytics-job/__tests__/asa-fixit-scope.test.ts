@@ -134,4 +134,35 @@ describe('#4354 the 404 Fix-it is scoped to callers who could actually run it', 
     // R7 — nothing is asserted about env vars the code did not look at.
     expect(JSON.stringify(j)).not.toContain('LOOM_ASA_RG');
   });
+
+  it('a write probe that THREW is reported as undetermined, never as a denial', async () => {
+    // #4354 review, should-fix 2. `loadOwnedItem` returns null for
+    // not-found/not-yours and THROWS on an infra failure — a Cosmos 429 burst
+    // right after the read at the top of the handler succeeded is exactly this
+    // shape. A `.catch(() => null)` folded the throw into the denial and then
+    // told the item's OWNER they lack write access: an R7 assertion of a cause
+    // the code never established.
+    //
+    // Fail CLOSED on the button (that part was right), and say only what is
+    // known.
+    let call = 0;
+    loadOwnedItem.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) return ITEM;                       // the read that opens the editor
+      throw Object.assign(new Error('RequestRateTooLarge'), { code: 429 });  // the write probe
+    });
+
+    const r = (await GET({} as any, params)) as any;
+    const j = await r.json();
+
+    expect(r.status).toBe(404);
+    expect(j.code).toBe('asa-job-not-provisioned');
+    expect(j.expectedJobName).toBe('Rides-Telemetry');
+    // Withheld, because it could not be established that the caller may write.
+    expect(j.fixIt).toBeUndefined();
+    expect(j.writeScope).toBe('unknown');
+    // The false claim this replaces.
+    expect(String(j.error)).not.toContain('ask an owner or member');
+    expect(String(j.error)).toContain('could NOT be determined');
+  });
 });

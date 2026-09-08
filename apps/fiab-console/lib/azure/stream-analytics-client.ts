@@ -653,8 +653,21 @@ export async function deleteOutput(jobName: string, outputName: string): Promise
 // Contributor") grants both. No mocks — real ARM, real diagnostics.
 // ---------------------------------------------------------------------------
 
-function defaultLocation(): string {
+/**
+ * The region ASA work lands in when the caller did not name one.
+ *
+ * Exported (#4354 review, should-fix 3) so no second copy of this default can
+ * drift: the literal it replaces was `'eastus'`, which does not exist in the
+ * Azure Government boundary, and a Commercial-shaped default in a Gov code path
+ * is a `cloud-parity.md` defect whether or not a bicep-deployed estate happens
+ * to make it unreachable by setting `LOOM_LOCATION`.
+ */
+export function asaDefaultLocation(): string {
   return process.env.LOOM_ASA_LOCATION || (isGovCloud() ? 'usgovvirginia' : 'eastus2');
+}
+
+function defaultLocation(): string {
+  return asaDefaultLocation();
 }
 
 /** Poll an Azure async operation (LRO) until terminal; return the final JSON. */

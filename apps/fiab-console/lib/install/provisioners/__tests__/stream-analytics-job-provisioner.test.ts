@@ -11,13 +11,20 @@
  * Only the ARM/Cosmos boundary is mocked — the provisioner's own naming and
  * gating logic runs for real.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const createOrUpdateJob = vi.fn(async (s: any) => ({
   id: `/subscriptions/sub1/resourceGroups/rgAsa/providers/Microsoft.StreamAnalytics/streamingjobs/${s.name}`,
   name: s.name,
 }));
 const readAsaConfig = vi.fn(() => ({ subscriptionId: 'sub1', resourceGroup: 'rgAsa' }));
+/**
+ * The client's Gov-aware region resolver. Stubbed to the Gov answer so the
+ * fall-through can be asserted without reaching `isGovCloud()` (#4354 review,
+ * should-fix 3 — the literal it replaced was `'eastus'`, a region that does not
+ * exist in the Azure Government boundary).
+ */
+const asaDefaultLocation = vi.fn(() => 'usgovvirginia');
 /**
  * The 404 the client really throws. Built by importing the class OUT of the
  * mocked module rather than declaring one here: the provisioner's read-before-
@@ -59,6 +66,7 @@ vi.mock('@/lib/azure/stream-analytics-client', () => {
     readAsaConfig: () => readAsaConfig(),
     createOrUpdateJob: (s: any) => createOrUpdateJob(s),
     getJob: (n: string) => getJob(n),
+    asaDefaultLocation: () => asaDefaultLocation(),
   };
 });
 
@@ -215,5 +223,60 @@ describe('#4354 review finding 7 — the provisioner READS before it writes', ()
     expect(replace).not.toHaveBeenCalled();
     expect(res.status).not.toBe('created');
     expect(res.status).not.toBe('exists');
+  });
+});
+
+describe('#4354 review should-fix 3 — the region default is Gov-aware, not a Commercial literal', () => {
+  const saved = { asa: process.env.LOOM_ASA_LOCATION, loc: process.env.LOOM_LOCATION };
+  const setEnv = (asa?: string, loc?: string) => {
+    if (asa === undefined) delete process.env.LOOM_ASA_LOCATION; else process.env.LOOM_ASA_LOCATION = asa;
+    if (loc === undefined) delete process.env.LOOM_LOCATION; else process.env.LOOM_LOCATION = loc;
+  };
+  afterEach(() => setEnv(saved.asa, saved.loc));
+
+  it('falls through to the CLIENT resolver when neither env var is set — never a bare \'eastus\'', async () => {
+    // The defect: `... || 'eastus'`. `eastus` does not exist in the Azure
+    // Government boundary, so wherever LOOM_LOCATION is absent (a locally run
+    // provisioner, a container brought up outside the bicep module, a partial
+    // env) the PUT carried a region Gov ARM cannot resolve. Reverting the
+    // literal turns this red: the stub answers 'usgovvirginia'.
+    setEnv(undefined, undefined);
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect(asaDefaultLocation).toHaveBeenCalled();
+    expect(createOrUpdateJob.mock.calls[0][0]).toMatchObject({ location: 'usgovvirginia' });
+  });
+
+  it('LOOM_ASA_LOCATION wins, then LOOM_LOCATION, then the resolver', async () => {
+    setEnv('westeurope', 'northeurope');
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect(createOrUpdateJob.mock.calls[0][0]).toMatchObject({ location: 'westeurope' });
+
+    vi.clearAllMocks();
+    createOrUpdateJob.mockImplementation(async (s: any) => ({ id: `/x/${s.name}`, name: s.name }));
+    getJob.mockImplementation(async (name: string) => { throw await asaNotFound(name); });
+    read.mockResolvedValue({ resource: { id: 'item-1', workspaceId: 'ws-1', state: {} } } as any);
+    setEnv(undefined, 'northeurope');
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect(createOrUpdateJob.mock.calls[0][0]).toMatchObject({ location: 'northeurope' });
+  });
+
+  it('records the job\'s ACTUAL location on the item, and records NONE when ARM reported none', async () => {
+    setEnv(undefined, 'northeurope');
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect((replace.mock.calls.at(-1)?.[0] as any).state.jobLocation).toBe('northeurope');
+
+    // An EXISTING job: the recorded region is what ARM said, not the default we
+    // would have used. ARM silent => the field is absent, never guessed (R7).
+    vi.clearAllMocks();
+    read.mockResolvedValue({ resource: { id: 'item-1', workspaceId: 'ws-1', state: {} } } as any);
+    getJob.mockResolvedValue({ id: '/x/rides', name: 'rides' } as any);
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect((replace.mock.calls.at(-1)?.[0] as any).state).not.toHaveProperty('jobLocation');
+
+    vi.clearAllMocks();
+    read.mockResolvedValue({ resource: { id: 'item-1', workspaceId: 'ws-1', state: {} } } as any);
+    getJob.mockResolvedValue({ id: '/x/rides', name: 'rides', location: 'usgovarizona' } as any);
+    await streamAnalyticsJobProvisioner(input('rides'));
+    expect((replace.mock.calls.at(-1)?.[0] as any).state.jobLocation).toBe('usgovarizona');
   });
 });

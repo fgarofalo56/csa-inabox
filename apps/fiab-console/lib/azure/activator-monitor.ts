@@ -500,7 +500,12 @@ export async function bindActionGroup(input: ActionGroupBindInput): Promise<Acti
   const { emails, smsReceivers, webhookReceivers, logicAppReceivers } = input;
   const derived = emails.length + smsReceivers.length + webhookReceivers.length + logicAppReceivers.length;
   const groupName = safeRuleName(input.activatorDisplayName, 'ag');
-  const shortName = (input.activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom';
+  // DERIVED from the activator's display name, never chosen by anyone, so it is
+  // passed as `shortNameIfNew`: a create-only default that loses to whatever an
+  // existing group already carries. Sending it as `shortName` would rename
+  // `loom-default-alerts` — and any operator-named group a repair touches — to
+  // whichever activator reconciled last (#4354 review, blocker 1).
+  const shortNameIfNew = (input.activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom';
   const target = input.existingActionGroupId || groupName;
 
   let read: Awaited<ReturnType<typeof readActionGroupReceivers>>;
@@ -516,7 +521,7 @@ export async function bindActionGroup(input: ActionGroupBindInput): Promise<Acti
     if (derived > 0) {
       const upserted = await upsertActionGroup({
         name: groupName,
-        shortName,
+        shortNameIfNew,
         emails,
         smsReceivers,
         webhookReceivers,
@@ -609,7 +614,7 @@ export async function bindActionGroup(input: ActionGroupBindInput): Promise<Acti
 
   const actionGroupId = await upsertActionGroup({
     name: input.existingActionGroupId || groupName,
-    shortName,
+    shortNameIfNew,
     emails: bindEmails,
     smsReceivers: useFallback ? [] : smsReceivers,
     webhookReceivers: useFallback ? [] : webhookReceivers,

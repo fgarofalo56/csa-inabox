@@ -1406,8 +1406,28 @@ export interface ActionGroupInput {
   /** Resource name e.g. 'loom-activator-ag', OR a full action-group ARM id (the
    *  repair path, which must write back to the group it read). */
   name: string;
-  /** 1-12 char short name shown in notifications. */
-  shortName: string;
+  /**
+   * 1-12 char short name shown in notifications, supplied EXPLICITLY by a
+   * caller that has one to say — the health-check editor's "Short name" field
+   * and `/api/monitor/action-groups`. An explicit value is an INSTRUCTION and
+   * is applied even to a group that already exists, exactly like the receiver
+   * arrays below: absent means "leave it alone", present means "make it this".
+   *
+   * Omit it (and pass {@link ActionGroupInput.shortNameIfNew} instead) when the
+   * value is DERIVED rather than chosen — see below.
+   */
+  shortName?: string;
+  /**
+   * Create-only fallback short name. Used when the group does not already carry
+   * one, and ignored otherwise.
+   *
+   * This is what the activator bind/repair paths pass: they derive a short name
+   * from the activator's display name, so it is a default, never a rename
+   * request. Sending it as `shortName` would rename `loom-default-alerts` (and
+   * every operator-named group a repair touches) to whatever activator happened
+   * to reconcile last.
+   */
+  shortNameIfNew?: string;
   /** Email receivers; each becomes an emailReceiver. */
   emails?: string[];
   /** SMS receivers (Teams/pager-style escalation). */
@@ -1437,6 +1457,30 @@ function actionGroupCoordinates(nameOrId: string): { sub: string; rg: string; na
 
 function actionGroupPath(c: { sub: string; rg: string; name: string }): string {
   return `/subscriptions/${c.sub}/resourceGroups/${c.rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(c.name)}?api-version=${ACTION_GROUPS_API}`;
+}
+
+/**
+ * `groupShortName` for the PUT body, in the same precedence order the receiver
+ * arrays use (#4354 review):
+ *
+ *   1. an EXPLICIT `shortName` — a caller that has one to say is instructing;
+ *   2. the short name the group already carries — so a derived-name caller
+ *      cannot rename a group somebody else named;
+ *   3. `shortNameIfNew` — the derived default, which only lands on create;
+ *   4. `'loom'` — ARM requires 1-12 chars, so the field is never empty.
+ *
+ * Empty/whitespace at any level falls through to the next: ARM rejects an empty
+ * `groupShortName`, and `''` is not an instruction.
+ */
+function resolveGroupShortName(
+  input: Pick<ActionGroupInput, 'shortName' | 'shortNameIfNew'>,
+  existingShortName: string | undefined,
+): string {
+  for (const candidate of [input.shortName, existingShortName, input.shortNameIfNew]) {
+    const trimmed = String(candidate ?? '').trim();
+    if (trimmed) return trimmed.slice(0, 12);
+  }
+  return 'loom';
 }
 
 /**
@@ -1494,6 +1538,12 @@ export async function readActionGroupReceivers(nameOrId: string): Promise<Action
  *      explicitly empty array) is ALSO preserved. Passing `emails: []` still
  *      clears the email receivers — an explicit empty is an instruction; an
  *      absent field is not.
+ *   3. `groupShortName` obeys the SAME rule (#4354 review). An explicit
+ *      `shortName` is an instruction and RENAMES the group — the health-check
+ *      editor renders that field, so discarding it would be a form that reports
+ *      success for a change ARM never made. A caller with only a DERIVED name
+ *      passes `shortNameIfNew`, which loses to whatever the group already
+ *      carries, so a bind/repair never renames somebody else's group.
  *
  * The read is allowed to 404 (the group is new) and NOTHING ELSE. A 403 or a
  * throttle must not degrade into "it had no receivers", because that reading
@@ -1550,9 +1600,14 @@ export async function upsertActionGroup(input: ActionGroupInput): Promise<string
   const body = {
     location: 'Global',
     properties: {
-      // An EXISTING group's short name is its own — renaming it is a mutation
-      // nobody asked for, and it is what notifications actually display.
-      groupShortName: existing.shortName || input.shortName.slice(0, 12),
+      // Same precedence as the receiver arrays: EXPLICIT beats existing, and a
+      // merely-derived name (`shortNameIfNew`) loses to whatever the group
+      // already carries. #4354 review — the previous form was
+      // `existing.shortName || input.shortName`, which made the health-check
+      // editor's "Short name" field unable to ever apply to an existing group
+      // while the route still persisted the submitted value to Cosmos and
+      // returned ok:true. ARM caps this at 12 chars.
+      groupShortName: resolveGroupShortName(input, existing.shortName),
       enabled: true,
       ...receivers,
     },

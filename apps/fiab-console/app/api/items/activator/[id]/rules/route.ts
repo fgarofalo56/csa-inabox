@@ -38,7 +38,7 @@ import {
   repairActionGroupIfUnreachable,
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
-import { resolveFallbackAlertEmails } from '@/lib/install/provisioners/_activator-receivers';
+import { resolvePlatformFallbackAlertEmails } from '@/lib/install/provisioners/_activator-receivers';
 import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRulesPaged, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
@@ -444,6 +444,23 @@ function kustoGate(e: any): NextResponse | null {
   }, { status: e.status && e.status >= 400 ? e.status : 503 });
 }
 
+/**
+ * GET — the activator's rules.
+ *
+ * NOT a pure read, and that is deliberate: for a WRITE-scoped caller this
+ * handler performs the #4113 open-time self-heal (`auto-bind-by-default.md` §3),
+ * which can (a) persist a reconciled rule list back onto the Cosmos item and
+ * (b) issue an ARM PUT that binds receivers onto an action group carrying zero
+ * of them. Both are disclosed on the response: `healed`, `partial`, and a
+ * per-rule `note` naming what was repaired or why it could not be. A read-only
+ * caller gets the same rules with no side effect at all.
+ *
+ * The receivers bound by the repair come from
+ * `resolvePlatformFallbackAlertEmails`, which prefers the DEPLOYMENT's shared
+ * action-group addresses over the opening user's own inbox (#4354 review,
+ * should-fix 4) — so opening a shared activator first does not silently make
+ * you its alert recipient.
+ */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -512,7 +529,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         }
         return writeScoped;
       };
-      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist, resolveFallbackAlertEmails(session));
+      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist, await resolvePlatformFallbackAlertEmails(session));
       if (reconciled) {
         return NextResponse.json({
           ok: true,
@@ -641,7 +658,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // #4113 — the address the platform ALWAYS has for an interactive caller.
       // Without it a rule whose action names no deliverable destination got NO
       // action group at all and notified nobody, reported as a clean create.
-      fallbackEmails: resolveFallbackAlertEmails(session),
+      // The DEPLOYMENT's shared ops addresses come first; the caller's own is
+      // the last resort (#4354 review, should-fix 4).
+      fallbackEmails: await resolvePlatformFallbackAlertEmails(session),
     });
     // Persist onto the Cosmos item so the rule list survives reload. Re-creating
     // a previously deleted rule lifts its tombstone, so a later reconcile is not
@@ -905,7 +924,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : old.timestampColumn,
       // #4113 — an EDIT re-derives the action group, so it is also the moment a
       // zero-receiver group gets repaired rather than re-written empty.
-      fallbackEmails: resolveFallbackAlertEmails(session),
+      fallbackEmails: await resolvePlatformFallbackAlertEmails(session),
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
     let renamedFrom: string | undefined;

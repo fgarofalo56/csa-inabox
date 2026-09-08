@@ -103,7 +103,21 @@ export const GET = withSession<{ name: string }>(async (_req: NextRequest, { ses
         // the POST uses (`loadOwnedItem` without `allowReadRoles`), so the two
         // cannot drift apart. It costs one extra Cosmos read, on the 404 path
         // only.
-        const writable = await loadOwnedItem(name, ITEM_TYPE, s.claims.oid).catch(() => null);
+        //
+        // #4354 review, should-fix 2. `loadOwnedItem` returns null for
+        // not-found/not-yours and THROWS on an infra failure — a Cosmos throttle
+        // right after the read at the top of this handler succeeded is exactly
+        // that shape. A `.catch(() => null)` folded the throw into the denial and
+        // then told the item's OWNER they lack write access: an R7 assertion of a
+        // cause the code never established. The BUTTON is withheld either way
+        // (fail closed); only the prose differs, and it now says what is true.
+        let writable: WorkspaceItem | null = null;
+        let writeScopeEstablished = true;
+        try {
+          writable = await loadOwnedItem(name, ITEM_TYPE, s.claims.oid);
+        } catch {
+          writeScopeEstablished = false;
+        }
         return NextResponse.json(
           {
             ok: false,
@@ -113,9 +127,13 @@ export const GET = withSession<{ name: string }>(async (_req: NextRequest, { ses
               'Stream Analytics itself is configured and reachable.' +
               (writable
                 ? ''
-                : ' Creating it needs write access to this workspace; ask an owner or member to open this item.'),
+                : writeScopeEstablished
+                  ? ' Creating it needs write access to this workspace; ask an owner or member to open this item.'
+                  : ' Whether you can create it could NOT be determined — the workspace-membership read failed — ' +
+                    'so the create action is withheld rather than offered. Retry in a moment.'),
             code: 'asa-job-not-provisioned',
             expectedJobName: expected,
+            ...(writeScopeEstablished ? {} : { writeScope: 'unknown' as const }),
             ...(writable
               ? {
                   fixIt: {
