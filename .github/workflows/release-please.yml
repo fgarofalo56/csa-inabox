@@ -361,7 +361,28 @@ jobs:
           # and listing it with an EMPTY producer would post a SYNTHETIC status
           # for a context that a real run does publish, which is the #3393
           # defect. Neither is a mirror; both are worse than the gap. A release
-          # PR is a pull_request, so the real run publishes it unprompted.
+          # PR is a pull_request, so the real run publishes it unprompted —
+          # PROVIDED its held run is approved, which is a separate open question
+          # this file does not answer.
+          #
+          # STILL OPEN (#4038), and NOT closed here. Calling the gap deliberate
+          # does not make it harmless: this array is what the wait, the bridge
+          # and the post-verify all iterate, so a context outside it is a context
+          # this job never waits for, never bridges and never reasons about — and
+          # the token cannot read protection, so nothing in this file can detect
+          # the mismatch either. Closing it takes three edits AT ONCE: (a) a third
+          # field on each entry distinguishing "dispatch this producer" from
+          # "await (and approve) its held pull_request run", (b) the 15th entry
+          # added under that mode, and (c) MIN_REQUIRED_CONTEXTS in
+          # scripts/ci/check-release-please-integrity.mjs raised to 15. Doing
+          # fewer than all three turns the release lane red on the mismatch it
+          # has just declared. MEASURED 2026-09-07: (b)+(c) alone make
+          # scripts/ci/__tests__/release-please-integrity.test.mjs fail, because
+          # it asserts the producer set is exactly
+          # ['fiab-console-ci.yml','loom-guardrails.yml','test.yml','validate.yml'].
+          # What IS fixed here is the R7 half — the post-verify arm below no
+          # longer DENIES drift it cannot observe, and it now names the unlisted
+          # non-green contexts on the PR as candidates for the missing entry.
           #
           # Two further contexts are candidates but are NOT required by
           # protection today, so adding them here would manufacture drift in the
@@ -737,24 +758,44 @@ jobs:
               CR_URL["${cr_name}"]="${cr_url}"
             done <<< "${cr_tsv}"
 
-            bridged=(); broken=(); producerless=()
+            bridged=(); red=(); unmeasured=(); producerless=()
             for entry in "${REQUIRED_CHECKS[@]}"; do
               ctx="${entry%%|*}"; wf="${entry#*|}"
               if [ -z "${wf}" ]; then producerless+=("${ctx}"); continue; fi
               verdict="${CR_CONCL[${ctx}]:-ABSENT}"
               if [ "${verdict}" != "completed/success" ]; then
-                echo "    NOT-GREEN ${ctx} -> ${verdict}"
-                # Post an explicit FAILURE rather than merely withholding a
-                # success. Withholding alone would leave any status a PREVIOUS
-                # run of this workflow bridged for the same SHA standing — so a
-                # job that was green and is now red (a re-run, a flake) could
-                # still be sitting green on the commit. Overwrite it.
+                # R7 (#4038): say WHICH KIND of not-green this is. `cancelled`,
+                # `timed_out`, `skipped`, `stale` and `action_required` all mean
+                # the run did NOT MEASURE this context — a cancelled job with
+                # zero executed steps measured nothing at all. Reporting that as
+                # "a REAL red result from a real run", which the message below
+                # used to do for every non-success alike, asserts a verdict no
+                # run produced.
+                #
+                # Both kinds still post a `failure` status and still block. Fail
+                # closed is not in tension with saying what happened: an
+                # unmeasured required context must not be bridged green, and a
+                # stale green a previous run posted for this SHA must still be
+                # overwritten.
+                case "${verdict}" in
+                  completed/failure|completed/startup_failure)
+                    kind="REAL-RED" ;;
+                  *)
+                    kind="NO-VERDICT" ;;
+                esac
+                if [ "${kind}" = "REAL-RED" ]; then
+                  desc="REAL RED: a real run on this commit concluded ${verdict}"
+                  red+=("${ctx}=${verdict}")
+                else
+                  desc="NO VERDICT: the run ended ${verdict} — this context was not measured"
+                  unmeasured+=("${ctx}=${verdict}")
+                fi
+                echo "    NOT-GREEN ${ctx} -> ${verdict} (${kind})"
                 gh api -X POST "repos/${REPO}/statuses/${sha}" \
                   -f state=failure \
                   -f context="${ctx}" \
-                  -f description="Real run on this commit did not conclude success (${verdict})" \
+                  -f description="${desc}" \
                   -f target_url="${CR_URL[${ctx}]:-${RUN_URL}}" >/dev/null
-                broken+=("${ctx}=${verdict}")
                 continue
               fi
               echo "    GREEN     ${ctx} -> ${CR_URL[${ctx}]}"
@@ -766,16 +807,29 @@ jobs:
               bridged+=("${ctx}")
             done
 
-            if [ "${#broken[@]}" -gt 0 ]; then
-              echo "::error::PR #${num}: ${#broken[@]} required context(s) did NOT conclude success"
-              echo "::error::on ${sha}: ${broken[*]}"
+            if [ "${#red[@]}" -gt 0 ]; then
+              echo "::error::PR #${num}: ${#red[@]} required context(s) concluded a REAL FAILURE"
+              echo "::error::on ${sha}: ${red[*]}"
               echo "::error::Step 3 only reaches here once EVERY required context has a completed"
               echo "::error::check run on this commit, so each of these is a REAL red result from a"
               echo "::error::real run — the release is broken and must not merge. Each was posted as"
               echo "::error::a FAILURE status on ${sha}, which is the point."
-              echo "::error::('ABSENT' here would mean the check run vanished between step 3 and"
-              echo "::error::this read. It is not reachable by a missing mapping — step 3 diagnoses"
-              echo "::error::that case separately and never gets here.)"
+            fi
+            if [ "${#unmeasured[@]}" -gt 0 ]; then
+              echo "::error::PR #${num}: ${#unmeasured[@]} required context(s) ended WITHOUT a"
+              echo "::error::verdict on ${sha}: ${unmeasured[*]}"
+              echo "::error::cancelled / timed_out / skipped / stale / action_required / ABSENT all"
+              echo "::error::mean the producing run did not MEASURE this context. That is not a red"
+              echo "::error::result and this job does not claim it is — but an unmeasured required"
+              echo "::error::context cannot be bridged green either, so a FAILURE status was posted"
+              echo "::error::and the release stays blocked. The usual cause is a superseded run"
+              echo "::error::(cancel-in-progress) or a runner eviction; re-run the producing"
+              echo "::error::workflow against ${sha} and re-run this one."
+              echo "::error::('ABSENT' means the check run vanished between step 3 and this read. It"
+              echo "::error::is not reachable by a missing mapping — step 3 diagnoses that case"
+              echo "::error::separately and never gets here.)"
+            fi
+            if [ "${#red[@]}" -gt 0 ] || [ "${#unmeasured[@]}" -gt 0 ]; then
               exit 1
             fi
             echo "  bridged ${#bridged[@]} real result(s) onto ${sha}."
@@ -831,13 +885,33 @@ jobs:
               req_json="$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | cut -d'|' -f1 \
                 | jq -R -s -c 'split("\n") | map(select(length > 0))')"
               rollup=$(gh pr view "${num}" --repo "${REPO}" --json statusCheckRollup --jq '.statusCheckRollup')
+              # #4038 / R7: FAILURE and ERROR are verdicts. CANCELLED,
+              # TIMED_OUT, SKIPPED and ACTION_REQUIRED are NOT — they mean the
+              # run did not measure the context. Lumping them together made this
+              # job report "BLOCKED with FAILING required contexts" over a
+              # superseded run, asserting a red result nothing produced.
               failing=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
-                       | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR") or ((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT"))
+                       | select(((.conclusion // .state) == "FAILURE") or ((.conclusion // .state) == "ERROR"))
+                       | .name // .context] | unique | join(", ")')
+              unmeasured=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
+                       | select(((.conclusion // .state) == "CANCELLED") or ((.conclusion // .state) == "TIMED_OUT") or ((.conclusion // .state) == "SKIPPED") or ((.conclusion // .state) == "ACTION_REQUIRED") or ((.conclusion // .state) == "STALE"))
                        | .name // .context] | unique | join(", ")')
               inflight=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
                 '[.[]? | select((.name // .context) as $n | ($req | index($n)) != null)
                        | select(((.status // "") == "QUEUED") or ((.status // "") == "IN_PROGRESS") or ((.state // "") == "PENDING"))
+                       | .name // .context] | unique | join(", ")')
+              # The only token-readable DRIFT signal there is. GITHUB_TOKEN
+              # cannot read branch protection (see the header), so this job can
+              # never enumerate the required set. What it CAN see is every
+              # context reporting on the PR, and a non-green one this mirror does
+              # not list is a CANDIDATE for the missing entry. Named as a
+              # candidate — asserting it is required would be the same R7 error
+              # in the other direction.
+              unlisted=$(printf '%s' "$rollup" | jq -r --argjson req "$req_json" \
+                '[.[]? | select((.name // .context) as $n | ($req | index($n)) == null)
+                       | select(((.conclusion // .state) // "") != "SUCCESS")
                        | .name // .context] | unique | join(", ")')
               # The most common BLOCKED cause: branch protection requires an
               # approving review (required_approving_review_count=1 as of
@@ -853,10 +927,31 @@ jobs:
                 echo "::error::concluded success on this exact commit, so a red one here is a"
                 echo "::error::genuine result — the release is broken and must not merge."
                 exit 1
+              elif [ -n "$unmeasured" ]; then
+                echo "::error::Release PR #${num} is BLOCKED and required context(s) ended WITHOUT a"
+                echo "::error::verdict: ${unmeasured}."
+                echo "::error::CANCELLED / TIMED_OUT / SKIPPED / ACTION_REQUIRED / STALE mean the run"
+                echo "::error::did not measure the context. This job does NOT call that a failing"
+                echo "::error::check — but it cannot call it a pass either, so the release stays"
+                echo "::error::blocked. Re-run the producing workflow against this commit."
+                exit 1
               elif [ -n "$inflight" ]; then
                 echo "::notice::Release PR #${num} is BLOCKED because required contexts are still pending: ${inflight}. Nothing was bridged for them, which is correct — they will be picked up by the next run of this workflow once their real runs conclude."
               elif [ "$review" = "REVIEW_REQUIRED" ]; then
-                echo "::notice::Release PR #${num} is BLOCKED solely because branch protection requires an approving review, and no check is failing. This is the expected steady state — GITHUB_TOKEN cannot approve a PR. A human (or a PAT-backed reviewer) must approve #${num} to release. NOT context drift."
+                # #4038 / R7. This used to end "NOT context drift." — a claim
+                # about a set this job CANNOT READ. GITHUB_TOKEN has no route to
+                # branch protection's required_status_checks (see the header), so
+                # a context protection requires and the ${#REQUIRED_CHECKS[@]}-entry
+                # mirror above does not list would produce exactly this signal:
+                # nothing known failing, nothing known pending, review missing.
+                # Measured 2026-09-07 with an admin token: protection carried 15
+                # contexts, the mirror carried 14. The denial was false while it
+                # was being printed.
+                echo "::notice::Release PR #${num} is BLOCKED, no required context THIS FILE KNOWS ABOUT is failing or pending, and reviewDecision is REVIEW_REQUIRED. A missing approval is SUFFICIENT to explain BLOCKED and is the expected steady state — GITHUB_TOKEN cannot approve a PR, so a human (or a PAT-backed reviewer) must approve #${num} to release."
+                echo "::notice::What this run did NOT establish: that the ${#REQUIRED_CHECKS[@]}-entry REQUIRED_CHECKS mirror is complete. This token cannot read branch protection, so drift is not ruled out here — it is simply not observable from this job (#4038)."
+                if [ -n "$unlisted" ]; then
+                  echo "::warning::Contexts reporting on PR #${num} that REQUIRED_CHECKS does not list, and that are not green: ${unlisted}. Any of these MAY be a required context this mirror is missing. This job cannot tell which — it names them as candidates rather than asserting one. Reconcile with 'gh api repos/${REPO}/branches/main/protection/required_status_checks' using a token that can read protection."
+                fi
               else
                 echo "::error::Release PR #${num} is still BLOCKED. No required context is"
                 echo "::error::failing, none is pending, and reviewDecision is '${review}' so a"
@@ -866,6 +961,10 @@ jobs:
                 echo "::error::file does not know about, so nothing was ever posted for it. Compare"
                 echo "::error::'gh api repos/${REPO}/branches/main/protection/required_status_checks'"
                 echo "::error::against the table in this file and add what is missing."
+                if [ -n "$unlisted" ]; then
+                  echo "::error::Contexts reporting on this PR that REQUIRED_CHECKS does not list, and"
+                  echo "::error::that are not green — the candidates for the missing entry: ${unlisted}"
+                fi
                 echo "::error::This workflow cannot read branch protection to confirm that, so it"
                 echo "::error::names the known cause without asserting it is the only one."
                 exit 1
