@@ -43,7 +43,14 @@ import {
   imperativeFiles,
   isExecuted,
   resolveRoleArg,
+  resolveGuidToken,
   shellGuidVars,
+  yamlEnvGuidVars,
+  roleVars,
+  positionalArgs,
+  createSite,
+  classifyImperative,
+  GRANT_HELPER,
   inventory,
   scan,
   D3_CONTROLS,
@@ -415,4 +422,192 @@ test('the D3 CONTROL SET still carries the "mention is not a branch" bypasses', 
   // ever expects zero findings cannot tell a working judge from a dead one.
   assert.ok(D3_CONTROLS.some((c) => c.expectFindings === 1), 'no positive control');
   assert.ok(D3_CONTROLS.some((c) => c.expectFindings === 0), 'no negative control');
+});
+
+// ── #3464 finding 1 — the YAML `env:` binding D3 could not read ──────────────
+//
+// Measured on main at 899ea91b670: `node scripts/ci/check-role-assignment-
+// determinism.mjs --list` exited 0 reporting "ENUMERATED 33, RESOLVED 3, JUDGED
+// NONE", with `.github/workflows/gov-provision-streaming-migrate.yml:369` in the
+// UNRESOLVED list — a bare `az role assignment create --role "$BLOB_CONTRIB_ROLE"
+// … 2>/dev/null || true` whose GUID is bound in the workflow-level `env:` block.
+// The guard was clean over an empty set.
+
+test('yamlEnvGuidVars reads workflow-level and step-level `env:` GUID bindings', () => {
+  const logical = [
+    'env:',
+    '  ACRPULL_ROLE: 7f951dda-4ed3-4680-a7ca-43fe172d538d',
+    '  NOT_A_GUID: loom-console',
+    'jobs:',
+    '  provision:',
+    '    steps:',
+    '      - name: grant',
+    '        env:',
+    "          BLOB_CONTRIB_ROLE: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'",
+    '        run: |',
+    '          echo hi',
+  ].map((text, i) => ({ text, line: i + 1 }));
+  const vars = yamlEnvGuidVars(logical);
+  assert.equal(vars.get('ACRPULL_ROLE'), '7f951dda-4ed3-4680-a7ca-43fe172d538d');
+  assert.equal(vars.get('BLOB_CONTRIB_ROLE'), 'ba92f5b4-2d11-453d-a403-e96b0029c9fe');
+  assert.equal(vars.has('NOT_A_GUID'), false);
+});
+
+test('yamlEnvGuidVars does NOT read a `KEY: <guid>` outside an `env:` block', () => {
+  // Workflow-input defaults, `with:` arguments and subscription ids all have
+  // this shape. Reading them would resolve a `--role "$group"` to a GUID that is
+  // not a role definition at all — a finding the guard could not substantiate.
+  const logical = [
+    'on:',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      group:',
+    '        default: e093f4fd-5047-4ee4-968d-a56942c665f3',
+  ].map((text, i) => ({ text, line: i + 1 }));
+  assert.equal(yamlEnvGuidVars(logical).size, 0);
+});
+
+test('yamlEnvGuidVars ABSTAINS on a key bound to two different GUIDs (R7)', () => {
+  const logical = [
+    'env:',
+    '  ROLE_ID: 7f951dda-4ed3-4680-a7ca-43fe172d538d',
+    'jobs:',
+    '  a:',
+    '    env:',
+    '      ROLE_ID: ba92f5b4-2d11-453d-a403-e96b0029c9fe',
+  ].map((text, i) => ({ text, line: i + 1 }));
+  assert.equal(yamlEnvGuidVars(logical).has('ROLE_ID'), false, 'an ambiguous binding must not be guessed');
+});
+
+test('MUTATION PROOF — an UNGATED create whose --role is a YAML env binding IS flagged', () => {
+  // RED at the parent of this change: `shellGuidVars` alone cannot resolve
+  // `$BLOB_CONTRIB_ROLE`, so this site filed as unresolved and produced no
+  // finding and no judged count.
+  const wf =
+    'env:\n' +
+    `  BLOB_CONTRIB_ROLE: ${ACRPULL}\n` +
+    'jobs:\n' +
+    '  provision:\n' +
+    '    steps:\n' +
+    '      - run: |\n' +
+    '          az role assignment create --assignee-object-id "$RW_PID" --role "$BLOB_CONTRIB_ROLE" --scope "$LAKE_ID"\n';
+  const dir = scratchRepo({ '.github/workflows/w.yml': wf });
+  const { findings, judged, resolved } = findImperativeCollisions(acrPullRecords, dir, ['.github/workflows']);
+  assert.equal(resolved, 1, 'the YAML env binding must resolve the --role');
+  assert.equal(judged, 1, 'a resolved role the bicep also grants must be JUDGED');
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].check, 'D3');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ── #3464 finding 2 — the remedy must not delete the site from the population ─
+
+test('positionalArgs reads the helper call arguments, quotes stripped', () => {
+  assert.deepEqual(
+    positionalArgs('  grant_role_if_absent "$PID" "$ACRPULL_ROLE" "$ACR_ID" "AcrPull for x"', GRANT_HELPER),
+    ['$PID', '$ACRPULL_ROLE', '$ACR_ID', 'AcrPull for x'],
+  );
+  assert.deepEqual(positionalArgs(`grant_role_if_absent $A ${ACRPULL} $C`, GRANT_HELPER), ['$A', ACRPULL, '$C']);
+});
+
+test('createSite classifies the CLI call, the helper call, the definition and the mention', () => {
+  assert.equal(createSite(`az role assignment create --role ${ACRPULL} --scope X`).kind, 'cli');
+  assert.equal(createSite(`grant_role_if_absent "$P" ${ACRPULL} "$S" "l"`).kind, 'helper');
+  assert.equal(createSite('grant_role_if_absent() {'), null, 'a function DEFINITION is not a call site');
+  assert.equal(createSite('  local principal="$1" role="$2"'), null);
+  assert.equal(createSite('# grant_role_if_absent "$P" x "$S"'), null);
+  assert.equal(createSite('echo "use grant_role_if_absent instead"'), null);
+});
+
+test('MUTATION PROOF — a `grant_role_if_absent` call is ENUMERATED and JUDGED, and counts as gated', () => {
+  // RED at the parent: `grant_role_if_absent` carries no `az role assignment
+  // create` token, so the whole file scored population 0. Adopting the remedy
+  // made the site invisible — the guard's numbers fell as the tree improved.
+  const dir = scratchRepo({
+    'scripts/g.sh':
+      '#!/usr/bin/env bash\n' +
+      '. scripts/csa-loom/_grant-role-if-absent.sh\n' +
+      `grant_role_if_absent "$PID" ${ACRPULL} "$ACR_ID" "AcrPull"\n`,
+  });
+  const { findings, population, judged } = findImperativeCollisions(acrPullRecords, dir, ['scripts']);
+  assert.equal(population, 1, 'the helper call IS a create site');
+  assert.equal(judged, 1, 'and it is judged, not silently excused');
+  assert.deepEqual(findings, [], 'the helper probes internally, so the site is gated');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the helper SOURCE FILE contributes exactly one create site — its own internal create', () => {
+  // The definition line, the usage comment and the `echo … grant_role_if_absent
+  // needs …` diagnostic must not each score as a call, and the guard must not
+  // count the helper's own `az role assignment create` twice.
+  const helper = fs.readFileSync(
+    path.join(BICEP_ROOT, '..', '..', '..', 'scripts', 'csa-loom', '_grant-role-if-absent.sh'),
+    'utf8',
+  );
+  const logical = helper.split(/\r?\n/).map((text, i) => ({ text, line: i + 1 }));
+  const sites = logical.filter((l) => createSite(l.text) !== null);
+  assert.equal(sites.length, 1, `expected 1 site, got ${sites.length}: ${sites.map((s) => s.line).join(',')}`);
+  assert.ok(sites[0].text.includes('az role assignment create'));
+});
+
+// ── #3464 finding 3 — the floor is on JUDGED, not on ENUMERATED ──────────────
+
+test('the real tree now JUDGES a non-empty set, and the D3 verdict is about it', () => {
+  // The property the `judged === 0 -> exit 1` floor in the driver enforces.
+  // Measured at the parent of this change: judged 0, exit 0 — a clean verdict
+  // over an empty set, downgraded to a `::warning::` that cannot fail a build.
+  const { population, resolved, judged, findings } = findImperativeCollisions(inventory());
+  assert.ok(population > 10, `discovered only ${population} create sites — D3 is not scanning`);
+  assert.ok(resolved >= judged);
+  assert.ok(judged > 0, 'D3 judged ZERO sites — its clean verdict would be about an empty set (#3464)');
+  assert.deepEqual(findings, [], findings.map((f) => `${f.file}:${f.line}`).join('\n'));
+});
+
+test('the Gov streaming workflow is one of the sites D3 now judges', () => {
+  // The site named in #3464: its role GUIDs live in YAML `env:` and its grants
+  // are routed through the shared helper. Both readings are needed for it to be
+  // judged at all, so this fails if either widening is reverted.
+  const wf = '.github/workflows/gov-provision-streaming-migrate.yml';
+  const abs = path.join(BICEP_ROOT, '..', '..', '..', wf);
+  const text = fs.readFileSync(abs, 'utf8');
+  const logical = text.split(/\r?\n/).map((t, i) => ({ text: t, line: i + 1 }));
+  const bicepRoles = new Set(inventory().map((r) => r.roleKey).filter(Boolean));
+  const { population, judged, findings } = classifyImperative(logical, bicepRoles, wf);
+  assert.ok(population >= 2, `expected the AcrPull loop and the lake grant, got ${population}`);
+  assert.ok(judged >= 2, `expected both to be judged, got ${judged}`);
+  assert.deepEqual(findings, [], findings.map((f) => `${f.file}:${f.line} ${f.detail}`).join('\n'));
+  // …and the shapes deploy-integrity.md forbids are gone from that block.
+  assert.equal(
+    /az role assignment create[^\n]*\|\| true/.test(text),
+    false,
+    'a result-discarding `az role assignment create … || true` is back in the Gov streaming workflow',
+  );
+});
+
+test('roleVars merges both binding forms, shell winning a tie', () => {
+  const logical = [
+    { line: 1, text: 'env:' },
+    { line: 2, text: `  ROLE_A: ${ACRPULL}` },
+    { line: 3, text: `ROLE_B=${OTHER_ROLE}` },
+  ];
+  const vars = roleVars(logical);
+  assert.equal(vars.get('ROLE_A'), ACRPULL);
+  assert.equal(vars.get('ROLE_B'), OTHER_ROLE);
+  assert.equal(resolveGuidToken('"$ROLE_A"', vars), ACRPULL);
+  assert.equal(resolveGuidToken('"Storage Blob Data Reader"', vars), null, 'a display name is not guessed');
+  assert.equal(resolveGuidToken(null, vars), null);
+});
+
+test('the D3 CONTROL SET pins the YAML-env and helper-call shapes too', () => {
+  const whys = D3_CONTROLS.map((c) => c.why).join('\n');
+  assert.ok(whys.includes('D3-YAML'), 'the YAML `env:` controls are gone (#3464 finding 1)');
+  assert.ok(whys.includes('D3-HELPER'), 'the grant_role_if_absent controls are gone (#3464 finding 2)');
+  assert.ok(
+    D3_CONTROLS.some((c) => c.expectJudged === 1),
+    'no control asserts a NON-ZERO judged count — the set could pass with a dead judge',
+  );
+  assert.ok(
+    D3_CONTROLS.some((c) => c.expectJudged === 0),
+    'no control asserts a ZERO judged count — the set could pass with a judge that judges everything',
+  );
 });
