@@ -45,6 +45,8 @@ import {
   forbiddenPublishers,
   inheritedStreamSpawns,
   CONTROL_SOURCE_CRLF,
+  CONTROL_WRITE_COUNT,
+  CONTROL_VIOLATION_COUNT,
 } from './_publication-surfaces.mjs';
 
 const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs');
@@ -870,13 +872,25 @@ test('STRUCTURAL — EVERY write to a public stream crosses a boundary or a COUN
 
 test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded write', () => {
   const found = unboundedWrites(CONTROL_SOURCE_CRLF, RETRY_BOUNDARIES.concat('formatStdout'));
-  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.equal(found.length, CONTROL_VIOLATION_COUNT, `expected the control's ${CONTROL_VIOLATION_COUNT} violations, found ${found.length}`);
   assert.ok(found.some((w) => w.arg.startsWith('`deploy:')), 'a bare template-literal write was not detected');
   assert.ok(
     found.some((w) => w.arg.startsWith('redact(')),
     'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
   );
-  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+  // #3876 — the alias / destructured / bracket access paths, and the
+  // concatenation the prefix-only classifier used to accept. Asserted by
+  // access path, not by spelling, so narrowing the matcher back fails HERE.
+  assert.deepEqual(
+    [...new Set(found.map((w) => w.accessPath))].sort(),
+    ['alias', 'bracket', 'dotted'],
+    'the enumerator lost an ACCESS PATH — a write it cannot see reports as no write at all (#3876)',
+  );
+  assert.ok(
+    found.some((w) => w.arg.startsWith('formatStdout(') && w.arg.includes('+')),
+    'a boundary call CONCATENATED with a raw value was accepted — the classifier is prefix-only again (#3876 bypass 1)',
+  );
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, CONTROL_WRITE_COUNT, 'the control source lost a write to CRLF handling or to a narrowed enumerator');
 
   // The comment stripper is load-bearing: this file's header documents its write
   // sites in prose, so counting comments would inflate every number above.
