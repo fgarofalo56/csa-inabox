@@ -39,7 +39,7 @@ import {
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
-import { ingestionMappingOptions, type IngestionMappingRef } from './kql-ingestion-mappings';
+import { ingestionMappingOptions, mappingListHint, type IngestionMappingRef } from './kql-ingestion-mappings';
 import {
   SAMPLE_KQL_DB, DEFAULT_TABLE_COLUMNS, DC_FORMATS, FN_PARAM_TYPES, parseFnParams, serializeFnParams,
   type KqlDbInfo, type KqlWizardKind, type DcSourceRow, type DcConnectionRow, type FnParam,
@@ -133,6 +133,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizMappings, setWizMappings] = useState<IngestionMappingRef[]>([]);
   const [wizMappingsLoading, setWizMappingsLoading] = useState(false);
   const [wizMappingsError, setWizMappingsError] = useState<string | null>(null);
+  // #4357 re-review nit 2 — the THIRD state. `loading=false, error=null` is
+  // both a read that finished EMPTY and one that NEVER RAN (the effect below
+  // returns early on a missing / `new` id, and the first frame precedes it).
+  // Only a COMPLETED read flips this, so no caption claims an absence this
+  // code did not establish (deploy-integrity.md R7).
+  const [wizMappingsRead, setWizMappingsRead] = useState(false);
   // Event Hub data-connection wizard
   const [wizDcHub, setWizDcHub] = useState('');
   const [wizDcConsumerGroup, setWizDcConsumerGroup] = useState('');
@@ -462,14 +468,15 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // typed (#3519): `.show database ingestion mappings` via the same route the
   // Ingestion mapping wizard POSTs to.
   useEffect(() => {
-    if ((wizardKind !== 'ingest' && wizardKind !== 'data-connection') || !id || id === 'new') return;
+    // Nothing read ⇒ nothing known: the captions say "not read yet", not "none".
+    if ((wizardKind !== 'ingest' && wizardKind !== 'data-connection') || !id || id === 'new') { setWizMappingsRead(false); return; }
     let cancelled = false;
-    setWizMappingsLoading(true); setWizMappingsError(null); setWizMappings([]);
+    setWizMappingsLoading(true); setWizMappingsError(null); setWizMappings([]); setWizMappingsRead(false);
     clientFetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(id)}`)
       .then((r) => r.json())
       .then((j: any) => {
         if (cancelled) return;
-        if (j?.ok && Array.isArray(j.mappings)) setWizMappings(j.mappings as IngestionMappingRef[]);
+        if (j?.ok && Array.isArray(j.mappings)) { setWizMappings(j.mappings as IngestionMappingRef[]); setWizMappingsRead(true); }
         // An `ok:false` body carries the route's own reason; do NOT restate it
         // as "no mappings exist" — that is a claim this code did not establish.
         else setWizMappingsError(j?.error || 'the mapping list could not be read');
@@ -487,6 +494,10 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     () => ingestionMappingOptions(wizMappings, wizDcTargetTable),
     [wizMappings, wizDcTargetTable],
   );
+  // #4357 re-review nit 2 — ONE place decides loading / failed / NOT-READ /
+  // genuinely-none for both wizards, so neither caption can drift back to
+  // asserting an absence over a read that never ran.
+  const wizMappingRead = { loading: wizMappingsLoading, error: wizMappingsError, read: wizMappingsRead };
   // Changing the target table can move the picked mapping out of scope (Kusto
   // rejects a mapping bound to a different table). Drop it rather than submit a
   // reference the cluster will refuse. Only when a picker is actually showing —
@@ -1922,11 +1933,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                               disabled={wizMappingsLoading}
                             />
                             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                              {wizMappingsLoading
-                                ? 'Reading the database’s ingestion mappings…'
-                                : wizMappingsError
-                                  ? `The mapping list could not be read (${wizMappingsError}) — this does not mean none exist; type the name if you know it.`
-                                  : `No ingestion mapping is defined${wizSource.trim() ? ` for ${wizSource.trim()}` : ''} on this database yet — leave blank for the identity mapping, or build one with Home → New → Ingestion mapping.`}
+                              {mappingListHint({ ...wizMappingRead, optionCount: wizIngestMappingOptions.length }, wizSource)}
                             </Caption1>
                           </>
                         )}
@@ -2007,13 +2014,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         </Field>
                         <Field
                           label="Ingestion mapping name (optional)"
-                          hint={wizMappingsLoading
-                            ? 'Reading the database’s ingestion mappings…'
-                            : wizMappingsError
-                              ? `The mapping list could not be read (${wizMappingsError}) — this does not mean none exist; type the name if you know it.`
-                              : wizDcMappingOptions.length === 0
-                                ? `No ingestion mapping is defined${wizDcTargetTable ? ` for ${wizDcTargetTable}` : ''} on this database yet — build one with Home → New → Ingestion mapping, or leave blank.`
-                                : undefined}
+                          hint={mappingListHint({ ...wizMappingRead, optionCount: wizDcMappingOptions.length }, wizDcTargetTable)}
                         >
                           {wizDcMappingOptions.length > 0 ? (
                             <Select

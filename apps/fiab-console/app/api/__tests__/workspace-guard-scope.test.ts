@@ -188,12 +188,44 @@ interface Call {
  *   `{ allowReadRoles }` shorthand        → TRUE — a forwarded value, same reason
  *   `...(opts?.allowReadRoles ? … : …)`   → TRUE — the GHSA-hf73-rp4q-66pf helper idiom
  *
- * The only behaviour that changed versus the substring test is the literal
- * `false` case, which is provably write-scoped. Every other shape stays a grant,
- * so this is strictly no weaker — pinned by the two specs below that mutate a
- * mutating handler to `true` and to a variable and require both to go red.
+ * Two behaviours changed versus the substring test, and NEITHER is a grant that
+ * stopped being reported:
+ *
+ *   1. a resolvable literal `false` — provably write-scoped, the false positive
+ *      this replaced;
+ *   2. a mention that survives only inside a COMMENT or a string literal — that
+ *      is prose about the flag, not an argument passed to the guard.
+ *
+ * Every shape that actually passes a value stays a grant. The claim is therefore
+ * "no weaker on anything that reaches the callee", not "strictly no weaker on
+ * every byte of the call text" — the substring form did flag comment-only
+ * mentions, and this does not.
+ *
+ * The stripping in (2) is load-bearing in the OTHER direction too, and that is
+ * why it exists: matching the RAW argument text let a comment reading
+ * `// allowReadRoles: false` MASK a real shorthand grant in the same call args
+ * (`{ allowReadRoles }` resolves to no captured value → grant, unless the
+ * comment supplies a `false` for `.some()` to fall through on). Measured on
+ * `export-check:POST` before this fix: a read-only Viewer admitted to a mutation
+ * with the suite green. Pinned below by the MASKING spec, plus the two that
+ * mutate a mutating handler to `true` and to a variable and require both to go
+ * red.
  */
-function grantsReadRoles(args: string): boolean {
+/**
+ * Blank out block comments, line comments and string/template literals so a
+ * value that appears ONLY in prose cannot decide the outcome. Length and line
+ * structure are preserved (each stripped char becomes a space) so nothing else
+ * in the scan shifts.
+ */
+function stripCommentsAndStrings(args: string): string {
+  return args.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g,
+    (m) => m.replace(/[^\n]/g, ' '),
+  );
+}
+
+function grantsReadRoles(rawArgs: string): boolean {
+  const args = stripCommentsAndStrings(rawArgs);
   if (!/allowReadRoles/.test(args)) return false;
   const values = Array.from(
     args.matchAll(/allowReadRoles\s*:\s*([A-Za-z0-9_$.?![\]]+)/g),
@@ -432,6 +464,26 @@ describe('grantsReadRoles — the value is read, and everything unresolvable FAI
     expect(grantsReadRoles('guard(s, { workspaceId, allowReadRoles })')).toBe(true);
     // The GHSA-hf73-rp4q-66pf conditional-spread helper idiom.
     expect(grantsReadRoles('guard(s, { ...(opts?.allowReadRoles ? { allowReadRoles: true } : {}) })')).toBe(true);
+  });
+
+  it('a COMMENT or string literal cannot MASK a real grant (#4357 re-review item 1)', () => {
+    // Measured on the real thing before the strip landed: an ES-shorthand grant
+    // inside a MUTATING handler went unreported because a comment in the same
+    // call args read `allowReadRoles: false`, which `.some()` then fell through
+    // on. A read-only Viewer was admitted to a POST with the suite green.
+    expect(
+      grantsReadRoles(
+        'loadItem(id, type, session, {\n  // scope stays as it was: allowReadRoles: false\n  allowReadRoles,\n})',
+      ),
+    ).toBe(true);
+    expect(
+      grantsReadRoles('guard(s, { /* allowReadRoles: false */ allowReadRoles: opts.readOk })'),
+    ).toBe(true);
+    expect(
+      grantsReadRoles("guard(s, { reason: 'allowReadRoles: false', allowReadRoles: true })"),
+    ).toBe(true);
+    // ...and a mention that lives ONLY in prose is not an argument at all.
+    expect(grantsReadRoles('guard(s, { workspaceId }) // allowReadRoles is not passed')).toBe(false);
   });
 
   it('ANY grant in a multi-flag call site wins', () => {
