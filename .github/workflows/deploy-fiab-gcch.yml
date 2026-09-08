@@ -741,6 +741,57 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice::GCC-High stood down: the estate is DECLARED paused. This run is UNMEASURED, not clean."
 
+      # ── THE PROGRAM BUDGET'S IMMUTABLE START DATE (#4253) ─────────────────
+      # `timePeriod.startDate` on Microsoft.Consumption/budgets CANNOT be updated
+      # after creation, and program-budget.bicep defaulted it to
+      # `utcNow('yyyy-MM-01')` — a value that moves on the 1st of every month.
+      # Once it moves past the month the budget was created in, EVERY apply dies
+      # on that one leaf and takes the whole subscription deployment with it:
+      #   400 on 'loom-program-budget' → "Start date of budgets cannot be
+      #   updated. Please delete and create a new budget."
+      #
+      # MEASURED ON COMMERCIAL (green 2026-08-29/30/31, then 8 for 8 red from
+      # 09-01). This lane carries the SAME bomb on its OWN month boundary —
+      # programBudgetEnabled defaults true and no param file overrode it — so the
+      # fix is wired on every boundary, not only the one that has fired
+      # (cloud-parity.md). This lane's deploy job DID execute on 2026-09-01, so
+      # if it created the budget that day its frozen start is a different date
+      # than Commercial's — which is exactly why a pinned literal was rejected
+      # and the value is read per estate instead.
+      #
+      # The value is DISCOVERED, never computed: the live budget's own start when
+      # one exists, the first of the current month only on a genuine create, and
+      # a REFUSAL when the read did not complete (deploy-integrity.md R7). Same
+      # shape as the DNS-resolver preflight above (#3754), which fixed the
+      # identical immutable-field class on this very lane. Runs before the
+      # what-if so the preview and the apply describe the same deployment;
+      # gcc-high.bicepparam reads LOOM_PROGRAM_BUDGET_START_DATE.
+      - name: Resolve the program budget's IMMUTABLE start date (#4253)
+        # STAND DOWN on a DECLARED-paused estate, exactly as the what-if below
+        # does. GCC-High is the one live entry in estate-pause-declaration.json,
+        # and this step calls `az consumption budget list` and REFUSES (exit 1)
+        # when that read does not complete. Against a paused estate that would
+        # turn a clean, deliberate stand-down into a red job — reporting a
+        # failure it never established, which is the same false signal #3980
+        # removed from the What-If lane. Keyed to the preflight's DECLARATION
+        # verdict, never to cluster state, for the reasons spelled out below.
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach deploys no admin plane and targets another subscription; the program budget is not managed there."
+            exit 0
+          fi
+          DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+          if [ -z "$DEPLOY_SUB" ]; then
+            echo "::error::No target subscription, so the live program budget cannot be read. It comes from the AZURE_GOV_SUBSCRIPTION_ID repository secret; it is empty."
+            exit 1
+          fi
+          node scripts/ci/resolve-program-budget-start-date.mjs \
+            --subscription "$DEPLOY_SUB"
+
       - name: Bicep what-if
         # STAND DOWN on a DECLARED-paused estate. ARM what-if cannot enumerate
         # Microsoft.Kusto/clusters/principalAssignments against a stopped engine
