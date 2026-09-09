@@ -142,25 +142,41 @@
 //     `s3GatewayRoleDefinitionId` @description.
 //   GUARD 3 — only modules whose grant this pass OWNS may gate their deploy on
 //     `loomStorageWillBeGranted`.
-//   GUARD 4 — this pass has exactly ONE call site, every argument main.bicep
-//     binds to it is registered, and each `principal` argument is traced hop by
-//     hop — main.bicep's expression, the admin-plane output behind it, the
-//     minting module's output behind that — to a `userAssignedIdentities`
-//     resource s3-gateway-aca.bicep DECLARES rather than adopts. That terminal
-//     check is the structural form of "minted by this run", so it cannot be
-//     satisfied by renaming.
+//   GUARD 4 — this pass has exactly ONE call site in the WHOLE bicep tree (every
+//     `.bicep` under platform/fiab/bicep — 185 of them at this commit — not one
+//     hard-coded orchestrator, and including the `= [for … : {` declaration
+//     form), that call site's
+//     `scope:` is registered, every argument bound to it is registered, and each
+//     `principal` argument is traced hop by hop — main.bicep's expression, the
+//     admin-plane output behind it, the minting module's output behind that — to
+//     a `userAssignedIdentities` resource s3-gateway-aca.bicep DECLARES rather
+//     than adopts. That terminal check is the structural form of "minted by this
+//     run", so it cannot be satisfied by renaming.
 //
-// WHAT THAT DOES NOT CLAIM. It is source analysis over this 209-line file and
-// the three call-chain hops named above, not an assertion about the compiled
-// ARM — only `az bicep build` over this pass could make that one, and it is not
-// run from node:test. Nor is it a claim about every route by which this pass
-// could come to grant something else: the chain's registration stops at
-// s3-gateway-aca.bicep's `storageIdentity` declaration, and a change INSIDE that
-// module that made the symbol resolve to a pre-existing identity while keeping
-// the `= {` form is outside what the guards read. What IS checkable, and is
-// checked: no new param, resource or module can enter this file, no different
-// role can be granted from it, and no different value can be bound to it at its
-// single call site, without a reviewer registering the change.
+//     Revision 1 of this guard claimed that sentence while measuring only
+//     `main.bicep`, through a module regex that could not parse a loop header. A
+//     reviewer beat it twice, both compiling and both 39/39 GREEN: a second call
+//     site in `modules/admin-plane/main.bicep` (where the sibling lake-RBAC
+//     delegations already live), and a second call site in `main.bicep` itself
+//     written as `= [for … : {`. Both are RED now, named with file:line; the
+//     claim above is the invariant the code enforces, not the one it aspired to.
+//
+// WHAT THAT DOES NOT CLAIM. It is source analysis over this file, the
+// tree's module declarations, and the three call-chain hops named above, not an
+// assertion about the compiled ARM — only `az bicep build` over this pass could
+// make that one, and it is not run from node:test. Nor is it a claim about every
+// route by which this pass could come to grant something else: the chain's
+// registration stops at s3-gateway-aca.bicep's `storageIdentity` declaration,
+// and a change INSIDE that module that made the symbol resolve to a pre-existing
+// identity while keeping the `= {` form is outside what the guards read. The
+// call-site reader is line-oriented, so a declaration whose `{` is not on the
+// `module` line, or whose loop header itself contains a `:`, fails to match and
+// is not recorded — fail-CLOSED for the reader, but it means "one call site" is
+// a statement about declarations this reader can parse. What IS checkable, and
+// is checked: no new param, resource or module can enter this file, no different
+// role can be granted from it, and no second call site or different bound value
+// or call-site scope can appear anywhere in the tree, without a reviewer
+// registering the change.
 
 targetScope = 'resourceGroup'
 

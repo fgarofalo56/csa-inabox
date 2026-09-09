@@ -210,17 +210,36 @@ export function staleRegistrations(findings, register = KNOWN_DORMANT) {
  * Strip `//` line comments while PRESERVING length, so line numbers stay true.
  *
  * STRING-LITERAL AWARE, and that is not a nicety. A naive regex that blanks
- * every `//` to end-of-line also blanks the `//` inside a quoted URL. On
- * `modules/admin-plane/main.bicep` that truncated
+ * every `//` to end-of-line also blanks the `//` inside a quoted URL. Measured
+ * over `modules/admin-plane/main.bicep` at this commit, old reader vs new:
+ *
+ *   OLD  modules 92  resources 27  params 240  vars 311
+ *   NEW  modules 92  resources 27  params 240  vars 311   <- declarations IDENTICAL
+ *   var VALUES that differ: 9
+ *
+ * So the blast radius is NINE MIS-PARSED VAR VALUES, not a lost declaration.
+ * `parseBicep`'s var branch scans continuation lines with a local `j` and leaves
+ * `i` alone, so every `module` / `resource` / `param` line below is still
+ * visited. Eight of the nine were TRUNCATED at the `//` inside a quoted URL
+ * (`icebergCatalogUrl` 30 -> 69 chars, `trinoPolicyRulesUrl` 26 -> 86,
+ * `trinoConsoleAudience` 35 -> 76, `loomCosmosEndpointVal` 35 -> 167,
+ * `icebergConsoleAudience` 61 -> 102, `loomMsLearnMcpEndpoint` 41 -> 71,
+ * `loomPowerBiMcpEndpoint` 43 -> 85, `byoFoundryEndpoint` 44 -> 179). The ninth
+ * RAN AWAY to EOF:
  *
  *     var effectiveArmEndpoint = … ? 'https://management.usgovcloudapi.net' : …
  *
- * mid-literal, leaving one unbalanced `(`, so `parseBicep`'s var-continuation
- * joiner ran on to EOF and `vars.get('effectiveArmEndpoint')` came back 121,678
- * characters long — swallowing every declaration below it. Any guard that asks
- * "which var mentions X" then answers `effectiveArmEndpoint` for any X appearing
- * anywhere further down the file: an R7 message naming a var that never mentions
- * the flag, pointing an investigation at the wrong line.
+ * was truncated mid-literal, leaving one unbalanced `(`, so the var-continuation
+ * joiner ran on and `vars.get('effectiveArmEndpoint')` came back 121,678
+ * characters (the whole 9,216-line file from that point down; it is 165 chars
+ * now, and the longest var in the file is 223). THAT is the defect: any guard
+ * asking "which var mentions X" then answered `effectiveArmEndpoint` for any X
+ * appearing anywhere further down — an R7 message naming a var that never
+ * mentions the flag, pointing an investigation at the wrong line.
+ *
+ * (An earlier revision of this comment said the runaway swallowed "every
+ * declaration below it". It did not — measured above, the declaration counts are
+ * identical either way. The real bug needed no exaggeration.)
  *
  * Bicep string rules honoured here: single-quoted literals do not span a
  * newline and escape with a backslash; `'''…'''` multi-line literals do span
@@ -337,8 +356,37 @@ export function fieldAt(body, key, indent) {
 /** Whitespace- and quote-normalised, for comparison only. */
 export const norm = (s) => String(s ?? '').replace(/\s+/g, '').replace(/"/g, "'");
 
-const RESOURCE_RE = /^resource\s+([A-Za-z_]\w*)\s+'([^'@]+)@[^']*'\s+(existing\s+)?=\s*(?:if\s*\((.*?)\)\s*)?\{/;
-const MODULE_RE = /^module\s+([A-Za-z_]\w*)\s+'([^']+)'\s*=\s*(?:\[[^\]]*\]\s*)?(?:if\s*\((.*?)\)\s*)?\{/;
+/**
+ * A declaration's optional `[for … :` loop header, matched as a prefix.
+ *
+ * `(?:\[\s*for\s+[^:]*:\s*)?` and NOT the `\[[^\]]*\]` this file shipped first.
+ * That earlier spelling required the bracket to CLOSE on the same line, and a
+ * bicep loop never closes it there — the `]` sits after the body's `}`, many
+ * lines below. So EVERY `module x '…' = [for g in gs: {` declaration in the tree
+ * was invisible to this reader, and any guard built on `parsed.modules` counted
+ * such a declaration as ABSENT rather than as something it had failed to parse.
+ *
+ * That is not hypothetical. A reviewer used exactly this to add a second,
+ * unregistered call site of `data-plane/dlz-lake-grant-pass.bicep` — in `[for]`
+ * form, in `main.bicep` itself. Re-measured here before the fix: the mutation
+ * applied to the real file left #3338's call-site guard GREEN at 39/39 and
+ * `check-module-existing-scope.mjs` at rc 0, and `az bicep build` accepted it
+ * (rc 0, ARM emitted). The guard's own declared case, beaten by a layout change.
+ *
+ * `[^:]*:` stops at the loop header's own colon, which covers `[for g in gs:`
+ * and `[for (g, i) in gs:`. A loop expression that itself contains a colon still
+ * fails to match — that is the pre-existing fail-CLOSED behaviour (no match, no
+ * declaration recorded), not a hole this widening introduces.
+ */
+const LOOP_PREFIX = '(?:\\[\\s*for\\s+[^:]*:\\s*)?';
+const RESOURCE_RE = new RegExp(
+  `^resource\\s+([A-Za-z_]\\w*)\\s+'([^'@]+)@[^']*'\\s+(existing\\s+)?=\\s*${LOOP_PREFIX}(?:if\\s*\\((.*?)\\)\\s*)?\\{`,
+);
+const MODULE_RE = new RegExp(
+  `^module\\s+([A-Za-z_]\\w*)\\s+'([^']+)'\\s*=\\s*${LOOP_PREFIX}(?:if\\s*\\((.*?)\\)\\s*)?\\{`,
+);
+/** True for the `= [for … :` form. Recorded so a finding can say so out loud. */
+const LOOP_FORM_RE = /=\s*\[\s*for\s/;
 const PARAM_RE = /^param\s+([A-Za-z_]\w*)\s/;
 const VAR_RE = /^var\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
 
@@ -384,6 +432,7 @@ export function parseBicep(source, file = '<memory>') {
         type: r[2],
         existing: Boolean(r[3]),
         condition: r[4] ? r[4].trim() : null,
+        loop: LOOP_FORM_RE.test(text),
         line: i + 1,
         name: fieldAt(body, 'name', 2)?.value ?? null,
         scope: fieldAt(body, 'scope', 2)?.value ?? null,
@@ -398,6 +447,7 @@ export function parseBicep(source, file = '<memory>') {
         symbol: m[1],
         target: m[2],
         condition: m[3] ? m[3].trim() : null,
+        loop: LOOP_FORM_RE.test(text),
         line: i + 1,
         scope: fieldAt(body, 'scope', 2)?.value ?? null,
         params: paramBindings(body),

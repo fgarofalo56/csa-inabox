@@ -23,6 +23,7 @@ import {
   derefsOf,
   fieldAt,
   KNOWN_DORMANT,
+  loadTree,
   norm,
   paramBindings,
   parseBicep,
@@ -431,8 +432,9 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //            the structural form of the self-minted claim.
 //
 // WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. It is
-// keyed to declarations in ONE small file (209 lines) whose entire job is to
-// make role assignments, plus three named call-chain hops, so an inventory is a
+// keyed to declarations in ONE small file (225 lines, of which the first 180
+// are the header explaining this) whose entire job is to make role assignments,
+// plus three named call-chain hops, so an inventory is a
 // proportionate key there and would not be on a 9,000-line orchestrator. It does
 // not prove that the emitted ARM contains exactly one role assignment; only
 // `az bicep build` over the pass could, and that is not run from node:test here.
@@ -1088,13 +1090,33 @@ test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows 
 // lines refusing — with all three guards green. Half 2 of #3338's fix ("GRANT A
 // LONG-LIVED SHARED IDENTITY") never needed the property GUARDS 1-3 enforce.
 //
-// So the ARGUMENT is registered next to the param, and the identity CHAIN behind
-// it is registered hop by hop, ending at a structural fact rather than another
-// name: the terminal expression must dereference a `userAssignedIdentities`
-// resource that the minting module DECLARES (not `existing`) — which is what
-// "minted by this same deployment run, so it cannot already hold the tuple"
-// actually means. Renaming things does not satisfy that; repointing the chain at
-// a long-lived identity breaks it at whichever hop was repointed.
+// So the ARGUMENT is registered next to the param, the call site's SCOPE is
+// registered beside it, and the identity CHAIN behind the principal is
+// registered hop by hop, ending at a structural fact rather than another name:
+// the terminal expression must dereference a `userAssignedIdentities` resource
+// that the minting module DECLARES (not `existing`) — which is what "minted by
+// this same deployment run, so it cannot already hold the tuple" actually means.
+// Renaming things does not satisfy that; repointing the chain at a long-lived
+// identity breaks it at whichever hop was repointed.
+//
+// THE POPULATION IS THE OTHER HALF OF THE GUARD, and revision 1 got it wrong.
+// It read exactly ONE hard-coded file (`main.bicep`) through a module regex that
+// could not parse a `[for]` declaration, so a second call site escaped it two
+// ways, both measured by a reviewer, both compiling, both 39/39 GREEN:
+//
+//   B1  the same pass invoked from `modules/admin-plane/main.bicep` — not an
+//       exotic location, it is where the sibling lake-RBAC delegations already
+//       live (`transformRunnerLakeRbac … scope: resourceGroup(loomDlzRg)`), so it
+//       is the most likely place a future half 2 of #3338 would be written.
+//   B2  a second call site inside `main.bicep` itself, in `= [for … : {` form,
+//       which `MODULE_RE`'s old `\[[^\]]*\]` alternative could never match
+//       because a bicep loop does not close its bracket on the declaration line.
+//       The guard's OWN declared case, beaten by a layout change.
+//
+// Both are closed by the same two changes: read the WHOLE tree the checker
+// walks, and teach the reader the loop form (see `LOOP_PREFIX` in
+// check-module-existing-scope.mjs). `sites.length === 1` is now the invariant the
+// pass's header claims, rather than a claim about one file.
 //
 // WHERE THE CHAIN'S REGISTRATION STOPS, stated rather than implied: at
 // s3-gateway-aca.bicep's `storageIdentity` declaration. A change INSIDE that
@@ -1106,6 +1128,14 @@ test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows 
 
 const ORCHESTRATOR_REL = 'main.bicep';
 const S3_GATEWAY_REL = 'modules/data-plane/s3-gateway-aca.bicep';
+
+/**
+ * Discovery floor. The checker reports 185 `.bicep` under platform/fiab/bicep;
+ * a scan that returned a handful would make "exactly one call site" true by
+ * having looked at almost nothing. Deliberately slack — this is a broken-scan
+ * tripwire, not a file census that a legitimate deletion should break.
+ */
+const BICEP_POPULATION_FLOOR = 100;
 
 /**
  * The registered ARGUMENT for every param at the pass's single call site.
@@ -1127,6 +1157,20 @@ const PASS_CALLSITE_REGISTER = {
     why: 'Fail-closed switch, a bool, not an identity.',
   },
 };
+
+/**
+ * The registered SCOPE of the call site — WHERE the one role assignment lands.
+ *
+ * Registered because the arguments alone do not pin it: `storageAccountName` is
+ * a bare name, and the pass's unscoped `existing` resolves it in whatever
+ * resource group the CALLER deploys the module at. Repointing
+ * `resourceGroup(lakeAdoptSub, lakeAdoptRg)` at another subscription/RG
+ * therefore retargets the grant without touching a single registered argument.
+ * It cannot introduce a new PRINCIPAL — that is why the reviewer graded it below
+ * B1/B2 — but leaving it out was the same "registered next to the param" idea
+ * half-applied.
+ */
+const PASS_CALLSITE_SCOPE = 'resourceGroup(lakeAdoptSub, lakeAdoptRg)';
 
 /**
  * For every param registered `kind: 'principal'`, the chain from the call-site
@@ -1153,12 +1197,35 @@ const PRINCIPAL_ARGUMENT_CHAIN = {
   },
 };
 
-/** Every call site of the grant pass, wherever the orchestrator declares it. */
-function passCallSites(orchSource) {
-  return parseBicep(orchSource).modules.filter(
-    (m) => resolveTarget(ORCHESTRATOR_REL, m.target) === GRANT_PASS_REL,
-  );
+/**
+ * The WHOLE bicep tree — the same population `check-module-existing-scope.mjs`
+ * walks — with optional in-memory overrides so a mutation control can rewrite a
+ * shipped file without touching disk.
+ *
+ * An override must REPLACE a file that exists. A typo'd path that quietly
+ * inserted a new key would make a mutation control mutate nothing and pass.
+ */
+function bicepTree(overrides = new Map()) {
+  const tree = loadTree(BICEP_ROOT);
+  for (const [rel, src] of overrides) {
+    assert.ok(tree.has(rel), `mutation override ${rel} must replace a real .bicep, not invent one`);
+    tree.set(rel, src);
+  }
+  return tree;
 }
+
+/** Every call site of the grant pass, in any file under platform/fiab/bicep. */
+function passCallSites(tree) {
+  const sites = [];
+  for (const [rel, src] of tree) {
+    for (const m of parseBicep(src, rel).modules) {
+      if (resolveTarget(rel, m.target) === GRANT_PASS_REL) sites.push({ ...m, file: rel });
+    }
+  }
+  return sites.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
+}
+
+const siteLabel = (s) => `${s.file}:${s.line} ${s.symbol}${s.loop ? ' [for]' : ''}`;
 
 /**
  * The expression of `output <name>` in a bicep source, or null.
@@ -1176,20 +1243,24 @@ function outputExpr(source, name) {
   return null;
 }
 
-/** Call-site bindings whose expression is not the registered one. */
-function misboundCallSiteArgs(orchSource) {
+/** Call-site bindings — and scopes — that are not the registered ones. */
+function misboundCallSiteArgs(tree) {
   const out = [];
-  for (const site of passCallSites(orchSource)) {
+  for (const site of passCallSites(tree)) {
+    const at = siteLabel(site);
+    if (norm(site.scope ?? '') !== norm(PASS_CALLSITE_SCOPE)) {
+      out.push(`${at}.<scope>: ${site.scope ?? "NONE — deploys at the caller's own scope"}`);
+    }
     for (const [key, expr] of site.params.entries()) {
       const reg = PASS_CALLSITE_REGISTER[key];
       if (!reg) {
-        out.push(`${site.symbol}.${key}: UNREGISTERED argument`);
+        out.push(`${at}.${key}: UNREGISTERED argument`);
         continue;
       }
-      if (norm(expr) !== norm(reg.expr)) out.push(`${site.symbol}.${key}: ${expr}`);
+      if (norm(expr) !== norm(reg.expr)) out.push(`${at}.${key}: ${expr}`);
     }
     for (const key of Object.keys(PASS_CALLSITE_REGISTER)) {
-      if (!site.params.has(key)) out.push(`${site.symbol}.${key}: registered but NOT BOUND`);
+      if (!site.params.has(key)) out.push(`${at}.${key}: registered but NOT BOUND`);
     }
   }
   return out.sort();
@@ -1222,17 +1293,28 @@ function brokenPrincipalChains(adminSource, mintingSources) {
   return broken.sort();
 }
 
-test('#3338 GUARD 4: the pass has exactly ONE call site, and every argument it binds is registered', () => {
-  const orch = readBicep(ORCHESTRATOR_REL);
-  const sites = passCallSites(orch);
+test('#3338 GUARD 4: the pass has exactly ONE call site in the WHOLE tree, and every argument it binds is registered', () => {
+  const tree = bicepTree();
 
-  // Non-vacuity: a reader that resolved no call site would satisfy the
-  // "everything bound is registered" assertion while measuring nothing.
+  // Population floor: "one call site" over a broken scan measures nothing. This
+  // is the assertion revision 1 could not make, because its population was a
+  // single hard-coded filename.
+  assert.ok(
+    tree.size >= BICEP_POPULATION_FLOOR,
+    `discovered only ${tree.size} .bicep under ${BICEP_ROOT} — the scan is broken, not clean`,
+  );
+  assert.ok(tree.has(GRANT_PASS_REL), `${GRANT_PASS_REL} must be in the scanned tree`);
+  assert.ok(tree.has(ORCHESTRATOR_REL), `${ORCHESTRATOR_REL} must be in the scanned tree`);
+
+  const sites = passCallSites(tree);
   assert.equal(
     sites.length,
     1,
-    `dlz-lake-grant-pass.bicep must have exactly one call site in main.bicep; found ${sites.length}. A second call site can bind a different principal to the same pass, which is #3338's half 2 with the callee untouched.`,
+    `dlz-lake-grant-pass.bicep must have exactly one call site anywhere under platform/fiab/bicep; found ${sites.length}${
+      sites.length ? ` (${sites.map(siteLabel).join(', ')})` : ''
+    }. A second call site can bind a different principal to the same pass, which is #3338's half 2 with the callee untouched — and it does not have to be in main.bicep, nor in non-loop form.`,
   );
+  assert.equal(sites[0].file, ORCHESTRATOR_REL, 'the registered call site lives in main.bicep');
   assert.ok(sites[0].params.size > 0, 'the call site must bind params for this guard to measure anything');
   assert.ok(
     Object.keys(PASS_CALLSITE_REGISTER).every((k) => Object.hasOwn(PASS_PARAM_REGISTER, k)),
@@ -1240,9 +1322,9 @@ test('#3338 GUARD 4: the pass has exactly ONE call site, and every argument it b
   );
 
   assert.deepEqual(
-    misboundCallSiteArgs(orch),
+    misboundCallSiteArgs(tree),
     [],
-    "main.bicep binds something other than the registered expression to dlz-lake-grant-pass.bicep. The callee's inventory cannot see this edit: swapping the s3 gateway output for adminPlane!.outputs.uamiConsolePrincipalId makes the pass grant the Console UAMI with GUARDS 1-3 green.",
+    "the pass is invoked with something other than the registered expressions/scope. The callee's inventory cannot see this edit: swapping the s3 gateway output for adminPlane!.outputs.uamiConsolePrincipalId makes the pass grant the Console UAMI with GUARDS 1-3 green.",
   );
 });
 
@@ -1267,12 +1349,13 @@ test('#3338 GUARD 4: the principal argument chains back to an identity this depl
 });
 
 test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a second call site, and a repointed chain all go RED', () => {
-  const orch = readBicep(ORCHESTRATOR_REL);
+  const tree = bicepTree();
+  const orch = tree.get(ORCHESTRATOR_REL);
   const admin = readBicep(ADMIN_PLANE_REL);
   const s3gw = readBicep(S3_GATEWAY_REL);
   const minting = new Map([[S3_GATEWAY_REL, s3gw]]);
 
-  assert.deepEqual(misboundCallSiteArgs(orch), [], 'head must be clean before a mutation means anything');
+  assert.deepEqual(misboundCallSiteArgs(tree), [], 'head must be clean before a mutation means anything');
   assert.deepEqual(brokenPrincipalChains(admin, minting), [], 'head chain must be clean');
 
   // (a) BLOCKER 1 verbatim: the callee untouched, the argument swapped for the
@@ -1283,17 +1366,69 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   );
   assert.notEqual(swapped, orch, 'the call-site mutation must actually apply');
   assert.ok(/output uamiConsolePrincipalId string =/.test(admin), 'the swap target output must really exist');
-  assert.deepEqual(misboundCallSiteArgs(swapped), [
-    "dlzLakeGrantPass.s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''",
-  ]);
+  const swappedFindings = misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REL, swapped]])));
+  assert.equal(swappedFindings.length, 1, `expected one finding, got ${swappedFindings.join(' | ')}`);
+  assert.match(
+    swappedFindings[0],
+    /^main\.bicep:\d+ dlzLakeGrantPass\.s3GatewayPrincipalId: deployAdminPlane \? adminPlane!\.outputs\.uamiConsolePrincipalId : ''$/,
+  );
 
-  // (b) the pass invoked a SECOND time with a different principal, leaving the
-  // registered call site untouched.
+  // (b) the pass invoked a SECOND time in main.bicep with a different principal,
+  // leaving the registered call site untouched.
   const doubled = `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass.bicep' = if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: adminPlane!.outputs.uamiConsolePrincipalId\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
-  assert.equal(passCallSites(doubled).length, 2, 'the second call site must parse');
+  const doubledTree = bicepTree(new Map([[ORCHESTRATOR_REL, doubled]]));
+  assert.equal(passCallSites(doubledTree).length, 2, 'the second call site must parse');
   assert.ok(
-    misboundCallSiteArgs(doubled).some((f) => f.startsWith('dlzLakeGrantPassConsole.s3GatewayPrincipalId:')),
+    misboundCallSiteArgs(doubledTree).some((f) => f.includes('dlzLakeGrantPassConsole.s3GatewayPrincipalId:')),
     'the second call site must be named in the finding',
+  );
+
+  // (b1) REVIEWER'S BYPASS 1 — a second call site in a file OTHER than
+  // main.bicep. `modules/admin-plane/main.bicep` is where the sibling lake-RBAC
+  // delegations already live, so it is the likeliest place half 2 gets written.
+  // Measured GREEN 39/39 against the one-file population this replaced.
+  const elsewhere = `${admin}\nmodule dlzLakeGrantPassConsole '../data-plane/dlz-lake-grant-pass.bicep' = if (loomStorageGrantable && !skipRoleGrants) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(loomDlzRg)\n  params: {\n    storageAccountName: loomStorageAccount\n    s3GatewayPrincipalId: identity.outputs.uamiConsolePrincipalId\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
+  assert.notEqual(elsewhere, admin, 'the out-of-orchestrator mutation must actually apply');
+  const elsewhereTree = bicepTree(new Map([[ADMIN_PLANE_REL, elsewhere]]));
+  const elsewhereSites = passCallSites(elsewhereTree);
+  assert.equal(elsewhereSites.length, 2, 'the call site outside main.bicep must be SEEN');
+  assert.ok(
+    elsewhereSites.some((s) => s.file === ADMIN_PLANE_REL && s.symbol === 'dlzLakeGrantPassConsole'),
+    'the second site must be attributed to modules/admin-plane/main.bicep',
+  );
+  assert.ok(
+    misboundCallSiteArgs(elsewhereTree).some((f) =>
+      f.startsWith(`${ADMIN_PLANE_REL}:`) && f.includes('dlzLakeGrantPassConsole.s3GatewayPrincipalId:'),
+    ),
+    'the out-of-orchestrator principal swap must be named, with its file',
+  );
+
+  // (b2) REVIEWER'S BYPASS 2 — a second call site inside main.bicep in `[for]`
+  // form. This is the one that mattered most: the guard's OWN declared case,
+  // beaten by a layout change, because MODULE_RE could not parse a loop header.
+  // `az bicep build` accepted it (rc 0) and the suite stayed 39/39 GREEN.
+  const looped = `${orch}\nvar extraLakeGrants = [\n  'console'\n]\nmodule dlzLakeGrantPassExtra 'modules/data-plane/dlz-lake-grant-pass.bicep' = [for g in extraLakeGrants: if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-x-\${g}'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''\n    assignRoles: !skipRoleGrants\n  }\n}]\n`;
+  const loopedTree = bicepTree(new Map([[ORCHESTRATOR_REL, looped]]));
+  const loopedSites = passCallSites(loopedTree);
+  assert.equal(loopedSites.length, 2, 'the `[for]` call site must PARSE — this is what MODULE_RE used to miss');
+  const loopSite = loopedSites.find((s) => s.symbol === 'dlzLakeGrantPassExtra');
+  assert.ok(loopSite, 'the loop call site must be found by symbol');
+  assert.equal(loopSite.loop, true, 'the loop form must be recorded as such, so a finding can say so');
+  assert.ok(
+    misboundCallSiteArgs(loopedTree).some((f) => f.includes('dlzLakeGrantPassExtra [for].s3GatewayPrincipalId:')),
+    'the loop call site must be named in the finding, marked as a loop',
+  );
+
+  // (b3) the call site's SCOPE repointed at another subscription/RG — every
+  // registered ARGUMENT untouched, so only the scope registration catches it.
+  const rescoped = orch.replace(
+    "  name: 'dlz-lake-grant-pass'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)",
+    "  name: 'dlz-lake-grant-pass'\n  scope: resourceGroup(otherSub, otherRg)",
+  );
+  assert.notEqual(rescoped, orch, 'the scope mutation must actually apply');
+  assert.deepEqual(
+    misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REL, rescoped]]))).map((f) => f.replace(/:\d+ /, ' ')),
+    ['main.bicep dlzLakeGrantPass.<scope>: resourceGroup(otherSub, otherRg)'],
   );
 
   // (c) the chain repointed one hop out — the admin-plane output itself made to
@@ -1322,6 +1457,48 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   assert.deepEqual(brokenPrincipalChains(admin, adopted), [
     's3GatewayPrincipalId: modules/data-plane/s3-gateway-aca.bicep storageIdentity is Microsoft.ManagedIdentity/userAssignedIdentities EXISTING — not an identity this run mints',
   ]);
+});
+
+test('the reader parses a `[for … :` declaration header — the form MODULE_RE used to miss', () => {
+  // Direct unit cover for the cause behind bypass B2, independent of #3338: the
+  // old `\[[^\]]*\]` alternative needed the bracket closed on the declaration
+  // line, which a bicep loop never does.
+  const src = [
+    "module plain 'modules/x.bicep' = {",
+    "  name: 'plain'",
+    "}",
+    "module looped 'modules/y.bicep' = [for g in gs: {",
+    "  name: 'looped-${g}'",
+    "  scope: resourceGroup(someRg)",
+    "  params: {",
+    "    a: b",
+    "  }",
+    "}]",
+    "module loopedIndexed 'modules/z.bicep' = [for (g, i) in gs: if (flag) {",
+    "  name: 'idx-${i}'",
+    "}]",
+    "resource loopRes 'Microsoft.Storage/storageAccounts@2024-01-01' = [for n in ns: {",
+    "  name: n",
+    "}]",
+  ].join('\n');
+  const parsed = parseBicep(src, '<memory>');
+  assert.deepEqual(
+    parsed.modules.map((m) => [m.symbol, m.target, m.loop, m.condition]),
+    [
+      ['plain', 'modules/x.bicep', false, null],
+      ['looped', 'modules/y.bicep', true, null],
+      ['loopedIndexed', 'modules/z.bicep', true, 'flag'],
+    ],
+  );
+  // The loop body must still be read, not just its header — otherwise the call
+  // site would parse and then bind nothing, which reads as clean.
+  const looped = parsed.modules.find((m) => m.symbol === 'looped');
+  assert.equal(looped.scope, 'resourceGroup(someRg)');
+  assert.deepEqual([...looped.params.entries()], [['a', 'b']]);
+  assert.deepEqual(
+    parsed.resources.map((r) => [r.symbol, r.loop]),
+    [['loopRes', true]],
+  );
 });
 
 test('blankComments preserves length and does not blank a `//` inside a string literal', () => {
