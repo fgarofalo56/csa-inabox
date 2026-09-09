@@ -6986,8 +6986,9 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 //    onto an equivalent grant already made for this pair elsewhere rather than
 //    erroring on a duplicate". This repo's own measured history says the
 //    opposite three times over. Cited by SYMBOL, not by line — the first
-//    revision of this very block cited ":9095 below" and its own diff pushed
-//    that note to :9145:
+//    revision of this very block cited a line number for the third one and its
+//    own diff pushed that note further down the file, so no number here is
+//    trustworthy for longer than one merge:
 //      * main.bicep's `adminAppResourcesRbac` gating note — the app-resources
 //        leaf "failed RoleAssignmentExists on EVERY deploy in BOTH topologies;
 //        it only ever 'worked' because the grant was created imperatively";

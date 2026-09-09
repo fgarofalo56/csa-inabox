@@ -108,16 +108,21 @@
 // is no write to 403 on. #3338's real acceptance criterion is an
 // artifact-persistence path in that app, which does not exist yet.
 //
-// Three guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
+// Four guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
 // line, and they are keyed to an INVENTORY of this file rather than to a
-// pattern. Two earlier revisions each lost to one edit — revision 1 keyed the
+// pattern. Three earlier revisions each lost to one edit — revision 1 keyed the
 // refusal to param NAMES (`/PrincipalId$/`), so the identical Console-UAMI grant
 // under `consoleUamiObjectId` read green; revision 2 keyed it to a
 // `principalId:` at exactly four spaces inside a top-level `resource`, so an
 // inline `properties: { … }` and a grant delegated to a child module both read
-// green while compiling to the same ARM. Enumerating one more syntax would only
-// move the next escape, so the key is now the three bicep KEYWORDS that must
-// begin a statement and that no layout can hide:
+// green while compiling to the same ARM; revision 3 keyed everything to
+// declarations IN THIS FILE, so a reviewer left the file untouched and swapped
+// what main.bicep BINDS to it — one line at the call site made this pass grant
+// the Console UAMI with every guard green (measured 2026-09-09: the parent
+// commit's suite passed 35/35 on that mutation applied to the real main.bicep).
+// Enumerating one more syntax would only move the next escape, so the key is now
+// the three bicep KEYWORDS that must begin a statement and that no layout can
+// hide, plus the call site's ARGUMENTS:
 //
 //   GUARD 1 — every `param` this file declares is in PASS_PARAM_REGISTER with a
 //     `kind` and a reason. A `principal` param must reach the `principalId` of a
@@ -127,20 +132,35 @@
 //     forgotten), including the form that is referenced by a `!empty(...)`
 //     grant-gate var and a counted output.
 //   GUARD 2 — every `resource` and `module` this file declares is in
-//     PASS_BODY_REGISTER, AND every principal that actually reaches a
-//     `principalId` is on a self-minted allowlist with a measured reason. The
-//     inventory half is what closes the inline-object, `[for]`-loop and
-//     delegated-module forms together instead of one at a time.
+//     PASS_BODY_REGISTER, every principal that actually reaches a `principalId`
+//     is on a self-minted allowlist with a measured reason, and every role
+//     definition GUID reachable inside a roleAssignments declaration is in
+//     PASS_GRANTED_ROLES. The inventory half is what closes the inline-object,
+//     `[for]`-loop and delegated-module forms together instead of one at a time;
+//     the role half is what closes a one-token Reader→Contributor swap, which
+//     adds no declaration at all and would falsify this file's own
+//     `s3GatewayRoleDefinitionId` @description.
 //   GUARD 3 — only modules whose grant this pass OWNS may gate their deploy on
 //     `loomStorageWillBeGranted`.
+//   GUARD 4 — this pass has exactly ONE call site, every argument main.bicep
+//     binds to it is registered, and each `principal` argument is traced hop by
+//     hop — main.bicep's expression, the admin-plane output behind it, the
+//     minting module's output behind that — to a `userAssignedIdentities`
+//     resource s3-gateway-aca.bicep DECLARES rather than adopts. That terminal
+//     check is the structural form of "minted by this run", so it cannot be
+//     satisfied by renaming.
 //
-// WHAT THAT DOES NOT CLAIM. It is source analysis over this one 167-line file,
-// not an assertion about the compiled ARM — only `az bicep build` over this pass
-// could make that one, and it is not run from node:test. The claim is narrower
-// and checkable: no new param, resource or module can enter this file without a
-// reviewer registering it, which is the property both halves of #3338's fix need
-// in order to merge. Each guard carries a mutation control that applies the
-// break to a copy of this real source and asserts the checker turns red.
+// WHAT THAT DOES NOT CLAIM. It is source analysis over this 209-line file and
+// the three call-chain hops named above, not an assertion about the compiled
+// ARM — only `az bicep build` over this pass could make that one, and it is not
+// run from node:test. Nor is it a claim about every route by which this pass
+// could come to grant something else: the chain's registration stops at
+// s3-gateway-aca.bicep's `storageIdentity` declaration, and a change INSIDE that
+// module that made the symbol resolve to a pre-existing identity while keeping
+// the `= {` form is outside what the guards read. What IS checkable, and is
+// checked: no new param, resource or module can enter this file, no different
+// role can be granted from it, and no different value can be bound to it at its
+// single call site, without a reviewer registering the change.
 
 targetScope = 'resourceGroup'
 

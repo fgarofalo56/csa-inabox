@@ -23,6 +23,7 @@ import {
   derefsOf,
   fieldAt,
   KNOWN_DORMANT,
+  norm,
   paramBindings,
   parseBicep,
   partitionFindings,
@@ -370,8 +371,8 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //      deploy in BOTH topologies"), main.bicep's monitoring-reader-rbac
 //      `digestPrincipalId: ''` note, and admin-plane/main.bicep's note on the
 //      REMOVED `reportSubscriptionsPrincipalId` output. Those are cited by
-//      SYMBOL, not by line: an earlier revision of this block cited
-//      admin-plane/main.bicep:9095 and its own diff moved the line.
+//      SYMBOL, not by line: an earlier revision of this block cited a line
+//      number in admin-plane/main.bicep and its own diff moved that line.
 //      The Console UAMI already holds Storage Blob Data Contributor on the live
 //      Commercial lake from an out-of-band grant (measured 2026-08-13, recorded
 //      in the pass's own header). #3338 asked for exactly that principal at
@@ -379,8 +380,8 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //
 // HOW THESE GUARDS ARE KEYED, AND WHY IT IS AN INVENTORY AND NOT A PATTERN.
 //
-// Two earlier revisions of this block each lost to one edit, and the pattern is
-// the lesson, not the individual escapes:
+// Three earlier revisions of this block each lost to one edit, and the pattern
+// is the lesson, not the individual escapes:
 //
 //   * revision 1 keyed GUARD 2 to param NAMES (`/PrincipalId$/`), so the
 //     identical Console-UAMI grant under `consoleUamiObjectId` read green;
@@ -391,13 +392,23 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //     this repo's own convention for lake RBAC). GUARD 1 meanwhile still keyed
 //     on `/PrincipalId$/` plus "referenced by nothing", so a param that IS
 //     referenced (by a grant-gate `var` and an `output`) under a name without
-//     that suffix went green while carrying no assignment at all.
+//     that suffix went green while carrying no assignment at all;
+//   * revision 3 keyed EVERYTHING to declarations inside the callee, and so
+//     could not see the CALL SITE. Leaving the pass byte-identical and changing
+//     one line of main.bicep — `s3GatewayPrincipalId: … adminPlane!.outputs.`
+//     `uamiConsolePrincipalId` — made the pass's one assignment grant the
+//     Console UAMI. Measured 2026-09-09 on the real shipped main.bicep: revision
+//     3's suite passed 35/35 on that mutation. A one-token role flip (Reader →
+//     Contributor) was equally invisible, and it also falsified the pass's own
+//     shipped `s3GatewayRoleDefinitionId` @description.
 //
-// Both were reviewer-built counterexamples, reproduced on disk against the real
-// pass. Enumerating one more syntax would just move the next escape. So the
-// primary key is now an INVENTORY of the pass, taken from the three bicep
+// All three were reviewer-built counterexamples, reproduced on disk against the
+// real files. Enumerating one more syntax would just move the next escape. So
+// the primary key is an INVENTORY of the pass, taken from the three bicep
 // KEYWORDS that no layout can hide — `param`, `resource`, `module`, each of
-// which must begin a statement:
+// which must begin a statement — plus the two things an inventory of the callee
+// structurally cannot see: the ROLE the assignment carries, and the ARGUMENTS
+// the single call site binds.
 //
 //   GUARD 1  every `param` the pass declares is in PASS_PARAM_REGISTER, with a
 //            `kind` and a reason. A `principal` param must reach the
@@ -405,28 +416,40 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //            Adding ANY param under ANY name, referenced or not, is red until
 //            registered — which is where a reviewer has to look at it.
 //   GUARD 2  every `resource` and `module` the pass declares is in
-//            PASS_BODY_REGISTER, and every principal that actually reaches a
-//            `principalId` is on the self-minted allowlist. The first half is
-//            what closes the inline-object and delegated-module forms: they add
-//            a declaration, whatever their layout.
+//            PASS_BODY_REGISTER, every principal that actually reaches a
+//            `principalId` is on the self-minted allowlist, and every role guid
+//            reachable inside a roleAssignments declaration is in
+//            PASS_GRANTED_ROLES. The first part closes the inline-object and
+//            delegated-module forms: they add a declaration, whatever their
+//            layout. The last closes the one-token escalation, which adds none.
 //   GUARD 3  only modules whose grant the pass OWNS may gate their deploy on
 //            `loomStorageWillBeGranted`.
+//   GUARD 4  the pass has exactly ONE call site; every argument main.bicep binds
+//            there is registered next to the param; and each `principal`
+//            argument is traced hop by hop to a `userAssignedIdentities`
+//            resource that s3-gateway-aca.bicep DECLARES rather than adopts —
+//            the structural form of the self-minted claim.
 //
 // WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. It is
-// keyed to declarations in ONE small file (167 lines) whose entire job is to
-// make role assignments, so an inventory is a proportionate key there and would
-// not be on a 9,000-line orchestrator. It does not prove that the emitted ARM
-// contains exactly one role assignment; only `az bicep build` over the pass
-// could, and that is not run from node:test here. What it does establish is
-// that no NEW param, resource or module can enter this file without a reviewer
-// registering it — which is the property both #3338 half-fixes needed to
-// bypass, and the property the module header may therefore claim.
+// keyed to declarations in ONE small file (209 lines) whose entire job is to
+// make role assignments, plus three named call-chain hops, so an inventory is a
+// proportionate key there and would not be on a 9,000-line orchestrator. It does
+// not prove that the emitted ARM contains exactly one role assignment; only
+// `az bicep build` over the pass could, and that is not run from node:test here.
+// Nor does it reach INSIDE s3-gateway-aca.bicep: the chain ends at that module's
+// `storageIdentity` declaration, and an edit there that made the symbol resolve
+// to a pre-existing identity while keeping the `= {` form is out of reach and is
+// said so rather than covered by implication. What it DOES establish is that no
+// new param, resource or module can enter the pass, no different role can be
+// granted from it, and no different value can be bound to it at its call site,
+// without a reviewer registering the change — which is what both #3338
+// half-fixes, in every form measured so far, had to bypass.
 //
 // These tests are GREEN at head — head carries neither break. They are trap
 // guards, not the fix for a red, and each carries a MUTATION control that
-// applies the break to an in-memory copy of the REAL source and asserts the
-// checker turns red on it. Without that control a green here would be
-// indistinguishable from a checker that looks at nothing.
+// applies the break to a copy of the REAL source and asserts the checker turns
+// red on it. Without that control a green here would be indistinguishable from
+// a checker that looks at nothing.
 
 const GRANT_PASS_REL = 'modules/data-plane/dlz-lake-grant-pass.bicep';
 const ADMIN_PLANE_REL = 'modules/admin-plane/main.bicep';
@@ -599,6 +622,71 @@ function grantingConfigParams(source) {
   return declaredParamNames(source)
     .filter((p) => PASS_PARAM_REGISTER[p]?.kind === 'config')
     .filter((p) => reachesAGrant(source, p))
+    .sort();
+}
+
+const SBDR_ROLE_ID = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'; // Storage Blob Data Reader
+const SBDC_ROLE_ID = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; // Storage Blob Data CONTRIBUTOR
+
+const GUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
+/**
+ * Every role-definition GUID reachable from inside a
+ * `Microsoft.Authorization/roleAssignments` declaration in the pass — written
+ * inline, or via a `var` this file declares.
+ *
+ * WHY A SET AND NOT A `roleDefinitionId:` READ. A reviewer's counterexample
+ * flipped ONE token — `storageBlobDataReaderRoleId` from Reader to Contributor —
+ * which adds no param, resource or module, so the inventory saw nothing while
+ * the pass's own shipped `@description` ("READER — never Contributor") became
+ * false in `deploy-templates/main.json`. Collecting every guid inside the
+ * declaration and demanding each one be REGISTERED is fail-closed against that
+ * whatever spelling it takes: the var, the guid() name salt, an inline
+ * `properties: { … }`, or a literal in `roleDefinitionId:` itself.
+ */
+function grantedRoleIds(source) {
+  const lines = blankComments(source).split(/\r?\n/);
+  const varGuids = new Map();
+  for (const [name, expr] of parseBicep(source).vars.entries()) {
+    const found = String(expr).match(GUID_RE);
+    if (found && found.length === 1) varGuids.set(name, found[0].toLowerCase());
+  }
+  const out = new Set();
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^resource\s+\w+\s+'Microsoft\.Authorization\/roleAssignments@/.test(lines[i].trimStart())) continue;
+    const body = blockAt(lines, i)
+      .map((b) => b.text)
+      .join('\n');
+    for (const g of body.match(GUID_RE) ?? []) out.add(g.toLowerCase());
+    for (const m of body.matchAll(/\b([A-Za-z_]\w*)\b/g)) {
+      const g = varGuids.get(m[1]);
+      if (g) out.add(g);
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * Every role this pass is allowed to grant. Registered by GUID because the guid
+ * is what reaches ARM; the role NAME beside it is what a reviewer reads.
+ */
+const PASS_GRANTED_ROLES = {
+  [SBDR_ROLE_ID]: {
+    role: 'Storage Blob Data Reader',
+    why: 'READ only, and the exact role the same-subscription path (data-plane/s3-gateway-lake-rbac.bicep) grants for the same identity, so the two paths converge instead of racing. The pass ships `output s3GatewayRoleDefinitionId` with the @description "READER — never Contributor", and that string compiles into apps/fiab-console/deploy-templates/main.json — an escalation here would also make a shipped description false.',
+  },
+};
+
+/** Role guids the pass grants that PASS_GRANTED_ROLES does not account for. */
+function unregisteredGrantedRoles(source) {
+  return grantedRoleIds(source).filter((g) => !Object.hasOwn(PASS_GRANTED_ROLES, g));
+}
+
+/** Registered roles the pass no longer grants — the register must not rot. */
+function staleRoleRegistrations(source) {
+  const granted = new Set(grantedRoleIds(source));
+  return Object.keys(PASS_GRANTED_ROLES)
+    .filter((g) => !granted.has(g))
     .sort();
 }
 
@@ -795,9 +883,46 @@ test('#3338 GUARD 2: the cross-sub pass declares only registered resources/modul
     assert.ok(p.mintedBy && p.mintedBy.length > 20, `${p.param} must name what mints it`);
     assert.ok(p.why && p.why.length > 40, `${p.param} needs a measured reason, not an assertion`);
   }
+
+  // …and WHICH ROLE, which is invisible to the declaration inventory: a
+  // one-token Reader→Contributor swap adds no param, resource or module.
+  assert.ok(grantedRoleIds(source).length > 0, 'no role guid was read at all — this half would be vacuous');
+  assert.deepEqual(
+    unregisteredGrantedRoles(source),
+    [],
+    'dlz-lake-grant-pass.bicep grants a role definition PASS_GRANTED_ROLES does not account for. This pass is READ-ONLY on the lake by design; an escalation to Storage Blob Data Contributor is the write half of #3338 and also falsifies the shipped `s3GatewayRoleDefinitionId` @description.',
+  );
+  assert.deepEqual(
+    staleRoleRegistrations(source),
+    [],
+    'PASS_GRANTED_ROLES lists a role the pass no longer grants — prune it, or the register is a mute button',
+  );
+  assert.equal(
+    grantedRoleIds(source).includes(SBDC_ROLE_ID),
+    false,
+    'the pass grants Storage Blob Data CONTRIBUTOR — the exact role #3338 asks for, refused in the module header',
+  );
 });
 
-const SBDC_ROLE_ID = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
+test('#3338 GUARD 2 — MUTATION control: escalating the granted role to Contributor goes RED in both spellings', () => {
+  const head = readBicep(GRANT_PASS_REL);
+  assert.deepEqual(unregisteredGrantedRoles(head), [], 'head must be clean before the mutation means anything');
+
+  // (a) the one-token var flip — the reviewer's counterexample verbatim.
+  const viaVar = head.replace(`'${SBDR_ROLE_ID}'`, `'${SBDC_ROLE_ID}'`);
+  assert.notEqual(viaVar, head, 'the var mutation must actually apply');
+  assert.deepEqual(unregisteredGrantedRoles(viaVar), [SBDC_ROLE_ID]);
+  assert.deepEqual(staleRoleRegistrations(viaVar), [SBDR_ROLE_ID]);
+
+  // (b) the var left innocent and the guid written straight into the
+  // assignment, so a diff reader scanning the `var` block sees nothing.
+  const viaInline = head.replace(
+    "roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)",
+    `roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '${SBDC_ROLE_ID}')`,
+  );
+  assert.notEqual(viaInline, head, 'the inline mutation must actually apply');
+  assert.deepEqual(unregisteredGrantedRoles(viaInline), [SBDC_ROLE_ID]);
+});
 
 /**
  * Applies the FULL fix #3338 asks for to an in-memory copy of the real pass —
@@ -945,6 +1070,257 @@ test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows 
     false,
     'effectiveArmEndpoint must not appear to reference the grant flag',
   );
+});
+
+// ── GUARD 4 — the CALL SITE, because the callee's inventory cannot see it ────
+//
+// A reviewer built the escape that motivated this guard, one level out from
+// where GUARDS 1-3 look: leave the pass untouched and change what main.bicep
+// BINDS to it.
+//
+//     -    s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.s3GatewayStorageUamiPrincipalId : ''
+//     +    s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''
+//
+// That compiles (`output uamiConsolePrincipalId` exists in admin-plane), adds no
+// param, resource or module, and made the pass's ONE assignment grant the
+// Console UAMI — the exact identity, role and scope the module header spends 62
+// lines refusing — with all three guards green. Half 2 of #3338's fix ("GRANT A
+// LONG-LIVED SHARED IDENTITY") never needed the property GUARDS 1-3 enforce.
+//
+// So the ARGUMENT is registered next to the param, and the identity CHAIN behind
+// it is registered hop by hop, ending at a structural fact rather than another
+// name: the terminal expression must dereference a `userAssignedIdentities`
+// resource that the minting module DECLARES (not `existing`) — which is what
+// "minted by this same deployment run, so it cannot already hold the tuple"
+// actually means. Renaming things does not satisfy that; repointing the chain at
+// a long-lived identity breaks it at whichever hop was repointed.
+//
+// WHERE THE CHAIN'S REGISTRATION STOPS, stated rather than implied: at
+// s3-gateway-aca.bicep's `storageIdentity` declaration. A change INSIDE that
+// module that made `storageIdentity` resolve to something pre-existing while
+// keeping the `= {` form (an `existingIdentityName` param threaded into `name:`,
+// say) is outside what this reads. That is a different module with a different
+// job, and pretending otherwise is how the previous two revisions of these
+// guards over-claimed.
+
+const ORCHESTRATOR_REL = 'main.bicep';
+const S3_GATEWAY_REL = 'modules/data-plane/s3-gateway-aca.bicep';
+
+/**
+ * The registered ARGUMENT for every param at the pass's single call site.
+ *
+ * Compared with `norm()` (whitespace- and quote-insensitive) so reformatting is
+ * not a false red, but any change to WHAT IS BOUND is.
+ */
+const PASS_CALLSITE_REGISTER = {
+  storageAccountName: {
+    expr: "lakeAdoptName",
+    why: "main.bicep:670's `adoptName(adopt,'storage-adls')` — the lake's name comes from the ADOPT PLAN, the same document that bound loomStorageAccount, and the call site's `scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)` reads the sub/rg from the same three lines.",
+  },
+  s3GatewayPrincipalId: {
+    expr: "deployAdminPlane ? adminPlane!.outputs.s3GatewayStorageUamiPrincipalId : ''",
+    why: "The ONE principal this pass grants. The ternary keeps the output unevaluable when the admin plane is skipped; the value itself must stay the S3 gateway's dedicated UAMI — see PRINCIPAL_ARGUMENT_CHAIN for the hops behind it.",
+  },
+  assignRoles: {
+    expr: '!skipRoleGrants',
+    why: 'Fail-closed switch, a bool, not an identity.',
+  },
+};
+
+/**
+ * For every param registered `kind: 'principal'`, the chain from the call-site
+ * argument to the resource that MINTS the identity. Each hop is an expression
+ * this guard reads out of the real source and compares; the last hop is checked
+ * structurally.
+ */
+const PRINCIPAL_ARGUMENT_CHAIN = {
+  s3GatewayPrincipalId: {
+    // hop 1 — which admin-plane output main.bicep reads (also covered by
+    // PASS_CALLSITE_REGISTER; named here so the chain reads end to end).
+    adminPlaneOutput: 's3GatewayStorageUamiPrincipalId',
+    // hop 2 — what that output is, inside admin-plane/main.bicep.
+    adminPlaneExpr: "s3GatewayActive ? s3Gateway!.outputs.storageUamiPrincipalId : ''",
+    // hop 3 — the minting module and the output it exposes.
+    mintingModule: S3_GATEWAY_REL,
+    mintingOutput: 'storageUamiPrincipalId',
+    mintingExpr: 'storageIdentity.properties.principalId',
+    // hop 3, structurally: the symbol above must be a userAssignedIdentity this
+    // module CREATES. `existing` here would mean the identity predates the run,
+    // which is precisely the property SELF_MINTED_PASS_PRINCIPALS asserts.
+    mintedSymbol: 'storageIdentity',
+    mintedType: 'Microsoft.ManagedIdentity/userAssignedIdentities',
+  },
+};
+
+/** Every call site of the grant pass, wherever the orchestrator declares it. */
+function passCallSites(orchSource) {
+  return parseBicep(orchSource).modules.filter(
+    (m) => resolveTarget(ORCHESTRATOR_REL, m.target) === GRANT_PASS_REL,
+  );
+}
+
+/**
+ * The expression of `output <name>` in a bicep source, or null.
+ *
+ * Single-line by design and therefore fail-CLOSED: an output split across lines
+ * yields null, which does not match its registered expression and goes red for a
+ * reviewer to look at, rather than being silently skipped.
+ */
+function outputExpr(source, name) {
+  const re = new RegExp(`^output\\s+${name}\\s+\\w+\\s*=\\s*(.*)$`);
+  for (const line of blankComments(source).split(/\r?\n/)) {
+    const m = re.exec(line.trimStart());
+    if (m) return m[1].trim();
+  }
+  return null;
+}
+
+/** Call-site bindings whose expression is not the registered one. */
+function misboundCallSiteArgs(orchSource) {
+  const out = [];
+  for (const site of passCallSites(orchSource)) {
+    for (const [key, expr] of site.params.entries()) {
+      const reg = PASS_CALLSITE_REGISTER[key];
+      if (!reg) {
+        out.push(`${site.symbol}.${key}: UNREGISTERED argument`);
+        continue;
+      }
+      if (norm(expr) !== norm(reg.expr)) out.push(`${site.symbol}.${key}: ${expr}`);
+    }
+    for (const key of Object.keys(PASS_CALLSITE_REGISTER)) {
+      if (!site.params.has(key)) out.push(`${site.symbol}.${key}: registered but NOT BOUND`);
+    }
+  }
+  return out.sort();
+}
+
+/** Chain hops that no longer read the way PRINCIPAL_ARGUMENT_CHAIN records. */
+function brokenPrincipalChains(adminSource, mintingSources) {
+  const broken = [];
+  for (const [param, chain] of Object.entries(PRINCIPAL_ARGUMENT_CHAIN)) {
+    const adminExpr = outputExpr(adminSource, chain.adminPlaneOutput);
+    if (adminExpr === null || norm(adminExpr) !== norm(chain.adminPlaneExpr)) {
+      broken.push(`${param}: admin-plane output ${chain.adminPlaneOutput} = ${adminExpr}`);
+      continue;
+    }
+    const mintSource = mintingSources.get(chain.mintingModule);
+    const mintExpr = outputExpr(mintSource ?? '', chain.mintingOutput);
+    if (mintExpr === null || norm(mintExpr) !== norm(chain.mintingExpr)) {
+      broken.push(`${param}: ${chain.mintingModule} output ${chain.mintingOutput} = ${mintExpr}`);
+      continue;
+    }
+    const minted = parseBicep(mintSource ?? '').resources.find((r) => r.symbol === chain.mintedSymbol);
+    if (!minted || minted.type !== chain.mintedType || minted.existing) {
+      broken.push(
+        `${param}: ${chain.mintingModule} ${chain.mintedSymbol} is ${
+          minted ? `${minted.type}${minted.existing ? ' EXISTING' : ''}` : 'absent'
+        } — not an identity this run mints`,
+      );
+    }
+  }
+  return broken.sort();
+}
+
+test('#3338 GUARD 4: the pass has exactly ONE call site, and every argument it binds is registered', () => {
+  const orch = readBicep(ORCHESTRATOR_REL);
+  const sites = passCallSites(orch);
+
+  // Non-vacuity: a reader that resolved no call site would satisfy the
+  // "everything bound is registered" assertion while measuring nothing.
+  assert.equal(
+    sites.length,
+    1,
+    `dlz-lake-grant-pass.bicep must have exactly one call site in main.bicep; found ${sites.length}. A second call site can bind a different principal to the same pass, which is #3338's half 2 with the callee untouched.`,
+  );
+  assert.ok(sites[0].params.size > 0, 'the call site must bind params for this guard to measure anything');
+  assert.ok(
+    Object.keys(PASS_CALLSITE_REGISTER).every((k) => Object.hasOwn(PASS_PARAM_REGISTER, k)),
+    'every registered argument must correspond to a param the pass actually declares',
+  );
+
+  assert.deepEqual(
+    misboundCallSiteArgs(orch),
+    [],
+    "main.bicep binds something other than the registered expression to dlz-lake-grant-pass.bicep. The callee's inventory cannot see this edit: swapping the s3 gateway output for adminPlane!.outputs.uamiConsolePrincipalId makes the pass grant the Console UAMI with GUARDS 1-3 green.",
+  );
+});
+
+test('#3338 GUARD 4: the principal argument chains back to an identity this deployment MINTS', () => {
+  const admin = readBicep(ADMIN_PLANE_REL);
+  const minting = new Map([[S3_GATEWAY_REL, readBicep(S3_GATEWAY_REL)]]);
+
+  assert.ok(
+    Object.keys(PRINCIPAL_ARGUMENT_CHAIN).length > 0,
+    'at least one principal chain must be registered — otherwise this guard is vacuous',
+  );
+  for (const param of Object.keys(PRINCIPAL_ARGUMENT_CHAIN)) {
+    assert.equal(PASS_PARAM_REGISTER[param]?.kind, 'principal', `${param} must be a registered principal`);
+    assert.ok(Object.hasOwn(PASS_CALLSITE_REGISTER, param), `${param} must also have a registered argument`);
+  }
+
+  assert.deepEqual(
+    brokenPrincipalChains(admin, minting),
+    [],
+    'the chain from the pass\'s principal param to the resource that mints the identity no longer reads as registered. SELF_MINTED_PASS_PRINCIPALS\'s "structurally impossible to collide" claim rests on this chain, so a hop that moved must be re-justified, not re-pointed.',
+  );
+});
+
+test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a second call site, and a repointed chain all go RED', () => {
+  const orch = readBicep(ORCHESTRATOR_REL);
+  const admin = readBicep(ADMIN_PLANE_REL);
+  const s3gw = readBicep(S3_GATEWAY_REL);
+  const minting = new Map([[S3_GATEWAY_REL, s3gw]]);
+
+  assert.deepEqual(misboundCallSiteArgs(orch), [], 'head must be clean before a mutation means anything');
+  assert.deepEqual(brokenPrincipalChains(admin, minting), [], 'head chain must be clean');
+
+  // (a) BLOCKER 1 verbatim: the callee untouched, the argument swapped for the
+  // Console UAMI. Compiles — `output uamiConsolePrincipalId` exists.
+  const swapped = orch.replace(
+    's3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.s3GatewayStorageUamiPrincipalId : \'\'',
+    's3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : \'\'',
+  );
+  assert.notEqual(swapped, orch, 'the call-site mutation must actually apply');
+  assert.ok(/output uamiConsolePrincipalId string =/.test(admin), 'the swap target output must really exist');
+  assert.deepEqual(misboundCallSiteArgs(swapped), [
+    "dlzLakeGrantPass.s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''",
+  ]);
+
+  // (b) the pass invoked a SECOND time with a different principal, leaving the
+  // registered call site untouched.
+  const doubled = `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass.bicep' = if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: adminPlane!.outputs.uamiConsolePrincipalId\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
+  assert.equal(passCallSites(doubled).length, 2, 'the second call site must parse');
+  assert.ok(
+    misboundCallSiteArgs(doubled).some((f) => f.startsWith('dlzLakeGrantPassConsole.s3GatewayPrincipalId:')),
+    'the second call site must be named in the finding',
+  );
+
+  // (c) the chain repointed one hop out — the admin-plane output itself made to
+  // emit the Console UAMI, with main.bicep and the pass both untouched.
+  const repointed = admin.replace(
+    "output s3GatewayStorageUamiPrincipalId string = s3GatewayActive ? s3Gateway!.outputs.storageUamiPrincipalId : ''",
+    "output s3GatewayStorageUamiPrincipalId string = identity.outputs.uamiConsolePrincipalId",
+  );
+  assert.notEqual(repointed, admin, 'the output mutation must actually apply');
+  assert.deepEqual(brokenPrincipalChains(repointed, minting), [
+    's3GatewayPrincipalId: admin-plane output s3GatewayStorageUamiPrincipalId = identity.outputs.uamiConsolePrincipalId',
+  ]);
+
+  // (d) the terminal structural fact broken: the minting module made to adopt a
+  // pre-existing identity instead of creating one.
+  const adopted = new Map([
+    [
+      S3_GATEWAY_REL,
+      s3gw.replace(
+        "resource storageIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {",
+        "resource storageIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {",
+      ),
+    ],
+  ]);
+  assert.notEqual(adopted.get(S3_GATEWAY_REL), s3gw, 'the existing-identity mutation must actually apply');
+  assert.deepEqual(brokenPrincipalChains(admin, adopted), [
+    's3GatewayPrincipalId: modules/data-plane/s3-gateway-aca.bicep storageIdentity is Microsoft.ManagedIdentity/userAssignedIdentities EXISTING — not an identity this run mints',
+  ]);
 });
 
 test('blankComments preserves length and does not blank a `//` inside a string literal', () => {
