@@ -218,11 +218,11 @@ test('202 but never fresh → poll TIMEOUT → exit 1', async () => {
  * dismissed the same way.
  *
  * The behavioural measurement was already plumbed and thrown away: `withServer`
- * passes `() => ({ posts, gets })` as `run()`'s second argument (see :65) and
- * this case declared `async (url) => {…}`, never binding it. Counting the polls
- * is immune to machine load AND strictly stronger — the old assertion passed if
- * the script polled twice quickly, which is exactly the regression it exists to
- * catch.
+ * passes `() => ({ posts, gets })` as `run()`'s second argument — grep
+ * `return await run(url,` — and this case declared `async (url) => {…}`, never
+ * binding it. Counting the polls is immune to machine load AND strictly
+ * stronger — the old assertion passed if the script polled twice quickly, which
+ * is exactly the regression it exists to catch.
  *
  * MUTATION-PROOF (load-bearing): make the script keep polling past a
  * `job.state: failed` and `gets` climbs to the cap, so this goes RED.

@@ -48,12 +48,16 @@ param forceUpdateTag string = utcNow()
 // cited that absence in prose while nothing enforced it. THAT IS NOW HISTORY,
 // stated in the past tense because this file is what changed it: the
 // `param originResponseTimeoutSeconds` declaration below, and the property of
-// the same name on the origin-group resource, declare and apply the value.
-// (Deliberately NOT cited by line number. The previous revision of this
-// sentence said `:121`/`:287`; the real lines were 153 and 319, because a
-// comment edit above them shifted every number. A citation that goes stale
-// whenever anything above it moves is a false statement waiting to happen —
-// which is the exact class this whole comment is about. Grep the symbol.)
+// the same name on the `fdProfile` (`Microsoft.Cdn/profiles`) resource, declare
+// and apply the value. It is a PROFILE-level property — `fdOriginGroup` exists
+// in this file and does NOT carry it, so do not go looking there.
+// (This one sentence is deliberately cited by SYMBOL, not line number, because
+// it is the sentence that has gone stale twice: it said `:121`/`:287` when the
+// real lines were 153 and 319, and its round-7 replacement named the wrong
+// RESOURCE. It sits at the top of the file, so every comment edit below it
+// shifts the numbers it would cite. Every OTHER line number in this comment
+// points into a DIFFERENT file, which this file's edits cannot move — a
+// different risk, and one this note does not claim to cover.)
 // All three citations were updated in the same change to describe the pin
 // rather than its absence
 // (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
