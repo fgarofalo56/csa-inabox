@@ -3104,7 +3104,38 @@ export function cliMain(argv, io) {
         log(`::notice::estate-image-lease: CONFIRMED — the registry records '${me}' as the estate image-write lease holder. This run may write Container App images.`);
         return 0;
       }
-      log(`::warning::estate-image-lease: NOT confirmed as the holder after the claim write — ${v.reason}`);
+      // R7: the acquire path's `reason` MAY NOT be forwarded from here. It is
+      // written for a run that has not claimed yet, and on the ORDINARY
+      // lost-claim race — the exact event the settle-and-read-back exists to
+      // detect — it asserts three things THIS call did not establish:
+      //   * "TIMED OUT waiting" — no wait happens here. `waitDeadlineEpoch` is
+      //     hard-coded to 0 above, so the acquire path's timeout branch is
+      //     taken unconditionally; nothing was waited for.
+      //   * "this run wrote NOTHING" — false, and false in the same sentence as
+      //     "after the claim write". The four claim tags WERE written; reading
+      //     them back is the whole purpose of this call, and the `claimed`
+      //     output exists precisely to record that they may still be there.
+      //   * a remaining-TTL figure — the other run's hold, carried into a
+      //     sentence where it means nothing.
+      // So the confirmation states its own facts. What is true on every one of
+      // these branches, and is the operator-actionable part, is factored out.
+      const claimTagNote = 'This run has written NO Container App image. It HAS written its own claim tags, so the registry may still record this run — the release step clears them (its `if:` reads `claimed`).';
+      if (v.action === 'unknown') {
+        log(`::warning::estate-image-lease: NOT confirmed — the claim read-back did not establish an owner: ${v.reason} — ${claimTagNote}`);
+        return 1;
+      }
+      if (v.action === 'refuse' || v.action === 'wait') {
+        // The tags name a LIVE holder that is not this run. That is all that is
+        // established: this run is not the recorded holder. Who overwrote whom,
+        // and in what order, is not readable from a single read-back.
+        log(`::warning::estate-image-lease: NOT confirmed — the claim read-back names another run, '${v.holder}' (${v.holderUrl || 'no holder url'}), as the estate image-write lease holder, not '${me}'. This run did not win the claim. ${claimTagNote}`);
+        return 1;
+      }
+      // `claim`: the read SUCCEEDED and records no live holder — neither this
+      // run nor another. Why is not establishable from one read-back (the claim
+      // write may not have landed, or the tag may have been cleared or expired
+      // between that write and this read), so this says what it saw and stops.
+      log(`::warning::estate-image-lease: NOT confirmed — the claim read-back succeeded and records no LIVE holder, so '${me}' is not recorded as the estate image-write lease holder. WHY is UNKNOWN from here: the claim write may not have landed, or the tag may have been cleared or expired between that write and this read. ${claimTagNote}`);
       return 1;
     }
 

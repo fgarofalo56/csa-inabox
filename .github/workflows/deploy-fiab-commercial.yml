@@ -1938,8 +1938,16 @@ jobs:
               # is an `env:` value in the step header above, not a property of
               # this shell — the same bytes run on both image writers and
               # roll-race.test.mjs asserts they stay identical, so nothing here
-              # may name one lane. Note this branch is reached BEFORE any claim
-              # write, so a degraded run leaves the tags untouched.
+              # may name one lane. It is NOT true that this branch is only ever
+              # reached before a claim write, and the comment that said so was
+              # wrong: the loop `continue`s past a failed read-back, so a later
+              # pass can arrive here with CLAIMED already true — the claim tags
+              # landed, the confirm read-back failed, and the next acquire read
+              # returned `unknown`. roll-race.test.mjs drives exactly that
+              # (AZ_TAG_LIST_ERR_AFTER=1) and asserts claimed=true with this
+              # run's id still in the tags. A degraded run therefore MAY have
+              # tags recorded, which is why the release step's `if:` reads
+              # `claimed` and not `held` alone. Do not re-gate it on `held`.
               RESULT=0
               break
             fi

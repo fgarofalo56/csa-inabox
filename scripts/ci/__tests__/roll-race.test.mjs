@@ -4513,6 +4513,50 @@ test('LEASE CLI: confirm is 0 only when the registry names THIS run', () => {
     '--tags-error', 'read failed']).rc, 1, 'an unreadable read-back is not a confirmation');
 });
 
+test('LEASE CLI (R7): the confirm failure line asserts only what the READ-BACK established', () => {
+  // The exit code was asserted above and the MESSAGE was not, which is how this
+  // shipped: `estate-image-lease-confirm` forwarded the ACQUIRE path's refusal
+  // verbatim, and that string is written for a run that has not claimed yet. On
+  // the ORDINARY lost-claim race — the exact event the settle-and-read-back
+  // exists to detect — it told the operator "TIMED OUT waiting" (no wait
+  // happens: `waitDeadlineEpoch` is 0, so the timeout branch is unconditional),
+  // "this run wrote NOTHING" (in the same sentence as "after the claim write" —
+  // the four claim tags WERE written, which is what `claimed` records), and a
+  // remaining-TTL figure belonging to the other run's hold.
+  //
+  // A green `rc === 1` is exactly as green over the false line as over the true
+  // one. So the line is pinned.
+  const lost = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) });
+  const free = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: tagDoc({}) });
+  const unreadable = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW),
+    '--tags-error', 'az tag list exited 1: forbidden']);
+  for (const r of [lost, free, unreadable]) assert.equal(r.rc, 1);
+
+  // The three assertions the code could not make. Checked FIRST and on EVERY
+  // failure branch, because forwarding the acquire reason put them on all of
+  // them, and checked before the positive matches so a re-forwarded reason reds
+  // on the R7 claim itself rather than on a missing phrase.
+  for (const [label, r] of [['lost', lost], ['free', free], ['unreadable', unreadable]]) {
+    assert.doesNotMatch(r.out, /wrote NOTHING/,
+      `the ${label} confirm line claims the run "wrote NOTHING" — it wrote its claim tags, and that is the state the release step has to clean up`);
+    assert.doesNotMatch(r.out, /TIMED OUT/,
+      `the ${label} confirm line claims a timeout — confirm passes waitDeadlineEpoch 0 and waits for nothing`);
+    assert.doesNotMatch(r.out, /for another -?\d+s/,
+      `the ${label} confirm line carries the acquire path's remaining-TTL arithmetic into a context where it means nothing`);
+  }
+
+  assert.match(lost.out, /names another run, 'gha:fgarofalo56\/csa-inabox:32004118361:1'/,
+    'the lost-claim line must still name the holder and its url — that is the operator-actionable part');
+  assert.match(lost.out, /HAS written its own claim tags/,
+    'the confirm line must say the claim tags may be recorded; a run told it "wrote NOTHING" has no reason to look for a strand');
+  assert.match(free.out, /records no LIVE holder/);
+  assert.match(free.out, /WHY is UNKNOWN from here/,
+    'a read-back that finds the tag empty does not establish WHY, and may not pick one of the causes');
+  assert.match(unreadable.out, /did not establish an owner/);
+});
+
 test('LEASE CLI: release exit codes distinguish CLEAR from "do not touch those tags"', () => {
   const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
   assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
@@ -4580,7 +4624,20 @@ test('WIRING: BOTH LEASED image writers take the lease, and the two shells are t
 // ---------------------------------------------------------------------------
 
 /**
- * The `az containerapp update … --image` sites in one workflow.
+ * The Container App image-write sites in one workflow.
+ *
+ * KEYED TO THE SHAPE, NOT TO ONE SPELLING. The first cut of this matched
+ * `az containerapp update` AND `--image`, which is one of at least four ways
+ * the CLI writes `properties.template.containers[0].image` — and the tree at
+ * head already held a second: `gov-provision-mongo.yml` writes the field twice,
+ * once through `update --image` and once through `create … --image` in the
+ * else-branch of the same `if`. A guard that measures one spelling of a
+ * population makes the same over-broad claim it was written to stop, one level
+ * down (`each guard fix was a narrower enumeration`). So the needle is
+ * (verb ∈ update|create|up|revision copy) AND (an `--image` flag, OR a `--set`
+ * naming `containers[…].image`, OR a `--yaml` spec, which carries the image
+ * inside the file). Each arm has its own positive control below, so a rotted
+ * arm reds instead of silently reading zero.
  *
  * Line-continued: the repo's real writers are wrapped over four or five lines
  * and several go through `deploy-retry.mjs -- az containerapp update …`, so a
@@ -4607,7 +4664,12 @@ function imageWriteSites(yaml) {
       j += 1;
       logical += ` ${lines[j].replace(/^\s+/, '')}`;
     }
-    if (/az\s+containerapp\s+update\b/.test(logical) && /(^|\s)--image[\s=]/.test(logical)) {
+    const mutates = /az\s+containerapp\s+(update|create|up|revision\s+copy)\b/.test(logical);
+    if (mutates && (
+      /(^|\s)--image[\s=]/.test(logical)
+      || /(^|\s)--set[\s=][^\n]*containers\s*\[[^\]]*\]\s*\.\s*image/.test(logical)
+      || /(^|\s)--yaml[\s=]/.test(logical)
+    )) {
       hits.push(i + 1);
     }
     i = j;
@@ -4652,10 +4714,10 @@ const UNLEASED_IMAGE_WRITERS = Object.freeze({
       'Gov boundary. Two real writes (roll + rollback) and one `ROLLBACK_ADVICE=` string that quotes the command for the operator; the string is counted rather than pattern-excluded, because a scanner clever enough to drop it is a scanner that can drop a real write. No estate image-write lease exists in GCC/GCC-High/IL5 at all: per cloud-parity.md this capability is INCOMPLETE until ported. #3676.',
   },
   'gov-provision-mongo.yml': {
-    writes: 1,
-    recorded: '2026-09-08',
+    writes: 2,
+    recorded: '2026-09-09',
     reason:
-      'Gov boundary, provisioning-time write of a pinned upstream image (loom-mongo:7) on a dispatch lane, not a roll of a Loom-built app. Same unported-to-Gov gap as above. #3676.',
+      'Gov boundary, provisioning-time writes of a pinned upstream image (loom-mongo:7) on a dispatch lane, not a roll of a Loom-built app. TWO sites, not one: `az containerapp update --image` when the app already exists, and `az containerapp create … --image` in the else-branch of the same `if`. The create branch was invisible to the first version of this scanner, which is why the needle is now keyed to the SHAPE. Same unported-to-Gov gap as above. #3676.',
   },
   'deploy-portal.yml': {
     writes: 2,
@@ -4682,9 +4744,14 @@ test('POPULATION: every image writer in the tree is LEASED or is a dated, reason
   // The scan has to actually find the writers it is counting. If the needle
   // rots (a rename of `az containerapp update`, a new wrapper), every file
   // reads zero and the guard congratulates the tree on having no writers.
+  //
+  // THIS COUNT IS NOT THE ONLY CONTROL, and on its own it would be a weak one:
+  // it counts files matching the SAME needle, so widening the tree with a
+  // spelling the needle does not know leaves it perfectly satisfied. The
+  // per-spelling positive control below is what covers that.
   assert.ok(
     Object.keys(writers).length >= 6,
-    `the image-write scan found only ${Object.keys(writers).length} workflow(s) with an \`az containerapp update … --image\` site. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`,
+    `the image-write scan found only ${Object.keys(writers).length} workflow(s) with a Container App image-write site. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`,
   );
 
   assert.deepEqual(leaseTakers, LEASED_WRITER_FILES,
@@ -4709,7 +4776,7 @@ test('POPULATION: every image writer in the tree is LEASED or is a dated, reason
   //    failure mode a hand-listed population always ends in.
   for (const file of Object.keys(UNLEASED_IMAGE_WRITERS)) {
     assert.ok(writers[file],
-      `UNLEASED_IMAGE_WRITERS lists ${file}, but it has no \`az containerapp update … --image\` site any more. Drop the entry.`);
+      `UNLEASED_IMAGE_WRITERS lists ${file}, but it has no Container App image-write site any more. Drop the entry.`);
   }
 
   // 3. The leased lanes' own counts are pinned too, so an image write added
@@ -4717,11 +4784,209 @@ test('POPULATION: every image writer in the tree is LEASED or is a dated, reason
   //    somewhere is not silently covered by the file-level check above.
   //    loom-roll-and-validate writes twice: the leased roll, and the rollback
   //    (disclosed at its step). deploy-fiab-commercial writes through
-  //    `az deployment sub create`, never `az containerapp update`.
+  //    `az deployment sub create`, never a `az containerapp` mutation.
   assert.equal((writers['loom-roll-and-validate.yml'] ?? []).length, 2,
     'loom-roll-and-validate.yml no longer has exactly 2 image writes (the leased roll + the disclosed rollback). A third write needs its own disclosure at the step.');
   assert.equal(writers['deploy-fiab-commercial.yml'], undefined,
-    'deploy-fiab-commercial.yml grew an `az containerapp update --image`. Its image write is the ARM apply, which the lease is placed around; a direct CLI write is a second, unarbitrated path.');
+    'deploy-fiab-commercial.yml grew a direct `az containerapp` image write. Its image write is the ARM apply, which the lease is placed around; a direct CLI write is a second, unarbitrated path.');
+});
+
+test('POPULATION CONTROL: the scanner recognises EVERY spelling that writes the image field, not just the one the first cut matched', () => {
+  // THE POSITIVE CONTROL FOR THE NEEDLE ITSELF. The file-count assertion above
+  // cannot catch a spelling the needle does not know — it counts files matching
+  // that same needle, so a tree full of `containerapp create --image` reads as a
+  // tree with no writers and the guard congratulates it. That is exactly how
+  // `gov-provision-mongo.yml`'s create-branch write sat uncounted inside an
+  // allowlist entry that asserted an EXACT count of 1.
+  //
+  // So each arm of the shape is driven directly. If any arm rots, this reds and
+  // names the arm, rather than the population test silently under-reading.
+  const wrap = (cmd) => `jobs:\n  j:\n    steps:\n      - name: write\n        run: |\n          ${cmd}\n`;
+  const spellings = {
+    'update --image': 'az containerapp update -n loom-console -g rg --image "$ACR/loom-console:$TAG" -o none',
+    'create --image': 'az containerapp create -n loom-console -g rg --environment cae --image "$ACR/loom-console:$TAG" -o none',
+    'revision copy --image': 'az containerapp revision copy -n loom-console -g rg --image "$ACR/loom-console:$TAG" -o none',
+    'up --image': 'az containerapp up -n loom-console -g rg --image "$ACR/loom-console:$TAG"',
+    'update --set containers[0].image': 'az containerapp update -n loom-console -g rg --set "properties.template.containers[0].image=$ACR/loom-console:$TAG" -o none',
+    'update --yaml': 'az containerapp update -n loom-console -g rg --yaml app.yaml -o none',
+    'line-continued update --image': 'az containerapp update -n loom-console -g rg \\\n            --image "$ACR/loom-console:$TAG" \\\n            -o none',
+    'wrapped through deploy-retry': 'node scripts/ci/deploy-retry.mjs --step "roll" -- az containerapp create -n loom-console -g rg --environment cae --image "$IMG"',
+  };
+  for (const [label, cmd] of Object.entries(spellings)) {
+    assert.equal(imageWriteSites(wrap(cmd)).length, 1,
+      `the image-write scanner does not see the '${label}' spelling. A writer using it would be invisible to the POPULATION guard, and the allowlist's exact counts would be exact about the wrong set.`);
+  }
+
+  // NEGATIVE CONTROL. A needle that matches everything is not a measurement
+  // either: the tree is full of `az containerapp update --set-env-vars`, which
+  // does NOT touch the image field, and counting those would bury the writers
+  // that matter in noise the allowlist would then have to excuse.
+  const notWriters = {
+    'update --set-env-vars': 'az containerapp update -n loom-console -g rg --set-env-vars "LOOM_X=1" -o none',
+    'show': 'az containerapp show -n loom-console -g rg --query properties.latestRevisionName -o tsv',
+    'env var that merely names the field': 'echo "properties.template.containers[0].image is the field"',
+    'a commented-out writer': '# az containerapp update -n loom-console -g rg --image "$IMG"',
+    'a --set on a different property': 'az containerapp update -n loom-console -g rg --set "properties.template.scale.minReplicas=1" -o none',
+  };
+  for (const [label, cmd] of Object.entries(notWriters)) {
+    assert.equal(imageWriteSites(wrap(cmd)).length, 0,
+      `the image-write scanner counts '${label}' as an image write. It is not one, and a scanner that counts non-writers makes the allowlist a record of noise.`);
+  }
+
+  // And the real tree still contains the instance that motivated the widening,
+  // so this control cannot pass over a tree where the create branch was simply
+  // deleted and the needle left broken.
+  const mongo = imageWriteSites(readNorm(join(WORKFLOW_DIR, 'gov-provision-mongo.yml')));
+  assert.equal(mongo.length, 2,
+    `gov-provision-mongo.yml reads ${mongo.length} image-write site(s) (line(s) ${mongo.join(', ')}). It has an update branch and a create branch; if that is no longer true, re-take the allowlist count deliberately rather than letting this control be the thing that changed.`);
+});
+
+// ---------------------------------------------------------------------------
+// THE OTHER WRITER ON THE SAME RESOURCE. The lease lives in the admin-plane
+// ACR's ARM tags, and `scripts/csa-loom/apply-acr-compliance-tags.sh` also
+// writes that tag dictionary — from FOUR deploy lanes (commercial, gcc, gcch,
+// il5) — and can `exit 4`. It had no test at all, so the lease-survival check
+// inside it was prose with an exit code attached.
+//
+// It is driven here against a stub `az` whose tag store is a real file: a
+// `--operation Merge` MUTATES the same document the read-back reads, so a
+// key that survived is distinguishable from one the stub was told to report.
+// ---------------------------------------------------------------------------
+
+const COMPLIANCE_SCRIPT = join(REPO_ROOT, 'scripts', 'csa-loom', 'apply-acr-compliance-tags.sh');
+
+const COMPLIANCE_AZ_STUB = [
+  '#!/usr/bin/env bash',
+  'set -u',
+  'if [ "$1" = "acr" ] && [ "$2" = "show" ]; then printf "%s\\n" "$AZ_ACR_ID"; exit 0; fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "list" ]; then cat "$AZ_TAG_STORE"; exit 0; fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "update" ]; then',
+  '  SEEN=0; KVS=()',
+  '  for A in "$@"; do',
+  // `-o none` trails the pairs, so collection STOPS at the next flag. A stub
+  // that swallowed it would invent a tag named `-o` and the read-back would be
+  // measuring the stub's bug.
+  '    if [ "$SEEN" = "1" ]; then case "$A" in -*) SEEN=0 ;; *) KVS+=("$A") ;; esac; fi',
+  '    if [ "$A" = "--tags" ]; then SEEN=1; fi',
+  '  done',
+  '  for KV in "${KVS[@]}"; do',
+  '    K="${KV%%=*}"; V="${KV#*=}"',
+  "    jq --arg k \"$K\" --arg v \"$V\" '.[$k] = $v' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  done',
+  // OUT-OF-BAND ACTIVITY IN THE MERGE WINDOW. This is the whole point of the
+  // fixture: another lane taking or releasing its lease between the BEFORE read
+  // and the AFTER read is the ordinary healthy case, and a guard that reds on it
+  // fails a deploy lane on the mutex working.
+  //
+  // The tag store is reached by REDIRECT and the patch by `--argjson`, never as
+  // a path ARGUMENT. The script under test exports MSYS_NO_PATHCONV=1 (its own
+  // #3714 note explains why), which on this Windows host means a `/c/Users/...`
+  // argument reaches jq.exe unconverted and jq cannot open it — silently, since
+  // the script captures the update's stderr. Measured: the first cut of this
+  // stub used `jq -s "$STORE" "$PATCH"` and the patch never landed while
+  // everything still exited 0. Redirects are performed by bash and are immune.
+  '  if [ -n "${AZ_TAG_OOB_ADD:-}" ]; then',
+  '    OOB="$(cat "$AZ_TAG_OOB_ADD")"',
+  "    jq --argjson oob \"$OOB\" '. * $oob' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  fi',
+  '  if [ -n "${AZ_TAG_OOB_DROP:-}" ]; then',
+  "    jq --arg k \"$AZ_TAG_OOB_DROP\" 'del(.[$k])' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  fi',
+  '  exit 0',
+  'fi',
+  'echo "unstubbed az: $*" >&2; exit 99',
+].join('\n');
+
+function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '' } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'acr-compliance-'));
+  const binDir = join(dir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  try {
+    writeFileSync(join(binDir, 'az'), COMPLIANCE_AZ_STUB);
+    chmodSync(join(binDir, 'az'), 0o755);
+    const store = join(dir, 'tags.json');
+    writeFileSync(store, JSON.stringify(before));
+    const oobFile = join(dir, 'oob.json');
+    if (oobAdd) writeFileSync(oobFile, JSON.stringify(oobAdd));
+    const res = spawnSync('bash', [toPosixPath(COMPLIANCE_SCRIPT),
+      '--acr', 'acrloomtest',
+      '--tags-json', '{"loomCompliance":"iso27001"}'], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH}`,
+        AZ_ACR_ID: '/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg-loom-admin/providers/Microsoft.ContainerRegistry/registries/acrloomtest',
+        AZ_TAG_STORE: toPosixPath(store),
+        AZ_TAG_OOB_ADD: oobAdd ? toPosixPath(oobFile) : '',
+        AZ_TAG_OOB_DROP: oobDrop,
+      },
+    });
+    return { rc: res.status, out: `${res.stdout || ''}${res.stderr || ''}`, tags: JSON.parse(readFileSync(store, 'utf8')) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FW_LEASE = { loomAcrFwOwner: 'gha:owner/repo:777:1', loomAcrFwExpiresEpoch: '9999999999' };
+const IMG_LEASE = { loomEstateImgOwner: 'gha:owner/repo:888:1', loomEstateImgExpiresEpoch: '9999999999' };
+
+test('COMPLIANCE TAGS: a Merge that preserves BOTH leases passes, and the compliance keys really land', { skip: shellSkip }, () => {
+  const r = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE } });
+  assert.equal(r.rc, 0, `expected 0, got ${r.rc}. Output:\n${r.out}`);
+  assert.equal(r.tags.loomCompliance, 'iso27001', 'the merge did not actually write the compliance tag');
+  assert.equal(r.tags['loom-estate-id'], 'loom:00000000:rg-loom-admin', 'the ownership tag is derived from the resolved ARM id');
+  assert.equal(r.tags.loomEstateImgOwner, IMG_LEASE.loomEstateImgOwner, 'the estate image-write lease must survive a compliance merge');
+  assert.equal(r.tags.loomAcrFwOwner, FW_LEASE.loomAcrFwOwner, 'the firewall lease must survive a compliance merge');
+});
+
+test('COMPLIANCE TAGS: a lease key that DISAPPEARS across the merge is exit 4, for BOTH prefixes', { skip: shellSkip }, () => {
+  // THE POSITIVE CONTROL. The check below narrows this guard from set-inequality
+  // to removals-only, and a narrowing has to be shown still to catch its target
+  // or it is just a deletion.
+  for (const key of ['loomEstateImgOwner', 'loomAcrFwOwner']) {
+    const r = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE }, oobDrop: key });
+    assert.equal(r.rc, 4, `dropping ${key} across the merge must be exit 4, got ${r.rc}. Output:\n${r.out}`);
+    assert.match(r.out, new RegExp(`REMOVED lease key\\(s\\).*${key}`),
+      `the failure must NAME the key that vanished — "a lease key set changed" sends the reader to diff two lists by eye`);
+  }
+});
+
+test('COMPLIANCE TAGS: a lease key that APPEARS across the merge is NOT a clobber', { skip: shellSkip }, () => {
+  // The stated invariant is "held before and ABSENT after". The first cut
+  // compared the two key SETS for equality, which also reds on appearance — and
+  // a lease key appearing between these two reads is another lane legitimately
+  // TAKING the lease while this step runs. That is the mutex working, and
+  // failing a deploy lane for it is a false red on the healthy case.
+  //
+  // The window is real rather than theoretical for `loomEstateImg*`: the roll
+  // lane acquires whenever `build-fiab-images-acr-tasks` completes, which is not
+  // coordinated with when the deploy lane's compliance step runs.
+  const r = runComplianceTags({ before: FW_LEASE, oobAdd: IMG_LEASE });
+  assert.equal(r.rc, 0, `a lease being TAKEN during the merge window must not fail the step, got ${r.rc}. Output:\n${r.out}`);
+  assert.doesNotMatch(r.out, /REMOVED lease key/);
+  assert.equal(r.tags.loomEstateImgOwner, IMG_LEASE.loomEstateImgOwner, 'the other lane\'s freshly-taken lease must be intact');
+
+  // And the symmetric case: a holder RELEASING mid-merge writes `owner=none`
+  // rather than deleting the key, so the key set is unchanged — but if a future
+  // release path ever does delete it, that IS a removal and stays red. Pinned so
+  // the two behaviours are not conflated later.
+  const released = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE }, oobAdd: { loomEstateImgOwner: 'none', loomEstateImgExpiresEpoch: '0' } });
+  assert.equal(released.rc, 0, `a holder releasing mid-merge must not fail the step, got ${released.rc}. Output:\n${released.out}`);
+  assert.equal(released.tags.loomEstateImgOwner, 'none');
+});
+
+test('COMPLIANCE TAGS: the script the FOUR deploy lanes call is the one under test here', () => {
+  // A test pointed at a path nothing invokes proves nothing. The lanes are read
+  // off the tree rather than listed, for the same reason the image-writer
+  // population is.
+  const callers = readdirSync(WORKFLOW_DIR)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .filter((f) => readNorm(join(WORKFLOW_DIR, f)).includes('apply-acr-compliance-tags.sh'))
+    .sort();
+  assert.deepEqual(callers, [
+    'deploy-fiab-commercial.yml', 'deploy-fiab-gcc.yml', 'deploy-fiab-gcch.yml', 'deploy-fiab-il5.yml',
+  ], 'the set of lanes invoking apply-acr-compliance-tags.sh changed. An edit to that script now reaches a different set of deploy lanes than this suite says it does.');
+  assert.ok(existsSync(COMPLIANCE_SCRIPT), 'apply-acr-compliance-tags.sh moved; the tests above are exercising nothing');
 });
 
 test('POPULATION: the roll lane waits AT LEAST as long as the deploy lane can hold the lease', () => {

@@ -311,18 +311,29 @@ _note "tags AFTER merge:  $(printf '%s' "$AFTER" | tr -d '\n')"
 # (`loomEstateImg*`, #3676 bullet 1). They are distinct keys on the same
 # resource and this step runs on that resource, so a guard that watched only one
 # prefix would let the other be clobbered exactly as silently.
+#
+# REMOVALS ONLY — before-minus-after, NOT set inequality. The invariant above is
+# "held before and absent after"; an equality test also reds on APPEARANCE, and
+# a lease key appearing between these two reads is another lane legitimately
+# TAKING the lease while this step runs. That is the mutex working. Failing this
+# step for it would fail a deploy lane on a non-event, and a guard that reds on
+# the healthy case is a guard people learn to ignore. A key whose VALUE changed
+# is likewise not this guard's subject: only this script's own `--operation
+# Merge` is under test here, and Merge cannot remove a key.
 CLOBBERED=""
 for PREFIX in loomAcrFw loomEstateImg; do
   KEYS_BEFORE="$(printf '%s' "${BEFORE:-{\}}" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
   KEYS_AFTER="$(printf '%s' "$AFTER" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
   _note "${PREFIX}* keys before: ${KEYS_BEFORE:-<none>}"
   _note "${PREFIX}* keys after:  ${KEYS_AFTER:-<none>}"
-  if [ "$KEYS_BEFORE" != "$KEYS_AFTER" ]; then
-    CLOBBERED="${CLOBBERED}${CLOBBERED:+; }${PREFIX}* ('$KEYS_BEFORE' -> '$KEYS_AFTER')"
+  DROPPED="$(jq -rn --argjson before "${BEFORE:-{\}}" --argjson after "$AFTER" --arg p "$PREFIX" \
+    '[$before | keys[] | . as $k | select($k | startswith($p)) | select(($after | has($k)) | not)] | sort | join(" ")')"
+  if [ -n "$DROPPED" ]; then
+    CLOBBERED="${CLOBBERED}${CLOBBERED:+; }${PREFIX}* dropped: $DROPPED"
   fi
 done
 if [ -n "$CLOBBERED" ]; then
-  _err "the compliance-tag merge CHANGED a lease key set: $CLOBBERED. That is the #3676 clobber returning; \`--operation Merge\` must never do this. Failing loudly rather than leaving a silently broken mutex."
+  _err "the compliance-tag merge REMOVED lease key(s): $CLOBBERED. That is the #3676 clobber returning; \`--operation Merge\` must never do this. Failing loudly rather than leaving a silently broken mutex."
   exit 4
 fi
 
