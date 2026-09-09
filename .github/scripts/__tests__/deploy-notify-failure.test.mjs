@@ -34,6 +34,8 @@ import {
   forbiddenPublishers,
   inheritedStreamSpawns,
   CONTROL_SOURCE_CRLF,
+  CONTROL_WRITE_COUNT,
+  CONTROL_VIOLATION_COUNT,
 } from '../../../scripts/ci/__tests__/_publication-surfaces.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -737,7 +739,7 @@ test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded w
   // tree — so a `\n`-anchored regression is caught here rather than by being
   // silently green (csa_loom_crlf_makes_mutation_needles_silently_noop).
   const found = unboundedWrites(CONTROL_SOURCE_CRLF, [...NOTIFY_BOUNDARIES, 'unredactedByDesign']);
-  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.equal(found.length, CONTROL_VIOLATION_COUNT, `expected the control's ${CONTROL_VIOLATION_COUNT} violations, found ${found.length}`);
   assert.ok(
     found.some((w) => w.arg.startsWith('`deploy:')),
     'a bare template-literal write was not detected',
@@ -746,9 +748,21 @@ test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded w
     found.some((w) => w.arg.startsWith('redact(')),
     'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
   );
+  // #3876 — the shapes round 4's `process\.stdout\.write` regex could not see
+  // even in principle. Three of them are ZERO-POPULATION bypasses, so the
+  // assertion is over the set of ACCESS PATHS rather than over any one spelling.
+  assert.deepEqual(
+    [...new Set(found.map((w) => w.accessPath))].sort(),
+    ['alias', 'bracket', 'dotted'],
+    'the enumerator lost an ACCESS PATH — a write it cannot see reports as no write at all (#3876)',
+  );
+  assert.ok(
+    found.some((w) => w.arg.startsWith('formatStdout(') && w.arg.includes('+')),
+    'a boundary call CONCATENATED with a raw value was accepted — the classifier is prefix-only again (#3876 bypass 1)',
+  );
   // …and the three legitimate shapes in the same control are NOT flagged, or the
   // guard would be unusable and would be silenced rather than obeyed.
-  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, CONTROL_WRITE_COUNT, 'the control source lost a write to CRLF handling or to a narrowed enumerator');
 
   // The comment stripper is load-bearing here: this file's own header documents
   // its write sites in prose, and counting those would inflate every number.

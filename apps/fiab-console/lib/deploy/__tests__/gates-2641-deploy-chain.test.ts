@@ -369,18 +369,25 @@ describe('the Gov image lane still runs on a SCHEDULE (#3730/#3745)', () => {
       'gov-build-images lost its schedule: trigger — the Gov lane is back to dispatch-only (#3730)',
     ).toMatch(/^ {2}schedule:/m);
 
-    const cron = wf.match(/^ {4}- cron: *'([^']+)'/m);
-    expect(cron, 'the schedule: block carries no `- cron:` entry').not.toBeNull();
+    // EVERY `- cron:` entry, not just the first (#3819). `String.match` without
+    // `g` returns the first hit and stops, so a second schedule entry added
+    // later — the obvious way to add a Gov build window — would never be
+    // checked, and a malformed one there fails exactly the way a malformed one
+    // here does: GitHub declines to schedule it and nothing says so.
+    const crons = [...wf.matchAll(/^ {4}- cron: *'([^']*)'/gm)];
+    expect(crons.length, 'the schedule: block carries no `- cron:` entry').toBeGreaterThan(0);
 
     // The HOUR is deliberately NOT pinned. 07:37 UTC was chosen from measured
     // merge traffic (see the trigger's own comment) and a re-measurement should
     // be free. What must hold is that the expression is a well-formed 5-field
     // cron: GitHub silently declines to schedule a malformed one, so an emptied
     // or mangled value fails HERE rather than by never firing at 07:37.
-    expect(
-      cron![1].trim().split(/\s+/),
-      `'${cron![1]}' is not a 5-field cron expression`,
-    ).toHaveLength(5);
+    for (const c of crons) {
+      expect(
+        c[1].trim().split(/\s+/).filter(Boolean),
+        `'${c[1]}' is not a 5-field cron expression`,
+      ).toHaveLength(5);
+    }
   });
 
   it('carries the workflow-level `env:` defaults a schedule event needs', () => {
@@ -416,8 +423,37 @@ describe('the Gov image lane still runs on a SCHEDULE (#3730/#3745)', () => {
     // An empty matrix does not error on its own: `build` is simply skipped and
     // the run goes green having produced nothing — deploy-integrity R1 verbatim,
     // and the single most likely way the schedule path goes quietly wrong.
+    //
+    // ANCHORED TO THE CLOSING `fi` (#3819). This used to read
+    // `then[\s\S]*?exit 1`, which searches forward for ANY later `exit 1` — and
+    // this step has several (the per-app build-context checks below it). So the
+    // guard's own body could be gutted and the assertion would still match, on
+    // an `exit 1` belonging to a different condition twelve lines away. The
+    // `exit 1` now has to sit INSIDE this `if`, before its `fi`.
     expect(resolve, 'the empty-matrix guard is gone — a scheduled run could build zero images and still pass')
-      .toMatch(/if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then[\s\S]*?exit 1/);
+      .toMatch(/if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then\s*\n(?:[^\n]*\n)*?\s*exit 1\r?\n\s*fi\b/);
+
+    // EMBEDDED CONTROL — the anchored matcher can actually reject the shape the
+    // old one accepted. A structural assertion over a healthy file has a zero
+    // population by construction and reports "guard present" identically when it
+    // has stopped looking, so the gutted variant is constructed HERE and run
+    // through both matchers: the new one must refuse it, the old one must accept
+    // it. Without the second half this is a claim about the regex rather than a
+    // measurement of it.
+    const ANCHORED = /if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then\s*\n(?:[^\n]*\n)*?\s*exit 1\r?\n\s*fi\b/;
+    const LAZY_OLD = /if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then[\s\S]*?exit 1/;
+    const gutted = resolve.replace(
+      /(if \[ "\$MATRIX" = "\[\]" \] \|\| \[ -z "\$MATRIX" \]; then\s*\n)(?:[^\n]*\n)*?(\s*fi\b)/,
+      '$1$2',
+    );
+    expect(gutted, 'the gutting rewrite did not change anything — this control has no population')
+      .not.toEqual(resolve);
+    expect(gutted, 'a gutted guard still contains a LATER exit 1, which is what made the old matcher blind')
+      .toMatch(/exit 1/);
+    expect(LAZY_OLD.test(gutted), 'the OLD lazy matcher no longer accepts a gutted guard — this control lost its subject')
+      .toBe(true);
+    expect(ANCHORED.test(gutted), 'the anchored matcher accepts a guard whose body was removed (#3819)')
+      .toBe(false);
 
     // ...and it must stay fail-closed. A valve here would restore the exact
     // silent-success this guard exists to prevent.

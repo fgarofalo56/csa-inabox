@@ -397,6 +397,17 @@ export function findCrossFileCandidates(records) {
  * judged — this guard cannot establish which role definition it is, and a
  * finding it cannot substantiate is how a guard gets switched off. Those are
  * printed by `--list` as unresolved, so the reviewer sees the residue.
+ *
+ * TWO WIDENINGS, both #3464, both load-bearing for whether D3 judges ANYTHING:
+ *   - a role GUID may reach `--role` through a workflow's YAML `env:` mapping,
+ *     not only a shell `KEY=<guid>` (see `yamlEnvGuidVars`);
+ *   - a create may be spelled `grant_role_if_absent <pid> <role> <scope>`, the
+ *     shared probe-then-create helper, in which case the `az role assignment
+ *     create` token is in the HELPER and not in the calling file at all (see
+ *     `GRANT_HELPER`). Without this, adopting the remedy deletes the site from
+ *     the population and the guard's numbers fall as the tree improves.
+ * Before both, `judged` on this repo was ZERO — a clean verdict about an empty
+ * set — and only a `::warning::` said so. `judged === 0` is now a hard failure.
  */
 export const IMPERATIVE_ROOTS = ['.github/workflows', 'scripts'];
 const IMPERATIVE_EXT = /\.(ya?ml|sh)$/;
@@ -490,8 +501,8 @@ function maskQuoted(s) {
 
 const SEGMENT_DELIM = /(?:&&|\|\||[;|&]|\bthen\b|\bdo\b|\belse\b|\{|\()/g;
 
-export function isExecuted(text) {
-  const at = text.indexOf(CREATE_TOKEN);
+export function isExecuted(text, token = CREATE_TOKEN) {
+  const at = text.indexOf(token);
   if (at < 0) return false;
   if (/^\s*#/.test(text)) return false;
   const before = text.slice(0, at);
@@ -517,15 +528,79 @@ export function shellGuidVars(logical) {
   return map;
 }
 
+const YAML_ENV_OPEN = /^(\s*)env:\s*$/;
+const YAML_ENV_ENTRY = /^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/;
+
+/**
+ * Role GUIDs bound in a workflow's YAML `env:` mapping — `#3464 finding 1`.
+ *
+ * `shellGuidVars` reads only `KEY=<guid>`, the SHELL form. A GitHub workflow
+ * binds the same thing as `KEY: <guid>` under `env:`, and the step's `run:`
+ * body then references it as `$KEY` exactly as if it had been assigned in the
+ * shell. D3 could not see that, so `.github/workflows/gov-provision-streaming-
+ * migrate.yml`'s `--role "$BLOB_CONTRIB_ROLE"` filed as UNRESOLVED and was never
+ * judged — measured on main 2026-09-07: ENUMERATED 33, RESOLVED 3, JUDGED 0.
+ * A guard whose judged population is zero is a guard reporting on an empty set.
+ *
+ * Both `env:` scopes are read: the workflow-level block and any step-level one.
+ * A block runs from an `env:` line to the next non-blank line indented at or
+ * left of it.
+ *
+ * STATED LIMIT (R7). Scoping is per FILE, not per step: a GUID bound in one
+ * step's `env:` is offered to every `$KEY` in the file. Modelling step scope
+ * needs a real YAML parse, which this line reader is not. The over-approximation
+ * is bounded in the direction that matters — it can only make D3 judge MORE
+ * sites, never fewer — but a key bound to two DIFFERENT GUIDs in one file is
+ * genuinely ambiguous, so it is dropped rather than guessed.
+ */
+export function yamlEnvGuidVars(logical) {
+  const map = new Map();
+  const ambiguous = new Set();
+  let envIndent = -1;
+  for (const l of logical) {
+    const text = l.text;
+    if (text.trim() === '' || isCommentLine(text)) continue;
+    const indent = /^\s*/.exec(text)[0].length;
+    if (envIndent >= 0 && indent <= envIndent) envIndent = -1;
+    const open = YAML_ENV_OPEN.exec(text);
+    if (open) {
+      envIndent = open[1].length;
+      continue;
+    }
+    if (envIndent < 0) continue;
+    const m = YAML_ENV_ENTRY.exec(text);
+    if (!m || m[1].length <= envIndent) continue;
+    const value = m[3] ?? m[4] ?? m[5];
+    if (!GUID_RE.test(value)) continue;
+    const key = m[2];
+    const guid = value.toLowerCase();
+    if (map.has(key) && map.get(key) !== guid) ambiguous.add(key);
+    map.set(key, guid);
+  }
+  for (const k of ambiguous) map.delete(k);
+  return map;
+}
+
+/** Both binding forms a role GUID can reach a `--role` argument through. */
+export function roleVars(logical) {
+  return new Map([...yamlEnvGuidVars(logical), ...shellGuidVars(logical)]);
+}
+
+/** The role definition GUID a bare token resolves to, or null. */
+export function resolveGuidToken(raw, vars) {
+  if (raw === null || raw === undefined) return null;
+  const bare = String(raw).replace(/^["']|["']$/g, '');
+  if (GUID_RE.test(bare)) return bare.toLowerCase();
+  const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(bare);
+  if (v && vars.has(v[1])) return vars.get(v[1]);
+  return null;
+}
+
 /** The role definition GUID a `--role <token>` resolves to, or null. */
 export function resolveRoleArg(text, vars) {
   const m = /--role\s+("[^"]*"|'[^']*'|\S+)/.exec(text);
   if (!m) return null;
-  const raw = m[1].replace(/^["']|["']$/g, '');
-  if (GUID_RE.test(raw)) return raw.toLowerCase();
-  const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(raw);
-  if (v && vars.has(v[1])) return vars.get(v[1]);
-  return null;
+  return resolveGuidToken(m[1], vars);
 }
 
 /**
@@ -834,9 +909,147 @@ export function probeGates(logical, i) {
 }
 
 /**
+ * THE SECOND WAY THIS REPO CREATES A ROLE ASSIGNMENT (#3464 finding 2).
+ *
+ * `scripts/csa-loom/_grant-role-if-absent.sh` is the ONE shared implementation
+ * of "probe, then create only when the probe did not find the grant". #3454 and
+ * #4227 moved call sites onto it, which is the fix D3 asks for — but it also
+ * moved the `az role assignment create` token OUT of those files and into the
+ * helper. A site that adopts the remedy therefore vanishes from D3's population,
+ * and D3's numbers go DOWN as the tree gets better. That is the shape where a
+ * guard's zero stops meaning anything.
+ *
+ * So a `grant_role_if_absent <principal> <role> <scope>` call is enumerated as a
+ * create in its own right, and counted as GATED.
+ *
+ * WHAT "GATED" CLAIMS HERE, EXACTLY (R7). The helper runs `az role assignment
+ * list` into a captured variable and creates only when that probe did not
+ * establish the grant is present. It DELIBERATELY creates when the probe cannot
+ * be READ (unreadable probe → create, documented in the helper's own header:
+ * skipping a real absence is an outage, while a redundant create is refused by
+ * ARM and cannot mint a second name). So the claim is "the create is behind a
+ * probe", NOT "the create only ever runs on an established absence" — the
+ * helper's contract is the weaker one on purpose, and this guard does not assert
+ * the stronger one. What the helper's own suite proves is checked by
+ * `scripts/csa-loom/__tests__/grant-role-if-absent.test.mjs`, not here.
+ */
+export const GRANT_HELPER = 'grant_role_if_absent';
+const HELPER_DEFINITION = /(?:^|\s)grant_role_if_absent\s*\(\s*\)/;
+
+/**
+ * The positional arguments following `token` on a command line, quotes removed
+ * and stopping at the first unquoted command separator. `"$PID"` → `$PID`.
+ */
+export function positionalArgs(text, token) {
+  const at = text.indexOf(token);
+  if (at < 0) return [];
+  const rest = text.slice(at + token.length);
+  const out = [];
+  let cur = '';
+  let started = false;
+  let quote = null;
+  for (let i = 0; i < rest.length; i += 1) {
+    const ch = rest[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      started = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) out.push(cur);
+      cur = '';
+      started = false;
+      continue;
+    }
+    if (ch === ';' || ch === '&' || ch === '|' || ch === '#') break;
+    cur += ch;
+    started = true;
+  }
+  if (started) out.push(cur);
+  return out;
+}
+
+/**
+ * The create SITE at one logical line, or null.
+ *
+ * @returns {{kind:'cli'|'helper', roleToken:string|null}|null}
+ */
+export function createSite(text) {
+  if (isExecuted(text, CREATE_TOKEN)) {
+    const m = /--role\s+("[^"]*"|'[^']*'|\S+)/.exec(text);
+    return { kind: 'cli', roleToken: m ? m[1] : null };
+  }
+  if (HELPER_DEFINITION.test(text)) return null;
+  if (isExecuted(text, GRANT_HELPER)) {
+    const args = positionalArgs(text, GRANT_HELPER);
+    return { kind: 'helper', roleToken: args.length >= 2 ? args[1] : null };
+  }
+  return null;
+}
+
+/**
+ * Judge ONE file's logical lines. Shared by the tree scan and by the in-process
+ * controls, so a control cannot pass against a classifier the tree scan does not
+ * use — the two loops used to be separate copies of the same code.
+ *
  * @returns {{findings: object[], population: number, judged: number, resolved: number, unresolved: object[]}}
- *   `population` is every EXECUTED create found, resolvable or not.
- *   `resolved`   is those whose `--role` resolved to a role-definition GUID.
+ */
+export function classifyImperative(logical, bicepRoles, rel = '<memory>') {
+  const vars = roleVars(logical);
+  const findings = [];
+  const unresolved = [];
+  let population = 0;
+  let resolved = 0;
+  let judged = 0;
+
+  for (let i = 0; i < logical.length; i += 1) {
+    const l = logical[i];
+    const site = createSite(l.text);
+    if (!site) continue;
+    population += 1;
+
+    const role = resolveGuidToken(site.roleToken, vars);
+    if (!role) {
+      unresolved.push({ file: rel, line: l.line });
+      continue;
+    }
+    resolved += 1;
+    if (!bicepRoles.has(role)) continue;
+    judged += 1;
+
+    if (site.kind === 'helper') continue; // see GRANT_HELPER — probe is inside it
+    const gate = probeGates(logical, i);
+    if (gate.gated) continue;
+
+    findings.push({
+      check: 'D3',
+      file: rel,
+      line: l.line,
+      detail:
+        `\`az role assignment create --role ${role}\` is not gated on an \`az role assignment list\` probe ` +
+        `within the preceding ${PROBE_WINDOW} logical lines (${gate.why}), and the bicep ALSO grants that ` +
+        'role definition. The CLI mints a RANDOM v4 name for the (scope, principalId, roleDefinitionId) ' +
+        'triple while the template computes a deterministic v5 one, and ARM enforces uniqueness on the ' +
+        'TRIPLE — so whichever writer lands first blocks the other on EVERY future run (measured: ' +
+        'deploy-fiab-commercial 31780698652, #3439). Probe first and create only on an established absence — ' +
+        `\`. scripts/csa-loom/_grant-role-if-absent.sh\` then \`${GRANT_HELPER} <pid> <role> <scope> <label>\` ` +
+        'is the shared implementation.',
+    });
+  }
+  return { findings, population, resolved, judged, unresolved };
+}
+
+/**
+ * @returns {{findings: object[], population: number, judged: number, resolved: number, unresolved: object[]}}
+ *   `population` is every EXECUTED create site found, resolvable or not — both
+ *                `az role assignment create` and `grant_role_if_absent`.
+ *   `resolved`   is those whose role argument resolved to a role-definition GUID.
  *   `judged`     is those D3 actually RULES ON — resolved AND also granted by
  *                the bicep. This is the number the guard's verdict is about, and
  *                the one that was never reported (#3464 finding 2).
@@ -852,38 +1065,12 @@ export function findImperativeCollisions(records, root = REPO_ROOT, roots = IMPE
   for (const abs of imperativeFiles(root, roots)) {
     const rel = path.relative(root, abs).split(path.sep).join('/');
     const logical = readLogicalLines(fs.readFileSync(abs, 'utf8'));
-    const vars = shellGuidVars(logical);
-
-    for (let i = 0; i < logical.length; i += 1) {
-      const l = logical[i];
-      if (!isExecuted(l.text)) continue;
-      population += 1;
-
-      const role = resolveRoleArg(l.text, vars);
-      if (!role) {
-        unresolved.push({ file: rel, line: l.line });
-        continue;
-      }
-      resolved += 1;
-      if (!bicepRoles.has(role)) continue;
-      judged += 1;
-
-      const gate = probeGates(logical, i);
-      if (gate.gated) continue;
-
-      findings.push({
-        check: 'D3',
-        file: rel,
-        line: l.line,
-        detail:
-          `\`az role assignment create --role ${role}\` is not gated on an \`az role assignment list\` probe ` +
-          `within the preceding ${PROBE_WINDOW} logical lines (${gate.why}), and the bicep ALSO grants that ` +
-          'role definition. The CLI mints a RANDOM v4 name for the (scope, principalId, roleDefinitionId) ' +
-          'triple while the template computes a deterministic v5 one, and ARM enforces uniqueness on the ' +
-          'TRIPLE — so whichever writer lands first blocks the other on EVERY future run (measured: ' +
-          'deploy-fiab-commercial 31780698652, #3439). Probe first and create only on an established absence.',
-      });
-    }
+    const one = classifyImperative(logical, bicepRoles, rel);
+    findings.push(...one.findings);
+    unresolved.push(...one.unresolved);
+    population += one.population;
+    resolved += one.resolved;
+    judged += one.judged;
   }
   return { findings, population, resolved, judged, unresolved };
 }
@@ -1309,28 +1496,147 @@ export const D3_CONTROLS = [
     expectFindings: 0,
     expectPopulation: 0,
   },
+
+  // ── the YAML `env:` binding (#3464 finding 1) ─────────────────────────────
+  //
+  // The exact shape D3 was blind to. `.github/workflows/gov-provision-streaming-
+  // migrate.yml` binds its role GUIDs in the workflow-level `env:` block and the
+  // step's `run:` body says `--role "$BLOB_CONTRIB_ROLE"`. `shellGuidVars` reads
+  // only `KEY=<guid>`, so the site filed as UNRESOLVED and D3 judged NOTHING in
+  // the whole repo. Stubbing `yamlEnvGuidVars` back to an empty Map drops
+  // `expectJudged` here to 0 and this control fails.
+  {
+    why: 'D3-YAML: a role GUID bound in a workflow-level `env:` block resolves, and an UNGATED create over it IS flagged',
+    lines: [
+      'env:',
+      `  BLOB_CONTRIB_ROLE: ${CONTROL_ROLE}`,
+      'jobs:',
+      '  provision:',
+      '    steps:',
+      '      - run: |',
+      `          az role assignment create --assignee-object-id "$PID" --role "$BLOB_CONTRIB_ROLE" --scope "$LAKE_ID"`,
+    ],
+    expectFindings: 1,
+    expectPopulation: 1,
+    expectJudged: 1,
+  },
+  {
+    why: 'D3-YAML: a STEP-level `env:` binding resolves too',
+    lines: [
+      '      - name: grant',
+      '        env:',
+      `          ROLE_ID: ${CONTROL_ROLE}`,
+      '        run: |',
+      `          az role assignment create --assignee-object-id "$PID" --role "$ROLE_ID" --scope "$S"`,
+    ],
+    expectFindings: 1,
+    expectJudged: 1,
+  },
+  {
+    // R7: an over-approximation that GUESSES is worse than one that abstains.
+    why: 'D3-YAML: a key bound to TWO DIFFERENT GUIDs in one file is ambiguous, so it is NOT resolved',
+    lines: [
+      'env:',
+      `  ROLE_ID: ${CONTROL_ROLE}`,
+      'jobs:',
+      '  a:',
+      '    env:',
+      '      ROLE_ID: 00000000-0000-0000-0000-000000000002',
+      '    steps:',
+      '      - run: |',
+      `          az role assignment create --assignee-object-id "$PID" --role "$ROLE_ID" --scope "$S"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 1,
+    expectJudged: 0,
+  },
+  {
+    // A `KEY: <guid>` OUTSIDE any `env:` block is a workflow input default, a
+    // subscription id, a `with:` argument — not a shell binding.
+    why: 'D3-YAML: a `KEY: <guid>` that is NOT inside an `env:` block is not a shell binding',
+    lines: [
+      'on:',
+      '  workflow_dispatch:',
+      '    inputs:',
+      '      group:',
+      `        default: ${CONTROL_ROLE}`,
+      '      - run: |',
+      `          az role assignment create --assignee-object-id "$PID" --role "$group" --scope "$S"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 1,
+    expectJudged: 0,
+  },
+
+  // ── the shared helper as a create SITE (#3464 finding 2) ──────────────────
+  //
+  // #3454/#4227 moved call sites onto `grant_role_if_absent`, which removes the
+  // `az role assignment create` token from those files. Without these, adopting
+  // the remedy makes a site DISAPPEAR from D3's population — the guard's numbers
+  // fall as the tree improves, which is the recorded
+  // `filter_inside_the_predicate_beats_the_population_contract` shape.
+  {
+    why: 'D3-HELPER: a `grant_role_if_absent <pid> <role> <scope>` call IS enumerated and JUDGED, and counts as gated',
+    lines: [
+      '. scripts/csa-loom/_grant-role-if-absent.sh',
+      `grant_role_if_absent "$PID" ${CONTROL_ROLE} "$ACR_ID" "AcrPull"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 1,
+    expectJudged: 1,
+  },
+  {
+    why: 'D3-HELPER: the role argument resolves through a YAML env binding as well',
+    lines: [
+      'env:',
+      `  ACRPULL_ROLE: ${CONTROL_ROLE}`,
+      '      - run: |',
+      '          . scripts/csa-loom/_grant-role-if-absent.sh',
+      '          grant_role_if_absent "$PID" "$ACRPULL_ROLE" "$ACR_ID" "AcrPull"',
+    ],
+    expectFindings: 0,
+    expectPopulation: 1,
+    expectJudged: 1,
+  },
+  {
+    why: 'D3-HELPER: the function DEFINITION line is not a call site',
+    lines: [
+      'grant_role_if_absent() {',
+      '  local principal="$1" role="$2" scope="$3"',
+      '}',
+    ],
+    expectFindings: 0,
+    expectPopulation: 0,
+    expectJudged: 0,
+  },
+  {
+    why: 'D3-HELPER: a MENTION of the helper inside an echo is a reference, not a call',
+    lines: [
+      `echo "call grant_role_if_absent \\"$PID\\" ${CONTROL_ROLE} \\"$S\\" instead"`,
+    ],
+    expectFindings: 0,
+    expectPopulation: 0,
+    expectJudged: 0,
+  },
 ];
 
 /** Runs the controls against the classifier in memory. Returns failures. */
 export function runD3Controls() {
   const failures = [];
+  const bicepRoles = new Set([CONTROL_ROLE]);
   for (const c of D3_CONTROLS) {
     const logical = c.lines.map((text, idx) => ({ text, line: idx + 1 }));
-    const findings = [];
-    let population = 0;
-    for (let i = 0; i < logical.length; i += 1) {
-      if (!isExecuted(logical[i].text)) continue;
-      population += 1;
-      const role = resolveRoleArg(logical[i].text, shellGuidVars(logical));
-      if (!role || role !== CONTROL_ROLE) continue;
-      if (probeGates(logical, i).gated) continue;
-      findings.push(i);
-    }
+    // The SAME entry point the tree scan uses. Two copies of this loop is how a
+    // control set ends up proving a classifier nothing judges the tree with.
+    const { findings, population, judged } = classifyImperative(logical, bicepRoles, 'control');
     if (findings.length !== c.expectFindings) {
       failures.push(`expected ${c.expectFindings} finding(s), got ${findings.length} — ${c.why}`);
     }
     if (c.expectPopulation !== undefined && population !== c.expectPopulation) {
       failures.push(`expected population ${c.expectPopulation}, got ${population} — ${c.why}`);
+    }
+    if (c.expectJudged !== undefined && judged !== c.expectJudged) {
+      failures.push(`expected judged ${c.expectJudged}, got ${judged} — ${c.why}`);
     }
   }
   return failures;
@@ -1356,10 +1662,10 @@ const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  // The controls run IN-PROCESS, BEFORE the tree is judged (#3464 finding 4).
-  // This is load-bearing rather than decorative here: D3's JUDGED population is
-  // currently ZERO, so without these the guard would have no evidence at all
-  // that its judge path still works.
+  // The controls run IN-PROCESS, BEFORE the tree is judged (#3464 finding 4),
+  // through the SAME `classifyImperative` entry point the tree scan uses. They
+  // were load-bearing while D3's judged population was zero; now that the floor
+  // below refuses a zero, they are what keeps the judge path itself honest.
   const controlFailures = runD3Controls();
   if (controlFailures.length > 0) {
     process.stderr.write(
@@ -1380,13 +1686,31 @@ if (isMain) {
   }
   // D3's FINDINGS may legitimately reach zero (every site probes). Its
   // POPULATION may not: this repo executes `az role assignment create` in both
-  // cloud lanes, so zero executed creates means the matcher drifted off the
-  // code, and a verdict from a scanner that has stopped scanning is not a
-  // verdict (guard_with_zero_population_needs_embedded_control).
+  // cloud lanes, so zero create sites means the matcher drifted off the code,
+  // and a verdict from a scanner that has stopped scanning is not a verdict
+  // (guard_with_zero_population_needs_embedded_control).
   if (imperative.population === 0) {
     process.stderr.write(
-      'check-role-assignment-determinism: discovered ZERO executed `az role assignment create` calls under ' +
-        `${IMPERATIVE_ROOTS.join(', ')} — D3 is not scanning anything, which is not the same as a clean tree.\n`,
+      'check-role-assignment-determinism: discovered ZERO executed `az role assignment create` / ' +
+        `\`${GRANT_HELPER}\` call sites under ${IMPERATIVE_ROOTS.join(', ')} — D3 is not scanning anything, ` +
+        'which is not the same as a clean tree.\n',
+    );
+    process.exit(1);
+  }
+  // …and the population floor alone was not enough (#3464 finding 2). Between
+  // 2026-08-23 and 2026-09-07 D3 ENUMERATED 33-34 creates and JUDGED ZERO of
+  // them, because every resolvable `--role` named a role the bicep does not
+  // grant and the one that mattered was bound in YAML `env:`, which the resolver
+  // could not read. The guard reported OK the whole time, over an empty set,
+  // with only a `::warning::` saying so — and a warning does not fail a build.
+  // The floor is now on the number the verdict is actually ABOUT.
+  if (imperative.judged === 0) {
+    process.stderr.write(
+      `check-role-assignment-determinism: D3 JUDGED ZERO of ${imperative.population} create site(s) ` +
+        `(${imperative.resolved} resolved a role GUID). A clean D3 verdict over an EMPTY judged set is not a ` +
+        'clean verdict. Either role resolution has narrowed (yamlEnvGuidVars / shellGuidVars / the ' +
+        `\`${GRANT_HELPER}\` call reader) or every site now names a role the bicep does not grant — establish ` +
+        'which before treating this as clean (#3464, deploy-integrity.md R7).\n',
     );
     process.exit(1);
   }
@@ -1403,8 +1727,9 @@ if (isMain) {
     );
     for (const c of cross) process.stdout.write(`  ${c.key}\n    ${c.where.join('\n    ')}\n`);
     process.stdout.write(
-      `\nimperative \`az role assignment create\` calls EXECUTED: ${imperative.population}\n` +
-        `  of which the --role could NOT be resolved to a role definition GUID (not judged): ` +
+      `\nimperative create SITES (\`az role assignment create\` + \`${GRANT_HELPER}\`) EXECUTED: ` +
+        `${imperative.population}\n` +
+        `  of which the role argument could NOT be resolved to a role definition GUID (not judged): ` +
         `${imperative.unresolved.length}\n`,
     );
     for (const u of imperative.unresolved) process.stdout.write(`  ${u.file}:${u.line}\n`);
@@ -1430,38 +1755,23 @@ if (isMain) {
   // So it CHECKED ZERO and said thirty-four. An error or status message must
   // not state as fact something it did not establish, and a count of what a
   // guard ENUMERATED reported as a count of what it JUDGED is exactly that.
-  // #3464 filed this as "population 34, unresolved ~32 -> only ~4 judged"; it
-  // has since degraded to zero, so the sentence was not merely imprecise, it
-  // was describing work that is not happening.
   //
-  // Why the number is zero, and why that is NOT fixed here: 31 of the 34 sites
-  // pass `--role` as a DISPLAY NAME ("Storage Blob Data Contributor", "Reader")
-  // or an unresolvable variable, and the 3 that do resolve name roles the bicep
-  // does not grant. Widening resolution — reading role GUIDs out of a workflow's
-  // YAML `env:` mapping, which is #3464 finding 1 — makes exactly ONE more site
-  // judgeable, `gov-provision-streaming-migrate.yml:330`, and that site is an
-  // UNGATED create with `2>/dev/null || true`. So the widening and the fix are
-  // inseparable, and the file is owned by the deploy lane. Routed, not silently
-  // widened, and not silently left unsaid.
-  const judgedNote =
-    imperative.judged === 0
-      ? 'and D3 JUDGED NONE of them — see the note in this file and #3464; the D3 controls above are '
-        + 'therefore the only live evidence its judge path works'
-      : `and D3 JUDGED ${imperative.judged} of them (the rest name a role the bicep does not grant, or a `
-        + '--role this guard cannot resolve and therefore refuses to rule on)';
+  // #3464 findings 1+2 are what made the number zero, and both are closed above:
+  // role resolution now reads a workflow's YAML `env:` bindings, and a
+  // `grant_role_if_absent` call is enumerated as a create site in its own right
+  // so that adopting the remedy no longer DELETES a site from the population.
+  // `judged === 0` is now a hard failure rather than a `::warning::`.
+  //
+  // What is still NOT judged, and why it is stated rather than hidden: the sites
+  // whose `--role` is a DISPLAY NAME ("Storage Blob Data Contributor") or a
+  // variable this reader cannot resolve. D3 refuses to rule on a role definition
+  // it cannot establish; `--list` prints every one of them as residue.
   process.stdout.write(
     `check-role-assignment-determinism: OK — ${records.length} role assignment(s); every name is a ` +
       'deterministic guid(…) and no two declarations collide on one ARM triple. ' +
-      `D3 ENUMERATED ${imperative.population} imperative create(s), RESOLVED ${imperative.resolved}, ` +
-      `${judgedNote}. ${D3_CONTROLS.length} embedded control(s) passed in-process before the tree was judged.\n`,
+      `D3 ENUMERATED ${imperative.population} imperative create site(s), RESOLVED ${imperative.resolved}, ` +
+      `and JUDGED ${imperative.judged} of them (the rest name a role the bicep does not grant, or a role ` +
+      'argument this guard cannot resolve and therefore refuses to rule on). ' +
+      `${D3_CONTROLS.length} embedded control(s) passed in-process before the tree was judged.\n`,
   );
-  if (imperative.judged === 0) {
-    process.stdout.write(
-      '::warning::check-role-assignment-determinism: D3 judged ZERO of ' +
-        `${imperative.population} executed \`az role assignment create\` calls. Its clean verdict is about ` +
-        'an EMPTY set. Closing this needs role-name resolution widened (#3464 finding 1) together with the ' +
-        'ungated create it exposes in .github/workflows/gov-provision-streaming-migrate.yml — one change, ' +
-        'owned by the deploy lane.\n',
-    );
-  }
 }

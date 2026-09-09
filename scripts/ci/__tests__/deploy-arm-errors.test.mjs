@@ -41,6 +41,8 @@ import {
   forbiddenPublishers,
   inheritedStreamSpawns,
   CONTROL_SOURCE_CRLF,
+  CONTROL_WRITE_COUNT,
+  CONTROL_VIOLATION_COUNT,
 } from './_publication-surfaces.mjs';
 
 const FIXTURES = path.resolve(import.meta.dirname, '..', '__fixtures__', 'arm-ops-31069329802');
@@ -574,13 +576,26 @@ test('STRUCTURAL — EVERY write to a public stream crosses a boundary or a COUN
 
 test('SELF-DEFENCE — the surface enumerator can actually detect an unbounded write', () => {
   const found = unboundedWrites(CONTROL_SOURCE_CRLF, ARM_BOUNDARIES);
-  assert.equal(found.length, 2, `expected the control's 2 violations, found ${found.length}`);
+  assert.equal(found.length, CONTROL_VIOLATION_COUNT, `expected the control's ${CONTROL_VIOLATION_COUNT} violations, found ${found.length}`);
   assert.ok(found.some((w) => w.arg.startsWith('`deploy:')), 'a bare template-literal write was not detected');
   assert.ok(
     found.some((w) => w.arg.startsWith('redact(')),
     'a PER-SITE redact() was not detected — one boundary per surface is the rule; a per-field call is the defect',
   );
-  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, 5, 'the control source lost a write to CRLF handling');
+  // #3876 — the four bypasses, each by ACCESS PATH rather than by spelling.
+  // Three of them are zero-population bypasses: they do not mis-classify a
+  // counted write, they stop it being counted, so the count below is the half
+  // of this control that has teeth against them.
+  assert.deepEqual(
+    [...new Set(found.map((w) => w.accessPath))].sort(),
+    ['alias', 'bracket', 'dotted'],
+    'the enumerator lost an ACCESS PATH — a write it cannot see reports as no write at all (#3876)',
+  );
+  assert.ok(
+    found.some((w) => w.arg.startsWith('formatStdout(') && w.arg.includes('+')),
+    'a boundary call CONCATENATED with a raw value was accepted — the classifier is prefix-only again (#3876 bypass 1)',
+  );
+  assert.equal(streamWrites(CONTROL_SOURCE_CRLF).length, CONTROL_WRITE_COUNT, 'the control source lost a write to CRLF handling or to a narrowed enumerator');
   // The stripper keeps real code and drops prose — both directions.
   assert.match(stripComments(ARM_SRC), /process\.stdout\.write\(formatStdout\(/, 'the stripper ate real code');
   assert.doesNotMatch(stripComments(ARM_SRC), /DISCLOSED EXCEPTION, and the ONLY unredacted publication/, 'the stripper left prose');
