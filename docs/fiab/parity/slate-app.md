@@ -45,12 +45,14 @@ reactivity layer** (`SlateVariable` / `SlateEventTrigger` / `SlateEventEffect`,
 Measured against the previous revision of this file, the delta of this pass is:
 rows **14, 16, 18, 21, 22, 23 flip ❌ MISSING → ⚠️ partial**. Rows **4 and 29
 were already ⚠️ partial** and are **re-described, not flipped** — 4 gains real
-row-selection, 29 goes copy-only bundle → real ARM deploy. One row moves the
-other way: **12 is re-scored ✅ BUILT → ⚠️ 3 of 5**, correcting a pre-existing
-overstatement rather than recording new code (its Queries panel has never had
-Slate's editor toolbar or raw-JSON view). Every row still MISSING is now tracked
-(see **Tracked gaps** below) — this doc carries **one** grade, at the end of the
-Loom coverage table.
+row-selection, 29 goes copy-only bundle → real ARM deploy. Two rows move the
+other way: **1 is re-scored ✅ BUILT → ⚠️ 2 of 3** and **12 ✅ BUILT → ⚠️ 3 of
+5**, each correcting a pre-existing overstatement of a bundled row rather than
+recording new code — row 1 because *place* is not drag-and-drop (`WidgetPalette`
+adds via `Button onClick`, #4360), row 12 because its Queries panel has never had
+Slate's editor toolbar or raw-JSON view. Every row still MISSING is now tracked
+(see **Tracked gaps** below) — this doc carries **one** grade, in its own
+**Grade** section immediately after the Loom coverage table.
 
 Slate is Foundry's **pro-code application builder**: a drag-and-drop widget grid, a first-class
 Queries panel (Ontology / Function / SQL / HTTP-JSON), a Variables + Events/Actions reactivity
