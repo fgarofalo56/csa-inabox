@@ -6935,7 +6935,7 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
 // NOT a change to this binding or to that grant.
 //
 // DO NOT "fix" this by adding `loomStorageWillBeGranted` to
-// `transformRunnerActive` (:819) in the shape `s3GatewayActive` uses at :1490.
+// `transformRunnerActive` above in the shape `s3GatewayActive` uses.
 // That flag means "SOME pass owns my lake grant", and the only cross-sub pass
 // (modules/data-plane/dlz-lake-grant-pass.bicep) grants the S3 gateway's
 // dedicated identity and nothing else. Borrowing it here would gate this deploy

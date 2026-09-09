@@ -736,7 +736,8 @@ function unjustifiedGrantedPrincipals(source) {
  * — a statement about the PASS, not about the caller. Borrowing it for a module
  * whose principal the pass does not grant makes the flag assert an ownership
  * that does not exist. That is what #3338's suggested one-liner ("make
- * transformRunnerActive include loomStorageWillBeGranted, mirror :1490") does:
+ * transformRunnerActive include loomStorageWillBeGranted, mirroring the shape
+ * `s3GatewayActive` uses") does:
  * the pass grants the S3 gateway's dedicated identity and nothing else, so the
  * transform runner would gate on someone else's grant.
  */
