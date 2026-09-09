@@ -42,14 +42,33 @@ import {
 
 const MIN_HEARTBEAT_MS = 5_000;
 const DEFAULT_TTL_MS = 45_000;
+/**
+ * Re-probe cadence after a SETTLED refusal (see {@link isSettledRefusal}) —
+ * the same 60s ceiling the push backoff tops out at, so a refused surface
+ * costs one request a minute instead of one every 5-15s.
+ */
+const SETTLED_REPROBE_MS = PUSH_RETRY_MAX_MS;
 
 /**
- * Stream refusals that a faster retry cannot fix. Each settles the push loop
- * onto the 60s re-probe instead of the 5s→60s ramp (#3697): the flag being off
- * (503), the caller not being authorized (401/403), and the route/item not
- * being reachable for this caller (404). The always-on poll is unaffected.
+ * Statuses that will NOT become a different answer within seconds, so retrying
+ * on the fast ramp is pure noise (#3697 — every canvas open produced a 404
+ * storm against canvas-presence / collab/stream while `loadOwnedItem` refused
+ * the item):
+ *
+ *   503 — the `a14-collab-push` kill-switch is OFF server-side.
+ *   401 — the caller is not authenticated for this route. clientFetch already
+ *         handles a SESSION-EXPIRY 401 itself (refresh + reauth); a 401 that
+ *         reaches here is the authorization kind, which a retry cannot fix.
+ *   403 — the caller has no access to this item.
+ *   404 — the item lookup refused (wrong type, deleted, or no access path).
+ *
+ * These are RE-PROBED, never abandoned: an access grant or a flag flip made
+ * out-of-band self-heals on the next slow probe, per auto-bind-by-default §3.
+ * Anything else (5xx, network, a proxy hiccup) stays on the fast ramp.
  */
-const NON_RETRYABLE_STREAM_STATUS: ReadonlySet<number> = new Set([401, 403, 404, 503]);
+function isSettledRefusal(status: number): boolean {
+  return status === 503 || status === 401 || status === 403 || status === 404;
+}
 
 export interface PresenceTransportOptions {
   itemType: string;
@@ -60,7 +79,8 @@ export interface PresenceTransportOptions {
    * runtime kill-switch is enforced SERVER-side: with the flag OFF the stream
    * route answers 503 and this transport settles into a slow (60s) re-probe
    * while the poll carries presence — no client-side flag read, so mounting a
-   * presence surface never requires a react-query provider.
+   * presence surface never requires a react-query provider. The same slow
+   * re-probe covers a 401/403/404 refusal (see {@link isSettledRefusal}).
    */
   pushEnabled?: boolean;
   /** Live peer list sink (called from both the poll and the push path). */
@@ -99,6 +119,12 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
   let ttlMs = DEFAULT_TTL_MS;
   let streamAbort: AbortController | undefined;
   let pushAttempt = 0;
+  /**
+   * The poll's own settled-refusal latch. Set when a heartbeat POST is refused
+   * with a settled status, cleared by the next accepted beat — so a repaired
+   * grant restores the normal TTL/3 cadence with no reload.
+   */
+  let pollSettled = false;
 
   // ── Poll loop (heartbeat write + peers read — the always-on fallback) ─────
   const beat = async (): Promise<void> => {
@@ -111,14 +137,21 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
       const j: unknown = await r.json().catch(() => ({}));
       const body = j as { ok?: boolean; peers?: unknown; ttlMs?: number };
       if (!stopped && r.ok && body?.ok) {
+        pollSettled = false;
         onPeers(Array.isArray(body.peers) ? (body.peers as PresencePeer[]) : []);
         if (Number.isFinite(body.ttlMs) && (body.ttlMs as number) > 0) ttlMs = body.ttlMs as number;
+      } else if (!r.ok && isSettledRefusal(r.status)) {
+        // The BFF refused this beacon for a reason a 15s retry cannot change.
+        // Slow to the re-probe cadence rather than re-POSTing every TTL/3.
+        pollSettled = true;
       }
     } catch {
       /* transient — next tick retries */
     } finally {
       if (!stopped) {
-        const interval = Math.max(MIN_HEARTBEAT_MS, Math.floor(ttlMs / 3));
+        const interval = pollSettled
+          ? SETTLED_REPROBE_MS
+          : Math.max(MIN_HEARTBEAT_MS, Math.floor(ttlMs / 3));
         heartbeatTimer = setTimeout(() => { void beat(); }, interval);
       }
     }
@@ -154,7 +187,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
         // Where the 404 is a route that does not exist at all, the re-probe
         // will not recover it — clearing #3697 needs the route implemented or
         // the call removed, neither of which happens here.
-        settled = NON_RETRYABLE_STREAM_STATUS.has(res.status);
+        settled = isSettledRefusal(res.status);
         throw new Error(`stream HTTP ${res.status}`);
       }
       const reader = res.body.getReader();
@@ -197,7 +230,7 @@ export function createPresenceTransport(opts: PresenceTransportOptions): Presenc
       void openStream();
       return;
     }
-    const delay = settled ? PUSH_RETRY_MAX_MS : nextPushRetryMs(pushAttempt++);
+    const delay = settled ? SETTLED_REPROBE_MS : nextPushRetryMs(pushAttempt++);
     retryTimer = setTimeout(() => { void openStream(); }, delay);
   };
 

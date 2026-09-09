@@ -389,3 +389,29 @@ param appImageTags = {
 // genuinely fresh subscription; csa-loom-post-deploy-bootstrap.yml creates the
 // registration and unseals the catalog. Mirrors gcc-high/il5.bicepparam.
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
+
+// COST0 PROGRAM BUDGET — THE IMMUTABLE START DATE (#4253). `timePeriod.startDate`
+// on Microsoft.Consumption/budgets cannot be updated after creation, so the
+// template must name the value the LIVE budget already holds. It used to default
+// to `utcNow('yyyy-MM-01')` inside the module, which moved on the 1st of every
+// month and then failed EVERY apply for the rest of that month — taking the whole
+// subscription deployment down with it on one leaf:
+//   400 on 'loom-program-budget' → "Start date of budgets cannot be updated."
+// deploy-fiab-commercial ran green on 2026-08-29/30/31 and failed 8 for 8 from
+// 09-01, with no change to the module in between.
+//
+// The lane's `Resolve the program budget's IMMUTABLE start date` step runs
+// scripts/ci/resolve-program-budget-start-date.mjs before the what-if and the
+// apply, and exports LOOM_PROGRAM_BUDGET_START_DATE: the live budget's existing
+// start when there is one, the first of the current month when there genuinely is
+// no budget (the only start Azure accepts on a create), and it REFUSES the run
+// when the read did not complete rather than guessing.
+//
+// EMPTY is meaningful and safe: main.bicep does not declare the budget at all,
+// and because the deployment is incremental a live budget is left untouched and
+// still alerting. Without this line that export is INERT and the module falls
+// back to being skipped — so the budget would silently stop being managed.
+// Mirrors gcc/gcc-high/il5.bicepparam.
+param observabilityConfig = {
+  programBudgetStartDate: readEnvironmentVariable('LOOM_PROGRAM_BUDGET_START_DATE', '')
+}

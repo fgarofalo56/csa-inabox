@@ -337,11 +337,13 @@ jobs:
           # same (scope, principalId, roleDefinitionId) triple and ARM then refuses
           # the template's create forever. Same defect, Gov boundary.
           #
-          # NOTE for reviewers: D3 in check-role-assignment-determinism.mjs does
-          # NOT flag this file. `ACRPULL_ROLE` is defined in a YAML `env:` block,
-          # and D3 only resolves shell `KEY=<guid>` assignments, so it files this
-          # site as unresolved and never judges it. This lane therefore has the
-          # FIX but no regression net — tracked separately.
+          # NOTE for reviewers: D3 in check-role-assignment-determinism.mjs DOES
+          # now judge this file (#3464). It reads role GUIDs out of a workflow's
+          # YAML `env:` block, so `$ACRPULL_ROLE` / `$BLOB_CONTRIB_ROLE` resolve,
+          # and it enumerates `grant_role_if_absent` as a create site in its own
+          # right — so routing a site onto the helper no longer deletes it from
+          # the guard's population. Restore a bare `az role assignment create`
+          # over either of these two roles here and D3 exits 1.
           # shellcheck source=scripts/csa-loom/_grant-role-if-absent.sh
           . scripts/csa-loom/_grant-role-if-absent.sh
           for PID in "$MIG_PID" "$RW_PID"; do
@@ -366,9 +368,16 @@ jobs:
             LAKE_ID=$(az storage account list --subscription "$SUB" \
               --query "[?name=='$LAKE'].id | [0]" -o tsv | tr -d '\r')
             if [ -n "$LAKE_ID" ]; then
-              az role assignment create --assignee-object-id "$RW_PID" --assignee-principal-type ServicePrincipal \
-                --role "$BLOB_CONTRIB_ROLE" --scope "$LAKE_ID" -o none 2>/dev/null || true
-              echo "::notice::granted Storage Blob Data Contributor on $LAKE to uami-loom-risingwave-$LOCATION"
+              # #3464: this used to be a bare `az role assignment create … -o none
+              # 2>/dev/null || true` followed unconditionally by
+              # `::notice::granted …`. Two defects in three lines: `2>/dev/null ||
+              # true` discards the result (deploy-integrity.md, forbidden), and the
+              # notice ASSERTED a grant the code had not established (R7) — an
+              # AuthorizationFailed printed nothing and was reported as success.
+              # The shared helper probes first, and its ✓/::warning:: reports what
+              # actually happened.
+              grant_role_if_absent "$RW_PID" "$BLOB_CONTRIB_ROLE" "$LAKE_ID" \
+                "Storage Blob Data Contributor on $LAKE for uami-loom-risingwave-$LOCATION"
             else
               echo "::warning::lake account '$LAKE' not found in this subscription — skipping the sink grant. RisingWave still runs on single-node local state and serves the Postgres wire; only CREATE SINK to the lake would gate."
             fi
