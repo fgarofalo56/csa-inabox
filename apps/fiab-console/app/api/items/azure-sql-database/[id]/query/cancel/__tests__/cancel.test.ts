@@ -11,6 +11,11 @@
  *   5. live request → calls request.cancel() (TDS ATTENTION) and removes it
  *   6. cancel() throwing → 502
  *
+ * BOUNDS ON THE WRITE (added 2026-09-09 re-review)
+ *   6a. requestId must match a shape a Loom client mints, checked BEFORE any
+ *       Cosmos upsert — UUID, or the editors' `req-<ms>-<base36>` fallback
+ *   6b. the /query route's own 'query' rate-limit bucket, also before the write
+ *
  * MECHANISM (added after review; see the M3/M4 note further down)
  *   7. the watcher's LIFECYCLE — registering a request is what starts the poll
  *   8. recordCancelIntent's PERSISTENCE — the claim the route's answer rests on
@@ -20,6 +25,7 @@
  * app/api/items/azure-sql-database/[id]/query/__tests__/query-cancel-receipt.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -46,6 +52,13 @@ vi.mock('@/lib/azure/azure-sql-client', () => ({
   recordCancelIntent,
   cancelIntentUnavailableReason,
 }));
+
+// The route now shares the /query route's rate-limit bucket. Mocked (same
+// pattern as query-cancel-receipt.test.ts) so these specs measure the ROUTE's
+// call and its ordering, not the limiter's own token arithmetic — and so the
+// durable Cosmos tier is never pulled in here.
+const enforceRateLimitMock = vi.fn(async () => null as any);
+vi.mock('@/lib/azure/rate-limiter', () => ({ enforceRateLimit: (...a: any[]) => enforceRateLimitMock(...a) }));
 
 /**
  * A fake Cosmos SDK, so the REAL `cancelIntentStore()` init path — the client,
@@ -131,6 +144,18 @@ import { getSession } from '@/lib/auth/session';
 
 function postReq(body: any) { return { json: async () => body } as any; }
 
+/**
+ * Request ids are UUIDs because REAL callers mint `crypto.randomUUID()` and the
+ * route now shape-checks that (see the ABUSE SURFACE block below). These four
+ * stand in for the short mnemonics this file used before — `r1`, `gone`,
+ * `elsewhere`, `on-another-replica` — which the route rejects at 400 now, and
+ * rightly: the unknown-id branch performs a Cosmos upsert keyed by this value.
+ */
+const ID_LOCAL = '11111111-1111-4111-8111-111111111111';
+const ID_GONE = '22222222-2222-4222-8222-222222222222';
+const ID_ELSEWHERE = '33333333-3333-4333-8333-333333333333';
+const ID_OTHER_REPLICA = '44444444-4444-4444-8444-444444444444';
+
 beforeEach(() => {
   vi.resetAllMocks();
   liveRequests.clear();
@@ -142,12 +167,13 @@ beforeEach(() => {
   // be a no-op and `liveRequests.has(...) === false` would stop measuring
   // anything.
   unregisterLiveRequest.mockImplementation((requestId: string) => { liveRequests.delete(requestId); });
+  enforceRateLimitMock.mockResolvedValue(null);
 });
 
 describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
   it('returns 401 when no session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await POST(postReq({ requestId: 'r1' }));
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     expect(res.status).toBe(401);
   });
 
@@ -159,7 +185,7 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
 
   it('is idempotent for an unknown requestId when no intent store is reachable', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    const res = await POST(postReq({ requestId: 'gone' }));
+    const res = await POST(postReq({ requestId: ID_GONE }));
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -169,29 +195,129 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
   it('cancels a live request (sends TDS ATTENTION) and removes it', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     const cancel = vi.fn();
-    liveRequests.set('r1', { cancel });
-    const res = await POST(postReq({ requestId: 'r1' }));
+    liveRequests.set(ID_LOCAL, { cancel });
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.cancelled).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
-    expect(liveRequests.has('r1')).toBe(false);
+    expect(liveRequests.has(ID_LOCAL)).toBe(false);
     // Removed through `unregisterLiveRequest`, NOT a bare `liveRequests.delete`.
     // The bare delete leaves the poll watcher running on this replica; both
     // teardown call sites must use the same one.
-    expect(unregisterLiveRequest).toHaveBeenCalledWith('r1');
+    expect(unregisterLiveRequest).toHaveBeenCalledWith(ID_LOCAL);
     // A locally-owned request is cancelled directly — no intent is published.
     expect(recordCancelIntent).not.toHaveBeenCalled();
   });
 
   it('returns 502 when cancel() throws', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    liveRequests.set('r1', { cancel: () => { throw new Error('boom'); } });
-    const res = await POST(postReq({ requestId: 'r1' }));
+    liveRequests.set(ID_LOCAL, { cancel: () => { throw new Error('boom'); } });
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     const j = await res.json();
     expect(res.status).toBe(502);
     expect(j.ok).toBe(false);
     expect(j.error).toContain('boom');
+  });
+});
+
+/**
+ * THE COST SURFACE THIS DIFF INTRODUCED, AND ITS TWO BOUNDS (re-review
+ * 2026-09-09).
+ *
+ * Before the cross-replica store, an unknown requestId was a replica-local
+ * `Map` miss with no side effect, so `withSession` alone was proportionate.
+ * The same branch now runs `container.items.upsert({ id: requestId, … })`, so
+ * an authenticated session could write unbounded documents into
+ * `sql-cancel-intents` under ids it chose. These specs hold both bounds in
+ * place, in the order the route applies them: shape first, then rate limit,
+ * BOTH before `recordCancelIntent` can be reached.
+ *
+ * WHAT THIS IS NOT. Not an access-control fix and not claimed as one — request
+ * ids are `crypto.randomUUID()`, so another user's in-flight id is not
+ * guessable, and this route still does not run the `[id]` owner check its
+ * sibling /query route runs (#4407). It is a cost/DoS bound.
+ */
+describe('cancel — the intent write is bounded (#3400 re-review)', () => {
+  it('rejects a requestId that is not a UUID, BEFORE any Cosmos write', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: 'attacker-chosen-document-id' }));
+    const j = await res.json();
+    expect(res.status).toBe(400);
+    expect(j.ok).toBe(false);
+    // The write is what matters — the status code alone would still pass if the
+    // route 400'd after upserting.
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects an id that merely CONTAINS a UUID (anchored, not a substring match)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: `x${ID_ELSEWHERE}` }));
+    expect(res.status).toBe(400);
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('accepts an upper-case UUID (crypto.randomUUID is lower-case, but callers may echo)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE.toUpperCase() }));
+    expect(res.status).toBe(200);
+    expect(recordCancelIntent).toHaveBeenCalledWith(ID_ELSEWHERE.toUpperCase());
+  });
+
+  /**
+   * THE REGRESSION A BARE UUID CHECK WOULD HAVE SHIPPED. All three SQL editors
+   * fall back to `req-${Date.now()}-${base36}` when `crypto.randomUUID` is
+   * missing — it is secure-context-only, so that branch is live on a plain-http
+   * host (unified-sql-database-editor.tsx:915-917, azure-sql-editors.tsx:956-958
+   * and :1442-1444). A UUID-only shape check would have made Cancel return 400
+   * exactly there, on the path with the least-capable browser.
+   *   MUTATION: narrow REQUEST_ID_RE to the UUID alternative alone → red.
+   */
+  it('accepts the editors\' non-crypto fallback id shape', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const fallbackId = `req-${Date.now()}-${(123456789).toString(36)}`;
+    const res = await POST(postReq({ requestId: fallbackId }));
+    expect(res.status).toBe(200);
+    expect(recordCancelIntent).toHaveBeenCalledWith(fallbackId);
+  });
+
+  /** The fallback alternative must not be a hole: `req-` + anything is not it. */
+  it('does not let the fallback alternative admit arbitrary ids', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    for (const bad of ['req-notdigits-abc', 'req-123-UPPER/slash', `req-1-${'x'.repeat(40)}`]) {
+      const res = await POST(postReq({ requestId: bad }));
+      expect(res.status, `accepted ${bad}`).toBe(400);
+    }
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('applies the SAME rate-limit bucket as the /query route, before the write', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    await POST(postReq({ requestId: ID_ELSEWHERE }));
+    // 'query' — not a bespoke class — so a cancel cannot be a cheaper way to
+    // reach the same backends than the query it cancels.
+    expect(enforceRateLimitMock).toHaveBeenCalledWith({ claims: { oid: 'u' } }, 'query');
+  });
+
+  it('a 429 from the limiter is returned and NOTHING is written or cancelled', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const cancel = vi.fn();
+    liveRequests.set(ID_LOCAL, { cancel });
+    enforceRateLimitMock.mockResolvedValue(
+      new NextResponse(JSON.stringify({ ok: false, error: 'rate limited' }), { status: 429 }),
+    );
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
+    expect(res.status).toBe(429);
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+    // The local cancel is gated too — the limiter runs before the map lookup.
+    expect(cancel).not.toHaveBeenCalled();
   });
 });
 
@@ -278,7 +404,7 @@ describe('cancel route honesty (#3400)', () => {
   it('an unknown requestId with NO reachable store reports the no-op honestly', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     recordCancelIntent.mockResolvedValue(false);
-    const res = await POST(postReq({ requestId: 'elsewhere' }));
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE }));
     const j = await res.json();
     expect(j.cancelled).toBe(false);
     expect(j.crossReplica).toBe(false);
@@ -310,7 +436,7 @@ describe('cancel route honesty (#3400)', () => {
       + '(LOOM_SQL_CANCEL_INTENTS_DISABLED=1), so the signal was not carried to any other replica',
     );
 
-    const res = await POST(postReq({ requestId: 'elsewhere' }));
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE }));
     const j = await res.json();
 
     expect(cancelIntentUnavailableReason).toHaveBeenCalled();
@@ -324,7 +450,7 @@ describe('cancel route honesty (#3400)', () => {
   it('does not ask for an unavailability reason when the intent WAS published', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     recordCancelIntent.mockResolvedValue(true);
-    await POST(postReq({ requestId: 'on-another-replica' }));
+    await POST(postReq({ requestId: ID_OTHER_REPLICA }));
     expect(cancelIntentUnavailableReason).not.toHaveBeenCalled();
   });
 
@@ -337,10 +463,10 @@ describe('cancel route honesty (#3400)', () => {
   it('publishes a cross-replica intent when the id is not local, and reports it as REQUESTED', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     recordCancelIntent.mockResolvedValue(true);
-    const res = await POST(postReq({ requestId: 'on-another-replica' }));
+    const res = await POST(postReq({ requestId: ID_OTHER_REPLICA }));
     const j = await res.json();
     expect(res.status).toBe(200);
-    expect(recordCancelIntent).toHaveBeenCalledWith('on-another-replica');
+    expect(recordCancelIntent).toHaveBeenCalledWith(ID_OTHER_REPLICA);
     expect(j.ok).toBe(true);
     expect(j.crossReplica).toBe(true);
     // NOT `true` — persisting a signal is not observing a cancellation (R7).

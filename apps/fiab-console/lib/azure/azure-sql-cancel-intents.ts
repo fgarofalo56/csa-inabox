@@ -224,8 +224,33 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     const { database } = await client.databases.createIfNotExists({
       id: process.env.LOOM_COSMOS_DATABASE || 'loom',
     });
-    // createIfNotExists so a fresh estate needs no extra ARM step
-    // (no-vaporware.md bicep-sync #4 permits the lazy-create path).
+    // WHY LAZY-CREATE HERE, AND WHAT THAT DOES **NOT** ESTABLISH (#4406).
+    //
+    // Every other container this app opens lazily also has an ARM row in
+    // `landing-zone/cosmos.bicep`'s `loomContainers`, so for those
+    // `createIfNotExists` settles on the read and the CREATE branch never runs
+    // on a deployed estate. `sql-cancel-intents` has no ARM row yet — it is
+    // deferred to #4406 — so on a live estate this call is the first one in the
+    // app that genuinely issues a container create over the data plane with
+    // `aadCredentials`. That is a real difference and it is stated here rather
+    // than hidden behind "no-vaporware.md bicep-sync #4 permits lazy-create",
+    // which is true but was doing more work than it should.
+    //
+    // WHAT IS MEASURED: the deploy grants the Console UAMI BOTH tiers on this
+    // account — `Cosmos DB Built-in Data Contributor` (data-plane
+    // sqlRoleAssignment, `cosmos.bicep:680` / `loom-console-cosmos.bicep:357`)
+    // and `DocumentDB Account Contributor` (ARM control plane, `:662` / `:345`).
+    // WHAT IS NOT MEASURED: that either of those makes THIS SDK call succeed.
+    // No estate receipt exists for it, so the code does not assume one.
+    //
+    // WHAT HAPPENS IF IT DOES FAIL, so this is not a silent dead feature
+    // (deploy-integrity R3): the catch below records the driver's real message,
+    // `cancelIntentUnavailableReason()` embeds it, and the cancel route returns
+    // it to the caller in `reason` — so the operator sees the actual Cosmos
+    // error in the HTTP response the moment a cross-replica cancel is attempted,
+    // not only in a console.warn nobody can reach. The `console.warn` is the
+    // second copy, not the only one. Landing the ARM row on #4406 removes the
+    // create attempt altogether and is the real fix.
     const { container } = await database.containers.createIfNotExists({
       id: CANCEL_INTENT_CONTAINER,
       partitionKey: { paths: ['/requestId'] },

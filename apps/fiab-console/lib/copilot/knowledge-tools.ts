@@ -207,11 +207,19 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
   // is registered so the gate is discoverable and so the backend goes live the
   // moment the driver ships — not because the parity gap is closed.
   //
-  // The heavy modules are imported INSIDE the handler on purpose: the vCore
-  // client resolves the `mongodb` driver through a webpack-ignored dynamic
-  // import, and the AOAI client is only needed on the embedding path. Keeping
-  // both out of module scope means registering this tool costs nothing in an
-  // estate that never calls it.
+  // WHAT THE HANDLER-SCOPED IMPORTS DO AND DO NOT BUY. `aoaiEmbed` is imported
+  // inside the handler and nowhere else, so the AOAI client genuinely stays out
+  // of this module's graph until someone calls the tool. The vCore client does
+  // NOT get that: `cosmosVcoreGate` / `CosmosVcoreDriverError` are STATIC
+  // imports at the top of this file (the gate has to be evaluated on the
+  // handler's first line), so `import('../azure/cosmos-vcore-vector-client')`
+  // below re-enters a module that is already loaded. This comment used to claim
+  // both were deferred and that "registering this tool costs nothing" — that was
+  // true of the AOAI client only, and is corrected here rather than defended.
+  // What the dynamic import in the handler still does buy is real but narrower:
+  // the `mongodb` driver itself is resolved through a webpack-ignored dynamic
+  // import INSIDE that client, so the driver — the heavy part, and the one this
+  // image does not carry — is never resolved on a path that only reads the gate.
   r.register({
     name: 'vector_store_retrieve',
     service: 'Cosmos DB for MongoDB (vCore) vector search',

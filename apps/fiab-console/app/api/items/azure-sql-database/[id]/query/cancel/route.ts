@@ -39,21 +39,89 @@
  * same as a query having stopped. Only the /query response's `code: 'ECANCEL'`
  * establishes that, and the client should treat that as the receipt. When the
  * intent store is unavailable the route says so and claims nothing.
+ *
+ * COST/ABUSE SURFACE — WHY THIS ROUTE NOW SHAPE-CHECKS AND RATE-LIMITS (#3400
+ * re-review, 2026-09-09). Before the cross-replica store existed, an unknown
+ * requestId was a pure in-memory `Map` miss: replica-local, no side effect, so
+ * `withSession` alone was proportionate. It is not any more — the same branch
+ * now performs a Cosmos upsert with an `id` taken verbatim from the request
+ * body, so an authenticated session could drive unbounded document writes into
+ * `sql-cancel-intents` with ids of its choosing. Two bounds, both BEFORE
+ * `recordCancelIntent`:
+ *
+ *   1. the id must match a shape a Loom client actually mints — a UUID, or the
+ *      `req-<ms>-<base36>` fallback all three SQL editors use when
+ *      `crypto.randomUUID` is unavailable (a secure-context-only API, so that
+ *      branch is live on a plain-http host). A bare UUID check was the review's
+ *      suggestion and would have 400'd that path;
+ *   2. `enforceRateLimit(session, 'query')` — the SAME bucket the sibling
+ *      /query route uses (query/route.ts:57), so a cancel cannot be cheaper to
+ *      spam than the query it cancels.
+ *
+ * The shape check bounds WHICH document ids a body can name; the rate limit
+ * bounds HOW MANY. Neither is authenticity — either shape is forgeable — and
+ * the code does not claim otherwise.
+ *
+ * This is NOT privilege escalation and the code does not claim it was: ids are
+ * random UUIDs, so another user's in-flight requestId is not guessable, and the
+ * bound is a cost/DoS bound rather than an access-control one. The remaining
+ * access-control gap — this route never resolves `[id]` and so never runs the
+ * owner check the /query route runs via `loadOwnedSqlItem` — is tracked on
+ * #4407 and deliberately NOT folded in here.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { liveRequests, unregisterLiveRequest, recordCancelIntent, cancelIntentUnavailableReason } from '@/lib/azure/azure-sql-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const POST = withSession(async (req: NextRequest) => {
+/**
+ * The id shapes a REAL Loom client mints, and nothing else.
+ *
+ * NOT a bare UUID check, which is what the review suggested and what I started
+ * with — measured against the callers, that would have 400'd a live path. All
+ * three SQL editors mint the id the same way and all three carry a fallback:
+ *
+ *   lib/editors/unified-sql-database-editor.tsx:915-917
+ *   lib/editors/azure-sql-editors.tsx:956-958 and :1442-1444
+ *     crypto.randomUUID() when available, else `req-${Date.now()}-${base36}`
+ *
+ * `crypto.randomUUID` is secure-context-only, so the fallback is reachable on a
+ * plain-http dev host. Rejecting it would have made Cancel return 400 exactly
+ * there. Both shapes are accepted, anchored, with a length ceiling — the point
+ * is to bound the id space a request body can name for the Cosmos upsert below,
+ * not to certify RFC-4122 conformance.
+ *
+ * This is a SHAPE bound, not an authenticity one, and the code does not pretend
+ * otherwise: a caller can forge either shape just as easily. What it removes is
+ * an arbitrary attacker-chosen document id (and unbounded id length); what
+ * bounds the VOLUME is the rate limit immediately after it.
+ */
+const REQUEST_ID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|req-\d{1,20}-[a-z0-9]{1,32})$/i;
+
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const body = await req.json().catch(() => ({}));
   const requestId = String(body?.requestId || '').trim();
   if (!requestId) {
     return NextResponse.json({ ok: false, error: 'requestId is required' }, { status: 400 });
   }
+  // Shape-check BEFORE any lookup or write. An id outside these shapes can match
+  // nothing in `liveRequests` either — every entry there was keyed by an id one
+  // of the three editors above minted — so rejecting here costs no reachable
+  // behaviour; it only removes the attacker-chosen Cosmos document id below.
+  if (!REQUEST_ID_RE.test(requestId)) {
+    return NextResponse.json(
+      { ok: false, error: 'requestId is not a well-formed Loom request id (the value /query was called with)' },
+      { status: 400 },
+    );
+  }
+  // Same bucket as the sibling /query route, so a cancel is not a cheaper way
+  // to reach the same backends than the query it cancels.
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
   const request = liveRequests.get(requestId);
   if (!request) {
     // Not this replica's request. Publish a cross-replica cancel intent; the
