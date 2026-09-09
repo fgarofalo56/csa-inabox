@@ -44,6 +44,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -66,18 +67,22 @@ def _bash() -> str:
     return "bash"
 
 
-def _workflow() -> dict:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+def _workflow() -> dict[str, Any]:
+    loaded = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict), f"{WORKFLOW.name} did not parse as a mapping"
+    return loaded
 
 
-def _step(step_id: str) -> dict:
-    steps = _workflow()["jobs"]["check"]["steps"]
+def _step(step_id: str) -> dict[str, Any]:
+    steps: list[dict[str, Any]] = _workflow()["jobs"]["check"]["steps"]
     matches = [s for s in steps if s.get("id") == step_id]
     assert matches, f"no step with id {step_id!r} in {WORKFLOW.name}"
     return matches[0]
 
 
-def _run_classifier(script: str, age_seconds: int = 3, **overrides) -> tuple[str, int, str]:
+def _run_classifier(
+    script: str, age_seconds: int = 3, **overrides: str
+) -> tuple[str, int, str]:
     """Run a classifier script and return (status, returncode, job summary)."""
     env = dict(os.environ)
     env.update(
@@ -153,7 +158,7 @@ BRANCHES = [
     ids=[b[0].replace(" ", "-") for b in BRANCHES],
 )
 def test_branch_produces_expected_status(
-    case: str, overrides: dict, age: int, expected_status: str, expected_rc: int
+    case: str, overrides: dict[str, str], age: int, expected_status: str, expected_rc: int
 ) -> None:
     script = _step("classify")["run"]
     status, rc, summary = _run_classifier(script, age_seconds=age, **overrides)
