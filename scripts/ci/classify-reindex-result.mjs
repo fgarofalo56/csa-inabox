@@ -459,6 +459,28 @@ function firstLine(s) {
   return String(s || '').split(/\r?\n/)[0].slice(0, 300);
 }
 
+/**
+ * Whitelist an HTTP-status-code env value to digits and commas.
+ *
+ * `POST_CODE` is one `curl -w '%{http_code}'` value (or the literal `000` curl
+ * fallback); `POST_CODES` is those joined by commas, one per attempt. Both are
+ * interpolated into a message this script writes to stdout, which CodeQL flags
+ * as `js/clear-text-logging` (alerts 1034/1035) because the value is read from
+ * the environment and reaches a log sink.
+ *
+ * A status code carries nothing sensitive, so the alert is a false positive on
+ * the values this script actually receives — but that is an argument about the
+ * producer, and the producer is not visible from here. Enforcing the SHAPE at
+ * the boundary makes it true rather than merely likely: anything that is not a
+ * status code is dropped instead of echoed, and the flow stops being a
+ * clear-text-logging path at all. Real values (`504`, `000`, `504,502`) pass
+ * through untouched, so this is a no-op for every input the caller produces.
+ */
+function statusCodesOnly(value) {
+  const s = String(value ?? '');
+  return /^[0-9,]*$/.test(s) ? s : '';
+}
+
 function main() {
   const mode = process.env.MODE ?? 'post';
   const { verdict, level, message } =
@@ -469,8 +491,8 @@ function main() {
           waitedSeconds: process.env.POLL_WAITED_S ?? '',
           attempts: process.env.POLL_ATTEMPTS ?? '',
           idleStreak: process.env.POLL_IDLE_STREAK ?? '',
-          postCode: process.env.POST_CODE ?? '',
-          postCodes: process.env.POST_CODES ?? '',
+          postCode: statusCodesOnly(process.env.POST_CODE),
+          postCodes: statusCodesOnly(process.env.POST_CODES),
           postAttempts: process.env.POST_ATTEMPTS ?? '',
         })
       : classifyReindexResult({

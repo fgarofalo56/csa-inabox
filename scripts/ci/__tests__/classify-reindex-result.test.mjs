@@ -538,3 +538,80 @@ test('poll: trigger_refused with a single collected code names it plainly', () =
   assert.doesNotMatch(r.message, /HTTP 504 then/);
   assert.doesNotMatch(r.message, /LAST attempt/);
 });
+
+/*
+ * ── POST_CODE / POST_CODES ARE WHITELISTED AT THE ENV BOUNDARY ──────────────
+ *
+ * Both are read from the environment and interpolated into a message written to
+ * stdout, which CodeQL flags as `js/clear-text-logging` (alerts 1034/1035). The
+ * values the caller actually produces are `curl -w '%{http_code}'` outputs, so
+ * the alert is a false positive on them — but that is a claim about a producer
+ * this script cannot see. `statusCodesOnly` makes it true at the boundary
+ * instead of merely likely.
+ *
+ * These drive the CLI rather than the exported function, because the whitelist
+ * IS the env boundary: testing the function would step over the thing under
+ * test. The first case is the CONTROL — it proves the assertion can see a code
+ * at all, so the "dropped" cases below are not passing vacuously.
+ */
+test('poll CLI: real curl status codes pass through the whitelist untouched', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODES: '504,502',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /HTTP 504 then 502, one per attempt/);
+});
+
+test('poll CLI: a POST_CODE that is not a status code is dropped, not echoed', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODE: 'NOT-A-CODE-9f2a',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.doesNotMatch(res.stdout, /NOT-A-CODE-9f2a/);
+  // R7: having dropped it, the message must not invent a code either.
+  assert.match(res.stdout, /\(no application body\)/);
+  assert.doesNotMatch(res.stdout, /LAST attempt/);
+});
+
+test('poll CLI: a malformed POST_CODES list is dropped whole, not partially echoed', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODES: '504,NOT-A-CODE-9f2a',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.doesNotMatch(res.stdout, /NOT-A-CODE-9f2a/);
+  // Whitelisting is all-or-nothing on the list: a partially-valid list is not
+  // silently trimmed to its valid prefix, which would report FEWER attempts
+  // than were made and understate the failure.
+  assert.doesNotMatch(res.stdout, /HTTP 504, no application body/);
+  assert.match(res.stdout, /\(no application body\)/);
+});
