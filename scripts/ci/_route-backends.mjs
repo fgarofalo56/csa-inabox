@@ -480,6 +480,23 @@ export const CLIENT_WITHOUT_AZURE_IDENTIFIER = new Map([
     },
   ],
   [
+    `${CONSOLE_ROOT}/lib/azure/azure-sql-cancel-intents.ts`,
+    {
+      backend: 'Cosmos',
+      why:
+        'the cross-replica SQL cancel-intent store (#3400): `container.items.upsert` / `.item().read()` / ' +
+        '`.item().delete()` against a Cosmos container, on a `new CosmosClient({ endpoint: ' +
+        'LOOM_COSMOS_ENDPOINT, aadCredentials })`. Real network calls, but nothing in the module is READABLE as ' +
+        'Cosmos by the detectors: the endpoint is deployment configuration so no `documents.azure.com` literal ' +
+        'appears, and the SDK is reached through `await import(\'@azure/cosmos\')` INSIDE the store initialiser — ' +
+        'a dynamic import, which PACKAGE_RE cannot see because it matches `from \'…\'` only. Split out of ' +
+        'azure-sql-client.ts, which the derivation could name only because of its unrelated static `import sql ' +
+        'from \'mssql\'`; the Cosmos half of that module was never named there either. Declared rather than ' +
+        'widening PACKAGE_RE to dynamic imports, which would relabel modules across the whole console in a diff ' +
+        'that is not about the derivation.',
+    },
+  ],
+  [
     `${CONSOLE_ROOT}/lib/azure/databricks-scale-client.ts`,
     {
       backend: 'Databricks',
