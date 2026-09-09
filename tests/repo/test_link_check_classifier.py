@@ -350,11 +350,14 @@ def _base_repo(repo: Path) -> str:
     _init_repo(repo)
     _write(repo, "docs/top.md")
     _write(repo, "docs/guide/deep.md")
-    # Links at a non-.md asset, which is what makes the delete-asset fixture a
-    # real inbound-link breakage rather than a hypothetical one.
-    _write(repo, "docs/guide/other.md", "see ![arch](../img/arch.png)\n")
+    # Links at a non-.md asset AND at a target OUTSIDE docs/. Both are real
+    # shapes in this repo (551 non-.md files under docs/; 227 link occurrences
+    # pointing outside it, 41 of them at README.md), and both were missed by an
+    # earlier, narrower widen.
+    _write(repo, "docs/guide/other.md", "see ![arch](../img/arch.png) and [readme](../../README.md)\n")
     _write(repo, "docs/img/arch.png", "not really a png\n")
     _write(repo, "docs/_includes/snippet.md", "shared snippet\n")
+    _write(repo, "README.md", "root readme\n")
     _write(repo, "src/app.py", "x = 1\n")
     return _commit(repo, "base")
 
@@ -434,6 +437,10 @@ WIDEN_CASES = [
     # widen exists for; 551 non-.md files live under docs/ and lychee resolves
     # local file: links. It reported "nothing needed to be checked".
     ("deleted-non-md-asset", "delete-asset"),
+    # Round-4 review: 227 link occurrences in docs/ point OUTSIDE docs/, 41 of
+    # them at README.md. Keyed on ^docs/ the widen missed a deleted OUTBOUND
+    # target and reported "nothing needed to be checked".
+    ("deleted-outbound-target", "delete-outbound"),
     ("renamed-within-docs", "rename-in"),
     ("renamed-out-of-docs", "rename-out"),
     ("non-ascii-doc", "non-ascii"),
@@ -457,6 +464,13 @@ def _apply_widen_fixture(repo: Path, kind: str, label: str) -> None:
         # docs/guide/other.md links to it, and the PR removes it. Nothing under
         # docs/ that a doc can point at may be deleted without widening.
         (repo / "docs" / "img" / "arch.png").unlink()
+    elif kind == "delete-outbound":
+        # An OUTBOUND target: docs/guide/other.md links to ../../README.md.
+        # The PR deletes it and otherwise touches only an excluded include, so
+        # nothing lands in the narrow scope and the widen is the only thing
+        # standing between this and a false "nothing needed to be checked".
+        (repo / "README.md").unlink()
+        _write(repo, "docs/_includes/snippet.md", "touched\n")
     elif kind == "rename-in":
         _git(repo, "mv", "docs/guide/other.md", "docs/guide/renamed.md")
     elif kind == "rename-out":
@@ -655,14 +669,14 @@ SCOPE_MUTATIONS = [
         "many",
     ),
     (
-        "rename detection restored (round 2 blocker a)",
-        ("--name-only --no-renames --diff-filter=DR", "--name-only --diff-filter=DR"),
-        "rename-out",
+        "deletion widen re-keyed to docs/*.md (rounds 3+4 blockers)",
+        ("elif [ -s gone-all.txt ]; then", "elif grep -qE '^docs/.*[.]md$' gone-all.txt; then"),
+        "delete-asset",
     ),
     (
-        "DR widen re-keyed to .md only (round 3 blocker)",
-        ("elif grep -qE '^docs/' gone-all.txt", "elif grep -qE '^docs/.*[.]md$' gone-all.txt"),
-        "delete-asset",
+        "deletion widen re-keyed to ^docs/ (round 4 blocker)",
+        ("elif [ -s gone-all.txt ]; then", "elif grep -qE '^docs/' gone-all.txt; then"),
+        "delete-outbound",
     ),
     (
         "absent-from-checkout widen removed",
@@ -843,6 +857,31 @@ def test_detail_reports_lychees_own_total_not_a_predicted_count() -> None:
     assert "2520 link(s)" not in summary2
 
 
+def _lychee_summary(total: int, successful: int, excluded: int = 0, errors: int = 0) -> str:
+    """A summary in the shape lychee 0.24.2 ACTUALLY emits.
+
+    This matters more than it looks. The first version of these fixtures used a
+    tidy ``| Excluded | 4 |``, a shape lychee never produces — the real rows are
+    emoji-prefixed and column-padded. Against those fixtures a broken parser
+    stayed green: changing the shipped ``Excluded[^0-9]*[0-9]+`` to
+    ``Excluded . [0-9]+`` matched the fixture and NOT real output, so the suite
+    passed while the marker went back to reporting excluded links as checked.
+    A fixture the real tool cannot produce tests nothing.
+    """
+    rows = [
+        "| Status          | Count |",
+        "|-----------------|-------|",
+        f"| \U0001f50d Total        | {total:>5} |",
+        f"| ✅ Successful   | {successful:>5} |",
+        "| ⏳ Timeouts     |     0 |",
+        "| \U0001f500 Redirected   |     0 |",
+        f"| \U0001f47b Excluded     | {excluded:>5} |",
+        "| ❓ Unknown      |     0 |",
+        f"| \U0001f6ab Errors       | {errors:>5} |",
+    ]
+    return "\n".join(rows) + "\n"
+
+
 def test_excluded_links_are_not_counted_as_checked() -> None:
     """R7: lychee's Total INCLUDES links it never contacted.
 
@@ -854,42 +893,92 @@ def test_excluded_links_are_not_counted_as_checked() -> None:
     ``Total 4 / Excluded 4`` and the classifier printed
     *"lychee reports 4 link(s) checked, and found no dead links"* — over a run
     that checked zero. On the offline widen it is structural, not a corner
-    case: 18197 Total / 6291 Excluded reported as 18197 checked.
+    case: against the real corpus, 18197 Total / 6291 Excluded reported as
+    18197 checked when 11906 were.
     """
     script = _step("classify")["run"]
-    all_excluded = (
-        "| Status | Count |\n|---|---|\n"
-        "| Total | 4 |\n| Successful | 0 |\n| Excluded | 4 |\n"
-    )
     r = _run_classifier_full(
-        script, lychee_out=all_excluded, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+        script,
+        lychee_out=_lychee_summary(total=4, successful=0, excluded=4),
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
     )
     assert r["status"] == "OK"
-    assert "4 link(s) checked" not in r["summary"], (
+    assert "4 link occurrence(s) checked" not in r["summary"], (
         "excluded links were reported as checked — the run contacted nothing"
     )
-    assert "0 link(s)" in r["summary"], f"expected an honest zero, got:\n{r['summary']}"
     assert r["status_json"]["links_checked"] == "0"
     assert r["status_json"]["links_excluded"] == "4"
     assert r["status_json"]["links_found"] == "4"
 
-    # The partial case: some excluded, some genuinely checked.
-    partial = (
-        "| Status | Count |\n|---|---|\n"
-        "| Total | 18197 |\n| Successful | 11900 |\n| Excluded | 6291 |\n"
-    )
+    # The real-corpus numbers, verified against a real run: 18197 - 6291 =
+    # 11906 = Successful 11833 + Errors 73.
     r2 = _run_classifier_full(
-        script, lychee_out=partial, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+        script,
+        lychee_out=_lychee_summary(total=18197, successful=11833, excluded=6291, errors=73),
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
     )
     assert r2["status_json"]["links_checked"] == "11906"
     assert "11906" in r2["summary"]
 
-    # No Excluded row at all -> Total is the honest count, unchanged behaviour.
-    plain = "| Status | Count |\n|---|---|\n| Total | 12 |\n| Successful | 12 |\n"
+    # No exclusions -> Total is the honest count, unchanged behaviour.
     r3 = _run_classifier_full(
-        script, lychee_out=plain, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+        script,
+        lychee_out=_lychee_summary(total=12, successful=12),
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
     )
     assert r3["status_json"]["links_checked"] == "12"
+
+    # Absent Excluded row entirely (older/degraded output): fall back to Total
+    # rather than crashing or inventing a number.
+    minimal = "| Status | Count |\n|---|---|\n| Total | 9 |\n"
+    r4 = _run_classifier_full(
+        script, lychee_out=minimal, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert r4["status_json"]["links_checked"] == "9"
+
+    # Malformed: Excluded > Total must never print a negative count.
+    r5 = _run_classifier_full(
+        script,
+        lychee_out=_lychee_summary(total=3, successful=0, excluded=9),
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert not r5["status_json"]["links_checked"].startswith("-"), (
+        f"negative link count reached the marker: {r5['status_json']!r}"
+    )
+
+
+def test_the_excluded_parser_is_tested_against_real_lychee_output() -> None:
+    """SILENCE control on the parser itself, using the real output shape.
+
+    The reviewer's mutation — narrowing the separator match — survived a green
+    suite because every fixture used a tidy shape lychee never emits. Pin it:
+    a parser that cannot read the REAL row must turn this red.
+    """
+    script = _step("classify")["run"]
+    real = _lychee_summary(total=18197, successful=11833, excluded=6291, errors=73)
+
+    healthy = _run_classifier_full(
+        script, lychee_out=real, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert healthy["status_json"]["links_excluded"] == "6291", (
+        "precondition: the shipped parser reads the real emoji-padded row"
+    )
+
+    narrowed = script.replace(
+        "grep -oE 'Excluded[^0-9]*[0-9]+'", "grep -oE 'Excluded . [0-9]+'"
+    )
+    assert narrowed != script, "the Excluded parser anchor was not found"
+    broken = _run_classifier_full(
+        script=narrowed, lychee_out=real, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert broken["status_json"]["links_excluded"] != "6291", (
+        "a parser that cannot read real lychee output still passed — this "
+        "control is measuring the fixture, not the tool"
+    )
 
 
 def test_status_json_is_the_machine_surface_and_is_asserted() -> None:

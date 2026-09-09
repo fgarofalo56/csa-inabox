@@ -78,9 +78,11 @@ jobs:
           # to it. The failure direction is always "check MORE", never "check
           # nothing and report success". Every way out of the narrowing path is
           # enumerated and widens: no base sha, an absent base sha, a failed
-          # diff, a git-quoted path, ANY deleted-or-renamed path under docs/
-          # (not only .md), a path unsafe to interpolate, a changed path missing
-          # from the checkout, and a diff over the argv budget.
+          # diff, a git-quoted path, ANY deleted-or-renamed path anywhere in the
+          # repo (not only under docs/, and not only .md — a doc can link
+          # outward, and 227 occurrences do), a path unsafe to interpolate, a
+          # changed path missing from the checkout, and a diff over the argv
+          # budget.
           # `tests/repo/test_link_check_classifier.py` drives this script
           # against throwaway git repos for each of those, and asserts the
           # full-sweep count as well — an earlier revision of this comment
@@ -102,11 +104,14 @@ jobs:
               # narrowing, which is the one direction this step must never fail.
               git -c core.quotepath=false diff --name-only --diff-filter=d "${BASE_SHA}...HEAD" > changed-all.txt 2> diff-err.txt
               DIFF_RC=$?
-              # --no-renames: with rename detection ON, --name-only prints only a
-              # rename's POST-image, so moving docs/a.md OUT to other/a.md emits
-              # no docs path at all and the widen below never fires — precisely
-              # the inbound-internal-link case this diff exists to catch. Without
-              # rename detection the same move is a plain D of docs/a.md.
+              # --no-renames: with rename detection ON, --name-only prints only
+              # a rename's POST-image. That once decided the widen — moving
+              # docs/a.md OUT to other/a.md emitted no docs path and the widen
+              # never fired. It no longer decides it (the widen below now fires
+              # on ANY entry here), so this flag is not load-bearing for the
+              # decision. It is kept because it makes the CONTENT honest: with
+              # it, gone-all.txt lists the paths that went AWAY, which is what
+              # the REASON below counts and reports.
               git -c core.quotepath=false diff --name-only --no-renames --diff-filter=DR "${BASE_SHA}...HEAD" > gone-all.txt 2> gone-err.txt
               GONE_RC=$?
 
@@ -119,19 +124,23 @@ jobs:
                 # ^docs/ test — it would vanish silently. Refuse to classify the
                 # diff at all rather than classify a subset of it.
                 REASON="the diff contains a path git had to quote, which cannot be classified safely — fell back to the full sweep"
-              elif grep -qE '^docs/' gone-all.txt; then
-                # ANY deleted/renamed path under docs/, NOT just *.md. The
-                # breakage this exists to catch is an internal link from a doc
-                # the PR never touched into something the PR removed — and an
-                # image/svg/asset has exactly that property. Keying it on .md
-                # narrowed silently: deleting docs/img/arch.png while an
-                # unchanged docs/guide/page.md links to it produced count=0 and
-                # the marker "nothing needed to be checked", which the run had
-                # not established. 551 tracked non-.md files live under docs/,
-                # and lychee does resolve local file: links (12 in the last
-                # completed sweep). The wider widen is cheap because the PR
-                # path runs the sweep --offline; see OFFLINE below.
-                REASON="this PR deletes or renames path(s) under docs/, which can break inbound internal links from unchanged docs — full sweep"
+              elif [ -s gone-all.txt ]; then
+                # ANY deleted or renamed path, anywhere in the repo — not just
+                # under docs/, and not just *.md. Two rounds narrowed this twice
+                # and were wrong both times:
+                #   - keyed on ^docs/.*\.md$ it missed a deleted ASSET an
+                #     unchanged doc links to (docs/img/arch.png);
+                #   - keyed on ^docs/ it missed a deleted OUTBOUND target —
+                #     measured, 227 link occurrences in docs/ point outside
+                #     docs/, 41 of them at README.md. Deleting README.md while
+                #     touching only docs/ reported "nothing needed to be
+                #     checked".
+                # This workflow only runs when a PR touches docs/** (or this
+                # file), so "a docs PR that also deletes something" is a small
+                # population, and the widen it triggers is an --offline sweep
+                # measured at ~33s. Widening on any deletion is cheaper than
+                # another round of guessing which deletions can break a link.
+                REASON="this PR deletes or renames $(wc -l < gone-all.txt) path(s), any of which an unchanged doc may link to — full sweep"
               else
                 # docs/_includes is handed to lychee as --exclude-path, so a
                 # changed file under it is NOT checkable. Leaving it in scope
@@ -315,13 +324,17 @@ jobs:
           CHECKED_N=""
           if [ -n "$MEASURED" ]; then
             CHECKED_N=$(( MEASURED - ${EXCLUDED:-0} ))
+            # Clamp. Excluded <= Total holds for real lychee output (both count
+            # occurrences), but a negative "checked -6" would be a worse lie
+            # than the one this arithmetic exists to remove.
+            if [ "$CHECKED_N" -lt 0 ]; then CHECKED_N=0; fi
           fi
           if [ -z "$MEASURED" ]; then
             CHECKED="lychee emitted no summary total, so how much it checked is unknown"
           elif [ "${EXCLUDED:-0}" -gt 0 ]; then
-            CHECKED="lychee actually checked ${CHECKED_N} link(s) — it found ${MEASURED}, of which ${EXCLUDED} were excluded and never contacted"
+            CHECKED="lychee actually checked ${CHECKED_N} link occurrence(s) — it found ${MEASURED}, of which ${EXCLUDED} were excluded and never contacted"
           else
-            CHECKED="lychee reports ${MEASURED} link(s) checked"
+            CHECKED="lychee reports ${MEASURED} link occurrence(s) checked"
           fi
 
           # An offline run contacted no external host, so it may not report on
