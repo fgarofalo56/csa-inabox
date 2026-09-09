@@ -25,6 +25,16 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.105.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.3...csa-inabox-v0.105.4) (2026-09-08)
+
+
+### Bug Fixes
+
+* **brain:** id-match the drift reporter's arrays, and put the rename case on both required lanes (refs [#4275](https://github.com/fgarofalo56/csa-inabox/issues/4275), [#4282](https://github.com/fgarofalo56/csa-inabox/issues/4282)) ([#4397](https://github.com/fgarofalo56/csa-inabox/issues/4397)) ([6bc98c4](https://github.com/fgarofalo56/csa-inabox/commit/6bc98c429947172663cc75a5cbb249f42164aafb))
+* **ci:** D3 judged ZERO role-assignment creates and said OK; the release lane called a cancelled run a red result and denied drift it cannot see ([#3464](https://github.com/fgarofalo56/csa-inabox/issues/3464), [#4038](https://github.com/fgarofalo56/csa-inabox/issues/4038)) ([#4399](https://github.com/fgarofalo56/csa-inabox/issues/4399)) ([3731f84](https://github.com/fgarofalo56/csa-inabox/commit/3731f841f71f47c81c7307df96c9b1e50893b04e))
+* **console:** pick the evaluation dataset + deployment, name the wizard progress bars, settle a 404 collab stream ([#3543](https://github.com/fgarofalo56/csa-inabox/issues/3543), [#3169](https://github.com/fgarofalo56/csa-inabox/issues/3169), [#3697](https://github.com/fgarofalo56/csa-inabox/issues/3697)) ([#4313](https://github.com/fgarofalo56/csa-inabox/issues/4313)) ([43284fd](https://github.com/fgarofalo56/csa-inabox/commit/43284fde0831d661c610b355a12f13d47ef2b85c))
+* **deploy:** the program budget's start date moved with the calendar into a field ARM will not let you move ([#4409](https://github.com/fgarofalo56/csa-inabox/issues/4409)) ([6d00562](https://github.com/fgarofalo56/csa-inabox/commit/6d00562bd8709bd9fa0d9e87ffe68c853fb3aaab))
+
 ## [0.105.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.2...csa-inabox-v0.105.3) (2026-09-08)
 
 
