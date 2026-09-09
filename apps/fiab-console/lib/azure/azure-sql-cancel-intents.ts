@@ -253,6 +253,14 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
       },
     };
     _cosmosIntentInitFailedAt = 0;
+    // Clear the failure STRING too, not just the timestamp. The declaration says
+    // "null when the last attempt succeeded"; before this line that was a comment
+    // asserting something the code did not do — in the one file whose whole thesis
+    // is R7. Unreachable in practice (`cancelIntentUnavailableReason()` only reads
+    // it under a truthy `_cosmosIntentInitFailedAt`, and any later failure
+    // overwrites it in the same catch), so this changes no observable behaviour;
+    // it makes the invariant true rather than nearly true.
+    _lastIntentInitError = null;
     return _cosmosIntentStore;
   } catch (e: any) {
     // R7 — the caller must not read this as "no intent"; `recordCancelIntent`

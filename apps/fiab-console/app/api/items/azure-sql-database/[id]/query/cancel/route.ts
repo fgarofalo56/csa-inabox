@@ -42,7 +42,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { liveRequests, recordCancelIntent, cancelIntentUnavailableReason } from '@/lib/azure/azure-sql-client';
+import { liveRequests, unregisterLiveRequest, recordCancelIntent, cancelIntentUnavailableReason } from '@/lib/azure/azure-sql-client';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -103,6 +103,12 @@ export const POST = withSession(async (req: NextRequest) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-  liveRequests.delete(requestId);
+  // `unregisterLiveRequest`, NOT a bare `liveRequests.delete` — the two teardown
+  // call sites must not differ. The bare delete leaves the poll watcher running
+  // until some other path happens to call `stopCancelWatcherIfIdle()`; it
+  // self-heals on the next `.finally()` in azure-sql-client, which is why this
+  // was cosmetic rather than a leak, but "cosmetic because something else cleans
+  // up after me" is not an invariant worth keeping.
+  unregisterLiveRequest(requestId);
   return NextResponse.json({ ok: true, cancelled: true, requestId });
 });

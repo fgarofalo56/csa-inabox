@@ -493,7 +493,23 @@ export const CLIENT_WITHOUT_AZURE_IDENTIFIER = new Map([
         'azure-sql-client.ts, which the derivation could name only because of its unrelated static `import sql ' +
         'from \'mssql\'`; the Cosmos half of that module was never named there either. Declared rather than ' +
         'widening PACKAGE_RE to dynamic imports, which would relabel modules across the whole console in a diff ' +
-        'that is not about the derivation.',
+        'that is not about the derivation. ' +
+        'UNDER-REPORT DISCLOSED, because a table that quietly drops a backend is worse than one that adds a ' +
+        'spurious label: this module ALSO reaches Azure SQL. It holds live mssql `Request` objects in ' +
+        '`liveRequests` and the watcher calls `.cancel()` on them, which makes tedious put a TDS ATTENTION ' +
+        'packet on the Azure SQL connection. This map records ONE label per module (`backend` is `string|null`, ' +
+        'asserted in scripts/ci/__tests__/route-backends.test.mjs), so only `Cosmos` is published, and the ' +
+        'measured consequence in docs/fiab/route-inventory.md is that ' +
+        '`items/azure-sql-database/[id]/query/cancel/route.ts` moved from `Azure SQL` to `Cosmos` — the label ' +
+        'was REPLACED, not added, and that route still sends the ATTENTION packet on its local branch. ' +
+        '(`items/paginated-report/[id]/preview/route.ts` gaining `Cosmos` is the mirror image: it calls ' +
+        '`executeQuery`, which can now reach this store — statically true, though that route passes no ' +
+        '`requestId` so it never registers one at runtime.) Restoring `Azure SQL` on the cancel row needs the ' +
+        'declared entry to carry a SET of labels — a derivation-schema change touching labelFor, ' +
+        'classifyRouteBackends, generate-route-inventory.mjs and this map\'s shape assertion, which would ' +
+        'relabel rows across the console in a diff that is not about the derivation. Tracked in #4406 with ' +
+        'the rest of this module\'s follow-ups; disclosed here so the row is not read as "does not reach ' +
+        'Azure SQL".',
     },
   ],
   [

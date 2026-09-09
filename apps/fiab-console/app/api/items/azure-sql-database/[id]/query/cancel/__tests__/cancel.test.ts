@@ -25,15 +25,24 @@ import { join } from 'node:path';
 
 // vi.mock factories are hoisted above module-scope consts, so the shared map
 // must itself be hoisted (vi.hoisted) to be referenceable inside the factory.
-const { liveRequests, recordCancelIntent, cancelIntentUnavailableReason } = vi.hoisted(() => ({
-  liveRequests: new Map<string, { cancel: () => void }>(),
-  recordCancelIntent: vi.fn(async (_requestId: string) => false),
-  cancelIntentUnavailableReason: vi.fn(() => 'no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)'),
-}));
+const { liveRequests, unregisterLiveRequest, recordCancelIntent, cancelIntentUnavailableReason } = vi.hoisted(() => {
+  const liveRequests = new Map<string, { cancel: () => void }>();
+  return {
+    liveRequests,
+    // Mirrors the real export (azure-sql-cancel-intents.ts): delete + stop the
+    // idle watcher. A spy, so the route's teardown call site is asserted rather
+    // than assumed — the local branch used to call `liveRequests.delete` directly
+    // and leave the watcher running.
+    unregisterLiveRequest: vi.fn((requestId: string) => { liveRequests.delete(requestId); }),
+    recordCancelIntent: vi.fn(async (_requestId: string) => false),
+    cancelIntentUnavailableReason: vi.fn(() => 'no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)'),
+  };
+});
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/azure-sql-client', () => ({
   liveRequests,
+  unregisterLiveRequest,
   recordCancelIntent,
   cancelIntentUnavailableReason,
 }));
@@ -128,6 +137,11 @@ beforeEach(() => {
   // Default: no intent store reachable (local dev / no Cosmos endpoint).
   recordCancelIntent.mockResolvedValue(false);
   cancelIntentUnavailableReason.mockReturnValue('no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)');
+  // `vi.resetAllMocks()` strips implementations, not just call history, so
+  // re-arm the real behaviour of the teardown export — otherwise this spy would
+  // be a no-op and `liveRequests.has(...) === false` would stop measuring
+  // anything.
+  unregisterLiveRequest.mockImplementation((requestId: string) => { liveRequests.delete(requestId); });
 });
 
 describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
@@ -162,6 +176,10 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
     expect(j.cancelled).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
     expect(liveRequests.has('r1')).toBe(false);
+    // Removed through `unregisterLiveRequest`, NOT a bare `liveRequests.delete`.
+    // The bare delete leaves the poll watcher running on this replica; both
+    // teardown call sites must use the same one.
+    expect(unregisterLiveRequest).toHaveBeenCalledWith('r1');
     // A locally-owned request is cancelled directly — no intent is published.
     expect(recordCancelIntent).not.toHaveBeenCalled();
   });
