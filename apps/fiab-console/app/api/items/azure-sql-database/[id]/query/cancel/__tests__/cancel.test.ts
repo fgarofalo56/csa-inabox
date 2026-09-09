@@ -211,25 +211,47 @@ describe('cancel route honesty (#3400)', () => {
     join(process.cwd(), 'lib', 'azure', 'azure-sql-client.ts'),
     'utf8',
   );
+  const SRC_INTENTS = readFileSync(
+    join(process.cwd(), 'lib', 'azure', 'azure-sql-cancel-intents.ts'),
+    'utf8',
+  );
 
-  it('neither file instructs the operator to enable sticky sessions', () => {
-    for (const [name, src] of [['cancel/route.ts', SRC_ROUTE], ['azure-sql-client.ts', SRC_CLIENT]] as const) {
+  /**
+   * The population, declared ONCE.
+   *
+   * It was two files until the cancel machinery was split out of
+   * azure-sql-client.ts (that module crossed the 1500-LOC monolith-creep line).
+   * The split moved the anti-affinity record with the code and this guard went
+   * red — correctly: a source-content guard whose subject moves out from under
+   * it is asserting nothing. Enumerating the files in each `it` separately is
+   * how that becomes a silent hole next time, so the list lives here and every
+   * assertion iterates it. azure-sql-client.ts keeps a summary of the record
+   * because it is still where a reader looking for `liveRequests` lands.
+   */
+  const SOURCES = [
+    ['cancel/route.ts', SRC_ROUTE],
+    ['azure-sql-client.ts', SRC_CLIENT],
+    ['azure-sql-cancel-intents.ts', SRC_INTENTS],
+  ] as const;
+
+  it('no file instructs the operator to enable sticky sessions', () => {
+    for (const [name, src] of SOURCES) {
       expect(src, `${name} still prescribes affinity:'sticky'`).not.toMatch(/enable ingress sticky sessions/i);
       expect(src, `${name} still offers affinity:'sticky' as the remedy`)
         .not.toMatch(/stickySessions\.affinity:\s*'sticky'\)?\s*(?:or run a single replica|\*\/)/i);
     }
   });
 
-  it('both files record that affinity is FORBIDDEN and name the real mechanism', () => {
-    for (const [name, src] of [['cancel/route.ts', SRC_ROUTE], ['azure-sql-client.ts', SRC_CLIENT]] as const) {
+  it('every file records that affinity is FORBIDDEN and names the real mechanism', () => {
+    for (const [name, src] of SOURCES) {
       expect(src, `${name} does not say affinity is not the answer`).toMatch(/NOT SESSION AFFINITY|NOT "FIX" THIS WITH SESSION AFFINITY/i);
       expect(src, `${name} does not name the cross-replica signal`).toMatch(/cross-replica cancel signal/i);
       expect(src, `${name} does not record the multiRevision constraint`).toMatch(/multiRevision/);
     }
   });
 
-  it('neither file still claims the intent store is unimplemented', () => {
-    for (const [name, src] of [['cancel/route.ts', SRC_ROUTE], ['azure-sql-client.ts', SRC_CLIENT]] as const) {
+  it('no file still claims the intent store is unimplemented', () => {
+    for (const [name, src] of SOURCES) {
       expect(src, `${name} still says the store is not implemented`)
         .not.toMatch(/store is (?:NOT|not) implemented yet/);
     }
