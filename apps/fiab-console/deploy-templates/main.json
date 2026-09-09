@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10573649905775354518"
+      "templateHash": "17907236334542069879"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "16686836482713871990"
+              "templateHash": "17366333785670139780"
             }
           },
           "definitions": {
@@ -29097,7 +29097,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6102562982605094537"
+                      "templateHash": "16948656478370421592"
                     }
                   },
                   "parameters": {
@@ -29151,6 +29151,15 @@
                       "defaultValue": "[utcNow()]",
                       "metadata": {
                         "description": "Cache-busting tag so the approval script re-runs on each deploy (idempotent — approve is a no-op once Approved)."
+                      }
+                    },
+                    "originResponseTimeoutSeconds": {
+                      "type": "int",
+                      "defaultValue": 120,
+                      "minValue": 16,
+                      "maxValue": 240,
+                      "metadata": {
+                        "description": "Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console's API routes declare a maxDuration above that. Portal range is 16-240. Front Door is not deployed on IL5 (frontDoorEnabled=false) — that boundary's edge is App Gateway, see #4431."
                       }
                     },
                     "vanityDomain": {
@@ -29273,6 +29282,9 @@
                       "tags": "[parameters('complianceTags')]",
                       "sku": {
                         "name": "Premium_AzureFrontDoor"
+                      },
+                      "properties": {
+                        "originResponseTimeoutSeconds": "[parameters('originResponseTimeoutSeconds')]"
                       }
                     },
                     {
