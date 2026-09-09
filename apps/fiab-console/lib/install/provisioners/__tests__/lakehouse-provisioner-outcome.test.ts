@@ -179,20 +179,25 @@ describe('lakehouse provisioner — the status reflects the outcome', () => {
 });
 
 /**
- * The seed CSV moved to `Files/_seed/` in #3904. Two consumers RE-DERIVE the old
- * `Tables/<name>/<name>.csv` location instead of reading it:
+ * The seed CSV moved to `Files/_seed/` in #3904. Two consumers USED TO
+ * RE-DERIVE the old `Tables/<name>/<name>.csv` location instead of reading it:
  *
- *   - `app/api/apps/[id]/install/route.ts` builds the path and persists it into
+ *   - `app/api/apps/[id]/install/route.ts` built the path and persisted it into
  *     every auto-bound report's `dataSource` as an `OPENROWSET(… FORMAT='CSV')`
- *     URL — so a wrong path is not a transient 404, it is a stored one.
- *   - `lib/editors/lakehouse/lakehouse-editor-shell.tsx` does the same.
+ *     URL — so a wrong path was not a transient 404, it was a stored one.
+ *   - `lib/editors/lakehouse/lakehouse-editor-shell.tsx` did the same.
  *
- * Their derivations do not even agree with each other: the install route
- * sanitizes a schema with `replace(/[^A-Za-z0-9_]/g, '')`, the seeder with
+ * Their derivations did not even agree with each other: the install route
+ * sanitized a schema with `replace(/[^A-Za-z0-9_]/g, '')`, the seeder with
  * `'_'`. Three copies of one rule is why the recorded value exists.
  *
- * These tests pin the RECORD, not the consumers (which are a follow-up in files
- * this work item does not own).
+ * BOTH RE-DERIVATIONS ARE GONE as of #3919 — each consumer now reads the
+ * recorded path through the single `seedCsvPathLookup`, and the seeder hands
+ * its already-sanitized schema to the per-table hook. The follow-up this
+ * docblock used to defer is therefore landed; the divergence is pinned against
+ * a hostile input by `lakehouse-schema-sanitize-agreement.test.ts` (#3920).
+ *
+ * These tests pin the RECORD — the value both consumers now read.
  *
  * MUTATION PROOF:
  *   a) Delete the `seedCsvPaths.set(...)` line in the hook -> RED (all four).

@@ -100,6 +100,27 @@ export function pipPackagesFor(content: unknown): string[] {
  * Return `content` with a `%pip install` bootstrap cell as its FIRST cell when
  * the bundle declares packages, or `content` unchanged when it declares none
  * (or already carries the bootstrap).
+ *
+ * BOUNDARY LIMITATION, NAMED RATHER THAN IMPLIED (`cloud-parity.md`). The cell
+ * emitted below is a BARE `%pip install` — no `--index-url`, no
+ * `--trusted-host`, no `--find-links`. It therefore resolves against public
+ * PyPI, and this repo currently has no boundary-aware feed of any kind:
+ * measured across `apps/fiab-console` and `platform/fiab/bicep`, there are ZERO
+ * occurrences of `--index-url` / `--extra-index-url` / `PIP_INDEX_URL` /
+ * `--trusted-host` / `--find-links` / `pip.conf` outside this comment. In a
+ * GCC-High or IL5 pool whose egress is restricted to private endpoints this
+ * cell fails and takes every downstream cell with it, so a bundle that declares
+ * `requiredLibraries` works in Commercial and does NOT work in those
+ * boundaries. That is not a regression — before this mechanism existed the same
+ * notebook failed in Gov too, two cells later, with `ModuleNotFoundError` — but
+ * per `cloud-parity.md` a Commercial-only fix is INCOMPLETE, not done.
+ *
+ * The two bundles most affected are the sovereign-facing ones
+ * (`app-federal-data-mesh`, `app-sovereign-ai-agents`). Closing it needs one of:
+ * a boundary-aware package feed (an Azure Artifacts / devpi upstream the deploy
+ * provisions and threads in, per `auto-bind-by-default.md` §5 — an env var the
+ * operator must set by hand would itself be a violation), a pre-baked Synapse
+ * pool image, or a Databricks cluster-scoped library. Tracked on #3530.
  */
 export function withRequiredLibraryBootstrap<T>(content: T): T {
   const pkgs = pipPackagesFor(content);
