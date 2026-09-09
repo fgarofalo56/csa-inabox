@@ -33,10 +33,13 @@
 # ~30s in, with a Front Door HTML body. What is MEASURED: the POST handler
 # cannot be the slow party (auth check, a stat-only corpus count, fire the job,
 # return 202 — apps/fiab-console/app/api/help-copilot/reindex/route.ts), and
-# `originResponseTimeoutSeconds` is set NOWHERE in platform/fiab/bicep. What is
-# NOT measured, and is therefore not asserted anywhere in this script: why the
-# edge gave up at ~30s when the AFD default is 60s, and whether the POST ever
-# reached a replica. The fix does not need that answer — it converts the
+# `originResponseTimeoutSeconds` was set NOWHERE in platform/fiab/bicep until
+# this change pinned it at modules/admin-plane/front-door.bicep (default 120) —
+# and that module deploys on Commercial / GCC-High / tenant-DMLZ but NOT on IL5,
+# whose only edge is App Gateway with `requestTimeout: 30` hardcoded (#4431).
+# What is NOT measured, and is therefore not asserted anywhere in this script:
+# why the edge gave up at ~30s when the AFD default is 60s, and whether the POST
+# ever reached a replica. The fix does not need that answer — it converts the
 # unknown into a measurement by polling the durable freshness signal.
 #
 # ── …AND WHEN THE TRIGGER IS NEVER ACCEPTED, NAME THAT (#3472) ──────────────

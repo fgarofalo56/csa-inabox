@@ -64,8 +64,8 @@ param forceUpdateTag string = utcNow()
 // R7). This value was chosen from the route declarations above, not from a
 // reading of the live edge:
 //   * the LIVE profile's effective value. No `az cdn profile show` receipt
-//     exists for either boundary from this change — the estate is paused and
-//     Gov is only reachable from an in-boundary runner.
+//     exists for ANY boundary from this change — the estate is paused and Gov
+//     is only reachable from an in-boundary runner.
 //   * WHY the edge gave up at ~30s when the default is 60s, or whether the POST
 //     ever reached a replica.
 //   * whether pinning this changes the reindex 504 rate AT ALL. This is not
@@ -73,7 +73,7 @@ param forceUpdateTag string = utcNow()
 //     of #3472 (scripts/ci/reindex-loom-docs.sh) is what converts the remaining
 //     unknown into a measurement, and it still fails closed either way.
 //
-// RESIDUAL GAP, stated rather than hidden: the AFD portal exposes 16–240s, so
+// RESIDUAL GAP #1, stated rather than hidden: the AFD portal exposes 16–240s, so
 // the 12 routes declaring `maxDuration = 300` exceed ANY value settable here.
 // Those must stay async-and-pollable the way the reindex route already is; this
 // pin does not cover them and must not be read as covering them.
@@ -81,8 +81,35 @@ param forceUpdateTag string = utcNow()
 // Pinning it in the template also closes the re-render hazard: an operator's
 // portal change to this field was invisible to this module and would be dropped
 // by the next apply (the class that blanked the bootstrap admin OID and
-// LOOM_ADLS_ACCOUNT). One module, so Commercial and Gov get the same value.
-@description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240.')
+// LOOM_ADLS_ACCOUNT).
+//
+// WHICH BOUNDARIES THIS ACTUALLY COVERS — one module, but not every boundary
+// instantiates it (#4373 review §B2, cloud-parity.md). admin-plane/main.bicep
+// gates it `if (frontDoorEnabled && containerPlatform == 'containerApps' &&
+// deployAppsEnabled)`, and the param files set `frontDoorEnabled` as follows:
+//   * true  — commercial-full, commercial, tenant-dmlz (Commercial), gcc-high
+//             (GCC-High). Those are the boundaries this value can reach.
+//             `commercial.bicepparam` leaves `deployAppsEnabled` unset and has
+//             it passed by deploy-fiab-commercial.yml (see its note at :271-275),
+//             so its coverage depends on that workflow input, not on the file.
+//   * FALSE — il5.bicepparam:419, stated at its :8 as "Front Door not
+//             IL5-certified — use AGW only". IL5 NEVER deploys this module.
+//   * unset (=> false, main.bicep:1007) — gcc.bicepparam and
+//             dlz-attach.bicepparam, which also leave `deployAppsEnabled`
+//             unset, so they stand up no apps to front.
+// Per cloud-parity.md those are not equivalent states and must not be listed as
+// though they were: of the four with it true, Commercial and GCC-High carry
+// deploy receipts; IL5 has none at all (`gh run list --workflow
+// deploy-fiab-il5.yml` returns ZERO runs — supported-in-code, never exercised).
+//
+// RESIDUAL GAP #2 — IL5's edge timeout is NOT moved by this change. IL5 fronts
+// the console with Application Gateway, and modules/admin-plane/app-gateway.bicep:122
+// hardcodes `requestTimeout: 30` with no param to override it — below 54 of the
+// 71 route declarations, never mind the 30 above 60. Tracked as #4431 and
+// deliberately NOT fixed here: that is a different boundary's edge and belongs
+// in its own lane. So this pin is Commercial + GCC-High + tenant-DMLZ only, and
+// must not be read as closing the edge-timeout gap for IL5.
+@description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240. Front Door is not deployed on IL5 (frontDoorEnabled=false) — that boundary\'s edge is App Gateway, see #4431.')
 @minValue(16)
 // BOTH ENDS OF THE RANGE, NOT ONE (#4373 review §5). The description and the
 // note above both state the settable range as 16-240, and `maxDuration: 300`
