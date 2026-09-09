@@ -1,10 +1,20 @@
 # Check for broken links in documentation.
 #
-# Runs weekly and on PRs that touch docs. Uses lychee for fast, parallel
-# link checking with sensible defaults (retry, timeout, exclude patterns).
+# Two scopes, deliberately different (#4425):
 #
-# Failures are advisory — the check surfaces dead links but does not block
-# merges, since external sites can have transient outages.
+#   * pull_request — ONLY the docs files this PR changed. Runtime is bounded by
+#     the diff, not by the corpus, so it cannot re-break as docs grow. The old
+#     full-corpus sweep on every docs PR is what blew the 10-minute budget:
+#     docs/**/*.md is 2520 files carrying 4650 unique external URLs, and at
+#     --timeout 30 --max-retries 2 one unreachable host costs 90s.
+#
+#   * schedule / workflow_dispatch — the full docs/** sweep, with a cache.
+#
+# Dead links are ADVISORY: reported, never merge-blocking, because external
+# sites have transient outages. "I could not look" is NOT advisory — a setup
+# failure fails closed and says so, and a timeout writes a marker distinguishing
+# it from a superseded run. A run that established nothing must never be
+# reported as a run that found nothing (R7).
 name: Link Check
 
 on:
@@ -22,16 +32,118 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Backstop only, NOT the operating budget. The PR path is bounded by the
+    # diff; only the full sweep can approach this. The classifier below re-reads
+    # this exact line rather than restating the number, so the two cannot drift.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the PR path diffs against the merge-base, and a shallow
+          # clone makes that diff lie. The scope decides what gets checked, so a
+          # lying diff is a silently narrowed check.
+          fetch-depth: 0
+
+      - name: Select scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+          # The full sweep is the default and every narrowing failure falls back
+          # to it. The failure direction is always "check MORE", never "check
+          # nothing and report success".
+          SCOPE="full"
+          REASON="full docs/** sweep"
+
+          if [ "$EVENT" = "pull_request" ]; then
+            if [ -z "${BASE_SHA:-}" ]; then
+              REASON="pull_request carried no base sha — fell back to the full sweep"
+            elif ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" > /dev/null; then
+              REASON="base sha ${BASE_SHA} absent after checkout — fell back to the full sweep"
+            else
+              git diff --name-only --diff-filter=d "${BASE_SHA}...HEAD" > changed-all.txt 2> diff-err.txt
+              DIFF_RC=$?
+              git diff --name-only --diff-filter=DR "${BASE_SHA}...HEAD" > gone-all.txt 2> gone-err.txt
+              GONE_RC=$?
+
+              if [ "$DIFF_RC" -ne 0 ] || [ "$GONE_RC" -ne 0 ]; then
+                REASON="git diff vs ${BASE_SHA} failed (rc=${DIFF_RC}/${GONE_RC}; $(wc -c < diff-err.txt)/$(wc -c < gone-err.txt) stderr bytes) — fell back to the full sweep"
+              elif grep -qE '^docs/.*\.md$' gone-all.txt; then
+                # Checking only CHANGED files would miss the one breakage a PR
+                # can cause in a file it never touched: an internal link from an
+                # unchanged doc into a doc this PR deleted or renamed. Those PRs
+                # are rare, so widen rather than narrow.
+                REASON="this PR deletes or renames docs file(s), which can break inbound internal links from unchanged docs — full sweep"
+              else
+                grep -E '^docs/.*\.md$' changed-all.txt > changed-docs.txt || true
+                : > scope-files.txt
+                UNSAFE=""
+                while IFS= read -r f; do
+                  [ -n "$f" ] || continue
+                  [ -f "$f" ] || continue      # renamed/removed paths are not checkable
+                  # lychee-action `eval`s its args, so a path containing shell
+                  # metacharacters must never be interpolated into them.
+                  case "$f" in
+                    *[!A-Za-z0-9/._-]*) UNSAFE="$f"; break ;;
+                  esac
+                  printf '%s\n' "$f" >> scope-files.txt
+                done < changed-docs.txt
+
+                if [ -n "$UNSAFE" ]; then
+                  REASON="changed path '${UNSAFE}' has characters unsafe to interpolate — fell back to the full sweep"
+                else
+                  N=$(wc -l < scope-files.txt)
+                  if [ "$N" -gt 300 ]; then
+                    REASON="${N} changed docs files exceeds the 300-file argv budget — fell back to the full sweep"
+                  else
+                    SCOPE="changed"
+                    REASON="${N} docs file(s) changed by this PR"
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+          if [ "$SCOPE" = "full" ]; then
+            # 2520 paths will not fit in argv; let lychee glob it itself.
+            TARGETS="docs/**/*.md"
+            COUNT=$(git ls-files 'docs/**/*.md' | wc -l)
+          else
+            TARGETS=$(tr '\n' ' ' < scope-files.txt)
+            COUNT=$(wc -l < scope-files.txt)
+          fi
+
+          {
+            echo "scope=$SCOPE"
+            echo "count=$COUNT"
+            echo "reason=$REASON"
+            echo "targets=$TARGETS"
+          } >> "$GITHUB_OUTPUT"
+          echo "SCOPE=$SCOPE ($REASON); $COUNT file(s) in scope"
+
+      - name: Restore link-check cache
+        if: steps.scope.outputs.count != '0'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.run_id }}
+          restore-keys: |
+            lychee-
 
       - name: Check links
+        id: lychee
+        if: steps.scope.outputs.count != '0'
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: >-
             --verbose
             --no-progress
+            --cache
+            --max-cache-age 1d
             --timeout 30
             --max-retries 2
             --exclude-path docs/_includes
@@ -45,13 +157,134 @@ jobs:
             --exclude '<rg>'
             --exclude '<action-group-id>'
             --exclude 'aka\.ms/'
-            docs/**/*.md
-          fail: false    # advisory — don't block PRs on transient external failures
+            ${{ steps.scope.outputs.targets }}
+          fail: false          # advisory — a dead link must not block a merge
+          # Default is true, which exits 1 when lychee reports "Total | 0". A
+          # docs file that legitimately carries no links would then fail the
+          # workflow, and the classifier below would have to read that as a
+          # setup failure. Turning it off is what makes `outcome == failure`
+          # mean *only* "the checker could not run".
+          failIfEmpty: false
+
+      - name: Classify result
+        id: classify
+        if: always()
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+          COUNT: ${{ steps.scope.outputs.count }}
+          REASON: ${{ steps.scope.outputs.reason }}
+          STARTED_AT: ${{ steps.scope.outputs.started_at }}
+          LYCHEE_OUTCOME: ${{ steps.lychee.outcome }}
+          LYCHEE_EXIT: ${{ steps.lychee.outputs.exit_code }}
+        run: |
+          set -uo pipefail
+          mkdir -p lychee
+
+          NOW=$(date +%s)
+          ELAPSED=$(( NOW - ${STARTED_AT:-$NOW} ))
+
+          # Single source of truth for the budget: re-read the job's own
+          # timeout-minutes rather than restate it. Two hand-maintained copies of
+          # one constant is how this repo's guards have drifted before (#3862).
+          BUDGET_MIN=$(grep -m1 -E '^    timeout-minutes: [0-9]+' .github/workflows/link-check.yml | grep -oE '[0-9]+' || true)
+
+          # Slack is proportional, not a fixed 90s. A constant large enough to be
+          # meaningful at a 45-minute budget goes NEGATIVE at a small one, which
+          # would make every cancel — superseded ones included — read as TIMEOUT.
+          # That matters because a deliberately tiny budget is how the TIMEOUT
+          # branch gets exercised in the first place.
+          BUDGET_S=$(( ${BUDGET_MIN:-0} * 60 ))
+          SLACK=$(( BUDGET_S / 10 ))
+          if [ "$SLACK" -gt 90 ]; then SLACK=90; fi
+
+          if [ "${COUNT:-0}" = "0" ]; then
+            STATUS="NO_DOCS_IN_SCOPE"
+            DETAIL="No docs/**/*.md file was in scope (${REASON}). Nothing was checked, and nothing needed to be."
+          elif [ "${LYCHEE_OUTCOME:-}" = "success" ]; then
+            # fail:false + failIfEmpty:false means the step always exits 0, so
+            # lychee's own code is the only verdict. 2 is its dead-link code;
+            # anything else non-zero is the checker erroring, which is not a
+            # statement about links.
+            case "${LYCHEE_EXIT:-0}" in
+              0) STATUS="OK"
+                 DETAIL="lychee checked ${COUNT} target(s) and found no dead links." ;;
+              2) STATUS="DEAD_LINKS"
+                 DETAIL="lychee checked ${COUNT} target(s) and reported dead links. Advisory — this does not block a merge. See the link-check-report artifact." ;;
+              *) STATUS="CHECKER_ERROR"
+                 DETAIL="lychee exited ${LYCHEE_EXIT}, which is neither success nor its dead-link code. This run established NOTHING about the links; it is not a dead-link report." ;;
+            esac
+          elif [ "${LYCHEE_OUTCOME:-}" = "failure" ]; then
+            STATUS="SETUP_FAILED"
+            DETAIL="The link checker could not run at all, so NO link was checked and this run establishes nothing about the docs. This is the shape that previously surfaced as a bare 'exit code 35' (curl SSL error while downloading the lychee binary, 0 links checked)."
+          elif [ -z "${LYCHEE_OUTCOME:-}" ] || [ "${LYCHEE_OUTCOME}" = "cancelled" ]; then
+            # A job timeout and a supersede BOTH surface as `cancelled`. Elapsed
+            # time against the declared budget is what separates them, and that
+            # ambiguity is the substance of #4425.
+            if [ -z "$BUDGET_MIN" ]; then
+              STATUS="TIMEOUT_OR_CANCELLED"
+              DETAIL="The link step did not complete after ${ELAPSED}s, and the job budget could not be re-read from the workflow file, so a timeout cannot be told apart from a supersede here. Either way NO link verdict was established."
+            elif [ "$ELAPSED" -ge $(( BUDGET_S - SLACK )) ]; then
+              STATUS="TIMEOUT"
+              DETAIL="The link check was still running when the ${BUDGET_MIN}-minute job budget expired (${ELAPSED}s elapsed). It was killed mid-flight and emitted NO verdict — this run is ABSENT, not red, and says nothing about whether the links are good."
+            else
+              STATUS="CANCELLED"
+              DETAIL="Cancelled after ${ELAPSED}s, well inside the ${BUDGET_MIN}-minute budget — superseded by a newer push, or cancelled by hand. No link verdict was established."
+            fi
+          else
+            STATUS="UNKNOWN"
+            DETAIL="The link step reported outcome '${LYCHEE_OUTCOME}', which this classifier does not recognise. Treat this run as establishing nothing."
+          fi
+
+          printf '%s\n' "$STATUS" > lychee/status.txt
+          cat > lychee/status.json <<JSON
+          {
+            "status": "${STATUS}",
+            "scope": "${SCOPE:-unknown}",
+            "scope_reason": "${REASON}",
+            "targets": "${COUNT:-0}",
+            "lychee_outcome": "${LYCHEE_OUTCOME:-none}",
+            "lychee_exit_code": "${LYCHEE_EXIT:-none}",
+            "elapsed_seconds": ${ELAPSED},
+            "budget_minutes": "${BUDGET_MIN:-unknown}",
+            "run": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          JSON
+
+          # lychee's own jobSummary step writes with `>` (it overwrites). This
+          # append runs after it, so the marker survives.
+          {
+            echo "## Link Check — ${STATUS}"
+            echo
+            echo "${DETAIL}"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| scope | \`${SCOPE:-unknown}\` — ${REASON} |"
+            echo "| targets | ${COUNT:-0} |"
+            echo "| lychee outcome | \`${LYCHEE_OUTCOME:-none}\` (exit \`${LYCHEE_EXIT:-none}\`) |"
+            echo "| elapsed | ${ELAPSED}s of ${BUDGET_MIN:-?}m budget |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          echo "STATUS=${STATUS} — ${DETAIL}"
+
+          # Fail closed ONLY when the checker could not look. A dead link stays
+          # advisory; being unable to look is a defect in this workflow and must
+          # not pass silently as a green check.
+          case "$STATUS" in
+            SETUP_FAILED|CHECKER_ERROR|UNKNOWN)
+              echo "::error title=Link Check established nothing::${DETAIL}"
+              exit 1 ;;
+          esac
 
       - name: Upload report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: link-check-report
-          path: lychee/out.md
+          path: |
+            lychee/out.md
+            lychee/status.txt
+            lychee/status.json
+          if-no-files-found: warn
           retention-days: 14
