@@ -78,7 +78,6 @@
   "lib/editors/databricks/pipeline-editor.tsx": 1,
   "lib/editors/dataflow-gen2-editor.tsx": 1,
   "lib/editors/foundry-playground.tsx": 1,
-  "lib/editors/foundry-sub-editors.tsx": 2,
   "lib/editors/geo-editors.tsx": 1,
   "lib/editors/lakehouse-shortcut-editor.tsx": 2,
   "lib/editors/lakehouse/dialogs/permissions-dialog.tsx": 1,

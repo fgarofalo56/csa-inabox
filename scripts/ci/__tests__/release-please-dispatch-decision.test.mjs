@@ -375,7 +375,238 @@ test('all 14 contexts green: bridges 14 success statuses and exits 0', () => {
   const posted = r.calls.split('\n').filter((l) => l.includes('state=success')).length;
   assert.equal(posted, 14, `expected 14 bridged statuses, saw ${posted}`);
   assert.match(r.out, /0 synthetic statuses posted/);
-  assert.match(r.out, /requires an approving review/, 'the permanent review gate must still be named, not guessed at');
+  assert.match(
+    r.out,
+    /reviewDecision is REVIEW_REQUIRED/,
+    'the permanent review gate must still be named, not guessed at',
+  );
+});
+
+// ── #4038 — the messages must not assert what the job did not establish ─────
+
+test('R7: the review-gate arm no longer DENIES context drift it cannot observe', () => {
+  // The old wording ended "NOT context drift." Measured 2026-09-07 with an admin
+  // token: branch protection carried 15 required contexts and REQUIRED_CHECKS
+  // carried 14 — so the denial was false at the moment it was being printed.
+  // GITHUB_TOKEN cannot read protection at all, which is exactly why the claim
+  // was never the job's to make.
+  const r = runStep(
+    fixtures({
+      check_runs: allGreen(),
+      dispatch_run_paths: dispatchPaths,
+      merge_state: 'BLOCKED',
+      review_decision: 'REVIEW_REQUIRED',
+    }),
+  );
+  assert.equal(r.code, 0);
+  assert.doesNotMatch(r.out, /NOT context drift/, 'the unestablished denial is back');
+  assert.match(r.out, /did NOT establish/, 'the limit must be stated, not merely dropped');
+  assert.match(r.out, /cannot read branch protection/);
+});
+
+test('R7: a CANCELLED required context is reported as NO VERDICT, not as a real red result', () => {
+  // A cancelled run measured nothing — `csa_loom_cancelled_job_with_zero_steps_
+  // measured_nothing`. The previous shape posted the same message for it as for
+  // a genuine failure: "each of these is a REAL red result from a real run".
+  const runs = allGreen();
+  runs[0] = { name: CONTEXTS[0], status: 'completed', conclusion: 'cancelled' };
+  const r = runStep(fixtures({ check_runs: runs, dispatch_run_paths: dispatchPaths }));
+  assert.notEqual(r.code, 0, 'fail-closed must be preserved — an unmeasured context still blocks');
+  assert.match(r.out, /NO-VERDICT/);
+  assert.match(r.out, /ended WITHOUT a/, 'the unmeasured class must be named');
+  assert.doesNotMatch(
+    r.out,
+    /REAL red result/,
+    'a cancelled run must not be described as a real red result',
+  );
+  assert.match(r.calls, /state=failure/, 'it still overwrites any stale green — fail closed');
+});
+
+test('a genuinely FAILING required context is still called a real red result', () => {
+  // The other direction: the split must not blunt the real verdict.
+  const runs = allGreen();
+  runs[0] = { name: CONTEXTS[0], status: 'completed', conclusion: 'failure' };
+  const r = runStep(fixtures({ check_runs: runs, dispatch_run_paths: dispatchPaths }));
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /REAL-RED/);
+  assert.match(r.out, /REAL red result from a/);
+  assert.doesNotMatch(r.out, /ended WITHOUT a/, 'a failure is not an unmeasured context');
+});
+
+test('post-verify: a CANCELLED required context in the rollup is not reported as FAILING', () => {
+  const r = runStep(
+    fixtures({
+      check_runs: allGreen(),
+      dispatch_run_paths: dispatchPaths,
+      merge_state: 'BLOCKED',
+      rollup: [{ name: CONTEXTS[0], status: 'COMPLETED', conclusion: 'CANCELLED' }],
+      review_decision: 'APPROVED',
+    }),
+  );
+  assert.notEqual(r.code, 0, 'still blocks');
+  assert.match(r.out, /ended WITHOUT a\s*\n?::error::verdict/);
+  assert.doesNotMatch(r.out, /BLOCKED with FAILING required contexts/);
+});
+
+test('post-verify: a genuinely FAILING rollup entry is still reported as failing', () => {
+  const r = runStep(
+    fixtures({
+      check_runs: allGreen(),
+      dispatch_run_paths: dispatchPaths,
+      merge_state: 'BLOCKED',
+      rollup: [{ name: CONTEXTS[0], status: 'COMPLETED', conclusion: 'FAILURE' }],
+      review_decision: 'APPROVED',
+    }),
+  );
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /BLOCKED with FAILING required contexts/);
+});
+
+// ── the rollup arm's FATAL SET is unchanged by the #4038 re-description ──────
+//
+// Review finding, 2026-09-08. The first revision of the #4038 edit also moved
+// SKIPPED / ACTION_REQUIRED / STALE out of the fall-through and into the fatal
+// arm. That is not a re-description, it is a new red — and it is a FALSE one.
+// Measured A/B against the parent workflow at 899ea91b670 on the fixture below
+// (14 required check runs green and bridged, statusCheckRollup ALSO carrying a
+// duplicate entry under the same context name, reviewDecision=REVIEW_REQUIRED):
+//
+//   conclusion        parent exit   first-revision exit
+//   SKIPPED           0             1
+//   ACTION_REQUIRED   0             1
+//   STALE             0             1
+//   CANCELLED         1             1
+//   TIMED_OUT         1             1
+//   FAILURE           1             1
+//
+// The context in those first three rows WAS measured, and measured GREEN, by
+// the check-run read in the bridge loop — which is why 14 statuses were bridged
+// in every one of those runs. Blocking on a coarser second view of the same
+// commit manufactures a red over a context that concluded success.
+//
+// These three tests pin the parent's exit code, so a future edit cannot quietly
+// widen the fatal set again while describing itself as a wording change.
+
+const dupRollup = (conclusion) => [
+  ...CONTEXTS.map((name) => ({ name, status: 'COMPLETED', conclusion: 'SUCCESS' })),
+  { name: CONTEXTS[0], status: 'COMPLETED', conclusion },
+];
+
+for (const conclusion of ['SKIPPED', 'ACTION_REQUIRED', 'STALE']) {
+  test(`post-verify: a ${conclusion} rollup entry alongside a measured-green context does NOT block`, () => {
+    const r = runStep(
+      fixtures({
+        check_runs: allGreen(),
+        dispatch_run_paths: dispatchPaths,
+        merge_state: 'BLOCKED',
+        rollup: dupRollup(conclusion),
+        review_decision: 'REVIEW_REQUIRED',
+      }),
+    );
+    assert.equal(r.code, 0, `${conclusion} must not turn the release lane red — the parent exits 0 here`);
+    assert.doesNotMatch(r.out, /ended WITHOUT a/, 'it must not be reported as an unmeasured BLOCKING context');
+    assert.doesNotMatch(r.out, /BLOCKED with FAILING/, 'it is not a failing context either');
+    // Not blocking is not the same as not being SEEN. R7 cuts both ways: the
+    // state is named, and the warning says what it did not establish.
+    assert.match(r.out, /measured nothing \(SKIPPED \/ ACTION_REQUIRED \/ STALE\)/);
+    assert.match(r.out, /What this line does NOT establish/);
+  });
+}
+
+test('post-verify: CANCELLED and TIMED_OUT still block, exactly as they did before the split', () => {
+  // The other half of the parity claim. These two were ALREADY fatal in the
+  // single pre-#4038 `failing` expression; only the sentence changed.
+  for (const conclusion of ['CANCELLED', 'TIMED_OUT']) {
+    const r = runStep(
+      fixtures({
+        check_runs: allGreen(),
+        dispatch_run_paths: dispatchPaths,
+        merge_state: 'BLOCKED',
+        rollup: dupRollup(conclusion),
+        review_decision: 'REVIEW_REQUIRED',
+      }),
+    );
+    assert.notEqual(r.code, 0, `${conclusion} must still block`);
+    assert.match(r.out, /ended WITHOUT a/, `${conclusion} must be named as unmeasured, not as a red result`);
+  }
+});
+
+test('CONTROL: the fatal rollup set is exactly the four conclusions the pre-#4038 expression matched', () => {
+  // A source-level control over the two jq programs, so the pair cannot drift
+  // apart from the behavioural tests above. This is a CONTROL on the split, not
+  // the proof — the proof is the exit codes asserted in the tests around it.
+  const fatal = new Set();
+  for (const varName of ['failing', 'rollup_unmeasured']) {
+    const at = STEP_SRC.indexOf(`${varName}=$(printf`);
+    assert.ok(at > 0, `the ${varName} rollup expression is missing`);
+    const chunk = STEP_SRC.slice(at, STEP_SRC.indexOf("join(\", \")')", at));
+    for (const m of chunk.matchAll(/==\s*"([A-Z_]+)"/g)) fatal.add(m[1]);
+  }
+  assert.deepEqual(
+    [...fatal].sort(),
+    ['CANCELLED', 'ERROR', 'FAILURE', 'TIMED_OUT'],
+    'the rollup arm blocks on a different set than the pre-#4038 code did',
+  );
+});
+
+test('CONTROL: the post-verify scalar does not reuse the bridge loop ARRAY name', () => {
+  // shellcheck SC2178/SC2128, caught by the repo's own workflow-actionlint gate
+  // and not by a local actionlint run with `-shellcheck=` disabled. The bridge
+  // loop declares `unmeasured=()` and reads `${#unmeasured[@]}`; the post-verify
+  // originally assigned a STRING to the same name, which destroys the array for
+  // the remainder of the script. They are different variables and must read as
+  // different variables.
+  assert.match(STEP_SRC, /\bunmeasured=\(\)/, 'the bridge loop array declaration vanished');
+  assert.match(STEP_SRC, /\brollup_unmeasured=\$\(printf/, 'the post-verify scalar is not distinctly named');
+  assert.doesNotMatch(
+    STEP_SRC,
+    /(?<!rollup_)\bunmeasured=\$\(/,
+    'a string is being assigned to the bridge loop array name again',
+  );
+});
+
+test('CONTROL: the post-verify rollup arm posts NO commit status of its own', () => {
+  // The PR body originally claimed "both still post a failure status". That is
+  // true of the BRIDGE LOOP and false here: this arm only echoes and exits. The
+  // claim is corrected; this control keeps it honest.
+  const r = runStep(
+    fixtures({
+      check_runs: allGreen(),
+      dispatch_run_paths: dispatchPaths,
+      merge_state: 'BLOCKED',
+      rollup: [{ name: CONTEXTS[0], status: 'COMPLETED', conclusion: 'FAILURE' }],
+      review_decision: 'APPROVED',
+    }),
+  );
+  assert.notEqual(r.code, 0);
+  // 14 status POSTs, all from the bridge loop, all success — none from this arm.
+  const posts = r.calls.split('\n').filter((l) => l.includes('statuses/'));
+  assert.equal(posts.length, 14, `expected only the 14 bridged statuses, saw ${posts.length}`);
+  assert.equal(
+    posts.filter((l) => l.includes('state=failure')).length,
+    0,
+    'the rollup arm posted a failure status — the "both post a failure status" claim would need revisiting',
+  );
+});
+
+test('post-verify names UNLISTED non-green contexts as drift CANDIDATES, without asserting they are required', () => {
+  // The only drift signal this token can actually observe. It is the shape the
+  // live estate is in: protection carries `changelog parser can read every
+  // commit message`, REQUIRED_CHECKS does not.
+  const r = runStep(
+    fixtures({
+      check_runs: allGreen(),
+      dispatch_run_paths: dispatchPaths,
+      merge_state: 'BLOCKED',
+      rollup: [
+        { name: 'changelog parser can read every commit message', status: 'COMPLETED', conclusion: 'PENDING' },
+      ],
+      review_decision: 'REVIEW_REQUIRED',
+    }),
+  );
+  assert.match(r.out, /changelog parser can read every commit message/);
+  assert.match(r.out, /MAY be a required context this mirror is missing/);
+  assert.doesNotMatch(r.out, /NOT context drift/);
 });
 
 test('NON-WEAKENING CONTROL: no success status is ever posted for an ungraded context', () => {

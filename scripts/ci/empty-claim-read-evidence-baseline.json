@@ -83,7 +83,7 @@
     "apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx#unguarded": 2,
     "apps/fiab-console/lib/editors/event-schema-set-editor.tsx#unguarded": 2,
     "apps/fiab-console/lib/editors/foundry-playground.tsx#unguarded": 3,
-    "apps/fiab-console/lib/editors/foundry-sub-editors.tsx#unguarded": 6,
+    "apps/fiab-console/lib/editors/foundry-sub-editors.tsx#unguarded": 7,
     "apps/fiab-console/lib/editors/lakebase-editor.tsx#unguarded": 1,
     "apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx#unguarded": 1,
     "apps/fiab-console/lib/editors/lakehouse/panes/interop-pane.tsx#unguarded": 2,

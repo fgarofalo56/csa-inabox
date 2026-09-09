@@ -141,6 +141,158 @@ function childPath(path, key) {
   return path === '' ? String(key) : `${path}.${key}`;
 }
 
+/** Whether `name` holds a distinct value on every element of `arr`. */
+function isUniqueAcross(arr, name) {
+  const seen = new Set();
+  for (const element of arr) {
+    if (seen.has(element[name])) return false;
+    seen.add(element[name]);
+  }
+  return true;
+}
+
+/**
+ * The property that identifies the elements of `arr`, or `null` when it has none.
+ *
+ * `id` first, because that is the name the extractor mints identity under
+ * (`graph.nodes`, `graph.edges`, `facet.sinks`, `facet.allowPaths`). If every
+ * element carries a non-empty string `id` and those ids are NOT unique, this
+ * returns null rather than falling through to some other property: the
+ * collection has already declared what names its elements, and pairing on
+ * something else would be a guess about a collection that told us the answer.
+ *
+ * Otherwise a single unambiguous alternative is accepted — exactly one property
+ * that is a non-empty string on every element AND distinct across all of them.
+ * That is what reaches `join.painted` (keyed `nodeId`), `meta.scanScopes`
+ * (`scope`) and `meta.skipped` (`subject`). "Exactly one" is the whole
+ * safeguard: with two candidates there is a choice to make, and this function
+ * has no basis for making it, so it refuses. `join.unjoined` is the live example
+ * — `nodeId` and `codeModuleId` are both unique across its 229 rows — and it is
+ * index-walked for that reason.
+ *
+ * The candidate set is DATA-DEPENDENT, and that is a disclosed narrowing rather
+ * than an accident: if a second property later happens to be unique, the array
+ * silently drops back to the index walk. That degrades the REPORT and never the
+ * VERDICT. {@link collectKeyed} returns nothing only when the arrays are
+ * element-wise identical IN THE SAME ORDER — a leftover that zipped to an equal
+ * partner would have matched by key in the first place, and the shared-key order
+ * is compared — so a keyed walk can print a different SHAPE of report than the
+ * index walk (a swap is one `.order` entry rather than four field entries) but
+ * can never call unequal arrays equal.
+ */
+function identityKey(arr) {
+  if (arr.length === 0) return null;
+  for (const element of arr) {
+    if (element === null || typeof element !== 'object' || Array.isArray(element)) return null;
+  }
+
+  if (arr.every((element) => typeof element.id === 'string' && element.id !== '')) {
+    return isUniqueAcross(arr, 'id') ? 'id' : null;
+  }
+
+  const candidates = Object.keys(arr[0]).filter(
+    (name) =>
+      arr.every((element) => typeof element[name] === 'string' && element[name] !== '') &&
+      isUniqueAcross(arr, name),
+  );
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * ARRAYS OF IDENTIFIED THINGS ARE MATCHED BY KEY, THEN ALIGNED BY POSITION (#4275).
+ *
+ * Walking two arrays by index pairs element i against element i, so INSERTING
+ * one node at the front reports every subsequent node as a modified
+ * `id`/`kind`/`label`/… — the cap (20) fills with index-shift noise and the
+ * actual change, the added node, may not appear in the printed list at all.
+ * Measured on the committed artifact: one inserted route node plus its
+ * `join.painted` row produced 20 entries under the pure index walk, 17 of them
+ * naming rows nobody touched.
+ *
+ * So elements present on BOTH sides under {@link identityKey} are paired by that
+ * key. What is left over on each side is then zipped POSITIONALLY, in its
+ * original relative order, and only a genuine surplus is reported as an
+ * absent/present pair. That second half is not a detail — it is what keeps this
+ * from being a regression when the keys themselves are what moved:
+ *
+ *   - one node inserted, 936 keys shared  -> 1 entry naming the added id
+ *   - every `facet.sinks` id renumbered, 0 keys shared -> the leftovers zip 1:1
+ *     and each sink reports its changed `.id` field, exactly as the index walk
+ *     did. Without the zip each renumbered sink cost TWO cap slots (absent +
+ *     present) and printed a truncated whole-object blob instead of the one
+ *     field that changed — measured on the #4275 case (every ordinal +51): 20
+ *     entries covering 10 sinks, against 20 entries covering 20 sinks.
+ *
+ * ORDER IS COMPARED. A keyed walk that ignored position would report NOTHING for
+ * an artifact whose elements were merely reordered — and the message this feeds
+ * says "the committed artifact matches the tree", which would then be false of
+ * bytes that genuinely differ (R7). So the relative order of the SHARED keys is
+ * compared and the first divergence is reported. Only shared keys, because an
+ * insertion legitimately shifts everything after it and is already reported once.
+ *
+ * BLAST RADIUS, MEASURED on the committed artifact (936 nodes / 173 edges) on
+ * 2026-09-08 — keying engages on 537 array instances of 7 kinds:
+ * `graph.nodes` 1 (`id`), `graph.edges` 1 (`id`), `graph.nodes[].facet.sinks`
+ * 227 of 229 (`id`; 2 carry duplicate ids and index-walk),
+ * `graph.nodes[].facet.allowPaths` 305 (`id`), `join.painted` 1 (`nodeId`),
+ * `meta.scanScopes` 1 (`scope`), `meta.skipped` 1 (`subject`).
+ * `join.unjoined` is NOT keyed — two candidates, so it refuses.
+ *
+ * WHAT THIS DOES NOT FIX. #4275's stated root cause is the EXTRACTOR's
+ * ordinal-based member identity (`console:member:<N>`, where N is a source
+ * offset), which makes an unrelated edit above a sink renumber every sink id in
+ * the file. Nothing here changes how those ids are minted; this only stops the
+ * REPORT from smearing. The identity scheme is still open on #4275.
+ */
+function collectKeyed(a, b, key, path, out, cap) {
+  const indexA = new Map(a.map((element, i) => [element[key], i]));
+  const indexB = new Map(b.map((element, i) => [element[key], i]));
+
+  const orderA = a.filter((element) => indexB.has(element[key])).map((element) => element[key]);
+  const orderB = b.filter((element) => indexA.has(element[key])).map((element) => element[key]);
+  for (let i = 0; i < orderA.length; i += 1) {
+    if (orderA[i] === orderB[i]) continue;
+    if (out.length >= cap) return;
+    out.push({
+      path: `${path}.order`,
+      committed: `${key}=${orderA[i]} at position ${i} of the ${orderA.length} shared key(s)`,
+      current: `${key}=${orderB[i]} at position ${i} of the ${orderB.length} shared key(s)`,
+    });
+    break;
+  }
+
+  // The leftovers come BEFORE the matched pairs: an element that arrived or left
+  // IS the population statement, and it is the entry #4275 measured being pushed
+  // off the end of a cap filled with field noise.
+  const leftoverA = [...a.keys()].filter((i) => !indexB.has(a[i][key]));
+  const leftoverB = [...b.keys()].filter((i) => !indexA.has(b[i][key]));
+  const zipped = Math.min(leftoverA.length, leftoverB.length);
+  for (let k = 0; k < zipped; k += 1) {
+    if (out.length >= cap) return;
+    const i = leftoverA[k];
+    const j = leftoverB[k];
+    // `[i|j]` when the two positions differ: the committed index, then the
+    // current one. Naming only one of them would assert a position the other
+    // side does not have the element at.
+    collect(a[i], b[j], i === j ? `${path}[${i}]` : `${path}[${i}|${j}]`, out, cap);
+  }
+  for (const i of leftoverA.slice(zipped)) {
+    if (out.length >= cap) return;
+    out.push({ path: `${path}[${key}=${a[i][key]}]`, committed: summarize(a[i]), current: '<absent>' });
+  }
+  for (const j of leftoverB.slice(zipped)) {
+    if (out.length >= cap) return;
+    out.push({ path: `${path}[${key}=${b[j][key]}]`, committed: '<absent>', current: summarize(b[j]) });
+  }
+
+  for (const element of a) {
+    if (out.length >= cap) return;
+    const j = indexB.get(element[key]);
+    if (j === undefined) continue;
+    collect(element, b[j], `${path}[${key}=${element[key]}]`, out, cap);
+  }
+}
+
 function collect(a, b, path, out, cap) {
   if (out.length >= cap) return;
   if (a === b) return;
@@ -156,6 +308,13 @@ function collect(a, b, path, out, cap) {
     if (a.length !== b.length) {
       out.push({ path: `${path}.length`, committed: a.length, current: b.length });
     }
+    const keyA = identityKey(a);
+    const keyB = identityKey(b);
+    if (keyA !== null && keyA === keyB) {
+      collectKeyed(a, b, keyA, path, out, cap);
+      return;
+    }
+
     const n = Math.min(a.length, b.length);
     for (let i = 0; i < n && out.length < cap; i += 1) {
       collect(a[i], b[i], `${path}[${i}]`, out, cap);
