@@ -866,7 +866,20 @@ const bundle: AppBundle = {
       // Prepend the backend-util shim so this standalone notebook's loom_get_secret
       // calls resolve on Synapse/Databricks/Fabric/AML (it does not share notebook
       // 01's session).
-      content: { kind: 'notebook', defaultLang: 'pyspark', cells: [backendUtilShimCell(), ...rtaCells(NB_OPENAI_CELLS)] },
+      //
+      // #3530: this notebook does `from openai import AzureOpenAI`. `openai` is
+      // NOT in the Synapse Spark / Databricks stock image — the same position
+      // this repo already takes for `app-rag-builder`, which declares `openai`
+      // for the identical import. Leaving it undeclared here while declaring it
+      // there could not both be right. Declared, the notebook provisioner
+      // prepends the session-scoped `%pip install` bootstrap.
+      // Not verified against a live pool image.
+      content: {
+        kind: 'notebook',
+        defaultLang: 'pyspark',
+        requiredLibraries: ['openai'],
+        cells: [backendUtilShimCell(), ...rtaCells(NB_OPENAI_CELLS)],
+      },
     },
 
     // ─── Warehouse: data-quality + streaming metrics (seeded) ─────────────
