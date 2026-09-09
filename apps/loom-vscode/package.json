@@ -731,7 +731,7 @@
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.6.0",
-    "vitest": "^3.2.7",
+    "vitest": "^5.0.0",
     "zod": "^3.23.8"
   }
 }
