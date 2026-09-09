@@ -3,11 +3,18 @@
 Source UI: Fabric **Workspace → folders** + **Task flows**
 Reference: <https://learn.microsoft.com/fabric/get-started/workspaces-folders>
 Also: <https://learn.microsoft.com/fabric/get-started/task-flow-overview>
-Run date: 2026-09-07 (rev.6 — source re-measure; rev.5 walk was 2026-06-09)
+Run date: 2026-09-08 (rev.7 — line counts re-measured; rev.6 source re-measure
+2026-09-07; rev.5 walk was 2026-06-09)
+
+Every "N lines" below is `wc -l` on the file, one convention throughout. The
+#4348 round-7 review measured four of them one high (folders route, the run
+route, `step-runner.ts`, `launch-item.ts`) — every file here ends with a
+newline, so `wc -l` is the count and the mixed convention is corrected, not
+re-argued.
 
 Loom surfaces:
 
-- Folders BFF: `app/api/workspaces/[id]/folders/route.ts` (GET/POST/PATCH/DELETE, 200 lines)
+- Folders BFF: `app/api/workspaces/[id]/folders/route.ts` (GET/POST/PATCH/DELETE, 199 lines)
 - Folders pane: `lib/panes/folders.tsx` (1028 lines)
 - Task-flows BFF: `app/api/workspaces/[id]/task-flows/route.ts` (GET/POST),
   `.../[flowId]/route.ts` (GET/PUT/DELETE), `.../[flowId]/run/route.ts` (POST/GET),
@@ -65,7 +72,7 @@ Folders and task flows are both **Loom-native** constructs in Cosmos. There is
 | Attach a real workspace item to a task | ✅ Built | step editor picks a live `WorkspaceItem`; `lib/taskflow/launch-item.ts` resolves its open target |
 | Canvas persistence | ✅ Built | 1200 ms debounce → `saveTaskFlow` → `PUT .../[flowId]` (real Cosmos write, no autosave-to-memory) |
 | Canvas overview map + zoom controls | ✅ Built | `MiniMap` + shared `CanvasRightRail` (zoom in/out/fit, `fitView`) |
-| **Beyond Fabric:** run a task flow and watch step status | ✅ Built | `POST`+`GET .../[flowId]/run` (253 lines) driven by `lib/taskflow/step-runner.ts`; runnable kinds `notebook`, `data-pipeline`, `synapse-pipeline`, `adf-pipeline`, `databricks-job` |
+| **Beyond Fabric:** run a task flow and watch step status | ✅ Built | `POST`+`GET .../[flowId]/run` (252 lines) driven by `lib/taskflow/step-runner.ts`; runnable kinds `notebook`, `data-pipeline`, `synapse-pipeline`, `adf-pipeline`, `databricks-job` |
 | **Beyond Fabric:** run history | ✅ Built | `listTaskFlowRuns` / `getTaskFlowRun` → run drawer |
 
 Zero ❌ rows against the Fabric inventory: folder management and the task-flow
@@ -103,10 +110,10 @@ open work and are recorded here rather than left unsaid:
   task-flows/` serve the same shapes for the admin plane. Clients:
   `lib/clients/taskflow-client.ts` (143 lines) and
   `lib/clients/taskflow-run-client.ts` (61 lines).
-- **Task-flow run engine** — `lib/taskflow/step-runner.ts` (244 lines) exports
+- **Task-flow run engine** — `lib/taskflow/step-runner.ts` (243 lines) exports
   `RUNNABLE_ITEM_TYPES`, `isRunnableType`, `flowHasRunnableItems`,
   `topoSortSteps`, `buildFlowRunSkeleton`, `rollupStepStatus`,
-  `rollupFlowStatus`. `lib/taskflow/launch-item.ts` (267 lines) resolves a step's
+  `rollupFlowStatus`. `lib/taskflow/launch-item.ts` (266 lines) resolves a step's
   attached item to its open target.
 - **Tests** — `lib/clients/__tests__/taskflow-client.test.ts` (128),
   `lib/panes/__tests__/task-flows-run.test.tsx` (105),

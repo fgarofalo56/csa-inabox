@@ -97,6 +97,41 @@ const WORKSPACES_TRIMMED = {
 };
 
 /**
+ * #4348 round-7 review, should-fix 3 — THE OTHER HALF of `trimmed`.
+ *
+ * `inventoryNotEstablished` fires on `legacyUnstampedExcluded > 0 ||
+ * legacyCountUnavailable === true`, and only the first operand had a fixture.
+ * The second is not a variant of the first: it is the state where the
+ * disclosure aggregate ITSELF did not answer, so the count is UNKNOWN rather
+ * than zero (`countUnstampedWorkspaces` returns `established:false` when the
+ * cross-partition `COUNT(1)` is rejected under RU pressure — the first thing
+ * Cosmos sheds). The route then omits `legacyUnstampedExcluded` entirely
+ * (`...(legacyUnstampedExcluded ? … : {})`, app/api/admin/workspaces/route.ts
+ * :73) and emits `legacyCountUnavailable: true` instead, so a fixture that
+ * carries a count exercises none of this branch.
+ *
+ * Envelope VERBATIM from app/api/admin/workspaces/route.ts:63-89 for the
+ * `legacyCountUnavailable` case; `legacyRemediation` is `UNSTAMPED_COUNT_UNAVAILABLE`
+ * copied string-for-string from lib/clients/workspaces-client.ts:212-219, and
+ * `degradedReasons` is the single code that path pushes (`:311`).
+ */
+const WORKSPACES_COUNT_UNAVAILABLE = {
+  ok: true,
+  total: 1,
+  workspaces: [{ id: 'ws-1', name: 'Analytics' }],
+  degraded: true,
+  degradedReasons: ['legacy-count-unavailable'],
+  legacyCountUnavailable: true,
+  legacyRemediation:
+    'Loom could not read how many workspace records carry no Entra tenant, so the count above may ' +
+    'exclude records it cannot attribute to your tenant — that number is UNKNOWN, not zero. The ' +
+    'disclosure query (`SELECT VALUE COUNT(1) FROM c WHERE NOT IS_DEFINED(c.tid)`) is a ' +
+    'cross-partition aggregate and is the first thing Cosmos rejects under RU pressure; retry the ' +
+    'page. Run `node scripts/csa-loom/backfill-workspace-tid.mjs` (DRY-RUN by default) to see ' +
+    'whether any unstamped records exist.',
+};
+
+/**
  * THE NEGATIVE CONTROL for the disclosure above. rel-T108 degrades `degraded`
  * for a best-effort ENRICHMENT failure (item counts, owner roles) over a
  * COMPLETE list. Those fields are not read by this picker — it takes `id` and
@@ -342,6 +377,29 @@ describe('budget scope picker — a 200 that ADMITS it established nothing is no
     expect(await screen.findByRole('option', { name: 'Analytics' })).toBeInTheDocument();
     // The excluded records are named, not silently absent from the picker.
     expect(screen.getByText(/backfill-workspace-tid/)).toBeInTheDocument();
+  });
+
+  it('an inventory whose exclusion count COULD NOT BE READ discloses that the number is unknown, not zero', async () => {
+    // #4348 round-7 review, should-fix 3. The second operand of
+    // `inventoryNotEstablished`'s `trimmed` predicate — `legacyCountUnavailable
+    // === true` — had no fixture, so deleting it left every assertion green
+    // while a list whose completeness Cosmos declined to establish rendered as
+    // an ordinary complete one. The rows that DID load stay pickable (this is a
+    // disclosure, not an error), and the notice must say the count is UNKNOWN
+    // rather than assert an exclusion count it does not have (R7).
+    vi.stubGlobal('fetch', installFetch({ workspaces: [WORKSPACES_COUNT_UNAVAILABLE, 200] }));
+    await openNewBudget();
+
+    const dd = await screen.findByRole('combobox', { name: 'Workspace' });
+    expect(screen.queryByRole('textbox', { name: 'Workspace' })).toBeNull();
+    fireEvent.click(dd);
+    expect(await screen.findByRole('option', { name: 'Analytics' })).toBeInTheDocument();
+    // The route's own words, and specifically the claim that distinguishes this
+    // state from the trimmed one: the number is not established.
+    expect(screen.getByText(/that number is UNKNOWN, not zero/)).toBeInTheDocument();
+    // The trimmed fixture's sentence must NOT be what renders here — a count of
+    // excluded records is exactly what this branch could not obtain.
+    expect(screen.queryByText(/workspace record\(s\) record no Entra tenant/)).toBeNull();
   });
 
   it('an ENRICHMENT-only degradation over a COMPLETE list says nothing extra — no phantom warning', async () => {
