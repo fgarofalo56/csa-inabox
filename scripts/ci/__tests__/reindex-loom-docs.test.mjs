@@ -871,7 +871,14 @@ test('#4373 a retry that never connects does NOT erase the poll (indeterminate i
     (n) => (n === 1 ? EDGE_504 : { destroy: true }),
     () => STALE_IDLE,
     async (url, counts) => {
-      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '4' });
+      // REFUSED_IDLE_POLLS is set BELOW the poll count on purpose. With the
+      // shipped default of 8 against POLL_MAX_ATTEMPTS=4 the TRIGGER REFUSED
+      // assertion below is unreachable for a reason that has nothing to do with
+      // POST_REFUSED — the threshold is simply never met — so it reads as a pin
+      // while pinning nothing. At 3 the rename becomes available and the
+      // assertion is load-bearing: injecting POST_REFUSED=true on the
+      // non-answer branch reds this test.
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '4', REFUSED_IDLE_POLLS: '3' });
       assert.equal(res.status, 1, res.stdout + res.stderr);
       assert.equal(counts().posts, 2, 'the indeterminate 504 is re-sampled');
       assert.equal(counts().gets, 5, '1 pre-retry probe + 4 REAL polls — not the probe alone');
