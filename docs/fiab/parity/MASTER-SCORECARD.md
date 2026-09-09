@@ -356,8 +356,8 @@ yet built and are intentionally **not** documented here as parity.
 | Embed codes | `embed-codes.md` | **B** | PBI REST GenerateToken + `powerbi-client-react` | PBI-bound ⚠️ / Publish-to-web admin ⚠️ |
 | Org visuals & branding | `org-visuals.md` | **B+** | Cosmos `tenant-themes` + ADLS (domain images) | custom `.pbiviz` ⚠️ |
 
-**Grade distribution (rev.5, amended 2026-08-29 and 2026-09-07):** 13 × A / A−,
-6 × B+ / B. **Zero D, zero F.** Backend-per-control on every row. The
+**Grade distribution (rev.5, amended 2026-08-29 and 2026-09-07):** 14 × A / A−,
+5 × B+ / B. **Zero D, zero F.** Backend-per-control on every row. The
 "zero ❌ in any of the 19 docs" claim carried from rev.5 **no longer holds**:
 `users-licenses.md` records two ❌ as of 2026-09-07 (see the amendment below).
 
