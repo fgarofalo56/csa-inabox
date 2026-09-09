@@ -52,7 +52,19 @@ describe('KqlDatabaseEditor', () => {
       '/api/adx/tables': () => ({ ok: true, database: 'loomdb-default', tables: [{ name: 'Events', totalRowCount: 12 }, { name: 'Alerts', totalRowCount: 3 }] }),
       '/api/adx/functions': () => ({ ok: true, database: 'loomdb-default', functions: [] }),
       '/api/adx/materialized-views': () => ({ ok: true, database: 'loomdb-default', materializedViews: [] }),
-      '/api/adx/ingestion-mappings': () => ({ ok: true, database: 'loomdb-default', mappings: [] }),
+      // The Get data wizard's ingestion-mapping field is an IngestionMappingPicker
+      // (#3519) that READS this route, so the fixture has to carry a real row for
+      // there to be anything to pick. `EventsJsonMap` is scoped to Events (the
+      // table that test selects); `OtherOnlyMap` belongs to a different table and
+      // must therefore NOT be offered.
+      '/api/adx/ingestion-mappings': () => ({
+        ok: true,
+        database: 'loomdb-default',
+        mappings: [
+          { name: 'EventsJsonMap', kind: 'json', table: 'Events' },
+          { name: 'OtherOnlyMap', kind: 'json', table: 'Alerts' },
+        ],
+      }),
       '/api/adx/overview': () => ({ ok: true, database: 'loomdb-default', schema: null, continuousExports: [] }),
     });
     calls = m.calls;
@@ -138,7 +150,22 @@ describe('KqlDatabaseEditor', () => {
       .getByText('Format', { selector: 'span' })
       .parentElement!.querySelector('select') as HTMLSelectElement;
     fireEvent.change(formatSelect, { target: { value: 'json' } });
-    fireEvent.change(screen.getByPlaceholderText('EventMapping'), { target: { value: 'EventMapping' } });
+    // #3519 replaced the free-text `placeholder="EventMapping"` box with an
+    // IngestionMappingPicker, so the mapping is now PICKED from the names the
+    // database actually carries. Same portal caveat as the buttons above, and
+    // worse: inside the Fluent Dialog portal `getByRole` finds NOTHING for this
+    // control — measured, not assumed (`queryAllByRole('combobox')` returns 0
+    // while `document.querySelectorAll('[role="combobox"]')` returns 1), because
+    // testing-library's role queries drop nodes it computes as inaccessible.
+    // getByLabelText / getByText do not apply that filter, so the picker is
+    // driven through them.
+    const mappingBox = screen.getByLabelText(/Ingestion mapping name/i);
+    fireEvent.click(mappingBox);
+    // Only mappings that can apply to the selected target table are offered:
+    // Events' own mapping is there, Alerts'-only mapping is not.
+    const picked = await screen.findByText('EventsJsonMap');
+    expect(screen.queryByText('OtherOnlyMap')).toBeNull();
+    fireEvent.click(picked);
     const fileContent = '{"ts":"2026-01-01T00:00:00Z"}';
     const file = new File([fileContent], 'sample.json', { type: 'application/json' });
     // jsdom's File does not implement Blob.text() (it exists in real browsers),
@@ -158,7 +185,7 @@ describe('KqlDatabaseEditor', () => {
       expect(post).toBeTruthy();
       const kql = JSON.parse(String(post!.init!.body)).kql as string;
       expect(kql).toContain("format='json'");
-      expect(kql).toContain("ingestionMappingReference='EventMapping'");
+      expect(kql).toContain("ingestionMappingReference='EventsJsonMap'");
     });
   });
 
