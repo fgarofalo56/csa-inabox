@@ -304,3 +304,314 @@ test('CLI exit code for the indeterminate verdict is 75, distinct from 0 and 1',
   assert.equal(gw.status, 75);
   assert.match(gw.stdout, /::warning::/);
 });
+
+// ── trigger_refused: a REFUSED trigger is not a SLOW rebuild (#3472) ─────────
+//
+// Measured on copilot-quality-evals run 33472611043 (2026-09-01): a gateway 504
+// on the POST, then 57 polls over 904s every one of which read
+// `freshness=stale job=idle`, then a red whose message was "did not reach a
+// fresh state within 904s". That message is true and useless — it describes the
+// rebuild's duration when the rebuild was never accepted. The poll loop now
+// recognises that shape and hands the classifier its own outcome.
+//
+// It is a RENAME of `timeout` applied after the same ceiling, not an early
+// exit: the first revision of this change DID end the wait on the streak, and a
+// real-server counterfactual showed that turning a run which exits 0 at head
+// (fresh at poll 9) into exit 1 at poll 8. Nothing here may imply the wait was
+// shortened.
+
+/** The body every one of those 57 polls returned. */
+const POLL_STALE_IDLE = JSON.stringify({
+  ok: true,
+  backend: 'ai-search',
+  job: { state: 'idle', jobId: null, error: null },
+  freshness: { state: 'stale', indexedChunkCount: 49593 },
+});
+
+test('poll: trigger_refused is a FAIL, and names the request path — not the rebuild', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.equal(r.level, 'error');
+  assert.match(r.message, /TRIGGER REFUSED/);
+  // The whole point of the separate verdict: a reader must be pointed at the
+  // edge/origin path, not told the rebuild was slow.
+  assert.match(r.message, /REQUEST-PATH problem, not a slow rebuild/i);
+  assert.match(r.message, /originResponseTimeoutSeconds/);
+  // It must report the evidence it actually had.
+  assert.match(r.message, /2 POST attempt\(s\)/);
+  assert.match(r.message, /HTTP 504/);
+  assert.match(r.message, /8 poll\(s\) over 128s/);
+});
+
+/**
+ * MUTATION-PROOF, and the reason this verdict is allowed to exist at all
+ * (deploy-integrity R7). `job.state` is the ANSWERING REPLICA's view and the
+ * corpus manifest is written only at the END of a rebuild, so neither "idle"
+ * nor "chunk count unchanged" proves that nothing ran. Delete either caveat
+ * from the message and this goes RED: the verdict would then be asserting two
+ * things the poll loop cannot observe.
+ */
+test('poll: trigger_refused states its CAVEATS and never claims "no job ran"', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /ANSWERING replica/i, 'must disclose the replica-scope caveat');
+  assert.match(r.message, /does not prove no job started anywhere/i);
+  assert.match(r.message, /written only at the END of a rebuild/i, 'must disclose the manifest caveat');
+  // The claims it may NOT make.
+  assert.doesNotMatch(r.message, /no (job|rebuild) (ran|started)\b(?! anywhere)/i);
+  assert.doesNotMatch(r.message, /nothing ran/i);
+  assert.match(r.message, /never OBSERVED/i, 'the positive claim must be scoped to observation');
+});
+
+/** A RENAME of `timeout`, produced after the same ceiling. It must never soften
+ *  the EXIT CODE, and it must not claim it shortened anything. */
+test('poll CLI: trigger_refused exits 1 (fail-closed intact)', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODE: '504',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /::error::/);
+  assert.match(res.stdout, /TRIGGER REFUSED/);
+  assert.match(res.stdout, /RENAME, not a shortcut/);
+});
+
+/**
+ * R7 on the message's own inputs. With no POST_CODE plumbed through, the message
+ * may not invent one.
+ */
+test('poll: trigger_refused with no postCode does not invent a status code', () => {
+  const r = classifyReindexPoll({ outcome: 'trigger_refused', body: POLL_STALE_IDLE, attempts: 8 });
+  assert.match(r.message, /no application body/);
+  assert.doesNotMatch(r.message, /HTTP \d/);
+});
+
+/**
+ * R7 on the message's own inputs, second half — and a defect the reviewer of
+ * PR #4373 MEASURED at the first revision of this file: with no POST_ATTEMPTS
+ * the message read "All 2 POST attempt(s) were answered by the EDGE" over a run
+ * whose attempt count was never handed over. Two is not a floor either — the
+ * shell makes ONE attempt when POST_RETRIES=0 or when its pre-retry probe skips
+ * the retry. An invented count is a measurement claim that was not measured.
+ *
+ * MUTATION-PROOF: restore the `: 2` fallback and this goes RED.
+ */
+test('poll: trigger_refused with no postAttempts does not invent an attempt COUNT', () => {
+  const r = classifyReindexPoll({ outcome: 'trigger_refused', body: POLL_STALE_IDLE, attempts: 8 });
+  assert.doesNotMatch(r.message, /All \d+ POST attempt/);
+  assert.match(r.message, /Every POST attempt\(s\) were answered by the EDGE/);
+});
+
+/** A ONE-attempt run says one. The count is evidence, so it must be the real one. */
+test('poll: trigger_refused reports a SINGLE POST attempt as 1, not 2', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    attempts: 8,
+    postCode: 504,
+    postAttempts: 1,
+  });
+  assert.match(r.message, /All 1 POST attempt\(s\)/);
+  assert.doesNotMatch(r.message, /All 2 POST attempt/);
+});
+
+/**
+ * R7 on the POLL count — the #4373 review's second blocking finding, MEASURED
+ * against the real harness at 10 claimed / 8 observed.
+ *
+ * The clause asserts a `freshness=stale job=idle` reading with an unchanged
+ * chunk count. Only the TRAILING streak established that; `attempts` is every
+ * poll the loop made, including unreachable ones and any that read something
+ * else before the streak began. The two numbers must not be conflated.
+ *
+ * MUTATION-PROOF: make the message print `attempts` where it prints `idleStreak`
+ * and the first assertion goes RED (it would read "the LAST 10 of 10").
+ */
+test('poll: trigger_refused claims the TRAILING streak, not every poll', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 10,
+    idleStreak: 8,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /Of the 10 poll\(s\) over 128s that followed, the LAST 8 read freshness=stale/);
+  // The refuted sentence: the total presented as the polls that did the reading.
+  assert.doesNotMatch(r.message, /10 poll\(s\) over 128s since then read freshness=stale/);
+  assert.doesNotMatch(r.message, /the LAST 10/);
+});
+
+/**
+ * Same rule as the attempt count: with no streak handed over, do not invent one.
+ * The message drops the number and says "the TRAILING" instead.
+ */
+test('poll: trigger_refused with no idleStreak does not invent a poll COUNT for the reading', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 10,
+    postCode: 504,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /the TRAILING ones read freshness=stale/);
+  assert.doesNotMatch(r.message, /the LAST \d+ read/);
+});
+
+/**
+ * PER-ATTEMPT STATUS CODES (#4373 review §4). `postCode` is the LAST attempt's
+ * status and the sentence is plural, so naming it alone attributed one sample to
+ * every attempt: "All 2 POST attempt(s) were answered by the EDGE (HTTP 502…)"
+ * when attempt 1 was a 504. With `postCodes` the message names each in order.
+ *
+ * MUTATION-PROOF: drop the `postCodes` branch and this reads "(HTTP 502 on the
+ * LAST attempt…)" — RED on the first assertion.
+ */
+test('poll: trigger_refused names EVERY attempt\'s status when it has them', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCode: 502,
+    postCodes: '504,502',
+    postAttempts: 2,
+  });
+  assert.match(r.message, /HTTP 504 then 502, one per attempt, no application body/);
+  assert.doesNotMatch(r.message, /\(HTTP 502, no application body\)/);
+});
+
+/**
+ * And with only the LAST code available it must SAY that is what it is, rather
+ * than letting the plural sentence imply it covered them all.
+ */
+test('poll: trigger_refused with only postCode scopes it to the LAST attempt', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCode: 502,
+    postAttempts: 2,
+  });
+  assert.match(r.message, /HTTP 502 on the LAST attempt, no application body/);
+});
+
+/** One attempt, one code: no "then", no "LAST attempt" hedge — it IS all of them. */
+test('poll: trigger_refused with a single collected code names it plainly', () => {
+  const r = classifyReindexPoll({
+    outcome: 'trigger_refused',
+    body: POLL_STALE_IDLE,
+    waitedSeconds: 128,
+    attempts: 8,
+    idleStreak: 8,
+    postCodes: '504',
+    postAttempts: 1,
+  });
+  assert.match(r.message, /\(HTTP 504, no application body\)/);
+  assert.doesNotMatch(r.message, /HTTP 504 then/);
+  assert.doesNotMatch(r.message, /LAST attempt/);
+});
+
+/*
+ * ── POST_CODE / POST_CODES ARE WHITELISTED AT THE ENV BOUNDARY ──────────────
+ *
+ * Both are read from the environment and interpolated into a message written to
+ * stdout, which CodeQL flags as `js/clear-text-logging` (alerts 1034/1035). The
+ * values the caller actually produces are `curl -w '%{http_code}'` outputs, so
+ * the alert is a false positive on them — but that is a claim about a producer
+ * this script cannot see. `statusCodesOnly` makes it true at the boundary
+ * instead of merely likely.
+ *
+ * These drive the CLI rather than the exported function, because the whitelist
+ * IS the env boundary: testing the function would step over the thing under
+ * test. The first case is the CONTROL — it proves the assertion can see a code
+ * at all, so the "dropped" cases below are not passing vacuously.
+ */
+test('poll CLI: real curl status codes pass through the whitelist untouched', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODES: '504,502',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /HTTP 504 then 502, one per attempt/);
+});
+
+test('poll CLI: a POST_CODE that is not a status code is dropped, not echoed', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODE: 'NOT-A-CODE-9f2a',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.doesNotMatch(res.stdout, /NOT-A-CODE-9f2a/);
+  // R7: having dropped it, the message must not invent a code either.
+  assert.match(res.stdout, /\(no application body\)/);
+  assert.doesNotMatch(res.stdout, /LAST attempt/);
+});
+
+test('poll CLI: a malformed POST_CODES list is dropped whole, not partially echoed', () => {
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'trigger_refused',
+      POLL_BODY: POLL_STALE_IDLE,
+      POLL_WAITED_S: '128',
+      POLL_ATTEMPTS: '8',
+      POST_CODES: '504,NOT-A-CODE-9f2a',
+      POST_ATTEMPTS: '2',
+    },
+  });
+  assert.equal(res.status, 1);
+  assert.doesNotMatch(res.stdout, /NOT-A-CODE-9f2a/);
+  // Whitelisting is all-or-nothing on the list: a partially-valid list is not
+  // silently trimmed to its valid prefix, which would report FEWER attempts
+  // than were made and understate the failure.
+  assert.doesNotMatch(res.stdout, /HTTP 504, no application body/);
+  assert.match(res.stdout, /\(no application body\)/);
+});
