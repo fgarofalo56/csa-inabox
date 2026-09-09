@@ -14,11 +14,14 @@
  * full rebuild of ~2.5k markdown files into tens of thousands of AI Search
  * documents cannot finish inside the edge timeout, and the caller gets an EDGE
  * 502 with no way to tell "still building" from "crashed". Nor does the pin
- * cover every boundary — it is the Front Door module, and IL5 fronts the
- * console with Application Gateway instead, whose `requestTimeout: 30` is
- * hardcoded (#4431). A CI step that cannot distinguish those two
- * either fails on a healthy reindex or (worse) tolerates a broken one and
- * measures a stale index.
+ * cover every edge — it is the Front Door module, and Application Gateway is
+ * enabled on FOUR boundaries (commercial-full, gcc-high, il5, tenant-dmlz),
+ * where `requestTimeout: 30` is hardcoded with no parameter (#4431). On three
+ * of those the console has two public edges and this pin moves only one; on
+ * IL5, where Front Door is disabled as not IL5-certified, App Gateway is the
+ * ONLY edge, so nothing here moves it at all. A CI step that cannot distinguish
+ * those two either fails on a healthy reindex or (worse) tolerates a broken one
+ * and measures a stale index.
  *
  * So the POST now ACCEPTS the work (202) and returns immediately; callers poll
  * `GET /api/help-copilot/reindex` for terminal state. No gateway timeout is on

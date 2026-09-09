@@ -46,9 +46,16 @@ param forceUpdateTag string = utcNow()
 // in platform/fiab/bicep, so the edge used whatever the AFD default (60s) or an
 // out-of-band portal change left it — and three separate places in this repo
 // cited that absence in prose while nothing enforced it. THAT IS NOW HISTORY,
-// stated in the past tense because this file is what changed it: `:121`/`:287`
-// below declare and apply the value, and all three citations were updated in
-// the same change to describe the pin rather than its absence
+// stated in the past tense because this file is what changed it: the
+// `param originResponseTimeoutSeconds` declaration below, and the property of
+// the same name on the origin-group resource, declare and apply the value.
+// (Deliberately NOT cited by line number. The previous revision of this
+// sentence said `:121`/`:287`; the real lines were 153 and 319, because a
+// comment edit above them shifted every number. A citation that goes stale
+// whenever anything above it moves is a false statement waiting to happen —
+// which is the exact class this whole comment is about. Grep the symbol.)
+// All three citations were updated in the same change to describe the pin
+// rather than its absence
 // (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
 // apps/fiab-console/lib/azure/reindex-job.ts, scripts/ci/reindex-loom-docs.sh).
 //
@@ -111,10 +118,13 @@ param forceUpdateTag string = utcNow()
 //     `status: waiting` (environment approval) with that job at 0 steps. A
 //     failing job that RAN is a receipt; a waiting one is not.
 //   * commercial-full — LATENT, not exercised. Every known invocation overrides
-//     `deployAppsEnabled=false` (bicep-whatif.yml:291, loom-drift-check.yml:147,
-//     and no-vaporware.md's from-scratch PHASE 1) — the very gate this module
-//     hangs on — so it compiles this value and has never deployed it. Recorded
-//     at loom-guardrails.yml:572-577.
+//     `deployAppsEnabled=false` (grep that string in bicep-whatif.yml and
+//     loom-drift-check.yml, and no-vaporware.md's from-scratch PHASE 1) — the
+//     very gate this module hangs on — so it compiles this value and has never
+//     deployed it. Recorded in loom-guardrails.yml's boundary table. (Cited by
+//     grep, not line number: loom-guardrails.yml's own copy of this note says
+//     `bicep-whatif.yml:291`, which is a `clientSecret` line — the real one is
+//     406. That stale citation is out of this PR's lane and is left alone.)
 //   * tenant-dmlz — SUPPORTED-IN-CODE, NEVER EXERCISED. `git grep -ln
 //     tenant-dmlz.bicepparam -- .github/` returns NOTHING: no workflow
 //     references it at all, and loom-guardrails.yml:570-571 records it as
