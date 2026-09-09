@@ -56,7 +56,14 @@ jobs:
     # Backstop only, NOT the operating budget. The PR path is bounded by the
     # diff; only the full sweep can approach this. The classifier below re-reads
     # this exact line rather than restating the number, so the two cannot drift.
-    timeout-minutes: 45
+    #
+    # MEASURED, not guessed. Dispatch run 34393875137 on this branch swept the
+    # real 2548-file corpus ONLINE and was killed by the old 45m backstop at
+    # 2699s having emitted no verdict — so 45 was not a backstop for the sweep,
+    # it was a guaranteed weekly TIMEOUT marker. A scheduled control that can
+    # never produce a verdict is the mirror of one that can never fail, and this
+    # workflow is not shipping one. Raised to cover the measurement below.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

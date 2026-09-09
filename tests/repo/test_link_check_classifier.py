@@ -798,10 +798,19 @@ def test_budget_backstop_has_a_floor() -> None:
     single-source-of-truth trade, but it also means dropping the backstop back
     to 10 minutes leaves every other test in this module green. This is the one
     assertion that would notice.
+
+    The floor is MEASURED, not chosen. Dispatch run 34393875137 on this branch
+    ran the real 2548-file corpus ONLINE and was still going when the then-45m
+    backstop killed it at 2699s with no verdict emitted. So any value at or
+    below 45m is not a backstop for the weekly sweep at all — it is a guaranteed
+    TIMEOUT marker every Monday, i.e. a scheduled control that can never pass.
+    The floor sits above the one duration we have actually observed the sweep
+    exceed; it is not a claim about where the sweep finishes.
     """
-    assert _BUDGET_SECONDS >= 30 * 60, (
-        f"the Link Check backstop is {_BUDGET_SECONDS // 60}m; below ~30m the full "
-        "sweep can be killed again, which is the #4425 defect"
+    assert _BUDGET_SECONDS > 45 * 60, (
+        f"the Link Check backstop is {_BUDGET_SECONDS // 60}m; the full online "
+        "sweep was measured still running at 45m (run 34393875137), so at or "
+        "below that the weekly cron can only ever emit TIMEOUT"
     )
 
 
