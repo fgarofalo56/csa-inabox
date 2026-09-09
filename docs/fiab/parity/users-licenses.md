@@ -13,6 +13,8 @@ Source UI:
   https://learn.microsoft.com/graph/api/subscribedsku-list ,
   https://learn.microsoft.com/graph/api/user-list
 
+Run date: 2026-09-07 (rev.6 — source re-measure; rev.5 walk was 2026-06-09)
+
 Loom builds this **1:1 on Azure-native backends** — Cosmos (workspaces / items /
 workspace-permissions / F5 workspace-roles) for the Loom-access view, and
 Microsoft Graph (Directory.Read.All + User.Read.All on the Console UAMI) for the
@@ -35,6 +37,8 @@ reads. Available in Commercial, GCC, GCC-High (L4), and DoD (L5).
 | 9  | Cross-link to Entra (Azure AD) user profile                       | Identity blade |
 | 10 | Per-user role assignments / scoped access                         | M365 = admin roles; Loom = workspace roles |
 | 11 | Sort / filter the grid                                             | column sort + search |
+| 12 | Assign / remove a license for a user                               | `POST /users/{id}/assignLicense` — a **write** the M365 grid performs inline |
+| 13 | Block sign-in / reset password for a user                          | `PATCH /users/{id}` (`accountEnabled`) / password reset action |
 
 ## Loom coverage
 
@@ -51,6 +55,18 @@ reads. Available in Commercial, GCC, GCC-High (L4), and DoD (L5).
 | 9  | built ✅ | "Entra" link → `portal.azure.com` UserProfileMenuBlade by UPN |
 | 10 | built ✅ | Roles cell shows legacy workspace-permissions roles + a "N ws-roles" Popover expanding the F5 principalId-keyed `workspace-roles` rows (workspace → role), joined by the user's Entra objectId |
 | 11 | built ✅ | LoomDataTable provides per-column sort/filter; page Toolbar search covers UPN / name / department / role / license |
+| 12 | MISSING ❌ | No license assign/remove control. `app/api/admin/users/route.ts` exports **`GET` only** — grep for `POST\|PATCH\|PUT\|DELETE\|assignLicense` in that file returns rc=1, zero hits — and `page.tsx` has no assignment affordance (`assign` appears only in prose, `assignedLicenses` reads, and workspace-role text). |
+| 13 | MISSING ❌ | No block-sign-in / reset-password control. `accountEnabled` is rendered as a read-only badge; nothing writes it. |
+
+> **rev.6 correction.** Rev.5's inventory stopped at row 11 and the doc then
+> reported zero ❌. That was an artifact of the inventory, not of the surface:
+> the M365 Active users grid is a **read-write** experience, and the two writes
+> it performs inline — license assignment and account block/reset — were never
+> enumerated, so their absence could not show up as a gap. Rows 12–13 add them.
+> The MASTER-SCORECARD already carried a `license ⚠️` gate for this surface that
+> the doc did not, which is the same drift seen from the other side. Loom's
+> `/admin/users` is a **read-only** review surface at head; that is a defensible
+> scope, but it is a scope decision and it is now recorded as one.
 
 Honest-gate (⚠️, not a stub): when `LOOM_GRAPH_USERS_ENABLED` is unset or the
 UAMI lacks Directory.Read.All / User.Read.All, the license + account + objectId
@@ -90,3 +106,27 @@ Cosmos-derived users, activity, and legacy roles — never an empty/error surfac
   the UAMI grant shows real tenant users, real `subscribedSkus` cards, real
   per-user license SKUs, the ws-roles Popover from the F5 store, and the M365
   deep-link — all with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET.
+
+**Evidence basis for rev.6.** Rev.6 re-measured every inventory row against
+source at head rather than re-walking the browser: `app/admin/users/page.tsx`
+(463 lines) still carries `LoomDataTable`, the `department` /
+`accountEnabled` / `capabilityStatus` columns, the `UserProfileMenuBlade` and
+`#/users/:/UserDetails/{oid}` deep-links and the `ws-roles` `Popover`;
+`app/api/admin/users/route.ts` (231) still performs the `subscribedSkus` and
+`listAllWorkspaceRolesForWorkspaces` joins; `lib/azure/graph-identity-client.ts`
+(982) still exports `listUsersWithLicenses` + `fetchSubscribedSkus` and still
+gates on `LOOM_GRAPH_USERS_ENABLED`. Rows 1–11 all hold; nothing regressed. Rows
+12–13 are new to the inventory, not new regressions — the capability was always
+absent, only the row was. The live-walk line above remains rev.5's receipt, not a
+new one — per `ux-baseline.md` G1 a source re-measure is not a completion
+receipt.
+
+Grade: **B+** — 11 of 13 inventory rows built on real Graph + Cosmos with one
+honest ⚠️ gate that names its exact env var and remediation script, but **two ❌**:
+the surface performs no writes, so license assignment and account block/reset
+have no control at all. Per `ui-parity.md` a doc with any ❌ is not A-grade. This
+holds the MASTER-SCORECARD's existing **B+** for this row — rev.6 did not change
+the grade, it supplied the two rows that justify it. Closing the ❌s means a
+`PATCH`/`POST` on `/api/admin/users` plus the Graph `User.ReadWrite.All` /
+`Directory.ReadWrite.All` grant, which is a write-scope expansion and belongs in
+its own change, not in a docs revision.

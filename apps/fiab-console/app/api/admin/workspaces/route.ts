@@ -70,10 +70,23 @@ export async function GET() {
       ...(degraded ? { degraded: true, degradedReasons } : {}),
       // #3826: a legacy estate must not read as a SHORTER inventory with no
       // explanation. Excluded records are reported with their remediation.
-      ...(legacyUnstampedExcluded ? { legacyUnstampedExcluded, legacyRemediation } : {}),
+      ...(legacyUnstampedExcluded ? { legacyUnstampedExcluded } : {}),
       // #4316 review: and an exclusion count that could NOT be read is reported
       // as unread — omitting it would let 0 stand in for "I could not count".
-      ...(legacyCountUnavailable ? { legacyCountUnavailable: true, legacyRemediation } : {}),
+      ...(legacyCountUnavailable ? { legacyCountUnavailable: true } : {}),
+      // #4348 review — THE REMEDIATION RIDES THE DEGRADATION, NOT A COUNT.
+      // Both spreads above used to carry `legacyRemediation` themselves, which
+      // gated it on a legacy COUNT being non-zero. The one degradation that
+      // carries no count is `tenant-scope-unconfirmed` — the tid-less refusal at
+      // lib/clients/workspaces-client.ts, which returns `workspaces: []` with
+      // `legacyUnstampedExcluded: 0` and `legacyCountUnavailable: false`. Its
+      // remediation ("your sign-in session carries no Entra tenant (`tid`)
+      // claim … sign out and sign in again") was therefore dropped here and
+      // could not reach ANY client, leaving a refusal indistinguishable on the
+      // wire from a tenant that genuinely owns no workspaces. Emitting it
+      // wherever the client produced it is additive: the two cases above still
+      // carry the same string they always did.
+      ...(legacyRemediation ? { legacyRemediation } : {}),
     });
   } catch (e: any) {
     return apiServerError(e);
