@@ -12,17 +12,16 @@
  * module instance. `liveRequests` in particular must stay a single map — the
  * watcher and the query path both mutate it.
  *
- * TWO deliberate non-move deltas, both type-level and both disclosed rather than
- * folded in silently: the credential chain is reconstructed here rather than
- * imported from `azure-sql-client.ts`, so the two modules do not form an import
- * cycle (`scripts/check-circular-deps.mjs`) — it is the same three-link chain
- * that module builds, so the Cosmos AAD token is unchanged; and the map's value
- * type is the structural `CancellableRequest` below instead of `sql.Request`,
- * for the reason given there.
+ * TWO deliberate non-move deltas, both disclosed rather than folded in silently:
+ * the credential is resolved through `workspaceScopedCredential()` rather than
+ * by rebuilding `azure-sql-client.ts`'s chain here — that keeps the two modules
+ * out of an import cycle (`scripts/check-circular-deps.mjs`) AND off the wrong
+ * side of the shrink-only credential-construction ratchet; and the map's value
+ * type is the structural `CancellableRequest` below instead of `sql.Request`.
+ * Both are explained where they are declared.
  */
 
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 
 /**
  * The only surface of an mssql `Request` this module touches.
@@ -44,10 +43,36 @@ export interface CancellableRequest {
   cancel(): void;
 }
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+/**
+ * The identity the Cosmos intent store authenticates with.
+ *
+ * `loomServerCredential` — the SHARED chain in `aca-managed-identity.ts`, whose
+ * own doc says "clients that maintain their own per-module credential can switch
+ * to this" — and NOT a copy of the chain `azure-sql-client.ts` builds. Copying it
+ * was the first attempt and `check-workspace-credential-adoption.mjs` rejected
+ * it: that ratchet is shrink-only at 130 direct `ChainedTokenCredential`
+ * constructions and a 131st fails, precisely so a file split does not multiply
+ * credential chains. Importing a chain that already exists constructs nothing,
+ * so the count stays at 130.
+ *
+ * Chosen over `workspaceScopedCredential()` (the factory the ratchet's error
+ * message suggests) on a MEASURED basis, not a preference: the factory module
+ * reaches ARM, so adopting it moved `ARM` and `Managed Identity` onto NINE
+ * unrelated rows of `docs/fiab/route-inventory.md` — real reach, but reach this
+ * module does not have and a label change this PR has no business making.
+ * `aca-managed-identity.ts` is already recorded in the derivation as reaching no
+ * backend of its own ("it mints a token; the service the token is spent on is
+ * attributed at the client that spends it"), so this import adds no label
+ * anywhere.
+ *
+ * The chain differs from `azure-sql-client.ts`'s in exactly one branch — with no
+ * `LOOM_UAMI_CLIENT_ID`/`AZURE_CLIENT_ID` that module uses a bare
+ * `DefaultAzureCredential` while this one still tries ACA then MI first. That
+ * branch is unreachable on the path that spends the token: it is only reached
+ * when `LOOM_COSMOS_ENDPOINT` is set, which is a deployed estate, where the UAMI
+ * id is set too.
+ */
+const credential = loomServerCredential;
 
 /**
  * Registry of live mssql `Request` objects, keyed by a caller-supplied request
