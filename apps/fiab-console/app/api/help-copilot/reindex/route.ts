@@ -21,10 +21,17 @@
  *      `copilot-corpus/` containing only `.gitkeep` and the walker enumerated
  *      zero files.
  *   2. LATENT timeout — a healthy full rebuild (~2.5k md → tens of thousands of
- *      AI Search docs) cannot finish inside Front Door's default 60s origin
- *      response timeout (front-door.bicep never overrides
- *      `originResponseTimeoutSeconds`), even though this route declares
- *      maxDuration = 300. The EDGE would 502 while the rebuild was fine.
+ *      AI Search docs) cannot finish inside Front Door's origin response
+ *      timeout, even though this route declares maxDuration = 300. At the time
+ *      of that 502 the template overrode nothing, so the AFD default (60s)
+ *      applied. #3472 has since PINNED it — front-door.bicep now declares
+ *      `param originResponseTimeoutSeconds int = 120` (bounded 16-240) and
+ *      passes it on the profile — which does not change this conclusion: 120,
+ *      and even the 240 ceiling, are both under this route's 300. The EDGE
+ *      would 502 while the rebuild was fine.
+ *      That pin also does not reach every boundary: it is the Front Door
+ *      module, which IL5 never deploys (frontDoorEnabled=false), and the
+ *      Application Gateway edge hardcodes `requestTimeout: 30` (#4431).
  *
  * A caller cannot tell those apart, so it either fails on healthy runs or
  * tolerates broken ones. Now:

@@ -34,9 +34,16 @@
 # cannot be the slow party (auth check, a stat-only corpus count, fire the job,
 # return 202 — apps/fiab-console/app/api/help-copilot/reindex/route.ts), and
 # `originResponseTimeoutSeconds` was set NOWHERE in platform/fiab/bicep until
-# this change pinned it at modules/admin-plane/front-door.bicep (default 120) —
-# and that module deploys on Commercial / GCC-High / tenant-DMLZ but NOT on IL5,
-# whose only edge is App Gateway with `requestTimeout: 30` hardcoded (#4431).
+# this change pinned it at modules/admin-plane/front-door.bicep (default 120).
+# That module reaches only the param files with `frontDoorEnabled = true`, and
+# those are NOT in the same state (cloud-parity.md): commercial is exercised,
+# gcc-high has exactly ONE executed deploy job and it FAILED, commercial-full is
+# latent (every known caller overrides deployAppsEnabled=false), and tenant-dmlz
+# is supported-in-code but NEVER exercised — no workflow references
+# tenant-dmlz.bicepparam at all. The pin does not touch the App Gateway edge,
+# whose `requestTimeout: 30` is hardcoded and enabled on FOUR param files
+# (commercial-full, gcc-high, il5, tenant-dmlz); IL5 is where AGW is the ONLY
+# edge, not the only place it is capped (#4431).
 # What is NOT measured, and is therefore not asserted anywhere in this script:
 # why the edge gave up at ~30s when the AFD default is 60s, and whether the POST
 # ever reached a replica. The fix does not need that answer — it converts the

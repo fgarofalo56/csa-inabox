@@ -42,10 +42,14 @@ param forceUpdateTag string = utcNow()
 
 // ── ORIGIN RESPONSE TIMEOUT: PINNED, NOT INHERITED (#3472) ──────────────────
 //
-// This template never set `originResponseTimeoutSeconds`, so the edge used
-// whatever the AFD default (60s) or an out-of-band portal change left it — and
-// three separate places in this repo cite that absence in prose while nothing
-// enforces it (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
+// Until this change, this template set `originResponseTimeoutSeconds` NOWHERE
+// in platform/fiab/bicep, so the edge used whatever the AFD default (60s) or an
+// out-of-band portal change left it — and three separate places in this repo
+// cited that absence in prose while nothing enforced it. THAT IS NOW HISTORY,
+// stated in the past tense because this file is what changed it: `:121`/`:287`
+// below declare and apply the value, and all three citations were updated in
+// the same change to describe the pin rather than its absence
+// (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
 // apps/fiab-console/lib/azure/reindex-job.ts, scripts/ci/reindex-loom-docs.sh).
 //
 // WHAT IS MEASURED, in this tree, today:
@@ -97,18 +101,46 @@ param forceUpdateTag string = utcNow()
 //   * unset (=> false, main.bicep:1007) — gcc.bicepparam and
 //             dlz-attach.bicepparam, which also leave `deployAppsEnabled`
 //             unset, so they stand up no apps to front.
-// Per cloud-parity.md those are not equivalent states and must not be listed as
-// though they were: of the four with it true, Commercial and GCC-High carry
-// deploy receipts; IL5 has none at all (`gh run list --workflow
-// deploy-fiab-il5.yml` returns ZERO runs — supported-in-code, never exercised).
+// Per cloud-parity.md those four are NOT equivalent states and must not be
+// listed as though they were. Re-measured 2026-09-09:
+//   * commercial (the live Commercial lane) — EXERCISED.
+//     deploy-fiab-commercial.yml deploys it and passes `deployAppsEnabled`.
+//   * gcc-high — EXERCISED ONCE, AND IT FAILED. Of its last 12 runs exactly one
+//     executed the `Deploy + validate CSA Loom in GCC-High` job: 33519232492
+//     (2026-09-01), 33 steps, conclusion `failure`. The other 11 sit at
+//     `status: waiting` (environment approval) with that job at 0 steps. A
+//     failing job that RAN is a receipt; a waiting one is not.
+//   * commercial-full — LATENT, not exercised. Every known invocation overrides
+//     `deployAppsEnabled=false` (bicep-whatif.yml:291, loom-drift-check.yml:147,
+//     and no-vaporware.md's from-scratch PHASE 1) — the very gate this module
+//     hangs on — so it compiles this value and has never deployed it. Recorded
+//     at loom-guardrails.yml:572-577.
+//   * tenant-dmlz — SUPPORTED-IN-CODE, NEVER EXERCISED. `git grep -ln
+//     tenant-dmlz.bicepparam -- .github/` returns NOTHING: no workflow
+//     references it at all, and loom-guardrails.yml:570-571 records it as
+//     having "no automated caller at all (operator/manual only)".
+// IL5 sits outside that list entirely (frontDoorEnabled=false) and has no deploy
+// receipt of its own either — `gh run list --workflow deploy-fiab-il5.yml`
+// returns ZERO runs.
 //
-// RESIDUAL GAP #2 — IL5's edge timeout is NOT moved by this change. IL5 fronts
-// the console with Application Gateway, and modules/admin-plane/app-gateway.bicep:122
-// hardcodes `requestTimeout: 30` with no param to override it — below 54 of the
-// 71 route declarations, never mind the 30 above 60. Tracked as #4431 and
-// deliberately NOT fixed here: that is a different boundary's edge and belongs
-// in its own lane. So this pin is Commercial + GCC-High + tenant-DMLZ only, and
-// must not be read as closing the edge-timeout gap for IL5.
+// RESIDUAL GAP #2 — the APPLICATION GATEWAY edge is not moved by this change,
+// and that is FOUR param files, not just IL5. In
+// modules/admin-plane/app-gateway.bicep, `:122` hardcodes `requestTimeout: 30`
+// with no param to override it (the only occurrence in the bicep tree) — below
+// 54 of the 71 route declarations, never mind the 30 above 60. Its gate at
+// admin-plane/main.bicep:8705 is the same shape as this module's, and
+// `appGatewayEnabled = true` in commercial-full:347, gcc-high:406, il5:418 AND
+// tenant-dmlz:308 (it is unset, hence false, in commercial, gcc and
+// dlz-attach). Both modules are handed the
+// SAME origin — `loom-console.${caeDefaultDomain}`, main.bicep:8710 and :8723 —
+// so wherever both flags and `deployAppsEnabled` are true the console has two
+// public edges and this pin moves only one of them. IL5 is the boundary where
+// the App Gateway is the ONLY edge, not the only one where it is capped at 30s.
+// Tracked as #4431 (filed IL5-scoped, widened after this measurement) and
+// deliberately NOT fixed here: a different module's edge belongs in its own
+// lane. So what this pin closes is the FRONT DOOR path's edge-timeout gap, on
+// the boundaries enumerated above and with the exercise caveats stated there —
+// it must not be read as closing the App Gateway path's gap on ANY boundary.
 @description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240. Front Door is not deployed on IL5 (frontDoorEnabled=false) — that boundary\'s edge is App Gateway, see #4431.')
 @minValue(16)
 // BOTH ENDS OF THE RANGE, NOT ONE (#4373 review §5). The description and the
