@@ -21,7 +21,7 @@
  *   a) In `notebook.ts` make `withRequiredLibraryBootstrap` `return content`
  *      unconditionally -> RED:
  *        "an installed rag-builder notebook's FIRST code cell is the %pip bootstrap"
- *        "the bootstrap names BOTH declared packages"
+ *        "the bootstrap names EVERY declared package"
  *        "the Synapse artifact carries the bootstrap too, not just Loom's copy"
  *   b) Delete the `firstSource.includes(PIP_BOOTSTRAP_MARKER)` early return ->
  *      RED: "re-provisioning does not stack a second bootstrap cell" — the arm
@@ -29,6 +29,13 @@
  *   c) Delete the `PIP_SAFE.test(s)` filter in `pipPackagesFor` -> RED:
  *      "a package name carrying a shell metacharacter is dropped, not escaped"
  *      — the string goes to a kernel magic, so this is not cosmetic.
+ *   d) In `databricks-notebook.ts` pass `input.content` to `importAndRunNotebook`
+ *      instead of the bootstrapped content -> RED:
+ *        "a databricks-notebook item gets the bootstrap too"
+ *      — the FAIL-GREEN arm: the undeclared-import sweep enumerates
+ *      `NOTEBOOK_ITEM_TYPES`, which includes `databricks-notebook`, so without
+ *      this an author follows the sweep's own remediation message, watches the
+ *      sweep go green, and still gets `ModuleNotFoundError` on Run-all.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -37,6 +44,22 @@ const h = {
   synapseConfigGate: vi.fn(() => null as any),
   databricksConfigGate: vi.fn(() => ({ missing: 'LOOM_DATABRICKS_HOSTNAME' } as any)),
 };
+
+/** What `databricks-notebook.ts` actually hands the Databricks importer. */
+const dbx = { lastContent: undefined as any };
+
+vi.mock('../_seed-databricks', async (importOriginal) => {
+  // Partial mock: `buildDatabricksSource` stays REAL so the assertion below is
+  // over the source Databricks would actually receive, not over a stand-in.
+  const actual = await importOriginal<typeof import('../_seed-databricks')>();
+  return {
+    ...actual,
+    importAndRunNotebook: vi.fn(async (_appId: string, _name: string, content: any) => {
+      dbx.lastContent = content;
+      return { triggered: true, settled: true, resultState: 'SUCCESS', runId: 7, notebookPath: '/Shared/x', steps: [] };
+    }),
+  };
+});
 
 vi.mock('@/lib/azure/synapse-artifacts-client', () => ({
   synapseConfigGate: () => h.synapseConfigGate(),
@@ -61,6 +84,8 @@ import {
   pipPackagesFor,
   PIP_BOOTSTRAP_MARKER,
 } from '../notebook';
+import { databricksNotebookProvisioner } from '../databricks-notebook';
+import { buildDatabricksSource } from '../_seed-databricks';
 import ragBuilderBundle from '@/lib/apps/content-bundles/app-rag-builder';
 
 /** The rag-builder bundle's notebook item, read from the SHIPPED bundle. */
@@ -75,6 +100,7 @@ const sourceOf = (cell: any): string =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  dbx.lastContent = undefined;
   h.synapseConfigGate.mockReturnValue(null);
   h.databricksConfigGate.mockReturnValue({ missing: 'LOOM_DATABRICKS_HOSTNAME' });
   h.upsertSynapseNotebook.mockImplementation(async () => ({ id: 'syn-1' }));
@@ -96,19 +122,27 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
     expect(out.cells[0].lang).toBe('pyspark');
   });
 
-  it('the bootstrap names BOTH declared packages', () => {
-    // The two distributions the cells import and the images do not ship.
-    expect(pipPackagesFor(ragNotebookContent())).toEqual(['azure-search-documents', 'openai']);
+  it('the bootstrap names EVERY declared package', () => {
+    // The distributions the cells import and the images do not ship.
+    // `langchain-text-splitters` joined the list when the #3530 systemic sweep
+    // (content-bundles/__tests__/bundle-notebook-libraries.test.ts) derived the
+    // declaration from the cells rather than hand-listing it.
+    expect(pipPackagesFor(ragNotebookContent()))
+      .toEqual(['azure-search-documents', 'openai', 'langchain-text-splitters']);
     const out: any = withRequiredLibraryBootstrap(ragNotebookContent());
-    expect(sourceOf(out.cells[0])).toMatch(/%pip install azure-search-documents openai/);
+    expect(sourceOf(out.cells[0]))
+      .toMatch(/%pip install azure-search-documents openai langchain-text-splitters/);
   });
 
   it('the declared packages match what the cells actually import', () => {
     // Anti-drift: a declaration nobody checks against the code is a comment.
+    // Note this arm is per-bundle and hand-written; the DERIVED sweep over all
+    // bundles lives in content-bundles/__tests__/bundle-notebook-libraries.test.ts.
     const cells: any[] = ragNotebookContent().cells;
     const allSource = cells.map(sourceOf).join('\n');
     expect(allSource).toMatch(/from azure\.search\.documents import/);
     expect(allSource).toMatch(/from openai import/);
+    expect(allSource).toMatch(/from langchain_text_splitters import/);
   });
 
   it('the Synapse artifact carries the bootstrap too, not just Loom\'s copy', async () => {
@@ -126,9 +160,10 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
     const artifact = (h.upsertSynapseNotebook.mock.calls.at(-1) as unknown as any[] | undefined)?.[1] as any;
     const first = artifact.properties.cells[0];
     expect(first.cell_type).toBe('code');
-    expect(first.source.join('')).toMatch(/%pip install azure-search-documents openai/);
+    expect(first.source.join('')).toMatch(/%pip install azure-search-documents openai langchain-text-splitters/);
     // The receipt names what it arranged, so the outcome is inspectable.
-    expect(r.secondaryIds?.sessionPackages).toBe('azure-search-documents openai');
+    expect(r.secondaryIds?.sessionPackages)
+      .toBe('azure-search-documents openai langchain-text-splitters');
   });
 
   it('re-provisioning does not stack a second bootstrap cell', () => {
@@ -156,5 +191,76 @@ describe('notebook install — declared libraries become a %pip bootstrap cell (
       .toEqual(['openai==1.2.3', 'pkg[all]', 'a-b_c.d']);
     // Duplicates collapse, so the magic line names each package once.
     expect(pipPackagesFor({ requiredLibraries: ['openai', 'openai'] })).toEqual(['openai']);
+  });
+
+  it('a databricks-notebook item gets the bootstrap too, and it survives into the Databricks source', async () => {
+    // THE FAIL-GREEN ARM. `NOTEBOOK_ITEM_TYPES` — the population the #3530
+    // undeclared-import sweep enumerates — is
+    // `['notebook','databricks-notebook','synapse-notebook']`, but until this
+    // change only the `notebook` provisioner applied the bootstrap. For a
+    // `databricks-notebook` item the sweep would fail, the author would follow
+    // its remediation message ("add '<x>' to that notebook's
+    // requiredLibraries"), the sweep would go GREEN, and Run-all would still
+    // throw `ModuleNotFoundError` — a guard that steers you into the defect.
+    //
+    // Latent rather than live today: `app-direct-lake-replacement` is the only
+    // bundle with `databricks-notebook` items and its cells carry no Python
+    // imports. Reachable the moment one gains one, which is exactly what the
+    // sweep exists to make happen.
+    const content = {
+      kind: 'notebook',
+      defaultLang: 'pyspark',
+      requiredLibraries: ['delta-sharing'],
+      cells: [{ id: 'c', type: 'code', lang: 'pyspark', source: 'import delta_sharing\n' }],
+    };
+    const r = await databricksNotebookProvisioner({
+      session: { claims: { oid: 'o' } },
+      target: { mode: 'shared' },
+      cosmosItemId: 'dbnb-1',
+      workspaceId: 'w',
+      displayName: 'Silver Transform',
+      appId: 'app-direct-lake-replacement',
+      content,
+    } as any);
+    expect(r.status).toBe('created');
+
+    // 1. The importer really received the bootstrapped content, not the raw one.
+    expect(dbx.lastContent).toBeTruthy();
+    expect(sourceOf(dbx.lastContent.cells[0])).toContain('%pip install delta-sharing');
+    expect(dbx.lastContent.cells).toHaveLength(content.cells.length + 1);
+
+    // 2. …and the REAL serializer keeps it a runnable command rather than
+    //    burying it in a `# MAGIC` block or dropping it. The bootstrap cell is
+    //    `lang:'pyspark'`, i.e. the notebook default, so it is emitted natively
+    //    — byte-identical to how the `notebook` itemType's Databricks arm has
+    //    shipped this cell since #3530. NOT verified against a live Databricks
+    //    workspace; this asserts the source, not the execution.
+    const source = buildDatabricksSource(dbx.lastContent);
+    expect(source.split('\n')).toContain('%pip install delta-sharing');
+    // It is the FIRST command, before the import that needs it.
+    expect(source.indexOf('%pip install')).toBeLessThan(source.indexOf('import delta_sharing'));
+
+    // 3. The receipt names what was arranged, so the outcome is inspectable.
+    expect(r.steps?.[0]).toContain("%pip install delta-sharing");
+  });
+
+  it('a databricks-notebook that declares nothing is handed its content untouched', async () => {
+    // The control: the bootstrap must be a no-op for every bundle shipping
+    // today, so this change cannot alter any current install.
+    const content = {
+      kind: 'notebook',
+      defaultLang: 'pyspark',
+      cells: [{ id: 'c', type: 'code', lang: 'pyspark', source: 'print(1)\n' }],
+    };
+    await databricksNotebookProvisioner({
+      session: { claims: { oid: 'o' } },
+      target: { mode: 'shared' },
+      cosmosItemId: 'dbnb-2',
+      workspaceId: 'w',
+      displayName: 'Gold Transform',
+      appId: 'app-direct-lake-replacement',
+      content,
+    } as any);
+    expect(dbx.lastContent).toBe(content);
   });
 });
