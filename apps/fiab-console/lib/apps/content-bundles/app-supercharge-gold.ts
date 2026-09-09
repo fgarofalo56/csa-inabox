@@ -140,7 +140,7 @@ const bundle: AppBundle = {
       itemType: 'notebook',
       displayName: "17 — Gold Ai Functions Compliance",
       description: "Gold Layer: AI Enrichment for Compliance Analysis (Azure OpenAI)",
-      content: { kind: 'notebook', defaultLang: "pyspark", cells: CELLS["CELLS_GOLD_17_GOLD_AI_FUNCTIONS_COMPLIANCE"] } as NotebookContent,
+      content: { kind: 'notebook', defaultLang: "pyspark", requiredLibraries: ["openai"], cells: CELLS["CELLS_GOLD_17_GOLD_AI_FUNCTIONS_COMPLIANCE"] } as NotebookContent,
     },
     {
       itemType: 'notebook',

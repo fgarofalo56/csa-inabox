@@ -628,6 +628,19 @@ const bundle: AppBundle = {
       content: {
         kind: 'notebook',
         defaultLang: 'pyspark',
+        // #3530: these cells do `from azure.search.documents import SearchClient`.
+        // `app-rag-builder` declares `azure-search-documents` for the identical
+        // import on the stated ground that the Synapse Spark / Databricks stock
+        // image does not ship it; leaving it undeclared here while declaring it
+        // there could not both be right, so this bundle takes the same position.
+        // Declared, the notebook provisioner prepends the session-scoped
+        // `%pip install` bootstrap. Not verified against a live pool image.
+        //
+        // The other non-stdlib imports in these cells (azure.cosmos.aio,
+        // azure.functions, azure.keyvault.secrets, redis.asyncio) are NOT
+        // declared: nothing in this repo establishes whether the image ships
+        // them, and they remain tracked in UNVERIFIED_AT_HEAD.
+        requiredLibraries: ['azure-search-documents'],
         cells: CFP_CELLS,
       },
     },

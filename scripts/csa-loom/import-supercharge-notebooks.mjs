@@ -378,6 +378,29 @@ function descFromCells(cells) {
 
 // ── TS emit ─────────────────────────────────────────────────────────────────
 
+/**
+ * #3530 — PyPI distributions a converted notebook needs `%pip install`ed before
+ * Run-all can reach its first cell, keyed `<varName>`.
+ *
+ * These bundles are GENERATED, so a declaration hand-added to the emitted `.ts`
+ * would be erased by the next run of this script. It lives here so it survives
+ * regeneration, and the console-side sweep
+ * (`lib/apps/content-bundles/__tests__/bundle-notebook-libraries.test.ts`)
+ * fails closed if it ever stops arriving: that test derives the finding set
+ * from the live registry, so a dropped entry reports as a red test, not as a
+ * customer's ModuleNotFoundError on the golden path.
+ *
+ * Each entry is a REVIEWED claim that the package is absent from the Synapse
+ * Spark / Databricks stock image. None of them is verified against a live pool.
+ */
+const REQUIRED_LIBRARIES = {
+  // `17_gold_ai_functions_compliance.py` does `from openai import AzureOpenAI`.
+  // `app-rag-builder` declares `openai` for the identical import on the stated
+  // ground that the image does not ship it; both bundles cannot be right at
+  // once, so this one takes the same position rather than staying silent.
+  CELLS_GOLD_17_GOLD_AI_FUNCTIONS_COMPLIANCE: ['openai'],
+};
+
 const tsLit = (s) => '`' + s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`';
 
 function emitBundle(appId, intro, layerDirRel, items) {
@@ -420,11 +443,13 @@ function emitBundle(appId, intro, layerDirRel, items) {
   lines.push(`  sourceDocs: ['examples/supercharge-fabric/notebooks/${layerDirRel}'],`);
   lines.push('  items: [');
   for (const it of items) {
+    const libs = REQUIRED_LIBRARIES[it.varName];
+    const libsLit = libs ? `requiredLibraries: ${JSON.stringify(libs)}, ` : '';
     lines.push('    {');
     lines.push(`      itemType: 'notebook',`);
     lines.push(`      displayName: ${JSON.stringify(it.displayName)},`);
     lines.push(`      description: ${JSON.stringify(it.description)},`);
-    lines.push(`      content: { kind: 'notebook', defaultLang: ${JSON.stringify(it.defaultLang)}, cells: CELLS[${JSON.stringify(it.varName)}] } as NotebookContent,`);
+    lines.push(`      content: { kind: 'notebook', defaultLang: ${JSON.stringify(it.defaultLang)}, ${libsLit}cells: CELLS[${JSON.stringify(it.varName)}] } as NotebookContent,`);
     lines.push('    },');
   }
   lines.push('  ],');
