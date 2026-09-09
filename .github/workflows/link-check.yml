@@ -299,13 +299,29 @@ jobs:
           # 6x (see the glob note in Select scope), and asserting the prediction
           # would be the very R7 defect this workflow exists to remove.
           MEASURED=""
+          EXCLUDED=""
           if [ -f lychee/out.md ]; then
             MEASURED=$(grep -oE 'Total[^0-9]*[0-9]+' lychee/out.md | grep -oE '[0-9]+' | head -1 || true)
+            EXCLUDED=$(grep -oE 'Excluded[^0-9]*[0-9]+' lychee/out.md | grep -oE '[0-9]+' | head -1 || true)
           fi
+          # lychee's "Total" INCLUDES links it never contacted — everything the
+          # --exclude / --exclude-path list matched, and on an --offline run
+          # every external URL. Reporting Total as "checked" credits the run
+          # with work it did not do. Measured: a file whose links are all on the
+          # exclude list gives Total 4 / Excluded 4 and used to print "4 link(s)
+          # checked, and found no dead links" when ZERO were checked; on the
+          # offline widen it is structural (18197 Total / 6291 Excluded).
+          # This is the same sentence already fixed once for docs/_includes.
+          CHECKED_N=""
           if [ -n "$MEASURED" ]; then
-            CHECKED="lychee reports ${MEASURED} link(s) checked"
-          else
+            CHECKED_N=$(( MEASURED - ${EXCLUDED:-0} ))
+          fi
+          if [ -z "$MEASURED" ]; then
             CHECKED="lychee emitted no summary total, so how much it checked is unknown"
+          elif [ "${EXCLUDED:-0}" -gt 0 ]; then
+            CHECKED="lychee actually checked ${CHECKED_N} link(s) — it found ${MEASURED}, of which ${EXCLUDED} were excluded and never contacted"
+          else
+            CHECKED="lychee reports ${MEASURED} link(s) checked"
           fi
 
           # An offline run contacted no external host, so it may not report on
@@ -378,7 +394,9 @@ jobs:
             "scope": "${SCOPE:-unknown}",
             "scope_reason": "${REASON}",
             "files_in_scope": "${COUNT:-0}",
-            "links_checked": "${MEASURED:-unknown}",
+            "links_checked": "${CHECKED_N:-unknown}",
+            "links_found": "${MEASURED:-unknown}",
+            "links_excluded": "${EXCLUDED:-unknown}",
             "offline": "${OFFLINE:+true}",
             "lychee_outcome": "${LYCHEE_OUTCOME:-none}",
             "lychee_exit_code": "${LYCHEE_EXIT:-none}",
@@ -399,8 +417,12 @@ jobs:
             echo "|---|---|"
             echo "| scope | \`${SCOPE:-unknown}\` — ${REASON} |"
             echo "| files in scope | ${COUNT:-0} (what lychee was pointed at) |"
-            echo "| links checked | ${MEASURED:-unknown} (lychee's own count) |"
-            echo "| network | ${OFFLINE:+offline — LOCAL links only, no external host contacted}${OFFLINE:-online} |"
+            echo "| links checked | ${CHECKED_N:-unknown} (lychee found ${MEASURED:-unknown}, excluded ${EXCLUDED:-unknown}) |"
+            if [ -n "${OFFLINE:-}" ]; then
+              echo "| network | offline — LOCAL links only, no external host contacted |"
+            else
+              echo "| network | online |"
+            fi
             echo "| lychee outcome | \`${LYCHEE_OUTCOME:-none}\` (exit \`${LYCHEE_EXIT:-none}\`) |"
             echo "| elapsed | ${ELAPSED}s of ${BUDGET_MIN:-?}m budget |"
           } >> "$GITHUB_STEP_SUMMARY"

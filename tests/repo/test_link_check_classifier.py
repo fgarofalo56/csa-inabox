@@ -52,6 +52,7 @@ What is asserted
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -93,10 +94,16 @@ def _step(step_id: str) -> dict[str, Any]:
     return matches[0]
 
 
-def _run_classifier(
+def _run_classifier_full(
     script: str, age_seconds: int = 3, lychee_out: str | None = None, **overrides: str
-) -> tuple[str, int, str]:
-    """Run a classifier script and return (status, returncode, job summary)."""
+) -> dict[str, Any]:
+    """Run a classifier script and return everything it produced.
+
+    Keys: status, rc, summary, status_json (parsed), status_txt. `status.json`
+    is the designated MACHINE surface — a preflight taught to tell a timeout
+    from a supersede reads it — so it needs assertions of its own, not just the
+    human-readable job summary.
+    """
     env = dict(os.environ)
     env.update(
         {
@@ -106,6 +113,7 @@ def _run_classifier(
             "STARTED_AT": str(int(time.time()) - age_seconds),
             "LYCHEE_OUTCOME": "success",
             "LYCHEE_EXIT": "0",
+            "OFFLINE": "",
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "o/r",
             "GITHUB_RUN_ID": "1",
@@ -148,7 +156,28 @@ def _run_classifier(
                 status = line.split("=", 1)[1]
         summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
 
-    return status, proc.returncode, summary
+        status_json: dict[str, Any] = {}
+        json_path = Path(td) / "lychee" / "status.json"
+        if json_path.exists():
+            status_json = json.loads(json_path.read_text(encoding="utf-8"))
+        txt_path = Path(td) / "lychee" / "status.txt"
+        status_txt = txt_path.read_text(encoding="utf-8").strip() if txt_path.exists() else ""
+
+    return {
+        "status": status,
+        "rc": proc.returncode,
+        "summary": summary,
+        "status_json": status_json,
+        "status_txt": status_txt,
+    }
+
+
+def _run_classifier(
+    script: str, age_seconds: int = 3, lychee_out: str | None = None, **overrides: str
+) -> tuple[str, int, str]:
+    """Run a classifier script and return (status, returncode, job summary)."""
+    r = _run_classifier_full(script, age_seconds=age_seconds, lychee_out=lychee_out, **overrides)
+    return str(r["status"]), int(r["rc"]), str(r["summary"])
 
 
 # The job's real budget, so the timeout case is pinned to what actually ships.
@@ -707,6 +736,47 @@ def test_a_widen_that_goes_online_is_caught(tmp_path: Path) -> None:
     )
 
 
+def test_scope_widens_when_the_diff_itself_fails(tmp_path: Path) -> None:
+    """The failed-diff exit — enumerated in the step's comment, never driven.
+
+    An unrelated-history base has no merge base, so `git diff base...HEAD`
+    exits 128. The step must widen on that. Neutering the DIFF_RC/GONE_RC test
+    flips this case to `changed count=0` — "Nothing was checked, and nothing
+    needed to be" — over a PR whose diff could not be computed at all.
+    """
+    repo = tmp_path / "r"
+    _base_repo(repo)
+    _write(repo, "docs/top.md", "changed\n")
+    _commit(repo, "touch")
+
+    # An orphan commit shares no ancestry with HEAD, so `base...HEAD` has no
+    # merge base and git fails rather than producing an empty diff.
+    _git(repo, "checkout", "-q", "--orphan", "unrelated")
+    _git(repo, "rm", "-rq", "--cached", ".")
+    _write(repo, "unrelated.txt", "x\n")
+    orphan = _commit(repo, "orphan root")
+    _git(repo, "checkout", "-q", "main")
+
+    out = _run_scope(repo, base_sha=orphan)
+    assert out["scope"] == "full", (
+        f"a diff that could not be computed must widen, got {out!r}"
+    )
+    assert out["reason"], "widened with no reason"
+
+    # SILENCE control: without the rc test this narrows and reports success.
+    shipped = _step("scope")["run"]
+    mutated = shipped.replace(
+        'if [ "$DIFF_RC" -ne 0 ] || [ "$GONE_RC" -ne 0 ]; then',
+        'if [ "$DIFF_RC" -eq 999 ]; then',
+    )
+    assert mutated != shipped, "the rc-test anchor was not found"
+    broken = _run_scope(repo, base_sha=orphan, script=mutated)
+    assert broken["scope"] != "full", (
+        "the mutated step still widened, so this case proves nothing. "
+        f"reason={broken.get('reason')!r}"
+    )
+
+
 def test_budget_backstop_has_a_floor() -> None:
     """The budget is read from the workflow, so nothing else guards its VALUE.
 
@@ -753,9 +823,15 @@ def test_detail_reports_lychees_own_total_not_a_predicted_count() -> None:
     )
     assert (status, rc) == ("OK", 0)
     assert "3539" in job_summary, "the measured total must reach the operator"
-    assert "checked 2520" not in job_summary, (
-        "the predicted file count must not be asserted as what was checked"
+    # The predicted file count must never be presented as a link count. The
+    # first version of this assertion looked for "checked 2520", which the
+    # classifier never emits in that word order — so it passed no matter what
+    # the code did. Swapping ${MEASURED} for ${COUNT} left the suite green.
+    # Assert on the SHAPE the classifier actually produces.
+    assert "2520 link(s)" not in job_summary, (
+        "the predicted file count was reported as a link count"
     )
+    assert "reports 3539 link(s) checked" in job_summary or "3539" in job_summary
 
     # And when lychee emitted no summary, the marker says so rather than
     # substituting the prediction.
@@ -764,4 +840,123 @@ def test_detail_reports_lychees_own_total_not_a_predicted_count() -> None:
     )
     assert status2 == "OK"
     assert "unknown" in summary2.lower()
-    assert "checked 2520" not in summary2
+    assert "2520 link(s)" not in summary2
+
+
+def test_excluded_links_are_not_counted_as_checked() -> None:
+    """R7: lychee's Total INCLUDES links it never contacted.
+
+    Everything the --exclude / --exclude-path list matched is counted in
+    `Total`, and on an --offline run so is every external URL. Reporting Total
+    as "checked" credits the run with work it did not do.
+
+    Measured before the fix: a file whose links are all excluded gives
+    ``Total 4 / Excluded 4`` and the classifier printed
+    *"lychee reports 4 link(s) checked, and found no dead links"* — over a run
+    that checked zero. On the offline widen it is structural, not a corner
+    case: 18197 Total / 6291 Excluded reported as 18197 checked.
+    """
+    script = _step("classify")["run"]
+    all_excluded = (
+        "| Status | Count |\n|---|---|\n"
+        "| Total | 4 |\n| Successful | 0 |\n| Excluded | 4 |\n"
+    )
+    r = _run_classifier_full(
+        script, lychee_out=all_excluded, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert r["status"] == "OK"
+    assert "4 link(s) checked" not in r["summary"], (
+        "excluded links were reported as checked — the run contacted nothing"
+    )
+    assert "0 link(s)" in r["summary"], f"expected an honest zero, got:\n{r['summary']}"
+    assert r["status_json"]["links_checked"] == "0"
+    assert r["status_json"]["links_excluded"] == "4"
+    assert r["status_json"]["links_found"] == "4"
+
+    # The partial case: some excluded, some genuinely checked.
+    partial = (
+        "| Status | Count |\n|---|---|\n"
+        "| Total | 18197 |\n| Successful | 11900 |\n| Excluded | 6291 |\n"
+    )
+    r2 = _run_classifier_full(
+        script, lychee_out=partial, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert r2["status_json"]["links_checked"] == "11906"
+    assert "11906" in r2["summary"]
+
+    # No Excluded row at all -> Total is the honest count, unchanged behaviour.
+    plain = "| Status | Count |\n|---|---|\n| Total | 12 |\n| Successful | 12 |\n"
+    r3 = _run_classifier_full(
+        script, lychee_out=plain, LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert r3["status_json"]["links_checked"] == "12"
+
+
+def test_status_json_is_the_machine_surface_and_is_asserted() -> None:
+    """status.json is what a preflight would read; it had zero coverage.
+
+    Hardcoding either status file survived a green suite before this.
+    """
+    script = _step("classify")["run"]
+    r = _run_classifier_full(
+        script, age_seconds=_BUDGET_SECONDS - 1, LYCHEE_OUTCOME="cancelled"
+    )
+    assert r["status"] == "TIMEOUT"
+    assert r["status_txt"] == "TIMEOUT", "status.txt must carry the same verdict"
+    j = r["status_json"]
+    assert j["status"] == "TIMEOUT", "status.json must carry the same verdict"
+    assert j["budget_minutes"] == str(_BUDGET_SECONDS // 60)
+    assert int(j["elapsed_seconds"]) >= _BUDGET_SECONDS - 60
+    assert j["run"].startswith("https://github.com/")
+
+    # A supersede must be distinguishable IN THE JSON, not only in the prose —
+    # that is the whole point of the machine surface.
+    r2 = _run_classifier_full(script, age_seconds=5, LYCHEE_OUTCOME="cancelled")
+    assert r2["status_json"]["status"] == "CANCELLED"
+    assert r2["status_json"]["status"] != j["status"]
+
+
+def _detail_of(summary: str) -> str:
+    """The DETAIL sentence — the paragraph under the `## Link Check — X` header.
+
+    Asserting against the whole job summary is not enough: the table below it
+    repeats some of the same words, so a check for a phrase can pass on the
+    table row while the sentence that actually makes a claim goes unqualified.
+    That vacuity was measured, not hypothesised.
+    """
+    lines = summary.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("## Link Check"):
+            rest = [x for x in lines[i + 1 :] if x.strip()]
+            return rest[0] if rest else ""
+    return ""
+
+
+def test_offline_runs_say_they_did_not_contact_anything() -> None:
+    """An offline run must not read as a verdict on external URLs.
+
+    The whole offline-honesty branch could be deleted with a green suite,
+    because no test ever set OFFLINE.
+    """
+    script = _step("classify")["run"]
+    plain = "| Status | Count |\n|---|---|\n| Total | 7 |\n| Successful | 7 |\n"
+
+    online = _run_classifier_full(script, lychee_out=plain, LYCHEE_OUTCOME="success")
+    offline = _run_classifier_full(
+        script, lychee_out=plain, LYCHEE_OUTCOME="success", OFFLINE="--offline"
+    )
+
+    assert online["status"] == offline["status"] == "OK"
+
+    # The DETAIL sentence is the one that says "found no dead links". THAT is
+    # what has to be qualified — not merely somewhere in the job summary.
+    offline_detail = _detail_of(str(offline["summary"]))
+    online_detail = _detail_of(str(online["summary"]))
+    assert "found no dead links" in offline_detail, f"unexpected detail: {offline_detail!r}"
+    assert "LOCAL links only" in offline_detail, (
+        "an offline OK must be qualified IN THE DETAIL or it reads as a clean "
+        f"bill of health for external URLs it never contacted: {offline_detail!r}"
+    )
+    assert "LOCAL links only" not in online_detail
+    assert offline["status_json"]["offline"] == "true"
+    assert offline["status_json"]["offline"] != online["status_json"]["offline"]
