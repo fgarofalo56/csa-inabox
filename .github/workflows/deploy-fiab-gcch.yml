@@ -195,12 +195,17 @@ jobs:
   #     file (EACCES), unparseable JSON, a boundary that is not named, and an
   #     expired `reviewBy` ALL resolve to `declared_paused=false` with a
   #     warning — the pre-register behaviour, in which the image phase runs
-  #     (scripts/ci/estate-pause-declared.mjs:48-55, codified by
+  #     (scripts/ci/estate-pause-declared.mjs:58-69, "NEVER THROWS, AND ALWAYS
+  #     WRITES A VALUE"; codified by
   #     scripts/ci/__tests__/gcch-standdown-completeness.test.mjs). Suppression
   #     needs POSITIVE evidence: a JSON parse error must not be able to stand a
   #     P0 sovereign deploy lane down silently.
-  # `deploy-validate` runs on `always()` and does not need this job, so the
-  # deploy path is unaffected either way.
+  # `deploy-validate` runs on `always()`, so a FAILURE of this job cannot stop
+  # the deploy — but it DOES need this job, and has since round 8: the Teardown
+  # refusal below reads `needs.pause-declaration.outputs.declared` as the half
+  # of its verdict that survives `topology=dlz-attach`. Conditioning or deleting
+  # this job therefore empties that half and disarms the refusal; it does not
+  # merely change what the image phase does.
   pause-declaration:
     name: Is the GCC-High estate DECLARED paused?
     runs-on: ubuntu-latest
@@ -833,13 +838,20 @@ jobs:
             echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
             echo "its cluster stopped."
             echo ""
-            echo "SKIPPED IN THIS JOB: the what-if, the deploy-verification evidence receipt"
-            echo "and its artifact upload, BOTH image preflights — the adoption preflight"
+            echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
+            echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
+            echo "artifact upload, BOTH image preflights — the adoption preflight"
             echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
-            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin, the"
-            echo "apply, the Front Door private-endpoint approval and the DLZ template"
-            echo "publish. SKIPPED ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase"
-            echo "and the chained post-deploy bootstrap."
+            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin,"
+            echo "the apply, the ACR compliance-tag patch, the Front Door private-endpoint"
+            echo "approval, the DLZ template publish, and the Gov smoke test."
+            echo "SKIPPED ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase and the"
+            echo "chained post-deploy bootstrap. That list is DERIVED, not written: every"
+            echo "step this job dispositions as guarded or transitively guarded carries the"
+            echo "phrase it must be named by, and"
+            echo "\`scripts/ci/__tests__/gcch-standdown-completeness.test.mjs\` fails if one"
+            echo "of them is missing here — an enumeration one short reads exactly like a"
+            echo "complete one."
             echo ""
             echo "THE SOVEREIGN ACR FIREWALL WAS NOT OPENED BY THIS RUN. Four things on this"
             echo "lane take the owned ACR firewall lease (\`publicNetworkAccess=Enabled\`):"

@@ -540,6 +540,168 @@ export function refusalBlock(body) {
 }
 
 /**
+ * The value stood in for a name whose runtime content this file does not model:
+ * non-empty, and equal to no literal anyone would write in a verdict test.
+ */
+const UNMODELLED = 'unmodelled';
+
+/**
+ * Split a shell condition into words, dropping quote characters. Quoting is
+ * irrelevant to the comparison `[ "$X" = "true" ]` performs, and keeping it
+ * would only mean unquoting again at every use.
+ *
+ * @param {string} expr
+ * @returns {string[]}
+ */
+function shellWords(expr) {
+  const out = [];
+  let cur = '';
+  let quoted = false;
+  let q = null;
+  for (const ch of String(expr)) {
+    if (q) {
+      if (ch === q) q = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      q = ch;
+      quoted = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur !== '' || quoted) out.push(cur);
+      cur = '';
+      quoted = false;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur !== '' || quoted) out.push(cur);
+  return out;
+}
+
+/**
+ * Substitute `$NAME`, `${NAME}` and `${NAME:-default}` from `values`, or return
+ * null when the word uses a parameter expansion this evaluator does not model.
+ * Null is FAIL-CLOSED: the caller reports "not evaluable", never "fine".
+ *
+ * @param {string} word
+ * @param {Map<string,string>} values
+ * @returns {string|null}
+ */
+function expandWord(word, values) {
+  const out = String(word).replace(
+    /\$\{([A-Za-z_]\w*)(?::-([^}]*))?\}|\$([A-Za-z_]\w*)/g,
+    (_m, braced, dflt, bare) => {
+      const name = braced || bare;
+      const v = values.has(name) ? values.get(name) : UNMODELLED;
+      return dflt !== undefined && v === '' ? dflt : v;
+    },
+  );
+  return out.includes('$') ? null : out;
+}
+
+/**
+ * Evaluate one `[ … ]` test's inner words. Null means "shape not modelled".
+ *
+ * @param {string[]} words already expanded
+ * @returns {boolean|null}
+ */
+function evalTest(words) {
+  if (words.length === 1) return words[0] !== '';
+  if (words.length === 2 && words[0] === '-n') return words[1] !== '';
+  if (words.length === 2 && words[0] === '-z') return words[1] === '';
+  if (words.length === 3 && (words[1] === '=' || words[1] === '==')) return words[0] === words[2];
+  if (words.length === 3 && words[1] === '!=') return words[0] !== words[2];
+  return null;
+}
+
+/**
+ * Does the refusal's condition evaluate TRUE when every VERDICT it reads is the
+ * EMPTY STRING?
+ *
+ * ROUND 9, on a review finding. Everything rounds 4-8 assert about this
+ * conditional is about its BINDINGS and its POSITION — that each name is an
+ * `env:` key, that at least one producer cannot decline to produce, that
+ * nothing reassigns it, that the branch precedes the handoff. Not one of them
+ * reads the condition's POLARITY, so two edits of the real workflow left
+ * `judge()` returning `[]`:
+ *
+ *   `[ "${ESTATE_DECLARED:-}" != "false" ]` → `= "true"`   (−2 B)
+ *   `||` between the two conditions        → `&&`          (+0 B)
+ *
+ * Both restore the round-8 defect: on `topology=dlz-attach` the ADX preflight
+ * returns before writing `estate_paused`, so `ESTATE_PAUSED` is empty, and on
+ * either mutant an empty pair of verdicts stops being a refusal. The suite went
+ * red on both only because ONE fixture regex at the R8 mutation test pins the
+ * literal text of the second conjunct — coincidence, not design, and exactly
+ * the fixture-spelling brittleness round 8 recorded.
+ *
+ * The property asserted here is the OUTCOME the whole refusal exists for: an
+ * UNKNOWN verdict must refuse. Empty is what every one of these verdicts
+ * collapses to when its producer declines — a step that returns early, a job
+ * that is skipped, an output that is never written — so "all verdicts empty" is
+ * the state the refusal has to be fail-CLOSED against. Names that are not
+ * verdicts keep a non-empty UNMODELLED stand-in rather than being forced empty,
+ * so a legitimate second conjunct on a real env key (`[ -n "${RG_NAME:-}" ]`)
+ * stays green; anything this evaluator cannot model is reported as
+ * not-evaluable rather than assumed correct.
+ *
+ * @param {string} condition the `if …; then` line, as written
+ * @param {Map<string,string>} values name → value to evaluate under
+ * @returns {{fires:boolean}|{unevaluable:string}}
+ */
+export function refusalFiresWhenVerdictsUnknown(condition, values) {
+  const expr = String(condition)
+    .trim()
+    .replace(/^if\s+/, '')
+    .replace(/;\s*then\s*$/, '')
+    .trim();
+  const words = shellWords(expr);
+  if (words.length === 0) return { unevaluable: 'the condition is empty' };
+  let result = null;
+  let op = null;
+  let i = 0;
+  while (i < words.length) {
+    let negate = false;
+    while (words[i] === '!') {
+      negate = !negate;
+      i += 1;
+    }
+    const close = words[i] === '[' ? ']' : words[i] === '[[' ? ']]' : null;
+    if (!close) return { unevaluable: `expected a \`[\` test, found \`${words[i]}\`` };
+    i += 1;
+    const inner = [];
+    while (i < words.length && words[i] !== close) {
+      inner.push(words[i]);
+      i += 1;
+    }
+    if (i >= words.length) return { unevaluable: `unterminated \`${close === ']' ? '[' : '[['}\` test` };
+    i += 1;
+    const expanded = inner.map((w) => expandWord(w, values));
+    if (expanded.some((w) => w === null)) {
+      return { unevaluable: `an unmodelled parameter expansion in \`${inner.join(' ')}\`` };
+    }
+    const v = evalTest(expanded);
+    if (v === null) return { unevaluable: `an unmodelled test shape \`${inner.join(' ')}\`` };
+    const value = negate ? !v : v;
+    // `&&` and `||` are equal precedence and left-associative in sh, which is
+    // exactly what evaluating in sequence does.
+    result = op === null ? value : op === '||' ? result || value : result && value;
+    if (i < words.length) {
+      if (words[i] !== '||' && words[i] !== '&&') {
+        return { unevaluable: `expected \`||\` or \`&&\`, found \`${words[i]}\`` };
+      }
+      op = words[i];
+      i += 1;
+      if (i >= words.length) return { unevaluable: `a trailing \`${op}\` with nothing after it` };
+    }
+  }
+  return { fires: result === true };
+}
+
+/**
  * The first line index of `lines` at or after `from`, outside `[skipFrom,
  * skipTo]`, that hands control to something destructive — or -1.
  *
@@ -577,7 +739,14 @@ export function refusalBlock(body) {
 export function destructiveHandoffAt(lines, from, skipFrom, skipTo) {
   for (let i = Math.max(0, from); i < lines.length; i += 1) {
     if (i >= skipFrom && i <= skipTo) continue;
-    const l = lines[i];
+    // ROUND 9. The LOGICAL line starting here, not the physical row: a trailing
+    // `\` continues the command onto the next row, and every pattern below
+    // stops at the row's end. The index reported is still `i` — the row the
+    // command STARTS on, which is where the refusal has to sit above.
+    let l = lines[i];
+    for (let j = i; j + 1 < lines.length && /\\[ \t]*$/.test(lines[j]); j += 1) {
+      l = `${l.replace(/\\[ \t]*$/, '')} ${String(lines[j + 1]).trim()}`;
+    }
     // `bash foo.sh`, `sh ./foo.sh`, `. foo.sh`, and `bash -c "… foo.sh …"`.
     if (/(?:^|[\s;&|(])(?:bash|sh|source|\.)\s+(?:-\S+\s+)*['"]?[^\s;&|'"]*\.sh\b/.test(l)) return i;
     if (/(?:^|[\s;&|(])(?:bash|sh)\s+(?:-\S+\s+)*['"][^'"]*\.sh\b/.test(l)) return i;
@@ -629,8 +798,37 @@ const MUTATING_AZ =
  * .github/workflows returns 16 occurrences across 6 files.
  *
  * `az rest --method GET` stays exempt, which is correct — it is a read.
+ *
+ * ROUND 9, on a review finding, MEASURED. The middle of this pattern is a
+ * negated-newline class, so it required the verb to sit on the SAME PHYSICAL
+ * LINE as `az rest` — and the reviewer walked past it with the identical call
+ * written over a backslash continuation:
+ *
+ *   az rest \
+ *     --method DELETE \
+ *     --url "https://management.usgovcloudapi.net/…/rg-csa-loom-admin-…"
+ *
+ * appended to the EXEMPT `Note dry-run completion` step. One line: RC=1, 29
+ * pass / 21 fail. The same call continued: +196 B, RC=0, 50 pass / 0 fail. The
+ * continued form is this repo's own idiom — gov-purview-verify.yml:236 and
+ * full-app-deploy-commercial.yml:298 both write `az rest --method put` with
+ * continuations — it just happens to keep the verb on line 1 today. So
+ * `estateMutatingAz` now joins continuations into LOGICAL lines before it
+ * scans, and the pattern is anchored to the command rather than to a row.
  */
 const MUTATING_AZ_REST = /\baz\s+rest\b[^\n]*?--method[=\s]+['"]?(PUT|POST|PATCH|DELETE)\b/i;
+
+/**
+ * Join backslash-continued physical lines into the LOGICAL lines the shell
+ * actually executes. `\` + newline + leading indentation collapses to one
+ * space, so a command split across rows reads as the single command it is.
+ *
+ * @param {string} src
+ * @returns {string}
+ */
+export function logicalLines(src) {
+  return String(src || '').replace(/[ \t]*\\[ \t]*\r?\n[ \t]*/g, ' ');
+}
 
 /**
  * `az` command groups that configure the CLI ON THE RUNNER and can reach no
@@ -651,7 +849,9 @@ const RUNNER_LOCAL_AZ = /^az\s+(?:cloud|extension|config|version)\b/;
  * @returns {string|null}
  */
 export function estateMutatingAz(body) {
-  const src = String(body || '');
+  // LOGICAL lines, not physical ones — both patterns below stop at a newline,
+  // and a trailing `\` is how this repo writes a long `az` call.
+  const src = logicalLines(body);
   const rest = MUTATING_AZ_REST.exec(src);
   const m = MUTATING_AZ.exec(src);
   const runnerLocal = m ? RUNNER_LOCAL_AZ.test(m[0]) : true;
@@ -1163,6 +1363,15 @@ export function judgeGuardProducer(jobs, clause = JOB_GUARD, script = PRODUCER_S
  *                      an exempt step rewritten to `az group delete` stayed
  *                      green — an exemption with no reason and no teeth is how
  *                      this table would rot into an allowlist.
+ *
+ * `summary` (ROUND 9, on a review nit) is the phrase the stand-down notice must
+ * name this step by. Required on every 'guard' and 'via-provision' entry, and
+ * walked as a POPULATION — so the notice's "SKIPPED IN THIS JOB" enumeration
+ * cannot go one short again the way it did when
+ * `Resolve the program budget's IMMUTABLE start date (#4253)` arrived from
+ * `main`: the step was dispositioned, carried the guard, skipped on every
+ * stood-down run, and was simply not mentioned. An enumeration one short reads
+ * exactly like a complete one.
  */
 const DISPOSITIONS = new Map([
   // Arrived from `main` in #4409 (the program budget's immutable startDate) and
@@ -1172,23 +1381,42 @@ const DISPOSITIONS = new Map([
   // it. It calls `az consumption budget list` and REFUSES (exit 1) when that
   // read does not complete, so against a declared-paused estate it would turn a
   // deliberate stand-down into a red job. It carries GUARD already.
-  ["Resolve the program budget's IMMUTABLE start date (#4253)", { mode: 'guard' }],
-  ['Bicep what-if', { mode: 'guard' }],
-  ['Deploy-verification evidence receipt (§7)', { mode: 'guard' }],
-  ['Upload GCC-High verification receipt', { mode: 'guard' }],
+  ["Resolve the program budget's IMMUTABLE start date (#4253)", { mode: 'guard', summary: 'program budget' }],
+  ['Bicep what-if', { mode: 'guard', summary: 'the what-if' }],
+  ['Deploy-verification evidence receipt (§7)', { mode: 'guard', summary: 'evidence receipt' }],
+  ['Upload GCC-High verification receipt', { mode: 'guard', summary: 'artifact upload' }],
   // Round 5: this one MOVED here from six steps above the declaration, where it
   // had no `if:` at all and opened the sovereign ACR firewall on every
   // declared-paused run. See the header, and leaseTakingSteps.
-  ['Image preflight — never adopt a live app onto a missing tag', { mode: 'guard' }],
-  ['Image preflight — Gov ACR must already hold every referenced tag', { mode: 'guard' }],
-  ['Image-tag revert gate — never flatten a pinned app to the default', { mode: 'guard' }],
-  ['Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)', { mode: 'guard' }],
-  ['Provision (with full Gov dispatch)', { mode: 'guard' }],
+  [
+    'Image preflight — never adopt a live app onto a missing tag',
+    { mode: 'guard', summary: 'preflight-image-tags.sh' },
+  ],
+  [
+    'Image preflight — Gov ACR must already hold every referenced tag',
+    { mode: 'guard', summary: 'assert-acr-image-tags.sh' },
+  ],
+  [
+    'Image-tag revert gate — never flatten a pinned app to the default',
+    { mode: 'guard', summary: 'image-tag revert gate' },
+  ],
+  [
+    'Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)',
+    { mode: 'guard', summary: 'the re-pin' },
+  ],
+  ['Provision (with full Gov dispatch)', { mode: 'guard', summary: 'the apply' }],
   [
     'Apply ACR compliance tags (merge-patch, out-of-band — #3714)',
-    { mode: 'via-provision', needle: "steps.provision.conclusion == 'success'" },
+    {
+      mode: 'via-provision',
+      needle: "steps.provision.conclusion == 'success'",
+      summary: 'ACR compliance-tag patch',
+    },
   ],
-  ['Approve the Front Door -> ACA private-endpoint connection', { mode: 'guard' }],
+  [
+    'Approve the Front Door -> ACA private-endpoint connection',
+    { mode: 'guard', summary: 'Front Door private-endpoint' },
+  ],
   [
     'Export bootstrap coordinates (for the chained Gov bootstrap)',
     {
@@ -1196,10 +1424,10 @@ const DISPOSITIONS = new Map([
       why: '`az account show` reads the SUBSCRIPTION, not the estate — no Loom resource is read or written. Its only consumer, the post-deploy-bootstrap job, carries its own `needs.deploy-validate.outputs.estate_paused != \'true\'`.',
     },
   ],
-  ['Publish DLZ template + wire deploy env (Gov)', { mode: 'guard' }],
+  ['Publish DLZ template + wire deploy env (Gov)', { mode: 'guard', summary: 'DLZ template publish' }],
   [
     'Smoke test (Gov-specific)',
-    { mode: 'via-provision', needle: "steps.provision.outputs.console_url != ''" },
+    { mode: 'via-provision', needle: "steps.provision.outputs.console_url != ''", summary: 'Gov smoke test' },
   ],
   ['Teardown', { mode: 'refuse' }],
   [
@@ -1308,6 +1536,49 @@ function judgePreVerdict(step) {
 }
 
 /**
+ * Every `needs.<job>.outputs.<key>` an `env:` map binds, with the job it names.
+ *
+ * @param {Map<string,string>} env
+ * @returns {{key:string, job:string, output:string, clause:string}[]}
+ */
+export function jobOutputBindings(env) {
+  const candidates = [];
+  for (const [key, value] of env) {
+    const m = /needs\.([\w-]+)\.outputs\.([\w-]+)/.exec(String(value));
+    if (m) candidates.push({ key, job: m[1], output: m[2], clause: `needs.${m[1]}.outputs.${m[2]}` });
+  }
+  return candidates;
+}
+
+/**
+ * The subset of `jobOutputBindings` whose producer job carries no `if:` — the
+ * bindings that cannot be conditioned out, and therefore the SECOND kind of
+ * verdict this refusal branches on.
+ *
+ * ROUND 9, on a review finding. Extracted from judgeUnconditionalVerdict so the
+ * E3 reassignment arm can share the SAME population. Before this, E3 built its
+ * assign/unset regexes from `verdictRefs()` alone — i.e. only names bound to
+ * `steps.<id>.outputs.<verdict>` — so `ESTATE_DECLARED`, bound to
+ * `needs.pause-declaration.outputs.declared`, was outside every arm's frame.
+ * MEASURED: inserting `ESTATE_DECLARED="false"` immediately below
+ * `set -euo pipefail` in the real Teardown step (+35 B, one line) left this
+ * suite at 50 pass / 0 fail, RC=0, with the round-8 blocking defect restored —
+ * on `topology=dlz-attach` the ADX preflight returns before writing
+ * `estate_paused`, so BOTH conjuncts are false and fiab-teardown.sh runs
+ * against a DECLARED-PAUSED sovereign estate.
+ *
+ * @param {{name:string, if:string}[]} jobs
+ * @param {Map<string,string>} env
+ * @returns {{key:string, job:string, output:string, clause:string}[]}
+ */
+export function unconditionalVerdictBindings(jobs, env) {
+  return jobOutputBindings(env).filter((c) => {
+    const producer = jobs.find((j) => j.name === c.job);
+    return producer && String(producer.if || '').trim().length === 0;
+  });
+}
+
+/**
  * A refusal on a DESTRUCTIVE step has to branch on a verdict that is POPULATED
  * on every path that step can run on.
  *
@@ -1347,15 +1618,8 @@ function judgePreVerdict(step) {
  */
 export function judgeUnconditionalVerdict(step, jobs, env) {
   const problems = [];
-  const candidates = [];
-  for (const [key, value] of env) {
-    const m = /needs\.([\w-]+)\.outputs\.([\w-]+)/.exec(String(value));
-    if (m) candidates.push({ key, job: m[1], output: m[2], clause: `needs.${m[1]}.outputs.${m[2]}` });
-  }
-  const unconditional = candidates.filter((c) => {
-    const producer = jobs.find((j) => j.name === c.job);
-    return producer && String(producer.if || '').trim().length === 0;
-  });
+  const candidates = jobOutputBindings(env);
+  const unconditional = unconditionalVerdictBindings(jobs, env);
   if (unconditional.length === 0) {
     problems.push(
       `step '${step.name}' REFUSES on a destructive action, but its env: binds no verdict to a ` +
@@ -1495,6 +1759,7 @@ export function judge(steps, jobs = parseJobs(workflowText())) {
         // produce. See judgeUnconditionalVerdict — every check below this point
         // held while the value was empty at runtime on topology=dlz-attach.
         problems.push(...judgeUnconditionalVerdict(step, jobs, env));
+        const unconditionalKeys = new Set(unconditionalVerdictBindings(jobs, env).map((c) => c.key));
         const lines = String(step.body).split('\n');
         const condition = refusal.text.split('\n')[0];
         const read = [...new Set([...condition.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
@@ -1507,6 +1772,12 @@ export function judge(steps, jobs = parseJobs(workflowText())) {
               `is torn down. Its env: is {${[...env.keys()].join(', ') || 'empty'}}.`,
           );
         } else {
+          // The full set of verdicts the refusal branches on: the
+          // `steps.<id>.outputs.<verdict>` half AND the
+          // `needs.<job>.outputs.<key>`-of-an-unconditional-producer half. Used
+          // by the polarity arm and by E3 below, both of which read one half
+          // only until round 9.
+          const verdicts = [...new Set([...bound, ...unconditionalKeys].filter((v) => read.includes(v)))];
           // E1. Every OTHER name the condition reads must come from the same
           // env: map. A name bound nowhere is the empty string, and one false
           // conjunct disarms the whole refusal.
@@ -1518,12 +1789,50 @@ export function judge(steps, jobs = parseJobs(workflowText())) {
                 'every run and the refusal never fires — while the verdict binding beside it still reads as correct. ' +
                 `Its env: is {${[...env.keys()].join(', ') || 'empty'}}.`,
             );
+          } else {
+            // POLARITY (round 9, on a review finding). Every arm above reads a
+            // BINDING or a POSITION; none reads what the condition MEANS. Hold
+            // every verdict at the empty string — the state each of them
+            // collapses to when its producer declines — and the condition must
+            // still be TRUE, or the refusal is not fail-closed against an
+            // unknown. See refusalFiresWhenVerdictsUnknown for the two edits of
+            // the real workflow that left judge() returning [].
+            const values = new Map(read.map((v) => [v, verdicts.includes(v) ? '' : UNMODELLED]));
+            const polarity = refusalFiresWhenVerdictsUnknown(condition, values);
+            if (polarity.unevaluable) {
+              problems.push(
+                `step '${step.name}' has a refusal condition this suite cannot evaluate — ${polarity.unevaluable} in ` +
+                  `\`${condition.trim()}\`. The POLARITY of a refusal on a destructive step is not something to take ` +
+                  'on trust: rewrite it in the `[ … ] || [ … ]` form, or teach refusalFiresWhenVerdictsUnknown the ' +
+                  'shape. Reported rather than assumed correct, because assuming is how a refusal stops refusing.',
+              );
+            } else if (!polarity.fires) {
+              problems.push(
+                `step '${step.name}' does NOT refuse when its verdicts are UNKNOWN: with ` +
+                  `${verdicts.map((v) => `\`$${v}\``).join(', ') || '(no verdict)'} held at the EMPTY STRING — what ` +
+                  'each becomes when its producer returns early, is skipped, or never writes the output — ' +
+                  `\`${condition.trim()}\` evaluates FALSE, so the branch is not taken and ` +
+                  '`fiab-teardown.sh` destroys a sovereign estate this run never measured. An unknown must refuse.',
+              );
+            }
           }
           // E3. Nothing may overwrite the verdict between the `env:` binding and
           // the branch. The binding is then intact and the value is not.
+          //
+          // ROUND 9, on a review finding, MEASURED. This used to build its
+          // regexes from `bound` — the `steps.<id>.outputs.<verdict>` half
+          // alone — while the refusal branches on TWO verdicts, the second
+          // bound to `needs.pause-declaration.outputs.declared`. So
+          // `ESTATE_DECLARED="false"` inserted below `set -euo pipefail`
+          // (+35 B, one line) restored the round-8 blocking defect verbatim
+          // with this suite at 50 pass / 0 fail, RC=0. The population is now
+          // EVERY verdict the refusal reads, whichever producer shape supplies
+          // it, so the sentence above is true of all of them and not of one.
           const runAt = lines.findIndex((l) => /^\s{8}run:/.test(l));
-          const assign = new RegExp(`^\\s*(?:export\\s+|declare\\s+|local\\s+|readonly\\s+)?(?:${bound.join('|')})=`);
-          const unset = new RegExp(`^\\s*(?:unset|read)\\s.*\\b(?:${bound.join('|')})\\b`);
+          const assign = new RegExp(
+            `^\\s*(?:export\\s+|declare\\s+|local\\s+|readonly\\s+)?(?:${verdicts.join('|')})=`,
+          );
+          const unset = new RegExp(`^\\s*(?:unset|read)\\s.*\\b(?:${verdicts.join('|')})\\b`);
           for (let i = Math.max(0, runAt + 1); i < refusal.start; i += 1) {
             if (assign.test(lines[i]) || unset.test(lines[i])) {
               problems.push(
@@ -1613,6 +1922,24 @@ test('the runner-local carve-out is a namespace, not an allowlist', () => {
   // delete the scan rather than fix a lane.
   assert.equal(estateMutatingAz('az rest --method GET --url https://x --query value'), null);
   assert.equal(estateMutatingAz('az rest --url https://x'), null);
+  // ROUND 9, on a review finding, MEASURED. Both patterns above stop at a
+  // newline, so the round-8 fix closed exactly ONE spelling: the reviewer wrote
+  // the same DELETE with the verb behind a backslash continuation, appended to
+  // the EXEMPT `Note dry-run completion` step, and the suite went from RC=1 /
+  // 29 pass / 21 fail (one line, +166 B) to RC=0 / 50 pass / 0 fail (continued,
+  // +196 B). `gov-purview-verify.yml:236` and `full-app-deploy-commercial.yml:298`
+  // already write `az rest --method put` with continuations, so the multi-line
+  // shape is this repo's own idiom — it just keeps the verb on row 1 today.
+  const continued =
+    'az rest \\\n  --method DELETE \\\n  --url "https://management.usgovcloudapi.net/subscriptions/S/resourcegroups/rg-csa-loom-admin-usgovvirginia?api-version=2021-04-01"';
+  assert.equal(estateMutatingAz(continued), 'az rest --method DELETE');
+  assert.equal(estateMutatingAz('az group \\\n  delete -n rg-csa-loom-admin-usgovvirginia --yes'), 'az group delete');
+  // …and joining continuations does not invent a write out of two reads on
+  // separate lines, or the fix would be a scan that flags everything.
+  assert.equal(estateMutatingAz('az account show --query id -o tsv\naz rest --method GET --url https://x'), null);
+  assert.equal(logicalLines('a \\\n  b'), 'a b');
+  assert.equal(logicalLines('a\nb'), 'a\nb', 'a plain newline is NOT a continuation');
+  assert.equal(logicalLines('a \\\r\n  b'), 'a b', 'CRLF continues too — this workflow is checked in CRLF');
 });
 
 test('every step after the declaration stands down, refuses, or is dispositioned', () => {
@@ -1697,6 +2024,33 @@ test('MUTATION: an EXEMPT step rewritten to mutate the estate is caught', () => 
   assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
   assert.match(problems[0], /Note dry-run completion/);
   assert.match(problems[0], /az group delete/);
+});
+
+test('MUTATION R9: the SAME estate write, behind a line continuation, is caught', () => {
+  // The round-8 fix closed one physical-line spelling of `az rest --method
+  // DELETE` in this exempt step; the reviewer walked past it by writing the
+  // identical call over three rows (+196 B), and the suite stayed at 50 pass /
+  // 0 fail, RC=0. Two rows of the SAME call is not a different call.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Note dry-run completion'
+      ? {
+          ...s,
+          body:
+            `${s.body}\n          az rest \\\n            --method DELETE \\\n` +
+            '            --url "https://management.usgovcloudapi.net/subscriptions/S/resourcegroups/' +
+            'rg-csa-loom-admin-usgovvirginia?api-version=2021-04-01"',
+        }
+      : s,
+  );
+  assert.match(
+    mutated.find((s) => s.name === 'Note dry-run completion').body,
+    /az rest \\\n\s+--method DELETE/,
+    'the mutation must be CONTINUED — the verb off row 1 is the whole point',
+  );
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /Note dry-run completion/);
+  assert.match(problems[0], /az rest --method DELETE/);
 });
 
 test('MUTATION: an exemption whose reason is deleted is caught, for steps and for jobs', () => {
@@ -2017,6 +2371,168 @@ test('MUTATION E3: overwriting the verdict above the branch is caught', () => {
   assert.match(problems[0], /REASSIGNS the verdict variable before it branches on it/);
 });
 
+test('MUTATION R9: overwriting the OTHER verdict above the branch is caught — +35 bytes', () => {
+  // THE ROUND-9 BLOCKING FINDING, pinned. E3 above protects `ESTATE_PAUSED`,
+  // the `steps.<id>.outputs.<verdict>` half. The refusal branches on TWO
+  // verdicts, and the second — `ESTATE_DECLARED`, bound to
+  // `needs.pause-declaration.outputs.declared` — was outside every arm's frame,
+  // because `bound` was filtered through `verdictRefs()`, whose regex is
+  // derived from GUARD and matches `steps.*` only.
+  //
+  // MEASURED at head before the fix: this one inserted line left the suite at
+  // 50 pass / 0 fail, RC=0 — and it restores the round-8 defect verbatim. On a
+  // `topology=dlz-attach` + `run_mode=full` + `keep_resources=false` dispatch
+  // the ADX preflight returns before writing `estate_paused`, so `ESTATE_PAUSED`
+  // is empty AND `ESTATE_DECLARED` is forced to `false`: both conjuncts false,
+  // no refusal, `.github/scripts/fiab-teardown.sh` against a DECLARED-PAUSED
+  // sovereign estate. A defaulting line is also the most ordinary edit anyone
+  // would make next, which is what makes it worth a ratchet arm.
+  const mutated = parseSteps(workflowText()).map((s) =>
+    s.name === 'Teardown'
+      ? { ...s, body: mutateRefusal(s.body, (c) => `${c.match(/^\s*/)[0]}ESTATE_DECLARED="false"\n${c}`) }
+      : s,
+  );
+  const teardown = mutated.find((s) => s.name === 'Teardown');
+  assert.match(teardown.body, /^\s*ESTATE_DECLARED="false"$/m, 'the mutation must have applied');
+  assert.equal(
+    stepEnv(teardown.body).get('ESTATE_DECLARED'),
+    '${{ needs.pause-declaration.outputs.declared }}',
+    'the env: binding must SURVIVE — the value is destroyed in the shell, not the binding',
+  );
+  assert.match(refusalBlock(teardown.body).text, /exit 1/);
+  const problems = judge(mutated);
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+  assert.match(problems[0], /REASSIGNS the verdict variable before it branches on it/);
+  assert.match(problems[0], /ESTATE_DECLARED="false"/);
+});
+
+test('the E3 population is EVERY verdict the refusal reads, from either producer shape', () => {
+  // The negative half of the arm above: not "one more name was added to a
+  // list", but "the list is derived from both binding shapes". `bound` comes
+  // from verdictRefs (steps.*), the rest from unconditionalVerdictBindings
+  // (needs.* of a job with no if:), and the real Teardown has exactly one of
+  // each. If either derivation silently emptied, this would read as compliant.
+  const teardown = parseSteps(workflowText()).find((s) => s.name === 'Teardown');
+  const env = stepEnv(teardown.body);
+  const jobs = parseJobs(workflowText());
+  assert.deepEqual(
+    [...env].filter(([, v]) => verdictRefs(v).length > 0).map(([k]) => k),
+    ['ESTATE_PAUSED'],
+    'the steps.<id>.outputs.<verdict> half',
+  );
+  assert.deepEqual(
+    unconditionalVerdictBindings(jobs, env).map((c) => c.key),
+    ['ESTATE_DECLARED'],
+    'the needs.<job>.outputs.<key>-of-an-unconditional-producer half',
+  );
+  // …and a CONDITIONED producer is not in it: that is what makes this half a
+  // measurement of the producer rather than a spelling of the key.
+  assert.deepEqual(
+    unconditionalVerdictBindings(
+      jobs.map((j) => (j.name === 'pause-declaration' ? { ...j, if: "github.event_name == 'schedule'" } : j)),
+      env,
+    ),
+    [],
+  );
+});
+
+test('MUTATION R9: a refusal that stops firing on an UNKNOWN verdict is caught', () => {
+  // POLARITY. Two edits of the real condition, each of which restores the
+  // round-8 defect, and each of which left `judge()` returning `[]` at head:
+  // the suite went red only because one fixture regex pins the literal text of
+  // the second conjunct — coincidence, not design.
+  const cases = [
+    ['= "true" on the declaration half (−2 B)', / != "false" \]; then$/m, ' = "true" ]; then'],
+    ['|| becomes && (+0 B)', / \|\| \[ "\$\{ESTATE_DECLARED/m, ' && [ "${ESTATE_DECLARED'],
+  ];
+  for (const [label, find, replace] of cases) {
+    const mutated = parseSteps(workflowText()).map((s) =>
+      s.name === 'Teardown' ? { ...s, body: mutateRefusal(s.body, (c) => c.replace(find, replace)) } : s,
+    );
+    const teardown = mutated.find((s) => s.name === 'Teardown');
+    const condition = refusalBlock(teardown.body).text.split('\n')[0];
+    assert.notEqual(
+      condition,
+      refusalBlock(parseSteps(workflowText()).find((s) => s.name === 'Teardown').body).text.split('\n')[0],
+      `${label}: the mutation must have applied`,
+    );
+    // Every binding and every position survives: this is a change of MEANING.
+    assert.equal(stepEnv(teardown.body).get('ESTATE_PAUSED'), '${{ steps.adx_preflight.outputs.estate_paused }}');
+    assert.equal(stepEnv(teardown.body).get('ESTATE_DECLARED'), '${{ needs.pause-declaration.outputs.declared }}');
+    assert.match(refusalBlock(teardown.body).text, /exit 1/, `${label}: the refusal still contains its exit`);
+    const problems = judge(mutated);
+    assert.equal(problems.length, 1, `${label}: expected exactly one problem, got: ${problems.join(' | ')}`);
+    assert.match(problems[0], /does NOT refuse when its verdicts are UNKNOWN/, label);
+  }
+});
+
+test('the polarity check reads the condition, and says so when it cannot', () => {
+  const empty = new Map([
+    ['ESTATE_PAUSED', ''],
+    ['ESTATE_DECLARED', ''],
+  ]);
+  // The real shape: an unknown pair REFUSES.
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ "${ESTATE_PAUSED:-}" = "true" ] || [ "${ESTATE_DECLARED:-}" != "false" ]; then',
+      empty,
+    ),
+    { fires: true },
+  );
+  // Both polarity mutants, at the level of the condition itself.
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ "${ESTATE_PAUSED:-}" = "true" ] || [ "${ESTATE_DECLARED:-}" = "true" ]; then',
+      empty,
+    ),
+    { fires: false },
+  );
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ "${ESTATE_PAUSED:-}" = "true" ] && [ "${ESTATE_DECLARED:-}" != "false" ]; then',
+      empty,
+    ),
+    { fires: false },
+  );
+  // `&&` and `||` are equal precedence and LEFT-associative in sh; evaluating
+  // right-first would call the next line a refusal, which it is not.
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ -n "${ESTATE_PAUSED:-}" ] && [ -n "${ESTATE_DECLARED:-}" ] || [ -z "${ESTATE_PAUSED:-}" ]; then',
+      empty,
+    ),
+    { fires: true },
+  );
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ -z "${ESTATE_PAUSED:-}" ] || [ -n "${ESTATE_DECLARED:-}" ] && [ -n "${ESTATE_PAUSED:-}" ]; then',
+      empty,
+    ),
+    { fires: false },
+  );
+  // A name this file does not model keeps a NON-EMPTY stand-in, so a legitimate
+  // second conjunct on a real env key is not called a polarity defect.
+  assert.deepEqual(
+    refusalFiresWhenVerdictsUnknown(
+      'if [ "${ESTATE_PAUSED:-}" = "true" ] || [ "${ESTATE_DECLARED:-}" != "false" ] && [ -n "${RG_NAME:-}" ]; then',
+      empty,
+    ),
+    { fires: true },
+  );
+  // `!` negation, and a default that is not empty.
+  assert.deepEqual(refusalFiresWhenVerdictsUnknown('if ! [ -n "${ESTATE_PAUSED:-}" ]; then', empty), { fires: true });
+  assert.deepEqual(refusalFiresWhenVerdictsUnknown('if [ "${ESTATE_PAUSED:-true}" = "true" ]; then', empty), {
+    fires: true,
+  });
+  // And FAIL-CLOSED on anything it cannot evaluate: a shape it does not model
+  // is REPORTED, never assumed to refuse. Silence on an unread condition is
+  // how the polarity went unasserted for eight rounds.
+  assert.ok(refusalFiresWhenVerdictsUnknown('if grep -q x "$FILE"; then', empty).unevaluable);
+  assert.ok(refusalFiresWhenVerdictsUnknown('if [ "${ESTATE_PAUSED:+x}" = "x" ]; then', empty).unevaluable);
+  assert.ok(refusalFiresWhenVerdictsUnknown('if [ "$A" -lt 3 ]; then', empty).unevaluable);
+  assert.ok(refusalFiresWhenVerdictsUnknown('if [ "$A" = "b"; then', empty).unevaluable);
+});
+
 test('MUTATION E4: a refusal moved BELOW the teardown is caught — +0 bytes', () => {
   // The one that costs nothing to write and nothing to review: a pure reorder,
   // log byte-identical, every assertion in this file true. The estate is
@@ -2107,6 +2623,16 @@ test('MUTATION R8: the refusal reading only a verdict its producer can DECLINE t
   );
   const teardown = mutated.find((s) => s.name === 'Teardown');
   assert.ok(!stepEnv(teardown.body).has('ESTATE_DECLARED'), 'the mutation must have applied');
+  // ROUND 9, on a review nit. The `.replace()` above pins the LITERAL text of
+  // the second conjunct, and round 8 recorded what that costs: the round-4..7
+  // fixtures "silently stopped applying when the refusal grew its second
+  // verdict". Assert the SHELL half landed too, so a reworded condition fails
+  // this test loudly instead of measuring a mutant that was never applied.
+  assert.doesNotMatch(
+    refusalBlock(teardown.body).text.split('\n')[0],
+    /ESTATE_DECLARED/,
+    'the CONDITION half of the mutation must have applied — otherwise this measures the unmutated refusal',
+  );
   assert.equal(
     stepEnv(teardown.body).get('ESTATE_PAUSED'),
     '${{ steps.adx_preflight.outputs.estate_paused }}',
@@ -2114,8 +2640,20 @@ test('MUTATION R8: the refusal reading only a verdict its producer can DECLINE t
   );
   assert.match(refusalBlock(teardown.body).text, /exit 1/, 'the refusal still refuses, on a value that is empty');
   const problems = judge(mutated);
-  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
-  assert.match(problems[0], /binds no verdict to a `needs\.<job>\.outputs\.<key>` of a job that carries NO `if:`/);
+  // TWO problems since round 9, from two independent arms: the binding arm
+  // (no verdict from a producer that cannot decline) and the polarity arm (the
+  // surviving condition does not fire when its one verdict is empty). Both are
+  // this defect; requiring both is strictly stronger than the "exactly one"
+  // this asserted while the polarity of the refusal went unread.
+  assert.equal(problems.length, 2, `expected exactly two problems, got: ${problems.join(' | ')}`);
+  assert.ok(
+    problems.some((p) => /binds no verdict to a `needs\.<job>\.outputs\.<key>` of a job that carries NO `if:`/.test(p)),
+    `the binding arm must fire: ${problems.join(' | ')}`,
+  );
+  assert.ok(
+    problems.some((p) => /does NOT refuse when its verdicts are UNKNOWN/.test(p)),
+    `the polarity arm must fire: ${problems.join(' | ')}`,
+  );
 });
 
 test('MUTATION R8: conditioning the producer JOB disarms the same refusal', () => {
@@ -2372,6 +2910,45 @@ test('the stand-down summary claims only what the run established (R7)', () => {
         'step census cannot see',
     );
   }
+});
+
+test('the stand-down notice names EVERY step it stands down — the enumeration is derived', () => {
+  // ROUND 9, on a review nit. The notice enumerated ten of the thirteen steps
+  // that skip on this verdict; `Resolve the program budget's IMMUTABLE start
+  // date (#4253)` arrived from `main`, was dispositioned, carried the guard,
+  // skipped on every stood-down run — and was simply not named. Nothing could
+  // have caught that, because the enumeration was PROSE and the census was
+  // code. It is one population now: every 'guard' / 'via-provision'
+  // disposition carries the phrase the notice must name it by, so a new
+  // guarded step reds this the day it is added rather than quietly making the
+  // list one short. An enumeration one short reads exactly like a complete one.
+  const summary = parseSteps(workflowText()).find((s) => s.name === DECLARATION_STEP);
+  assert.ok(summary, 'the declaration summary step is gone');
+  const from = summary.body.indexOf('SKIPPED IN THIS JOB');
+  assert.ok(from >= 0, 'the notice must carry a SKIPPED IN THIS JOB enumeration');
+  const to = summary.body.indexOf('THE SOVEREIGN ACR FIREWALL', from);
+  assert.ok(to > from, 'the enumeration must end at the firewall claim, or this reads the whole notice');
+  const enumeration = summary.body.slice(from, to).toLowerCase();
+
+  const skipped = [...DISPOSITIONS].filter(([, d]) => d.mode === 'guard' || d.mode === 'via-provision');
+  assert.ok(skipped.length >= 13, `expected the full guarded population, got ${skipped.length}`);
+  const missingNeedle = skipped.filter(([, d]) => typeof d.summary !== 'string' || d.summary.trim() === '');
+  assert.deepEqual(
+    missingNeedle.map(([name]) => name),
+    [],
+    'every guarded / transitively-guarded step must declare the phrase the stand-down notice names it by',
+  );
+  const unnamed = skipped.filter(([, d]) => !enumeration.includes(d.summary.toLowerCase()));
+  assert.deepEqual(
+    unnamed.map(([name, d]) => `${name} (expected the notice to say "${d.summary}")`),
+    [],
+    'the stand-down notice tells the operator what this run skipped; these steps skip and are not named',
+  );
+  // …and the needles are not a set of substrings that match anything: each one
+  // has to be distinctive enough that a DIFFERENT step's phrase does not cover
+  // it, or "complete" would mean "the words happened to appear".
+  const needles = skipped.map(([, d]) => d.summary.toLowerCase());
+  assert.equal(new Set(needles).size, needles.length, 'two steps must not claim the same phrase in the notice');
 });
 
 test('CLOUD PARITY: no sibling deploy lane has an UNGATED image phase on a cron', () => {
