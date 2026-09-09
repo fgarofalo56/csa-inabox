@@ -842,3 +842,183 @@ test('#3472 no indexedChunkCount reported → no rename (the verdict would be cl
     },
   );
 });
+
+/**
+ * ── #4373 review, BLOCKER 1 — THE RETRY MUST NEVER ERASE THE POLL ────────────
+ *
+ * `POLL_ANYWAY` used to be derived from the FINAL POST attempt's classifier exit
+ * code alone. Attempt 1 = the indeterminate gateway 504 (exit 75, which this
+ * script's own contract says MUST fall through to the poll); attempt 2 = a curl
+ * `000`, which the classifier TOLERATES on its own. Final code 0, `CODE` not
+ * 202, so the script emitted `reindex_poll=not-applicable` and exited 0 having
+ * polled ZERO times — the evals then measure the stale index this whole file
+ * exists to prevent.
+ *
+ * MEASURED with this harness, same fixture, three trees:
+ *   origin/main            exit 1, 1 POST, 4 real polls
+ *   PR head 94e0a97        exit 0, 2 POSTs, 1 GET (the probe), NO polls
+ *   with SAW_INDETERMINATE exit 1, 2 POSTs, 1 probe + 4 real polls
+ *
+ * `{ destroy: true }` on attempt 2 is a REAL curl 000 (the socket is torn
+ * down), not a stub of one — the retry only fires when the request path is
+ * already misbehaving, so a connect failure is the likeliest second sample.
+ *
+ * MUTATION-PROOF: delete the `SAW_INDETERMINATE` latch (or its clause in the
+ * `POLL_ANYWAY` decision) and this goes RED on `status` 0 !== 1 with `gets` 1.
+ */
+test('#4373 a retry that never connects does NOT erase the poll (indeterminate is latched)', async () => {
+  await withServer(
+    (n) => (n === 1 ? EDGE_504 : { destroy: true }),
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().posts, 2, 'the indeterminate 504 is re-sampled');
+      assert.equal(counts().gets, 5, '1 pre-retry probe + 4 REAL polls — not the probe alone');
+      assert.match(res.stdout, /did NOT settle attempt 1's gateway answer/);
+      assert.match(res.stdout, /did NOT reach a fresh state/);
+      assert.doesNotMatch(
+        res.stdout,
+        /not-applicable/,
+        'a tolerated non-answer must not discharge the indeterminate observation',
+      );
+      // POST_REFUSED requires EVERY attempt to have been an edge refusal, and
+      // attempt 2 was not one. The rename must therefore be unavailable here.
+      assert.doesNotMatch(res.stdout, /TRIGGER REFUSED/);
+    },
+  );
+});
+
+/**
+ * ...AND THE LATCH IS SCOPED TO A NON-ANSWER, DELIBERATELY.
+ *
+ * A retry the CONSOLE answered RESOLVES the unknown rather than discarding it.
+ * An honest not-configured 5xx means the backing infra is not provisioned, so
+ * no rebuild can be in flight on any replica and `fresh` will never arrive:
+ * polling it to the ceiling would convert today's honest gate (exit 0 + a loud
+ * warning, per no-vaporware.md) into a false red — the same class of defect
+ * round 2 of this review blocked when it measured the early exit turning a pass
+ * into a fail.
+ *
+ * MUTATION-PROOF IN THE OTHER DIRECTION: widen the latch to `SAW_INDETERMINATE`
+ * regardless of the final code and this goes RED (exit 1, 4 polls).
+ */
+test('#4373 an honest not-configured retry answer is NOT polled to a red', async () => {
+  await withServer(
+    (n) =>
+      n === 1
+        ? EDGE_504
+        : { status: 502, body: { ok: false, error: 'LOOM_AI_SEARCH_SERVICE is not configured' } },
+    () => STALE_IDLE,
+    async (url, counts) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.equal(counts().posts, 2);
+      assert.equal(counts().gets, 1, 'the pre-retry probe only — the console ANSWERED, so nothing is unresolved');
+      assert.match(res.stdout, /honest-gated/);
+    },
+  );
+});
+
+/**
+ * ── #4373 review §S1 — THE BODY FILE IS TRUNCATED PER ATTEMPT ────────────────
+ *
+ * `curl -o` does not empty the file when the transfer fails, so before the fix
+ * the retry's log read, verbatim:
+ *
+ *     reindex POST http://…/api/help-copilot/reindex -> HTTP 000
+ *     <!DOCTYPE html><HTML><TITLE>The request timed out.</TITLE></HTML>
+ *
+ * i.e. attempt 1's gateway body printed under attempt 2's status, and the same
+ * stale body handed to the classifier as `RESP_BODY`.
+ *
+ * MUTATION-PROOF: remove `: > "$POST_BODY_FILE"` from `do_post` and this reds.
+ */
+test('#4373 a retry that never connects does not print the PREVIOUS attempt\'s body', async () => {
+  await withServer(
+    (n) => (n === 1 ? EDGE_504 : { destroy: true }),
+    () => STALE_IDLE,
+    async (url) => {
+      const res = await runScript(url, { POLL_MAX_ATTEMPTS: '1' });
+      assert.match(res.stdout, /-> HTTP 000/, 'the retry must actually have failed to connect');
+      assert.doesNotMatch(
+        res.stdout,
+        /-> HTTP 000\r?\n\s*<!DOCTYPE/,
+        "attempt 1's gateway body was attributed to attempt 2",
+      );
+    },
+  );
+});
+
+/**
+ * ── #4373 review §S2 — THE PROBE'S SAW_RUNNING SEED IS WHAT KEEPS THE ────────
+ * ── RENAME HONEST WHEN EVERY LATER POLL READS idle ──────────────────────────
+ *
+ * The `trigger_refused` verdict asserts the rebuild "was never OBSERVED to be
+ * accepted or running". The pre-retry probe is an observation like any other,
+ * so a `running` sighting there must disable the rename for the whole run —
+ * even though every subsequent poll reads `stale`/`idle` and the trailing
+ * streak clears the threshold. Until now that seeding was only exercised
+ * through the skip branch, on a run that then went `fresh` anyway.
+ *
+ * Here the probe sees `running` (retry skipped) and then every poll reads
+ * `stale`/`idle`/49593 forever: the streak reaches 4 against a threshold of 3,
+ * and the verdict must still be the ordinary ceiling refusal.
+ *
+ * MUTATION-PROOF: delete the probe's `SAW_RUNNING=true` and `TRIGGER REFUSED`
+ * is printed instead — a sentence refuted by a line in the same log.
+ */
+test('#4373 a probe sighting of job=running blocks the rename even if every poll then reads idle', async () => {
+  await withServer(
+    () => EDGE_504,
+    (n) => (n === 1 ? { status: 200, body: pollBody({ freshness: 'stale', job: 'running' }) } : STALE_IDLE),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().posts, 1, 'the probe saw a rebuild, so the retry is skipped');
+      assert.equal(counts().gets, 5, '1 pre-retry probe + 4 polls');
+      assert.match(res.stdout, /pre-retry probe: HTTP 200 freshness=stale job=running/);
+      assert.doesNotMatch(
+        res.stdout,
+        /TRIGGER REFUSED/,
+        'a rebuild WAS observed running — on the probe — so "never observed" would be false',
+      );
+      assert.match(res.stdout, /did NOT reach a fresh state/);
+    },
+  );
+});
+
+/**
+ * ── #4373 review §S3 — PIN THE READING OF A MOVED CHUNK COUNT ────────────────
+ *
+ * When the count moves, the poll that moved it is itself a `stale`/`idle`
+ * observation and it establishes the new baseline, so the streak RESTARTS AT 1
+ * rather than 0. The review noted both readings are defensible and that the
+ * existing `MOVING indexedChunkCount` fixture passes either way (its count
+ * moves on every poll, so the streak never accumulates under either rule).
+ * This is the discriminating fixture: threshold 3, four polls, the count moves
+ * exactly once on poll 2.
+ *
+ *   IDLE_STREAK=1 on the move (shipped):  1, 1, 2, 3  -> renames
+ *   IDLE_STREAK=0 on the move:            1, 0, 1, 2  -> does not
+ *
+ * MUTATION-PROOF: change that `IDLE_STREAK=1` to `IDLE_STREAK=0` and this reds.
+ */
+test('#4373 the poll that MOVED the chunk count restarts the streak at 1, not 0', async () => {
+  await withServer(
+    () => EDGE_504,
+    // GET 1 = pre-retry probe; polls are GETs 2..5. The count moves once, on
+    // poll 2 (GET 3), and then holds.
+    (n) => ({
+      status: 200,
+      body: pollBody({ freshness: 'stale', job: 'idle', chunks: n <= 2 ? 100 : 200 }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
+      assert.equal(res.status, 1, res.stdout + res.stderr);
+      assert.equal(counts().gets, 5, '1 pre-retry probe + 4 polls');
+      assert.match(res.stdout, /TRIGGER REFUSED/, 'the trailing streak is 3 (polls 2,3,4), not 2');
+      assert.match(res.stdout, /the LAST 3/, 'and the verdict names that streak, not the 4 polls');
+    },
+  );
+});

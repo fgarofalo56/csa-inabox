@@ -87,7 +87,18 @@
 #      decides which NAME the resulting failure gets. That keeps 100% of the
 #      diagnosis #3472 asked for and 0% of the false-red risk; the cost saving
 #      the earlier revision claimed is dropped, deliberately.
-# Both verdicts fail closed. This RENAMES a failure. It changes no exit code.
+# SCOPE THAT SENTENCE, BECAUSE AN EARLIER REVISION DID NOT (#4373 review B1).
+# It used to read "Both verdicts fail closed. This RENAMES a failure. It changes
+# no exit code." The RENAME half is true and stays true. The RETRY half was
+# false in both directions: a retry that gets a 202 turns a would-be timeout
+# into a legitimate pass (that is the point of it), and — the defect — a retry
+# answered by nothing at all used to make the script exit 0 having polled ZERO
+# times, erasing a failure `origin/main` reported. So, precisely:
+#   * the `trigger_refused` rename changes no exit code, ever;
+#   * the retry MAY change one, in the direction of a real answer only. It can
+#     never remove the obligation to poll: an INDETERMINATE attempt is latched
+#     (SAW_INDETERMINATE below) and a later attempt that is itself a non-answer
+#     cannot discharge it.
 #
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
 # `freshness.state === 'fresh'` — the DURABLE, cross-replica signal (the
@@ -140,6 +151,11 @@ POLL_MAX_ATTEMPTS="${POLL_MAX_ATTEMPTS:-0}"
 # #3472. Both knobs default to the behaviour argued for in the header note.
 # POST_RETRIES=0 gets exactly the pre-#3472 request path back; REFUSED_IDLE_POLLS=0
 # gets the pre-#3472 verdict NAME back (the wait itself is unchanged either way).
+# NOTE THE SHIPPED DEFAULT IS 1, AND NO CALLER OVERRIDES IT — copilot-quality-evals.yml
+# sets only POLL_TIMEOUT_S / POLL_INTERVAL_S / FATAL. So "you can switch it off"
+# is not a safety argument for the default path, and the #4373 review was right
+# to say so: the DEFAULT is what must preserve the poll, and the
+# SAW_INDETERMINATE latch below is what makes it do that.
 POST_RETRIES="${POST_RETRIES:-1}"
 POST_RETRY_DELAY_S="${POST_RETRY_DELAY_S:-5}"
 REFUSED_IDLE_POLLS="${REFUSED_IDLE_POLLS:-8}"
@@ -186,7 +202,16 @@ fi
 # already PRINTS `000` from `-w` on a connect failure, so the fallback would
 # concatenate to "000000" and the classifier would be handed a string that is
 # not a status code (#3414).
+#
+# TRUNCATE FIRST. `curl -o` does NOT empty the file when the transfer fails, so
+# on a retry that never connects the file still holds the PREVIOUS attempt's
+# body — and this function then prints it under the CURRENT attempt's status and
+# hands it to the classifier as `RESP_BODY`. Measured on this harness before the
+# fix (#4373 review §S1): `-> HTTP 000` followed verbatim by attempt 1's
+# `<html><title>504 Gateway Time-out</title>`. In a script whose entire subject
+# is a log sentence that described the wrong thing, that is the same defect.
 do_post() {
+  : > "$POST_BODY_FILE"
   CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $INTERNAL_TOKEN" \
     -H 'Content-Type: application/json' \
@@ -206,6 +231,11 @@ do_post() {
 # jq, so this runs anywhere the classifier does. A body we cannot parse yields
 # 'unknown', which is never read as success by either caller.
 get_status() {
+  # Truncated for the same reason `do_post` is (#4373 review §S1): `curl -o`
+  # leaves the file untouched on a failed transfer, so an unreachable poll would
+  # otherwise carry the PREVIOUS poll's body into `$POLL_BODY` and the final
+  # verdict's `freshness=…` detail would describe a poll that never answered.
+  : > "$POLL_BODY_FILE"
   # `|| true`, never `|| echo 000` — the fallback concatenated onto the `000`
   # curl already printed, so GCODE was "000000" and the unreachable branch just
   # below it, which exists precisely for that case, never fired (#3414).
@@ -254,6 +284,24 @@ POST_ATTEMPTS=1
 POST_CODES="$CODE"
 HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
 CRC=$?
+# ── THE INDETERMINATE OBSERVATION IS LATCHED, NOT RE-READ FROM THE LAST ──────
+# ── ATTEMPT (#4373 review, BLOCKER 1) ────────────────────────────────────────
+# `POLL_ANYWAY` used to be derived from the FINAL attempt's CRC alone. So when
+# attempt 1 was the indeterminate gateway 5xx (CRC 75 — which this file's own
+# contract says MUST fall through to the poll) and the retry produced a verdict
+# the classifier TOLERATES, CRC became 0, `CODE` was not 202, and the script
+# exited 0 at `reindex_poll=not-applicable` having polled ZERO times. The retry
+# only fires when the request path is already misbehaving, so the likeliest
+# tolerated retry verdict is exactly the one that triggers it: a curl `000`.
+# MEASURED with a real node:http server and real curl — POST 1 edge-504, POST 2
+# socket destroyed, GET stale/idle/49593:
+#   origin/main      exit 1, 1 POST, 4 real polls  ("did NOT reach a fresh state")
+#   this file BEFORE exit 0, 2 POSTs, 1 GET (the probe), NO polls at all
+# i.e. the retry did not rename a failure, it ERASED one and let the evals run
+# against a stale index. So the fact "an attempt was indeterminate" is latched
+# here and survives whatever the later attempts say.
+SAW_INDETERMINATE=false
+if [ "$CRC" -eq 75 ]; then SAW_INDETERMINATE=true; fi
 
 # ── ONE RETRY, AND ONLY ON THE INDETERMINATE ANSWER (#3472) ─────────────────
 # Scoped to CRC 75 on purpose. A 401, a 502 with an application body, or an
@@ -300,6 +348,7 @@ while [ "$CRC" -eq 75 ] && [ "$POST_ATTEMPTS" -le "$POST_RETRIES" ]; do
   POST_CODES="$POST_CODES,$CODE"
   HTTP_CODE="$CODE" RESP_BODY="$(cat "$POST_BODY_FILE")" node "$CLASSIFIER"
   CRC=$?
+  if [ "$CRC" -eq 75 ]; then SAW_INDETERMINATE=true; fi
 done
 
 # Emitted ONCE, after the final attempt: GITHUB_OUTPUT is append-only, so
@@ -322,15 +371,46 @@ POST_REFUSED=false
 if [ "$CRC" -eq 75 ]; then
   POLL_ANYWAY=true
   POST_REFUSED=true
+elif [ "$CRC" -eq 0 ] && [ "$SAW_INDETERMINATE" = "true" ] && [ "$CODE" = "000" ]; then
+  # ── A NON-ANSWER CANNOT DISCHARGE AN EARLIER UNKNOWN (#4373 review B1) ─────
+  # The retry did not reach the console either (curl 000). The classifier
+  # TOLERATES that on its own — the eval reaches the console over the
+  # CAE-internal network, so an edge blip must not red the gate — but it settles
+  # nothing about attempt 1's gateway 5xx, which is still the open question
+  # "did a rebuild start?". Tolerating it here would discard the one observation
+  # that obliges this script to look. So: poll.
+  #
+  # SCOPED TO A NON-ANSWER ON PURPOSE, and the two cases left out are left out
+  # for a measured reason, not an oversight. A retry that the CONSOLE answered
+  # RESOLVES the unknown rather than discarding it:
+  #   * 200/2xx ok — a pre-#2929 console rebuilt INLINE and the refresh is done;
+  #   * an honest not-configured 5xx — the backing infra is not provisioned, so
+  #     no rebuild can be in flight on any replica and `fresh` will never
+  #     arrive. Polling that to the ceiling would convert today's honest gate
+  #     (exit 0 + warning) into a false red, which is the same class of defect
+  #     round 2 of this review blocked. Measured both ways below
+  #     (`#4373 an honest not-configured retry answer is NOT polled to a red`).
+  # `POST_REFUSED` stays FALSE here: not every attempt was an edge refusal, so
+  # the `trigger_refused` rename must not be available to this run.
+  POLL_ANYWAY=true
+  echo "::notice::the retry POST did not reach the console either (curl $CODE), so it did NOT settle attempt 1's gateway answer. Polling the durable freshness signal anyway — a tolerated non-answer cannot discharge an INDETERMINATE one (#4373)."
 elif [ "$CRC" -ne 0 ]; then
   emit 'reindex_poll=not-started'
   fail
 fi
 
 # Only a 202 leaves work in flight. A 200 is an older console that rebuilt
-# inline (already complete); 000 and an honest not-configured gate were
-# tolerated above. In none of those is there anything to poll for — EXCEPT the
-# indeterminate gateway case, which polls precisely because it is unresolved.
+# inline (already complete); an honest not-configured gate, and a 000 with no
+# indeterminate attempt behind it, were tolerated above. In none of those is
+# there anything to poll for — EXCEPT the indeterminate gateway case, which
+# polls precisely because it is unresolved.
+#
+# THAT "EXCEPT" WAS ASSERTING A GUARD THE CODE DID NOT HAVE (#4373 review B1,
+# R7). It was written as if the indeterminate case always reached the poll; it
+# did not, whenever the RETRY's own verdict was tolerated. `POLL_ANYWAY` is now
+# set from the latched observation as well as the final CRC, so the sentence is
+# true — and `#4373 a retry that never connects does NOT erase the poll` reds
+# if the latch is removed.
 if [ "$CODE" != "202" ] && [ "$POLL_ANYWAY" != "true" ]; then
   emit 'reindex_poll=not-applicable'
   exit 0
