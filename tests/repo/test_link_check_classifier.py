@@ -81,7 +81,7 @@ def _step(step_id: str) -> dict[str, Any]:
 
 
 def _run_classifier(
-    script: str, age_seconds: int = 3, **overrides: str
+    script: str, age_seconds: int = 3, lychee_out: str | None = None, **overrides: str
 ) -> tuple[str, int, str]:
     """Run a classifier script and return (status, returncode, job summary)."""
     env = dict(os.environ)
@@ -116,6 +116,11 @@ def _run_classifier(
         (staged / "link-check.yml").write_text(
             WORKFLOW.read_text(encoding="utf-8"), encoding="utf-8"
         )
+
+        if lychee_out is not None:
+            out_dir = Path(td) / "lychee"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "out.md").write_text(lychee_out, encoding="utf-8")
 
         proc = subprocess.run(
             [_bash(), str(script_path)],
@@ -235,3 +240,49 @@ def test_pull_requests_are_scoped_to_changed_files() -> None:
     # touched, so those PRs must widen back to the full sweep.
     assert "--diff-filter=DR" in scope, "deleted/renamed docs must force a full sweep"
     assert _step("lychee").get("if"), "the check must be skippable when nothing is in scope"
+
+
+def test_full_sweep_glob_is_quoted() -> None:
+    """A BARE docs/**/*.md silently checks a sixth of the corpus.
+
+    lychee-action ``eval``s its args, and that bash runs with globstar OFF, where
+    ``**`` degrades to ``*``. Measured on this tree: bare expands to 421 paths
+    (identical to ``docs/*/*.md``) against 2548 tracked docs .md files. Quoting
+    hands the literal pattern to lychee, whose glob crate honours ``**``.
+
+    This is a regression guard on a one-character mistake that produces no error
+    and no visible symptom — just six sevenths of the docs going unchecked.
+    """
+    scope = _step("scope")["run"]
+    assert "TARGETS=\"'docs/**/*.md'\"" in scope, (
+        "the full-sweep pattern must be quoted so lychee globs it, not bash"
+    )
+
+
+def test_detail_reports_lychees_own_total_not_a_predicted_count() -> None:
+    """R7: the marker may only cite a number the run actually established.
+
+    The file count handed to lychee is a prediction; on the full sweep it can
+    differ from reality several-fold. Only lychee knows what it checked, so the
+    detail line must quote lychee's summary and never the predicted count.
+    """
+    script = _step("classify")["run"]
+    summary = "| Status | Count |\n|---|---|\n| Total | 3539 |\n| OK | 3500 |\n"
+
+    status, rc, job_summary = _run_classifier(
+        script, lychee_out=summary, COUNT="2520", LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert (status, rc) == ("OK", 0)
+    assert "3539" in job_summary, "the measured total must reach the operator"
+    assert "checked 2520" not in job_summary, (
+        "the predicted file count must not be asserted as what was checked"
+    )
+
+    # And when lychee emitted no summary, the marker says so rather than
+    # substituting the prediction.
+    status2, _, summary2 = _run_classifier(
+        script, lychee_out=None, COUNT="2520", LYCHEE_OUTCOME="success", LYCHEE_EXIT="0"
+    )
+    assert status2 == "OK"
+    assert "unknown" in summary2.lower()
+    assert "checked 2520" not in summary2

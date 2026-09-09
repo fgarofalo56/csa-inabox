@@ -4,9 +4,17 @@
 #
 #   * pull_request — ONLY the docs files this PR changed. Runtime is bounded by
 #     the diff, not by the corpus, so it cannot re-break as docs grow. The old
-#     full-corpus sweep on every docs PR is what blew the 10-minute budget:
-#     docs/**/*.md is 2520 files carrying 4650 unique external URLs, and at
-#     --timeout 30 --max-retries 2 one unreachable host costs 90s.
+#     unconditional sweep on every docs PR is what blew the 10-minute budget: at
+#     --timeout 30 --max-retries 2 one unreachable host costs 90s, and the last
+#     completed sweep reported 3539 links checked.
+#
+#     Note what that sweep actually covered, because it is NOT what the pathspec
+#     suggests: the bare `docs/**/*.md` was expanded by BASH inside the action's
+#     `eval`, with globstar off, so `**` degraded to `*` and only the 421 files
+#     at depth 2 were ever checked — of 2548 tracked docs .md. The pattern is
+#     quoted below so lychee's own glob crate expands it, which fixes that 6x
+#     coverage hole and makes the full sweep substantially larger than any run
+#     measured so far.
 #
 #   * schedule / workflow_dispatch — the full docs/** sweep, with a cache.
 #
@@ -109,21 +117,28 @@ jobs:
           fi
 
           if [ "$SCOPE" = "full" ]; then
-            # 2520 paths will not fit in argv; let lychee glob it itself.
-            TARGETS="docs/**/*.md"
-            COUNT=$(git ls-files 'docs/**/*.md' | wc -l)
+            # QUOTED on purpose. lychee-action `eval`s its args (entrypoint.sh),
+            # and bash there runs with globstar OFF, where `**` degrades to `*` —
+            # so a BARE docs/**/*.md is expanded by bash to the 421 files at
+            # depth 2 and lychee never sees the other 2127. Quoting hands the
+            # literal pattern to lychee, whose own glob crate honours `**`.
+            TARGETS="'docs/**/*.md'"
+            # The corpus this is POINTED AT. It is not a count of what got
+            # checked — only lychee can report that, and the classifier reads it
+            # back from lychee's own output rather than asserting this number.
+            CORPUS=$(git ls-files -- docs | grep -cE '[.]md$')
           else
             TARGETS=$(tr '\n' ' ' < scope-files.txt)
-            COUNT=$(wc -l < scope-files.txt)
+            CORPUS=$(wc -l < scope-files.txt)
           fi
 
           {
             echo "scope=$SCOPE"
-            echo "count=$COUNT"
+            echo "count=$CORPUS"
             echo "reason=$REASON"
             echo "targets=$TARGETS"
           } >> "$GITHUB_OUTPUT"
-          echo "SCOPE=$SCOPE ($REASON); $COUNT file(s) in scope"
+          echo "SCOPE=$SCOPE ($REASON); $CORPUS file(s) in scope"
 
       - name: Restore link-check cache
         if: steps.scope.outputs.count != '0'
@@ -197,6 +212,20 @@ jobs:
           SLACK=$(( BUDGET_S / 10 ))
           if [ "$SLACK" -gt 90 ]; then SLACK=90; fi
 
+          # Ground truth for "what was actually checked" is lychee's own summary,
+          # never a number we predicted. On the full sweep the two can differ by
+          # 6x (see the glob note in Select scope), and asserting the prediction
+          # would be the very R7 defect this workflow exists to remove.
+          MEASURED=""
+          if [ -f lychee/out.md ]; then
+            MEASURED=$(grep -oE 'Total[^0-9]*[0-9]+' lychee/out.md | grep -oE '[0-9]+' | head -1 || true)
+          fi
+          if [ -n "$MEASURED" ]; then
+            CHECKED="lychee reports ${MEASURED} link(s) checked"
+          else
+            CHECKED="lychee emitted no summary total, so how much it checked is unknown"
+          fi
+
           if [ "${COUNT:-0}" = "0" ]; then
             STATUS="NO_DOCS_IN_SCOPE"
             DETAIL="No docs/**/*.md file was in scope (${REASON}). Nothing was checked, and nothing needed to be."
@@ -207,9 +236,9 @@ jobs:
             # statement about links.
             case "${LYCHEE_EXIT:-0}" in
               0) STATUS="OK"
-                 DETAIL="lychee checked ${COUNT} target(s) and found no dead links." ;;
+                 DETAIL="${CHECKED}, and found no dead links." ;;
               2) STATUS="DEAD_LINKS"
-                 DETAIL="lychee checked ${COUNT} target(s) and reported dead links. Advisory — this does not block a merge. See the link-check-report artifact." ;;
+                 DETAIL="${CHECKED}, and reported dead links. Advisory — this does not block a merge. See the link-check-report artifact." ;;
               *) STATUS="CHECKER_ERROR"
                  DETAIL="lychee exited ${LYCHEE_EXIT}, which is neither success nor its dead-link code. This run established NOTHING about the links; it is not a dead-link report." ;;
             esac
@@ -241,7 +270,8 @@ jobs:
             "status": "${STATUS}",
             "scope": "${SCOPE:-unknown}",
             "scope_reason": "${REASON}",
-            "targets": "${COUNT:-0}",
+            "files_in_scope": "${COUNT:-0}",
+            "links_checked": "${MEASURED:-unknown}",
             "lychee_outcome": "${LYCHEE_OUTCOME:-none}",
             "lychee_exit_code": "${LYCHEE_EXIT:-none}",
             "elapsed_seconds": ${ELAPSED},
@@ -260,7 +290,8 @@ jobs:
             echo "| field | value |"
             echo "|---|---|"
             echo "| scope | \`${SCOPE:-unknown}\` — ${REASON} |"
-            echo "| targets | ${COUNT:-0} |"
+            echo "| files in scope | ${COUNT:-0} (what lychee was pointed at) |"
+            echo "| links checked | ${MEASURED:-unknown} (lychee's own count) |"
             echo "| lychee outcome | \`${LYCHEE_OUTCOME:-none}\` (exit \`${LYCHEE_EXIT:-none}\`) |"
             echo "| elapsed | ${ELAPSED}s of ${BUDGET_MIN:-?}m budget |"
           } >> "$GITHUB_STEP_SUMMARY"
