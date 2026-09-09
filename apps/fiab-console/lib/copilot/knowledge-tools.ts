@@ -50,7 +50,7 @@ import {
   knowledgeGovGate,
   isSearchConfigured,
 } from '../azure/aisearch-knowledge';
-import { cosmosVcoreGate } from '../azure/cosmos-vcore-vector-client';
+import { cosmosVcoreGate, CosmosVcoreDriverError } from '../azure/cosmos-vcore-vector-client';
 
 const S_STRING = { type: 'string' } as const;
 const S_NUMBER = { type: 'number' } as const;
@@ -276,8 +276,39 @@ export function registerKnowledgeTools(r: LoomToolRegistry): void {
           results: rows,
         };
       } catch (e: any) {
-        // R7 — report the failure as a failure. An empty result set and an
-        // unreachable cluster are different facts and must not read the same.
+        // R7 — report the failure as the failure it ACTUALLY was. Three
+        // different facts reach this catch and they must not read the same: an
+        // empty result set (handled above — `grounded: true, matches: 0`), a
+        // driver that is absent from this image, and a cluster that could not
+        // be reached or rejected the aggregation.
+        //
+        // The driver case is the ONLY one reachable in the image that ships
+        // today (see the header note), so getting it wrong here would make the
+        // sole live behaviour of this tool a false claim. CosmosVcoreDriverError
+        // arrives UNWRAPPED: `withDb()` calls `loadMongo()` before entering its
+        // own try block, so nothing converts it into a CosmosVcoreError. It
+        // means the `mongodb` npm driver is missing from this Console image — a
+        // dependency gap, NOT a backend failure — and it carries the exact
+        // one-time remediation on `.hint`, which is what makes this an honest
+        // gate under no-vaporware.md and ux-baseline G2. Discarding that hint
+        // and asserting "backend failure" was both untrue and unactionable.
+        //
+        // Matched on the class AND the name: `vcoreVectorSearch` is reached
+        // through a dynamic import, so a bundler that hands back a second
+        // instance of the module would break `instanceof` alone and drop this
+        // branch back into the wrong claim.
+        if (e instanceof CosmosVcoreDriverError || e?.name === 'CosmosVcoreDriverError') {
+          const hint = typeof e?.hint === 'string' && e.hint.trim() ? ` ${e.hint.trim()}` : '';
+          return {
+            grounded: false,
+            driverMissing: true,
+            message:
+              `No Cosmos DB vector search ran against collection "${coll}": `
+              + `${e?.message || String(e)}. The \`mongodb\` driver is missing from this Console image`
+              + ' — this is a missing dependency, not a backend failure and not an empty result.'
+              + hint,
+          };
+        }
         return {
           grounded: false,
           message:
