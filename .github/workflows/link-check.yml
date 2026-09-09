@@ -57,13 +57,32 @@ jobs:
     # diff; only the full sweep can approach this. The classifier below re-reads
     # this exact line rather than restating the number, so the two cannot drift.
     #
-    # MEASURED, not guessed. Dispatch run 34393875137 on this branch swept the
-    # real 2548-file corpus ONLINE and was killed by the old 45m backstop at
-    # 2699s having emitted no verdict — so 45 was not a backstop for the sweep,
-    # it was a guaranteed weekly TIMEOUT marker. A scheduled control that can
-    # never produce a verdict is the mirror of one that can never fail, and this
-    # workflow is not shipping one. Raised to cover the measurement below.
-    timeout-minutes: 180
+    # MEASURED, not guessed, and now measured to COMPLETION.
+    #
+    # First: dispatch run 34393875137 swept the real 2548-file corpus ONLINE and
+    # was killed by the old 45m backstop at 2699s having emitted no verdict — so
+    # 45 was not a backstop for the sweep, it was a guaranteed weekly TIMEOUT
+    # marker. A scheduled control that can never produce a verdict is the mirror
+    # of one that can never fail, and this workflow is not shipping one.
+    #
+    # Then: dispatch run 34402571605, same branch, same full online scope
+    # (`SCOPE=full (full docs/** sweep); 2548 file(s) in scope`), ran to
+    # COMPLETION in 4918s — 81m58s, 20:42:41Z → 22:04:39Z on the `Check links`
+    # step — and classified DEAD_LINKS over 18080 link occurrences actually
+    # contacted (18196 found, 116 excluded). The cache MISSED on that run
+    # (`Cache not found for input keys: lychee-34402571605, lychee-`), so 4918s
+    # is the cold, fully-online cost — which is the weekly cron's shape too,
+    # since `--max-cache-age 1d` against a 7-day cron means the sweep never
+    # reuses an entry.
+    #
+    # 150m is 1.83x that. It is deliberately NOT tighter: 4918s is a single
+    # observation, not a distribution, and the corpus is largely external hosts
+    # whose latency is the day's luck (the same variance that made the OLD
+    # 10-minute PR sweep intermittently rather than structurally over budget —
+    # see the 110s..616s spread noted at the top of this file). The floor test
+    # `test_budget_backstop_has_a_floor` pins that 1.5x margin against 4918 so
+    # this number cannot be quietly dropped back under the measurement.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

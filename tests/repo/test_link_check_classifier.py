@@ -183,6 +183,12 @@ def _run_classifier(
 # The job's real budget, so the timeout case is pinned to what actually ships.
 _BUDGET_SECONDS = int(_workflow()["jobs"]["check"]["timeout-minutes"]) * 60
 
+# The only OBSERVED full-sweep completion. Dispatch run 34402571605 on this
+# branch: full online scope over the real 2548-file corpus, cache MISS, `Check
+# links` ran 20:42:41Z -> 22:04:39Z. Everything the floor test asserts is
+# derived from this one number, so changing the budget cannot quietly outrun it.
+_OBSERVED_FULL_SWEEP_SECONDS = 4918
+
 # (case, env overrides, age, expected status, expected rc)
 # rc 1 is reserved for "the checker could not look" — those must fail closed.
 # A dead link is advisory and must NOT fail.
@@ -799,18 +805,27 @@ def test_budget_backstop_has_a_floor() -> None:
     to 10 minutes leaves every other test in this module green. This is the one
     assertion that would notice.
 
-    The floor is MEASURED, not chosen. Dispatch run 34393875137 on this branch
-    ran the real 2548-file corpus ONLINE and was still going when the then-45m
-    backstop killed it at 2699s with no verdict emitted. So any value at or
-    below 45m is not a backstop for the weekly sweep at all — it is a guaranteed
-    TIMEOUT marker every Monday, i.e. a scheduled control that can never pass.
-    The floor sits above the one duration we have actually observed the sweep
-    exceed; it is not a claim about where the sweep finishes.
+    The floor is MEASURED, not chosen, and it now rests on a COMPLETION rather
+    than on a kill. Dispatch run 34393875137 was still going when the then-45m
+    backstop killed it at 2699s with no verdict emitted, which established only
+    a lower bound. Run 34402571605 then finished the same full online sweep over
+    the same 2548-file corpus, on a cache MISS, in 4918s. So the sweep's cost is
+    known, and any budget at or below it is not a backstop at all — it is a
+    guaranteed TIMEOUT marker every Monday, i.e. a scheduled control that can
+    never pass.
+
+    The floor carries a deliberate 1.5x margin over that observation, because
+    4918s is n=1 and the corpus is mostly external hosts whose latency is the
+    day's luck. The margin is a hedge on the variance, not a claim that the
+    sweep ever takes that long.
     """
-    assert _BUDGET_SECONDS > 45 * 60, (
-        f"the Link Check backstop is {_BUDGET_SECONDS // 60}m; the full online "
-        "sweep was measured still running at 45m (run 34393875137), so at or "
-        "below that the weekly cron can only ever emit TIMEOUT"
+    floor = (_OBSERVED_FULL_SWEEP_SECONDS * 3) // 2
+    assert _BUDGET_SECONDS >= floor, (
+        f"the Link Check backstop is {_BUDGET_SECONDS}s; the full online sweep "
+        f"was MEASURED at {_OBSERVED_FULL_SWEEP_SECONDS}s on a cache miss (run "
+        f"34402571605), so the floor is {floor}s — 1.5x that single observation. "
+        "Below it the weekly cron risks emitting only TIMEOUT. Seconds, not "
+        "minutes, because the floor is not a whole number of minutes"
     )
 
 
