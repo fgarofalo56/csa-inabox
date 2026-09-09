@@ -3,10 +3,16 @@
 # Two scopes, deliberately different (#4425):
 #
 #   * pull_request — ONLY the docs files this PR changed. Runtime is bounded by
-#     the diff, not by the corpus, so it cannot re-break as docs grow. The old
-#     unconditional sweep on every docs PR is what blew the 10-minute budget: at
-#     --timeout 30 --max-retries 2 one unreachable host costs 90s, and the last
-#     completed sweep reported 3539 links checked.
+#     the diff, not by the corpus, so it cannot re-break as docs grow.
+#
+#     Measured on #4369 (branch drain/h-docs-4), all 7 Link Check runs, job
+#     durations from the jobs API: 605s, 616s, 110s, 116s, 616s, 194s, 615s —
+#     4 killed at the old `timeout-minutes: 10`, 3 finishing in under 3m15s.
+#     So the old sweep was INTERMITTENTLY over budget, not structurally over it:
+#     at --timeout 30 --max-retries 2 one unreachable host costs 90s, and how
+#     many hosts are slow on a given day is luck. Sweeping the corpus on every
+#     docs PR is what made a run capable of exceeding the budget at all; the
+#     diff-scoped path removes that growth term regardless of the day's luck.
 #
 #     Note what that sweep actually covered, because it is NOT what the pathspec
 #     suggests: the bare `docs/**/*.md` was expanded by BASH inside the action's
@@ -23,6 +29,13 @@
 # failure fails closed and says so, and a timeout writes a marker distinguishing
 # it from a superseded run. A run that established nothing must never be
 # reported as a run that found nothing (R7).
+#
+# What that marker does NOT do: it does not change the check-run CONCLUSION. A
+# job timeout still reports `cancelled` to the API, so a merge preflight reading
+# only the conclusion still sees `cancelled` and still treats it as advisory-red.
+# The marker is for a human, or for a preflight taught to read the
+# `lychee/status.json` artifact. The merge unblock in #4425 comes from the scope
+# narrowing removing the timeout, not from the marker renaming it.
 name: Link Check
 
 on:
@@ -63,7 +76,12 @@ jobs:
 
           # The full sweep is the default and every narrowing failure falls back
           # to it. The failure direction is always "check MORE", never "check
-          # nothing and report success".
+          # nothing and report success". Every way out of the narrowing path is
+          # enumerated and widens: no base sha, an absent base sha, a failed
+          # diff, a git-quoted path, a deleted-or-renamed doc, a path unsafe to
+          # interpolate, a changed path missing from the checkout, and a diff
+          # over the argv budget. `tests/repo/test_link_check_classifier.py`
+          # drives this script against throwaway repos for each of those.
           SCOPE="full"
           REASON="full docs/** sweep"
 
@@ -73,13 +91,30 @@ jobs:
             elif ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" > /dev/null; then
               REASON="base sha ${BASE_SHA} absent after checkout — fell back to the full sweep"
             else
-              git diff --name-only --diff-filter=d "${BASE_SHA}...HEAD" > changed-all.txt 2> diff-err.txt
+              # core.quotepath=false: with the default (true) git C-quotes any
+              # path containing a non-ASCII byte, so `docs/café.md` is printed as
+              # "docs/caf\303\251.md" — a line that fails the ^docs/ test below
+              # and is therefore DROPPED rather than classified. That is a silent
+              # narrowing, which is the one direction this step must never fail.
+              git -c core.quotepath=false diff --name-only --diff-filter=d "${BASE_SHA}...HEAD" > changed-all.txt 2> diff-err.txt
               DIFF_RC=$?
-              git diff --name-only --diff-filter=DR "${BASE_SHA}...HEAD" > gone-all.txt 2> gone-err.txt
+              # --no-renames: with rename detection ON, --name-only prints only a
+              # rename's POST-image, so moving docs/a.md OUT to other/a.md emits
+              # no docs path at all and the widen below never fires — precisely
+              # the inbound-internal-link case this diff exists to catch. Without
+              # rename detection the same move is a plain D of docs/a.md.
+              git -c core.quotepath=false diff --name-only --no-renames --diff-filter=DR "${BASE_SHA}...HEAD" > gone-all.txt 2> gone-err.txt
               GONE_RC=$?
 
               if [ "$DIFF_RC" -ne 0 ] || [ "$GONE_RC" -ne 0 ]; then
                 REASON="git diff vs ${BASE_SHA} failed (rc=${DIFF_RC}/${GONE_RC}; $(wc -c < diff-err.txt)/$(wc -c < gone-err.txt) stderr bytes) — fell back to the full sweep"
+              elif grep -q '^"' changed-all.txt gone-all.txt; then
+                # quotepath=false stops git escaping non-ASCII, but git still
+                # C-quotes a path carrying an embedded quote, backslash or
+                # control character. Such a line starts with `"` and so fails the
+                # ^docs/ test — it would vanish silently. Refuse to classify the
+                # diff at all rather than classify a subset of it.
+                REASON="the diff contains a path git had to quote, which cannot be classified safely — fell back to the full sweep"
               elif grep -qE '^docs/.*\.md$' gone-all.txt; then
                 # Checking only CHANGED files would miss the one breakage a PR
                 # can cause in a file it never touched: an internal link from an
@@ -89,20 +124,28 @@ jobs:
               else
                 grep -E '^docs/.*\.md$' changed-all.txt > changed-docs.txt || true
                 : > scope-files.txt
-                UNSAFE=""
+                WIDEN=""
                 while IFS= read -r f; do
                   [ -n "$f" ] || continue
-                  [ -f "$f" ] || continue      # renamed/removed paths are not checkable
                   # lychee-action `eval`s its args, so a path containing shell
-                  # metacharacters must never be interpolated into them.
+                  # metacharacters must never be interpolated into them. Tested
+                  # FIRST, before anything below can drop the line: an unsafe
+                  # path has to widen the sweep, never disappear from it.
                   case "$f" in
-                    *[!A-Za-z0-9/._-]*) UNSAFE="$f"; break ;;
+                    *[!A-Za-z0-9/._-]*) WIDEN="changed path '${f}' has characters unsafe to interpolate"; break ;;
                   esac
+                  if [ ! -f "$f" ]; then
+                    # --diff-filter=d already excludes deletions, so every path
+                    # here should exist in the checkout. One that does not is
+                    # unexplained — widen rather than drop it and report success.
+                    WIDEN="changed path '${f}' is absent from the checkout"
+                    break
+                  fi
                   printf '%s\n' "$f" >> scope-files.txt
                 done < changed-docs.txt
 
-                if [ -n "$UNSAFE" ]; then
-                  REASON="changed path '${UNSAFE}' has characters unsafe to interpolate — fell back to the full sweep"
+                if [ -n "$WIDEN" ]; then
+                  REASON="${WIDEN} — fell back to the full sweep"
                 else
                   N=$(wc -l < scope-files.txt)
                   if [ "$N" -gt 300 ]; then
@@ -140,6 +183,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "SCOPE=$SCOPE ($REASON); $CORPUS file(s) in scope"
 
+      # Deliberately sized for the PR path, not the sweep. `--max-cache-age 1d`
+      # against a weekly cron means every restored entry is already stale on the
+      # Monday run, so the sweep gets no reuse from this — that is the correct
+      # trade, not an oversight: raising the age to cover a week would make the
+      # weekly sweep re-serve last week's answers and check almost nothing. The
+      # cache earns its keep on back-to-back PR runs.
       - name: Restore link-check cache
         if: steps.scope.outputs.count != '0'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -226,7 +275,15 @@ jobs:
             CHECKED="lychee emitted no summary total, so how much it checked is unknown"
           fi
 
-          if [ "${COUNT:-0}" = "0" ]; then
+          if [ -z "${COUNT:-}" ]; then
+            # `Select scope` failed before writing its outputs. `${COUNT:-0}`
+            # would collapse that to "0" and print NO_DOCS_IN_SCOPE — "nothing
+            # was checked, and nothing needed to be" — over a run that never
+            # established what it was supposed to check. The step's own failure
+            # already reds the job; this keeps the MARKER from saying otherwise.
+            STATUS="SCOPE_FAILED"
+            DETAIL="The scope step produced no file count, so this run never established what it was supposed to check, let alone checked it. Nothing here is a statement about the links."
+          elif [ "${COUNT}" = "0" ]; then
             STATUS="NO_DOCS_IN_SCOPE"
             DETAIL="No docs/**/*.md file was in scope (${REASON}). Nothing was checked, and nothing needed to be."
           elif [ "${LYCHEE_OUTCOME:-}" = "success" ]; then
@@ -254,7 +311,7 @@ jobs:
               DETAIL="The link step did not complete after ${ELAPSED}s, and the job budget could not be re-read from the workflow file, so a timeout cannot be told apart from a supersede here. Either way NO link verdict was established."
             elif [ "$ELAPSED" -ge $(( BUDGET_S - SLACK )) ]; then
               STATUS="TIMEOUT"
-              DETAIL="The link check was still running when the ${BUDGET_MIN}-minute job budget expired (${ELAPSED}s elapsed). It was killed mid-flight and emitted NO verdict — this run is ABSENT, not red, and says nothing about whether the links are good."
+              DETAIL="The link step did not complete, and ${ELAPSED}s had elapsed against the ${BUDGET_MIN}-minute (${BUDGET_S}s) budget. A job timeout is INFERRED from that elapsed time, not observed — a supersede arriving this late is indistinguishable here. Either way the step emitted NO verdict: this run is ABSENT, not red, and says nothing about whether the links are good."
             else
               STATUS="CANCELLED"
               DETAIL="Cancelled after ${ELAPSED}s, well inside the ${BUDGET_MIN}-minute budget — superseded by a newer push, or cancelled by hand. No link verdict was established."
@@ -303,7 +360,7 @@ jobs:
           # advisory; being unable to look is a defect in this workflow and must
           # not pass silently as a green check.
           case "$STATUS" in
-            SETUP_FAILED|CHECKER_ERROR|UNKNOWN)
+            SETUP_FAILED|CHECKER_ERROR|UNKNOWN|SCOPE_FAILED)
               echo "::error title=Link Check established nothing::${DETAIL}"
               exit 1 ;;
           esac
