@@ -6,22 +6,43 @@
  * Split out of `azure-sql-client.ts` because it is a bounded context of its own
  * — replica-local request registry, an intent store, and a poll watcher — and
  * because keeping it there took that module past the 1500-LOC monolith-creep
- * warn line (`scripts/ci/check-file-size.mjs`). This is a pure MOVE: no logic,
- * no message string and no state changed, and `azure-sql-client.ts` re-exports
+ * warn line (`scripts/ci/check-file-size.mjs`). This is a MOVE: no logic, no
+ * message string and no state changed, and `azure-sql-client.ts` re-exports
  * every symbol below, so every existing import path still resolves to the SAME
  * module instance. `liveRequests` in particular must stay a single map — the
  * watcher and the query path both mutate it.
  *
- * The credential chain is constructed here rather than imported from
- * `azure-sql-client.ts` so the two modules do not form an import cycle
- * (`scripts/check-circular-deps.mjs`). It is character-for-character the chain
- * that module builds, so the Cosmos AAD token this store mints is the one it
- * minted before the split.
+ * TWO deliberate non-move deltas, both type-level and both disclosed rather than
+ * folded in silently: the credential chain is reconstructed here rather than
+ * imported from `azure-sql-client.ts`, so the two modules do not form an import
+ * cycle (`scripts/check-circular-deps.mjs`) — it is the same three-link chain
+ * that module builds, so the Cosmos AAD token is unchanged; and the map's value
+ * type is the structural `CancellableRequest` below instead of `sql.Request`,
+ * for the reason given there.
  */
 
-import sql from 'mssql';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+
+/**
+ * The only surface of an mssql `Request` this module touches.
+ *
+ * Deliberately NOT `import sql from 'mssql'`. The repo has no `@types/mssql`, so
+ * that import is a TS7016 (`implicitly has an 'any' type`) under the brain-spec
+ * type-check in `fiab-console-ci.yml` — which is why `azure-sql-client.ts` and
+ * `synapse-sql-client.ts` are both carried on that step's KNOWN_RED list. Those
+ * two genuinely need the driver; this module only ever calls `.cancel()`, so
+ * taking the import would have added a THIRD named exemption for a dependency
+ * the code does not use. The gate says the list must shrink, not that it may
+ * grow by re-exporting the same untyped import into another file.
+ *
+ * Structural, so a real `sql.Request` satisfies it with no cast at the call
+ * sites in `azure-sql-client.ts`.
+ */
+export interface CancellableRequest {
+  /** tedious: sends a TDS ATTENTION packet on the same connection. */
+  cancel(): void;
+}
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -62,7 +83,7 @@ const credential = uamiClientId
  * Entries are removed on completion, error, or explicit cancel (in the `finally`
  * of `executeQuery` and in the cancel route after `.cancel()`).
  */
-export const liveRequests: Map<string, sql.Request> = new Map();
+export const liveRequests: Map<string, CancellableRequest> = new Map();
 
 // ============================================================
 // Cross-replica cancel intents (#3400)
@@ -328,7 +349,7 @@ function stopCancelWatcherIfIdle(): void {
 }
 
 /** Register an in-flight request and make sure this replica is watching for intents. */
-export function registerLiveRequest(requestId: string, request: sql.Request): void {
+export function registerLiveRequest(requestId: string, request: CancellableRequest): void {
   liveRequests.set(requestId, request);
   startCancelWatcher();
 }
