@@ -164,6 +164,10 @@ BRANCHES = [
     # never established what it needed to check — the R7 shape this file exists
     # to remove, in the file that removes it.
     ("scope step failed", {"COUNT": ""}, 3, "SCOPE_FAILED", 1),
+    # `success` with NO exit code published. Defaulting that to 0 would print
+    # "found no dead links" from a verdict never observed — the same shape as
+    # the empty COUNT above, and refused for the same reason.
+    ("success but no exit code", {"LYCHEE_OUTCOME": "success", "LYCHEE_EXIT": ""}, 3, "CHECKER_ERROR", 1),
     ("clean run", {"LYCHEE_OUTCOME": "success", "LYCHEE_EXIT": "0"}, 3, "OK", 0),
     ("dead links", {"LYCHEE_OUTCOME": "success", "LYCHEE_EXIT": "2"}, 3, "DEAD_LINKS", 0),
     ("lychee errored", {"LYCHEE_OUTCOME": "success", "LYCHEE_EXIT": "1"}, 3, "CHECKER_ERROR", 1),
@@ -176,7 +180,7 @@ BRANCHES = [
 
 
 @pytest.mark.parametrize(
-    "case,overrides,age,expected_status,expected_rc",
+    ("case", "overrides", "age", "expected_status", "expected_rc"),
     BRANCHES,
     ids=[b[0].replace(" ", "-") for b in BRANCHES],
 )
@@ -261,7 +265,16 @@ def test_pull_requests_are_scoped_to_changed_files() -> None:
     # A deletion or rename can break inbound links from files the PR never
     # touched, so those PRs must widen back to the full sweep.
     assert "--diff-filter=DR" in scope, "deleted/renamed docs must force a full sweep"
-    assert _step("lychee").get("if"), "the check must be skippable when nothing is in scope"
+    # Pinned, not merely truthy: `if: always()` is also truthy and would run
+    # lychee over an empty target list on every skip-worthy PR.
+    assert _step("lychee").get("if") == "steps.scope.outputs.count != '0'", (
+        "the lychee step's condition must be the count gate, exactly"
+    )
+    # The --offline decision is made in `scope`; if it is not interpolated into
+    # the args it has no effect on anything that runs.
+    assert "steps.scope.outputs.offline" in _step("lychee")["with"]["args"], (
+        "the offline flag must reach lychee's args or the widen is still online"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +321,11 @@ def _base_repo(repo: Path) -> str:
     _init_repo(repo)
     _write(repo, "docs/top.md")
     _write(repo, "docs/guide/deep.md")
-    _write(repo, "docs/guide/other.md")
+    # Links at a non-.md asset, which is what makes the delete-asset fixture a
+    # real inbound-link breakage rather than a hypothetical one.
+    _write(repo, "docs/guide/other.md", "see ![arch](../img/arch.png)\n")
+    _write(repo, "docs/img/arch.png", "not really a png\n")
+    _write(repo, "docs/_includes/snippet.md", "shared snippet\n")
     _write(repo, "src/app.py", "x = 1\n")
     return _commit(repo, "base")
 
@@ -383,6 +400,11 @@ def test_scope_skips_when_no_docs_changed(tmp_path: Path) -> None:
 # on the full sweep. A case that narrows instead is a silent under-check.
 WIDEN_CASES = [
     ("deleted-doc", "delete"),
+    # BLOCKER, round 3: keyed on ^docs/.*\.md$ this did NOT widen. Deleting an
+    # asset an unchanged doc links to is exactly the inbound-link breakage the
+    # widen exists for; 551 non-.md files live under docs/ and lychee resolves
+    # local file: links. It reported "nothing needed to be checked".
+    ("deleted-non-md-asset", "delete-asset"),
     ("renamed-within-docs", "rename-in"),
     ("renamed-out-of-docs", "rename-out"),
     ("non-ascii-doc", "non-ascii"),
@@ -390,29 +412,22 @@ WIDEN_CASES = [
     ("dollar-in-name", "dollar"),
     ("backtick-in-name", "backtick"),
     ("over-argv-budget", "many"),
+    # The widen the step's comment claimed was covered and was not: a path the
+    # diff lists but the checkout does not have.
+    ("changed-doc-absent-from-checkout", "absent"),
 ]
 
 
-@pytest.mark.parametrize(("case", "kind"), WIDEN_CASES, ids=[c[0] for c in WIDEN_CASES])
-def test_scope_never_narrows_silently(case: str, kind: str, tmp_path: Path) -> None:
-    """Every exit from the narrowing path widens to the full sweep.
-
-    The step's own comment states this as an invariant. Two counterexamples
-    shipped in the first draft of #4426 and are pinned here:
-
-    * ``rename-out`` — ``--name-only`` prints only a rename's POST-image, so
-      moving a doc OUT of ``docs/`` emitted no docs path, the DR widen never
-      fired, and the run reported "nothing needed to be checked" over a PR that
-      could have broken inbound internal links. Fixed with ``--no-renames``.
-    * ``non-ascii`` — ``core.quotepath`` (default true) C-quotes a non-ASCII
-      path, so the line began with ``"``, failed the ``^docs/`` test, and was
-      DROPPED before any guard saw it. Fixed with ``core.quotepath=false``.
-    """
-    repo = tmp_path / "r"
-    base = _base_repo(repo)
+def _apply_widen_fixture(repo: Path, kind: str, label: str) -> None:
+    """Build one widen scenario in `repo` and commit it. Shared by both tests."""
+    delete_after_commit: str | None = None
 
     if kind == "delete":
         (repo / "docs" / "guide" / "other.md").unlink()
+    elif kind == "delete-asset":
+        # docs/guide/other.md links to it, and the PR removes it. Nothing under
+        # docs/ that a doc can point at may be deleted without widening.
+        (repo / "docs" / "img" / "arch.png").unlink()
     elif kind == "rename-in":
         _git(repo, "mv", "docs/guide/other.md", "docs/guide/renamed.md")
     elif kind == "rename-out":
@@ -429,10 +444,40 @@ def test_scope_never_narrows_silently(case: str, kind: str, tmp_path: Path) -> N
     elif kind == "many":
         for i in range(301):
             _write(repo, f"docs/bulk/f{i}.md")
-    else:  # pragma: no cover - guards the table above
+    elif kind == "absent":
+        # Committed, so the diff lists it; then removed from the WORKTREE only,
+        # so `[ -f ]` fails. The step must widen, not silently drop the line.
+        _write(repo, "docs/ghost.md")
+        delete_after_commit = "docs/ghost.md"
+    else:  # pragma: no cover - guards the tables above
         raise AssertionError(f"unhandled fixture kind {kind!r}")
 
-    _commit(repo, case)
+    _commit(repo, label)
+    if delete_after_commit is not None:
+        (repo / delete_after_commit).unlink()
+
+
+@pytest.mark.parametrize(("case", "kind"), WIDEN_CASES, ids=[c[0] for c in WIDEN_CASES])
+def test_scope_never_narrows_silently(case: str, kind: str, tmp_path: Path) -> None:
+    """Every exit from the narrowing path widens to the full sweep.
+
+    The step's own comment states this as an invariant. Three counterexamples
+    shipped in earlier drafts of #4426 and are pinned here:
+
+    * ``rename-out`` — ``--name-only`` prints only a rename's POST-image, so
+      moving a doc OUT of ``docs/`` emitted no docs path, the DR widen never
+      fired, and the run reported "nothing needed to be checked" over a PR that
+      could have broken inbound internal links. Fixed with ``--no-renames``.
+    * ``non-ascii`` — ``core.quotepath`` (default true) C-quotes a non-ASCII
+      path, so the line began with ``"``, failed the ``^docs/`` test, and was
+      DROPPED before any guard saw it. Fixed with ``core.quotepath=false``.
+    * ``delete-non-md-asset`` — the DR widen was keyed on ``^docs/.*\\.md$``, so
+      deleting an image an unchanged doc links to did not widen. Fixed by
+      keying it on ``^docs/``.
+    """
+    repo = tmp_path / "r"
+    base = _base_repo(repo)
+    _apply_widen_fixture(repo, kind, case)
     out = _run_scope(repo, base_sha=base)
 
     assert out["scope"] == "full", (
@@ -461,7 +506,7 @@ def test_scope_widens_when_base_sha_is_missing_or_bogus(tmp_path: Path) -> None:
 
 
 def test_scope_is_full_off_the_pull_request_path(tmp_path: Path) -> None:
-    """The scheduled sweep is not narrowed by anything."""
+    """The scheduled sweep is not narrowed, is not offline, and counts the corpus."""
     repo = tmp_path / "r"
     base = _base_repo(repo)
     _write(repo, "docs/top.md", "changed\n")
@@ -470,6 +515,66 @@ def test_scope_is_full_off_the_pull_request_path(tmp_path: Path) -> None:
     out = _run_scope(repo, base_sha=base, event="schedule")
     assert out["scope"] == "full"
     assert out["targets"] == "'docs/**/*.md'"
+    # Asserting the COUNT is what stops a mutation that forces the full-sweep
+    # corpus to 0: `if: steps.scope.outputs.count != '0'` would then skip lychee
+    # entirely and the marker would report NO_DOCS_IN_SCOPE over a run that was
+    # supposed to sweep everything. Nothing asserted this before.
+    assert int(out["count"]) == 4, (
+        f"full sweep must count the tracked docs .md corpus, got {out['count']!r}"
+    )
+    # The weekly sweep is the one that goes to the network.
+    assert out["offline"] == "", "the scheduled sweep must NOT be offline"
+
+
+def test_pr_widen_is_offline_but_the_narrow_path_is_not(tmp_path: Path) -> None:
+    """A widen on a PR must be cheap, and must say it only checked local links.
+
+    Every widen exit exists for inbound INTERNAL links, and a deletion cannot
+    change whether an external host is up. Running the widen online is what
+    would let #4425's timeout back in on the PR path, now over 2548 files
+    instead of 421.
+    """
+    repo = tmp_path / "r"
+    base = _base_repo(repo)
+    (repo / "docs" / "guide" / "other.md").unlink()
+    _commit(repo, "delete a doc")
+
+    widened = _run_scope(repo, base_sha=base)
+    assert widened["scope"] == "full"
+    assert widened["offline"] == "--offline", (
+        "a PR widen must be offline or it re-opens the timeout it just closed"
+    )
+
+    # The narrow path still goes to the network: a PR that ADDS an external
+    # link is exactly what the check is for.
+    repo2 = tmp_path / "r2"
+    base2 = _base_repo(repo2)
+    _write(repo2, "docs/top.md", "changed\n")
+    _commit(repo2, "touch one doc")
+    narrowed = _run_scope(repo2, base_sha=base2)
+    assert narrowed["scope"] == "changed"
+    assert narrowed["offline"] == "", "the narrow PR path must stay online"
+
+
+def test_excluded_includes_dir_does_not_masquerade_as_a_checked_file(
+    tmp_path: Path,
+) -> None:
+    """docs/_includes is --exclude-path, so it must not count as in-scope.
+
+    Left in scope it produced count=1, ran lychee over a path it was told to
+    exclude, and reported "0 link(s) checked, and found no dead links" — a
+    clean bill of health for a file nothing looked at.
+    """
+    repo = tmp_path / "r"
+    base = _base_repo(repo)
+    _write(repo, "docs/_includes/snippet.md", "changed shared snippet\n")
+    _commit(repo, "touch only an excluded include")
+
+    out = _run_scope(repo, base_sha=base)
+    assert out["count"] == "0", (
+        f"an excluded path must not be counted as in scope, got {out!r}"
+    )
+    assert "docs/_includes" not in out["targets"]
 
 
 def test_scope_quoted_path_guard_is_independently_load_bearing(tmp_path: Path) -> None:
@@ -499,35 +604,52 @@ def test_scope_quoted_path_guard_is_independently_load_bearing(tmp_path: Path) -
     assert "quote" in out["reason"].lower(), out["reason"]
 
 
-# (label, mutation applied to the shipped script, fixture kind it must break)
+# (label, (old, new), fixture kind the mutation must break)
 # SILENCE controls. Each mutation reintroduces a real defect; if the suite stays
-# green under it, the corresponding test is measuring nothing. All three of
-# these survived the substring-only version of this module.
+# green under it, the corresponding test is measuring nothing. The first three
+# survived the substring-only version of this module; `non-md widen` and
+# `absent-from-checkout` survived a green suite as recently as round 3.
 SCOPE_MUTATIONS = [
     (
         "PR narrowing deleted",
         ('if [ "$EVENT" = "pull_request" ]', 'if [ "$EVENT" = "__never__" ]'),
+        "narrow",
     ),
     (
         "argv-safety guard neutered",
         ("*[!A-Za-z0-9/._-]*)", "*__never_matches__*)"),
+        "space",
     ),
     (
         "argv budget raised past any diff",
         ('if [ "$N" -gt 300 ]', 'if [ "$N" -gt 999999 ]'),
+        "many",
     ),
     (
-        "rename detection restored (finding 1a)",
+        "rename detection restored (round 2 blocker a)",
         ("--name-only --no-renames --diff-filter=DR", "--name-only --diff-filter=DR"),
+        "rename-out",
+    ),
+    (
+        "DR widen re-keyed to .md only (round 3 blocker)",
+        ("elif grep -qE '^docs/' gone-all.txt", "elif grep -qE '^docs/.*[.]md$' gone-all.txt"),
+        "delete-asset",
+    ),
+    (
+        "absent-from-checkout widen removed",
+        ('WIDEN="changed path \'${f}\' is absent from the checkout"', 'WIDEN=""'),
+        "absent",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("label", "mutation"), SCOPE_MUTATIONS, ids=[m[0].replace(" ", "-") for m in SCOPE_MUTATIONS]
+    ("label", "mutation", "kind"),
+    SCOPE_MUTATIONS,
+    ids=[m[0].replace(" ", "-") for m in SCOPE_MUTATIONS],
 )
 def test_a_broken_scope_step_is_caught(
-    label: str, mutation: tuple[str, str], tmp_path: Path
+    label: str, mutation: tuple[str, str], kind: str, tmp_path: Path
 ) -> None:
     """ANTI-VACUITY: the scope harness must be able to go RED on its own target."""
     old, new = mutation
@@ -539,9 +661,11 @@ def test_a_broken_scope_step_is_caught(
     repo = tmp_path / "r"
     base = _base_repo(repo)
 
-    if label.startswith("PR narrowing"):
+    if kind == "narrow":
+        # The one case whose HEALTHY state is `changed`; the mutation must stop
+        # it narrowing at all.
         _write(repo, "docs/top.md", "changed\n")
-        _commit(repo, "touch")
+        _commit(repo, label)
         healthy = _run_scope(repo, base_sha=base)
         broken = _run_scope(repo, base_sha=base, script=mutated)
         assert healthy["scope"] == "changed", "precondition: the shipped step narrows"
@@ -549,16 +673,7 @@ def test_a_broken_scope_step_is_caught(
         assert healthy["scope"] != broken["scope"], label
         return
 
-    if label.startswith("argv-safety"):
-        _write(repo, "docs/with space.md")
-    elif label.startswith("argv budget"):
-        for i in range(301):
-            _write(repo, f"docs/bulk/f{i}.md")
-    else:  # rename detection restored
-        _write(repo, "moved/placeholder.txt", "x\n")
-        _git(repo, "mv", "docs/guide/other.md", "moved/other.md")
-    _commit(repo, label)
-
+    _apply_widen_fixture(repo, kind, label)
     healthy = _run_scope(repo, base_sha=base)
     broken = _run_scope(repo, base_sha=base, script=mutated)
 
@@ -566,6 +681,29 @@ def test_a_broken_scope_step_is_caught(
     assert broken["scope"] != "full", (
         f"{label}: the mutated step still widened, so this case proves nothing. "
         f"reason={broken.get('reason')!r}"
+    )
+
+
+def test_a_widen_that_goes_online_is_caught(tmp_path: Path) -> None:
+    """SILENCE control on the --offline widen.
+
+    Removing it leaves every widen exit running the full 2548-file sweep on a
+    PR, which is #4425 with a bigger corpus. Nothing else in this module would
+    notice, because the scope/reason/count outputs are all unchanged.
+    """
+    repo = tmp_path / "r"
+    base = _base_repo(repo)
+    _apply_widen_fixture(repo, "delete", "delete a doc")
+
+    shipped = _step("scope")["run"]
+    mutated = shipped.replace('OFFLINE="--offline"', 'OFFLINE=""')
+    assert mutated != shipped, "the OFFLINE assignment was not found to remove"
+
+    healthy = _run_scope(repo, base_sha=base)
+    broken = _run_scope(repo, base_sha=base, script=mutated)
+    assert healthy["offline"] == "--offline", "precondition: the shipped widen is offline"
+    assert broken["offline"] != "--offline", (
+        "the mutated step still reported offline, so this control proves nothing"
     )
 
 
