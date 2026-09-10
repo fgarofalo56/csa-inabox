@@ -1388,10 +1388,10 @@ export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVer
   try { ep = await resolveContentSafetyEndpoint(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   if (!ep) return { blocked: false, reason: '' };
   let tok: string;
-  // Token acquisition failing (an IMDS blip, or Cognitive Services User revoked
-  // out-of-band) also means the prompt goes UNSCREENED. It gets the same loud
-  // treatment as an unreachable endpoint — a silent return here is how the UI
-  // ends up reporting "screened" while nothing is.
+  // An unobtainable token (IMDS blip, or Cognitive Services User revoked
+  // out-of-band) is an UNSCREENED prompt too, so it gets the same loud
+  // treatment — a silent return here is how the UI reports "screened" while
+  // nothing is.
   try { tok = await contentSafetyToken(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   let res: Response;
   try {
@@ -1409,14 +1409,9 @@ export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVer
     return { blocked: false, reason: '' };
   }
   // A 200 whose body will not parse is NOT a verdict of "no attack" — it is no
-  // verdict at all, and collapsing it to `{}` silently reads as clean. Fail
-  // open (availability), but say so, like every other unscreened path.
+  // verdict at all, and collapsing it to `{}` reads as clean. Fail open, loudly.
   let j: any;
-  try {
-    j = await res.json();
-  } catch (e) {
-    return safetyFailOpen('shieldPrompt', e);
-  }
+  try { j = await res.json(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   const attack = j?.userPromptAnalysis?.attackDetected === true;
   return {
     blocked: attack,
@@ -1458,13 +1453,9 @@ export async function moderateContent(text: string): Promise<ContentSafetyVerdic
     return { blocked: false, reason: '' };
   }
   // Same as shieldPrompt: an unparseable 200 is an absent verdict, not a clean
-  // one, and it must not read as "nothing was flagged".
+  // one, and must not read as "nothing was flagged".
   let j: any;
-  try {
-    j = await res.json();
-  } catch (e) {
-    return safetyFailOpen('moderateContent', e);
-  }
+  try { j = await res.json(); } catch (e) { return safetyFailOpen('moderateContent', e); }
   const hits: Array<{ category: string; severity: number }> =
     (j?.categoriesAnalysis || []).filter((c: any) => (c?.severity ?? 0) >= CONTENT_SAFETY_BLOCK_SEVERITY);
   if (hits.length === 0) return { blocked: false, reason: '' };

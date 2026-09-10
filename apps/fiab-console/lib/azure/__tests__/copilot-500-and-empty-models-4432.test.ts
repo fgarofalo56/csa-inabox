@@ -317,10 +317,13 @@ describe('#4432 / ARM list paging behind the empty AI-model pickers', () => {
   });
 
   it('treats a malformed nextLink as the end of the walk, not something to guess at', async () => {
-    const hosts: string[] = [];
+    // The first version of this test drove the case through listAccounts and was
+    // BLIND: listAccounts wraps each subscription in a catch, so without the
+    // guard `new URL('not-a-url')` threw, got swallowed into `failures`, and the
+    // assertions held identically with and without the fix. Measured GREEN-MISSED
+    // under mutation. Both assertions below discriminate.
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url);
-      hosts.push(u);
       const json = (body: unknown) =>
         new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
       if (u.includes('/subscriptions?') || u.endsWith('/subscriptions')) {
@@ -328,8 +331,21 @@ describe('#4432 / ARM list paging behind the empty AI-model pickers', () => {
       }
       return json({ value: [], nextLink: 'not-a-url' });
     }));
-    const { listAccounts } = await import('../foundry-cs-client');
-    await expect(listAccounts()).resolves.toEqual([]);
-    expect(hosts.some((h) => h.includes('not-a-url'))).toBe(false);
+    const { listAccountsDetailed, listCatalogModels } = await import('../foundry-cs-client');
+
+    // (a) ending the walk is not a FAILURE — without the guard the thrown
+    //     TypeError lands in `failures` and the caller reports a broken
+    //     subscription that is not broken.
+    const { accounts, failures } = await listAccountsDetailed();
+    expect(accounts).toEqual([]);
+    expect(failures).toEqual([]);
+
+    // (b) the consequence that actually matters: listCatalogModels calls
+    //     armListAll with NO surrounding catch, so without the guard a malformed
+    //     nextLink becomes a raw unhandled throw out of a route — the exact class
+    //     this PR exists to close.
+    await expect(
+      listCatalogModels({ name: 'a', rg: 'rg', sub: 'sub-1' }),
+    ).resolves.toBeTruthy();
   });
 });

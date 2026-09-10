@@ -108,52 +108,37 @@ async function readJson<T>(res: Response): Promise<T | null> {
   return (parsed as T) ?? ({} as T);
 }
 
-/** Hard ceiling on ARM list paging. 50 pages is far beyond any real estate.
- *
- *  This bounds PAGES, not TIME: with DEFAULT_SERVER_FETCH_TIMEOUT_MS at 30s a
- *  pathological chain could still burn 25 minutes on one request, fanned out
- *  across subscriptions by Promise.all. So the loop ALSO carries a wall-clock
- *  deadline and a visited-url set — the page ceiling alone is not a latency
- *  bound, and saying it was would be a claim the code did not establish. */
+/** Page ceiling for an ARM list walk. Bounds PAGES, not TIME — at a 30s per-fetch
+ *  timeout 50 pages is ~25min, so the loop also carries the wall-clock deadline
+ *  below and a visited-url set. Calling this a latency bound would overclaim. */
 const MAX_ARM_PAGES = 50;
-
-/** Wall-clock ceiling for a whole paged walk, independent of the page count. */
 const MAX_ARM_PAGING_MS = 60_000;
 
 /**
  * Follow an ARM collection across ALL of its pages.
  *
  * #4432: the account/deployment/model list calls read only `body.value` and
- * dropped `nextLink`. Note the scope honestly — this helper is adopted by the
- * calls that feed account and model pickers, NOT by every ARM list in this file.
- * `usages`, `roleAssignments`, `raiPolicies` and `privateEndpointConnections`
- * still read page 1 only and can still under-report; they are tracked separately
- * rather than claimed fixed here. (The activity-log call is deliberately
- * `.slice(0, 200)` and is not a paging defect.)
+ * dropped `nextLink`. Scope this honestly — adopted by the calls feeding account
+ * and model pickers, NOT every ARM list here. `usages`, `roleAssignments`,
+ * `raiPolicies` and `privateEndpointConnections` still read page 1 only and can
+ * under-report; tracked separately, not claimed fixed. (The activity-log call is
+ * a deliberate `.slice(0, 200)`, not a paging defect.)
  *
- * ARM's `Accounts_List` is RBAC-FILTERED PER PAGE, so an early page is
- * routinely empty while the accounts arrive later. Measured from inside the
- * loom-console container 2026-09-10 with the console UAMI: `GET
- * /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts` answered
- * HTTP 200, `value: []`, nextLink present — while that subscription holds three
- * Cognitive Services accounts.
+ * ARM's `Accounts_List` is RBAC-FILTERED PER PAGE, so an early page is routinely
+ * empty while accounts arrive later. Measured inside the loom-console container
+ * 2026-09-10 with the console UAMI: the accounts list answered HTTP 200,
+ * `value: []`, nextLink present, while that subscription held three accounts.
+ * Page-1-only therefore produced an EMPTY-BUT-SUCCESSFUL result: zero options,
+ * every model dropdown "(none)", no error because nothing failed — a claim of
+ * absence the code never established (R7). A 404 on page 1 still means "not
+ * found" and yields `null`, preserving the `readJson` contract `resolveAccount`
+ * depends on.
  *
- * Reading page 1 only therefore produced an EMPTY-BUT-SUCCESSFUL result: zero
- * account options, every model dropdown "(none)", and no error anywhere because
- * nothing had failed — a claim of absence the code never established (R7).
- *
- * A 404 on page 1 still means "not found" and yields `null`, preserving the
- * `readJson` contract `resolveAccount` depends on.
- *
- * SECURITY — `nextLink` is attacker-shaped data, not a trusted constant. It is
- * an absolute URL read VERBATIM out of a response body, and this loop attaches a
- * management-plane bearer token to it. Following it without checking its origin
- * would forward an ARM token to whatever host the body named, up to
- * MAX_ARM_PAGES times. Nothing upstream constrains that string, so the check
- * belongs here: the walk stops the moment a page points off the ARM origin for
- * this boundary. `armBase()` is boundary-correct (management.usgovcloudapi.net /
- * management.azure.microsoft.scloud), so this holds in sovereign clouds too.
- */
+ * SECURITY — `nextLink` is attacker-shaped data: an absolute URL read VERBATIM
+ * from a response body, to which this loop attaches a management-plane bearer
+ * token. Unchecked, that forwards an ARM token to whatever host the body names.
+ * The origin check runs BEFORE the token is minted; `armBase()` is
+ * boundary-correct, so it holds in sovereign clouds too. */
 async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[] | null> {
   const first = await armFetch(fullPath, apiVersion ? { apiVersion } : {});
   const page1 = await readJson<{ value?: T[]; nextLink?: string }>(first);
@@ -164,18 +149,14 @@ async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[]
   const seen = new Set<string>();
   const deadline = Date.now() + MAX_ARM_PAGING_MS;
   for (let p = 1; next && p < MAX_ARM_PAGES; p++) {
-    // nextLink is an ABSOLUTE url already carrying api-version + $skiptoken.
-    // Refuse to carry the ARM token anywhere but ARM. A malformed URL is not a
-    // page we can reason about either, so it ends the walk rather than being
-    // guessed at.
+    // nextLink is an ABSOLUTE url carrying api-version + $skiptoken. Refuse to
+    // carry the ARM token anywhere but ARM; a malformed url ends the walk rather
+    // than being guessed at. A repeated nextLink is a cycle, not progress.
     let nextOrigin: string;
     try {
       nextOrigin = new URL(next).origin;
-    } catch {
-      break;
-    }
+    } catch { break; }
     if (nextOrigin !== armOrigin) break;
-    // A repeated nextLink is a cycle, not progress.
     if (seen.has(next)) break;
     seen.add(next);
     if (Date.now() > deadline) break;
@@ -621,10 +602,8 @@ function shapeCatalogModel(r: any): CatalogModel {
  */
 export async function listCatalogModels(selector?: AccountSelector): Promise<{ account: CsAccount; models: CatalogModel[] }> {
   const acct = await resolveAccount(false, selector);
-  // Paged like every other ARM collection (#4432). This one backs an AI-MODEL
-  // PICKER — the exact surface class this fix exists for — so reading page 1
-  // only would reproduce the empty-but-successful dropdown here after fixing it
-  // everywhere else.
+  // Paged (#4432): this backs an AI-MODEL PICKER, so page-1-only would reproduce
+  // the empty-but-successful dropdown here after fixing it everywhere else.
   const rows = (await armListAll<any>(`${accountPath(acct)}/models`)) || [];
   const models = rows.map(shapeCatalogModel)
     // De-dupe by name, preferring the default version.
