@@ -95,24 +95,40 @@ function asOfDesc(asOf: AsOfSpec): string {
 // engine served whatever the ref named.
 //
 // WHAT LANDED: the NAME-SPACE half — `ontologySqlRefViolation` (pure, in
-// ontology-binding.ts). No engine-metadata schema (`sys`, `INFORMATION_SCHEMA`,
-// …) named as the SCHEMA of a `schema.table` or `db.schema.table` ref, and no
-// 3-part ref naming a database other than the one the binding declares. That
-// refuses the read the issue names — `master.sys.sql_logins`, and its bare
-// `sys.`, cased and bracketed spellings — before a query is built.
+// ontology-binding.ts). Every ref that reaches `buildSqlSelect` now carries an
+// EXPLICIT schema, that schema is not engine metadata (`sys`,
+// `INFORMATION_SCHEMA`, `guest`, the nine fixed-role schemas), and a 3-part ref
+// names no database other than the one the binding declares. That refuses the
+// read the issue names — `master.sys.sql_logins`, and its bare `sys.`, cased
+// and bracketed spellings — before a query is built.
 //
-// AND WHERE IT IS SILENT, IN THE SAME BREATH AS THE CLAIM. The schema test sits
-// behind `parts.length >= 2`, so a ONE-PART ref (`syslogins`, `sysobjects`,
-// `sysdatabases`) gets no schema test at all: there is no schema in the string
-// to test, and which schema the engine resolves it against is a server-side
-// decision a pure string function cannot see. Measured at head: `sys.sql_logins`
-// REFUSED, `syslogins` ALLOWED. Whether Synapse resolves those legacy
-// compatibility names out of `sys` for an unqualified ref was NOT established
-// here — no Synapse endpoint was reached — so this is "the guard does not cover
-// it", not "there is a hole". The full paragraph is on
-// `ontologySqlRefViolation` (WHERE THIS GUARD IS SILENT, SAID OUT LOUD); this
-// comment used to say the guard refused "every variant" of the read, which was
-// a security-scope claim the code does not support.
+// THE ONE-PART HOLE, AND WHY THE FIX IS A SHAPE. The first cut put the schema
+// test behind `parts.length >= 2`, so an unqualified ref got no schema test at
+// all. Independent review measured four spellings reaching this sink with
+// `gated=false`, one `synapseExecute` call each, `db = master`; re-measuring
+// before the fix with six more the first author never tried found all ten
+// reached it: `syslogins`, `sysobjects`, `sysdatabases`, `sysusers`,
+// `sysaltfiles`, `spt_values`, `MSreplication_options`, `[syslogins]`,
+// `[[sysobjects]]`, `sys`. Two of those do not begin with `sys`, so the obvious
+// narrow fix (refuse names starting with `sys`) would have closed eight of ten
+// and read as a closed class — the failure mode this repo keeps re-finding. The
+// rule that landed instead is a SHAPE: a ref with no schema in it is a ref
+// whose schema the SERVER picks, which this pure function cannot see and
+// therefore cannot judge, so it FAILS CLOSED regardless of the name. Measured
+// after: all ten `gated=true`, zero `synapseExecute` calls. Still no Synapse
+// endpoint was reached, so nothing here claims what the engine would have done
+// with those strings — only that they no longer reach it.
+//
+// WHAT THE DATABASE HALF ACTUALLY BINDS, SINCE "cross-database" OVERSTATES IT.
+// `ownDatabase` for `case 'lakehouse-table'` is `binding.source.database` — a
+// caller-supplied string off the request (`normalizeOntologyBinding`) — and it
+// is the SAME value passed to `serverlessTarget(lhDb)`. So on that sink the
+// 3-part test enforces internal consistency between `ref` and `database`, not
+// isolation: a caller who wants another database declares it. Only
+// `case 'warehouse-table'` gets a real restriction, because `dedicatedTarget()`
+// ignores the binding and reads `LOOM_SYNAPSE_DEDICATED_POOL`. Both halves are
+// pinned in `ontology-resolver-sql-sink-authz.test.ts` so the asymmetry cannot
+// be described away.
 //
 // WHAT DID NOT LAND, STATED PLAINLY RATHER THAN IMPLIED AWAY: the LIVE half —
 // "is this ref actually one of the objects the binding's catalog EXPOSES?",
@@ -125,12 +141,13 @@ function asOfDesc(asOf: AsOfSpec): string {
 // outside this change's file ownership, so the enumeration half is DEFERRED,
 // not silently dropped.
 //
-// SO BE PRECISE ABOUT WHAT IS AND IS NOT TRUE NOW: a ref naming a real user
-// table in the binding's own database that the caller was never meant to read
-// is STILL resolved, and a ONE-PART ref gets no schema test at all. What is
-// closed is the engine-metadata and cross-database class FOR `schema.table` and
-// `db.schema.table` refs — the spelling the sink was reported for. Anything
-// more would be a claim this code does not support.
+// SO BE PRECISE ABOUT WHAT IS AND IS NOT TRUE NOW. CLOSED: the engine-metadata
+// class, for every ref shape this sink accepts — qualified, bracketed, cased,
+// and unqualified — and the cross-database class on the DEDICATED sink. NOT
+// CLOSED: a ref naming a real user table in the binding's own database that the
+// caller was never meant to read is STILL resolved, and on the Serverless sink
+// the binding's own database is caller-declared, so it is not an isolation
+// boundary. Anything more would be a claim this code does not support.
 // ===========================================================================
 
 /**
