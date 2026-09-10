@@ -13,13 +13,28 @@
  *   3. a build question routes to the build agent — its badge.
  *
  * MOCKED is always run (deterministic SSE keyed on the prompt, so the visual +
- * routing contract is testable without AOAI). LIVE is opt-in via
- * UNIFIED_COPILOT_LIVE=1 and only asserts a real answer OR an honest AOAI gate.
+ * routing contract is testable without AOAI).
+ *
+ * LIVE IS ON BY DEFAULT, and it is the only case that joins the two halves.
+ * Every other test here runs against `mockBackends`, and the direct
+ * container-side probes exercise AOAI with no UI — so without this case the
+ * suite can be entirely green while the real UI has never once reached the real
+ * backend. It was `=== '1'`, i.e. opt-IN, and was therefore skipped on every run
+ * it has ever had: measured 2026-09-10, `pass=2 fail=1 skip=1`, the skip being
+ * this. Default-ON/opt-out per the day-one rule; set UNIFIED_COPILOT_LIVE=0 to
+ * downgrade deliberately.
  */
 import { test, expect } from '@playwright/test';
 import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
 
-const LIVE = process.env.UNIFIED_COPILOT_LIVE === '1';
+const LIVE = process.env.UNIFIED_COPILOT_LIVE !== '0';
+// Loom deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
+// wired" is a broken deployment rather than a supported shape
+// (auto-bind-by-default.md §5). Accepting the gate as an alternative outcome is
+// what makes a dead copilot indistinguishable from a working one — the same
+// defect this session found in copilot.uat.ts's classifier. Set
+// UNIFIED_COPILOT_ALLOW_GATE=1 only where AOAI genuinely is not deployed.
+const LIVE_ALLOW_GATE = process.env.UNIFIED_COPILOT_ALLOW_GATE === '1';
 
 /** Deterministic SSE for the docs agent: attribution → citation → final. */
 function docsSse(): string {
@@ -150,7 +165,7 @@ test('unified copilot — Ctrl+/ toggles the one window', async ({ browser }) =>
 });
 
 test.describe('unified copilot — live AOAI', () => {
-  test.skip(!LIVE, 'UNIFIED_COPILOT_LIVE=1 not set');
+  test.skip(!LIVE, 'UNIFIED_COPILOT_LIVE=0 — live AOAI walk deliberately downgraded');
 
   test('asks a real question, gets a streamed answer or an honest AOAI gate', async ({ browser }) => {
     const ctx = await browser.newContext();
@@ -162,10 +177,26 @@ test.describe('unified copilot — live AOAI', () => {
     await page.getByTestId('copilot-input').fill('What is CSA Loom?');
     await page.getByTestId('copilot-send').click();
 
-    // Either a final answer (with an attribution badge) OR the 503 AOAI gate.
     const finalMsg = page.getByTestId('copilot-msg-copilot').last();
     const aoaiGate = page.getByText(/Copilot AOAI deployment not wired/i);
-    await expect(finalMsg.or(aoaiGate)).toBeVisible({ timeout: 30_000 });
+
+    if (LIVE_ALLOW_GATE) {
+      await expect(finalMsg.or(aoaiGate)).toBeVisible({ timeout: 30_000 });
+    } else {
+      // A REAL answer, not "an answer or a gate". The disjunction is what made
+      // this pass mean nothing: it is satisfied by the copilot telling the user
+      // it is not wired, which is precisely the state the test should catch.
+      await expect(finalMsg).toBeVisible({ timeout: 30_000 });
+      await expect(aoaiGate).toHaveCount(0);
+      // A rendered bubble is not an answer — an empty one satisfies toBeVisible.
+      await expect(finalMsg).not.toHaveText(/^\s*$/);
+    }
+
+    recordVerdict({
+      surface: 'copilot:unified', feature: 'live-aoai-real-answer',
+      verdict: 'A', status: 'pass',
+      notes: LIVE_ALLOW_GATE ? 'real answer or honest gate (downgraded)' : 'real streamed answer',
+    });
     await ctx.close();
   });
 });
