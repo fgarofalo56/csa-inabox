@@ -515,8 +515,27 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     // established (deploy-integrity R7).
   },
   'svc-stream-analytics': {
-    surfaces: [{ path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' }],
+    // #3573 — `stream-analytics-job` is a first-class item type with its own
+    // editor and BFF routes, and this gate listed only the eventstream surface,
+    // so the ASA config gate was invisible on the Admin gate page for the item
+    // type that gates on it hardest (`ux-baseline.md` G2).
+    surfaces: [
+      { path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' },
+      { path: '/items/stream-analytics-job', label: 'Stream Analytics job editor' },
+      { path: '/api/items/stream-analytics-job/*', label: 'Stream Analytics BFF routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — stream-analytics-job provisioner' },
+    ],
     fixit: { kind: 'env-picker' },
+    // DELIBERATELY NOT registered here: `asa-job-not-provisioned`, the 404 the
+    // detail route returns when ASA is configured and the item's backing job
+    // does not exist. Every entry in `legacyCodes` resolves to THIS gate's
+    // env-picker Fix-it — i.e. "set LOOM_ASA_RG / LOOM_ASA_SUB" — and that is
+    // precisely the false remediation #3573 removed: the deployment IS
+    // configured, and no env var the operator could set would create the job.
+    // Its Fix-it is `POST …?provision=1`, which the PLATFORM performs, so under
+    // `auto-bind-by-default.md` §Explicitly-forbidden it is not a gate at all —
+    // a remediation Loom can execute itself must not be modelled as one the
+    // operator has to satisfy.
   },
   'svc-azure-sql': {
     surfaces: [

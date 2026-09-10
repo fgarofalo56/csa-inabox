@@ -2264,6 +2264,80 @@ export const TOUCH_EXEMPT = new Map([
     'apps/fiab-console/lib/components/notebook/environment-panel.tsx',
     '#3530 surfaced the auto-installed session packages here; the remaining .jar/.whl path site needs an artifact picker',
   ],
+  // ── #3573 / #4354 ──────────────────────────────────────────────────────────
+  // The ASA editor was touched ONLY in its error surface: the MessageBar title
+  // stopped keying on "a hint came back" and started keying on the STATUS CODE
+  // that establishes the cause, and a 404 now renders an inline Fix-it that
+  // POSTs the real Phase-2 provisioner (auto-bind-by-default.md §1). Measured
+  // against the diff: every changed line sits in the loadList / loadDetail /
+  // runFixIt / MessageBar block around :166-:230 and :599-:625. The four
+  // baselined sites are at :644, :657, :666 and :682, inside the "Create
+  // output" dialog, which this diff does not open.
+  //
+  // This entry is UNUSUAL and deliberately short-lived: the sites are not
+  // waiting on unbuilt work, they are being cleared RIGHT NOW in open PR #4344,
+  // which takes this file 4 -> 0 and DELETES its baseline key outright. Two of
+  // the four become AzureBackedField pickers there (kind="adxUri" for the ADX
+  // cluster URL, kind="storage" for the ADLS account); the other two are the
+  // Account key / Shared access key boxes, whose compliant default is already
+  // "leave blank and the ASA managed identity is used".
+  //
+  // Re-implementing those pickers here would collide with #4344 in the same
+  // hunks and duplicate work already in review, so the honest move is to say so
+  // and let #4344 land. NOT --update-baseline: measured 2026-09-07 on this head,
+  // that flag exits 0 reporting "baseline updated: 62 keys, 171 total (was 171)"
+  // and writes a byte-identical file while the boy-scout rule stays RC=1 — it
+  // does not clear this rule at all, exactly as the #3878 block above records.
+  //
+  // Named acceptance: DELETE this entry when #4344 merges. It is self-expiring
+  // — once that PR removes the file's baseline key the boy-scout rule can no
+  // longer fire on it, so this becomes dead code rather than a lingering
+  // amnesty.
+  //
+  // #4354 review, should-fix 5: self-expiry is not enough on its own, because
+  // the expiry CONDITION is an open PR. Measured 2026-09-07,
+  // `gh pr view 4344 --json state,mergeable` answers
+  // `{"state":"OPEN","mergeable":"CONFLICTING"}`, so the date is unknown and an
+  // amnesty conditioned on it can outlive its justification in silence — the
+  // exact failure this map exists to prevent. Tracked with the deletion as
+  // acceptance in #4388, in the same shape as the #3626 / #4201 entries.
+  [
+    'apps/fiab-console/lib/editors/stream-analytics-editor.tsx',
+    '#3573 changed only the error MessageBar + the new 404 Fix-it here; the 4 dialog sites are cleared by open PR #4344 (4 -> 0, baseline key deleted) — delete this entry when it merges, tracked in #4388',
+  ],
+  // ── #4432 / #4443 ─────────────────────────────────────────────────────────
+  // copilot-agents-config.tsx was touched to ADD two honest gates, not to add a
+  // box: the Foundry account list and the model-deployment list could each come
+  // back EMPTY-BUT-SUCCESSFUL (ARM's Accounts_List is RBAC-filtered per page and
+  // the client dropped `nextLink`, so page 1 was empty while the subscription
+  // held three accounts — measured on the live estate 2026-09-10). The dropdowns
+  // rendered zero options and NOTHING said why, because nothing had failed. The
+  // diff here is two MessageBars; it goes nowhere near the four free-text sites.
+  //
+  // What each remaining site actually needs — stated from the code, not assumed:
+  //   :362  AOAI endpoint. Already auto-filled from the selected account
+  //         (`accounts[].endpoint`, written by the account picker's
+  //         onOptionSelect); the box exists only for a custom-domain override.
+  //         This is the one site that needs NO new API — the fix is to render it
+  //         read-only with an explicit override affordance, which is a
+  //         behaviour change to the override path and belongs in its own diff.
+  //   :446  Foundry project endpoint. Needs a "list projects on this account"
+  //         discovery call. app/api/foundry/ has accounts / workspace /
+  //         model-deployments / … and NO project enumeration, so there is no
+  //         existing route to point a picker at.
+  //   :454  Foundry project GUID. Derives from whatever :446 resolves to; it
+  //         cannot clear before :446 does.
+  //   :507  Fabric workspace id. Needs a Fabric workspace picker that degrades
+  //         cleanly when no Fabric tenant is bound (no-fabric-dependency.md —
+  //         Fabric is the opt-in alternative), i.e. not a day-one gate.
+  //
+  // Dated exception in the shape #3626 / #4201 / #3530 established, NOT amnesty
+  // and NOT --update-baseline (which does not clear the boy-scout rule at all).
+  // Acceptance — including DELETING this entry — is #4444.
+  [
+    'apps/fiab-console/lib/components/admin/copilot-agents-config.tsx',
+    '#4443 added two empty-but-successful honest gates here (the #4432 ARM-paging defect); the 4 sites need pickers — :362 a read-only derived endpoint, :446/:454 a Foundry project enumeration that has no route yet, :507 a Fabric workspace picker — tracked in #4444',
+  ],
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
