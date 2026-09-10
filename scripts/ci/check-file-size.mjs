@@ -14,8 +14,12 @@
  *     • WARN_THRESHOLD (1500 LOC) — a file above this is "large". Large files
  *       are ADVISORY (printed) and only BLOCK when NEW (see FAIL rule 1).
  *     • Ratchet ceiling (per-file, in ALLOWLIST) — every file already above the
- *       warn line today is frozen at its current LOC (rounded up to the next
- *       100 for a little churn slack). Growth past that ceiling BLOCKS.
+ *       warn line today is frozen at its current LOC. A file entering the
+ *       allowlist for the first time is rounded up to the next 100 for a little
+ *       churn slack; ~a fifth of the entries are instead pinned at their EXACT
+ *       LOC (each says so in its own `reason`), which is a ceiling with zero
+ *       headroom BY DESIGN — the next line of growth has to be argued rather
+ *       than absorbed. Growth past the ceiling BLOCKS either way.
  *     • HARD_MAX (6000 LOC) — an absolute backstop. Any file above it that is
  *       not `bundleExempt` (a generated content bundle) BLOCKS regardless.
  *
@@ -40,7 +44,11 @@
  *     Reviewers gate new allowlist entries — an entry IS the exception request.
  *   - After decomposing a file, refresh the baseline so the ratchet tightens:
  *       node scripts/ci/check-file-size.mjs --update-baseline
- *     and paste the emitted JSON into ALLOWLIST below.
+ *     and paste the emitted JSON into ALLOWLIST below. That paste can only
+ *     TIGHTEN: see updateBaseline() for the invariant, and
+ *     scripts/ci/__tests__/file-size-ratchet.test.mjs for the test that holds
+ *     it — until 2026-09-10 the paste silently LOOSENED 12 ceilings and
+ *     DROPPED 8 entries.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,12 +61,30 @@ const APP_REL = path.join('apps', 'fiab-console');
 const APP_ROOT = path.join(REPO_ROOT, APP_REL);
 const SCOPE_DIRS = ['lib', 'app'];
 
-const WARN_THRESHOLD = 1500; // "large file" line — new files above this block
+export const WARN_THRESHOLD = 1500; // "large file" line — new files above this block
 const HARD_MAX = 6000;       // absolute backstop — non-bundle files above this block
 
 /** Round a LOC up to the next 100 to give a small churn slack on the ratchet. */
-function ceilTo100(loc) {
+export function ceilTo100(loc) {
   return Math.ceil(loc / 100) * 100;
+}
+
+/**
+ * The ratchet rule, as one pure function (see updateBaseline for the incident
+ * it was extracted from). `prevMax` is the ceiling already recorded for this
+ * file, or `undefined` for a file the allowlist has never seen.
+ *
+ *   - NEW file      -> ceilTo100(n): a little churn slack, once.
+ *   - EXISTING, fits under its ceiling -> min(prevMax, ceilTo100(n)). Never
+ *     looser than what is already recorded, so an entry deliberately pinned at
+ *     its exact LOC stays pinned; a decomposed file drops to the rounded count.
+ *   - EXISTING, outgrew its ceiling    -> exactly n. A bump has to happen for
+ *     the tree to be green, and the smallest one that works is the exact count,
+ *     so the NEXT line of growth is argued too.
+ */
+export function nextCeiling(prevMax, n) {
+  if (prevMax === undefined || prevMax === null) return ceilTo100(n);
+  return Math.max(n, Math.min(prevMax, ceilTo100(n)));
 }
 
 function isScanned(rel) {
@@ -71,7 +97,7 @@ function isScanned(rel) {
 }
 
 /** LOC = number of newline-separated lines in the file. */
-function loc(abs) {
+export function loc(abs) {
   const src = fs.readFileSync(abs, 'utf8');
   if (src.length === 0) return 0;
   let n = 1;
@@ -113,7 +139,7 @@ function scan() {
 // decomposition reason; generated content bundles are `bundleExempt` (they are
 // machine-emitted and are the WS-E E2 externalization target). Everything else
 // is a pre-existing large module, ratchet-frozen so it cannot grow further.
-const ALLOWLIST = {
+export const ALLOWLIST = {
   // --- WS-E E1 priority editors (tracked for decomposition; do NOT grow) -----
   "apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx": { max: 1200, reason: "WS-11.1 decomposed (5227→<1200 LOC); ratchet-frozen at 1200 post-decomp (R7 re-baseline)" },
   "apps/fiab-console/lib/editors/report-designer.tsx": { max: 1300, reason: "WS-11.1 decomposed (5135→1280 LOC); ratchet-frozen at 1300 post-decomp (R7 re-baseline)" },
@@ -141,7 +167,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/editors/phase3/eventhouse-editor.tsx": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/databricks-client.ts": { max: 2718, reason: "pre-existing large module — ratchet-frozen. +18 LOC for GHSA-v2g8-gp3r-rg4r: a `tasks` field on JobRun, and `listJobRunsPage` (limit clamped to the documented 25, plus page_token) which `listJobRuns` now delegates to. `items/databricks-notebook/[id]/runs` returned recent runs — and, via getRunOutput, notebook CELL OUTPUT — across the entire shared Databricks workspace; the only coordinate that attributes a run to a notebook is tasks[].notebook_task.notebook_path, which `runs/list` omits unless expand_tasks is requested, and Jobs 2.1 caps that request at 25 so the scoped route must PAGE. All of it sits on the client that owns the URL, so it cannot live elsewhere; doc comments were compressed rather than contorting the code to beat the counter. Decomposition of this module should ratchet the ceiling DOWN, not up again." },
   "apps/fiab-console/lib/components/deployment/deployment-pipelines-pane.tsx": { max: 2600, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/editors/foundry-hub-editor.tsx": { max: 2620, reason: "pre-existing large module — ratchet-frozen. Re-baselined 2600→2620 by the #3518 re-review of 2026-09-07, for two defects in the connection dialog this wave had already touched. (1) The Category dropdown did not clear the cascade it owns: pick AzureBlob, choose an account and a container, switch to AzureOpenAI, and the composed blob endpoint was submitted as the AOAI target — the same class fixed in event-grid-topic-editor's Handler-type dropdown. (2) A stored target with a path below the container (`…/bronze/raw/2026`) was folded whole into the container control on edit-prefill, so an edit could silently repoint the connection at the container root; the dialog now carries `blobPath` and round-trips it. Both are behavioural, not markup: the fix is a fourth piece of dialog state plus its clears in the category handler, the account handler, the container handler, the edit prefill and reset. The file was compressed first — the two blob-state docblocks merged into one, the cascade-clear note cut from 11 lines to 8, and its five setters folded onto one line, which is where 11 of the original 32 LOC of growth went. Ceiling set at the exact LOC rather than ceilTo100 so it ratchets DOWN when this editor is decomposed (the hub page, the connection list, the create/edit dialog and the deployment panes are one module today)." },
+  "apps/fiab-console/lib/editors/foundry-hub-editor.tsx": { max: 2620, reason: "pre-existing large module — ratchet-frozen. Re-baselined 2600→2620 by the #3518 re-review of 2026-09-07, for two defects in the connection dialog this wave had already touched. (1) The Category dropdown did not clear the cascade it owns: pick AzureBlob, choose an account and a container, switch to AzureOpenAI, and the composed blob endpoint was submitted as the AOAI target — the same class fixed in event-grid-topic-editor's Handler-type dropdown. (2) A stored target with a path below the container (`…/bronze/raw/2026`) was folded whole into the container control on edit-prefill, so an edit could silently repoint the connection at the container root; the dialog now carries `blobPath` and round-trips it. Both are behavioural, not markup: the fix is a fourth piece of dialog state plus its clears in the category handler, the account handler, the container handler, the edit prefill and reset. The file was compressed first — the two blob-state docblocks merged into one, the cascade-clear note cut from 11 lines to 8, and its five setters folded onto one line, which is where 11 of the original 32 LOC of growth went. Ceiling set at the exact LOC rather than ceilTo100 so it ratchets DOWN when this editor is decomposed (the hub page, the connection list, the create/edit dialog and the deployment panes are one module today). ZERO HEADROOM IS THE POINT, and it was re-decided here rather than inherited: measured over all 66 allowlist entries, 14 sit at exactly their ceiling at this head and 13 already did at this PR's merge base be792ecc137, so this PR moves that count by exactly one. The base 13 already included the other two entries this PR bumps: uc-dialogs was 3100 LOC under a 3100 ceiling and unified-sql-database-editor 2400 under 2400 on main before this wave touched either, so for those two a 0-headroom ceiling is preserved, not introduced. foundry-hub-editor is the only one of the three that spent real slack (2511 LOC under a 2600 ceiling at the base, 89 lines; 2620 under 2620 now). Rounding it to 2700 for churn room would hand back 80 lines of unargued growth in the one editor this wave just found two live cascade defects in, and would make this the odd entry out among the exact-LOC pins. So the next line of growth here fails CI ON PURPOSE, and the remediation is the decomposition above or a bump that says why — which is also why --update-baseline was fixed in this PR to stop quietly rounding pins like this one up (it would have written 2700 here)." },
   "apps/fiab-console/lib/editors/phase3/eventstream-editor.tsx": { max: 2600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/foundry-client.ts": { max: 2600, reason: "pre-existing large module — ratchet-frozen; +WS-2.2 AI Search deleteDocuments + semantic-rerank config for Delta-synced vector search" },
   "apps/fiab-console/lib/editors/phase3/kql-database-editor.tsx": { max: 2500, reason: "pre-existing large module — ratchet-frozen" },
@@ -194,20 +220,70 @@ const WS_E_EDITORS = new Set([
   "apps/fiab-console/lib/editors/apim-editors.tsx",
 ]);
 
+/**
+ * Emit the ALLOWLIST this tree ratchets to. THE INVARIANT: the ratchet only
+ * TIGHTENS — an emitted ceiling is never looser than the one it replaces, and
+ * an existing entry is never dropped while its file is still scanned.
+ *
+ * The header above states that invariant; before 2026-09-10 this function did
+ * not hold it, and it is the remediation the FAIL path tells you to run. Two
+ * measured leaks, on the tree at that date (66 entries, 58 files above the warn
+ * line):
+ *
+ *   1. Every ceiling was rewritten to `ceilTo100(loc)` with no reference to the
+ *      ceiling already recorded. 12 of the 58 got LOOSER — +38 to +94 LOC each
+ *      (foundry-hub-editor 2620 -> 2700, unified-sql-database-editor 2407 ->
+ *      2500, uc-dialogs 3106 -> 3200, purview-client 2922 -> 3000, ...). Those
+ *      are exactly the entries pinned at their EXACT LOC on purpose, each one
+ *      saying so in its own `reason`, so that the next line of growth has to be
+ *      argued rather than absorbed. Pasting the output handed all of it back.
+ *   2. Only files above WARN_THRESHOLD were emitted at all, so the 8 entries
+ *      whose files are now at or below it were DROPPED — and a dropped entry is
+ *      unratcheted up to the 1500 warn line. apim-editors.tsx is the loudest:
+ *      a 3581-LOC editor decomposed to a 25-LOC barrel and frozen at 100, which
+ *      the paste would have released to 1500.
+ *
+ * So: `ceilTo100` buys a NEW entry a little churn slack, and nothing else.
+ * For an entry that already exists the ceiling can only fall (to the rounded
+ * count) or, where the file genuinely outgrew it, rise to the EXACT LOC — the
+ * minimum that makes the tree green, which is also the shape the hand-written
+ * bumps in this allowlist already use.
+ */
 function updateBaseline(counts) {
-  const large = Object.entries(counts)
-    .filter(([, n]) => n > WARN_THRESHOLD)
-    .sort((a, b) => b[1] - a[1]);
-  const out = {};
-  for (const [file, n] of large) {
+  const files = new Set([
+    ...Object.keys(counts).filter((f) => counts[f] > WARN_THRESHOLD),
+    ...Object.keys(ALLOWLIST),
+  ]);
+  const rows = [];
+  const dropped = [];
+  for (const file of files) {
+    const n = counts[file];
     const prev = ALLOWLIST[file];
-    out[file] = {
-      max: ceilTo100(n),
-      reason: prev?.reason ?? 'pre-existing large module — ratchet-frozen',
-    };
+    if (n === undefined) {
+      // Not in the scan any more (deleted, renamed, or moved out of scope).
+      // There is nothing to ratchet, but say so instead of dropping silently.
+      if (prev) dropped.push(file);
+      continue;
+    }
+    const max = nextCeiling(prev?.max, n);
+    rows.push({ file, n, max, prev });
+  }
+  rows.sort((a, b) => b.n - a.n || a.file.localeCompare(b.file));
+  const out = {};
+  for (const { file, max, prev } of rows) {
+    out[file] = { max, reason: prev?.reason ?? 'pre-existing large module — ratchet-frozen' };
     if (prev?.bundleExempt) out[file].bundleExempt = true;
   }
-  console.log(`// ${large.length} files above ${WARN_THRESHOLD} LOC (ratchet ceilings rounded up to next 100)`);
+  const above = rows.filter((r) => r.n > WARN_THRESHOLD).length;
+  const tightened = rows.filter((r) => r.prev && r.max < r.prev.max).length;
+  const bumped = rows.filter((r) => r.prev && r.max > r.prev.max).length;
+  console.log(
+    `// ${rows.length} ratchet entries (${above} above ${WARN_THRESHOLD} LOC); ` +
+      `${tightened} tightened, ${bumped} raised to their exact LOC, none loosened`,
+  );
+  for (const f of dropped) {
+    console.log(`// DROPPED (no longer scanned — confirm the file is really gone): ${f}`);
+  }
   console.log(JSON.stringify(out, null, 2));
 }
 
@@ -260,7 +336,8 @@ function main() {
         console.error('      Or, if unavoidable, add a reviewed ALLOWLIST entry with a one-line reason.');
       } else if (f.kind === 'ratchet-regression') {
         console.error(`  - GREW ${f.file}: ${f.n} LOC > ${f.limit} frozen ceiling`);
-        console.error('      Fix: reduce below the ceiling, or justify + bump via --update-baseline.');
+        console.error('      Fix: reduce below the ceiling, or justify + bump via --update-baseline');
+        console.error('      (which bumps to the EXACT new LOC — the ratchet never loosens for you).');
       } else {
         console.error(`  - BACKSTOP ${f.file}: ${f.n} LOC > ${f.limit} absolute hard cap`);
         console.error('      A non-generated file this large must be decomposed before merge.');
