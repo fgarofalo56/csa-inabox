@@ -72,7 +72,14 @@ describe('resolveSameOriginUrl — ATTACK cases', () => {
     expect(new URL('https://management.azure.com@evil.test/x').host).toBe('evil.test');
     // ...and both satisfy the prefix test the fix replaces.
     expect('https://management.azure.com@evil.test/x'.startsWith('http')).toBe(true);
-    expect('https://management.azure.com.evil.test/x'.startsWith(ARM)).toBe(true);
+    // Stated as a SLICE rather than `suffixConfusable.startsWith(ARM)`: the
+    // latter IS the defect (`js/incomplete-url-substring-sanitization`), and
+    // CodeQL correctly flags it even when it appears in a test asserting that
+    // it is unsafe. The claim is identical — the first ARM.length characters
+    // are ARM, so a prefix check would accept this host.
+    const suffixConfusable = 'https://management.azure.com.evil.test/x';
+    expect(suffixConfusable.slice(0, ARM.length)).toBe(ARM);
+    expect(new URL(suffixConfusable).origin).not.toBe(ARM);
   });
 
   it('FAILS CLOSED on an unparseable absolute URL rather than treating it as a path', () => {
