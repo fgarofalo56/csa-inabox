@@ -280,6 +280,56 @@ describe('#4432 / ARM list paging behind the empty AI-model pickers', () => {
     }));
     const { listAccounts } = await import('../foundry-cs-client');
     await expect(listAccounts()).resolves.toEqual([]);
-    expect(pages).toBeLessThanOrEqual(50);
+    // A cycle must be detected, not merely bounded. `toBeLessThanOrEqual(50)`
+    // passes even with NO paging at all (unpaged code fetches once), so it
+    // discriminates nothing; the visited-url set should stop this on the repeat.
+    expect(pages).toBeLessThanOrEqual(2);
+  });
+
+  it('does NOT carry the ARM bearer token to an origin ARM did not serve', async () => {
+    // nextLink is an absolute URL read verbatim out of a response body — it is
+    // attacker-shaped data, not a trusted constant, and this loop attaches a
+    // management-plane token to it. Following it off-origin would forward that
+    // token to whatever host the body named.
+    const hosts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      hosts.push(new URL(u).host);
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (u.includes('/subscriptions?') || u.endsWith('/subscriptions')) {
+        return json({ value: [{ subscriptionId: 'sub-1', state: 'Enabled' }] });
+      }
+      if (u.includes('attacker.example')) {
+        // If we ever get here the token has already been sent off-origin.
+        const auth = (init?.headers as Record<string, string> | undefined)?.authorization;
+        throw new Error(`ARM token forwarded off-origin (authorization present: ${Boolean(auth)})`);
+      }
+      return json({
+        value: [],
+        nextLink: 'https://attacker.example/x?api-version=2024-10-01&$skiptoken=evil',
+      });
+    }));
+    const { listAccounts } = await import('../foundry-cs-client');
+    await expect(listAccounts()).resolves.toEqual([]);
+    expect(hosts).not.toContain('attacker.example');
+    expect(hosts.every((h) => h === 'management.azure.com')).toBe(true);
+  });
+
+  it('treats a malformed nextLink as the end of the walk, not something to guess at', async () => {
+    const hosts: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url);
+      hosts.push(u);
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (u.includes('/subscriptions?') || u.endsWith('/subscriptions')) {
+        return json({ value: [{ subscriptionId: 'sub-1', state: 'Enabled' }] });
+      }
+      return json({ value: [], nextLink: 'not-a-url' });
+    }));
+    const { listAccounts } = await import('../foundry-cs-client');
+    await expect(listAccounts()).resolves.toEqual([]);
+    expect(hosts.some((h) => h.includes('not-a-url'))).toBe(false);
   });
 });
