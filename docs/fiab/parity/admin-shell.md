@@ -2,17 +2,14 @@
 
 Source UI: Fabric **Admin center** left-rail + portal shell
 Reference: <https://learn.microsoft.com/fabric/admin/admin-center>
-Grade: **A−** (see [Revision history](#revision-history) — every inventory row is
-built, but this revision carries no in-browser G1 receipt, and per the #3738
-precedent a source-only re-verification does not sustain an A)
-Run date: 2026-09-07 (rev. 6 — re-baselined against current `main`; see
-[Revision history](#revision-history))
+Run date: 2026-09-07 (rev.6 — source re-measure; rev.5 walk was 2026-06-09)
 
 Loom surfaces:
 
-- Shell component: `lib/components/admin-shell.tsx` → `AdminShell`
-- Nav data: `lib/nav/admin-sections.ts` → `ADMIN_SECTIONS` (grouped) +
-  `ADMIN_LEGACY_REDIRECTS` (folded-route stubs)
+- Nav registry (pure data): `lib/nav/admin-sections.ts` → `ADMIN_SECTIONS`,
+  `ADMIN_DESTINATIONS`, `ADMIN_LEGACY_REDIRECTS`
+- Shell component (presentation): `lib/components/admin-shell.tsx` → `AdminShell`,
+  local `ICON_BY_HREF` + `STORAGE_KEY`
 - Page wrapper: `PageShell` (title + subtitle)
 - Persistence: `localStorage` key `loom-admin-nav-collapsed`
 
@@ -21,56 +18,54 @@ the shell itself; it is the navigation frame the admin surfaces mount into. It
 has **no dependency on real Microsoft Fabric** and renders identically with
 `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
+> **rev.6 correction.** Rev.5 described a flat "17-section nav" driven by a
+> `SECTIONS[]` array inside `admin-shell.tsx`. Neither survives at head. The nav
+> data moved out to `lib/nav/admin-sections.ts` (mirroring the
+> `left-nav.tsx` / `NAV_SECTIONS` split), and it is no longer flat or 17 entries:
+> measured at head it is **8 groups / 42 destinations / 11 legacy redirects**.
+> `const SECTIONS` does not appear in `admin-shell.tsx` at all. Corrected below.
+
 ## Fabric/Azure feature inventory (grounded in Learn)
 
 1. Persistent left navigation rail listing every admin area
-2. Areas CLUSTERED under labeled headings, not one flat list
-3. Collapse / expand the rail to reclaim horizontal space
-4. Active-area highlight reflecting the current route
-5. Hover affordance (label + description) when collapsed
-6. Page title + subtitle header per area
-7. Legacy/renamed area URLs keep resolving after an IA change
+2. Collapse / expand the rail to reclaim horizontal space
+3. Active-area highlight reflecting the current route
+4. Hover affordance (label + description) when collapsed
+5. Page title + subtitle header per area
+6. Grouped areas with group headings (the Fabric admin rail groups related
+   areas rather than presenting one flat list)
 
 ## Loom coverage
 
 | Capability | Status | Backend |
 |---|---|---|
-| Collapsible left-rail sidebar (248px ⇄ 52px) with expand/collapse toggle | ✅ Built | `PanelLeftContract24Regular` / `PanelLeftExpand24Regular` Fluent buttons (`admin-shell.tsx:176-184`) |
-| Collapse state persisted across reloads | ✅ Built | `localStorage` key `loom-admin-nav-collapsed` (`STORAGE_KEY`, `admin-shell.tsx:151`) |
-| GROUPED nav — 8 labeled clusters over 42 destinations | ✅ Built | `ADMIN_SECTIONS` in `lib/nav/admin-sections.ts`, rendered by `ADMIN_SECTIONS.map(...)` (`admin-shell.tsx:186`) |
-| Group header in the expanded rail; hairline divider in the collapsed (icon-only) rail | ✅ Built | `styles.groupHead` / the collapsed-rail hairline (`admin-shell.tsx:132`) |
-| Per-destination icon | ✅ Built | `ICON_BY_HREF` + `iconFor(href)` fallback `Apps24Regular` (`admin-shell.tsx:37,79`) |
-| Active-section highlight (exact route match) | ✅ Built | `usePathname() === s.href` → `styles.itemActive` + `aria-current="page"` |
-| Tooltip per nav item (label + description, surfaced in collapsed mode) | ✅ Built | Fluent `Tooltip positioning="after"`, content `${label} — ${desc}` when collapsed |
+| Collapsible left-rail sidebar (248px ⇄ 52px) with expand/collapse toggle | ✅ Built | `PanelLeftContract24Regular` / `PanelLeftExpand24Regular` Fluent buttons |
+| Collapse state persisted across reloads | ✅ Built | `localStorage` key `loom-admin-nav-collapsed` |
+| Grouped nav — **8 groups / 42 destinations** (Reliability & performance 7, Capacity & cost 3, Configuration & gates 5, Catalog & domains 3, Access & security governance 10, AI operations 3, Audit & usage 4, Platform (network / updates) 7) | ✅ Built | `ADMIN_SECTIONS` in `lib/nav/admin-sections.ts`; `ADMIN_DESTINATIONS = ADMIN_SECTIONS.flatMap((g) => g.items)` |
+| Group headings, and a hairline divider standing in for them when collapsed | ✅ Built | `styles.groupLabel` expanded / `styles.groupDividerCollapsed` collapsed |
+| Group semantics for assistive tech | ✅ Built | `role="group"` + `aria-label={group.label}` per group |
+| Active-section highlight (exact route match) | ✅ Built | `usePathname()` → `colorBrandBackground2` token, plus `aria-current="page"` |
+| Tooltip per nav item (label + description, surfaced in collapsed mode) | ✅ Built | Fluent `Tooltip positioning="after"` |
 | Page title + subtitle header | ✅ Built | `PageShell` wrapper |
-| Folded legacy routes still resolve (11 redirect stubs) | ✅ Built | `ADMIN_LEGACY_REDIRECTS` (`admin-sections.ts:151`) — IA-03 FinOps, IA-04 AI operations, IA-06 Access governance |
+| **Beyond Fabric:** in-rail teaching popover on the section head | ✅ Built | optional `<LearnPopover {...learn} />` per section |
+| **Beyond Fabric:** legacy-URL redirects so folded-away pages keep resolving | ✅ Built | `ADMIN_LEGACY_REDIRECTS` — 11 entries (e.g. `/admin/copilot-quality` → `/admin/ai-operations?tab=quality`) |
+| Distinct glyph per destination | ⚠️ Partial | `ICON_BY_HREF` in `admin-shell.tsx` has 39 entries for 42 destinations; `/admin/brain`, `/admin/sensitivity-labels` and `/admin/classifications` fall through `iconFor()` to the generic `Apps24Regular`. Zero orphan icon entries. Not a dead control — the label and tooltip are correct — but three rail rows read as generic. Fix is three `ICON_BY_HREF` entries; not made in this revision. |
 
-Zero ❌ rows. No ⚠️ gates — the shell is pure client chrome with no backend
+Zero ❌ rows. One ⚠️ — the three missing glyph entries above. Everything else in
+the inventory is built; the shell is pure client chrome with no backend
 dependency, so there is nothing to gate.
-
-### The 8 groups, as `ADMIN_SECTIONS` declares them
-
-| Group | Destinations |
-|---|---|
-| Reliability & performance | 7 |
-| Capacity & cost | 3 |
-| Configuration & gates | 5 |
-| Catalog & domains | 3 |
-| Access & security governance | 10 |
-| AI operations | 3 |
-| Audit & usage | 4 |
-| Platform (network / updates) | 7 |
-| **Total** | **42** |
 
 ## Backend per control
 
 - **All controls** — client-only React + Fluent v9 + Loom design tokens. No
-  network calls originate from the shell; each `ADMIN_SECTIONS` entry is a
+  network calls originate from the shell; each `ADMIN_DESTINATIONS` entry is a
   Next.js route link, and the mounted page owns its own BFF calls. The shell's
   only persisted state is the boolean collapse flag in `localStorage`.
-- `ADMIN_SECTIONS` is pure data (no React / icon imports) so server modules and
-  node-env vitest can import it; `lib/nav/__tests__/admin-sections.test.ts` is
-  the guard that stops a refactor orphaning a surface or breaking a deep link.
+- **Data / presentation split** — `lib/nav/admin-sections.ts` is pure data with
+  no React import, so the registry can be asserted on directly in tests and
+  reused by anything else that needs the admin IA. `admin-shell.tsx` holds only
+  presentation (`ICON_BY_HREF`, `STORAGE_KEY`, the rail markup). This mirrors the
+  `left-nav.tsx` / `NAV_SECTIONS` pattern used by the main console nav.
 
 ## Per-cloud notes
 
@@ -94,22 +89,22 @@ No Azure resources, env vars, or role grants. The shell is bundled in the
 
 - Default path works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset — no Fabric /
   OneLake call anywhere in this surface.
-- **What THIS revision verified:** the inventory rows above were re-read against
-  the current source — `lib/nav/admin-sections.ts` (8 groups / 42 destinations /
-  11 legacy redirects, counted from the file) and `lib/components/admin-shell.tsx`
-  (collapse toggle, `localStorage` key, exact-match active state, per-href icon,
-  tooltip content). Nothing here is carried forward from rev. 5 unchecked.
-- **What THIS revision did NOT verify, stated rather than implied:** no live
-  in-browser click-walk was performed for this revision, so the `ux-baseline.md`
-  G1 receipt is still owed. The walk to run: open any `/admin/*` route, toggle
-  the rail, confirm the 52px collapsed rail shows `label — desc` tooltips on
-  hover, confirm the collapse state survives a reload, confirm the active
-  highlight lands on each of the 42 entries, and confirm each of the 11 legacy
-  URLs lands on its hub tab.
+- Live walk: open any `/admin/*` route, toggle the rail collapse button and
+  confirm the 52px collapsed rail shows tooltips on hover, that the group
+  headings collapse to hairline dividers, and that the collapse state survives a
+  page reload; confirm the active section is highlighted for each of the 42
+  destinations; confirm each of the 11 legacy URLs redirects to its hub tab.
 
-## Revision history
+**Evidence basis for rev.6.** This revision is a **source re-measure, not a live
+browser walk** — the counts above come from parsing `ADMIN_SECTIONS`,
+`ADMIN_LEGACY_REDIRECTS` and `ICON_BY_HREF` at head, and the affordances from
+reading `admin-shell.tsx`. Per `ux-baseline.md` G1 that is *not* completion
+evidence, so the grade below is stated on the source-measured basis and the
+live-walk receipt is still owed.
 
-| Rev | Date | What changed |
-|---|---|---|
-| 5 | 2026-06-09 | Original A grade over a FLAT `SECTIONS[]` of seventeen entries declared inside `admin-shell.tsx`. |
-| 6 | 2026-09-07 | **Re-baselined (#3725).** Rev. 5 went stale on 2026-07-28: `449b97a83d0` (#2551, loom-apex Phase B) moved the nav data out to `lib/nav/admin-sections.ts` and regrouped it into labeled hubs, and `192cbf40b8d` (#4222, 2026-08-31) added `/admin/brain`. The nav row that claimed a FLAT list of seventeen entries declared as `SECTIONS[]` inside `admin-shell.tsx`, and the walk step that told the reader to check all seventeen of them, were both false at the time this rev was written; they are replaced by the grouped 8×42 inventory plus the folded-route redirect row, which rev. 5 had no row for at all. (The rev.-5 wording is paraphrased rather than quoted on purpose: a grep for the old flat-nav label is the cheapest check that the false claim is gone, and re-quoting that label anywhere in this file — including inside an example command — would keep the check red forever. Not hypothetical: the first draft of this row embedded the label in exactly such an example, and the grep stayed at 1.) Grade **A → A−**: every inventory row is still built, but this revision's evidence is a source read and not the in-browser G1 receipt an A requires (same standard the 2026-08-29 `usage-adoption.md` amendment applied). |
+Grade: **A− (source-measured)** — full inventory built and two capabilities
+beyond the Fabric rail (LearnPopover section heads, legacy-URL redirects); held
+below rev.5's **A** by the three destinations with no `ICON_BY_HREF` glyph and by
+the absence of a G1 live receipt at this revision. There is still no Azure-parity
+gap, because this is Loom-native chrome rather than a mirror of an Azure data
+surface.

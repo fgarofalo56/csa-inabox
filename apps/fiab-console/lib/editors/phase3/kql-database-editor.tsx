@@ -39,14 +39,10 @@ import {
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
-import { ingestionMappingOptions, mappingListHint, type IngestionMappingRef } from './kql-ingestion-mappings';
-import {
-  SAMPLE_KQL_DB, DEFAULT_TABLE_COLUMNS, DC_FORMATS, FN_PARAM_TYPES, parseFnParams, serializeFnParams,
-  type KqlDbInfo, type KqlWizardKind, type DcSourceRow, type DcConnectionRow, type FnParam,
-} from './kql-database-model';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
 import { IngestionMappingWizardDialog } from '@/lib/components/adx/ingestion-mapping-wizard';
+import { IngestionMappingPicker } from '@/lib/components/adx/ingestion-mapping-picker';
 import {
   ColumnGridDesigner, toKustoSchema, parseKustoSchema, validateColumns,
   type ColumnDef,
@@ -82,6 +78,92 @@ import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
 // cluster env (LOOM_KUSTO_CLUSTER_URI) is unset, the info fetch returns ok:false
 // and the editor shows the "Database unavailable" MessageBar — no fake data.
 
+interface KqlDbInfo {
+  ok: boolean;
+  cluster?: string;
+  database?: string;
+  details?: Record<string, unknown> | null;
+  tables?: Array<{ name: string; fromContent?: boolean }>;
+  tableCount?: number;
+  functions?: Array<{ name: string; parameters?: string; fromContent?: boolean }>;
+  functionCount?: number;
+  materializedViews?: Array<{ name: string; sourceTable?: string }>;
+  materializedViewCount?: number;
+  // Content-derived projections surfaced when the live ADX object is absent
+  // (bundle-installed KQL database not yet provisioned to the cluster). Lets
+  // the editor open FULLY BUILT-OUT — schema + starter queries.
+  schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
+  starterQueries?: Array<{ name: string; kql: string }>;
+  contentFallback?: boolean;
+  // Follower (database-shortcut) state — read-only replica of a leader cluster.
+  isFollower?: boolean;
+  followerLeaderCluster?: string | null;
+  followerConfigName?: string | null;
+  followerDatabaseName?: string | null;
+  error?: string;
+}
+
+const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
+print smoke = "ok", server_time = now(), current_user = current_principal()`;
+
+// Functions are authored through the structured stored-function editor below
+// (params grid + KQL body), so 'function' is intentionally NOT a generic
+// wizard kind — it has its own dialog (openFnEditor / submitFnEditor).
+type KqlWizardKind = 'table' | 'mv' | 'update-policy' | 'ingest' | 'data-connection' | 'alter-table' | 'drop-table' | 'follower';
+
+const DEFAULT_TABLE_COLUMNS: ColumnDef[] = [
+  { name: 'ts', type: 'datetime' },
+  { name: 'tenant', type: 'string' },
+  { name: 'value', type: 'long' },
+];
+
+/** A row from /api/azure/resources (IoT Hub / Event Hub namespace picker). */
+interface DcSourceRow { id: string; name: string; resourceGroup?: string; subscriptionId?: string; location?: string }
+/** A row from GET /api/items/kql-database/[id]/data-connections. */
+interface DcConnectionRow { name?: string; kind?: string; tableName?: string; consumerGroup?: string; dataFormat?: string; provisioningState?: string; source?: string }
+
+// ADX-supported data formats offered by the wizard. RAW is intentionally
+// excluded — IoT Hub data connections do not support it (per ADX docs).
+const DC_FORMATS = ['MULTIJSON', 'JSON', 'CSV', 'TSV', 'PSV', 'SCSV', 'SOHSV', 'TXT', 'TSVE', 'AVRO', 'APACHEAVRO', 'PARQUET', 'ORC', 'W3CLOGFILE'];
+
+/**
+ * Scalar parameter data types accepted in a KQL stored-function signature
+ * (`paramName:paramType`). Mirrors the scalar types valid in `let` / function
+ * signatures per the .create-or-alter function reference. Surfaced as a real
+ * dropdown so the params grid never relies on free-typed type strings.
+ */
+const FN_PARAM_TYPES = [
+  'string', 'long', 'int', 'real', 'double', 'decimal',
+  'bool', 'datetime', 'timespan', 'dynamic', 'guid',
+] as const;
+
+type FnParam = { name: string; type: string };
+
+/**
+ * Parse a KQL function parameters string as returned by `.show functions`
+ * (e.g. "(days:int, tenant:string)") into structured rows for the params grid.
+ * A no-arg signature ("" or "()") yields [].
+ */
+function parseFnParams(raw: string | undefined): FnParam[] {
+  if (!raw) return [];
+  const inner = raw.replace(/^\(/, '').replace(/\)$/, '').trim();
+  if (!inner) return [];
+  return inner
+    .split(',')
+    .map((p) => {
+      const [n, t] = p.split(':');
+      return { name: (n || '').trim(), type: (t || 'string').trim() };
+    })
+    .filter((p) => p.name);
+}
+
+/** Serialize the params grid back into the `name:type, …` argument list. */
+function serializeFnParams(params: FnParam[]): string {
+  return params
+    .filter((p) => p.name.trim())
+    .map((p) => `${p.name.trim()}:${p.type || 'string'}`)
+    .join(', ');
+}
 
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -127,18 +209,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [wizIngestMapping, setWizIngestMapping] = useState('');
   // Ingestion mapping wizard (format selector + auto-detect column grid)
   const [mappingWizOpen, setMappingWizOpen] = useState(false);
-  // Live ingestion-mapping catalogue for BOTH mapping-name pickers (ingest +
-  // Event Hub data-connection). Enumerable from the bound database, so the
-  // analyst picks rather than types (#3519).
-  const [wizMappings, setWizMappings] = useState<IngestionMappingRef[]>([]);
-  const [wizMappingsLoading, setWizMappingsLoading] = useState(false);
-  const [wizMappingsError, setWizMappingsError] = useState<string | null>(null);
-  // #4357 re-review nit 2 — the THIRD state. `loading=false, error=null` is
-  // both a read that finished EMPTY and one that NEVER RAN (the effect below
-  // returns early on a missing / `new` id, and the first frame precedes it).
-  // Only a COMPLETED read flips this, so no caption claims an absence this
-  // code did not establish (deploy-integrity.md R7).
-  const [wizMappingsRead, setWizMappingsRead] = useState(false);
   // Event Hub data-connection wizard
   const [wizDcHub, setWizDcHub] = useState('');
   const [wizDcConsumerGroup, setWizDcConsumerGroup] = useState('');
@@ -462,56 +532,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       .catch(() => { /* leave empty — the wizard surfaces the gate */ })
       .finally(() => setWizDcLoading(false));
   }, [wizardKind, id]);
-
-  // The ingest + data-connection wizards both reference an ingestion mapping by
-  // NAME. That name is enumerable off the bound database, so it is PICKED, not
-  // typed (#3519): `.show database ingestion mappings` via the same route the
-  // Ingestion mapping wizard POSTs to.
-  useEffect(() => {
-    // Nothing read ⇒ nothing known: the captions say "not read yet", not "none".
-    if ((wizardKind !== 'ingest' && wizardKind !== 'data-connection') || !id || id === 'new') { setWizMappingsRead(false); return; }
-    let cancelled = false;
-    setWizMappingsLoading(true); setWizMappingsError(null); setWizMappings([]); setWizMappingsRead(false);
-    clientFetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(id)}`)
-      .then((r) => r.json())
-      .then((j: any) => {
-        if (cancelled) return;
-        if (j?.ok && Array.isArray(j.mappings)) { setWizMappings(j.mappings as IngestionMappingRef[]); setWizMappingsRead(true); }
-        // An `ok:false` body carries the route's own reason; do NOT restate it
-        // as "no mappings exist" — that is a claim this code did not establish.
-        else setWizMappingsError(j?.error || 'the mapping list could not be read');
-      })
-      .catch((e: any) => { if (!cancelled) setWizMappingsError(e?.message || String(e)); })
-      .finally(() => { if (!cancelled) setWizMappingsLoading(false); });
-    return () => { cancelled = true; };
-  }, [wizardKind, id]);
-
-  const wizIngestMappingOptions = useMemo(
-    () => ingestionMappingOptions(wizMappings, wizSource),
-    [wizMappings, wizSource],
-  );
-  const wizDcMappingOptions = useMemo(
-    () => ingestionMappingOptions(wizMappings, wizDcTargetTable),
-    [wizMappings, wizDcTargetTable],
-  );
-  // #4357 re-review nit 2 — ONE place decides loading / failed / NOT-READ /
-  // genuinely-none for both wizards, so neither caption can drift back to
-  // asserting an absence over a read that never ran.
-  const wizMappingRead = { loading: wizMappingsLoading, error: wizMappingsError, read: wizMappingsRead };
-  // Changing the target table can move the picked mapping out of scope (Kusto
-  // rejects a mapping bound to a different table). Drop it rather than submit a
-  // reference the cluster will refuse. Only when a picker is actually showing —
-  // a value typed into the empty-list fallback is the user's, not ours.
-  useEffect(() => {
-    if (wizIngestMapping && wizIngestMappingOptions.length > 0 && !wizIngestMappingOptions.includes(wizIngestMapping)) {
-      setWizIngestMapping('');
-    }
-  }, [wizIngestMapping, wizIngestMappingOptions]);
-  useEffect(() => {
-    if (wizDcMappingRule && wizDcMappingOptions.length > 0 && !wizDcMappingOptions.includes(wizDcMappingRule)) {
-      setWizDcMappingRule('');
-    }
-  }, [wizDcMappingRule, wizDcMappingOptions]);
 
   // Refresh the dedicated consumer-group list when the selected hub changes
   // (each ADX data connection needs its OWN consumer group, per Azure docs).
@@ -1902,41 +1922,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                             <option key={fmt} value={fmt}>{fmt.toUpperCase()}</option>
                           ))}
                         </Select>
-                        <Caption1>Ingestion mapping name (optional — blank uses the table&apos;s identity mapping)</Caption1>
-                        {wizIngestMappingOptions.length > 0 ? (
-                          <Select
-                            value={wizIngestMapping}
-                            onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)}
-                            aria-label="Ingestion mapping name"
-                            disabled={wizMappingsLoading}
-                          >
-                            <option value="">— none (identity mapping) —</option>
-                            {wizIngestMappingOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                          </Select>
-                        ) : (
-                          <>
-                            <Input
-                              value={wizIngestMapping}
-                              onChange={(_: unknown, d: any) => setWizIngestMapping(d.value)}
-                              aria-label="Ingestion mapping name"
-                              placeholder="EventMapping"
-                              // Review nit (#4357): while the read is still in flight
-                              // the options array is empty, so THIS fallback renders
-                              // even though a picker is about to replace it. Left
-                              // enabled, anything typed here was erased the moment the
-                              // list resolved non-empty — the reset effect above fires
-                              // on a value it cannot tell apart from a stale pick.
-                              // Closing that window is what makes the effect's own
-                              // comment ("a value typed into the empty-list fallback is
-                              // the user's, not ours") true. The caption below already
-                              // says the read is running, so this is not a dead end.
-                              disabled={wizMappingsLoading}
-                            />
-                            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                              {mappingListHint({ ...wizMappingRead, optionCount: wizIngestMappingOptions.length }, wizSource)}
-                            </Caption1>
-                          </>
-                        )}
+                        <IngestionMappingPicker
+                          itemId={id}
+                          table={wizSource}
+                          value={wizIngestMapping}
+                          onChange={setWizIngestMapping}
+                          label="Ingestion mapping name (optional — blank uses the table’s identity mapping)"
+                        />
                         <Caption1>
                           File ({['parquet', 'avro', 'orc'].includes(wizIngestFormat)
                             ? 'binary — generates a blob ingest command'
@@ -2012,35 +2004,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                             {wizDcTables.map((t) => <option key={t} value={t}>{t}</option>)}
                           </Select>
                         </Field>
-                        <Field
+                        <IngestionMappingPicker
+                          itemId={id}
+                          table={wizDcTargetTable}
+                          value={wizDcMappingRule}
+                          onChange={setWizDcMappingRule}
                           label="Ingestion mapping name (optional)"
-                          hint={mappingListHint({ ...wizMappingRead, optionCount: wizDcMappingOptions.length }, wizDcTargetTable)}
-                        >
-                          {wizDcMappingOptions.length > 0 ? (
-                            <Select
-                              value={wizDcMappingRule}
-                              onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)}
-                              aria-label="Ingestion mapping name"
-                              disabled={wizMappingsLoading}
-                            >
-                              <option value="">— none —</option>
-                              {wizDcMappingOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                            </Select>
-                          ) : (
-                            <Input
-                              value={wizDcMappingRule}
-                              onChange={(_: unknown, d: any) => setWizDcMappingRule(d.value)}
-                              aria-label="Ingestion mapping name"
-                              placeholder="myMapping"
-                              // Same in-flight window as the Get-data box above: an
-                              // empty options array DURING the fetch is not evidence
-                              // the database has no mapping, and a value typed into it
-                              // was dropped when the list arrived. The Field hint
-                              // already says the read is running.
-                              disabled={wizMappingsLoading}
-                            />
-                          )}
-                        </Field>
+                        />
                       </>
                     )}
                     {wizardKind === 'follower' && (

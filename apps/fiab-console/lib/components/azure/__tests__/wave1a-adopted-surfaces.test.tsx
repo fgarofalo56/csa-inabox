@@ -22,9 +22,11 @@
  * hand-typed ARM box fails here as well as in the ratchet.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
+import * as React from 'react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const fetchMock = vi.fn();
@@ -33,6 +35,7 @@ vi.mock('@/lib/client-fetch', () => ({ clientFetch: (...a: any[]) => fetchMock(.
 import { MonitorActionBuilder } from '@/lib/components/monitor/monitor-action-builder';
 import { DEFAULT_MONITOR_ACTION } from '@/lib/components/monitor/monitor-action-model';
 import CatalogLineagePage from '@/app/catalog/lineage/page';
+import { IngestionMappingPicker } from '@/lib/components/adx/ingestion-mapping-picker';
 
 function wrap(ui: React.ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);
@@ -188,145 +191,196 @@ describe('Catalog lineage — the Databricks workspace host was typed', () => {
 });
 
 /**
- * Wave 1A residue — the ADX wizards' ingestion-mapping NAME (#3519).
+ * #3519 — the ADX ingestion-mapping NAME, in both KQL-database wizards.
  *
- * The cluster/leader ids on this editor were adopted in #3587, but two boxes
- * kept asking for a value that is fully enumerable off the bound database:
- * `.show database ingestion mappings`, already served by
- * `GET /api/adx/ingestion-mappings`. Typing it is not a cosmetic annoyance —
- * a mapping is TABLE-SCOPED in Kusto, so a name that is valid for one target
- * table is rejected by the cluster for another, and the free box could not
- * tell the analyst that.
+ * The title's ask (a hand-typed cluster ARM id / leader URI) was drained by
+ * #3587. What survived it were two free `<Input>`s for the ingestion-mapping
+ * NAME: `placeholder="EventMapping"` in the ingest wizard and
+ * `placeholder="myMapping"` in the Event Hub data-connection wizard. Kusto
+ * resolves a mapping by exact name, so a typo there is accepted by the form and
+ * fails at the cluster.
  *
- * Both directions are asserted, because only asserting the picker would let a
- * "picker with zero options over an empty database" regression pass: with no
- * mapping on the database the typed box must still be REACHABLE
- * (`auto-bind-by-default.md` forbids the dead end).
+ * WHY THE PICKER IS TESTED DIRECTLY AND THE EDITOR STRUCTURALLY. Mounting
+ * `KqlDatabaseEditor` pulls Monaco and React Flow, neither of which renders in
+ * jsdom — a spec built on it would be testing the harness. The BEHAVIOUR (fetch,
+ * per-table filter, blank option, freeform escape hatch) is therefore exercised
+ * on the extracted component, and the WIRING (that the editor mounts it twice
+ * and no longer renders either typed box) is asserted against the editor's
+ * source, in the same idiom as the guard control at the bottom of this file.
+ * Both halves fail on the pre-fix tree: the import does not resolve, and both
+ * placeholders are present.
  */
-describe('KQL database wizards — the ingestion mapping name was typed', () => {
-  const ITEM = {
-    slug: 'kql-database', displayName: 'KQL Database', restType: 'KQLDatabase',
-    category: 'Real-Time Intelligence', description: 'fixture',
-  } as any;
+describe('#3519 KQL ingestion mapping — picked from the live database, never typed', () => {
+  const MAPPINGS = [
+    { name: 'm1', table: 'T1', kind: 'json' },
+    { name: 'other-table-only', table: 'T2', kind: 'csv' },
+    { name: 'db-scoped', kind: 'json' },
+  ];
 
-  /** `fetchJson` (lib/api/workspaces) reads `res.ok`, so the stub must carry it. */
-  function okRes(body: unknown) {
-    return { ok: true, status: 200, json: async () => body } as any;
-  }
-
-  const DB = {
-    ok: true, cluster: 'https://adx-loom.eastus2.kusto.windows.net', database: 'loomdb',
-    details: {}, tables: [{ name: 'T1' }, { name: 'T2' }], tableCount: 2,
-  };
-
-  /** Route by URL, with the mapping list swapped per test. */
-  function routeEditor(mappingsBody: unknown) {
-    fetchMock.mockImplementation((url: any) => {
-      const u = String(url);
-      if (/\/api\/adx\/ingestion-mappings/.test(u)) return Promise.resolve(okRes(mappingsBody));
-      if (/\/api\/adx\/tables/.test(u)) return Promise.resolve(okRes({ ok: true, tables: [{ name: 'T1' }, { name: 'T2' }] }));
-      if (/\/data-connections/.test(u)) return Promise.resolve(okRes({ ok: true, namespace: 'ns', eventHubs: ['h1'], tables: ['T1', 'T2'], connections: [] }));
-      if (/\/api\/items\/kql-database\//.test(u)) return Promise.resolve(okRes(DB));
-      return Promise.resolve(okRes({ ok: true }));
-    });
-  }
-
-  async function openGetData() {
-    const { KqlDatabaseEditor } = await import('@/lib/editors/phase3/kql-database-editor');
-    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <FluentProvider theme={webLightTheme}><KqlDatabaseEditor item={ITEM} id="kqldb-1" /></FluentProvider>
-      </QueryClientProvider>,
+  it('offers the mappings for the SELECTED table plus the database-scoped ones, and no others', async () => {
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: true, mappings: MAPPINGS }]]);
+    wrap(
+      <IngestionMappingPicker
+        itemId="kdb-1" table="T1" value="" onChange={() => {}}
+        label="Ingestion mapping name (optional)"
+      />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Get data' }));
-    return screen.findByText(/Get data — ingest a file/);
-  }
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/adx/ingestion-mappings?id=kdb-1');
 
-  it('offers the database’s mappings for the picked table instead of a free-text box', async () => {
-    routeEditor({ ok: true, mappings: [{ name: 'm1', table: 'T1', kind: 'json' }, { name: 'm2', table: 'T2', kind: 'csv' }] });
-    await openGetData();
-
-    const picker = await screen.findByLabelText('Ingestion mapping name');
-    // A <select>, not an <input> — this is the assertion that is RED at head.
-    expect(picker.tagName, 'the mapping name is still a free-text box').toBe('SELECT');
-    // The blank "identity mapping" choice survives: a mapping is optional.
-    expect(within(picker as HTMLElement).getByRole('option', { name: /identity mapping/i })).toBeInTheDocument();
-
-    // Target table drives the list — a mapping bound to T2 is not a legal
-    // reference when ingesting into T1.
-    fireEvent.change(screen.getByPlaceholderText('events'), { target: { value: 'T1' } });
-    await waitFor(() => {
-      const names = Array.from((picker as HTMLSelectElement).options).map((o) => o.value);
-      expect(names).toContain('m1');
-      expect(names, 'a mapping scoped to another table was offered').not.toContain('m2');
-    });
-    expect(screen.queryByPlaceholderText('EventMapping'), 'the free-text mapping box is still rendered').toBeNull();
+    fireEvent.click(await screen.findByRole('combobox', { name: /Ingestion mapping/i }));
+    expect(await screen.findByRole('option', { name: 'm1' })).toBeTruthy();
+    // A database-scoped mapping applies to any table, so it stays offered...
+    expect(screen.getByRole('option', { name: 'db-scoped' })).toBeTruthy();
+    // ...while another table's mapping is not a legal choice here and is gone.
+    expect(screen.queryByRole('option', { name: 'other-table-only' })).toBeNull();
+    // The blank identity-mapping option survives — this field is optional.
+    expect(screen.getByRole('option', { name: /identity mapping/i })).toBeTruthy();
   });
 
-  it('still lets the name be typed when the database has no mapping at all', async () => {
-    routeEditor({ ok: true, mappings: [] });
-    await openGetData();
-    const box = await screen.findByLabelText('Ingestion mapping name');
-    expect(box.tagName).toBe('INPUT');
+  it('a name the list does not carry is COMMITTED to the parent, and survives a blur', async () => {
+    // Swapping a text box for a CLOSED list is how a "no items found" dead end
+    // gets introduced — the shape `auto-bind-by-default.md` forbids by name
+    // ("'No pipelines found' + a disabled Bind button").
+    //
+    // #4348 review, BLOCKER 2 — WHAT THIS ARM ACTUALLY HOLDS, stated honestly.
+    // Its previous title said it held the `freeform` prop. It did not: the
+    // reviewer deleted `freeform` and all three specs stayed green, and I
+    // re-measured why with a throwaway probe. `freeform` gates two
+    // `setValue(undefined)` calls in @fluentui/react-combobox@9.17.1 — on
+    // collapse (lib/utils/useComboboxBaseState.js:109) and on blur-while-
+    // collapsed (lib/components/Combobox/useInputTriggerSlot.js:18-26) — and
+    // `useControllableState` makes both inert when `props.value` is defined,
+    // which it always is here because `value` is a REQUIRED prop of the picker.
+    // Probe result: the rendered `<input>` with and without `freeform` matches
+    // on every attribute and on the whole class list, differing ONLY in React's
+    // render-order-generated `id`. (It is not inert in general — uncontrolled,
+    // type-then-blur keeps "Typed" with the prop and resets to "" without it.)
+    // So no DOM assertion against THIS component can distinguish the two states.
+    //
+    // What the escape hatch is REALLY held by is what this now asserts: the
+    // typed text reaches the parent through `onChange`, and a parent that
+    // stores it renders it back — which is what a Save would persist. Deleting
+    // the `onChange` wiring, or swapping the Combobox for a Dropdown, both fail
+    // here. The `freeform` PROP is pinned separately, structurally, below.
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: true, mappings: [] }]]);
+    const onChange = vi.fn();
+    function Controlled() {
+      const [v, setV] = React.useState('');
+      return (
+        <IngestionMappingPicker
+          itemId="kdb-1" table="T1" value={v}
+          onChange={(next) => { onChange(next); setV(next); }}
+          label="Ingestion mapping name (optional)"
+        />
+      );
+    }
+    wrap(<Controlled />);
+    // WAIT FOR THE READ TO SETTLE, not merely to be ISSUED. `toHaveBeenCalled()`
+    // returns while the mapping fetch's `.then` is still a pending microtask;
+    // when the machine is loaded that resolution can land INSIDE the `act()`
+    // that `fireEvent.change` wraps, re-committing the controlled `value=""`
+    // over the text we just wrote and resetting React's input value-tracker —
+    // so the change event is deduped away and `onChange` is never called. That
+    // is a real flake, and I hit it: this file passed 13/13 alone but the same
+    // arm failed "Number of calls: 0" in a 4-file run on this machine.
+    //
+    // Settling on the post-read hint NARROWS that window; it does not close it.
+    // Measured in the #4348 round-5 review: with the settle in place this same
+    // arm still lost the race once in a contended 4-file run, same signature.
+    // What stays uncontrolled is any commit landing between the settle and
+    // React's processing of the dispatch, and a test cannot fence those off.
+    //
+    // So the INTERACTION is re-driven, not the assertion retried. A `waitFor`
+    // around a bare `expect(onChange)` cannot help: a change event that was
+    // swallowed is never re-dispatched by waiting. Measured on a standalone
+    // jsdom probe of exactly this shape — a controlled parent that refuses the
+    // first commit — `SINGLE-SHOT: calls=0 assertionFailed=true domValue=""`
+    // (the flake, reproduced deterministically) against `RE-FIRE: attempts=2
+    // calls=1 timedOut=false`: the swallow leaves the input reset to "", so a
+    // second dispatch is a real transition and lands.
+    //
+    // The retry is a BOUNDED loop and deliberately NOT a `fireEvent` inside a
+    // `waitFor`. Measured: with `onChange` in the picker mutated to a no-op —
+    // the defect this arm exists to catch — the waitFor form did not go red, it
+    // HUNG (killed at 420s, rc=124, twice), because a callback that mutates the
+    // DOM on every attempt keeps RTL's mutation-driven retry alive and the
+    // timeout never lands. A required check that hangs is worse than the flake
+    // it was fixing. The loop below terminates and fails on the same assertion.
+    //
+    // It is a NARROWING, not a proof of absence: a failure that swallows EVERY
+    // dispatch exhausts the attempts and this arm goes red — the correct
+    // outcome, and the same red as before. What is gone is the one-shot
+    // dependency on the FIRST dispatch being the one that lands.
+    await screen.findByText(/No ingestion mapping is defined for T1/i);
+    const box = await screen.findByRole('combobox', { name: /Ingestion mapping/i });
     expect((box as HTMLInputElement).disabled).toBe(false);
-  });
-
-  /**
-   * R7: an unreadable list is not an empty list. The route answers `ok:false`
-   * on a real 403/503 from the cluster, and the copy under the box must not
-   * convert that into "none exist" — the same substitution
-   * `deploy-integrity.md` R7 was written for.
-   */
-  it('does not claim the database has no mappings when the list could not be READ', async () => {
-    routeEditor({ ok: false, error: 'Forbidden (principal lacks Database Viewer)' });
-    await openGetData();
-    await screen.findByLabelText('Ingestion mapping name');
-    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
-    expect(screen.queryByText(/No ingestion mapping is defined/i)).toBeNull();
-  });
-
-  /**
-   * The IN-FLIGHT window (#4357 review nit).
-   *
-   * `wizIngestMappingOptions` is empty for two completely different reasons —
-   * the database has no mapping, and the read has not answered yet — and the
-   * fallback `<Input>` renders for both. While the read is still open a typed
-   * value is not the user's to keep: the reset effect clears any value that is
-   * not in the options list as soon as a non-empty list lands, and it has no
-   * way to tell a just-typed name from a pick left over from another table.
-   * So the box is closed for exactly as long as the answer is unknown, and
-   * opens again the moment an EMPTY answer makes typing the right move.
-   */
-  it('closes the typed fallback while the list is in flight, and reopens it on a genuinely empty answer', async () => {
-    let release!: (v: unknown) => void;
-    const held = new Promise((r) => { release = r; });
-    fetchMock.mockImplementation((url: any) => {
-      const u = String(url);
-      // Held open: the component stays in `wizMappingsLoading`.
-      if (/\/api\/adx\/ingestion-mappings/.test(u)) return held;
-      if (/\/api\/adx\/tables/.test(u)) return Promise.resolve(okRes({ ok: true, tables: [{ name: 'T1' }] }));
-      if (/\/api\/items\/kql-database\//.test(u)) return Promise.resolve(okRes(DB));
-      return Promise.resolve(okRes({ ok: true }));
-    });
-    await openGetData();
-
-    const box = await screen.findByLabelText('Ingestion mapping name');
-    expect(box.tagName).toBe('INPUT');
-    expect(
-      (box as HTMLInputElement).disabled,
-      'a name typed while the list is still loading is silently discarded when it arrives',
-    ).toBe(true);
-    // The operator is told WHY it is briefly unavailable — not left guessing.
-    expect(await screen.findByText(/Reading the database’s ingestion mappings/i)).toBeInTheDocument();
-
-    // An answer of "none" is a real absence, and typing is then the only path
-    // forward — auto-bind-by-default.md forbids leaving it a dead end.
-    release(okRes({ ok: true, mappings: [] }));
+    for (let attempt = 0; attempt < 5 && onChange.mock.calls.length === 0; attempt++) {
+      const input = screen.getByRole('combobox', { name: /Ingestion mapping/i });
+      fireEvent.change(input, { target: { value: 'NotYetDiscovered' } });
+      if (onChange.mock.calls.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    expect(onChange).toHaveBeenCalledWith('NotYetDiscovered');
+    // The committed value, not just the keystroke: this is what the wizard holds
+    // and what a Save would write.
+    fireEvent.blur(box);
     await waitFor(() =>
-      expect((screen.getByLabelText('Ingestion mapping name') as HTMLInputElement).disabled).toBe(false),
+      expect((screen.getByRole('combobox', { name: /Ingestion mapping/i }) as HTMLInputElement).value)
+        .toBe('NotYetDiscovered'));
+  });
+
+  it('the picker declares itself FREEFORM — the prop, pinned where the DOM cannot show it', () => {
+    // The companion to the arm above, and the reason it exists. `freeform` has
+    // no observable effect on a fully-controlled Fluent Combobox (measured
+    // above), so it can be deleted with every behavioural assertion green — and
+    // it would then silently change behaviour for any future caller that lets
+    // the value go uncontrolled (measured too: uncontrolled, type-then-blur
+    // keeps the text with the prop and loses it without), and it is the declared
+    // intent the component header rests on. Source-asserted in the same idiom as
+    // the editor-wiring control below.
+    const src = fs.readFileSync(
+      path.resolve(process.cwd(), 'lib/components/adx/ingestion-mapping-picker.tsx'),
+      'utf8',
     );
+    // A Combobox, not a Dropdown — a Dropdown has no text input at all.
+    expect(src).toMatch(/<Combobox\b/);
+    expect(src).not.toMatch(/<Dropdown\b/);
+    // …and it is freeform.
+    expect(src).toMatch(/<Combobox\s[^>]*\bfreeform\b/s);
+    // A live negative: the file DOES carry other Combobox props, so the match
+    // above is not passing over a read that returned nothing.
+    expect(src).toMatch(/<Combobox\s[^>]*\bselectedOptions=/s);
+  });
+
+  it('a FAILED read says the read failed — it never renders as "this database has none"', async () => {
+    // deploy-integrity R7: an empty list and an unreadable list are different
+    // facts, and only one of them means "go create a mapping".
+    routeFetch([[/\/api\/adx\/ingestion-mappings/, { ok: false, error: 'ADX cluster not configured' }]]);
+    wrap(
+      <IngestionMappingPicker
+        itemId="kdb-1" table="T1" value="" onChange={() => {}}
+        label="Ingestion mapping name (optional)"
+      />,
+    );
+    expect(await screen.findByText(/ADX cluster not configured/)).toBeTruthy();
+    expect(screen.queryByText(/has no ingestion mappings yet/)).toBeNull();
+  });
+
+  it('the KQL editor mounts the picker in BOTH wizards and no longer renders either typed box', () => {
+    const src = fs.readFileSync(
+      path.resolve(process.cwd(), 'lib/editors/phase3/kql-database-editor.tsx'),
+      'utf8',
+    );
+    // The two free-text asks, by their own placeholders.
+    expect(src).not.toMatch(/placeholder="myMapping"/);
+    expect(src).not.toMatch(/placeholder="EventMapping"/);
+    // Both wizards mount the picker (plus the import line = 3 occurrences).
+    expect(src.match(/IngestionMappingPicker/g)?.length).toBe(3);
+    // A live negative: the file DOES still carry other placeholders, so the two
+    // assertions above are not passing over a file the read failed to load.
+    expect(src).toMatch(/placeholder="events"/);
   });
 });
 

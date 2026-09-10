@@ -13,11 +13,7 @@ Source UI:
   https://learn.microsoft.com/graph/api/subscribedsku-list ,
   https://learn.microsoft.com/graph/api/user-list
 
-Grade: **B+** (see [Revision history](#revision-history) — all 11 inventory rows
-built with one honest ⚠️ Graph gate, and no in-browser G1 receipt for this
-revision)
-Run date: 2026-09-07 (rev. 6 — re-baselined against current `main`; see
-[Revision history](#revision-history))
+Run date: 2026-09-07 (rev.6 — source re-measure; rev.5 walk was 2026-06-09)
 
 Loom builds this **1:1 on Azure-native backends** — Cosmos (workspaces / items /
 workspace-permissions / F5 workspace-roles) for the Loom-access view, and
@@ -41,6 +37,8 @@ reads. Available in Commercial, GCC, GCC-High (L4), and DoD (L5).
 | 9  | Cross-link to Entra (Azure AD) user profile                       | Identity blade |
 | 10 | Per-user role assignments / scoped access                         | M365 = admin roles; Loom = workspace roles |
 | 11 | Sort / filter the grid                                             | column sort + search |
+| 12 | Assign / remove a license for a user                               | `POST /users/{id}/assignLicense` — a **write** the M365 grid performs inline |
+| 13 | Block sign-in / reset password for a user                          | `PATCH /users/{id}` (`accountEnabled`) / password reset action |
 
 ## Loom coverage
 
@@ -57,6 +55,18 @@ reads. Available in Commercial, GCC, GCC-High (L4), and DoD (L5).
 | 9  | built ✅ | "Entra" link → `portal.azure.com` UserProfileMenuBlade by UPN |
 | 10 | built ✅ | Roles cell shows legacy workspace-permissions roles + a "N ws-roles" Popover expanding the F5 principalId-keyed `workspace-roles` rows (workspace → role), joined by the user's Entra objectId |
 | 11 | built ✅ | LoomDataTable provides per-column sort/filter; page Toolbar search covers UPN / name / department / role / license |
+| 12 | MISSING ❌ | No license assign/remove control. `app/api/admin/users/route.ts` exports **`GET` only** — grep for `POST\|PATCH\|PUT\|DELETE\|assignLicense` in that file returns rc=1, zero hits — and `page.tsx` has no assignment affordance (`assign` appears only in prose, `assignedLicenses` reads, and workspace-role text). |
+| 13 | MISSING ❌ | No block-sign-in / reset-password control. `accountEnabled` is rendered as a read-only badge; nothing writes it. |
+
+> **rev.6 correction.** Rev.5's inventory stopped at row 11 and the doc then
+> reported zero ❌. That was an artifact of the inventory, not of the surface:
+> the M365 Active users grid is a **read-write** experience, and the two writes
+> it performs inline — license assignment and account block/reset — were never
+> enumerated, so their absence could not show up as a gap. Rows 12–13 add them.
+> The MASTER-SCORECARD already carried a `license ⚠️` gate for this surface that
+> the doc did not, which is the same drift seen from the other side. Loom's
+> `/admin/users` is a **read-only** review surface at head; that is a defensible
+> scope, but it is a scope decision and it is now recorded as one.
 
 Honest-gate (⚠️, not a stub): when `LOOM_GRAPH_USERS_ENABLED` is unset or the
 UAMI lacks Directory.Read.All / User.Read.All, the license + account + objectId
@@ -86,41 +96,37 @@ Cosmos-derived users, activity, and legacy roles — never an empty/error surfac
 | M365 admin host                 | admin.microsoft.com     | admin.microsoft.us     | admin.apps.mil            |
 | Per-user M365 deep-link         | `#/users/:/UserDetails/{oid}` | same             | falls back to `#/users` (no published per-user path) |
 
-## Beyond the source inventory
-
-`app/admin/users/page.tsx` also ships three columns the M365 grid has no
-equivalent for, because they answer a Loom question rather than a directory one:
-**Workspaces** (owned), **Items created**, and **Last activity** — all derived
-from the tenant-scoped Cosmos read, not from Graph. They are listed here so a
-future reader does not mistake them for undocumented drift.
-
 ## Verification
 
-- **What THIS revision verified:** every one of the 11 inventory rows was
-  re-read against the current source. The grid is `LoomDataTable` with the
-  columns `user`, `department`, `account`, `licenses`, `roles`,
-  `workspacesOwned`, `itemsCreated`, `lastActivity`, `admin`
-  (`app/admin/users/page.tsx`); the ws-roles `Popover`, the Entra and M365
-  deep-links, and the `LOOM_GRAPH_USERS_ENABLED` honest-gate `MessageBar` are
-  all still present. No row moved from ✅.
-- **What THIS revision did NOT verify, stated rather than implied:** no live
-  in-browser click-walk and no test run were performed for this revision, so the
-  `ux-baseline.md` G1 receipt is still owed. The two bullets below are the
-  receipts from the ORIGINAL run and are kept as history, not re-asserted as
-  current:
-  - (rev. 5) `tsc --noEmit` clean for the four touched files.
-  - (rev. 5) `vitest run lib/azure/__tests__/graph-identity-client.test.ts` —
-    11 passing (6 new: subscribedSkus shaping, gate, error-swallow; user
-    chunking, `$count` + ConsistencyLevel, lowercase keying, short-circuit).
-- The walk still owed: `/admin/users` with `LOOM_GRAPH_USERS_ENABLED=true` +
+- `tsc --noEmit` clean for the four touched files.
+- `vitest run lib/azure/__tests__/graph-identity-client.test.ts` — 11 passing
+  (6 new: subscribedSkus shaping, gate, error-swallow; user chunking, $count +
+  ConsistencyLevel, lowercase keying, short-circuit).
+- Live walk (operator): `/admin/users` with `LOOM_GRAPH_USERS_ENABLED=true` +
   the UAMI grant shows real tenant users, real `subscribedSkus` cards, real
   per-user license SKUs, the ws-roles Popover from the F5 store, and the M365
   deep-link — all with `LOOM_DEFAULT_FABRIC_WORKSPACE` UNSET.
 
-## Revision history
+**Evidence basis for rev.6.** Rev.6 re-measured every inventory row against
+source at head rather than re-walking the browser: `app/admin/users/page.tsx`
+(463 lines) still carries `LoomDataTable`, the `department` /
+`accountEnabled` / `capabilityStatus` columns, the `UserProfileMenuBlade` and
+`#/users/:/UserDetails/{oid}` deep-links and the `ws-roles` `Popover`;
+`app/api/admin/users/route.ts` (231) still performs the `subscribedSkus` and
+`listAllWorkspaceRolesForWorkspaces` joins; `lib/azure/graph-identity-client.ts`
+(982) still exports `listUsersWithLicenses` + `fetchSubscribedSkus` and still
+gates on `LOOM_GRAPH_USERS_ENABLED`. Rows 1–11 all hold; nothing regressed. Rows
+12–13 are new to the inventory, not new regressions — the capability was always
+absent, only the row was. The live-walk line above remains rev.5's receipt, not a
+new one — per `ux-baseline.md` G1 a source re-measure is not a completion
+receipt.
 
-| Rev | Date | What changed |
-|---|---|---|
-| 5 | 2026-06-09 | Original doc. Carried **no Grade line and no Run date at all**, so nothing recorded when it was last true — which is why #3725 could not tell whether it was stale. |
-| 6 | 2026-09-07 | **Re-baselined (#3725).** Grade + Run date added. Re-verified against `0bc47c0b4c2` (#1827, 2026-07-10, UX-Wave 8), which rebuilt this page after rev. 5 was written: all 11 inventory rows survive that rebuild and stay ✅, and the three Loom-only columns it added are now documented rather than silent. Grade recorded as **B+** — unchanged from the MASTER-SCORECARD's rev.-5 entry, because nothing about this re-verification earns a raise: it is a source read, not the in-browser G1 receipt an A requires. |
-
+Grade: **B+** — 11 of 13 inventory rows built on real Graph + Cosmos with one
+honest ⚠️ gate that names its exact env var and remediation script, but **two ❌**:
+the surface performs no writes, so license assignment and account block/reset
+have no control at all. Per `ui-parity.md` a doc with any ❌ is not A-grade. This
+holds the MASTER-SCORECARD's existing **B+** for this row — rev.6 did not change
+the grade, it supplied the two rows that justify it. Closing the ❌s means a
+`PATCH`/`POST` on `/api/admin/users` plus the Graph `User.ReadWrite.All` /
+`Directory.ReadWrite.All` grant, which is a write-scope expansion and belongs in
+its own change, not in a docs revision.

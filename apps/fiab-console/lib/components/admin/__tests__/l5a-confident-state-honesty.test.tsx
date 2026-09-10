@@ -269,38 +269,43 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
 
   /**
    * The shape `/api/admin/workspaces` ACTUALLY returns: `{ ok, total,
-   * workspaces: WorkspaceAdminRecord[] }`, whose display field is `name`
-   * (lib/clients/workspaces-client.ts) — there is no `displayName` on it. The
-   * first cut of this spec fed the picker `displayName`, so
-   * `label: w.displayName || w.name || w.id` could have its `w.name` operand —
-   * the ONLY one production ever evaluates — deleted and every assertion still
-   * passed, while every workspace rendered as a raw GUID live. That is the
-   * exact defect #3742 is about, so the fixture models the route, not the test.
-   * `ws-3` pins the `w.id` tail of the same chain.
+   * workspaces }` where each row is a `WorkspaceAdminRecord`, whose display
+   * field is `name` (lib/clients/workspaces-client.ts:45) — there is no
+   * `displayName` on it. The first cut of this spec fed the picker
+   * `displayName`, so `label: w.displayName || w.name || w.id` could have its
+   * `w.name` operand — the ONLY one production ever evaluates — deleted and
+   * every assertion still passed, while every workspace rendered as a raw GUID
+   * live. That is the exact defect #3742 is about, so the fixture models the
+   * route, not the test. `ws-3` pins the `w.id` tail of the same chain.
    *
-   * The ROUTE is the admin inventory, and that is load-bearing, not a rename:
-   * `/api/workspaces` is `listAccessibleWorkspaces()`, which returns the
-   * caller's OWN workspaces plus their direct non-group role assignments and
-   * has NO tenant-admin branch at any `LOOM_MULTIUSER_ACL` setting (the flag
-   * defaults to `'on'`; an earlier draft of this note wrongly blamed it being
-   * unset). On a tenant-admin surface that silently hid every other owner's
-   * workspace behind "no workspace is available".
+   * ROUND 2 — the route MOVED from `/api/workspaces` to `/api/admin/workspaces`.
+   * The owner-scoped one resolves through `listAccessibleWorkspaces`, which is
+   * owner-only without LOOM_MULTIUSER_ACL, so on this tenant-admin-only surface
+   * it offered an admin only the workspaces they personally created. Keying the
+   * fixture to the ADMIN path is what makes this spec fail if the source is
+   * reverted.
    */
-  const WORKSPACES = {
+  const WORKSPACES = { ok: true, total: 3, workspaces: [
+    { id: 'ws-1', name: 'Sales analytics' },
+    { id: 'ws-2', name: 'Finance' },
+    { id: 'ws-3' },
+  ] };
+
+  /**
+   * `/api/admin/agent-quality` → `listAgents(projectId)`. `agent-new` EXISTS in
+   * the Foundry project and has never spent a token, so it is absent from the
+   * budgets ledger above — which is precisely the agent a budget is for.
+   */
+  const AGENT_QUALITY = {
     ok: true,
-    total: 3,
-    workspaces: [
-      { id: 'ws-1', name: 'Sales analytics' },
-      { id: 'ws-2', name: 'Finance' },
-      { id: 'ws-3' },
-    ],
+    agents: { configured: true, list: [{ name: 'agent-new', description: 'newly registered' }] },
   };
-  const ONE_WORKSPACE = { ok: true, total: 1, workspaces: [{ id: 'ws-1', name: 'Sales analytics' }] };
 
   it('offers the real workspaces instead of a free-text Scope id box', async () => {
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
       '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -319,10 +324,15 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     expect(screen.getByRole('option', { name: 'ws-3' })).toBeInTheDocument();
   });
 
-  it('switching scope to "agent" offers the agents the ledger has actually attributed', async () => {
+  it('switching scope to "agent" offers the ledger agents UNIONED with the Foundry registry', async () => {
+    // ROUND 2 (#3742 refutation, AC#2). `budgetDashboard()` rows are configured
+    // budgets ∪ scopes that have ALREADY SPENT, so a ledger-only picker can
+    // never offer the agent a prospective budget is for. `agent-new` is in the
+    // registry and NOT in `rows`; at the pre-fix shape it is unreachable.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
+      '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -334,78 +344,40 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
 
     const picker = await within(dialog).findByRole('combobox', { name: /Agent/i });
     await userEvent.click(picker);
+    // The ledger half still shows...
     expect(await screen.findByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
-  });
-
-  /**
-   * #3742 AC1 — the ledger is only HALF the population.
-   *
-   * `budgetDashboard` (lib/copilot/token-budget.ts) returns "configured budgets
-   * ∪ scopes with spend". An agent registered in Foundry that has not spent a
-   * token yet is therefore absent from `rows`, so the picker could not offer it
-   * — i.e. the one agent a cap would still have protected was the one agent the
-   * dialog would not let you cap. The Foundry registry supplies the other half.
-   */
-  it('offers a Foundry-registered agent that the ledger has NEVER attributed', async () => {
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
-      '/api/admin/agent-quality': {
-        status: 200,
-        // The route's real shape: agents.list is `{ name, description }[]`
-        // (app/api/admin/agent-quality/route.ts), honest-gated to [] when
-        // Foundry is unconfigured.
-        body: { ok: true, agents: { configured: true, list: [{ name: 'agent-new' }] } },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.click(within(dialog).getByRole('combobox', { name: /^Scope$/ }));
-    await userEvent.click(await screen.findByRole('option', { name: 'agent' }));
-
-    await userEvent.click(await within(dialog).findByRole('combobox', { name: /Agent/i }));
-    // Both halves of the union, deduped — the ledger row keeps its friendly label.
+    // ...and the registry half, the one that was missing, now does too.
     expect(await screen.findByRole('option', { name: 'agent-new' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
   });
 
-  /**
-   * #3742 AC3 — a NON-EMPTY list is not proof the wanted id is in it.
-   *
-   * The typed-id path used to appear only when the list was empty or errored,
-   * so one visible workspace was enough to make every other id unreachable. The
-   * escape hatch is now an explicit option in the list itself, and choosing it
-   * must actually yield an editable box — not just a label.
-   */
-  it('keeps a typed id reachable even when the list is NOT empty', async () => {
+  it('a not-yet-seen id stays reachable even when the list is NON-EMPTY', async () => {
+    // ROUND 2 (#3742 refutation, "NEW DEAD END"). The previous fix rendered the
+    // typed-id <Input> only when the list was ENTIRELY empty, so with one
+    // attributed agent an admin could neither pick nor type an agent that was
+    // absent from both sources. auto-bind-by-default forbids "no items found"
+    // over a control with no way forward, and this is that shape with one row.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
+      '/api/admin/workspaces': { status: 200, body: WORKSPACES },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
     const dialog = await screen.findByRole('dialog');
 
-    await userEvent.click(await within(dialog).findByRole('combobox', { name: /Workspace/i }));
-    // The real list is there AND the escape hatch is offered beside it.
-    expect(await screen.findByRole('option', { name: 'Sales analytics' })).toBeInTheDocument();
-    await userEvent.click(await screen.findByRole('option', { name: /Enter an id/i }));
+    // The list IS populated (three workspaces), so the old `mustTypeId` is false
+    // and no <Input> exists at the pre-fix shape.
+    const picker = await within(dialog).findByRole('combobox', { name: /Workspace/i });
+    await userEvent.click(picker);
+    await userEvent.click(await screen.findByRole('option', { name: 'Enter an id…' }));
 
     const typed = await within(dialog).findByRole('textbox', { name: /Workspace/i });
     expect(typed).toBeEnabled();
-    await userEvent.type(typed, 'ws-unlisted');
-    // ...and it reaches the save payload, rather than being visual only.
+    await userEvent.type(typed, 'ws-not-yet-seen');
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Save' })).toBeEnabled());
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() => {
-      const post = (global.fetch as any).mock.calls
-        .find((c: any[]) => String(c[0]).includes('/api/admin/copilot-quality/budgets') && c[1]?.method === 'POST');
-      expect(post, 'the typed id never reached a POST').toBeTruthy();
-      expect(JSON.parse(String(post[1].body)).scopeId).toBe('ws-unlisted');
-    });
+    // ...and it is not a one-way door: the real list is one click away again.
+    expect(within(dialog).getByRole('button', { name: /Pick from the list instead/i })).toBeInTheDocument();
   });
 
   it('switching scope DISCARDS the id picked under the previous scope', async () => {
@@ -416,7 +388,8 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     // asserted it, so dropping the `setScopeId('')` statement shipped green.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
+      '/api/admin/workspaces': { status: 200, body: { ok: true, workspaces: [{ id: 'ws-1', name: 'Sales analytics' }] } },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -440,16 +413,17 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     expect(within(dialog).queryByDisplayValue('ws-1')).toBeNull();
   });
 
-  it('POSITIVE CONTROL — a genuinely EMPTY tenant inventory still claims absence, and is not a dead end', async () => {
-    // This fixture is a SUCCESSFUL read of a tenant that has no workspaces:
-    // 200 + `ok:true` + `workspaces: []`. That is the ONE state in which "No
-    // workspace is available" is a true sentence, and it must survive the
-    // honesty fix below — deleting the absence copy outright would satisfy
-    // every "the false claim is gone" assertion while destroying a real guided
-    // empty state (ux-baseline.md).
+  it('HONEST FALLBACK — a genuinely EMPTY workspace list is not a dead end', async () => {
+    // NOTE the fixture: `ok:true` with an empty array. That is an estate with no
+    // workspaces — an absence the route DID establish. It is a different state
+    // from a list that could not be READ (403/500), which after PR #4348 no
+    // longer renders as this one; that pair is held in
+    // __tests__/token-budget-scope-picker.test.tsx. The title used to say
+    // "cannot be read", which this fixture never modelled.
     routeMock({
       '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: { ok: true, total: 0, workspaces: [] } },
+      '/api/admin/workspaces': { status: 200, body: { ok: true, workspaces: [] } },
+      '/api/admin/agent-quality': { status: 200, body: AGENT_QUALITY },
     });
     mount(<TokenBudgetPanel />);
 
@@ -463,185 +437,5 @@ describe('#3742 TokenBudgetPanel — the budget scope is picked from real data, 
     );
     expect(within(dialog).getByText(/Enter the workspace id directly/i)).toBeInTheDocument();
     expect(within(dialog).getByRole('textbox', { name: /Workspace/i })).toBeEnabled();
-  });
-
-  /**
-   * ── R7 — AN UNREAD POPULATION IS NOT AN EMPTY ONE ────────────────────────
-   *
-   * The review that blocked the first cut of this PR found the defect these
-   * four tests pin, and found it by MEASURING, not by reading: the picker was
-   * rendering "No workspace is available" / "No agent is registered in Foundry
-   * or attributed any spend yet" over reads that had FAILED.
-   *
-   * Both fixtures below are the narrow bypass the header of this file
-   * documents, in its two live forms:
-   *
-   *   1. `clientFetch` RESOLVES on a non-2xx. `/api/admin/workspaces` answers a
-   *      non-admin with a by-design structured 403, so `r.ok` was never checked
-   *      and react-query's `isError` is FALSE. The 403 became `[]`.
-   *   2. `/api/admin/agent-quality` reports an UNREADABLE Foundry registry as
-   *      HTTP 200 with `agents.gate.code:'error'` and `list: []`. There is no
-   *      non-2xx to notice at all — reading `agents.list` alone converts a 403
-   *      from Foundry into a claim that the tenant has no agents.
-   *
-   * A fix keyed on `isError` passes neither.
-   */
-  it('R7 — a 403 from the workspace inventory is surfaced, NEVER rendered as "no workspace is available"', async () => {
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      // The route's real non-admin shape (app/api/admin/workspaces/route.ts):
-      // `reason` carries the remediation, `error` is the useless word.
-      '/api/admin/workspaces': {
-        status: 403,
-        body: {
-          ok: false,
-          error: 'forbidden',
-          reason: 'Tenant-wide workspace inventory is admin-only. Ask an existing tenant admin to grant you the Admin role at /admin/permissions.',
-          code: 'admin_only',
-          gateId: 'bootstrap-admin',
-        },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const dialog = await screen.findByRole('dialog');
-
-    // The route's own remediation reaches the operator...
-    await waitFor(() =>
-      expect(within(dialog).getByText(/workspace inventory is admin-only/i)).toBeInTheDocument(),
-    );
-    expect(within(dialog).getByText(/HTTP 403/)).toBeInTheDocument();
-    // ...and the fabricated statement of absence is gone.
-    expect(within(dialog).queryByText(/No workspace is available/i)).toBeNull();
-    // Still not a dead end (auto-bind-by-default).
-    expect(within(dialog).getByRole('textbox', { name: /Workspace/i })).toBeEnabled();
-  });
-
-  it('R7 — a 200 whose agents.gate says the Foundry read FAILED is not "no agent is registered"', async () => {
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: { ...DASHBOARD, rows: [] } },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
-      '/api/admin/agent-quality': {
-        status: 200,
-        body: {
-          ok: true,
-          agents: { configured: false, list: [], gate: { code: 'error', error: 'Foundry project returned 403' } },
-        },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    // `rows: []` also renders the guided EmptyState, whose CTA is a second
-    // "New budget" button. The toolbar one is the subject.
-    await userEvent.click((await screen.findAllByRole('button', { name: 'New budget' }))[0]);
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.click(within(dialog).getByRole('combobox', { name: /^Scope$/ }));
-    await userEvent.click(await screen.findByRole('option', { name: 'agent' }));
-
-    await waitFor(() =>
-      expect(within(dialog).getByText(/Foundry agent registry could not be read: Foundry project returned 403/i)).toBeInTheDocument(),
-    );
-    // `rows: []` means the LEDGER half is genuinely empty, so the union is
-    // empty too — but the registry half was never read, so absence over the
-    // union is exactly the claim the code cannot make.
-    expect(within(dialog).queryByText(/No agent is registered in Foundry or attributed any spend yet/i)).toBeNull();
-    expect(within(dialog).getByRole('textbox', { name: /Agent/i })).toBeEnabled();
-  });
-
-  it('R7 — an UNCONFIGURED Foundry names the env var instead of claiming the registry was empty', async () => {
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: { ...DASHBOARD, rows: [] } },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
-      '/api/admin/agent-quality': {
-        status: 200,
-        body: {
-          ok: true,
-          agents: {
-            configured: false,
-            list: [],
-            gate: {
-              code: 'not_configured',
-              error: 'Foundry agents are not configured.',
-              hint: 'Set it to the project endpoint.',
-              missing: 'LOOM_FOUNDRY_PROJECT_ENDPOINT',
-            },
-          },
-        },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    await userEvent.click((await screen.findAllByRole('button', { name: 'New budget' }))[0]);
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.click(within(dialog).getByRole('combobox', { name: /^Scope$/ }));
-    await userEvent.click(await screen.findByRole('option', { name: 'agent' }));
-
-    // The honest gate no-vaporware.md allows: the exact env var to set.
-    await waitFor(() =>
-      expect(within(dialog).getByText(/LOOM_FOUNDRY_PROJECT_ENDPOINT is unset/i)).toBeInTheDocument(),
-    );
-    expect(within(dialog).queryByText(/No agent is registered in Foundry or attributed any spend yet/i)).toBeNull();
-  });
-
-  it('R7 — a populated list whose OTHER half failed says so on the list, not only on the empty state', async () => {
-    // The ledger half HAS a row, so the picker is not empty and the empty-state
-    // branch is never reached. The registry failure must still be disclosed —
-    // otherwise a one-item list reads as the complete population.
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': { status: 200, body: ONE_WORKSPACE },
-      '/api/admin/agent-quality': {
-        status: 200,
-        body: { ok: true, agents: { configured: false, list: [], gate: { code: 'error', error: 'Foundry project returned 403' } } },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.click(within(dialog).getByRole('combobox', { name: /^Scope$/ }));
-    await userEvent.click(await screen.findByRole('option', { name: 'agent' }));
-
-    // The ledger half still populates the picker...
-    await userEvent.click(await within(dialog).findByRole('combobox', { name: /Agent/i }));
-    expect(await screen.findByRole('option', { name: 'SQL helper' })).toBeInTheDocument();
-    // ...and the failed half is disclosed beside it.
-    expect(within(dialog).getByText(/Foundry agent registry could not be read/i)).toBeInTheDocument();
-  });
-
-  it('R7 — a DEGRADED workspace inventory is not presented as the complete tenant list', async () => {
-    // The route emits `degraded` / `legacyUnstampedExcluded` /
-    // `legacyCountUnavailable` precisely so a short list is not mistaken for
-    // the truth (#3826, rel-T108, #4316). The first cut discarded all three.
-    routeMock({
-      '/api/admin/copilot-quality/budgets': { status: 200, body: DASHBOARD },
-      '/api/admin/workspaces': {
-        status: 200,
-        body: {
-          ok: true,
-          total: 1,
-          workspaces: [{ id: 'ws-1', name: 'Sales analytics' }],
-          degraded: true,
-          degradedReasons: ['item counts unavailable'],
-          legacyUnstampedExcluded: 4,
-          legacyRemediation: 'Run the tid backfill.',
-        },
-      },
-    });
-    mount(<TokenBudgetPanel />);
-
-    await userEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const dialog = await screen.findByRole('dialog');
-
-    await waitFor(() =>
-      expect(within(dialog).getByText(/This list may be incomplete/i)).toBeInTheDocument(),
-    );
-    expect(within(dialog).getByText(/item counts unavailable/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/4 legacy workspace\(s\) are excluded/i)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Run the tid backfill/i)).toBeInTheDocument();
-    // The real option is NOT suppressed — a caveat is not an error.
-    await userEvent.click(await within(dialog).findByRole('combobox', { name: /Workspace/i }));
-    expect(await screen.findByRole('option', { name: 'Sales analytics' })).toBeInTheDocument();
   });
 });
