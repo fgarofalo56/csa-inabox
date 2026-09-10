@@ -18,8 +18,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   loadTenantCopilotConfig,
@@ -30,6 +28,7 @@ import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 import {
   MODEL_TIERS, TASK_CLASSES, type ModelTier, type TaskClass, type TierDeployments,
 } from '@/lib/foundry/model-tier-router';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -84,11 +83,7 @@ function sanitize(input: any): TenantCopilotConfig {
   return out;
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
   try {
     const config = (await loadTenantCopilotConfig(tenantId)) || {};
@@ -141,13 +136,9 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
-export async function PUT(req: NextRequest) {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const PUT = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.config;
@@ -181,4 +172,4 @@ export async function PUT(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

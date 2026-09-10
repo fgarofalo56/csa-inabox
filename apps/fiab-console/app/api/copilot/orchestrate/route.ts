@@ -38,7 +38,7 @@ import { isSafetyConfigured, shieldPrompt, moderateContent } from '@/lib/azure/f
 import { VALID_CONTEXT_SLUGS, type PersonaContextPayload } from '@/lib/azure/copilot-personas';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { randomId } from '@/lib/util/random-id';
-import { logSafe } from '@/lib/util/log-safe';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -126,11 +126,14 @@ async function handlePost(req: NextRequest) {
         shieldPrompt(prompt),
         moderateContent(prompt),
       ]);
-    } catch (e: any) {
+    } catch (e: unknown) {
+      // logSafeError, not raw: the message can embed the user's own prompt text,
+      // and a `\n` in it would forge a second, attacker-authored log record
+      // (CodeQL js/log-injection).
       // eslint-disable-next-line no-console
       console.warn(
-        '[copilot/orchestrate] content-safety pre-flight failed; continuing UNSCREENED: ' +
-          String(e?.message || e).slice(0, 300),
+        '[copilot/orchestrate] content-safety pre-flight failed; continuing UNSCREENED:',
+        logSafeError(e),
       );
     }
     const blocked = shield.blocked ? shield : inputMod.blocked ? inputMod : null;

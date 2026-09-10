@@ -1258,24 +1258,19 @@ export interface ContentSafetyVerdict {
   severity?: number;
 }
 
-/** True when a Content Safety endpoint is configured via env. The copilot
- *  orchestrators call this to decide between filtering vs. honest-gating.
- *
- *  NOTE (#4432): CONFIGURED IS NOT REACHABLE. This answers only "is an endpoint
- *  set", which on the live Commercial estate was true while the host did not
- *  resolve from the console at all. Anything that reports moderation STATUS to
- *  a human must use {@link contentSafetyHealth}, not this. */
+/** True when a Content Safety endpoint is CONFIGURED via env.
+ *  #4432: configured is NOT reachable — on the live estate this was true while
+ *  the host did not resolve at all. Anything reporting moderation STATUS to a
+ *  human must use {@link contentSafetyHealth}. */
 export function isSafetyConfigured(): boolean {
   return !!process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
 }
 
 export interface ContentSafetyHealth {
-  /** An endpoint is configured (env or Foundry-hub discovery). */
   configured: boolean;
-  /** The endpoint actually answered. `false` here with `configured:true` means
-   *  prompts are NOT being screened — the pipeline is failing open. */
+  /** The endpoint answered. `false` with `configured:true` = failing open,
+   *  i.e. prompts are NOT being screened. */
   reachable: boolean;
-  /** Why it is not reachable, verbatim, when we know. */
   error?: string;
 }
 
@@ -1283,20 +1278,14 @@ let _csHealth: { at: number; value: ContentSafetyHealth } | null = null;
 const CS_HEALTH_TTL_MS = 60_000;
 
 /**
- * Honest Content Safety status (#4432).
+ * Measured Content Safety status (#4432).
  *
- * `/api/copilot/status` previously reported `contentSafety: isSafetyConfigured()`
- * — a bare env-var read — and the Copilot pane rendered "prompts are filtered"
- * on the strength of it. Measured on the live Commercial estate 2026-09-10 that
- * claim was FALSE: `LOOM_CONTENT_SAFETY_ENDPOINT` was set, so the flag said
- * true, while the endpoint's host did not resolve from inside the console
- * container (`ENOTFOUND`) and nothing was screened at all.
- *
- * Per deploy-integrity.md R7 a status must not assert what it did not
- * establish, so this actually CALLS the endpoint. The probe reuses the real
- * `moderateContent` path against a benign string; a `blocked:false` verdict
- * proves nothing about content, but a completed round-trip proves reachability.
- * Cached for 60s — this runs on a status poll, not a chat turn.
+ * `/api/copilot/status` used to report `contentSafety: isSafetyConfigured()` —
+ * a bare env read — so it claimed prompts were filtered while the endpoint's
+ * host did not resolve from the console (`ENOTFOUND`, measured 2026-09-10) and
+ * nothing was screened. R7: a status must not assert what it did not establish,
+ * so this CALLS the endpoint; a completed round-trip proves reachability.
+ * Cached 60s — this runs on a status poll, not a chat turn.
  */
 export async function contentSafetyHealth(): Promise<ContentSafetyHealth> {
   const configured = isSafetyConfigured();
@@ -1318,23 +1307,16 @@ export async function contentSafetyHealth(): Promise<ContentSafetyHealth> {
       });
       value = res.ok
         ? { configured, reachable: true }
-        : {
-            configured,
-            reachable: false,
-            error: `Content Safety answered HTTP ${res.status}. Prompts are NOT being screened.`,
-          };
+        : { configured, reachable: false, error: `Content Safety answered HTTP ${res.status}. Prompts are NOT being screened.` };
     }
   } catch (e: any) {
+    // A statement of fact, not a chore: auto-bind-by-default.md forbids
+    // "go set LOOM_X" as the terminal user-facing state, and the platform now
+    // deploys this binding itself (deploy-planner/cognitive-account.bicep).
     const cause = e?.cause?.code || e?.code;
     value = {
       configured,
       reachable: false,
-      // Statement of fact, NOT a chore for the reader. auto-bind-by-default.md
-      // forbids "go set LOOM_X" as the terminal user-facing state: the platform
-      // deploys the Content Safety private endpoint itself (see
-      // deploy-planner/cognitive-account.bicep), so an unreachable endpoint is a
-      // deploy defect to repair, not something the operator should hand-wire.
-      // The diagnostic detail belongs in the server log, which safetyFailOpen writes.
       error:
         `Could not reach the Content Safety endpoint (${cause ? `${cause}: ` : ''}` +
         `${String(e?.message || e).slice(0, 200)}). Prompts are NOT being screened.`,
@@ -1364,24 +1346,18 @@ export async function resolveContentSafetyEndpoint(): Promise<string | null> {
 }
 
 /**
- * Every way a Content Safety round-trip can fail WITHOUT the service having
- * rendered a verdict — a thrown fetch (DNS `ENOTFOUND`, `ECONNREFUSED`, TLS,
- * `FetchTimeoutError`) as well as a non-2xx response.
+ * Fail open when a Content Safety round-trip never produced a verdict — a
+ * THROWN fetch (DNS `ENOTFOUND`, `ECONNREFUSED`, TLS, `FetchTimeoutError`).
  *
- * #4432: the two helpers below documented "fail-open on a transient Content
- * Safety error" but only implemented it for `!res.ok`. A *thrown* fetch escaped
- * both of them, propagated through `Promise.all([...])` in the copilot
- * orchestrate route (which has no wrapper of its own), and became a bare
- * Next.js 500 with a non-JSON body — which the chat pane rendered as the
- * literal, causeless string "Error: HTTP 500". Measured on the live Commercial
- * estate 2026-09-10: `LOOM_CONTENT_SAFETY_ENDPOINT` is set, and its host does
- * not resolve from inside the console container (`ENOTFOUND`), so EVERY chat
- * turn threw here.
+ * #4432: the helpers below documented "fail-open on a transient error" but only
+ * implemented it for `!res.ok`. A thrown fetch escaped both, propagated through
+ * `Promise.all([...])` in the orchestrate route (which had no wrapper), and
+ * became a bare Next.js 500 with a non-JSON body — the causeless "Error: HTTP
+ * 500" the chat pane showed. Measured live 2026-09-10: the endpoint is set and
+ * its host does not resolve from the console, so EVERY turn threw here.
  *
- * Failing open is the documented and correct behaviour: a moderation-service
- * outage must not take chat down. But it must be LOUD — the warning names the
- * real cause so the next failure is diagnosable (deploy-integrity.md R7: an
- * error must never assert something it did not establish).
+ * Failing open is correct — a moderation outage must not take chat down — but
+ * it must be LOUD, so the warning names the real cause (R7).
  */
 function safetyFailOpen(op: string, e: unknown): ContentSafetyVerdict {
   const cause = (e as any)?.cause?.code || (e as any)?.code;

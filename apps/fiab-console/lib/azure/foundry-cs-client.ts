@@ -116,23 +116,19 @@ const MAX_ARM_PAGES = 50;
  * Follow an ARM collection across ALL of its pages.
  *
  * #4432: every list call here read only `body.value` and dropped `nextLink`.
- * ARM's `Accounts_List` is RBAC-FILTERED PER PAGE: it walks the subscription's
- * resources in fixed-size pages and returns only the ones the caller may read,
- * so a caller scoped to a single resource group legitimately gets
- * `{ "value": [], "nextLink": "…&$skiptoken=…" }` for the first page and its
- * actual accounts several pages in. Measured against the live Commercial estate
- * from inside the loom-console container on 2026-09-10 with the console UAMI:
- * `GET /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts`
- * answered **HTTP 200, `value: []`, nextLink present** — while the subscription
- * demonstrably holds three Cognitive Services accounts.
+ * ARM's `Accounts_List` is RBAC-FILTERED PER PAGE, so an early page is
+ * routinely empty while the accounts arrive later. Measured from inside the
+ * loom-console container 2026-09-10 with the console UAMI: `GET
+ * /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts` answered
+ * HTTP 200, `value: []`, nextLink present — while that subscription holds three
+ * Cognitive Services accounts.
  *
- * Reading page 1 only therefore produced an EMPTY-BUT-SUCCESSFUL result: the
- * Foundry account picker rendered zero options, every model dropdown collapsed
- * to "(none)", and no error was raised anywhere because nothing had failed.
- * That is a claim of absence the code never established (deploy-integrity.md R7).
+ * Reading page 1 only therefore produced an EMPTY-BUT-SUCCESSFUL result: zero
+ * account options, every model dropdown "(none)", and no error anywhere because
+ * nothing had failed — a claim of absence the code never established (R7).
  *
- * A 404 on the first page still means "not found" and yields `null`, preserving
- * the existing `readJson` contract that `resolveAccount` depends on.
+ * A 404 on page 1 still means "not found" and yields `null`, preserving the
+ * `readJson` contract `resolveAccount` depends on.
  */
 async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[] | null> {
   const first = await armFetch(fullPath, apiVersion ? { apiVersion } : {});
