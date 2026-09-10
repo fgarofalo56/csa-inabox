@@ -16,23 +16,27 @@
  *     • Ratchet ceiling (per-file, in ALLOWLIST) — every file already above the
  *       warn line today is frozen at its current LOC. A file entering the
  *       allowlist for the first time is rounded up to the next 100 for a little
- *       churn slack; ~a fifth of the entries are instead pinned at their EXACT
- *       LOC (each says so in its own `reason`), which is a ceiling with zero
- *       headroom BY DESIGN — the next line of growth has to be argued rather
- *       than absorbed. Growth past the ceiling BLOCKS either way.
+ *       churn slack (a file landing exactly ON a multiple of 100 therefore gets
+ *       none — ceilTo100(1600) is 1600); ~a fifth of the entries are instead
+ *       pinned at their EXACT LOC (each says so in its own `reason`), which is a
+ *       ceiling with zero headroom BY DESIGN — the next line of growth has to be
+ *       argued rather than absorbed. Growth past the ceiling BLOCKS either way.
  *     • HARD_MAX (6000 LOC) — an absolute backstop. Any file above it that is
  *       not `bundleExempt` (a generated content bundle) BLOCKS regardless.
  *
  *   NET EFFECT: CI is green on today's tree (all current offenders are
  *   allowlisted at their real LOC), but (a) NO new file may cross 1500 LOC
  *   without an explicit, reviewed allowlist entry, and (b) NO allowlisted
- *   monolith may grow past its frozen ceiling. The ratchet only tightens:
- *   decompose a file and its ceiling drops on the next --update-baseline.
+ *   monolith may grow past its frozen ceiling. Decompose a file and its ceiling
+ *   drops on the next --update-baseline; grow one and the ceiling can only rise
+ *   with a HUMAN justification (FAIL rule 4 below).
  *
  * FAIL conditions:
  *   1. A file > WARN_THRESHOLD that is NOT in ALLOWLIST  → new monolith.
  *   2. An ALLOWLISTED file whose LOC > its ceiling       → monolith grew.
  *   3. Any file > HARD_MAX that is not `bundleExempt`     → absolute backstop.
+ *   4. An ALLOWLIST entry whose `reason` still carries the `TODO(bump):` marker
+ *      --update-baseline stamps on a RAISED ceiling      → unargued bump.
  *
  * ESCALATION POLICY (documented per E3 acceptance criteria):
  *   - Preferred fix for a new failure: split the file by bounded context
@@ -44,11 +48,21 @@
  *     Reviewers gate new allowlist entries — an entry IS the exception request.
  *   - After decomposing a file, refresh the baseline so the ratchet tightens:
  *       node scripts/ci/check-file-size.mjs --update-baseline
- *     and paste the emitted JSON into ALLOWLIST below. That paste can only
- *     TIGHTEN: see updateBaseline() for the invariant, and
- *     scripts/ci/__tests__/file-size-ratchet.test.mjs for the test that holds
- *     it — until 2026-09-10 the paste silently LOOSENED 12 ceilings and
- *     DROPPED 8 entries.
+ *     and paste the emitted JSON into ALLOWLIST below. THE PASTE CANNOT HAND
+ *     BACK HEADROOM, and it cannot make a RAISED ceiling green on its own:
+ *       · a file that fits gets the TIGHTER of its recorded ceiling and the
+ *         rounded count — never a looser one;
+ *       · a file that genuinely outgrew its ceiling rises to the EXACT LOC and
+ *         no further, AND its `reason` is stamped `TODO(bump): …`, which is FAIL
+ *         rule 4 above. The tree stays RED until a human replaces that marker
+ *         with the justification. That is deliberate: a bump IS an exception
+ *         request, so the tool computes the number and refuses to write the
+ *         argument.
+ *     See updateBaseline()/planBaseline() for the invariant and
+ *     scripts/ci/__tests__/file-size-ratchet.test.mjs for the tests that hold
+ *     it — until 2026-09-10 the paste silently LOOSENED 12 ceilings and DROPPED
+ *     8 entries; until 2026-09-11 a rise was emitted carrying the OLD entry's
+ *     justification verbatim and went green unargued.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -85,6 +99,41 @@ export function ceilTo100(loc) {
 export function nextCeiling(prevMax, n) {
   if (prevMax === undefined || prevMax === null) return ceilTo100(n);
   return Math.max(n, Math.min(prevMax, ceilTo100(n)));
+}
+
+/**
+ * The stamp `--update-baseline` puts on an entry whose ceiling it RAISED, and
+ * that FAIL rule 4 refuses. It is a prefix on the entry's `reason`, so it
+ * survives the copy-paste the FAIL text tells you to do and it is visible in the
+ * allowlist diff a reviewer reads.
+ *
+ * WHY A MARKER AND NOT A REFUSAL TO EMIT: a file that legitimately outgrew its
+ * pin is a real situation, and a `--update-baseline` that emitted the OLD number
+ * for it would hand the author output that leaves CI red with no explanation —
+ * a dead remediation. So the tool computes the smallest number that works and
+ * then blocks on the part only a human can supply: the argument.
+ */
+export const BUMP_MARKER = 'TODO(bump):';
+/** Separator between the marker sentence and the reason the entry carried before. */
+export const BUMP_SEPARATOR = ' || PREVIOUS REASON: ';
+
+/**
+ * The reason text minus any `TODO(bump):` stamp — used ONLY to build the next
+ * stamp, never to emit. Stripping a marker on the way OUT would launder a bump
+ * in two runs (grow, paste, re-run, paste again, green), so `planBaseline` never
+ * removes one: an entry that is not rising keeps its reason byte-for-byte.
+ */
+export function reasonWithoutBumpMarker(reason) {
+  if (typeof reason !== 'string' || !reason.startsWith(BUMP_MARKER)) return reason;
+  const at = reason.indexOf(BUMP_SEPARATOR);
+  return at < 0 ? reason : reason.slice(at + BUMP_SEPARATOR.length);
+}
+
+/** Files whose allowlist entry still carries an unreplaced `TODO(bump):` stamp. */
+export function unarguedBumps(allowlist = ALLOWLIST) {
+  return Object.entries(allowlist)
+    .filter(([, entry]) => typeof entry?.reason === 'string' && entry.reason.startsWith(BUMP_MARKER))
+    .map(([file]) => file);
 }
 
 function isScanned(rel) {
@@ -221,14 +270,29 @@ const WS_E_EDITORS = new Set([
 ]);
 
 /**
- * Emit the ALLOWLIST this tree ratchets to. THE INVARIANT: the ratchet only
- * TIGHTENS — an emitted ceiling is never looser than the one it replaces, and
- * an existing entry is never dropped while its file is still scanned.
+ * Plan the ALLOWLIST this tree ratchets to. Pure in `counts` and `allowlist`,
+ * so a fixture population can drive every branch — including the one the real
+ * tree can never exercise while it is green (a file OVER its ceiling; the tree
+ * is red in that state, so the CLI-over-the-real-population arms cannot see it).
  *
- * The header above states that invariant; before 2026-09-10 this function did
- * not hold it, and it is the remediation the FAIL path tells you to run. Two
- * measured leaks, on the tree at that date (66 entries, 58 files above the warn
- * line):
+ * THE INVARIANT, stated as what the code holds — all three clauses:
+ *
+ *   1. NO CEILING IS EVER HANDED BACK HEADROOM. For a file that fits under its
+ *      recorded ceiling the emitted value is min(recorded, ceilTo100(loc)), so
+ *      it either stays or falls. Never rises.
+ *   2. A FILE THAT GENUINELY OUTGREW ITS CEILING RISES TO EXACTLY ITS LOC and no
+ *      further — the smallest number that makes the tree green — and the entry
+ *      is STAMPED `TODO(bump):`, on which the guard FAILS (rule 4). So the tool
+ *      can compute a rise but cannot land one: `--update-baseline` output pasted
+ *      verbatim is still RED until a human writes why the growth is justified.
+ *      Nor can two runs launder it — a non-rising entry keeps its reason
+ *      byte-for-byte, marker included.
+ *   3. AN EXISTING ENTRY IS NEVER DROPPED while its file is still scanned.
+ *
+ * The header above stated a shorter version of clause 1 as the whole rule.
+ * Before 2026-09-10 this function did not hold even that, and it is the
+ * remediation the FAIL path tells you to run. Two measured leaks, on the tree at
+ * that date (66 entries, 58 files above the warn line):
  *
  *   1. Every ceiling was rewritten to `ceilTo100(loc)` with no reference to the
  *      ceiling already recorded. 12 of the 58 got LOOSER — +38 to +94 LOC each
@@ -247,18 +311,20 @@ const WS_E_EDITORS = new Set([
  * For an entry that already exists the ceiling can only fall (to the rounded
  * count) or, where the file genuinely outgrew it, rise to the EXACT LOC — the
  * minimum that makes the tree green, which is also the shape the hand-written
- * bumps in this allowlist already use.
+ * bumps in this allowlist already use. A rise carries the marker; the old
+ * justification is kept AFTER it rather than presented as the new one, because
+ * a reason that argues 2620 is not an argument for 2621.
  */
-function updateBaseline(counts) {
+export function planBaseline(counts, allowlist = ALLOWLIST) {
   const files = new Set([
     ...Object.keys(counts).filter((f) => counts[f] > WARN_THRESHOLD),
-    ...Object.keys(ALLOWLIST),
+    ...Object.keys(allowlist),
   ]);
   const rows = [];
   const dropped = [];
   for (const file of files) {
     const n = counts[file];
-    const prev = ALLOWLIST[file];
+    const prev = allowlist[file];
     if (n === undefined) {
       // Not in the scan any more (deleted, renamed, or moved out of scope).
       // There is nothing to ratchet, but say so instead of dropping silently.
@@ -271,16 +337,38 @@ function updateBaseline(counts) {
   rows.sort((a, b) => b.n - a.n || a.file.localeCompare(b.file));
   const out = {};
   for (const { file, max, prev } of rows) {
-    out[file] = { max, reason: prev?.reason ?? 'pre-existing large module — ratchet-frozen' };
+    const carried = prev?.reason ?? 'pre-existing large module — ratchet-frozen';
+    // A RISE is stamped. A non-rise carries `reason` byte-for-byte — including a
+    // marker a previous run put there, which is what stops a two-run laundering.
+    const reason =
+      prev && max > prev.max
+        ? `${BUMP_MARKER} --update-baseline raised this ceiling ${prev.max}->${max} because the file ` +
+          `reached ${max} LOC. Replace this sentence with why that growth is justified — ` +
+          `check-file-size FAILS while the marker is here, so the tool cannot hand you the headroom.` +
+          `${BUMP_SEPARATOR}${reasonWithoutBumpMarker(carried)}`
+        : carried;
+    out[file] = { max, reason };
     if (prev?.bundleExempt) out[file].bundleExempt = true;
   }
+  return { out, rows, dropped };
+}
+
+function updateBaseline(counts) {
+  const { out, rows, dropped } = planBaseline(counts);
   const above = rows.filter((r) => r.n > WARN_THRESHOLD).length;
   const tightened = rows.filter((r) => r.prev && r.max < r.prev.max).length;
-  const bumped = rows.filter((r) => r.prev && r.max > r.prev.max).length;
+  const raised = rows.filter((r) => r.prev && r.max > r.prev.max);
   console.log(
     `// ${rows.length} ratchet entries (${above} above ${WARN_THRESHOLD} LOC); ` +
-      `${tightened} tightened, ${bumped} raised to their exact LOC, none loosened`,
+      `${tightened} tightened, ${raised.length} raised to their exact LOC and stamped ` +
+      `${BUMP_MARKER}, 0 handed back headroom`,
   );
+  for (const r of raised) {
+    console.log(
+      `// ${BUMP_MARKER} ${r.file} ${r.prev.max} -> ${r.max}. Pasting this leaves check-file-size RED ` +
+        `until you replace the marker in its reason with the justification.`,
+    );
+  }
   for (const f of dropped) {
     console.log(`// DROPPED (no longer scanned — confirm the file is really gone): ${f}`);
   }
@@ -297,6 +385,13 @@ function main() {
 
   const failures = [];
   const large = [];
+  // FAIL rule 4 — an entry --update-baseline RAISED and nobody argued. This is
+  // read off the ALLOWLIST itself, not off the scan, so it fires whether or not
+  // the file is still over: the defect is the unwritten justification, and it
+  // must not become green just because the ceiling now covers the file.
+  for (const file of unarguedBumps()) {
+    failures.push({ file, kind: 'unargued-bump', limit: ALLOWLIST[file].max });
+  }
   for (const [file, n] of Object.entries(counts)) {
     if (n > WARN_THRESHOLD) large.push({ file, n });
     const entry = ALLOWLIST[file];
@@ -321,6 +416,12 @@ function main() {
   const allowlistedLarge = large.filter((l) => ALLOWLIST[l.file]);
   console.log(`[file-size] scanned git-tracked .ts/.tsx under ${APP_REL}/{${SCOPE_DIRS.join(',')}}`);
   console.log(`[file-size] warn threshold ${WARN_THRESHOLD} LOC, hard backstop ${HARD_MAX} LOC`);
+  // Say the rule-4 count out loud even when it is zero: a check whose only
+  // output is silence reads identically to a check that was never wired in.
+  console.log(
+    `[file-size] ${Object.keys(ALLOWLIST).length} allowlist entries, ` +
+      `${unarguedBumps().length} carrying an unargued ${BUMP_MARKER} marker`,
+  );
   console.log(`[file-size] ${large.length} large files (all ratchet-frozen in the allowlist):`);
   for (const { file, n } of allowlistedLarge) {
     const tag = WS_E_EDITORS.has(file) ? '  [WS-E priority]' : ALLOWLIST[file].bundleExempt ? '  [generated bundle]' : '';
@@ -336,8 +437,19 @@ function main() {
         console.error('      Or, if unavoidable, add a reviewed ALLOWLIST entry with a one-line reason.');
       } else if (f.kind === 'ratchet-regression') {
         console.error(`  - GREW ${f.file}: ${f.n} LOC > ${f.limit} frozen ceiling`);
-        console.error('      Fix: reduce below the ceiling, or justify + bump via --update-baseline');
-        console.error('      (which bumps to the EXACT new LOC — the ratchet never loosens for you).');
+        console.error('      Fix (preferred): reduce below the ceiling — decompose, see docs/fiab/decomposition-plan.md.');
+        console.error('      Fix (bump), TWO steps, because the tool will not argue for you:');
+        console.error('        1. node scripts/ci/check-file-size.mjs --update-baseline');
+        console.error(`           raises THIS entry to exactly ${f.n} and no further, leaves every other`);
+        console.error(`           ceiling no looser than it is today, and stamps this one ${BUMP_MARKER}.`);
+        console.error('        2. Paste the JSON, then REPLACE that marker with why the growth is');
+        console.error('           justified. This guard stays RED while the marker is there.');
+      } else if (f.kind === 'unargued-bump') {
+        console.error(`  - UNARGUED BUMP ${f.file}: ceiling ${f.limit} still carries the ${BUMP_MARKER} marker`);
+        console.error('      --update-baseline raised this ceiling and stamped it. Replace the marker');
+        console.error('      sentence in its `reason` with why the growth is justified (the reason it');
+        console.error('      carried before the rise is kept after "PREVIOUS REASON:" — it argued the OLD');
+        console.error('      number, so it is not the argument for this one).');
       } else {
         console.error(`  - BACKSTOP ${f.file}: ${f.n} LOC > ${f.limit} absolute hard cap`);
         console.error('      A non-generated file this large must be decomposed before merge.');
