@@ -121,11 +121,33 @@ describe('#4432 / orchestrate error envelope', () => {
     await expect(res.json()).resolves.toMatchObject({ ok: false, error: 'unauthenticated' });
   });
 
-  it('still returns 503 JSON when no AOAI deployment is wired', async () => {
+  // `code` is asserted, not just `ok`/`error`. Until it was, deleting
+  // `code:'no_aoai'` from the route broke ZERO tests — and the code is what
+  // makes this a DOCUMENTED gate rather than an unexplained 5xx, which is the
+  // whole basis on which a consumer is allowed to treat it as a gate at all
+  // (no-vaporware.md; e2e/_lib/copilot-verdict.ts GATE_CODES).
+  it('returns 503 with the documented gate code when no AOAI deployment is wired', async () => {
     resolveAoaiTarget.mockRejectedValueOnce(new NoAoaiDeploymentError('no chat deployment chosen'));
     const { POST } = await import('../orchestrate/route');
     const res = await POST(post({ prompt: 'hi' }));
     expect(res.status).toBe(503);
-    await expect(res.json()).resolves.toMatchObject({ ok: false, error: 'no chat deployment chosen' });
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false, code: 'no_aoai', error: 'no chat deployment chosen',
+    });
+  });
+
+  // The 502 is deliberately NOT a gate code: an AOAI account Loom itself
+  // deploys that cannot be reached is a broken deployment, and must never be
+  // reported as "not configured".
+  it('returns 502 with aoai_unreachable when resolution fails for any other reason', async () => {
+    resolveAoaiTarget.mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND'));
+    const { POST } = await import('../orchestrate/route');
+    const res = await POST(post({ prompt: 'hi' }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: false, code: 'aoai_unreachable' });
+    // Guards the distinction itself: if these two ever collapse to one code,
+    // a real outage starts reading as an honest gate.
+    expect(body.code).not.toBe('no_aoai');
   });
 });

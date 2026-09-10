@@ -368,10 +368,18 @@ param aiFoundryEnabled = false
 // two param files diverge on, exactly as `aiFoundryEnabled = false` three lines
 // above already does (Microsoft Foundry portal is IL2-only).
 //
-// Prompts are still screened. With this false, `admin-plane/main.bicep` wires
-// LOOM_CONTENT_SAFETY_ENDPOINT to `loomAiEnrichEndpoint` — the multi-service
-// AIServices /contentsafety data plane — which IS populated here
-// (`agentFoundryEnabled` below). So this is not an unscreened copilot.
+// Prompts are still screened ON THE DEFAULT PATH. With this false,
+// `admin-plane/main.bicep:6224` wires LOOM_CONTENT_SAFETY_ENDPOINT to
+// `loomAiEnrichEndpoint` — the multi-service AIServices /contentsafety data
+// plane — which is populated here because `agentFoundryEnabled = true` (below)
+// and `adoptMode()` defaults an absent key to 'create'. So a stock IL5 deploy
+// is NOT an unscreened copilot.
+//
+// The qualifier is load-bearing: setting EXISTING_AOAI puts `foundry` into
+// 'adopt' mode (see legacyAdoptFromEnv above), and a BYO account is not
+// guaranteed to expose the /contentsafety data plane. On that path screening
+// depends on the adopted account, which this file cannot assert. Stating it
+// unconditionally would be the same R7 error the comment above records.
 param contentSafetyEnabled = false
 param apimEnabled = true
 

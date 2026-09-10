@@ -48,9 +48,7 @@
  */
 import { test, expect, type APIResponse } from '@playwright/test';
 import path from 'node:path';
-import {
-  classify, gateIsFailure, type Probe,
-} from './_lib/copilot-verdict';
+import { scorePersona, type Probe } from './_lib/copilot-verdict';
 import {
   BASE, signIn, captureFailures, recordVerdict,
   createWorkspace, deleteWorkspace, createItem,
@@ -95,26 +93,20 @@ function assertPrimaryAction(
   p: Probe,
   opts: { requireReal?: boolean } = {},
 ) {
-  const { verdict, reason } = classify(p);
-  const mustAnswer = gateIsFailure(p, verdict, {
+  // Every decision lives in scorePersona so it is reachable by unit test; what
+  // remains here is only the two things that need the Playwright runner.
+  const s = scorePersona(surface, feature, p, {
     requireReal: opts.requireReal,
     allowAoaiGate: !REQUIRE_REAL_AOAI,
   });
-  const bad = verdict === 'fail' || mustAnswer;
   recordVerdict({
     surface, feature,
-    verdict: bad ? 'F' : 'A',
-    status: bad ? 'fail' : 'pass',
-    notes: `${reason} (HTTP ${p.status})${mustAnswer ? ' — AOAI-backed persona must answer, not gate' : ''}`,
+    verdict: s.bad ? 'F' : 'A',
+    status: s.bad ? 'fail' : 'pass',
+    notes: s.notes,
   });
-  expect(
-    bad ? 'fail' : verdict,
-    mustAnswer
-      ? `${surface}:${feature} — AOAI-backed persona returned ${reason}. Loom deploys its own ` +
-        `Foundry/AOAI account, so this is a broken deployment, not an honest gate.`
-      : `${surface}:${feature} — ${reason}`,
-  ).not.toBe('fail');
-  return verdict;
+  expect(s.bad ? 'fail' : s.verdict, s.message).not.toBe('fail');
+  return s.verdict;
 }
 
 // ── Shared workspace + item ids ─────────────────────────────────────────────

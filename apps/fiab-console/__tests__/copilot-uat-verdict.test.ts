@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   classify,
   gateIsFailure,
+  scorePersona,
   GATE_CODES,
   DELIBERATE_GATE_CODES,
   type Probe,
@@ -113,5 +114,64 @@ describe('gateIsFailure — AOAI-backed personas must answer', () => {
 
   it('never turns a real answer into a failure', () => {
     expect(gateIsFailure(json(200, { ok: true }), 'real', { requireReal: true })).toBe(false);
+  });
+});
+
+/**
+ * The COMBINATION, not just its halves.
+ *
+ * A re-review killed the first version of this suite by mutating the glue
+ * instead of the module: deleting `|| mustAnswer` from the caller removed the
+ * must-answer rule entirely and all 20 tests stayed green, because every
+ * assertion sat one layer below where the rule was applied. These cases assert
+ * on `bad` — the field that mutation flips — so the rule is covered where it
+ * actually takes effect.
+ */
+describe('scorePersona — the combined decision', () => {
+  const noAoai = json(503, { ok: false, code: 'no_aoai' });
+
+  it('an AOAI persona that gates is BAD (the `|| mustAnswer` arm)', () => {
+    const s = scorePersona('persona:x', 'act', noAoai, { requireReal: true });
+    expect(s.verdict).toBe('gate');
+    expect(s.mustAnswer).toBe(true);
+    expect(s.bad).toBe(true);
+    expect(s.message).toContain('broken deployment');
+    expect(s.notes).toContain('must answer, not gate');
+  });
+
+  it('the same gate on a NON-requireReal persona is not bad', () => {
+    const s = scorePersona('persona:x', 'act', noAoai, {});
+    expect(s.bad).toBe(false);
+    expect(s.mustAnswer).toBe(false);
+    expect(s.message).not.toContain('broken deployment');
+  });
+
+  it('the opt-out downgrades it (the `!REQUIRE_REAL_AOAI` arm)', () => {
+    const s = scorePersona('persona:x', 'act', noAoai, {
+      requireReal: true, allowAoaiGate: true,
+    });
+    expect(s.bad).toBe(false);
+    expect(s.mustAnswer).toBe(false);
+  });
+
+  it('a plain fail is bad regardless of requireReal (the `verdict === fail` arm)', () => {
+    const s = scorePersona('persona:x', 'act', json(500, { ok: false, code: 'orchestrate_failed' }), {});
+    expect(s.verdict).toBe('fail');
+    expect(s.mustAnswer).toBe(false);
+    expect(s.bad).toBe(true);
+  });
+
+  it('a real answer is never bad', () => {
+    const s = scorePersona('persona:x', 'act', json(200, { ok: true }), { requireReal: true });
+    expect(s.verdict).toBe('real');
+    expect(s.bad).toBe(false);
+  });
+
+  it('a deliberate tenant toggle is not bad even on an AOAI persona', () => {
+    const s = scorePersona('persona:x', 'act', json(403, { ok: false, code: 'disabled' }), {
+      requireReal: true,
+    });
+    expect(s.verdict).toBe('gate');
+    expect(s.bad).toBe(false);
   });
 });

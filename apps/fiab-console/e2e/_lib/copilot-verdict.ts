@@ -111,3 +111,49 @@ export function gateIsFailure(
   if (verdict !== 'gate') return false;
   return !DELIBERATE_GATE_CODES.includes(gateCodeOf(p));
 }
+
+export interface PersonaScore {
+  verdict: Verdict;
+  /** True when the persona must be reported as a failure. */
+  bad: boolean;
+  /** The gate was well-formed but this persona is not allowed to gate. */
+  mustAnswer: boolean;
+  reason: string;
+  notes: string;
+  message: string;
+}
+
+/**
+ * The WHOLE scoring decision for one persona — classification, the
+ * must-answer rule, and the reported strings.
+ *
+ * Why this exists rather than living in `assertPrimaryAction`: the first
+ * extraction stopped one function short, and a re-review proved the cost by
+ * mutation. Deleting `|| mustAnswer` from the caller — which removes the
+ * must-answer rule outright, the headline behaviour of the change that
+ * introduced it — left all 20 tests GREEN, because everything under test sat
+ * one layer below the glue. A rule is only covered where it is COMBINED, so
+ * the combination is here and `assertPrimaryAction` is left with nothing but
+ * `recordVerdict` + `expect`.
+ */
+export function scorePersona(
+  surface: string,
+  feature: string,
+  p: Probe,
+  opts: { requireReal?: boolean; allowAoaiGate?: boolean } = {},
+): PersonaScore {
+  const { verdict, reason } = classify(p);
+  const mustAnswer = gateIsFailure(p, verdict, opts);
+  const bad = verdict === 'fail' || mustAnswer;
+  return {
+    verdict,
+    bad,
+    mustAnswer,
+    reason,
+    notes: `${reason} (HTTP ${p.status})${mustAnswer ? ' — AOAI-backed persona must answer, not gate' : ''}`,
+    message: mustAnswer
+      ? `${surface}:${feature} — AOAI-backed persona returned ${reason}. Loom deploys its own `
+        + 'Foundry/AOAI account, so this is a broken deployment, not an honest gate.'
+      : `${surface}:${feature} — ${reason}`,
+  };
+}
