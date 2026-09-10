@@ -44,7 +44,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -395,7 +396,10 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
     const res = await budget.runPage(async (timeoutMs) =>
       next
         ? fetchWithTimeout(
-            next,
+            // SECURITY (GHSA-4gvx-9p49-p43g) — `next` is an absolute URL read out
+            // of a RESPONSE BODY and this expression mints an ARM token for it.
+            // Pin it to `armBase()` and fail closed rather than fetching.
+            resolveSameOriginUrl(next, armBase(), 'the ARM token'),
             { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
             timeoutMs,
           )
@@ -411,6 +415,9 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
       }
     }
     if (!j.nextLink || out.length >= cap) break;
+    // Row-capped loop — same continuation decision as walkPagedListResult,
+    // taken through the shared helper rather than a second copy of it.
+    if (!isContinuationAllowed(budget.label, j.nextLink, armBase())) break;
     next = j.nextLink;
   }
   budget.warnIfTruncated(out.length);

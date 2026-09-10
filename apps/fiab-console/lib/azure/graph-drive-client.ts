@@ -41,6 +41,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { getGraphHost } from '@/lib/azure/cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -170,7 +171,11 @@ function assertEnabled(): void {
 async function graphFetch<T>(path: string): Promise<T> {
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphDriveError(500, 'Failed to acquire Microsoft Graph token', 'token_failure');
-  const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
+  // SECURITY (GHSA-4gvx-9p49-p43g): `path` may be an ABSOLUTE URL — Graph
+  // paginates with an `@odata.nextLink` read out of a response body — and a
+  // Graph bearer token is attached below. Pin the target to the configured
+  // Graph host (sovereign-cloud correct) and fail closed instead of fetching.
+  const url = resolveSameOriginUrl(path, GRAPH_V1, 'the Microsoft Graph token');
   let res: Response;
   try {
     res = await fetchWithTimeout(url, {

@@ -30,6 +30,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -87,7 +88,11 @@ function permHint(status: number): string | undefined {
 
 async function graphFetch(path: string, init?: RequestInit): Promise<any> {
   const token = await graphToken();
-  const url = path.startsWith('http') ? path : `${graphBase()}${path}`;
+  // SECURITY (GHSA-4gvx-9p49-p43g): `path` may be an ABSOLUTE URL — Graph
+  // paginates with an `@odata.nextLink` read out of a response body — and a
+  // Graph bearer token is attached below. Pin the target to `graphBase()`
+  // (sovereign-cloud correct) and fail closed instead of fetching.
+  const url = resolveSameOriginUrl(path, graphBase(), 'the Microsoft Graph token');
   const res = await fetchWithTimeout(url, {
     ...init,
     headers: {

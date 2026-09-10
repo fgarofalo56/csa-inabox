@@ -60,6 +60,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 import { getGraphHost } from '@/lib/azure/cloud-endpoints';
+import { resolveSameOriginUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -180,7 +181,11 @@ function assertEnabled(): void {
 async function graphFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphIdentityError(500, null, 'Failed to acquire Microsoft Graph token');
-  const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
+  // SECURITY (GHSA-4gvx-9p49-p43g): `path` may be an ABSOLUTE URL — the
+  // transitive-members walk below feeds `@odata.nextLink` straight back in from
+  // a response body — and a Graph bearer token is attached below. Pin the
+  // target to the configured Graph host and fail closed instead of fetching.
+  const url = resolveSameOriginUrl(path, GRAPH_V1, 'the Microsoft Graph token');
   return fetchWithTimeout(url, {
     ...init,
     cache: 'no-store',
@@ -426,7 +431,13 @@ export async function getGroupTransitiveMembers(groupId: string, max = 200): Pro
       });
       if (out.length >= max) break;
     }
-    endpoint = j?.['@odata.nextLink'] || '';
+    // The continuation is an absolute URL out of a RESPONSE BODY, handed
+    // straight back to graphFetch, which attaches a Graph token. graphFetch
+    // refuses an off-origin target by throwing; refusing it HERE ends the walk
+    // with the members already collected instead, which is what a picker wants
+    // (GHSA-4gvx-9p49-p43g). Both checks stand — this one for the outcome, the
+    // one in graphFetch so the credential-attach point is never unguarded.
+    endpoint = sameOriginUrlOrNull(j?.['@odata.nextLink'], GRAPH_V1) || '';
   }
   budget.warnIfTruncated(out.length);
   return out;

@@ -28,6 +28,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, cogScope } from './cloud-endpoints';
 import { buildAoaiBody } from './aoai-model-contract';
+import { sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 const CS_API = '2024-10-01';
@@ -138,25 +139,23 @@ const MAX_ARM_PAGING_MS = 60_000;
  * from a response body, to which this loop attaches a management-plane bearer
  * token. Unchecked, that forwards an ARM token to whatever host the body names.
  * The origin check runs BEFORE the token is minted; `armBase()` is
- * boundary-correct, so it holds in sovereign clouds too. */
+ * boundary-correct, so it holds in sovereign clouds too. The check itself now
+ * lives in `lib/util/same-origin-url` — this function was the FIRST fix for the
+ * class (PR #4443 review) and keying it to this one function is precisely why
+ * every sibling walker stayed unguarded (advisory GHSA-4gvx-9p49-p43g). */
 async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[] | null> {
   const first = await armFetch(fullPath, apiVersion ? { apiVersion } : {});
   const page1 = await readJson<{ value?: T[]; nextLink?: string }>(first);
   if (page1 === null) return null; // 404 — genuinely absent
   const out: T[] = [...(page1.value || [])];
   let next = page1.nextLink;
-  const armOrigin = new URL(armBase()).origin;
   const seen = new Set<string>();
   const deadline = Date.now() + MAX_ARM_PAGING_MS;
   for (let p = 1; next && p < MAX_ARM_PAGES; p++) {
     // nextLink is an ABSOLUTE url carrying api-version + $skiptoken. Refuse to
     // carry the ARM token anywhere but ARM; a malformed url ends the walk rather
     // than being guessed at. A repeated nextLink is a cycle, not progress.
-    let nextOrigin: string;
-    try {
-      nextOrigin = new URL(next).origin;
-    } catch { break; }
-    if (nextOrigin !== armOrigin) break;
+    if (sameOriginUrlOrNull(next, armBase()) === null) break;
     if (seen.has(next)) break;
     seen.add(next);
     if (Date.now() > deadline) break;

@@ -29,6 +29,7 @@ import {
   type SparkStreamingBinding,
 } from '@/lib/admin/platform-settings';
 import { armGet } from '@/lib/azure/arm-client';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 import { walkPagedList } from '@/lib/azure/paging-budget';
 import { listDatabricksWorkspaces } from '@/lib/azure/databricks-discovery';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -56,7 +57,11 @@ async function listSynapseWorkspaces(): Promise<Array<{ name: string; id: string
     'spark-binding synapse workspaces',
     // nextLink is absolute; strip the host so armGet re-prefixes the ARM base.
     (next, timeoutMs) => armGet(next ? next.replace(/^https?:\/\/[^/]+/i, '') : first, timeoutMs),
-    { maxPages: 20 },
+    // The host strip above re-roots any link onto the ARM base, so an off-ARM
+    // one would hit a WRONG ARM route rather than leak the token. Refusing it
+    // outright is the honest outcome and matches every sibling walker
+    // (GHSA-4gvx-9p49-p43g).
+    { maxPages: 20, sameOriginAs: armBase() },
   );
   const out = rows
     .filter((w): w is { name: string; id: string } => !!(w?.name && w?.id))
