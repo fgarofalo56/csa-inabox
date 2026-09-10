@@ -25,7 +25,7 @@ import {
   loadTenantCopilotConfig,
   saveTenantCopilotConfig,
 } from '@/lib/azure/copilot-config-store';
-import { listAccounts, resolveAccount, CsNotConfiguredError } from '@/lib/azure/foundry-cs-client';
+import { listAccountsDetailed, resolveAccount, CsNotConfiguredError } from '@/lib/azure/foundry-cs-client';
 import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 import {
   MODEL_TIERS, TASK_CLASSES, type ModelTier, type TaskClass, type TierDeployments,
@@ -97,9 +97,29 @@ export async function GET() {
     let defaultAccount: string | undefined;
     let accountsError: { error: string; hint?: string } | undefined;
     try {
-      accounts = (await listAccounts()).map((a) => ({
+      // listAccountsDetailed (not listAccounts): per-subscription failures are
+      // tolerated inside the client so one bad subscription can't blank the
+      // picker, but they must NOT vanish. #4432 — a swallowed 403/429 rendered
+      // identically to "this tenant has no Foundry accounts": an empty dropdown
+      // with no MessageBar, i.e. a claim of absence never established (R7).
+      const detailed = await listAccountsDetailed();
+      accounts = detailed.accounts.map((a) => ({
         name: a.name, rg: a.rg, sub: a.subscriptionId, location: a.location, kind: a.kind, endpoint: a.endpoint,
       }));
+      if (accounts.length === 0 && detailed.failures.length > 0) {
+        const f = detailed.failures[0];
+        accountsError = {
+          error:
+            `Could not list Azure AI Foundry accounts: ARM returned ` +
+            `${f.status ? `HTTP ${f.status}` : 'an error'} for subscription ${f.subscriptionId}` +
+            `${detailed.failures.length > 1 ? ` (and ${detailed.failures.length - 1} more)` : ''}. ` +
+            `${f.message}`,
+          hint:
+            `This is NOT a statement that no accounts exist — the list could not be read. ` +
+            `Grant the Console managed identity "Cognitive Services Contributor" (or at least Reader) ` +
+            `on the subscription or resource group holding your AIServices/OpenAI account, then reload.`,
+        };
+      }
       try { defaultAccount = (await resolveAccount()).name; } catch { /* no default */ }
     } catch (e: any) {
       accountsError = e instanceof CsNotConfiguredError
