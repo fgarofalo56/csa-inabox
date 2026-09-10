@@ -336,6 +336,13 @@ describe('boundary 3 — GET [id]/export (the archive handed to the customer)', 
  * they are DISJOINT-KEY cases on purpose: the pre-existing mixed-shape test
  * only covers a same-key collision, which the preserve branch happens to get
  * right, so it could not see this.
+ *
+ * TWO OF THREE BRANCHES, AND THE THIRD IS PINNED AS A RESIDUAL. The live-ADF
+ * branch is deliberately NOT repaired, so the population #3700 itself created —
+ * pipelines pre-fix Loom published into ADF in the canvas shape — still reaches
+ * the editor unrepaired. The last case below asserts exactly that, so the
+ * decision is a red test away from being reversed rather than a claim in a
+ * comment. Round-2 review asked for either the repair or this case.
  */
 describe('boundary 0 — GET [id] (the shape the editor is handed)', () => {
   it('hands the editor the WIRE shape for a bundle-installed pipeline', async () => {
@@ -392,6 +399,43 @@ describe('boundary 0 — GET [id] (the shape the editor is handed)', () => {
     getPipeline.mockResolvedValue(structuredClone(live));
     const res = await DETAIL_GET(req({}), ctx);
     expect((await res.json()).definition).toEqual(live);
+  });
+
+  it('RESIDUAL, PINNED — a CANVAS-shaped definition read live from ADF is handed over UNREPAIRED', async () => {
+    // THE DECISION, MADE VISIBLE INSTEAD OF ASSERTED IN PROSE. Round-2 review
+    // measured this exact population and asked for either a repair or a pinned
+    // case; the repair is declined, so this is the case. #3700's premise is that
+    // three write paths PUT the CANVAS shape, so for every pipeline Loom
+    // published pre-fix ADF itself holds `notebookPath` at the activity root,
+    // `getPipeline` returns it, and this branch passes it straight through. ONE
+    // inspector patch then mints the mixed activity, which the preserve branch
+    // ships back to ADF unmoved — #3700's symptom surviving #3700's fix on the
+    // items that have it.
+    //
+    // WHY NOT REPAIRED HERE. Normalizing this branch would take
+    // `normalizeActivity`'s CANVAS branch on any live activity lacking
+    // `typeProperties` and move root keys ADF owns — `state` /
+    // `onInactiveMarkAs`, absent from both `ADF_ACTIVITY_ROOT_KEYS` and the
+    // published ARM schema — which is the regression the control above exists
+    // for. The tie is not breakable from the document.
+    //
+    // ASSERTED AS A FACT ABOUT TODAY, NOT AS A DESIRED OUTCOME: if someone later
+    // decides the repair IS worth its risk, this test goes red and they have to
+    // say so, rather than the docblock and the code drifting apart again.
+    const liveCanvas = {
+      name: 'My_Pipeline_item1',
+      properties: {
+        activities: [{
+          name: 'nb1', type: 'DatabricksNotebook',
+          notebookPath: '/Shared/legacy', baseParameters: { env: 'prod' },
+        }],
+      },
+    };
+    getPipeline.mockResolvedValue(structuredClone(liveCanvas));
+    const res = await DETAIL_GET(req({}), ctx);
+    const act = (await res.json()).definition.properties.activities[0];
+    expect(act.notebookPath).toBe('/Shared/legacy');
+    expect(act.typeProperties).toBeUndefined();
   });
 
   it('CONTROL — an item with no content and no definition still yields null, not a fabricated one', async () => {

@@ -340,9 +340,29 @@ const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
   'db_denydatareader', 'db_denydatawriter',
 ]);
 
-/** Split a SQL ref into its dotted parts with brackets stripped. Naive on
- *  purpose: `SQL_REF_RE` admits no quote or escape character, so a dot here is
- *  always a separator. Note the ORDER, since an earlier revision of this line
+/** Split a SQL ref into its dotted parts with brackets stripped.
+ *
+ *  NAIVE, AND THE PREMISE THAT USED TO JUSTIFY IT WAS WRONG. This docblock said
+ *  "`SQL_REF_RE` admits no quote or escape character, so a dot here is always a
+ *  separator". `SQL_REF_RE` admits `[` and `]` — the paragraph below says so
+ *  itself — and in T-SQL a dot INSIDE a delimited identifier is part of the name,
+ *  not a separator. So a dot here is NOT always a separator, and on a bracketed
+ *  ref this splitter and the engine can disagree about which part is the schema.
+ *  Measured through the real resolver: `sys.[a.b]` with `database:'sys'` split to
+ *  db=`sys` / schema=`a` / table=`b`, cleared the schema test and reached
+ *  `buildSqlSelect` (`SELECT TOP 100 * FROM sys.[a.b]`), where T-SQL reads schema
+ *  `sys`, object `a.b` — `FORBIDDEN_SQL_SCHEMAS` never saw the token the engine
+ *  would use.
+ *
+ *  THE SPLIT IS STILL NAIVE; THE DIVERGENCE IS REFUSED INSTEAD. Rather than
+ *  re-implementing T-SQL's delimited-identifier lexer here (and owning its
+ *  `]]`-escape and unterminated-bracket corners on a security path),
+ *  `sqlRefBracketDivergence` detects the ONLY structures on which the two parses
+ *  can differ and `ontologySqlRefViolation` refuses them — same "unjudgeable ⇒
+ *  fail closed" rule the one-part case uses. That check runs LAST, so every
+ *  refusal this function already produced keeps its own message.
+ *
+ *  Note the ORDER, since an earlier revision of this line
  *  said "has already excluded": `SQL_REF_RE` runs DOWNSTREAM, inside
  *  `buildSqlSelect`, so this splitter sees the raw ref and cannot lean on it.
  *
@@ -368,6 +388,58 @@ const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
  *  own terms. */
 function sqlRefParts(ref: string): string[] {
   return (ref || '').trim().split('.').map((p) => p.replace(/[[\]]/g, '').trim());
+}
+
+/**
+ * The ONLY two bracket structures on which `sqlRefParts` and T-SQL can disagree
+ * about where the name parts are, or null when they provably cannot.
+ *
+ * KEYED TO THE SHAPE, NOT TO A LIST OF REFS. Scanning is exactly T-SQL's
+ * delimited-identifier rule: `[` opens, a single `]` closes, `]]` inside is an
+ * escaped literal `]`, and any other character — INCLUDING `[` — is literal
+ * content. Two outcomes make the naive dot-split unsafe:
+ *
+ *   - `dot-inside`   a `.` sits inside a delimited identifier, so the engine
+ *                    reads it as part of the NAME while `sqlRefParts` reads it as
+ *                    a SEPARATOR. Every part index shifts, and the schema test
+ *                    then judges a token the engine will never resolve.
+ *   - `unterminated` a `[` is never closed, so there is no parse to compare
+ *                    against: how the engine tokenises the rest is not knowable
+ *                    from the string.
+ *
+ * A bare `]` with no open `[` is NOT reported. It is malformed, but it cannot
+ * move a separator — `sqlRefParts` strips it and the part boundaries are
+ * unchanged — so reporting it would refuse refs on a difference that does not
+ * exist. If the engine rejects such a ref, that is the engine's answer.
+ *
+ * WHY REFUSE RATHER THAN ARGUE UNREACHABILITY. Review measured the divergence
+ * and could not turn it into a live read of a real `sys` object, because no stock
+ * `sys` object has a dot in its name and the 3-part rule pins `parts[0]` to the
+ * declared database. That is a SILENCE, not a proof of safety — the same verdict
+ * this file already accepted twice, for `[[sys]]` (an outermost-pair rule "can
+ * always be spelled around") and for `sys .t` ("a security check should not rest
+ * on another check's alphabet"). Refusing costs one honest message.
+ */
+function sqlRefBracketDivergence(ref: string): 'dot-inside' | 'unterminated' | null {
+  const s = (ref || '').trim();
+  let inside = false;
+  let dotInside = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (!inside) {
+      if (c === '[') inside = true;
+      continue;
+    }
+    if (c === ']') {
+      // `]]` is T-SQL's escape for a literal `]`; consume both and stay inside.
+      if (s[i + 1] === ']') { i++; continue; }
+      inside = false;
+      continue;
+    }
+    if (c === '.') dotInside = true;
+  }
+  if (inside) return 'unterminated';
+  return dotInside ? 'dot-inside' : null;
 }
 
 /**
@@ -397,6 +469,13 @@ function sqlRefParts(ref: string): string[] {
  * schema the engine uses, which is what makes testing the string meaningful. No
  * Synapse endpoint was reached by this change, so that is the documented T-SQL
  * name-resolution rule being relied on, not a measurement of ours.
+ *
+ * AND THE SPLIT ITSELF IS JUDGED, NOT ASSUMED. Every rule here reads
+ * `sqlRefParts`' output, so it is only meaningful while that split agrees with
+ * the engine's. `sqlRefBracketDivergence` (above) names the two bracket
+ * structures on which it provably might not, and those refs are refused last —
+ * see that function for the measurement and for why "review could not reach a
+ * real `sys` object through it" is a silence rather than a safety proof.
  *
  * WHAT IS STILL NOT CLOSED, IN THE SAME BREATH. On the `lakehouse-table` sink
  * `ownDatabase` is `binding.source.database` — a caller-supplied string, and the
@@ -437,6 +516,22 @@ export function ontologySqlRefViolation(ref: string, ownDatabase?: string): stri
       return `"${ref}" names database \`${parts[0]}\`, which is not the database this binding declares`
         + `${ownDatabase ? ` (\`${ownDatabase}\`)` : ''}. A binding may only address objects in its own database.`;
     }
+  }
+  // LAST, AND ONLY OVER REFS THE RULES ABOVE WOULD PERMIT. Everything up to here
+  // judged `sqlRefParts`' split; this asks whether T-SQL would split the same ref
+  // the same way, and refuses when it provably might not. Running it last is
+  // deliberate: it is STRICTLY ADDITIVE, so no ref that already had a specific
+  // refusal (wrong schema, foreign database, no schema at all) trades that
+  // message for this vaguer one.
+  const divergence = sqlRefBracketDivergence(ref);
+  if (divergence === 'dot-inside') {
+    return `"${ref}" puts a dot inside a bracketed name part, so which part is the schema depends on `
+      + 'how the SQL engine tokenises the brackets and cannot be established from the reference. '
+      + 'Reference the object without a dot in a delimited name part.';
+  }
+  if (divergence === 'unterminated') {
+    return `"${ref}" opens a bracketed name part it never closes, so it has no name parts this code `
+      + 'can establish. Use `schema.table`, with each part either bare or wrapped in one `[...]` pair.';
   }
   return null;
 }

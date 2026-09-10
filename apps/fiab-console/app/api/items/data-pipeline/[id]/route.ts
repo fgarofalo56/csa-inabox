@@ -64,7 +64,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         if (fromContent) definition = toAdfWireShape(fromContent) as AdfPipeline;
       }
     }
-    // ONE SHAPE OUT OF THIS ROUTE — the MIXED-SHAPE class, closed at its source.
+    // THE MIXED-SHAPE CLASS, NARROWED AT ITS SOURCE — on two of this route's
+    // three branches. "One shape out of this route" was the earlier heading and
+    // it overstated the change; the live-ADF branch below is excluded on purpose.
     //
     // WHAT WAS MEASURED. `toAdfWireShape` treats "has a `typeProperties` object"
     // as "already wire-shaped" and then preserves every root key, which is what
@@ -94,12 +96,32 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     // The decidable place is the two branches above, where the provenance of the
     // shape is still known.
     //
-    // WHY ONLY THOSE TWO AND NOT THE LIVE-ADF BRANCH. A definition read from ADF
-    // IS the wire shape, so normalizing it is a no-op — the idempotence pinned by
-    // `lib/azure/__tests__/pipeline-binding.test.ts` and by the byte-identical
-    // control in `publish/__tests__/publish-shape.test.ts`. Leaving that branch
-    // alone keeps this route's only behaviour change on the shapes that were
-    // actually wrong.
+    // WHY ONLY THOSE TWO AND NOT THE LIVE-ADF BRANCH — AND *NOT* BECAUSE A LIVE
+    // READ IS ALREADY WIRE-SHAPED. An earlier revision of this comment said "a
+    // definition read from ADF IS the wire shape, so normalizing it is a no-op".
+    // That is false, and this PR's own #3700 finding is what falsifies it: three
+    // write paths PUT the CANVAS shape, so for every pipeline Loom published
+    // before that fix, ADF holds the canvas shape and `getPipeline` returns it.
+    // What `toAdfWireShape` actually promises is narrower and is all that those
+    // tests pin — IDEMPOTENT ON WIRE-SHAPED INPUT (its own docblock;
+    // `lib/azure/__tests__/pipeline-binding.test.ts`, and the byte-identical
+    // control in `publish/__tests__/publish-shape.test.ts`). Neither says
+    // anything about a canvas-shaped input read live from ADF.
+    //
+    // THE REAL REASON is the decidability argument above, applied to the OTHER
+    // side of the same discriminator. On a definition Loom authored, a root key
+    // outside `ADF_ACTIVITY_ROOT_KEYS` is leaked canvas config. On one read live
+    // from ADF the same key may be a service key this codebase does not know, and
+    // the published ARM schema cannot break that tie either — it carries ZERO
+    // occurrences of `onInactiveMarkAs` or `"state"`, two keys ADF demonstrably
+    // does put at the activity root (the deactivated-Copy fixture recorded in
+    // `pipeline-binding.ts`). Normalizing here would take `normalizeActivity`'s
+    // CANVAS branch on any live activity that lacks `typeProperties` and move
+    // those keys — re-inflicting the exact regression review already caught once.
+    //
+    // CONSEQUENCE, STATED RATHER THAN LEFT TO BE FOUND: a pre-fix-published
+    // pipeline still opens canvas-shaped, and one inspector patch can still mint
+    // the mixed activity. That is residual 1 in `normalizeActivity`'s docblock.
     //
     // SAFE FOR THE EDITOR, measured rather than assumed: `extractActivities`
     // reads `parsed?.properties?.activities` and nothing deeper

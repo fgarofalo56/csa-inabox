@@ -43,10 +43,37 @@
  * isolation. Only `warehouse-table` gets a real database restriction, because
  * `dedicatedTarget()` ignores the binding — asserted below.
  *
+ * ── THE THIRD AND FOURTH DEFECTS, FOUND BY THE ROUND-4 REVIEW ──────────────
+ * (a) THIS SPEC COULD NOT SEE THE EMPTY-PART BRANCH REGRESS. Narrowing the
+ * refusal at `ontology-binding.ts` to the TRAILING position left the spec at
+ * 42/42 RC=0 while `master..sysobjects` with `database:'master'` reached
+ * `buildSqlSelect`. The single empty-part assertion, `('a..b','db')`, stayed
+ * truthy only because `a` !== `db` — the DATABASE branch refused it and masked
+ * the branch under test. That is a blind assertion, not a weak mutation.
+ * (b) `sqlRefParts` SPLITS ON EVERY DOT, and its docblock justified that with
+ * "SQL_REF_RE admits no quote or escape character". It admits BRACKETS, and in
+ * T-SQL a dot inside a delimited identifier is part of the name. `sys.[a.b]`
+ * with `database:'sys'` reached the sink because the guard read the schema as
+ * `a` while T-SQL reads it as `sys`.
+ * Both are pinned below, with the database on each ref chosen so the branch
+ * under test is the only one that can refuse it.
+ *
  * WHAT IS DELIBERATELY *NOT* MOCKED. `ontologySqlRefViolation` and the whole
  * `resolveBindingInstances` switch RUN FOR REAL. Only the backend is stubbed —
  * `synapseExecute`, so the test can assert it was NEVER CALLED, which is the
  * actual security property. A gate that still ran the query would be theatre.
+ *
+ * AND THE COUNTERFACTUALS ARE IN THE REPO, NOT IN A SCRATCH DIRECTORY. Nine
+ * mutation arms — the two above, plus the pre-round-3 guard, the narrower
+ * `startsWith('sys')` fix a reviewer proposed, the outermost-pair bracket strip,
+ * the dropped per-part trim, a divergence verdict that is computed and
+ * discarded, and the gate removed from the Dedicated sink only — live at
+ * `lib/foundry/__tests__/mutation/`. Each declares the MECHANISM by which it
+ * changes the guard's answer and the test names it must break, so a mutant that
+ * dies for an unrelated reason is reported rather than counted:
+ *
+ *     cd apps/fiab-console
+ *     node lib/foundry/__tests__/mutation/run-sql-ref-guard-arms.mjs
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -178,7 +205,60 @@ describe('ontologySqlRefViolation — the pure policy, exercised directly', () =
 
   it('refuses an empty part (a trailing or doubled dot)', () => {
     expect(ontologySqlRefViolation('dbo.', 'db')).toBeTruthy();
+    // KEPT, AND NOW LABELLED WITH WHAT MASKS IT. Review found a GREEN mutation
+    // here: narrow the refusal at ontology-binding.ts to `parts[parts.length-1]
+    // === ''` (trailing-only) and this spec stayed 42/42 RC=0 while
+    // `master..sysobjects` with `database:'master'` reached the sink
+    // (`SELECT TOP 100 * FROM master..sysobjects`, targetDb `master`). This line
+    // survives the mutation because `a` !== `db`, so it is the DATABASE branch
+    // that refuses it, not the empty-part branch — a blind assertion, not a weak
+    // mutation. The discriminating arms are in the `it` below.
     expect(ontologySqlRefViolation('a..b', 'db')).toBeTruthy();
+  });
+
+  it('refuses an empty part in EVERY position, from the empty-part branch itself', () => {
+    // MECHANISM, so a green run here means something. Under the trailing-only
+    // mutation each of these would fall through to a PERMIT:
+    //   'master..sysobjects' → parts ['master','','sysobjects'] → length 3, last
+    //     part non-empty → schema is '' (not in FORBIDDEN_SQL_SCHEMAS) → db test
+    //     compares 'master' to ownDatabase 'master' and AGREES → null.
+    //   '.sysobjects'        → parts ['','sysobjects'] → schema is '' → null.
+    // So the database is chosen to MATCH precisely so the db branch cannot mask
+    // the empty-part branch, and the message is asserted (not just truthiness) so
+    // a future refusal arriving from some OTHER branch cannot pass for this one.
+    //
+    // In T-SQL `db..object` is not a typo: the omitted middle part means the
+    // SERVER applies default-schema resolution — the exact "unjudgeable, so fail
+    // closed" case this whole rule exists for.
+    const EMPTY_PART = 'is not a usable SQL object reference';
+    expect(ontologySqlRefViolation('master..sysobjects', 'master')).toContain(EMPTY_PART);
+    expect(ontologySqlRefViolation('.sysobjects', 'db')).toContain(EMPTY_PART);
+    expect(ontologySqlRefViolation('dbo.', 'db')).toContain(EMPTY_PART);
+    // …and a leading dot on a 3-part ref whose database also agrees.
+    expect(ontologySqlRefViolation('.dbo.orders', 'db')).toContain(EMPTY_PART);
+  });
+
+  it('refuses a ref whose brackets make this splitter and T-SQL disagree', () => {
+    // Review measured the divergence: `sqlRefParts` splits on EVERY dot, but
+    // `SQL_REF_RE` admits brackets and in T-SQL a dot inside a delimited
+    // identifier is part of the name. `sys.[a.b]` with `database:'sys'` split to
+    // db=`sys` / schema=`a` / table=`b`, cleared the schema test and reached
+    // `buildSqlSelect`; T-SQL reads schema `sys`, object `a.b`. Review could not
+    // turn it into a live read of a real `sys` object and said so — this closes
+    // the SILENCE, on the same reasoning `[[sys]]` and `sys .t` were closed.
+    expect(ontologySqlRefViolation('sys.[a.b]', 'sys')).toContain('dot inside a bracketed name part');
+    expect(ontologySqlRefViolation('[a.b].[c]', 'a')).toContain('dot inside a bracketed name part');
+    // An unterminated `[` leaves no parse to compare against at all.
+    expect(ontologySqlRefViolation('[dbo.orders', 'db')).toContain('never closes');
+    // STRICTLY ADDITIVE, asserted rather than claimed: a ref the earlier rules
+    // already refuse keeps ITS OWN, more specific message. `[[sys]].[sql_logins]`
+    // is `dot-inside` too (the `]]` escape swallows the closing bracket), so if
+    // the divergence check had been placed first this would now read "dot inside
+    // a bracketed name part" instead.
+    expect(ontologySqlRefViolation('[[sys]].[sql_logins]', 'db')).toContain('SQL engine metadata');
+    // …and an ordinary bracketed ref with no dot inside a part is still permitted.
+    expect(ontologySqlRefViolation('[dbo].[orders]', 'db')).toBeNull();
+    expect(ontologySqlRefViolation('[db].[dbo].[orders]', 'db')).toBeNull();
   });
 
   it('refuses a 3-part ref when the binding declares NO database at all', () => {
@@ -282,6 +362,50 @@ describe('one-part refs through the REAL sink — the property that actually mat
       });
     }
   }
+});
+
+describe('the shapes a PURE-FUNCTION assertion alone could not have caught', () => {
+  // Every case here is one review reached `buildSqlSelect` with, or would have
+  // reached it with, under a mutation the previous spec could not see. Only
+  // `synapseExecute` is stubbed, so `not.toHaveBeenCalled()` is the property.
+  //
+  // WHY THE DATABASE IS SPELLED OUT ON EACH. On `lakehouse-table` the guard's
+  // `ownDatabase` is `binding.source.database || 'master'`; on `warehouse-table`
+  // it is `dedicatedTarget().database` ('pool1' here). Each ref below is written
+  // so its FIRST part MATCHES that value — otherwise the cross-database branch
+  // refuses it and masks the branch actually under test, which is precisely how
+  // the `'a..b'` assertion above stayed green under the trailing-only mutation.
+  const CASES: Array<[kind: string, ref: string, database: string | undefined, why: string]> = [
+    ['lakehouse-table', 'master..sysobjects', 'master',
+      'db..object — the omitted middle part hands schema resolution to the SERVER'],
+    ['warehouse-table', 'pool1..sysobjects', undefined,
+      'the same shape against the pool name the Dedicated sink actually connects to'],
+    ['lakehouse-table', '.sysobjects', 'master',
+      'a LEADING empty part, which a trailing-only refusal also lets through'],
+    ['lakehouse-table', 'sys.[a.b]', 'sys',
+      'guard reads schema `a`; T-SQL reads schema `sys`, object `a.b`'],
+    ['warehouse-table', 'pool1.[a.b]', undefined,
+      'the same divergence on the Dedicated sink'],
+  ];
+
+  for (const [kind, ref, database, why] of CASES) {
+    it(`${kind} REFUSES '${ref}' — ${why}`, async () => {
+      const out = await resolveBindingInstances(binding(kind, ref, database), null);
+      expect(out.gated).toBe(true);
+      expect((out as any).code).toBe('ontology_sql_ref_namespace');
+      expect(synapseExecute).not.toHaveBeenCalled();
+    });
+  }
+
+  it('POSITIVE CONTROL — the same sinks still resolve a bracketed user table', async () => {
+    // Without this the five refusals above are equally explained by the sink
+    // being dead, and by the divergence rule having become a blanket refusal of
+    // every bracketed ref.
+    const out = await resolveBindingInstances(binding('lakehouse-table', '[dbo].[orders]', 'master'), null);
+    expect(out.gated).toBe(false);
+    expect(synapseExecute).toHaveBeenCalledTimes(1);
+    expect(synapseExecute.mock.calls[0][1]).toBe('SELECT TOP 100 * FROM [dbo].[orders]');
+  });
 });
 
 describe('the cross-database half binds only the DEDICATED sink — stated, not implied', () => {

@@ -455,18 +455,35 @@ const NESTED_ACTIVITY_KEYS = ['activities', 'ifTrueActivities', 'ifFalseActiviti
  * `{additionalProperties, dependsOn, description, name, userProperties}` and the
  * whole document contains ZERO occurrences of `onInactiveMarkAs` or `"state"`.
  *
- * SO THE CLASS IS CLOSED AT ITS SOURCE INSTEAD:
- * `GET /api/items/data-pipeline/[id]` now wire-shapes the definition it hands
- * the editor (all three of its branches), so the editor holds a PURE wire shape
- * and an inspector patch can no longer manufacture a mixed one. See the comment
- * at that call site for the measurements that it is safe for the canvas and the
- * inspector.
+ * SO THE CLASS IS NARROWED AT ITS SOURCE INSTEAD — ON TWO OF THREE BRANCHES:
+ * `GET /api/items/data-pipeline/[id]` wire-shapes the definition it hands the
+ * editor on the two branches whose PROVENANCE that route knows, because Loom
+ * authored both: a saved `state.definition` and a bundle `content` translation.
+ * A definition read LIVE from ADF is passed through untouched. On those two
+ * branches the editor holds a PURE wire shape and an inspector patch can no
+ * longer manufacture a mixed one. See the comment at that call site for why the
+ * live branch is deliberately excluded, and for the measurements that the
+ * translation is safe for the canvas and the inspector.
  *
- * RESIDUAL, not fixed and not hidden: a client that POSTs a hand-built mixed
- * activity straight to `publish` / `PUT [id]` still reaches the preserve branch.
- * That document was authored by neither this editor nor ADF, and ADF ignoring
- * or rejecting the stray key is the honest outcome; repairing it here would
- * require the guess the paragraph above shows is not available.
+ * RESIDUAL, not fixed and not hidden — TWO populations, because an earlier
+ * revision of this paragraph listed only the second and read as if the class
+ * were closed:
+ *
+ *   1. A PIPELINE PRE-FIX LOOM ITSELF PUBLISHED. #3700's finding is that three
+ *      write paths PUT the CANVAS shape, so for every pipeline published before
+ *      that fix, ADF holds `notebookPath` at the activity root. `getPipeline`
+ *      returns that canvas shape, the live branch hands it to the editor
+ *      unrepaired, and ONE inspector patch mints the mixed activity above —
+ *      which then reaches this function's preserve branch on the way back out.
+ *      "A definition read from ADF is already the wire shape" is therefore FALSE
+ *      of exactly the population Loom created, and it is NOT why the live branch
+ *      is skipped; the decidability argument at the call site is.
+ *   2. A client that POSTs a hand-built mixed activity straight to `publish` /
+ *      `PUT [id]`. That document was authored by neither this editor nor ADF,
+ *      and ADF ignoring or rejecting the stray key is the honest outcome.
+ *
+ * Repairing either HERE would require the guess the paragraph above shows is not
+ * available.
  */
 function normalizeActivity(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
