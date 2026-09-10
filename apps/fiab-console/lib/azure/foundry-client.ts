@@ -1329,6 +1329,12 @@ export async function contentSafetyHealth(): Promise<ContentSafetyHealth> {
     value = {
       configured,
       reachable: false,
+      // Statement of fact, NOT a chore for the reader. auto-bind-by-default.md
+      // forbids "go set LOOM_X" as the terminal user-facing state: the platform
+      // deploys the Content Safety private endpoint itself (see
+      // deploy-planner/cognitive-account.bicep), so an unreachable endpoint is a
+      // deploy defect to repair, not something the operator should hand-wire.
+      // The diagnostic detail belongs in the server log, which safetyFailOpen writes.
       error:
         `Could not reach the Content Safety endpoint (${cause ? `${cause}: ` : ''}` +
         `${String(e?.message || e).slice(0, 200)}). Prompts are NOT being screened.`,
@@ -1384,8 +1390,10 @@ function safetyFailOpen(op: string, e: unknown): ContentSafetyVerdict {
   console.warn(
     `[content-safety] ${op} could not reach the Content Safety endpoint ` +
       `(${cause ? `${cause}: ` : ''}${msg.slice(0, 200)}). ` +
-      `Failing OPEN — the prompt was NOT screened. Check that ` +
-      `LOOM_CONTENT_SAFETY_ENDPOINT resolves and is reachable from the console.`,
+      `Failing OPEN — the prompt was NOT screened. The platform deploys this ` +
+      `binding itself (deploy-planner/cognitive-account.bicep provisions the ` +
+      `account's private endpoint + privatelink.cognitiveservices A record), so ` +
+      `an unreachable endpoint means that infra deploy has not run or did not take.`,
   );
   return { blocked: false, reason: '' };
 }
