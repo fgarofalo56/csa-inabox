@@ -27,6 +27,8 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { armBase, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, isContinuationAllowed, type PagingTruncation } from './paging-budget';
+import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
+import { composeActionGroupBody, type ActionGroupInput } from './action-group-body';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -1383,87 +1385,127 @@ export async function enableDiagnostics(resourceId: string): Promise<{ settingNa
   throw lastErr instanceof Error ? lastErr : new MonitorError('enableDiagnostics failed', 500);
 }
 
-export interface SmsReceiverInput {
-  /** Numeric country/dialing code, e.g. '1' for US. */
-  countryCode: string;
-  /** Phone number (digits only). */
-  phoneNumber: string;
-}
+/**
+ * The action-group INPUT shapes and PUT-body composition live in
+ * `./action-group-body` (dependency-free, so the two modules are not circular)
+ * and are re-exported here — every importer of `monitor-client` keeps working
+ * unchanged.
+ */
+export type {
+  SmsReceiverInput,
+  WebhookReceiverInput,
+  LogicAppReceiverInput,
+  ActionGroupInput,
+} from './action-group-body';
 
-export interface WebhookReceiverInput {
-  /** HTTPS endpoint the alert POSTs the Common Alert Schema payload to. */
-  serviceUri: string;
-  useCommonAlertSchema?: boolean;
-}
+/**
+ * The receiver taxonomy lives in `./action-group-receivers` (dependency-free,
+ * so the two modules are not circular) and is re-exported here — every
+ * importer of `monitor-client` keeps working unchanged.
+ */
+export { ACTION_GROUP_RECEIVER_KINDS, LOOM_MANAGED_RECEIVER_KINDS, emptyReceiverMap } from './action-group-receivers';
+export type { ActionGroupReceiverKind, ActionGroupReceiverRead } from './action-group-receivers';
 
-export interface LogicAppReceiverInput {
-  /** ARM resource id of the Logic App (Consumption) workflow. */
-  resourceId: string;
-  /** The workflow trigger's listCallbackUrl (SAS). Fetch via getLogicAppCallbackUrl(). */
-  callbackUrl: string;
-  useCommonAlertSchema?: boolean;
-}
-
-export interface ActionGroupInput {
-  /** Resource name e.g. 'loom-activator-ag'. */
-  name: string;
-  /** 1-12 char short name shown in notifications. */
-  shortName: string;
-  /** Email receivers; each becomes an emailReceiver. */
-  emails?: string[];
-  /** SMS receivers (Teams/pager-style escalation). */
-  smsReceivers?: SmsReceiverInput[];
-  /** Webhook receivers (Teams incoming webhook, PagerDuty, custom HTTPS sink). */
-  webhookReceivers?: WebhookReceiverInput[];
-  /** Logic App receivers (Teams adaptive-card / pipeline-trigger workflows). */
-  logicAppReceivers?: LogicAppReceiverInput[];
-}
-
-/** Create/update an action group (Global). Returns its ARM id. Idempotent PUT. */
-export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
+/** `name` or a full ARM id → { sub, rg, name }. */
+function actionGroupCoordinates(nameOrId: string): { sub: string; rg: string; name: string } {
+  const m = /\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/[Mm]icrosoft\.[Ii]nsights\/actionGroups\/([^/?]+)/.exec(nameOrId || '');
+  if (m) return { sub: m[1], rg: m[2], name: decodeURIComponent(m[3]) };
   const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
   if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
-  const rg = alertResourceGroup();
-  const emailReceivers = (input.emails || [])
-    .filter((e) => e && e.includes('@'))
-    .map((e, i) => ({ name: `email${i}`, emailAddress: e.trim(), useCommonAlertSchema: true }));
-  const smsReceivers = (input.smsReceivers || [])
-    .filter((r) => r && r.phoneNumber)
-    .map((r, i) => ({
-      name: `sms${i}`,
-      countryCode: String(r.countryCode || '1').replace(/[^0-9]/g, '') || '1',
-      phoneNumber: String(r.phoneNumber).replace(/[^0-9]/g, ''),
-    }));
-  const webhookReceivers = (input.webhookReceivers || [])
-    .filter((r) => r && r.serviceUri && /^https?:\/\//i.test(r.serviceUri))
-    .map((r, i) => ({
-      name: `webhook${i}`,
-      serviceUri: r.serviceUri.trim(),
-      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
-    }));
-  const logicAppReceivers = (input.logicAppReceivers || [])
-    .filter((r) => r && r.resourceId && r.callbackUrl)
-    .map((r, i) => ({
-      name: `logicapp${i}`,
-      resourceId: r.resourceId.trim(),
-      callbackUrl: r.callbackUrl.trim(),
-      useCommonAlertSchema: r.useCommonAlertSchema ?? true,
-    }));
-  const path =
-    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(input.name)}?api-version=${ACTION_GROUPS_API}`;
-  const body = {
-    location: 'Global',
-    properties: {
-      groupShortName: input.shortName.slice(0, 12),
-      enabled: true,
-      emailReceivers,
-      smsReceivers,
-      webhookReceivers,
-      logicAppReceivers,
-    },
-  };
-  const res = await armPut(path, body);
-  return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/actionGroups/${input.name}`;
+  return { sub: subscriptionId, rg: alertResourceGroup(), name: nameOrId };
+}
+
+function actionGroupPath(c: { sub: string; rg: string; name: string }): string {
+  return `/subscriptions/${c.sub}/resourceGroups/${c.rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(c.name)}?api-version=${ACTION_GROUPS_API}`;
+}
+
+/**
+ * `groupShortName` precedence and the receiver merge live in
+ * `./action-group-body`; see {@link resolveGroupShortName} there for the
+ * explicit-beats-existing-beats-derived rule.
+ */
+
+/**
+ * Read an action group's receivers — ALL of them.
+ *
+ * #4113. `listActionGroups` and `sendActionGroupTestNotification` each read the
+ * same FOUR arrays, so a group whose only receiver was an `armRoleReceiver`
+ * (the shape `alert-dispatch.ts` and the platform bicep use) reported as having
+ * zero receivers everywhere in the product. "Reaches nobody" and "reaches
+ * somebody by a mechanism this function does not look at" are different facts,
+ * and only one of them was expressible.
+ *
+ * A 404 returns `exists:false` with every array empty. Any OTHER failure
+ * THROWS: an unread group is not an empty group, and the caller below turns
+ * "empty" into a destructive PUT body.
+ */
+export async function readActionGroupReceivers(nameOrId: string): Promise<ActionGroupReceiverRead> {
+  const c = actionGroupCoordinates(nameOrId);
+  let ag: any;
+  try {
+    ag = await armGet(actionGroupPath(c));
+  } catch (e: any) {
+    if (e instanceof MonitorError && e.status === 404) {
+      return { exists: false, byKind: emptyReceiverMap(), total: 0 };
+    }
+    throw e;
+  }
+  const p = ag?.properties || {};
+  const byKind = emptyReceiverMap();
+  let total = 0;
+  for (const kind of ACTION_GROUP_RECEIVER_KINDS) {
+    const arr = Array.isArray(p[kind]) ? p[kind] : [];
+    byKind[kind] = arr;
+    total += arr.length;
+  }
+  return { exists: true, id: ag?.id, shortName: p.groupShortName, byKind, total };
+}
+
+/**
+ * Create/update an action group (Global). Returns its ARM id.
+ *
+ * READ-MODIFY-WRITE, deliberately (#4113). The ARM action-group PUT replaces
+ * `properties` wholesale, and this function used to send a body containing
+ * exactly four receiver arrays. Every OTHER kind on a pre-existing group —
+ * `armRoleReceivers`, `azureFunctionReceivers`, `automationRunbookReceivers`,
+ * `voiceReceivers`, `azureAppPushReceivers`, `eventHubReceivers`,
+ * `itsmReceivers` — was therefore DELETED, silently, by an "idempotent upsert"
+ * whose comment said it was idempotent. The estate's `loom-default-alerts`
+ * group carries an armRole receiver; any activator that happened to compose
+ * over it destroyed the platform's own escalation path.
+ *
+ * Two invariants:
+ *   1. A kind Loom does not manage is written back EXACTLY as it was read.
+ *   2. A managed kind the caller did not supply (`undefined`, as opposed to an
+ *      explicitly empty array) is ALSO preserved. Passing `emails: []` still
+ *      clears the email receivers — an explicit empty is an instruction; an
+ *      absent field is not.
+ *   3. `groupShortName` obeys the SAME rule (#4354 review). An explicit
+ *      `shortName` is an instruction and RENAMES the group — the health-check
+ *      editor renders that field, so discarding it would be a form that reports
+ *      success for a change ARM never made. A caller with only a DERIVED name
+ *      passes `shortNameIfNew`, which loses to whatever the group already
+ *      carries, so a bind/repair never renames somebody else's group.
+ *
+ * The read is allowed to 404 (the group is new) and NOTHING ELSE. A 403 or a
+ * throttle must not degrade into "it had no receivers", because that reading
+ * would be written straight back as a deletion — the `deploy-integrity.md` R7
+ * failure where an unestablished fact becomes an assertion, with data loss
+ * attached.
+ */
+export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
+  // ── the READ half. Throws on anything that is not a clean 404. ──
+  // Coordinates come from `input.name`, so a full ARM id writes back to the
+  // group it was read from rather than minting a same-named copy in the Loom
+  // alert RG — the repair path depends on that.
+  const coords = actionGroupCoordinates(input.name);
+  const existing = await readActionGroupReceivers(input.name);
+
+  // ── the MODIFY half. Pure, and unit-tested in `action-group-body`. ──
+  const body = composeActionGroupBody(input, existing);
+
+  const res = await armPut(actionGroupPath(coords), body);
+  return res?.id || `/subscriptions/${coords.sub}/resourceGroups/${coords.rg}/providers/microsoft.insights/actionGroups/${coords.name}`;
 }
 
 export interface ActionGroupSummary {
@@ -1476,6 +1518,13 @@ export interface ActionGroupSummary {
   smsCount: number;
   webhookCount: number;
   logicAppCount: number;
+  /**
+   * Receivers of every kind in {@link ACTION_GROUP_RECEIVER_KINDS}, not just
+   * the four Loom composes (#4113). A group whose only receiver is an
+   * `armRoleReceiver` reaches an on-call human; summing four arrays reported it
+   * as reaching nobody.
+   */
+  receiverTotal: number;
 }
 
 /** List the action groups in the Loom alert resource group (for the pick-existing flow). */
@@ -1497,6 +1546,10 @@ export async function listActionGroups(): Promise<ActionGroupSummary[]> {
       smsCount: (p.smsReceivers || []).length,
       webhookCount: (p.webhookReceivers || []).length,
       logicAppCount: (p.logicAppReceivers || []).length,
+      receiverTotal: ACTION_GROUP_RECEIVER_KINDS.reduce(
+        (n, kind) => n + (Array.isArray(p[kind]) ? p[kind].length : 0),
+        0,
+      ),
     };
   });
 }
