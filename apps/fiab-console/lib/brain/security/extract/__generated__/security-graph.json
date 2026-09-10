@@ -2329,25 +2329,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/copilot-config -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/copilot-config:4",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
           "kind": "authorizer",
           "provenance": "declared",
@@ -2372,25 +2353,6 @@
             ],
             "reachesPrivilegedSink": false,
             "privilegedSinkKinds": []
-          }
-        },
-        {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "PUT /api/admin/copilot-config -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "PUT /api/admin/copilot-config:4",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
           }
         },
         {
@@ -28421,7 +28383,7 @@
             "declaredSinkCount": 23,
             "sinks": [
               {
-                "id": "console:member:2625",
+                "id": "console:member:2658",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28431,7 +28393,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2633",
+                "id": "console:member:2666",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28441,7 +28403,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2646",
+                "id": "console:member:2679",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28451,7 +28413,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2665",
+                "id": "console:member:2698",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28461,7 +28423,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2670",
+                "id": "console:member:2703",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28471,7 +28433,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2677",
+                "id": "console:member:2710",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28481,7 +28443,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2684",
+                "id": "console:member:2717",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28491,7 +28453,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2688",
+                "id": "console:member:2721",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28501,7 +28463,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2694",
+                "id": "console:member:2727",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28511,7 +28473,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2699",
+                "id": "console:member:2732",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28521,47 +28483,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2712",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2739",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2740",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2743",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:2771",
+                "id": "console:member:2745",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28581,7 +28503,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2781",
+                "id": "console:member:2773",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28591,7 +28513,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2783",
+                "id": "console:member:2776",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28601,7 +28523,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2784",
+                "id": "console:member:2804",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28611,7 +28533,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2785",
+                "id": "console:member:2805",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28621,7 +28543,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2786",
+                "id": "console:member:2814",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28631,7 +28553,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2787",
+                "id": "console:member:2816",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28641,7 +28563,47 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2788",
+                "id": "console:member:2817",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2818",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2819",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2820",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:2821",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -43652,20 +43614,6 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT->sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE->sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE",
           "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
@@ -45116,17 +45064,7 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
           "deployedAs": "loom-console"
         },
@@ -49351,15 +49289,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-10T12:44:27.531Z",
-      "commit": "be792ecc137d66f87773836be49a2d8e46e88022",
-      "inputsDigest": "8850592c833d26fe",
+      "generatedAt": "2026-09-10T20:38:35.816Z",
+      "commit": "76bc3acd1b2f5f3380d2e14d097277f69c49d4d5",
+      "inputsDigest": "098a423babe1e34f",
       "filesScanned": 2098,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1698,
-          "nodesEmitted": 707
+          "nodesEmitted": 705
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",

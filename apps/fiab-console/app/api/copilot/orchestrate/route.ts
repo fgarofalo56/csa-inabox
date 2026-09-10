@@ -38,11 +38,12 @@ import { isSafetyConfigured, shieldPrompt, moderateContent } from '@/lib/azure/f
 import { VALID_CONTEXT_SLUGS, type PersonaContextPayload } from '@/lib/azure/copilot-personas';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { randomId } from '@/lib/util/random-id';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
+async function handlePost(req: NextRequest) {
   const session = getSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -114,10 +115,27 @@ export async function POST(req: NextRequest) {
   // (The orchestrator repeats the input check internally and adds the OUTPUT
   // check on the completion, so SSE-only consumers are still covered.)
   if (isSafetyConfigured()) {
-    const [shield, inputMod] = await Promise.all([
-      shieldPrompt(prompt),
-      moderateContent(prompt),
-    ]);
+    // Defence in depth (#4432): shieldPrompt/moderateContent now fail open on a
+    // thrown fetch themselves, but a Content Safety outage must NEVER be able to
+    // take chat down from here either. A screening failure is a warning, not a
+    // 500 — the request proceeds unscreened and says so in the log.
+    let shield: Awaited<ReturnType<typeof shieldPrompt>> = { blocked: false, reason: '' };
+    let inputMod: Awaited<ReturnType<typeof moderateContent>> = { blocked: false, reason: '' };
+    try {
+      [shield, inputMod] = await Promise.all([
+        shieldPrompt(prompt),
+        moderateContent(prompt),
+      ]);
+    } catch (e: unknown) {
+      // logSafeError, not raw: the message can embed the user's own prompt text,
+      // and a `\n` in it would forge a second, attacker-authored log record
+      // (CodeQL js/log-injection).
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[copilot/orchestrate] content-safety pre-flight failed; continuing UNSCREENED:',
+        logSafeError(e),
+      );
+    }
     const blocked = shield.blocked ? shield : inputMod.blocked ? inputMod : null;
     if (blocked) {
       return NextResponse.json(
@@ -160,4 +178,38 @@ export async function POST(req: NextRequest) {
       'x-accel-buffering': 'no',
     },
   });
+}
+
+/**
+ * Top-level error boundary for the chat entry point (#4432).
+ *
+ * Unlike almost every sibling route this one is a bare handler, not
+ * `withSession(...)` — it needs to return a raw SSE `Response`, not a JSON
+ * envelope. That left it with NO error wrapper at all: any throw before the
+ * stream opened escaped to Next.js, which answers with a 500 whose body is not
+ * JSON. The chat pane's `res.json().catch(() => ({ error: \`HTTP ${res.status}\` }))`
+ * then rendered the literal, causeless string "Error: HTTP 500" — the exact
+ * text the operator reported, and the reason this took a live probe to diagnose.
+ *
+ * Per deploy-integrity.md R7 an error must carry the cause it actually
+ * established. This wrapper guarantees a parseable `{ ok:false, error, code }`
+ * body with the real message, so the NEXT failure names itself.
+ */
+export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req);
+  } catch (e: any) {
+    const detail = e instanceof Error ? (e.stack || e.message) : String(e);
+    // eslint-disable-next-line no-console
+    console.error('[copilot/orchestrate] unhandled:', logSafe(detail, 4000));
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'orchestrate_failed',
+        error:
+          `Copilot could not start this turn: ${String(e?.message || e).slice(0, 300)}`,
+      },
+      { status: 500 },
+    );
+  }
 }
