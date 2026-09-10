@@ -13,8 +13,10 @@ import {
   classify,
   gateIsFailure,
   scorePersona,
+  aoaiGateAllowed,
   GATE_CODES,
   DELIBERATE_GATE_CODES,
+  AOAI_BACKED_PERSONAS,
   type Probe,
 } from '../e2e/_lib/copilot-verdict';
 
@@ -131,7 +133,7 @@ describe('scorePersona — the combined decision', () => {
   const noAoai = json(503, { ok: false, code: 'no_aoai' });
 
   it('an AOAI persona that gates is BAD (the `|| mustAnswer` arm)', () => {
-    const s = scorePersona('persona:x', 'act', noAoai, { requireReal: true });
+    const s = scorePersona('persona:help-copilot', 'act', noAoai);
     expect(s.verdict).toBe('gate');
     expect(s.mustAnswer).toBe(true);
     expect(s.bad).toBe(true);
@@ -140,38 +142,127 @@ describe('scorePersona — the combined decision', () => {
   });
 
   it('the same gate on a NON-requireReal persona is not bad', () => {
-    const s = scorePersona('persona:x', 'act', noAoai, {});
+    const s = scorePersona('persona:copilot-studio-agent', 'act', noAoai);
     expect(s.bad).toBe(false);
     expect(s.mustAnswer).toBe(false);
     expect(s.message).not.toContain('broken deployment');
   });
 
   it('the opt-out downgrades it (the `!REQUIRE_REAL_AOAI` arm)', () => {
-    const s = scorePersona('persona:x', 'act', noAoai, {
-      requireReal: true, allowAoaiGate: true,
-    });
+    const s = scorePersona('persona:help-copilot', 'act', noAoai, { env: { LOOM_UAT_ALLOW_AOAI_GATE: 'true' } as any });
     expect(s.bad).toBe(false);
     expect(s.mustAnswer).toBe(false);
   });
 
   it('a plain fail is bad regardless of requireReal (the `verdict === fail` arm)', () => {
-    const s = scorePersona('persona:x', 'act', json(500, { ok: false, code: 'orchestrate_failed' }), {});
+    const s = scorePersona('persona:copilot-studio-agent', 'act', json(500, { ok: false, code: 'orchestrate_failed' }));
     expect(s.verdict).toBe('fail');
     expect(s.mustAnswer).toBe(false);
     expect(s.bad).toBe(true);
   });
 
   it('a real answer is never bad', () => {
-    const s = scorePersona('persona:x', 'act', json(200, { ok: true }), { requireReal: true });
+    const s = scorePersona('persona:help-copilot', 'act', json(200, { ok: true }));
     expect(s.verdict).toBe('real');
     expect(s.bad).toBe(false);
   });
 
   it('a deliberate tenant toggle is not bad even on an AOAI persona', () => {
-    const s = scorePersona('persona:x', 'act', json(403, { ok: false, code: 'disabled' }), {
-      requireReal: true,
-    });
+    const s = scorePersona('persona:help-copilot', 'act', json(403, { ok: false, code: 'disabled' }));
     expect(s.verdict).toBe('gate');
     expect(s.bad).toBe(false);
+  });
+});
+
+/**
+ * The fields the Playwright caller plumbs.
+ *
+ * `assertPrimaryAction` deliberately contains no decision — grade, status and
+ * the asserted value all come off `PersonaScore`. A re-review mutated each of
+ * those expressions while they still lived in the caller and the suite stayed
+ * green every time, because glue that needs the Playwright runner is
+ * unreachable from here. Pinning them as module fields is what makes them
+ * testable at all.
+ */
+describe('scorePersona — the reported fields', () => {
+  const noAoai = json(503, { ok: false, code: 'no_aoai' });
+
+  it('grade/status/actual all follow `bad` when the persona must answer', () => {
+    const s = scorePersona('persona:help-copilot', 'act', noAoai);
+    expect(s.bad).toBe(true);
+    expect(s.grade).toBe('F');
+    expect(s.status).toBe('fail');
+    // The value the caller asserts on. If this stops tracking `bad`, an
+    // AOAI-backed persona can gate and still pass.
+    expect(s.actual).toBe('fail');
+  });
+
+  it('grade/status/actual all follow `bad` when the answer is real', () => {
+    const s = scorePersona('persona:help-copilot', 'act', json(200, { ok: true }));
+    expect(s.bad).toBe(false);
+    expect(s.grade).toBe('A');
+    expect(s.status).toBe('pass');
+    expect(s.actual).toBe('real');
+  });
+
+  it('a tolerated gate reports the gate verdict, not a failure', () => {
+    const s = scorePersona('persona:copilot-studio-agent', 'act', noAoai);
+    expect(s.grade).toBe('A');
+    expect(s.status).toBe('pass');
+    expect(s.actual).toBe('gate');
+  });
+});
+
+/**
+ * The persona set as DATA.
+ *
+ * It was `{ requireReal: true }` at six call sites; deleting one silently
+ * removed the rule for that persona with every test green, because a call-site
+ * annotation cannot be reached from a unit test. As module data, dropping a
+ * persona changes something under test.
+ */
+describe('AOAI_BACKED_PERSONAS', () => {
+  const noAoai = json(503, { ok: false, code: 'no_aoai' });
+
+  it('every member fails on an AOAI gate', () => {
+    expect(AOAI_BACKED_PERSONAS.size).toBeGreaterThan(0);
+    for (const persona of AOAI_BACKED_PERSONAS) {
+      expect(scorePersona(persona, 'primary', noAoai).bad, persona).toBe(true);
+    }
+  });
+
+  it('covers each AOAI-backed surface the spec drives', () => {
+    // Named explicitly so REMOVING one from the set fails here, rather than
+    // silently shrinking the population the loop above iterates.
+    for (const persona of [
+      'persona:notebook-in-cell-copilot',
+      'persona:warehouse-copilot',
+      'persona:azure-sql-copilot',
+      'persona:cross-item-copilot',
+      'persona:help-copilot',
+      'persona:notebook-inline-complete',
+    ]) {
+      expect(AOAI_BACKED_PERSONAS.has(persona), persona).toBe(true);
+    }
+  });
+
+  it('does NOT cover Power Platform personas — Loom does not provision those', () => {
+    for (const persona of ['persona:copilot-studio-agent', 'persona:governance-copilot']) {
+      expect(AOAI_BACKED_PERSONAS.has(persona), persona).toBe(false);
+      expect(scorePersona(persona, 'primary', noAoai).bad, persona).toBe(false);
+    }
+  });
+});
+
+describe('aoaiGateAllowed — the opt-out, read in the module', () => {
+  it('is off by default', () => {
+    expect(aoaiGateAllowed({} as any)).toBe(false);
+  });
+
+  it('is on only for the exact string "true"', () => {
+    expect(aoaiGateAllowed({ LOOM_UAT_ALLOW_AOAI_GATE: 'true' } as any)).toBe(true);
+    for (const v of ['TRUE', '1', 'yes', '']) {
+      expect(aoaiGateAllowed({ LOOM_UAT_ALLOW_AOAI_GATE: v } as any), v).toBe(false);
+    }
   });
 });

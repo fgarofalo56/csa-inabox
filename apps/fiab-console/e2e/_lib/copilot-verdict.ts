@@ -112,6 +112,37 @@ export function gateIsFailure(
   return !DELIBERATE_GATE_CODES.includes(gateCodeOf(p));
 }
 
+/**
+ * Personas whose backend LOOM ITSELF DEPLOYS, as DATA rather than a flag each
+ * call site passes.
+ *
+ * It was `{ requireReal: true }` at six call sites, and a re-review showed that
+ * deleting one of them silently removed the rule for that persona with every
+ * test still green — a call-site annotation is unreachable from a unit test.
+ * As a set in the module it is covered: the test below asserts every member
+ * fails on a gate, so dropping a persona changes data under test.
+ */
+export const AOAI_BACKED_PERSONAS: ReadonlySet<string> = new Set([
+  'persona:notebook-in-cell-copilot',
+  'persona:warehouse-copilot',
+  'persona:azure-sql-copilot',
+  'persona:cross-item-copilot',
+  'persona:help-copilot',
+  'persona:notebook-inline-complete',
+]);
+
+/**
+ * The opt-out, read HERE and not at the call site.
+ *
+ * It used to be inverted into `allowAoaiGate: !REQUIRE_REAL_AOAI` by the
+ * caller. A re-review mutated that `!` away and the suite stayed green,
+ * because the inversion lived in glue no unit test could reach. Reading the
+ * env in the module puts it under test.
+ */
+export function aoaiGateAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LOOM_UAT_ALLOW_AOAI_GATE === 'true';
+}
+
 export interface PersonaScore {
   verdict: Verdict;
   /** True when the persona must be reported as a failure. */
@@ -121,6 +152,16 @@ export interface PersonaScore {
   reason: string;
   notes: string;
   message: string;
+  /** Letter grade for the verdict log. */
+  grade: 'A' | 'F';
+  /** Status for the verdict log. */
+  status: 'pass' | 'fail';
+  /**
+   * The value the caller asserts on. Carried here so the `bad -> 'fail'`
+   * mapping is a module field a unit test can pin, rather than an expression
+   * inside the one line that needs the Playwright runner.
+   */
+  actual: 'fail' | Verdict;
 }
 
 /**
@@ -140,16 +181,23 @@ export function scorePersona(
   surface: string,
   feature: string,
   p: Probe,
-  opts: { requireReal?: boolean; allowAoaiGate?: boolean } = {},
+  opts: { env?: NodeJS.ProcessEnv } = {},
 ): PersonaScore {
   const { verdict, reason } = classify(p);
-  const mustAnswer = gateIsFailure(p, verdict, opts);
+  const mustAnswer = gateIsFailure(p, verdict, {
+    // Derived from DATA and the environment, not from a caller-supplied flag.
+    requireReal: AOAI_BACKED_PERSONAS.has(surface),
+    allowAoaiGate: aoaiGateAllowed(opts.env),
+  });
   const bad = verdict === 'fail' || mustAnswer;
   return {
     verdict,
     bad,
     mustAnswer,
     reason,
+    grade: bad ? 'F' : 'A',
+    status: bad ? 'fail' : 'pass',
+    actual: bad ? 'fail' : verdict,
     notes: `${reason} (HTTP ${p.status})${mustAnswer ? ' — AOAI-backed persona must answer, not gate' : ''}`,
     message: mustAnswer
       ? `${surface}:${feature} — AOAI-backed persona returned ${reason}. Loom deploys its own `

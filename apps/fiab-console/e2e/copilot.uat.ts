@@ -48,7 +48,7 @@
  */
 import { test, expect, type APIResponse } from '@playwright/test';
 import path from 'node:path';
-import { scorePersona, type Probe } from './_lib/copilot-verdict';
+import { classify, scorePersona, type Probe } from './_lib/copilot-verdict';
 import {
   BASE, signIn, captureFailures, recordVerdict,
   createWorkspace, deleteWorkspace, createItem,
@@ -66,46 +66,20 @@ async function read(res: APIResponse): Promise<Probe> {
   return { status: res.status(), ct, text };
 }
 
-// Personas backed by AOAI must ACTUALLY ANSWER — a gate there is a defect.
-//
-// Loom deploys its own Foundry/AOAI account in every boundary (admin-plane
-// `agentFoundry`), so "AOAI is not wired" is not a deployment shape Loom ships;
-// it is a broken one. Tolerating a gate on these personas is the lenient
-// reading auto-bind-by-default.md §5 forbids: a remediation the platform could
-// have performed is a defect, not an acceptable state. Default ON, opt-out
-// only, per the default-ON/opt-out rule — set LOOM_UAT_ALLOW_AOAI_GATE=true to
-// downgrade, which is a deliberate, visible act rather than a silent tolerance.
-//
-// Power Platform / Dataverse personas are NOT covered by this: Loom does not
-// provision a Power Platform environment, so a BAP gate there is genuinely
-// honest and stays tolerated.
-const REQUIRE_REAL_AOAI = process.env.LOOM_UAT_ALLOW_AOAI_GATE !== 'true';
-
 /**
- * Assert a persona's primary action reached a real backend.
+ * Record and assert one persona's primary action.
  *
- * `opts.requireReal` — the persona runs on a backend Loom itself deploys, so an
- * honest gate is not an acceptable outcome and fails the test.
+ * Deliberately contains NO decision. Which personas must answer rather than
+ * gate, whether the opt-out applies, the letter grade, the pass/fail status
+ * and the value asserted on all come off `scorePersona` -- because a
+ * re-review mutated each of them here in turn and the suite stayed green
+ * every time. Glue that needs the Playwright runner cannot be unit-tested,
+ * so the answer is to leave no decision in it.
  */
-function assertPrimaryAction(
-  surface: string,
-  feature: string,
-  p: Probe,
-  opts: { requireReal?: boolean } = {},
-) {
-  // Every decision lives in scorePersona so it is reachable by unit test; what
-  // remains here is only the two things that need the Playwright runner.
-  const s = scorePersona(surface, feature, p, {
-    requireReal: opts.requireReal,
-    allowAoaiGate: !REQUIRE_REAL_AOAI,
-  });
-  recordVerdict({
-    surface, feature,
-    verdict: s.bad ? 'F' : 'A',
-    status: s.bad ? 'fail' : 'pass',
-    notes: s.notes,
-  });
-  expect(s.bad ? 'fail' : s.verdict, s.message).not.toBe('fail');
+function assertPrimaryAction(surface: string, feature: string, p: Probe) {
+  const s = scorePersona(surface, feature, p);
+  recordVerdict({ surface, feature, verdict: s.grade, status: s.status, notes: s.notes });
+  expect(s.actual, s.message).not.toBe('fail');
   return s.verdict;
 }
 
@@ -251,8 +225,7 @@ test.describe('Notebook in-cell Copilot — AOAI primary action', () => {
     const res = await page.request.post(`${BASE}/api/notebook/${notebookId}/assist`, {
       data: { mode: 'explain', lang: 'pyspark', source: 'df = spark.read.parquet("bronze/sales")\ndf.show()' },
     });
-    assertPrimaryAction('persona:notebook-in-cell-copilot', 'explain-cell', await read(res),
-      { requireReal: true });
+    assertPrimaryAction('persona:notebook-in-cell-copilot', 'explain-cell', await read(res));
     await ctx.close();
   });
 });
@@ -267,8 +240,7 @@ test.describe('Warehouse Copilot — NL→SQL primary action', () => {
     const res = await page.request.post(`${BASE}/api/items/synapse-dedicated-sql-pool/${sqlPoolId}/assist`, {
       data: { mode: 'generate', prompt: 'list all tables in the warehouse' },
     });
-    assertPrimaryAction('persona:warehouse-copilot', 'nl2sql-generate', await read(res),
-      { requireReal: true });
+    assertPrimaryAction('persona:warehouse-copilot', 'nl2sql-generate', await read(res));
     await ctx.close();
   });
 });
@@ -283,8 +255,7 @@ test.describe('Azure SQL Copilot — Fix primary action', () => {
     const res = await page.request.post(`${BASE}/api/items/azure-sql-database/${azureSqlId}/copilot`, {
       data: { command: 'fix', sql: 'SELCT TOP 5 * FORM dbo.Customer' },
     });
-    assertPrimaryAction('persona:azure-sql-copilot', 'fix-query', await read(res),
-      { requireReal: true });
+    assertPrimaryAction('persona:azure-sql-copilot', 'fix-query', await read(res));
     await ctx.close();
   });
 });
@@ -298,7 +269,7 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
     const page = await ctx.newPage();
     const res = await page.request.get(`${BASE}/api/copilot/status`);
     const probe = await read(res);
-    assertPrimaryAction('persona:cross-item-copilot', 'status', probe, { requireReal: true });
+    assertPrimaryAction('persona:cross-item-copilot', 'status', probe);
     const j = JSON.parse(probe.text);
     expect(j.tools?.count, 'at least one orchestrator tool registered').toBeGreaterThan(0);
     await ctx.close();
@@ -323,8 +294,7 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
         page.getByRole('button', { name: /^Send$/i }).click(),
       ]);
       const probe = await read(resp);
-      assertPrimaryAction('persona:cross-item-copilot', 'orchestrate', probe,
-        { requireReal: true });
+      assertPrimaryAction('persona:cross-item-copilot', 'orchestrate', probe);
     });
     await page.screenshot({
       path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-cross-item-receipt.png'),
@@ -345,7 +315,7 @@ test.describe('Docs/Help agent — backend + unified window', () => {
     const res = await page.request.post(`${BASE}/api/help-copilot/chat`, {
       data: { prompt: 'What is CSA Loom?' },
     });
-    assertPrimaryAction('persona:help-copilot', 'chat', await read(res), { requireReal: true });
+    assertPrimaryAction('persona:help-copilot', 'chat', await read(res));
     await ctx.close();
   });
 
@@ -376,8 +346,7 @@ test.describe('Inline code completion — primary action', () => {
       data: { prefix: '# read a csv into a spark dataframe\n', lang: 'pyspark', priorCells: [] },
     });
     // 200 ok:true {completion} (possibly empty), 503 no_aoai, or 403 disabled.
-    assertPrimaryAction('persona:notebook-inline-complete', 'complete', await read(res),
-      { requireReal: true });
+    assertPrimaryAction('persona:notebook-inline-complete', 'complete', await read(res));
     await ctx.close();
   });
 });

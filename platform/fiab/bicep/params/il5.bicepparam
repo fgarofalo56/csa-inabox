@@ -375,11 +375,22 @@ param aiFoundryEnabled = false
 // and `adoptMode()` defaults an absent key to 'create'. So a stock IL5 deploy
 // is NOT an unscreened copilot.
 //
-// The qualifier is load-bearing: setting EXISTING_AOAI puts `foundry` into
-// 'adopt' mode (see legacyAdoptFromEnv above), and a BYO account is not
-// guaranteed to expose the /contentsafety data plane. On that path screening
-// depends on the adopted account, which this file cannot assert. Stating it
-// unconditionally would be the same R7 error the comment above records.
+// ON THE BYO/ADOPT PATH IT IS, SILENTLY. Traced, not inferred: setting
+// EXISTING_AOAI puts `foundry` into 'adopt' (legacyAdoptFromEnv above), so
+// `provisionAgentFoundry` is false and `agentFoundryCreate`
+// (`main.bicep:2077`) with it. `loomAiEnrichEndpoint` (`main.bicep:3665`) then
+// falls to `(aiFoundryEnabled && empty(existingFoundryAccountName)) ? … : ''`
+// — and `aiFoundryEnabled = false` here — so the endpoint is the EMPTY STRING.
+// `resolveContentSafetyEndpoint()` returns null, and `shieldPrompt`
+// (`foundry-client.ts`) takes `if (!ep) return { blocked: false }`: the SILENT
+// branch, not the loud `safetyFailOpen()` that exists precisely so an
+// unscreened prompt is never quiet. Prompt Shields is off and nothing says so.
+//
+// That is a real gap on a supported path, recorded here rather than smoothed
+// over — an earlier revision of this comment said only that screening "depends
+// on the adopted account", which understated it. Closing it properly means
+// deriving the endpoint from the ADOPTED account (it is an AIServices account
+// and exposes /contentsafety) instead of falling through to empty.
 param contentSafetyEnabled = false
 param apimEnabled = true
 
