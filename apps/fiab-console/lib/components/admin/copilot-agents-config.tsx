@@ -313,6 +313,23 @@ export function CopilotAgentsConfig() {
         </MessageBar>
       )}
 
+      {!loading && !accountsError && accounts.length === 0 && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No Foundry accounts returned</MessageBarTitle>
+            ARM answered successfully but listed no Microsoft.CognitiveServices account
+            (kind AIServices / OpenAI) in any subscription the Console identity can read.
+            <div style={{ marginTop: tokens.spacingVerticalXS, fontSize: '12px' }}>
+              If you know an account exists, the Console managed identity most likely lacks
+              read access to it — grant it <code>Cognitive Services Contributor</code> on the
+              subscription or resource group holding the account. Otherwise provision one via{' '}
+              <code>platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep</code>. The model
+              pickers below stay empty until an account resolves.
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       <div className={s.grid}>
         <Field label="Default Foundry account" hint="Microsoft.CognitiveServices account (kind AIServices / OpenAI) that hosts model deployments.">
           <Dropdown
@@ -499,6 +516,20 @@ export function CopilotAgentsConfig() {
       {deploymentsError && (
         <MessageBar intent="warning">
           <MessageBarBody><MessageBarTitle>Deployment list unavailable</MessageBarTitle>{deploymentsError}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {account && !loadingDeployments && !deploymentsError && deployments.length === 0 && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No model deployments on “{account}”</MessageBarTitle>
+            ARM listed this account successfully but it has no model deployments, so every
+            model picker above offers only “(none)”.
+            <div style={{ marginTop: tokens.spacingVerticalXS, fontSize: '12px' }}>
+              Deploy a gpt-4o / gpt-4.1-class chat model to this account (Azure AI Foundry →
+              Deployments), or pick a different account above.
+            </div>
+          </MessageBarBody>
         </MessageBar>
       )}
 
