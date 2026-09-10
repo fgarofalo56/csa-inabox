@@ -22,13 +22,30 @@ once or the harness stops.
 The mutations are chosen to be the ones REVIEWERS actually raised, plus the
 places a decision could migrate back into unreachable glue.
 """
-import io
 import os
 import subprocess
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+
+
+def read_text(path):
+    """Read preserving line endings verbatim.
+
+    `newline=""` is load-bearing, not style: the working tree is CRLF and a
+    round-trip through universal newlines would rewrite every line of the file
+    being mutated, so the restore at the end would not be byte-identical and the
+    harness would silently leave the tree dirty.
+    """
+    with open(path, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def write_text(path, text):
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONSOLE = os.path.join(ROOT, "apps", "fiab-console")
@@ -98,10 +115,10 @@ def main():
     originals = {}
     for _, path, _, _ in MUTATIONS:
         if path not in originals:
-            originals[path] = io.open(path, encoding="utf-8", newline="").read()
+            originals[path] = read_text(path)
 
     rc, ran, summary, out = run_suites()
-    print("BASELINE rc=%s ran=%s  %s" % (rc, ran, summary))
+    print(f"BASELINE rc={rc} ran={ran}  {summary}")
     if not ran:
         print("INCONCLUSIVE: the runner produced no summary; nothing below is evidence.")
         print(out[-800:])
@@ -116,13 +133,12 @@ def main():
             src = originals[path]
             n = src.count(frm)
             if n != 1:
-                print("%-62s ANCHOR MATCHED %d -- HARNESS STOPS" % (label, n))
+                print(f"{label:<62} ANCHOR MATCHED {n} -- HARNESS STOPS")
                 survivors.append(label + " (anchor)")
                 continue
-            io.open(path, "w", encoding="utf-8", newline="").write(
-                src.replace(frm, to, 1))
+            write_text(path, src.replace(frm, to, 1))
             rc, ran, summary, _ = run_suites()
-            io.open(path, "w", encoding="utf-8", newline="").write(src)
+            write_text(path, src)
             if not ran:
                 verdict = "INCONCLUSIVE (runner never ran)"
                 survivors.append(label)
@@ -131,17 +147,17 @@ def main():
             else:
                 verdict = "SURVIVED"
                 survivors.append(label)
-            print("%-62s %-32s %s" % (label, verdict, summary))
+            print(f"{label:<62} {verdict:<32} {summary}")
     finally:
         for path, src in originals.items():
-            io.open(path, "w", encoding="utf-8", newline="").write(src)
-        ok = all(io.open(p, encoding="utf-8", newline="").read() == s
+            write_text(path, src)
+        ok = all(read_text(p) == s
                  for p, s in originals.items())
         print("all files restored byte-identical:", ok)
 
     print()
     if survivors:
-        print("SURVIVORS (%d):" % len(survivors))
+        print(f"SURVIVORS ({len(survivors)}):")
         for s in survivors:
             print("  -", s)
         return 1
