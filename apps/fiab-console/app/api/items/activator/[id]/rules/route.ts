@@ -35,8 +35,10 @@ import {
   enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
   isOnDemandAdxRule, appendRunHistory,
   loomRuleNameFromDescription, ruleBelongsToItem,
+  repairActionGroupIfUnreachable,
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
+import { resolvePlatformFallbackAlertEmails } from '@/lib/install/provisioners/_activator-receivers';
 import { MonitorNotConfiguredError, MonitorError, listScheduledQueryRulesPaged, type ScheduledQueryRule } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
@@ -269,6 +271,7 @@ async function reconcileFromAzureMonitor(
   item: WorkspaceItem,
   bundleRule: any | null,
   canPersist: () => Promise<boolean>,
+  fallbackEmails: string[] = [],
 ): Promise<{ rules: MonitorRuleRecord[]; healed: boolean; partial: boolean; note?: string } | null> {
   try {
     const evidence = reconcileEvidence(item, bundleRule);
@@ -300,6 +303,63 @@ async function reconcileFromAzureMonitor(
       const match = bundleRule && (bundleRule.name === named || bundleRule.name === r.name) ? bundleRule : undefined;
       return recordFromLiveRule(r, match);
     });
+
+    // #4113 — REPAIR ON OPEN (`auto-bind-by-default.md` §3, "the binding is
+    // self-healing"). `createMonitorActivatorRule` only runs on create/edit, so
+    // fixing the bind there leaves every ALREADY-DEPLOYED rule as broken as it
+    // was: on 2026-08-27 eleven of thirteen live Commercial action groups
+    // carried zero receivers, and nothing in the product would ever have
+    // touched them again. Opening the activator is the moment Loom is looking
+    // at the rule, so it is the moment to fix it.
+    //
+    // Write-scoped for the same reason the record write-back is: repairing is a
+    // real ARM mutation, so a read-only Viewer gets the honest counts and no
+    // repair. Best-effort per rule — a failure records the reason on the record
+    // (R7: it does not claim the group was fixed) and never sinks the GET.
+    // ONE repair per action GROUP, not per rule (#4354 review, finding 6).
+    // Several rules on one activator routinely share a single action group, and
+    // `repairActionGroupIfUnreachable` does an uncached ARM GET every time it is
+    // called — so a workspace with 30 rules on one group spent 30 reads against
+    // ARM's read throttle on EVERY open of the editor. Memoizing is not merely
+    // cheaper, it is also the more accurate answer: the first call is what makes
+    // the group reachable, so calls 2..N would report `attached` with the counts
+    // the first call just produced. The map lives inside this request, so it
+    // never serves a stale reading across opens.
+    const repairs = new Map<string, { bound?: Awaited<ReturnType<typeof repairActionGroupIfUnreachable>>; error?: string }>();
+    for (const rec of records) {
+      if (!rec.actionGroupId) continue;
+      const key = rec.actionGroupId.toLowerCase();
+      try {
+        if (!(await canPersist())) continue;
+        if (!repairs.has(key)) {
+          repairs.set(key, {
+            bound: await repairActionGroupIfUnreachable(
+              item.displayName,
+              rec.actionGroupId,
+              (rec as any).action ?? bundleRule?.action,
+              fallbackEmails,
+            ),
+          });
+        }
+        const memo = repairs.get(key)!;
+        if (memo.error) {
+          rec.note = `${rec.note ? `${rec.note} ` : ''}${memo.error}`;
+          continue;
+        }
+        const bound = memo.bound!;
+        if (bound.receivers) rec.actionGroupReceivers = bound.receivers;
+        if (bound.note) rec.note = `${rec.note ? `${rec.note} ` : ''}${bound.note}`;
+      } catch (e: any) {
+        const msg =
+          `The action group's receivers could not be read or repaired on this open (${e?.message || String(e)}), ` +
+          'so whether this rule reaches anyone was not established.';
+        // Remember the FAILURE too. Retrying the same denied group once per
+        // rule is the same throttle problem with a worse payload, and every
+        // rule on that group gets the identical honest note either way.
+        repairs.set(key, { error: msg });
+        rec.note = `${rec.note ? `${rec.note} ` : ''}${msg}`;
+      }
+    }
 
     if (listed.truncatedBy) {
       // The listing stopped at its paging ceiling, so this set is what fit — not
@@ -384,6 +444,23 @@ function kustoGate(e: any): NextResponse | null {
   }, { status: e.status && e.status >= 400 ? e.status : 503 });
 }
 
+/**
+ * GET — the activator's rules.
+ *
+ * NOT a pure read, and that is deliberate: for a WRITE-scoped caller this
+ * handler performs the #4113 open-time self-heal (`auto-bind-by-default.md` §3),
+ * which can (a) persist a reconciled rule list back onto the Cosmos item and
+ * (b) issue an ARM PUT that binds receivers onto an action group carrying zero
+ * of them. Both are disclosed on the response: `healed`, `partial`, and a
+ * per-rule `note` naming what was repaired or why it could not be. A read-only
+ * caller gets the same rules with no side effect at all.
+ *
+ * The receivers bound by the repair come from
+ * `resolvePlatformFallbackAlertEmails`, which prefers the DEPLOYMENT's shared
+ * action-group addresses over the opening user's own inbox (#4354 review,
+ * should-fix 4) — so opening a shared activator first does not silently make
+ * you its alert recipient.
+ */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -452,7 +529,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         }
         return writeScoped;
       };
-      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist);
+      const reconciled = await reconcileFromAzureMonitor(item, bundleRule, canPersist, await resolvePlatformFallbackAlertEmails(session));
       if (reconciled) {
         return NextResponse.json({
           ok: true,
@@ -578,6 +655,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : undefined,
       noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : undefined,
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : undefined,
+      // #4113 — the address the platform ALWAYS has for an interactive caller.
+      // Without it a rule whose action names no deliverable destination got NO
+      // action group at all and notified nobody, reported as a clean create.
+      // The DEPLOYMENT's shared ops addresses come first; the caller's own is
+      // the last resort (#4354 review, should-fix 4).
+      fallbackEmails: await resolvePlatformFallbackAlertEmails(session),
     });
     // Persist onto the Cosmos item so the rule list survives reload. Re-creating
     // a previously deleted rule lifts its tombstone, so a later reconcile is not
@@ -839,6 +922,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : old.rangeMax,
       noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : old.noDataMinutes,
       timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : old.timestampColumn,
+      // #4113 — an EDIT re-derives the action group, so it is also the moment a
+      // zero-receiver group gets repaired rather than re-written empty.
+      fallbackEmails: await resolvePlatformFallbackAlertEmails(session),
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
     let renamedFrom: string | undefined;

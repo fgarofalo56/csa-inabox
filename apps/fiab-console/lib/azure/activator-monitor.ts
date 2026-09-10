@@ -16,6 +16,8 @@
  */
 import {
   upsertActionGroup,
+  readActionGroupReceivers,
+  LOOM_MANAGED_RECEIVER_KINDS,
   upsertScheduledQueryRule,
   patchScheduledQueryRule,
   deleteScheduledQueryRule,
@@ -335,6 +337,15 @@ export interface MonitorRuleInput {
   /** ARM id of an EXISTING action group to attach instead of creating one from
    *  the rule's action config (the editor's pick-existing flow). */
   existingActionGroupId?: string;
+  /**
+   * Addresses to bind when the rule's own action names no deliverable
+   * destination (#4113). The platform ALWAYS has one for an interactive
+   * caller — the signed-in operator's — and `auto-bind-by-default.md` §5 is
+   * explicit that a value the platform holds must not become a user step.
+   * Empty/absent means the caller genuinely has none, and the record then says
+   * so rather than pretending a group was wired.
+   */
+  fallbackEmails?: string[];
   /** Which backend the rule's data lives in and the trigger/preview evaluates
    *  against. 'log-analytics' (Azure Monitor scheduledQueryRule over LA — the
    *  original path) or 'adx' (Eventhouse / KQL Database — the RTI DEFAULT).
@@ -373,7 +384,16 @@ export interface MonitorRuleRecord {
   action?: any;
   actionGroupId?: string;
   /** Summary of the receivers attached to this rule's action group (for the UI). */
-  actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
+  /**
+   * How many receivers the rule's action group carries, BY KIND.
+   *
+   * #4113 — this used to be the four kinds `upsertActionGroup` composes, which
+   * meant a group whose only receiver was an `armRoleReceiver` (the platform's
+   * own escalation shape) summed to zero and read as "notifies nobody". `other`
+   * carries every remaining kind in
+   * `monitor-client.ACTION_GROUP_RECEIVER_KINDS` so the total is a total.
+   */
+  actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number; other?: number };
   severity: number;
   evaluationFrequency: string;
   windowSize: string;
@@ -416,6 +436,242 @@ export interface MonitorRuleRecord {
   note?: string;
 }
 
+export interface ActionGroupBindInput {
+  activatorDisplayName: string;
+  /** ARM id of a group to attach (the editor's pick-existing flow). */
+  existingActionGroupId?: string;
+  emails: string[];
+  smsReceivers: SmsReceiverInput[];
+  webhookReceivers: WebhookReceiverInput[];
+  logicAppReceivers: LogicAppReceiverInput[];
+  /** Used ONLY when nothing above yields a receiver. */
+  fallbackEmails: string[];
+}
+
+export interface ActionGroupBindResult {
+  actionGroupId?: string;
+  receivers?: MonitorRuleRecord['actionGroupReceivers'];
+  /**
+   * What was actually done. `unreadable` is deliberately distinct from every
+   * other value: it means the group exists and we could not see inside it, and
+   * per `deploy-integrity.md` R7 that is not a pass and not a zero.
+   */
+  outcome: 'attached' | 'created' | 'repaired' | 'unreadable' | 'none';
+  /** Human-readable, asserting only what was established. */
+  note?: string;
+}
+
+/** Count a live receiver read into the record's by-kind shape. */
+function countsFromRead(read: { byKind: Record<string, any[]> }): MonitorRuleRecord['actionGroupReceivers'] {
+  const managed = new Set<string>(LOOM_MANAGED_RECEIVER_KINDS as readonly string[]);
+  let other = 0;
+  for (const [kind, arr] of Object.entries(read.byKind)) {
+    if (!managed.has(kind)) other += (arr || []).length;
+  }
+  return {
+    emails: (read.byKind.emailReceivers || []).length,
+    sms: (read.byKind.smsReceivers || []).length,
+    webhooks: (read.byKind.webhookReceivers || []).length,
+    logicApps: (read.byKind.logicAppReceivers || []).length,
+    other,
+  };
+}
+
+/**
+ * Resolve the action group a rule fires into, and GUARANTEE the answer is a
+ * measured one (#4113).
+ *
+ * The two things this replaces both produced a rule that notified nobody while
+ * reporting success:
+ *
+ *   - attaching a caller-supplied `existingActionGroupId` without ever reading
+ *     it, so an empty group looked identical to an on-call one; and
+ *   - creating no group at all when the rule's action derived no receivers,
+ *     which is precisely the case a fallback exists to cover.
+ *
+ * The REPAIR writes back to the group's OWN ARM id, and `upsertActionGroup` is
+ * read-modify-write, so a repair cannot clobber an `armRoleReceiver` the
+ * platform (or the operator) put there.
+ *
+ * Never invents a receiver: with no derived destination AND no fallback the
+ * outcome is `none` and the note says so, because there is nothing to bind.
+ */
+export async function bindActionGroup(input: ActionGroupBindInput): Promise<ActionGroupBindResult> {
+  const { emails, smsReceivers, webhookReceivers, logicAppReceivers } = input;
+  const derived = emails.length + smsReceivers.length + webhookReceivers.length + logicAppReceivers.length;
+  const groupName = safeRuleName(input.activatorDisplayName, 'ag');
+  // DERIVED from the activator's display name, never chosen by anyone, so it is
+  // passed as `shortNameIfNew`: a create-only default that loses to whatever an
+  // existing group already carries. Sending it as `shortName` would rename
+  // `loom-default-alerts` — and any operator-named group a repair touches — to
+  // whichever activator reconciled last (#4354 review, blocker 1).
+  const shortNameIfNew = (input.activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom';
+  const target = input.existingActionGroupId || groupName;
+
+  let read: Awaited<ReturnType<typeof readActionGroupReceivers>>;
+  // WHEN THE READ IS NEEDED. It is what makes SKIP A and SKIP B impossible, and
+  // it is needed for exactly those two: an attached group whose contents are
+  // unknown, and a rule that derived no destination and must decide whether
+  // falling back would clobber a group that is already fine. The other two
+  // shapes are settled without an ARM round trip:
+  //   - derived receivers, no group handed in ⇒ the WRITE is already
+  //     read-modify-write (`upsertActionGroup`), so a second GET buys nothing;
+  //   - nothing derived and no fallback ⇒ there is nothing to bind at all.
+  if (!input.existingActionGroupId) {
+    if (derived > 0) {
+      const upserted = await upsertActionGroup({
+        name: groupName,
+        shortNameIfNew,
+        emails,
+        smsReceivers,
+        webhookReceivers,
+        logicAppReceivers,
+      });
+      return {
+        actionGroupId: upserted,
+        // `other` is deliberately ABSENT rather than 0: the group was not read,
+        // so any non-composed receiver on it is UNKNOWN, not zero (R7). The
+        // total is still > 0, so reachability is established either way.
+        receivers: { emails: emails.length, sms: smsReceivers.length, webhooks: webhookReceivers.length, logicApps: logicAppReceivers.length },
+        outcome: 'created',
+      };
+    }
+    if (input.fallbackEmails.length === 0) {
+      return {
+        outcome: 'none',
+        note:
+          'No action group was created: this rule declared no deliverable destination and no fallback address was available, ' +
+          'so it would notify nobody.',
+      };
+    }
+  }
+  try {
+    read = await readActionGroupReceivers(target);
+  } catch (e: any) {
+    if (input.existingActionGroupId) {
+      // Attached but UNREAD. Say exactly that — an unread group is not an empty
+      // one, and repairing it blind would write a body built from a state we
+      // never observed.
+      return {
+        actionGroupId: input.existingActionGroupId,
+        outcome: 'unreadable',
+        note:
+          `Attached action group ${input.existingActionGroupId}, but its receivers could not be read (${e?.message || String(e)}), ` +
+          'so whether this rule reaches anyone was NOT established. Grant the Console UAMI "Monitoring Reader" on the alert resource group to confirm it.',
+      };
+    }
+    // NO group was handed in, so `target` is the name of the group LOOM would
+    // create for this activator, and the read failed for something other than
+    // "it is not there" (`readActionGroupReceivers` turns a clean 404 into
+    // `exists:false`, not a throw).
+    //
+    // #4354 review, finding 5. This used to `throw`, which made a 403 on the
+    // action-group READ fail the whole rule creation — a behaviour change
+    // nothing asked for: before #4113 there was no read here at all, so the
+    // rule was created (wired to nobody, silently). Neither extreme is right.
+    // Refusing to WRITE on an unreadable group stays — writing a body derived
+    // from a state we never saw is exactly the deletion #4113 fixed — but the
+    // rule itself is still created, and the outcome says, in the record the
+    // user sees, that no action group was bound and why. That is the honest
+    // middle: the pre-#4113 behaviour, no longer silent.
+    return {
+      outcome: 'unreadable',
+      note:
+        `No action group was bound: reading '${target}' — the group Loom would create for this activator — failed ` +
+        `(${e?.message || String(e)}), and it is not a "does not exist" answer, so this rule's group was neither ` +
+        'created nor confirmed and the rule notifies nobody until it is. Grant the Console UAMI "Monitoring Contributor" ' +
+        'on the alert resource group (LOOM_ALERT_RG) and re-open this activator to bind it.',
+    };
+  }
+
+  // The group already reaches someone. Attach it and record what it carries —
+  // including the kinds Loom does not compose, which is the whole point.
+  if (read.exists && read.total > 0) {
+    return {
+      actionGroupId: read.id || input.existingActionGroupId || undefined,
+      receivers: countsFromRead(read),
+      outcome: 'attached',
+      note: input.existingActionGroupId ? undefined : `Reused existing action group '${groupName}' (${read.total} receiver(s)).`,
+    };
+  }
+
+  // Nothing there (or no group yet). Bind what the rule declared; failing that,
+  // the platform's fallback address.
+  const useFallback = derived === 0;
+  const bindEmails = useFallback ? input.fallbackEmails : emails;
+  if (useFallback && bindEmails.length === 0) {
+    return {
+      ...(input.existingActionGroupId ? { actionGroupId: input.existingActionGroupId } : {}),
+      ...(input.existingActionGroupId ? { receivers: countsFromRead(read) } : {}),
+      outcome: 'none',
+      note:
+        (input.existingActionGroupId
+          ? `Action group ${input.existingActionGroupId} has no receivers of any kind, and `
+          : 'No action group was created: ') +
+        'this rule declared no deliverable destination and no fallback address was available, so it would notify nobody.',
+    };
+  }
+
+  const actionGroupId = await upsertActionGroup({
+    name: input.existingActionGroupId || groupName,
+    shortNameIfNew,
+    emails: bindEmails,
+    smsReceivers: useFallback ? [] : smsReceivers,
+    webhookReceivers: useFallback ? [] : webhookReceivers,
+    logicAppReceivers: useFallback ? [] : logicAppReceivers,
+  });
+  const receivers: MonitorRuleRecord['actionGroupReceivers'] = {
+    emails: bindEmails.length,
+    sms: useFallback ? 0 : smsReceivers.length,
+    webhooks: useFallback ? 0 : webhookReceivers.length,
+    logicApps: useFallback ? 0 : logicAppReceivers.length,
+    // Preserved by the read-modify-write, so they are still on the group.
+    other: countsFromRead(read)!.other ?? 0,
+  };
+  const repaired = read.exists;
+  return {
+    actionGroupId,
+    receivers,
+    outcome: repaired ? 'repaired' : 'created',
+    note: repaired
+      ? `Action group '${read.id || target}' carried ZERO receivers; bound ${bindEmails.length} address(es)` +
+        (useFallback ? ' from the platform fallback' : ' from the rule\'s own destinations') + '.'
+      : undefined,
+  };
+}
+
+/**
+ * Bring an EXISTING action group back to reachable — the estate-repair half of
+ * #4113.
+ *
+ * `createMonitorActivatorRule` only runs on create/edit, so fixing the bind
+ * there repairs NEW rules and leaves every already-deployed one exactly as
+ * broken as it was (11 of 13 live Commercial groups carried zero receivers).
+ * This is the entry point an open-time reconcile calls for an existing rule.
+ *
+ * Reads first, and does nothing at all when the group already reaches someone —
+ * by ANY receiver kind, so an `armRoleReceiver`-only group is left alone rather
+ * than "repaired" over. Uses the SAME private derivation the create path uses,
+ * so a repaired group is wired identically to a freshly created one.
+ */
+export async function repairActionGroupIfUnreachable(
+  activatorDisplayName: string,
+  actionGroupId: string,
+  action: unknown,
+  fallbackEmails: string[],
+): Promise<ActionGroupBindResult> {
+  const input = { action } as MonitorRuleInput;
+  return bindActionGroup({
+    activatorDisplayName,
+    existingActionGroupId: actionGroupId,
+    emails: ruleEmails(input),
+    smsReceivers: ruleSmsReceivers(input),
+    webhookReceivers: ruleWebhooks(input),
+    logicAppReceivers: ruleLogicAppReceivers(input),
+    fallbackEmails: (fallbackEmails || []).map((e) => String(e || '').trim()).filter(Boolean),
+  });
+}
+
 /** Create (or update) the runtime backend for a Loom activator rule.
  *
  *  - sourceKind='log-analytics' (the original path): a real Azure Monitor
@@ -453,30 +709,47 @@ export async function createMonitorActivatorRule(
     } as Partial<MonitorRuleRecord>;
   })();
 
-  // Pick-existing flow: attach a known action group as-is. Otherwise compose a
-  // new action group from the rule's action config (email / SMS / webhook /
-  // Logic App). All four receiver kinds are real ARM receivers — no Fabric.
-  // The action group is backend-agnostic: it wires notifications for both the LA
-  // scheduledQueryRule and an ADX-scoped rule when a host is provisioned.
+  // Pick-existing flow: attach a known action group. Otherwise compose a new
+  // one from the rule's action config (email / SMS / webhook / Logic App). All
+  // four receiver kinds are real ARM receivers — no Fabric. The action group is
+  // backend-agnostic: it wires notifications for both the LA scheduledQueryRule
+  // and an ADX-scoped rule when a host is provisioned.
+  //
+  // #4113 — TWO paths used to leave a rule wired to nobody, silently:
+  //
+  //   Skip A  an `existingActionGroupId` was attached AS-IS, with no read. The
+  //           record carried no receiver counts, so `receiverTotal` answered
+  //           UNKNOWN and no control could tell an on-call group from an empty
+  //           one. 11 of 13 live Commercial groups were empty.
+  //   Skip B  when the action derived no receivers, NO group was created at
+  //           all. The rule evaluated, fired, routed, and notified nobody.
+  //
+  // Both now go through `bindActionGroup`, which READS the group, REPAIRS it
+  // when it reaches nobody, and reports what it actually found.
   let actionGroupId: string | undefined = input.existingActionGroupId?.trim() || undefined;
   let receivers: MonitorRuleRecord['actionGroupReceivers'];
-  if (!actionGroupId) {
+  // What the bind actually established, carried onto the record. Discarding it
+  // was how `outcome:'none'` and `outcome:'unreadable'` became invisible: the
+  // rule came back looking ordinary while nothing had been bound (R7).
+  let bindNote: string | undefined;
+  {
     const emails = ruleEmails(input);
     const webhooks = ruleWebhooks(input);
     const smsArr = ruleSmsReceivers(input);
     const logicApps = ruleLogicAppReceivers(input);
-    const hasReceivers = emails.length || webhooks.length || smsArr.length || logicApps.length;
-    if (hasReceivers) {
-      actionGroupId = await upsertActionGroup({
-        name: safeRuleName(activatorDisplayName, 'ag'),
-        shortName: (activatorDisplayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom',
-        emails,
-        smsReceivers: smsArr,
-        webhookReceivers: webhooks,
-        logicAppReceivers: logicApps,
-      });
-      receivers = { emails: emails.length, sms: smsArr.length, webhooks: webhooks.length, logicApps: logicApps.length };
-    }
+    const fallback = (input.fallbackEmails || []).map((e) => String(e || '').trim()).filter(Boolean);
+    const bound = await bindActionGroup({
+      activatorDisplayName,
+      existingActionGroupId: actionGroupId,
+      emails,
+      smsReceivers: smsArr,
+      webhookReceivers: webhooks,
+      logicAppReceivers: logicApps,
+      fallbackEmails: fallback,
+    });
+    actionGroupId = bound.actionGroupId;
+    receivers = bound.receivers;
+    bindNote = bound.note;
   }
   const ruleSuffix = ruleNameSuffix(input.name);
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
@@ -543,7 +816,7 @@ export async function createMonitorActivatorRule(
       ...triggerModelFields,
       scheduled,
       createdAt: new Date().toISOString(),
-      note: [note, scheduleNote].filter(Boolean).join(' '),
+      note: [note, bindNote, scheduleNote].filter(Boolean).join(' '),
     };
   }
 
@@ -558,6 +831,7 @@ export async function createMonitorActivatorRule(
     ...(loomTags ? { tags: loomTags } : {}),
     actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
   });
+  const laNote = [note, bindNote].filter(Boolean).join(' ');
   return {
     id: azureRuleName,
     name: input.name || azureRuleName,
@@ -576,7 +850,7 @@ export async function createMonitorActivatorRule(
     ...triggerModelFields,
     scheduled: true,
     createdAt: new Date().toISOString(),
-    ...(note ? { note } : {}),
+    ...(laNote ? { note: laNote } : {}),
   };
 }
 

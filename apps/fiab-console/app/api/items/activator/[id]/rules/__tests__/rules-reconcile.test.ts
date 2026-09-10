@@ -45,7 +45,30 @@ const state = {
   replaceThrows: null as any,
   /** Queue of errors thrown by successive replace() calls (etag conflicts). */
   replaceThrowsOnce: [] as any[],
+  /** #4113 — what readActionGroupReceivers reports for the rule's action group. */
+  actionGroupRead: null as any,
+  /** #4113 — every upsertActionGroup body the repair path wrote. */
+  actionGroupUpserts: [] as any[],
 };
+
+/** #4113 — an ARM action-group read with every receiver kind empty. */
+const AG_RECEIVER_KINDS = [
+  'emailReceivers', 'smsReceivers', 'webhookReceivers', 'logicAppReceivers',
+  'armRoleReceivers', 'azureFunctionReceivers', 'automationRunbookReceivers',
+  'voiceReceivers', 'azureAppPushReceivers', 'eventHubReceivers', 'itsmReceivers',
+];
+function agRead(over: Partial<{ exists: boolean; id: string; byKind: any; total: number }> = {}) {
+  const byKind: any = {};
+  for (const k of AG_RECEIVER_KINDS) byKind[k] = [];
+  return { exists: true, id: 'AG-ID', byKind, total: 0, ...over };
+}
+/** The DEFAULT for tests that are not about receivers: a healthy group. */
+function agReadHealthy() {
+  const r = agRead();
+  r.byKind.emailReceivers = [{ name: 'email0', emailAddress: 'ops@contoso.com' }];
+  r.total = 1;
+  return r;
+}
 
 const replaced: any[] = [];
 const replaceOptions: any[] = [];
@@ -56,7 +79,7 @@ vi.mock('@azure/identity', () => {
 });
 
 vi.mock('@/lib/auth/session', () => ({
-  getSession: () => ({ claims: { oid: TENANT } }),
+  getSession: () => ({ claims: { oid: TENANT, email: 'operator@contoso.com' } }),
   tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
 }));
 
@@ -104,12 +127,23 @@ vi.mock('@/lib/azure/monitor-client', async (importOriginal) => ({
     return { rules: state.liveRules, truncatedBy: state.truncatedBy, pagesFetched: 1 };
   }),
   deleteScheduledQueryRule: vi.fn(async () => undefined),
+  // #4113 — the action-group ARM boundary. Left REAL, these would try to reach
+  // management.azure.com from the reconcile's repair pass.
+  readActionGroupReceivers: vi.fn(async (_n: string) => {
+    if (state.actionGroupRead instanceof Error) throw state.actionGroupRead;
+    return state.actionGroupRead ?? agReadHealthy();
+  }),
+  upsertActionGroup: vi.fn(async (i: any) => {
+    state.actionGroupUpserts.push(i);
+    return typeof i.name === 'string' && i.name.startsWith('/') ? i.name : `/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/${i.name}`;
+  }),
   upsertScheduledQueryRule: vi.fn(async (input: any) =>
     `/subscriptions/s/resourceGroups/rg/providers/Microsoft.Insights/scheduledQueryRules/${input.name}`),
 }));
 
 import { GET, POST, DELETE } from '../route';
 import { safeRuleName, expectedAzureRuleName } from '@/lib/azure/activator-monitor';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 
 const PARAMS = { params: Promise.resolve({ id: 'act-1' }) };
 const req = () => new NextRequest('http://localhost/api/items/activator/act-1/rules?workspaceId=ws-1');
@@ -167,6 +201,12 @@ function makeLiveRule(over: Partial<any> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` clears CALLS, not implementations, so a `mockImplementation`
+  // set by one test (the read-only-caller case below denies the write-scoped
+  // probe) silently leaks into every test after it and turns off the repair
+  // pass. Restore the default here rather than leaving order-dependence in the
+  // file.
+  (authorizeItemWorkspace as any).mockImplementation(async () => null);
   replaced.length = 0;
   replaceOptions.length = 0;
   state.itemDoc = makeItem();
@@ -177,6 +217,8 @@ beforeEach(() => {
   state.listThrows = null;
   state.replaceThrows = null;
   state.replaceThrowsOnce = [];
+  state.actionGroupRead = null;
+  state.actionGroupUpserts = [];
   delete process.env.LOOM_ACTIVATOR_BACKEND;
 });
 
@@ -515,5 +557,159 @@ describe('#3551 reconcile is gated — no deployment-wide ARM list without a rea
     const listedTwice =
       (listScheduledQueryRulesPaged as any).mock.calls.length + (listScheduledQueryRules as any).mock.calls.length;
     expect(listedTwice).toBe(1);
+  });
+});
+
+// ===========================================================================
+// #4113 — REPAIR ON OPEN. The bind fix in createMonitorActivatorRule only helps
+// rules created AFTER it shipped. On 2026-08-27 eleven of the thirteen live
+// Commercial action groups carried ZERO receivers, and nothing in the product
+// would ever have touched them again: those rules evaluate, fire, route, and
+// notify nobody. Opening the activator is the moment Loom is looking at the
+// rule, so it is the moment to fix it (auto-bind-by-default.md #3).
+// ===========================================================================
+describe('#4113 GET reconcile repairs an action group that reaches nobody', () => {
+  it('a ZERO-receiver group is repaired, and the record reports the receivers it now has', async () => {
+    state.actionGroupRead = agRead();            // exists, every kind empty
+    const r = await GET(req(), PARAMS);
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(state.actionGroupUpserts).toHaveLength(1);
+    // Written back to the group's OWN ARM id, never a same-named new group in
+    // the Loom alert RG.
+    expect(state.actionGroupUpserts[0].name).toBe(
+      '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/Model-Drift-Alert-ag',
+    );
+    expect(state.actionGroupUpserts[0].emails).toEqual(['operator@contoso.com']);
+    expect(j.rules[0].actionGroupReceivers.emails).toBe(1);
+    expect(j.rules[0].note).toContain('carried ZERO receivers');
+  });
+
+  it('a group that ALREADY reaches somebody is left alone', async () => {
+    state.actionGroupRead = agReadHealthy();
+    const j = await (await GET(req(), PARAMS)).json();
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    expect(j.rules[0].actionGroupReceivers.emails).toBe(1);
+  });
+
+  it('a group reachable only by ARM ROLE is left alone (not "repaired" over)', async () => {
+    const read = agRead();
+    read.byKind.armRoleReceivers = [{ name: 'oncall', roleId: 'r' }];
+    read.total = 1;
+    state.actionGroupRead = read;
+    const j = await (await GET(req(), PARAMS)).json();
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    // The kind Loom does not compose is still COUNTED, so the rule is not
+    // reported as unreachable.
+    expect(j.rules[0].actionGroupReceivers.other).toBe(1);
+  });
+
+  it('a read failure is reported as NOT ESTABLISHED, and writes nothing', async () => {
+    state.actionGroupRead = Object.assign(new Error('AuthorizationFailed'), { status: 403 });
+    const j = await (await GET(req(), PARAMS)).json();
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    expect(j.rules[0].note).toContain('was NOT established');
+    // R7 — no receiver counts are claimed for a group that could not be read.
+    expect(j.rules[0].actionGroupReceivers).toBeUndefined();
+    // The GET still succeeds: the rules are real and the caller needs them.
+    expect(j.rules).toHaveLength(1);
+  });
+
+  it('a READ-ONLY caller gets the rules and NO Azure mutation', async () => {
+    const { authorizeItemWorkspace } = await import('@/lib/auth/workspace-guard');
+    // Read-scoped call passes; the write-scoped probe (no allowReadRoles) denies.
+    (authorizeItemWorkspace as any).mockImplementation(async (_s: any, o: any) =>
+      o?.allowReadRoles ? null : new Response('nope', { status: 404 }));
+    state.actionGroupRead = agRead();
+    const j = await (await GET(req(), PARAMS)).json();
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    expect(j.rules).toHaveLength(1);
+  });
+});
+
+/**
+ * #4354 review, finding 6. The repair pass above ran once PER RULE, and
+ * `repairActionGroupIfUnreachable` does an uncached ARM GET every call. Several
+ * rules on one activator routinely share ONE action group (the group is named
+ * after the activator, not the rule), so an activator with N rules spent N ARM
+ * reads on every open — against ARM's read throttle, on the editor's hot path.
+ *
+ * Memoizing per group is also the more ACCURATE answer: the first call is what
+ * makes the group reachable, so calls 2..N reported `attached` with the counts
+ * the first call had just produced.
+ */
+describe('#4354 finding 6 — ONE action-group repair per GROUP, not per rule', () => {
+  /** Two ARM rules on this item, both routed to the SAME action group. */
+  function twoRulesOneGroup(agId = '/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/Model-Drift-Alert-ag') {
+    const second = expectedAzureRuleName('Model Drift Alert', 'latency');
+    expect(second).not.toBe(MY_ARM_NAME);
+    return [
+      makeLiveRule({ actionGroupIds: [agId], tags: { 'loom-item-id': 'act-1', 'loom-item-type': 'activator' } }),
+      makeLiveRule({
+        id: `/subscriptions/s/resourceGroups/rg/providers/Microsoft.Insights/scheduledQueryRules/${second}`,
+        name: second,
+        description: "Loom Activator rule 'latency'",
+        actionGroupIds: [agId],
+        tags: { 'loom-item-id': 'act-1', 'loom-item-type': 'activator' },
+      }),
+    ];
+  }
+
+  it('reads the shared group ONCE for two rules, and repairs it once', async () => {
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = agRead();          // exists, every kind empty
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    expect(j.rules).toHaveLength(2);
+    // The measurement the finding is about. Per-rule, this is 2.
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(1);
+    expect(state.actionGroupUpserts).toHaveLength(1);
+  });
+
+  it('BOTH rules still carry the repaired counts and the note — the memo is shared, not skipped', async () => {
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = agRead();
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    for (const rule of j.rules) {
+      expect(rule.actionGroupReceivers.emails).toBe(1);
+      expect(rule.note).toContain('carried ZERO receivers');
+    }
+  });
+
+  it('two rules on DIFFERENT groups are still read separately', async () => {
+    // The counterfactual: memoizing on the wrong key would collapse these too,
+    // and a second group would silently never be repaired.
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    const [a, b] = twoRulesOneGroup();
+    b.actionGroupIds = ['/subscriptions/s/resourceGroups/rg/providers/microsoft.insights/actionGroups/Other-ag'];
+    state.liveRules = [a, b];
+    state.actionGroupRead = agRead();
+
+    await GET(req(), PARAMS);
+
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(2);
+    expect(state.actionGroupUpserts).toHaveLength(2);
+  });
+
+  it('a DENIED read is remembered too — the second rule does not retry it', async () => {
+    const { readActionGroupReceivers } = await import('@/lib/azure/monitor-client');
+    state.liveRules = twoRulesOneGroup();
+    state.actionGroupRead = Object.assign(new Error('AuthorizationFailed'), { status: 403 });
+
+    const j = await (await GET(req(), PARAMS)).json();
+
+    expect((readActionGroupReceivers as any).mock.calls).toHaveLength(1);
+    expect(state.actionGroupUpserts).toHaveLength(0);
+    // Every rule on the group still gets the identical honest note (R7) — the
+    // memo suppresses the retry, never the disclosure.
+    expect(j.rules).toHaveLength(2);
+    for (const rule of j.rules) {
+      expect(rule.note).toContain('was NOT established');
+      expect(rule.actionGroupReceivers).toBeUndefined();
+    }
   });
 });
