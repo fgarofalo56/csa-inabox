@@ -100,10 +100,19 @@ async function handlePost(req: NextRequest) {
   try {
     await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
+    // `code` is what makes a gate DOCUMENTED rather than merely unsuccessful
+    // (no-vaporware.md). Without it these two were indistinguishable from a
+    // server error by anything reading the response — including the UAT
+    // classifier, which can only tell a gate from a fault by the code.
     if (e instanceof NoAoaiDeploymentError) {
-      return NextResponse.json({ ok: false, error: e.message }, { status: 503 });
+      return NextResponse.json({ ok: false, code: 'no_aoai', error: e.message }, { status: 503 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    // NOT a gate: the target resolved to something Loom deploys and it could
+    // not be reached. Distinct code so it is never read as "not configured".
+    return NextResponse.json(
+      { ok: false, code: 'aoai_unreachable', error: e?.message || String(e) },
+      { status: 502 },
+    );
   }
 
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';

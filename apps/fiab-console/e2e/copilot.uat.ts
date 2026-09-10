@@ -16,13 +16,19 @@
  * A 404 (route missing), a Loom-session `unauthenticated`, or any unexpected
  * shape FAILS the test — those are the vaporware tells this spec guards against.
  *
- * TWO THINGS A GATE IS NOT (both learned from #4432, where the copilot answered
- * HTTP 500 on every turn and this spec still passed green):
+ * TWO THINGS A GATE IS NOT (both learned while verifying the #4432 fix):
  *
  *   1. A CODELESS 5xx is not a gate, it is the server failing. An honest gate
  *      names its remediation; a 500 with no code asserts nothing. 500/502/503
- *      used to sit in the tolerated-status list and made this spec structurally
- *      incapable of failing on a dead copilot.
+ *      used to sit in the tolerated-status list beside 401/403/424.
+ *
+ *      To be precise about the history, because the obvious story is wrong:
+ *      this spec would have CAUGHT #4432. That 500 carried a non-JSON body, so
+ *      `JSON.parse` threw and the walk fell through to `fail`. The tolerance
+ *      only started mattering once the fix made the response well-formed
+ *      (`{ok:false, code:'orchestrate_failed'}` at 500) — a parseable 500 that
+ *      the old list scored as a gate. The rule below closes the window the fix
+ *      opened; it is not a retelling of the original bug.
  *   2. For an AOAI-BACKED persona, even a well-formed gate is a defect. Loom
  *      deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
  *      wired" is a broken deployment, not a supported shape — see
@@ -43,6 +49,9 @@
 import { test, expect, type APIResponse } from '@playwright/test';
 import path from 'node:path';
 import {
+  classify, gateIsFailure, type Probe,
+} from './_lib/copilot-verdict';
+import {
   BASE, signIn, captureFailures, recordVerdict,
   createWorkspace, deleteWorkspace, createItem,
 } from './_lib/uat';
@@ -51,49 +60,6 @@ import {
 // Studio create/publish flow. Absent → those personas assert at the
 // environment/agent-list probe (still a real BAP call) and tolerate the gate.
 const PP_ENV = process.env.LOOM_PP_ENV_ID || '';
-
-// ── Classification of a primary-action response ─────────────────────────────
-interface Probe { status: number; ct: string; text: string; }
-
-function classify(p: Probe): { verdict: 'real' | 'gate' | 'fail'; reason: string } {
-  if (p.status === 404) return { verdict: 'fail', reason: 'route 404 (missing)' };
-  if (p.ct.includes('text/event-stream')) {
-    return { verdict: 'real', reason: 'live SSE stream' };
-  }
-  let j: any = null;
-  try { j = JSON.parse(p.text); } catch { /* non-JSON */ }
-  if (j && j.ok === true) return { verdict: 'real', reason: 'HTTP 200 ok:true — real backend answered' };
-  // A broken Loom session would 401 with this exact body across EVERY persona —
-  // that is a real failure, not an honest gate.
-  if (j && j.error === 'unauthenticated') return { verdict: 'fail', reason: 'Loom session not authenticated' };
-  if (j && j.ok === false) {
-    const code = String(j.code || '');
-    const GATE_CODES = ['no_aoai', 'disabled', 'admin_only', 'copilot_studio_not_enabled'];
-    if (GATE_CODES.includes(code)) return { verdict: 'gate', reason: `honest gate code:'${code}'` };
-    // Dataverse/BAP/schema backend not wired in this deployment → honest infra
-    // gate: the route reached a real backend and that backend refused it.
-    if ([401, 403, 424].includes(p.status)) {
-      return { verdict: 'gate', reason: `honest infra gate HTTP ${p.status}` };
-    }
-    // A codeless 5xx is NOT a gate. An honest gate is DOCUMENTED — per
-    // no-vaporware.md it names the exact env var / role / resource, which is
-    // what `code` carries and what GATE_CODES above matches. A 5xx with no code
-    // is the server failing, and calling it a gate asserts a cause the response
-    // never established (deploy-integrity.md R7).
-    //
-    // #4432 was exactly this shape: the copilot answered HTTP 500 on every turn
-    // while 500 sat in the tolerated list above, so this classifier recorded
-    // verdict 'A', the suite passed green, and the one spec written to catch a
-    // dead copilot was structurally incapable of failing on it.
-    if ([500, 502, 503].includes(p.status)) {
-      return {
-        verdict: 'fail',
-        reason: `HTTP ${p.status} with no gate code — server error, not a gate: ${p.text.slice(0, 120)}`,
-      };
-    }
-  }
-  return { verdict: 'fail', reason: `unexpected HTTP ${p.status}: ${p.text.slice(0, 160)}` };
-}
 
 async function read(res: APIResponse): Promise<Probe> {
   const ct = (res.headers()['content-type'] || '').toLowerCase();
@@ -130,17 +96,20 @@ function assertPrimaryAction(
   opts: { requireReal?: boolean } = {},
 ) {
   const { verdict, reason } = classify(p);
-  const gateIsFailure = Boolean(opts.requireReal) && REQUIRE_REAL_AOAI && verdict === 'gate';
-  const bad = verdict === 'fail' || gateIsFailure;
+  const mustAnswer = gateIsFailure(p, verdict, {
+    requireReal: opts.requireReal,
+    allowAoaiGate: !REQUIRE_REAL_AOAI,
+  });
+  const bad = verdict === 'fail' || mustAnswer;
   recordVerdict({
     surface, feature,
     verdict: bad ? 'F' : 'A',
     status: bad ? 'fail' : 'pass',
-    notes: `${reason} (HTTP ${p.status})${gateIsFailure ? ' — AOAI-backed persona must answer, not gate' : ''}`,
+    notes: `${reason} (HTTP ${p.status})${mustAnswer ? ' — AOAI-backed persona must answer, not gate' : ''}`,
   });
   expect(
     bad ? 'fail' : verdict,
-    gateIsFailure
+    mustAnswer
       ? `${surface}:${feature} — AOAI-backed persona returned ${reason}. Loom deploys its own ` +
         `Foundry/AOAI account, so this is a broken deployment, not an honest gate.`
       : `${surface}:${feature} — ${reason}`,

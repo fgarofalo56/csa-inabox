@@ -344,24 +344,35 @@ param dlzDomainNames = []
 //   - AI Search: limited IL5 region surface → false.
 param deployAppsEnabled = true
 param aiFoundryEnabled = false
-// Azure AI Content Safety is ON here. It was `false` until 2026-09-10, justified
-// as "NOT offered in the DoD regions (US DoD Central / US DoD East)" — a true
-// statement about a region set THIS PARAM FILE DOES NOT TARGET. `location` above
-// is `usgovvirginia`, and the Microsoft Learn Content Safety region matrix lists
-// BOTH Fairfax regions as supported: USGovVirginia (Text, Prompt Shield,
-// Protected Material (Text)) and USGovArizona (those plus Protected Material
-// (Code)). `gcc-high.bicepparam` enables it in the very same regions, so IL5 was
-// the only sovereign boundary running the copilot with prompts UNSCREENED.
+// Azure AI Content Safety stays OFF here, and the REASON is the impact level,
+// not the region. The previous comment said "NOT offered in the DoD regions (US
+// DoD Central / US DoD East)" — a true statement about a region set this param
+// file does not target (`location` above is `usgovvirginia`). That wording
+// invited exactly one wrong conclusion, and on 2026-09-10 it got it: this param
+// was briefly flipped to `true` on the argument that Content Safety IS available
+// in usgovvirginia and that `gcc-high.bicepparam` enables it there. Both halves
+// of that argument are true and the conclusion is still wrong, because REGION
+// AVAILABILITY IS NOT AUDIT SCOPE.
 //
-// That is a cloud-parity defect (cloud-parity.md: a capability that works in one
-// boundary and not another is INCOMPLETE) layered on an R7 defect (the comment
-// asserted a cause it had not established for this configuration). The console
-// calls `contentsafety/text:analyze` + Prompt Shields, both ✅ in usgovvirginia.
+// Measured from Microsoft Learn, "Azure Government services by audit scope"
+// (last updated February 2026):
 //
-// A genuine DoD param set, when one exists, is where the DoD carve-out belongs;
-// `main.bicep`'s `contentSafetyEnabled` doc already records that fallback (the
-// multi-service AIServices /contentsafety data plane).
-param contentSafetyEnabled = true
+//   Foundry: Azure AI Content Safety | FedRAMP High ✅ | DoD IL2 ✅ |
+//                                      DoD IL4 — | DoD IL5WI — | DoD IL6 —
+//   Azure OpenAI                     | ✅ | ✅ | ✅ | ✅ | ✅   (positive control)
+//
+// Content Safety carries no IL4/IL5/IL6 provisional authorization, so deploying
+// it in an IL5 boundary is a COMPLIANCE violation, not a parity win. Azure
+// OpenAI is authorized through IL6, which is why the copilot itself runs here.
+// GCC-High shares the region and NOT the impact level; that is the axis these
+// two param files diverge on, exactly as `aiFoundryEnabled = false` three lines
+// above already does (Microsoft Foundry portal is IL2-only).
+//
+// Prompts are still screened. With this false, `admin-plane/main.bicep` wires
+// LOOM_CONTENT_SAFETY_ENDPOINT to `loomAiEnrichEndpoint` — the multi-service
+// AIServices /contentsafety data plane — which IS populated here
+// (`agentFoundryEnabled` below). So this is not an unscreened copilot.
+param contentSafetyEnabled = false
 param apimEnabled = true
 
 // Postgres-backed day-one services (OSS Airflow metadata DB + the N8 DuckLake
