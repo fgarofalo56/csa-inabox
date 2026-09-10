@@ -344,11 +344,24 @@ param dlzDomainNames = []
 //   - AI Search: limited IL5 region surface → false.
 param deployAppsEnabled = true
 param aiFoundryEnabled = false
-// Azure AI Content Safety is NOT offered in the DoD regions (US DoD Central /
-// US DoD East) per the Microsoft Learn region matrix. Leave off — the Console
-// honest-gates the copilot moderation pipeline with a warning MessageBar
-// (prompts pass unfiltered, never a silent claim of filtering).
-param contentSafetyEnabled = false
+// Azure AI Content Safety is ON here. It was `false` until 2026-09-10, justified
+// as "NOT offered in the DoD regions (US DoD Central / US DoD East)" — a true
+// statement about a region set THIS PARAM FILE DOES NOT TARGET. `location` above
+// is `usgovvirginia`, and the Microsoft Learn Content Safety region matrix lists
+// BOTH Fairfax regions as supported: USGovVirginia (Text, Prompt Shield,
+// Protected Material (Text)) and USGovArizona (those plus Protected Material
+// (Code)). `gcc-high.bicepparam` enables it in the very same regions, so IL5 was
+// the only sovereign boundary running the copilot with prompts UNSCREENED.
+//
+// That is a cloud-parity defect (cloud-parity.md: a capability that works in one
+// boundary and not another is INCOMPLETE) layered on an R7 defect (the comment
+// asserted a cause it had not established for this configuration). The console
+// calls `contentsafety/text:analyze` + Prompt Shields, both ✅ in usgovvirginia.
+//
+// A genuine DoD param set, when one exists, is where the DoD carve-out belongs;
+// `main.bicep`'s `contentSafetyEnabled` doc already records that fallback (the
+// multi-service AIServices /contentsafety data plane).
+param contentSafetyEnabled = true
 param apimEnabled = true
 
 // Postgres-backed day-one services (OSS Airflow metadata DB + the N8 DuckLake

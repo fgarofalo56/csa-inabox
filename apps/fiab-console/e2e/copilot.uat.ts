@@ -7,17 +7,31 @@
  *
  *   • real success  — HTTP 200 `{ok:true,…}` or a live `text/event-stream`
  *                      (the AOAI / Dataverse / BAP backend actually answered);
- *   • honest gate    — a documented config/tenant gate per no-vaporware.md
- *                      (`no_aoai` 503, `disabled` 403, `admin_only` 403, a
- *                      Dataverse/BAP 401/403/424/500/502 when Power Platform is
- *                      not wired in this deployment).
+ *   • honest gate    — a DOCUMENTED config/tenant gate per no-vaporware.md,
+ *                      i.e. one carrying a gate `code` (`no_aoai`, `disabled`,
+ *                      `admin_only`, `copilot_studio_not_enabled`), or a
+ *                      codeless Dataverse/BAP 401/403/424 when Power Platform
+ *                      is not wired in this deployment.
  *
  * A 404 (route missing), a Loom-session `unauthenticated`, or any unexpected
  * shape FAILS the test — those are the vaporware tells this spec guards against.
- * Because an honest gate is an acceptable outcome, the spec passes green whether
- * or not AOAI / Power Platform are wired in the target deployment, while still
- * proving every persona's route exists, validates the session, and reaches a
- * real backend (per .claude/rules/no-vaporware.md + ui-parity.md).
+ *
+ * TWO THINGS A GATE IS NOT (both learned from #4432, where the copilot answered
+ * HTTP 500 on every turn and this spec still passed green):
+ *
+ *   1. A CODELESS 5xx is not a gate, it is the server failing. An honest gate
+ *      names its remediation; a 500 with no code asserts nothing. 500/502/503
+ *      used to sit in the tolerated-status list and made this spec structurally
+ *      incapable of failing on a dead copilot.
+ *   2. For an AOAI-BACKED persona, even a well-formed gate is a defect. Loom
+ *      deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
+ *      wired" is a broken deployment, not a supported shape — see
+ *      auto-bind-by-default.md §5. Those personas pass only on a REAL answer.
+ *      Opt out deliberately with LOOM_UAT_ALLOW_AOAI_GATE=true; never silently.
+ *
+ * Power Platform / Dataverse personas remain gate-tolerant: Loom does not
+ * provision a Power Platform environment, so that gate is genuinely honest.
+ * (per .claude/rules/no-vaporware.md + ui-parity.md + auto-bind-by-default.md)
  *
  * Run:  SESSION_SECRET=<from-KV> LOOM_URL=<deployment> pnpm uat
  *       # optional deeper Copilot Studio create/publish flow:
@@ -56,10 +70,26 @@ function classify(p: Probe): { verdict: 'real' | 'gate' | 'fail'; reason: string
     const code = String(j.code || '');
     const GATE_CODES = ['no_aoai', 'disabled', 'admin_only', 'copilot_studio_not_enabled'];
     if (GATE_CODES.includes(code)) return { verdict: 'gate', reason: `honest gate code:'${code}'` };
-    // Dataverse/BAP/AOAI/schema backend not wired in this deployment → honest
-    // infra gate (the route still reached a real backend and reported why).
-    if ([401, 403, 424, 500, 502, 503].includes(p.status)) {
+    // Dataverse/BAP/schema backend not wired in this deployment → honest infra
+    // gate: the route reached a real backend and that backend refused it.
+    if ([401, 403, 424].includes(p.status)) {
       return { verdict: 'gate', reason: `honest infra gate HTTP ${p.status}` };
+    }
+    // A codeless 5xx is NOT a gate. An honest gate is DOCUMENTED — per
+    // no-vaporware.md it names the exact env var / role / resource, which is
+    // what `code` carries and what GATE_CODES above matches. A 5xx with no code
+    // is the server failing, and calling it a gate asserts a cause the response
+    // never established (deploy-integrity.md R7).
+    //
+    // #4432 was exactly this shape: the copilot answered HTTP 500 on every turn
+    // while 500 sat in the tolerated list above, so this classifier recorded
+    // verdict 'A', the suite passed green, and the one spec written to catch a
+    // dead copilot was structurally incapable of failing on it.
+    if ([500, 502, 503].includes(p.status)) {
+      return {
+        verdict: 'fail',
+        reason: `HTTP ${p.status} with no gate code — server error, not a gate: ${p.text.slice(0, 120)}`,
+      };
     }
   }
   return { verdict: 'fail', reason: `unexpected HTTP ${p.status}: ${p.text.slice(0, 160)}` };
@@ -72,16 +102,49 @@ async function read(res: APIResponse): Promise<Probe> {
   return { status: res.status(), ct, text };
 }
 
-/** Assert a persona's primary action reached a real backend OR an honest gate. */
-function assertPrimaryAction(surface: string, feature: string, p: Probe) {
+// Personas backed by AOAI must ACTUALLY ANSWER — a gate there is a defect.
+//
+// Loom deploys its own Foundry/AOAI account in every boundary (admin-plane
+// `agentFoundry`), so "AOAI is not wired" is not a deployment shape Loom ships;
+// it is a broken one. Tolerating a gate on these personas is the lenient
+// reading auto-bind-by-default.md §5 forbids: a remediation the platform could
+// have performed is a defect, not an acceptable state. Default ON, opt-out
+// only, per the default-ON/opt-out rule — set LOOM_UAT_ALLOW_AOAI_GATE=true to
+// downgrade, which is a deliberate, visible act rather than a silent tolerance.
+//
+// Power Platform / Dataverse personas are NOT covered by this: Loom does not
+// provision a Power Platform environment, so a BAP gate there is genuinely
+// honest and stays tolerated.
+const REQUIRE_REAL_AOAI = process.env.LOOM_UAT_ALLOW_AOAI_GATE !== 'true';
+
+/**
+ * Assert a persona's primary action reached a real backend.
+ *
+ * `opts.requireReal` — the persona runs on a backend Loom itself deploys, so an
+ * honest gate is not an acceptable outcome and fails the test.
+ */
+function assertPrimaryAction(
+  surface: string,
+  feature: string,
+  p: Probe,
+  opts: { requireReal?: boolean } = {},
+) {
   const { verdict, reason } = classify(p);
+  const gateIsFailure = Boolean(opts.requireReal) && REQUIRE_REAL_AOAI && verdict === 'gate';
+  const bad = verdict === 'fail' || gateIsFailure;
   recordVerdict({
     surface, feature,
-    verdict: verdict === 'fail' ? 'F' : 'A',
-    status: verdict === 'fail' ? 'fail' : 'pass',
-    notes: `${reason} (HTTP ${p.status})`,
+    verdict: bad ? 'F' : 'A',
+    status: bad ? 'fail' : 'pass',
+    notes: `${reason} (HTTP ${p.status})${gateIsFailure ? ' — AOAI-backed persona must answer, not gate' : ''}`,
   });
-  expect(verdict, `${surface}:${feature} — ${reason}`).not.toBe('fail');
+  expect(
+    bad ? 'fail' : verdict,
+    gateIsFailure
+      ? `${surface}:${feature} — AOAI-backed persona returned ${reason}. Loom deploys its own ` +
+        `Foundry/AOAI account, so this is a broken deployment, not an honest gate.`
+      : `${surface}:${feature} — ${reason}`,
+  ).not.toBe('fail');
   return verdict;
 }
 
@@ -227,7 +290,8 @@ test.describe('Notebook in-cell Copilot — AOAI primary action', () => {
     const res = await page.request.post(`${BASE}/api/notebook/${notebookId}/assist`, {
       data: { mode: 'explain', lang: 'pyspark', source: 'df = spark.read.parquet("bronze/sales")\ndf.show()' },
     });
-    assertPrimaryAction('persona:notebook-in-cell-copilot', 'explain-cell', await read(res));
+    assertPrimaryAction('persona:notebook-in-cell-copilot', 'explain-cell', await read(res),
+      { requireReal: true });
     await ctx.close();
   });
 });
@@ -242,7 +306,8 @@ test.describe('Warehouse Copilot — NL→SQL primary action', () => {
     const res = await page.request.post(`${BASE}/api/items/synapse-dedicated-sql-pool/${sqlPoolId}/assist`, {
       data: { mode: 'generate', prompt: 'list all tables in the warehouse' },
     });
-    assertPrimaryAction('persona:warehouse-copilot', 'nl2sql-generate', await read(res));
+    assertPrimaryAction('persona:warehouse-copilot', 'nl2sql-generate', await read(res),
+      { requireReal: true });
     await ctx.close();
   });
 });
@@ -257,7 +322,8 @@ test.describe('Azure SQL Copilot — Fix primary action', () => {
     const res = await page.request.post(`${BASE}/api/items/azure-sql-database/${azureSqlId}/copilot`, {
       data: { command: 'fix', sql: 'SELCT TOP 5 * FORM dbo.Customer' },
     });
-    assertPrimaryAction('persona:azure-sql-copilot', 'fix-query', await read(res));
+    assertPrimaryAction('persona:azure-sql-copilot', 'fix-query', await read(res),
+      { requireReal: true });
     await ctx.close();
   });
 });
@@ -271,7 +337,7 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
     const page = await ctx.newPage();
     const res = await page.request.get(`${BASE}/api/copilot/status`);
     const probe = await read(res);
-    assertPrimaryAction('persona:cross-item-copilot', 'status', probe);
+    assertPrimaryAction('persona:cross-item-copilot', 'status', probe, { requireReal: true });
     const j = JSON.parse(probe.text);
     expect(j.tools?.count, 'at least one orchestrator tool registered').toBeGreaterThan(0);
     await ctx.close();
@@ -296,7 +362,8 @@ test.describe('Cross-item Copilot orchestrator — ask + tool plan', () => {
         page.getByRole('button', { name: /^Send$/i }).click(),
       ]);
       const probe = await read(resp);
-      assertPrimaryAction('persona:cross-item-copilot', 'orchestrate', probe);
+      assertPrimaryAction('persona:cross-item-copilot', 'orchestrate', probe,
+        { requireReal: true });
     });
     await page.screenshot({
       path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-cross-item-receipt.png'),
@@ -317,7 +384,7 @@ test.describe('Docs/Help agent — backend + unified window', () => {
     const res = await page.request.post(`${BASE}/api/help-copilot/chat`, {
       data: { prompt: 'What is CSA Loom?' },
     });
-    assertPrimaryAction('persona:help-copilot', 'chat', await read(res));
+    assertPrimaryAction('persona:help-copilot', 'chat', await read(res), { requireReal: true });
     await ctx.close();
   });
 
@@ -348,7 +415,8 @@ test.describe('Inline code completion — primary action', () => {
       data: { prefix: '# read a csv into a spark dataframe\n', lang: 'pyspark', priorCells: [] },
     });
     // 200 ok:true {completion} (possibly empty), 503 no_aoai, or 403 disabled.
-    assertPrimaryAction('persona:notebook-inline-complete', 'complete', await read(res));
+    assertPrimaryAction('persona:notebook-inline-complete', 'complete', await read(res),
+      { requireReal: true });
     await ctx.close();
   });
 });
