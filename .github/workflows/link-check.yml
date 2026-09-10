@@ -396,8 +396,34 @@ jobs:
               DETAIL="The link step reported success but published no exit code, so lychee's own verdict is unavailable. This run establishes NOTHING about the links; it is not a clean bill of health."
             else
             case "${LYCHEE_EXIT}" in
-              0) STATUS="OK"
-                 DETAIL="${CHECKED}, and found no dead links.${SCOPE_NOTE}" ;;
+              0) # Exit 0 over ZERO contacted links is the shape this whole file
+                 # exists to refuse: a clean bill of health from a run that
+                 # touched nothing. It is reachable because `failIfEmpty: false`
+                 # removed the action's own `Total | 0` backstop — right for the
+                 # diff-scoped PR path, but the disable is global.
+                 #
+                 # On the FULL sweep it cannot happen legitimately: 2548 docs do
+                 # not collectively hold zero links, so zero means the input glob
+                 # matched nothing (exactly the docs/**/*.md -> docs/*.md
+                 # degradation that hid 2127 files for years) or everything was
+                 # excluded. Fail closed and say so.
+                 #
+                 # On the PR path the same shape IS legitimate — a changed doc
+                 # may simply contain no links — which is why failIfEmpty is off.
+                 # That stays green, but it does not get to claim it checked
+                 # anything.
+                 if [ "${CHECKED_N:-}" = "0" ]; then
+                   if [ "${SCOPE:-}" = "full" ]; then
+                     STATUS="CHECKER_ERROR"
+                     DETAIL="lychee was pointed at ${COUNT} file(s) and contacted ZERO link occurrence(s). A full docs/** sweep cannot legitimately reach zero — either the input glob matched no file or every link was excluded. This run establishes NOTHING about the links; it is not a clean bill of health."
+                   else
+                     STATUS="OK"
+                     DETAIL="lychee contacted no link occurrence(s) at all — the ${COUNT} file(s) in scope hold no links to check. Nothing was dead because nothing was checked; this says nothing about any URL.${SCOPE_NOTE}"
+                   fi
+                 else
+                   STATUS="OK"
+                   DETAIL="${CHECKED}, and found no dead links.${SCOPE_NOTE}"
+                 fi ;;
               2) STATUS="DEAD_LINKS"
                  DETAIL="${CHECKED}, and reported dead links. Advisory — this does not block a merge. See the link-check-report artifact.${SCOPE_NOTE}" ;;
               *) STATUS="CHECKER_ERROR"

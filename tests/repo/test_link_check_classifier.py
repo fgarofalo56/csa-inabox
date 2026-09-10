@@ -975,6 +975,102 @@ def test_excluded_links_are_not_counted_as_checked() -> None:
     )
 
 
+def test_a_full_sweep_that_contacted_zero_links_is_not_a_clean_bill_of_health() -> None:
+    """The last green-over-nothing hole in this file, found reviewing it.
+
+    ``failIfEmpty: false`` removes the action's own ``Total | 0`` backstop. That
+    is right for the diff-scoped PR path — a changed doc may genuinely hold no
+    links — but the disable is GLOBAL, so it also removes the backstop from the
+    weekly full sweep, where zero contacted links is structurally impossible.
+
+    Measured against the shipped classifier before this fix: ``SCOPE=full``,
+    ``COUNT=2548``, lychee Total 0 / Excluded 0, exit 0 gave
+
+        STATUS: OK · RC: 0
+        DETAIL: lychee reports 0 link occurrence(s) checked, and found no dead
+                links.
+
+    ``files_in_scope: 2548`` and ``links_checked: 0`` side by side in the same
+    marker, green — the classifier holds both numbers and never compares them.
+    That is exactly the defect this workflow was fixed for: ``docs/**/*.md``
+    degrading to ``docs/*.md`` inside the action's eval matched 421 of 2548
+    files for years, and the next narrowing of the glob matches none. A run that
+    contacted nothing must not print a clean bill of health.
+    """
+    script = _step("classify")["run"]
+    zero = _lychee_summary(total=0, successful=0)
+
+    swept = _run_classifier_full(
+        script,
+        lychee_out=zero,
+        SCOPE="full",
+        COUNT="2548",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert swept["status"] == "CHECKER_ERROR", (
+        f"a full sweep over 2548 files contacted zero links and passed: {swept['status']!r}"
+    )
+    assert swept["rc"] == 1, "green-over-nothing must fail closed"
+    assert "found no dead links" not in swept["summary"], (
+        "the marker still claims a clean bill of health over a run that "
+        "contacted nothing"
+    )
+    assert "ZERO" in swept["summary"]
+    # The two numbers the old marker printed without comparing are both still
+    # reported — the fix is that they are now read together, not that either
+    # goes away.
+    assert swept["status_json"]["files_in_scope"] == "2548"
+    assert swept["status_json"]["links_checked"] == "0"
+
+    # SILENCE control. Without the guard the same input is a green OK, so this
+    # test is measuring the guard and not the fixture.
+    ungated = script.replace('if [ "${CHECKED_N:-}" = "0" ]; then', 'if false; then')
+    assert ungated != script, "the zero-contacted guard anchor was not found"
+    r = _run_classifier_full(
+        script=ungated,
+        lychee_out=zero,
+        SCOPE="full",
+        COUNT="2548",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert r["status"] == "OK", (
+        "the pre-fix classifier did not reproduce the green-over-nothing shape, "
+        f"so this control proves nothing: {r['status']!r}"
+    )
+    assert r["rc"] == 0, f"pre-fix rc was {r['rc']}, so the control proves nothing"
+
+    # The PR path keeps the legitimate case: a changed doc with no links is not
+    # an error — that is WHY failIfEmpty is off — but it does not get to claim
+    # it checked anything either.
+    pr = _run_classifier_full(
+        script,
+        lychee_out=zero,
+        SCOPE="changed",
+        COUNT="1",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert pr["status"] == "OK", f"a changed doc holding no links must not red: {pr['status']!r}"
+    assert pr["rc"] == 0
+    assert "contacted no link occurrence(s)" in pr["summary"]
+    assert "0 link occurrence(s) checked, and found no dead links" not in pr["summary"]
+
+    # And a sweep that DID contact links is untouched by the guard.
+    healthy = _run_classifier_full(
+        script,
+        lychee_out=_lychee_summary(total=18196, successful=18080, excluded=116),
+        SCOPE="full",
+        COUNT="2548",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert healthy["status"] == "OK"
+    assert healthy["rc"] == 0
+    assert "found no dead links" in healthy["summary"]
+
+
 def test_the_excluded_parser_is_tested_against_real_lychee_output() -> None:
     """SILENCE control on the parser itself, using the real output shape.
 
