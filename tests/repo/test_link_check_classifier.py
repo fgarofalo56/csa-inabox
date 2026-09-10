@@ -1054,7 +1054,7 @@ def test_a_full_sweep_that_contacted_zero_links_is_not_a_clean_bill_of_health() 
     )
     assert pr["status"] == "OK", f"a changed doc holding no links must not red: {pr['status']!r}"
     assert pr["rc"] == 0
-    assert "contacted no link occurrence(s)" in pr["summary"]
+    assert "Nothing was dead because nothing was checked" in pr["summary"]
     assert "0 link occurrence(s) checked, and found no dead links" not in pr["summary"]
 
     # And a sweep that DID contact links is untouched by the guard.
@@ -1069,6 +1069,145 @@ def test_a_full_sweep_that_contacted_zero_links_is_not_a_clean_bill_of_health() 
     assert healthy["status"] == "OK"
     assert healthy["rc"] == 0
     assert "found no dead links" in healthy["summary"]
+
+
+def test_the_pr_path_must_not_say_a_file_holds_no_links_when_its_links_were_excluded() -> None:
+    """R7: ``contacted zero`` has TWO causes and the marker may not pick one.
+
+    Round 5c's first attempt printed *"the N file(s) in scope hold no links to
+    check"* whenever ``CHECKED_N == 0``. For an all-excluded file that is FALSE,
+    and falsifiably so from the same marker: ``links_found: 4`` sits three lines
+    above it. The code had not failed to establish the truth — it established the
+    OPPOSITE and printed both.
+
+    This is the ``docs/_includes`` case the ``Select scope`` comment already
+    records: a file whose links are all on the exclude list gives Total 4 /
+    Excluded 4. The fix defers to the ``${CHECKED}`` builder, which distinguishes
+    the two causes and is true for both.
+    """
+    script = _step("classify")["run"]
+    all_excluded = _lychee_summary(total=4, successful=0, excluded=4)
+
+    pr = _run_classifier_full(
+        script,
+        lychee_out=all_excluded,
+        SCOPE="changed",
+        COUNT="1",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    # Still green — an all-excluded changed doc is not an error.
+    assert pr["status"] == "OK", f"all-excluded changed doc must not red: {pr['status']!r}"
+    assert pr["rc"] == 0
+    # But the marker may not claim the file holds no links when it holds four.
+    assert "hold no links to check" not in pr["summary"], (
+        "the marker asserts the file holds no links while reporting "
+        f"links_found={pr['status_json'].get('links_found')!r}"
+    )
+    assert "were excluded and never contacted" in pr["summary"]
+    assert pr["status_json"]["links_found"] == "4"
+    assert pr["status_json"]["links_excluded"] == "4"
+    assert pr["status_json"]["links_checked"] == "0"
+
+    # SILENCE control: restore the round-5c sentence and the false claim comes
+    # back, so this test is measuring the fix and not the fixture.
+    regressed = script.replace(
+        'DETAIL="${CHECKED}. Nothing was dead because nothing was checked;'
+        ' this says nothing about any URL.${SCOPE_NOTE}"',
+        'DETAIL="lychee contacted no link occurrence(s) at all — the ${COUNT}'
+        " file(s) in scope hold no links to check. Nothing was dead because"
+        ' nothing was checked; this says nothing about any URL.${SCOPE_NOTE}"',
+    )
+    assert regressed != script, "the PR-path DETAIL anchor was not found"
+    r = _run_classifier_full(
+        script=regressed,
+        lychee_out=all_excluded,
+        SCOPE="changed",
+        COUNT="1",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert "hold no links to check" in r["summary"], (
+        "the pre-fix classifier did not reproduce the false claim, so this "
+        f"control proves nothing: {r['summary']!r}"
+    )
+
+
+def test_a_full_sweep_whose_links_were_all_excluded_is_also_green_over_nothing() -> None:
+    """The guard's SECOND stated cause, which had no test.
+
+    ``CHECKER_ERROR`` names two causes — "the input glob matched no file **or
+    every link was excluded**". Only the first was pinned, so narrowing the guard
+    to key on ``Total == 0`` instead of ``contacted == 0`` stayed green and
+    reopened green-over-nothing for every all-excluded sweep. Measured on the
+    offline widen this is not hypothetical: 18197 Total / 6291 Excluded is the
+    real shape, and an all-excluded variant of it contacts zero.
+
+    Also drives the sweep at a SECOND corpus size, so a guard coupled to
+    ``COUNT=2548`` stops surviving this suite the moment the corpus grows.
+    """
+    script = _step("classify")["run"]
+
+    all_excluded = _run_classifier_full(
+        script,
+        lychee_out=_lychee_summary(total=6291, successful=0, excluded=6291),
+        SCOPE="full",
+        COUNT="2548",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert all_excluded["status"] == "CHECKER_ERROR", (
+        "a full sweep that found 6291 links and contacted NONE of them passed: "
+        f"{all_excluded['status']!r}"
+    )
+    assert all_excluded["rc"] == 1
+    assert all_excluded["status_json"]["links_found"] == "6291"
+    assert all_excluded["status_json"]["links_checked"] == "0"
+
+    # Second corpus size: the guard must not be coupled to today's file count.
+    other_count = _run_classifier_full(
+        script,
+        lychee_out=_lychee_summary(total=0, successful=0),
+        SCOPE="full",
+        COUNT="1200",
+        LYCHEE_OUTCOME="success",
+        LYCHEE_EXIT="0",
+    )
+    assert other_count["status"] == "CHECKER_ERROR", (
+        "the guard stopped firing at a different corpus size, so it is coupled "
+        f"to the fixture's COUNT: {other_count['status']!r}"
+    )
+    assert other_count["rc"] == 1
+
+
+def test_an_unrecognised_scope_fails_closed_when_nothing_was_contacted() -> None:
+    """Unknown scope must not inherit the green branch.
+
+    ``Select scope`` emits exactly ``full`` or ``changed`` today, so this is not
+    currently reachable — but every other unknown in this classifier fails closed
+    (``SCOPE_FAILED``, an empty ``LYCHEE_EXIT``, an unrecognised outcome), and the
+    first draft of this guard was the one place that failed OPEN: an empty
+    ``SCOPE`` over 2548 files printed a green clean bill of health. A third scope
+    value added later must red, not inherit ``OK``.
+    """
+    script = _step("classify")["run"]
+    zero = _lychee_summary(total=0, successful=0)
+
+    for scope in ("", "partial"):
+        r = _run_classifier_full(
+            script,
+            lychee_out=zero,
+            SCOPE=scope,
+            COUNT="2548",
+            LYCHEE_OUTCOME="success",
+            LYCHEE_EXIT="0",
+        )
+        assert r["status"] == "CHECKER_ERROR", (
+            f"scope {scope!r} contacted zero links over 2548 files and passed: "
+            f"{r['status']!r}"
+        )
+        assert r["rc"] == 1, f"scope {scope!r} must fail closed"
+        assert "found no dead links" not in r["summary"]
 
 
 def test_the_excluded_parser_is_tested_against_real_lychee_output() -> None:

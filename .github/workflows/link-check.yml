@@ -404,21 +404,38 @@ jobs:
                  #
                  # On the FULL sweep it cannot happen legitimately: 2548 docs do
                  # not collectively hold zero links, so zero means the input glob
-                 # matched nothing (exactly the docs/**/*.md -> docs/*.md
-                 # degradation that hid 2127 files for years) or everything was
-                 # excluded. Fail closed and say so.
+                 # matched nothing or every link was excluded. Fail closed and
+                 # say so.
+                 #
+                 # This guard is a floor at EXACTLY zero, and that is ALL it is.
+                 # It would NOT have caught the docs/**/*.md -> docs/*.md
+                 # degradation that hid 2127 files for years: that matched 421 of
+                 # 2548 files and produced a large NON-zero count. A partial
+                 # narrowing — say 3,000 of the ~18,000 expected occurrences — is
+                 # still a green OK here. That residual is open, not covered.
                  #
                  # On the PR path the same shape IS legitimate — a changed doc
                  # may simply contain no links — which is why failIfEmpty is off.
                  # That stays green, but it does not get to claim it checked
-                 # anything.
+                 # anything, and it does not get to say the file HOLDS no links:
+                 # all-excluded contacts zero over links that DO exist, so the
+                 # ${CHECKED} builder — which already distinguishes the two
+                 # causes — states it, rather than one sentence that is false for
+                 # one of them.
+                 #
+                 # An unrecognised scope fails CLOSED, matching every other
+                 # unknown in this classifier, so a third scope value added later
+                 # cannot silently inherit the green branch.
                  if [ "${CHECKED_N:-}" = "0" ]; then
-                   if [ "${SCOPE:-}" = "full" ]; then
+                   if [ "${SCOPE:-}" = "changed" ]; then
+                     STATUS="OK"
+                     DETAIL="${CHECKED}. Nothing was dead because nothing was checked; this says nothing about any URL.${SCOPE_NOTE}"
+                   elif [ "${SCOPE:-}" = "full" ]; then
                      STATUS="CHECKER_ERROR"
                      DETAIL="lychee was pointed at ${COUNT} file(s) and contacted ZERO link occurrence(s). A full docs/** sweep cannot legitimately reach zero — either the input glob matched no file or every link was excluded. This run establishes NOTHING about the links; it is not a clean bill of health."
                    else
-                     STATUS="OK"
-                     DETAIL="lychee contacted no link occurrence(s) at all — the ${COUNT} file(s) in scope hold no links to check. Nothing was dead because nothing was checked; this says nothing about any URL.${SCOPE_NOTE}"
+                     STATUS="CHECKER_ERROR"
+                     DETAIL="lychee contacted ZERO link occurrence(s) over ${COUNT} file(s), and the scope was reported as '${SCOPE:-}', which is neither 'full' nor 'changed'. This run establishes NOTHING about the links; a scope this classifier does not recognise does not get the benefit of the doubt."
                    fi
                  else
                    STATUS="OK"
