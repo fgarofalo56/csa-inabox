@@ -40,7 +40,7 @@ import {
 import {
   ArrowUpload16Regular, Dismiss16Regular,
   DocumentText20Regular, Server20Regular, Rocket20Regular, History20Regular,
-  DocumentMultiple20Regular,
+  DocumentMultiple20Regular, FolderSearch20Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -58,6 +58,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { LineageHarvestBar } from '@/lib/components/lineage/lineage-harvest-bar';
 import type { LineageHarvestReceipt } from '@/lib/components/lineage/harvest-receipt';
 import { SparkLineageFixitDialog } from '@/lib/components/lineage/spark-lineage-fixit-dialog';
+import { AdlsPathPicker, AdlsBrowseDialog } from '@/lib/components/storage/adls-path-picker';
 
 const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
@@ -259,6 +260,87 @@ async function saveItemState(itemType: string, id: string, state: Record<string,
 
 function linesToArr(s: string): string[] {
   return s.split('\n').map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * A LIST of lake locations, browsed rather than typed (#4201).
+ *
+ * The three reference-file fields were newline-delimited Textareas whose
+ * placeholder spelled an `abfss://` URI — a hand-typed infrastructure locator,
+ * which `auto-bind-by-default.md` §5 and `loom_no_freeform_config` forbid when
+ * the platform can enumerate the value. It can: `AdlsBrowseDialog` already
+ * walks account → container → path against the real ADLS data plane on the
+ * Console identity, and is what `AdlsPathPicker` (the single-value sibling)
+ * embeds.
+ *
+ * The STORED SHAPE IS UNCHANGED — still newline-joined text — so `linesToArr`
+ * and the submit path at :44x are untouched by this. That is deliberate: a
+ * picker swap that also changes the persisted shape would make a regression in
+ * either half look like a regression in the other.
+ *
+ * A URI already stored is never dropped, only listed and removable. Values
+ * saved before this change (or by the REST API) can point at a container the
+ * caller cannot browse today; blanking those on open is how a Save silently
+ * erases a binding, which is the defect the picker's own header records.
+ */
+function LakeUriList({
+  label, hint, value, mode = 'file', onChange,
+}: {
+  label: string;
+  hint?: string;
+  /** Newline-delimited URIs — the same string the editor state holds. */
+  value: string;
+  mode?: 'file' | 'folder' | 'any';
+  onChange: (next: string) => void;
+}) {
+  const s = useLocalStyles();
+  const [open, setOpen] = useState(false);
+  const uris = useMemo(() => linesToArr(value), [value]);
+
+  const add = useCallback(
+    (uri: string) => {
+      // De-duplicated: the same file added twice becomes two `--py-files`
+      // entries, which Spark accepts and then stages twice.
+      if (uris.includes(uri)) { setOpen(false); return; }
+      onChange([...uris, uri].join('\n'));
+      setOpen(false);
+    },
+    [uris, onChange],
+  );
+
+  return (
+    <div className={s.field}>
+      <Caption1>{label}</Caption1>
+      {hint && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{hint}</Caption1>}
+      <div className={s.refList}>
+        {uris.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None — browse the lake to add one.</Caption1>
+        )}
+        {uris.map((u) => (
+          <div key={u} className={s.refItem}>
+            <span className={s.refUri} title={u}>{u}</span>
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Dismiss16Regular />}
+              aria-label={`Remove ${u}`}
+              onClick={() => onChange(uris.filter((x) => x !== u).join('\n'))}
+            />
+          </div>
+        ))}
+      </div>
+      <div>
+        <Button size="small" icon={<FolderSearch20Regular />} onClick={() => setOpen(true)}>Browse the lake…</Button>
+      </div>
+      <AdlsBrowseDialog
+        open={open}
+        mode={mode}
+        initialUri={uris[uris.length - 1]}
+        onClose={() => setOpen(false)}
+        onPick={(loc) => add(loc.uri)}
+      />
+    </div>
+  );
 }
 
 // ============================================================================
@@ -719,11 +801,22 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
               </div>
 
               <div className={styles.field}>
-                <Caption1>Main definition file ({langDef.accept} — upload from local or paste an abfss:// URI)</Caption1>
                 <div className={styles.fileRow}>
-                  <Input className={styles.field} value={file}
-                    onChange={(_, d) => { setFile(d.value); markDirty(); }}
-                    placeholder={`abfss://landing@<account>.dfs.core.windows.net/sjd/${id}/Main/main${langDef.accept.split(',')[0]}`} />
+                  <div className={styles.field}>
+                    {/* The label lives ON the picker, not in a sibling Caption1
+                        with `label=""` — an empty Field label rendered an empty
+                        label element AND gave the readonly Input an
+                        `aria-label` of " (selected)" (re-review 2026-09-07,
+                        nit 3). The Upload button beside it carries its own
+                        text, so nothing else depended on the caption. */}
+                    <AdlsPathPicker
+                      label="Main definition file"
+                      hint={`${langDef.accept} — browse the lake, or upload from local with the button beside it`}
+                      mode="file"
+                      value={file}
+                      onChange={(loc) => { setFile(loc?.uri || ''); markDirty(); }}
+                    />
+                  </div>
                   <input ref={mainFileInput} type="file" accept={langDef.accept} style={{ display: 'none' }}
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMain(f); e.target.value = ''; }} />
                   <Button icon={<ArrowUpload16Regular />} disabled={uploading}
@@ -750,24 +843,24 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
               <Subtitle2 className={styles.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
                 <DocumentMultiple20Regular />Reference files
               </Subtitle2>
-              <Caption1>Optional additional files staged with the job. Paste abfss:// URIs, one per line.</Caption1>
+              <Caption1>Optional additional files staged with the job. Browse the lake to add them.</Caption1>
               <div className={styles.row}>
-                <div className={styles.field}>
-                  <Caption1>Python modules (.py / .zip / .egg → --py-files)</Caption1>
-                  <Textarea value={refPyText} onChange={(_, d) => { setRefPyText(d.value); markDirty(); }} rows={3}
-                    placeholder={'abfss://landing@<account>.dfs.core.windows.net/sjd/utils.py'} />
-                </div>
-                <div className={styles.field}>
-                  <Caption1>JARs (.jar → --jars)</Caption1>
-                  <Textarea value={refJarText} onChange={(_, d) => { setRefJarText(d.value); markDirty(); }} rows={3}
-                    placeholder={'abfss://libs@<account>.dfs.core.windows.net/myudf.jar'} />
-                </div>
+                <LakeUriList
+                  label="Python modules (.py / .zip / .egg → --py-files)"
+                  value={refPyText}
+                  onChange={(v) => { setRefPyText(v); markDirty(); }}
+                />
+                <LakeUriList
+                  label="JARs (.jar → --jars)"
+                  value={refJarText}
+                  onChange={(v) => { setRefJarText(v); markDirty(); }}
+                />
               </div>
-              <div className={styles.field}>
-                <Caption1>Other files (data / config → --files)</Caption1>
-                <Textarea value={refFilesText} onChange={(_, d) => { setRefFilesText(d.value); markDirty(); }} rows={2}
-                  placeholder={'abfss://landing@<account>.dfs.core.windows.net/sjd/config.yaml'} />
-              </div>
+              <LakeUriList
+                label="Other files (data / config → --files)"
+                value={refFilesText}
+                onChange={(v) => { setRefFilesText(v); markDirty(); }}
+              />
 
               <div className={styles.field}>
                 <Caption1>Environment (optional — merges its Spark conf + JARs at submit)</Caption1>

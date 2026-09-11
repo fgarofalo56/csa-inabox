@@ -95,6 +95,42 @@ describe('the ARM shapes Resource Graph needs a different table for', () => {
   });
 });
 
+describe('ARM `kind` is a comma LIST, not an enum', () => {
+  /**
+   * REGRESSION GUARD (review 2026-09-07). `function-app-id` shipped as a bare
+   * `kind: 'functionapp'`, which `/api/azure/resources` renders as
+   * `| where kind =~ 'functionapp'` — case-insensitive EQUALITY. Loom's own
+   * bicep declares 15 function-app `Microsoft.Web/sites` repo-wide and 14 of
+   * them carry a comma list (`functionapp,linux`), so that predicate matched
+   * almost none of them and the Event Grid destination picker —
+   * which DEFAULTS to `AzureFunction` — opened on a list that could never
+   * return a row.
+   */
+  it('the Function App source asks for CONTAINS, so a `functionapp,linux` site is not excluded', () => {
+    const [src] = AZURE_BACKED_FIELDS['function-app-id'].sources;
+    expect(src.type).toBe('Microsoft.Web/sites');
+    expect(src.kind).toBe('functionapp');
+    // The load-bearing half: equality here is the dead end, so it is asserted
+    // rather than left to the comment.
+    expect(src.kindMatch).toBe('contains');
+  });
+
+  it('and the request the picker actually issues carries kindMatch=contains', async () => {
+    wrap(<AzureBackedField kind="function-app-id" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('type=Microsoft.Web%2Fsites');
+    expect(url).toContain('kind=functionapp');
+    expect(url).toContain('kindMatch=contains');
+  });
+
+  it('a source with no kindMatch sends no kindMatch, so every other picker is unchanged', async () => {
+    wrap(<AzureBackedField kind="adxUri" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('kindMatch');
+  });
+});
+
 describe('cloud parity', () => {
   it('the catalog endpoint queries Databricks AND Loom Unity, so Gov is not empty', () => {
     const types = AZURE_BACKED_FIELDS['catalog-endpoint'].sources.map((s) => s.type);
@@ -142,5 +178,28 @@ describe('the field itself', () => {
     wrap(<AzureBackedField kind={'not-a-kind' as any} onChange={() => {}} />);
     expect(screen.getByRole('alert').textContent).toContain("unknown kind 'not-a-kind'");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The hint is what a replaced `<Field>` used to carry. `app/catalog/unity`
+   * lost "Omit for the connector's system-assigned identity" when its
+   * hand-rolled Field became a picker, leaving "(optional)" in the label to
+   * carry a meaning it does not carry — the label says the value MAY be
+   * omitted, never what omitting it DOES. This asserts the prop reaches the
+   * rendered Field rather than being accepted and dropped.
+   */
+  it('renders the hint under the control, and renders none when none is passed', async () => {
+    const hint = "Omit for the connector's system-assigned identity.";
+    const { unmount } = wrap(
+      <AzureBackedField kind="user-assigned-identity" hint={hint} onChange={() => {}} />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    unmount();
+
+    fetchMock.mockClear();
+    wrap(<AzureBackedField kind="user-assigned-identity" onChange={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByText(hint)).toBeNull();
   });
 });

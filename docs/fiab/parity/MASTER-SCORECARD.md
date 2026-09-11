@@ -336,19 +336,19 @@ yet built and are intentionally **not** documented here as parity.
 
 | Surface | Doc | Grade | Default backend | Gate |
 |---|---|:--:|---|---|
-| AdminShell layout / chrome | `admin-shell.md` | **A** | none (pure client) | — |
+| AdminShell layout / chrome | `admin-shell.md` | **A−** (re-verified 2026-09-07, #3725) | none (pure client) | glyph ⚠️ |
 | Tenant settings | `tenant-settings.md` | **A** | Cosmos `tenant-settings` | — |
 | Capacity inventory + Scale by SKU (11 services) | `capacity.md` | **A** | ARM (UAMI) + per-service PATCH | cost ⚠️ |
 | Workspaces (user browser + admin) | `workspaces.md` | **A** | Cosmos `workspaces` + `items` | — |
 | Workspace create | `workspace-create.md` | **A** | Cosmos + PBI capacities | Purview ⚠️ |
 | Workspace roles (Manage access) | `workspace-roles.md` | **A** | Cosmos `workspace-roles` + ARM RBAC | RBAC-admin ⚠️ / Fabric opt-in ⚠️ |
-| Folders (+ task flows) | `folders-taskflows.md` | **A−** | Cosmos `folders` | task flows ⚠️ |
+| Folders (+ task flows) | `folders-taskflows.md` | **A−** (re-verified 2026-09-07, #3725) | Cosmos `folders` + `task-flows` | — |
 | Git integration (SCM binding) | `git-integration.md` | **B+** | Cosmos `workspace-git` | Git-exec ⚠️ |
 | Spark compute (notebook backend) | `spark-compute.md` | **A** | AML Serverless Spark (Com/GCC) / Synapse Livy (GovH/IL5) | config ⚠️ |
 | CMK encryption | `cmk.md` | **A** | `storage.bicep` + `keyvault.bicep` | key-URI ⚠️ / no-blade ⚠️ |
 | Network & Private DNS | `networking.md` | **A** | ARM network-discovery + `network.bicep` | Reader ⚠️ |
 | Azure Connections | `azure-connections.md` | **A** | Cosmos + Key Vault (`kv-secrets-client.ts`) | KV role ⚠️ |
-| Users & licenses | `users-licenses.md` | **B+** | Cosmos derivation + Graph (gated) | Graph ⚠️ / license ⚠️ |
+| Users & licenses | `users-licenses.md` | **B+** (re-verified 2026-09-07, #3725) | Cosmos derivation + Graph (gated) | Graph ⚠️ / read-only ❌×2 |
 | Domains | `domains.md` | **A** | Cosmos `tenant-settings` + Purview (gated) | Purview ⚠️ |
 | Audit logs | `audit-logs.md` | **A** | Cosmos `audit-log` | — |
 | Refresh summary & schedule | `refresh-summary.md` | **A** | Power BI REST (opt-in) | PBI-bound ⚠️ |
@@ -356,9 +356,10 @@ yet built and are intentionally **not** documented here as parity.
 | Embed codes | `embed-codes.md` | **B** | PBI REST GenerateToken + `powerbi-client-react` | PBI-bound ⚠️ / Publish-to-web admin ⚠️ |
 | Org visuals & branding | `org-visuals.md` | **B+** | Cosmos `tenant-themes` + ADLS (domain images) | custom `.pbiviz` ⚠️ |
 
-**Grade distribution (rev.5, amended 2026-08-29):** 13 × A / A−, 6 × B+ / B.
-**Zero D, zero F. Zero ❌ in any of the 19 docs** (grep-clean),
-backend-per-control on every row.
+**Grade distribution (rev.5, amended 2026-08-29 and 2026-09-07):** 14 × A / A−,
+5 × B+ / B. **Zero D, zero F.** Backend-per-control on every row. The
+"zero ❌ in any of the 19 docs" claim carried from rev.5 **no longer holds**:
+`users-licenses.md` records two ❌ as of 2026-09-07 (see the amendment below).
 
 > **Amendment, 2026-08-29 (#3738).** `usage-adoption.md` moved A → B on
 > re-verification: the rev.5 doc described six capabilities and claimed "zero ⚠️
@@ -370,6 +371,40 @@ backend-per-control on every row.
 > a precondition of an A. Same stale-doc cohort as #3725 — a rev.5 grade is a
 > claim about a snapshot, and every one of these 19 rows is due the same
 > treatment.
+
+> **Amendment, 2026-09-07 (#3725).** Three more rev.5 rows re-verified against
+> source at head. All three docs were wrong, in three different directions:
+>
+> - **`admin-shell.md` A → A−.** Rev.5 described a flat "17-section nav" driven
+>   by a `SECTIONS[]` array inside `admin-shell.tsx`. `const SECTIONS` does not
+>   appear in that file at all; the registry moved to `lib/nav/admin-sections.ts`
+>   and measures **8 groups / 42 destinations / 11 legacy redirects**. Held below
+>   A by a new ⚠️: `ICON_BY_HREF` has 39 entries for 42 destinations, so
+>   `/admin/brain`, `/admin/sensitivity-labels` and `/admin/classifications`
+>   render the generic glyph.
+> - **`folders-taskflows.md` A− held, gate removed.** Rev.5 recorded the
+>   task-flow canvas as a ⚠️ "not yet built" gate. The canvas shipped in
+>   `d423fa3de0f` at 2026-06-09 21:01 −04:00 — about two hours *after* the rev.5
+>   docs were committed (`42cc3e7964b`, 18:55 −04:00). The row was false within
+>   the same evening and stayed false for three months. The MessageBar rev.5
+>   cited does not exist either. The letter is unchanged; the reasoning is
+>   inverted, and the A− now rests on three Loom-baseline canvas gaps (no
+>   undo/redo, no `SplitPane`, no shared `EmptyState`) rather than on a
+>   non-existent Fabric gap.
+> - **`users-licenses.md` B+ held, and the ❌ count is no longer zero.** The
+>   rev.5 inventory stopped at row 11 and omitted the two **writes** the M365
+>   Active users grid performs inline — license assign/remove and account
+>   block/reset. `/api/admin/users` exports `GET` only, so both are MISSING ❌.
+>   The gap was real all along; only the rows were absent, which is why this
+>   scorecard carried a `license ⚠️` the doc itself never did.
+>
+> Like the 2026-08-29 pass, this was a **source re-measure, not a live browser
+> walk** — per `ux-baseline.md` G1 that is why none of the three is graded A on
+> this revision, and why each doc now carries an explicit "Evidence basis"
+> paragraph saying so. The pattern across both amendments is consistent: a rev.5
+> grade is a claim about a snapshot, and it decays in both directions — one row
+> was too generous, one was too harsh, one was silent about a gap.
+
 The two surfaces with material Power-BI-tenant gaps (public Publish-to-web admin,
 custom `.pbiviz` org visuals) are the *less* governable Power BI features; Loom's
 authenticated-embed and tenant/domain-branding paths deliver the parity today and

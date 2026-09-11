@@ -29,9 +29,46 @@
 # plugin-path discovery — all verified in debezium/container-images kafka/3.5 +
 # connect-base/3.5. Kafka client libs move 3.8 -> 4.2 with this bump; the
 # connector JSON templates below use Debezium 3.x-stable properties only.
+
+# ---------------------------------------------------------------------------
+# Stage 1 — compile the SC1 netty link checker.
+#
+# The Debezium Connect base ships a JRE 21, not a JDK (`javac` is absent —
+# measured, not assumed), so the build-time link check cannot be compiled in the
+# final stage the way it is on loom-trino / loom-unity / loom-risingwave. It is
+# compiled here instead and the .class files are COPYed in; `--release 11` keeps
+# them loadable on the runtime's JVM.
+#
+# No NEW registry dependency is introduced: apps/loom-unity/Dockerfile already
+# builds its Postgres/Entra stage FROM this exact image, through the same ACR
+# Tasks agents, in both the Commercial lane (build-fiab-images-acr-tasks.yml)
+# and the Gov lane (gov-build-images.yml).
+# ---------------------------------------------------------------------------
+FROM amazoncorretto:17-alpine3.20-jdk AS sc1check
+COPY scripts/NettyLinkCheck.java /build/
+RUN javac --release 11 -nowarn -d /build/classes /build/NettyLinkCheck.java
+
 FROM quay.io/debezium/connect:3.5.2.Final
 
 USER root
+
+# ── SC1 supply-chain gate — Java layer (#4429) ────────────────────────────────
+# CVE-2026-75595 (CRITICAL) in io.netty:netty-handler 4.1.128.Final, inside the
+# Oracle connector plugin. Every justification, digest and assertion lives in
+# scripts/sc1-netty.sh — including why bumping the Debezium base to 3.6.x would
+# NOT have cleared it (measured: the 3.6.2.Final Oracle plugin tarball still
+# ships netty-handler 4.1.128.Final).
+#
+# The script lives in a FILE rather than an inline heredoc on purpose: ACR Tasks'
+# classic builder cannot parse Dockerfile heredocs (they need BuildKit). A
+# heredoc here builds fine under a local `docker build` and then dies in CI after
+# ~3s with `failed to run step ID: build: failed to scan dependencies: exit
+# status 1`, before any layer runs. Keep this Dockerfile BuildKit-feature-free.
+COPY scripts/sc1-netty.sh /opt/loom-sc1/sc1-netty.sh
+COPY --from=sc1check /build/classes/ /opt/loom-sc1/classes/
+RUN chmod 0755 /opt/loom-sc1/sc1-netty.sh \
+    && /opt/loom-sc1/sc1-netty.sh \
+    && rm -rf /opt/loom-sc1
 
 # Per-source Debezium connector templates (operator parameterizes
 # via env vars at startup or via Kafka Connect REST API POST)

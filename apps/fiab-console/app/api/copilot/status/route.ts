@@ -14,7 +14,7 @@ import {
   listSessions,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
-import { isSafetyConfigured } from '@/lib/azure/foundry-client';
+import { contentSafetyHealth } from '@/lib/azure/foundry-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { detectLoomCloud, isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -81,6 +81,15 @@ export const GET = withSession(async (_req, { session }) => {
     }
   }
 
+  // Measured (not env-inferred) moderation status — see contentSafetyHealth.
+  // Cached 60s inside the helper, and never fatal: a probe failure is itself the
+  // "not reachable" answer, so it can't take the status endpoint down.
+  const csHealth = await contentSafetyHealth().catch((e: any) => ({
+    configured: true,
+    reachable: false,
+    error: String(e?.message || e).slice(0, 200),
+  }));
+
   let recentSessionCount = 0;
   try {
     const userOid = session.claims.oid || session.claims.upn || '';
@@ -101,10 +110,15 @@ export const GET = withSession(async (_req, { session }) => {
     endpoint: aoai.ok ? aoai.endpoint : undefined,
     model: aoai.ok ? aoai.deployment : undefined,
     aoai,
-    // Whether the AI Content Safety pipeline is wired. When false the pane
-    // shows an honest "prompts are not filtered" warning MessageBar (the
-    // copilot still works — honest-gate, not a silent pass).
-    contentSafety: isSafetyConfigured(),
+    // Whether the AI Content Safety pipeline is wired AND actually answering.
+    // #4432: this used to be a bare `isSafetyConfigured()` env read, which
+    // reported "prompts are filtered" on the live estate while the endpoint did
+    // not even resolve — a claim the code never established (R7). It is now the
+    // measured round-trip, so `false` genuinely means "not being screened".
+    contentSafety: csHealth.configured && csHealth.reachable,
+    // Full detail so the pane can distinguish "not deployed" (honest gate) from
+    // "deployed but unreachable" (a defect the operator must see).
+    contentSafetyDetail: csHealth,
     tools: {
       count: tools.length,
       byService,

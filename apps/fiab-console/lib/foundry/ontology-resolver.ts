@@ -46,6 +46,7 @@ import {
   type OntologyBinding, type OntologyBindingSourceKind, type ResolvedInstance,
   type SourceRows, normalizeOntologyBinding, mapRowsToInstances,
   buildSqlSelect, buildKql, buildDax, clampTop, sourceKindLabel,
+  ontologySqlRefViolation,
 } from './ontology-binding';
 import {
   LIVE, isLive, resolveTimeTravel, backendForOntologySourceKind,
@@ -82,6 +83,87 @@ function asOfDesc(asOf: AsOfSpec): string {
   return 'the requested time';
 }
 
+// ===========================================================================
+// #4219 — AUTHORIZING THE TWO SQL SINKS
+//
+// `case 'shortcut'` refuses an engine object outside the name-space Loom mints
+// into (`isMintedEngineObject`, #3959). `case 'lakehouse-table'` and
+// `case 'warehouse-table'` reach the SAME `buildSqlSelect` → `synapseExecute`
+// sink and had NO equivalent check: the only validation on `binding.source.ref`
+// was `SQL_REF_RE`, a shape regex that `master.sys.sql_logins` satisfies
+// character for character. The Console UAMI is a Synapse SQL admin, so the
+// engine served whatever the ref named.
+//
+// WHAT LANDED: the NAME-SPACE half — `ontologySqlRefViolation` (pure, in
+// ontology-binding.ts). Every ref that reaches `buildSqlSelect` now carries an
+// EXPLICIT schema, that schema is not engine metadata (`sys`,
+// `INFORMATION_SCHEMA`, `guest`, the nine fixed-role schemas), and a 3-part ref
+// names no database other than the one the binding declares. That refuses the
+// read the issue names — `master.sys.sql_logins`, and its bare `sys.`, cased
+// and bracketed spellings — before a query is built.
+//
+// THE ONE-PART HOLE, AND WHY THE FIX IS A SHAPE. The first cut put the schema
+// test behind `parts.length >= 2`, so an unqualified ref got no schema test at
+// all. Independent review measured four spellings reaching this sink with
+// `gated=false`, one `synapseExecute` call each, `db = master`; re-measuring
+// before the fix with six more the first author never tried found all ten
+// reached it: `syslogins`, `sysobjects`, `sysdatabases`, `sysusers`,
+// `sysaltfiles`, `spt_values`, `MSreplication_options`, `[syslogins]`,
+// `[[sysobjects]]`, `sys`. Two of those do not begin with `sys`, so the obvious
+// narrow fix (refuse names starting with `sys`) would have closed eight of ten
+// and read as a closed class — the failure mode this repo keeps re-finding. The
+// rule that landed instead is a SHAPE: a ref with no schema in it is a ref
+// whose schema the SERVER picks, which this pure function cannot see and
+// therefore cannot judge, so it FAILS CLOSED regardless of the name. Measured
+// after: all ten `gated=true`, zero `synapseExecute` calls. Still no Synapse
+// endpoint was reached, so nothing here claims what the engine would have done
+// with those strings — only that they no longer reach it.
+//
+// WHAT THE DATABASE HALF ACTUALLY BINDS, SINCE "cross-database" OVERSTATES IT.
+// `ownDatabase` for `case 'lakehouse-table'` is `binding.source.database` — a
+// caller-supplied string off the request (`normalizeOntologyBinding`) — and it
+// is the SAME value passed to `serverlessTarget(lhDb)`. So on that sink the
+// 3-part test enforces internal consistency between `ref` and `database`, not
+// isolation: a caller who wants another database declares it. Only
+// `case 'warehouse-table'` gets a real restriction, because `dedicatedTarget()`
+// ignores the binding and reads `LOOM_SYNAPSE_DEDICATED_POOL`. Both halves are
+// pinned in `ontology-resolver-sql-sink-authz.test.ts` so the asymmetry cannot
+// be described away.
+//
+// WHAT DID NOT LAND, STATED PLAINLY RATHER THAN IMPLIED AWAY: the LIVE half —
+// "is this ref actually one of the objects the binding's catalog EXPOSES?",
+// enumerated via `scanLakehouseTables()` / `listTables()`. It was written and
+// then removed, because it changes the resolver's contract for every existing
+// caller: `lib/foundry/__tests__/ontology-resolver.test.ts` resolves
+// `dbo.Customer` and `dbo.Cust` with no catalog mocked, so enumeration turned
+// four of its cases red and made the warehouse case attempt a real network
+// call. Teaching that spec the two new mocks is the right change and it is
+// outside this change's file ownership, so the enumeration half is DEFERRED,
+// not silently dropped.
+//
+// SO BE PRECISE ABOUT WHAT IS AND IS NOT TRUE NOW. CLOSED: the engine-metadata
+// class, for every ref shape this sink accepts — qualified, bracketed, cased,
+// and unqualified — and the cross-database class on the DEDICATED sink. NOT
+// CLOSED: a ref naming a real user table in the binding's own database that the
+// caller was never meant to read is STILL resolved, and on the Serverless sink
+// the binding's own database is caller-declared, so it is not an isolation
+// boundary. Anything more would be a claim this code does not support.
+// ===========================================================================
+
+/**
+ * Refuse a SQL ontology binding's ref on the NAME-SPACE policy, or return null
+ * to let it proceed to `buildSqlSelect`.
+ */
+function sqlRefGate(
+  kind: OntologyBindingSourceKind,
+  ref: string,
+  ownDatabase: string | undefined,
+): ResolveGate | null {
+  const shape = ontologySqlRefViolation(ref, ownDatabase);
+  if (!shape) return null;
+  return gate(kind, 'ontology_sql_ref_namespace', shape);
+}
+
 /**
  * Resolve ONE binding to typed instances of its object type against the real
  * backend for its source kind. `ot` is the object type's effective schema (for
@@ -114,8 +196,11 @@ export async function resolveBindingInstances(
             'Lakehouse-table resolution reads Delta via the Synapse Serverless SQL endpoint. Set ' +
             'LOOM_SYNAPSE_WORKSPACE (its -ondemand endpoint) and grant the Console UAMI Storage Blob Data Reader.');
         }
+        const lhDb = binding.source.database || 'master';
+        const refused = sqlRefGate(kind, binding.source.ref, lhDb);
+        if (refused) return refused;
         const sql = buildSqlSelect(binding.source.ref, top, tt);
-        const res = await synapseExecute(serverlessTarget(binding.source.database || 'master'), sql);
+        const res = await synapseExecute(serverlessTarget(lhDb), sql);
         return ok(binding, ot, res, sql, kind);
       }
       case 'warehouse-table': {
@@ -124,6 +209,8 @@ export async function resolveBindingInstances(
             'Warehouse-table resolution reads the Synapse Dedicated SQL pool. Set LOOM_SYNAPSE_WORKSPACE + ' +
             'LOOM_SYNAPSE_DEDICATED_POOL and grant the Console UAMI db_datareader.');
         }
+        const refused = sqlRefGate(kind, binding.source.ref, dedicatedTarget().database);
+        if (refused) return refused;
         const sql = buildSqlSelect(binding.source.ref, top, tt);
         const res = await synapseExecute(dedicatedTarget(), sql);
         return ok(binding, ot, res, sql, kind);

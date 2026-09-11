@@ -215,7 +215,17 @@ export const GET = withSession(async (_req, { session }) => {
       .fetchAll();
     return NextResponse.json({ ok: true, templates: resources });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e), status: 502 }, { status: 502 });
+    // `code` so the failure NAMES ITSELF, and deliberately NOT a gate code.
+    // The gallery is Cosmos-backed and Loom deploys the Cosmos account, so a
+    // failure here is a broken deployment, not a configuration the operator
+    // chose. Under the old classifier a codeless 502 scored as an honest infra
+    // gate and this persona passed; under the new rule it fails, which is the
+    // correct verdict and is a deliberate flip disclosed in the PR body rather
+    // than an accident of the rule change.
+    return NextResponse.json(
+      { ok: false, code: 'template_store_unreachable', error: e?.message || String(e), status: 502 },
+      { status: 502 },
+    );
   }
 });
 
@@ -242,6 +252,16 @@ export const POST = withSession(async (req: NextRequest) => {
     await container.items.upsert(doc);
     return NextResponse.json({ ok: true, template: doc });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e), status: 502 }, { status: 502 });
+    // `code` so the failure NAMES ITSELF, and deliberately NOT a gate code.
+    // The gallery is Cosmos-backed and Loom deploys the Cosmos account, so a
+    // failure here is a broken deployment, not a configuration the operator
+    // chose. Under the old classifier a codeless 502 scored as an honest infra
+    // gate and this persona passed; under the new rule it fails, which is the
+    // correct verdict and is a deliberate flip disclosed in the PR body rather
+    // than an accident of the rule change.
+    return NextResponse.json(
+      { ok: false, code: 'template_store_unreachable', error: e?.message || String(e), status: 502 },
+      { status: 502 },
+    );
   }
 });

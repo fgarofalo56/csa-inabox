@@ -55,10 +55,18 @@ export async function POST(req: NextRequest) {
   try {
     await resolveAoaiTarget(helpCfg);
   } catch (e: any) {
+    // `gate:'aoai'` stays for the widget's deep-link; `code` is the documented
+    // gate identifier every other consumer (and the UAT classifier) reads.
     if (e instanceof NoAoaiDeploymentError) {
-      return NextResponse.json({ ok: false, error: e.message, gate: 'aoai' }, { status: 503 });
+      return NextResponse.json(
+        { ok: false, code: 'no_aoai', error: e.message, gate: 'aoai' },
+        { status: 503 },
+      );
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json(
+      { ok: false, code: 'aoai_unreachable', error: e?.message || String(e) },
+      { status: 502 },
+    );
   }
 
   const userId = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';

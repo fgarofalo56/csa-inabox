@@ -4,7 +4,8 @@ import java.lang.reflect.Method;
  * SC1 smoke test for the loom-risingwave connector-node classpath.
  *
  * scripts/sc1-harden.sh replaces one jar in
- * {@code /risingwave/bin/connector-node/libs} (avro) and deletes two
+ * {@code /risingwave/bin/connector-node/libs} (avro), lifts the six-module
+ * netty core 4.1.77 -> 4.1.137 (#4429), and deletes two
  * (parquet-avro, htrace-core) to clear the Trivy CRITICAL gate. Changing a jar
  * on a wildcard classpath can fail in a way no file-listing assertion catches:
  * a class that no longer resolves its neighbours. So this loads -- and
@@ -117,6 +118,24 @@ public final class ConnectorLibsSmokeTest {
     mustLoad("org.apache.hadoop.conf.Configuration");
     mustLoad("org.apache.hadoop.fs.FileSystem");
     mustLoad("org.apache.iceberg.hadoop.HadoopFileIO");
+
+    // LIFTED jars: the netty CORE, 4.1.77 -> 4.1.137 (#4429, CVE-2026-75595).
+    // netty-handler alone was NOT enough -- 4.1.137's LazyX509Certificate
+    // needs io.netty.util.Recycler$EnhancedHandle, which netty-common 4.1.77
+    // does not have -- so common/buffer/codec/resolver/transport moved with it
+    // and the 4.1.100 LEAF modules stayed. These assertions cover the seam that
+    // matters: a leaf that is still 4.1.100 resolving against the new core.
+    mustLoad("io.netty.util.Recycler$EnhancedHandle");
+    mustLoad("io.netty.handler.ssl.SslContextBuilder");
+    mustLoad("io.netty.handler.ssl.util.LazyX509Certificate");
+    mustLoad("io.netty.buffer.PooledByteBufAllocator");
+    mustLoad("io.netty.channel.embedded.EmbeddedChannel");
+    // 4.1.100 leaves, loaded against the 4.1.137 core:
+    mustLoad("io.netty.handler.codec.http.HttpClientCodec");
+    mustLoad("io.netty.handler.codec.http2.Http2FrameCodec");
+    mustLoad("io.netty.handler.proxy.HttpProxyHandler");
+    mustLoad("io.netty.channel.epoll.EpollEventLoopGroup");
+    mustLoad("io.netty.resolver.dns.DnsNameResolverBuilder");
 
     // The connector-node entrypoint itself -- proves the whole service classpath
     // still links after the changes -- plus the sinks Loom actually drives.
