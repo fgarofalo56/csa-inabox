@@ -19,8 +19,16 @@
  * unguarded and the next client re-introduces it, which is exactly what
  * happened. This module is keyed to the SHAPE, and
  * `lib/util/__tests__/credential-url-origin-guard.test.ts` derives its
- * population from the filesystem so a newly added client cannot opt out by
- * being new.
+ * population from the filesystem so no file is out of scope because it is new.
+ *
+ * WHAT THAT GUARD DOES AND DOES NOT REACH. It is not a compiler. It recognises
+ * the SIX spellings of "is this absolute?" listed in its `ABS_TEST_SPELLINGS`,
+ * and a passthrough written in a seventh is invisible to it — round 2 of the
+ * #4454 review planted three ordinary clients and two were not in the
+ * population at all, which is why that list, the yield shapes and the
+ * subject-binding rule all widened. Read the guard's header before trusting a
+ * summary of it: an overstated control is worse than a narrow one, because the
+ * next author reads the claim and not the regex.
  *
  * WHY ORIGIN, NOT A PREFIX. `startsWith(base)` is not a host check. Both of
  * these pass it and both resolve somewhere else entirely:
