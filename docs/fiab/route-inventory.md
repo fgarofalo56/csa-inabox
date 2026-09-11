@@ -1245,7 +1245,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/azure-sql-database/[id]/performance/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/principal-search/route.ts` | GET | session-only |  | Microsoft Graph |
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | Azure SQL |
+| `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | Cosmos |
 | `items/azure-sql-database/[id]/query/route.ts` | POST | owner-scoped |  | Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/replication/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/azure-sql-database/[id]/restore/route.ts` | GET POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
@@ -1635,7 +1635,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/operations-agent/[id]/run/route.ts` | POST | owner-scoped |  | AAS, ADX, AI Foundry, AI Search, AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Azure SQL, Container Apps, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/paginated-report/[id]/definition/route.ts` | GET PUT | owner-scoped |  | Cosmos |
 | `items/paginated-report/[id]/export/route.ts` | POST | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/paginated-report/[id]/preview/route.ts` | POST | session-only |  | ARM, Azure SQL, Managed Identity |
+| `items/paginated-report/[id]/preview/route.ts` | POST | session-only |  | ARM, Azure SQL, Cosmos, Managed Identity |
 | `items/paginated-report/[id]/rdl/route.ts` | GET PUT | owner-scoped |  | AI Search, Cosmos, Microsoft Graph |
 | `items/paginated-report/[id]/render/route.ts` | POST | owner-scoped |  | AAS, ARM, Azure SQL, Cosmos, Fabric, Managed Identity, Power BI, Synapse SQL |
 | `items/paginated-report/[id]/route.ts` | GET | owner-scoped |  | Cosmos, Fabric, Microsoft Graph, Power BI |
@@ -2530,7 +2530,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-459 module(s) ORIGINATE a backend label — the derivation read an
+460 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2732,6 +2732,7 @@ this state that is NOT listed here fails the generator** — which is what makes
 | `apps/fiab-console/lib/access/signin-access-request.ts` | — (none) | its one fetch (:123) POSTs to `LOOM_ACCESS_REQUEST_WEBHOOK` — an operator-supplied Teams incoming webhook or Logic App URL. Which service that is, is deployment configuration and not a property of the code; unset, the function returns false without calling anything. |
 | `apps/fiab-console/lib/azure/aca-managed-identity.ts` | — (none) | a custom TokenCredential that GETs the Container Apps managed-identity endpoint ($IDENTITY_ENDPOINT, a localhost-side IMDS-style URL) because @azure/identity cannot parse the ACA response. It mints a token; the service the token is spent on is attributed at the client that spends it. |
 | `apps/fiab-console/lib/azure/arm-credential.ts` | — (none) | acquires an ARM-scoped token from the UAMI → DefaultAzureCredential chain and returns it. The ARM base URL it is used WITH lives in cloud-endpoints (armBase()), which is where the ARM label is derived; this module reaches no service of its own. |
+| `apps/fiab-console/lib/azure/azure-sql-cancel-intents.ts` | Cosmos | the cross-replica SQL cancel-intent store (#3400): `container.items.upsert` / `.item().read()` / `.item().delete()` against a Cosmos container, on a `new CosmosClient({ endpoint: LOOM_COSMOS_ENDPOINT, aadCredentials })`. Real network calls, but nothing in the module is READABLE as Cosmos by the detectors: the endpoint is deployment configuration so no `documents.azure.com` literal appears, and the SDK is reached through `await import('@azure/cosmos')` INSIDE the store initialiser — a dynamic import, which PACKAGE_RE cannot see because it matches `from '…'` only. Split out of azure-sql-client.ts, which the derivation could name only because of its unrelated static `import sql from 'mssql'`; the Cosmos half of that module was never named there either. Declared rather than widening PACKAGE_RE to dynamic imports, which would relabel modules across the whole console in a diff that is not about the derivation. UNDER-REPORT DISCLOSED, because a table that quietly drops a backend is worse than one that adds a spurious label: this module ALSO reaches Azure SQL. It holds live mssql `Request` objects in `liveRequests` and the watcher calls `.cancel()` on them, which makes tedious put a TDS ATTENTION packet on the Azure SQL connection. This map records ONE label per module (`backend` is `string\|null`, asserted in scripts/ci/__tests__/route-backends.test.mjs), so only `Cosmos` is published, and the measured consequence in docs/fiab/route-inventory.md is that `items/azure-sql-database/[id]/query/cancel/route.ts` moved from `Azure SQL` to `Cosmos` — the label was REPLACED, not added, and that route still sends the ATTENTION packet on its local branch. (`items/paginated-report/[id]/preview/route.ts` gaining `Cosmos` is the mirror image: it calls `executeQuery`, which can now reach this store — statically true, though that route passes no `requestId` so it never registers one at runtime.) Restoring `Azure SQL` on the cancel row needs the declared entry to carry a SET of labels — a derivation-schema change touching labelFor, classifyRouteBackends, generate-route-inventory.mjs and this map's shape assertion, which would relabel rows across the console in a diff that is not about the derivation. Tracked in #4406 with the rest of this module's follow-ups; disclosed here so the row is not read as "does not reach Azure SQL". |
 | `apps/fiab-console/lib/azure/capacity-broker-client.ts` | Loom service | POSTs /admit to the `loom-capacity-broker` Container App at `LOOM_CAPACITY_BROKER_URL` — one of Loom's OWN services, not an Azure backing service. Whatever Azure resources the broker itself uses are attributed in that app, not on the calling route. |
 | `apps/fiab-console/lib/azure/data-access-mode.ts` | — (none) | the (default-OFF) switchboard choosing between the shared Console UAMI and a per-user OBO credential. It selects an IDENTITY; the service that identity is used against is attributed at the client that calls it. |
 | `apps/fiab-console/lib/azure/databricks-scale-client.ts` | Databricks | instance pools / environment libraries / Spark conf over the Databricks workspace REST API — `fetchWithTimeout(`https://${host()}${path}`)` where `host()` is `LOOM_DATABRICKS_HOSTNAME`. The host is deployment configuration, so no `azuredatabricks.net` literal appears in the module and the derivation cannot read it. The AAD resource id it authenticates against (2ff814a6-…) IS the Azure Databricks first-party app. |
@@ -2919,6 +2920,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/arm-deployments-client.ts` | ARM |
 | `apps/fiab-console/lib/azure/attach-integration.ts` | Azure Monitor |
 | `apps/fiab-console/lib/azure/auto-bind-providers.ts` | ADF |
+| `apps/fiab-console/lib/azure/azure-sql-cancel-intents.ts` | Cosmos |
 | `apps/fiab-console/lib/azure/azure-sql-client.ts` | Azure Maintenance, Azure RBAC, Azure SQL |
 | `apps/fiab-console/lib/azure/batch-client.ts` | Batch |
 | `apps/fiab-console/lib/azure/budgets-client.ts` | Cost Management |
