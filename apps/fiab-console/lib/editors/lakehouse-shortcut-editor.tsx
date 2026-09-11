@@ -37,6 +37,9 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
+import { AdlsPathPicker } from '@/lib/components/storage/adls-path-picker';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto' },
@@ -385,12 +388,23 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
                         onSelect={onPickAdlsConnection}
                         createDefaultType="storage-adls"
                       />
-                      <Field label="Storage account" required hint="Bare account name, e.g. contosolake.">
-                        <Input value={cAccount} onChange={(_, d) => { setCAccount(d.value); setCConnId(undefined); setVerifyResult(null); }} placeholder="contosolake" />
-                      </Field>
-                      <Field label="Container / filesystem" required>
-                        <Input value={cContainer} onChange={(_, d) => { setCContainer(d.value); setVerifyResult(null); }} placeholder="curated" />
-                      </Field>
+                      <AzureBackedField
+                        kind="storage"
+                        label="Storage account"
+                        value={cAccount}
+                        surface="Lakehouse shortcut — ADLS source"
+                        onChange={(v) => { setCAccount(v || ''); setCConnId(undefined); setVerifyResult(null); }}
+                      />
+                      <BlobContainerPicker
+                        account={cAccount}
+                        value={cContainer}
+                        label="Container / filesystem"
+                        surface="Lakehouse shortcut — ADLS source"
+                        required
+                        disabled={!cAccount}
+                        onChange={(c) => { setCContainer(c); setVerifyResult(null); }}
+                        hint={cAccount ? undefined : 'Pick a storage account first — the container list is read from it.'}
+                      />
                       <Field label="Path / prefix" hint="Folder under the container, e.g. orders/2026/.">
                         <Input value={cPath} onChange={(_, d) => { setCPath(d.value); setVerifyResult(null); }} className={s.mono} />
                       </Field>
@@ -441,9 +455,13 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
                       <Field label="Dataverse environment URL" hint="e.g. https://org.crm.dynamics.com — informational; the data is read from the Synapse Link export path below.">
                         <Input value={cEnvUrl} onChange={(_, d) => setCEnvUrl(d.value)} placeholder="https://org.crm.dynamics.com" />
                       </Field>
-                      <Field label="Synapse Link export path (abfss://)" required hint="The ADLS Gen2 path Azure Synapse Link for Dataverse writes tables to (the Console identity needs Storage Blob Data Reader on it).">
-                        <Input value={cExportUri} onChange={(_, d) => { setCExportUri(d.value); setVerifyResult(null); }} className={s.mono} placeholder="abfss://dataverse@lake.dfs.core.windows.net/" />
-                      </Field>
+                      <AdlsPathPicker
+                        label="Synapse Link export path"
+                        mode="folder"
+                        value={cExportUri}
+                        onChange={(loc) => { setCExportUri(loc?.uri || ''); setVerifyResult(null); }}
+                        hint="The ADLS Gen2 folder Azure Synapse Link for Dataverse writes tables to. Browse runs on the Console identity, which needs Storage Blob Data Reader on it."
+                      />
                       <Field label="Table / sub-path" hint="Optional folder under the export root, e.g. account/.">
                         <Input value={cPath} onChange={(_, d) => { setCPath(d.value); setVerifyResult(null); }} className={s.mono} />
                       </Field>

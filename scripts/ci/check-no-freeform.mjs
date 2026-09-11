@@ -456,20 +456,53 @@ const MIN_TRACKED_FILES = 1000;
  */
 const MIN_FREETEXT_SITES = 1800;
 /** Classified violations the guard must still find; 250 when this ratchet was
- *  bootstrapped, 246 today. Two movements, in opposite directions: -7 from the
- *  two WAVE-1B classifier narrowings (`domKeyless`, the descriptor display-row
- *  rule), then +3 from closing the `disabled`/`readOnly` brace hole in the site
- *  extractor, which had made 52 free-text sites structurally invisible.
+ *  bootstrapped, 211 before the console-ui-w2 wave, 184 today. Movements, in
+ *  order: -7 from the two WAVE-1B classifier narrowings (`domKeyless`, the
+ *  descriptor display-row rule), +3 from closing the `disabled`/`readOnly`
+ *  brace hole in the site extractor (which had made 52 free-text sites
+ *  structurally invisible), then -24 from console-ui-w2 (#3515, #3517, #3518,
+ *  #3540, #3626, #3718, #4201) actually REPLACING sites with pickers — an ADX
+ *  cluster URI, storage accounts and containers, Event Grid destination and
+ *  dead-letter ARM ids, Unity Catalog access-connector ids, `abfss://` Spark
+ *  and shortcut paths, and one PostgreSQL admin password that is now minted
+ *  server-side into Key Vault instead of being asked for at all — and a further
+ *  -3 that arrived with main (#4313's foundry-sub-editors drain), which is why
+ *  this reads 184 and not the 187 the branch measured before that merge.
+ *
+ *  WHAT THAT -24 DOES AND DOES NOT SAY (re-review 2026-09-08, finding 3). It
+ *  says 24 sites are no longer CLASSIFIER-VISIBLE. It does not say 24 hand-
+ *  typing paths ceased to exist. `AzureResourcePicker`'s manual-entry arm is a
+ *  real free-text `<Input>` whose `allowManualEntry` prop defaults to TRUE, and
+ *  none of this wave's adopting call sites passes it false — so most of those
+ *  24 asks became "picker first, typing behind an Enter-manually button or
+ *  after discovery fails". This guard scores that arm at ZERO, measured:
+ *  `--report` finds no site in `lib/components/azure/azure-resource-picker.tsx`
+ *  or `azure-backed-field.tsx`, and neither file is in the baseline or in
+ *  ACCEPTED. The cause is that the placeholder there is
+ *  `MANUAL_PLACEHOLDER[matchBy]`, a dynamic lookup, and the classifier reads
+ *  site-local literals; inlining the `id` literal raises the population by
+ *  exactly one site in one new file and fails the gate on a new key. The
+ *  BEHAVIOUR is the hybrid this table already blesses three times over (api-marketplace,
+ *  workspace-egress-pane, mirror-source-wizard) and `ux-baseline.md` G2 forbids
+ *  the dead-end alternative — so this is a disclosure about what the number
+ *  measures, not a defect in the design. Whether the picker's manual arm should
+ *  itself be classified, and whether adopters that can always enumerate should
+ *  pass `allowManualEntry={false}`, is tracked in #4404.
  *
  *  This floor reads the MEASURED population, BEFORE ACCEPTED is applied. An
  *  acceptance is a judgement about a site the detector correctly found, so
  *  netting it off here would let the ACCEPTED table walk the floor down without
  *  anything having been fixed — the floor would then be measuring the table
- *  rather than the detector.
+ *  rather than the detector. That is why this wave's 14 newly-ACCEPTED sites do
+ *  NOT move it: only the 24 that were deleted do. (14, not the 13 an earlier
+ *  revision of this comment claimed — the ACCEPTED table's declared totals go
+ *  40 sites across 21 entries at the merge-base to 54 across 26 here.)
  *
  *  Deliberately NOT zero — a ratchet only fails on a RISE. Lower it in the SAME
- *  PR that actually removes the sites. */
-const MIN_LIVE_SITES = 200;
+ *  PR that actually removes the sites. Kept at roughly the same proportional
+ *  headroom the 200/211 pair had (~95%), so an ordinary fix does not trip it
+ *  but a detector COLLAPSE — the failure this floor exists for — still does. */
+const MIN_LIVE_SITES = 178;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PART 1 — raw-JSON-config surfaces (unchanged behaviour, HARD ZERO)
@@ -1970,37 +2003,56 @@ export const TOUCH_EXEMPT = new Map([
   // / Entra-admin) now derive their ARM target from the item's bound connection,
   // so the editor must persist the server+database selection ON CHANGE rather
   // than only when a query runs; without that the security fix 409s legitimate
-  // users, which is not a fix. The boy-scout rule requires a touched file to be
-  // FULLY cleared, and its four sites cannot be: the Entra `sid` picker is real
-  // work (a `principal-search`-fed picker), the PostgreSQL admin PASSWORD is a
-  // credential no discovery call can supply (it needs the platform to mint and
-  // Key Vault it, per auto-bind-by-default.md §5), and the ADF run-id receipt
-  // needs a run-history picker. Tracked with acceptance criteria — including
-  // DELETING this entry — in #3626, so this is a dated exception rather than a
-  // permanent amnesty.
+  // users, which is not a fix.
+  //
+  // ── REWRITTEN 2026-09-07 (#3626). The previous text was WRONG about this
+  // tree in two ways, which is the failure mode an exemption cannot afford: a
+  // justification is the whole load-bearing part of one, and both halves of
+  // this one had been overtaken by shipped work.
+  //   1. It said "its four sites cannot be [cleared]". Measured with `--report`:
+  //      the file has TWO. `no-freeform-inputs-baseline.json` already carried 2
+  //      before this diff, so the ratchet was correct and only the prose lagged.
+  //   2. It said "the Entra `sid` picker is real work (a `principal-search`-fed
+  //      picker)". It is not work; it SHIPPED. `EntraAdminPicker` is imported at
+  //      :73 and rendered at :669, fed by
+  //      `/api/items/azure-sql-database/[id]/principal-search`. The claim
+  //      described a state of the tree that no longer existed.
+  //
+  // What is TRUE at the time of this rewrite: one site remains, :2205, an ADF
+  // pipeline run ID typed as a receipt. The precedent the issue names for it,
+  // `app/api/items/adf-pipeline/[id]/runs/route.ts`, cannot be reused here —
+  // it resolves the pipeline from a Loom `adf-pipeline` ITEM binding
+  // (`resolveBinding`, and its ownership check proves
+  // `run.pipelineName === pipelineName`), and this editor is a SQL database
+  // with no such item id. A run-history picker on this surface therefore needs
+  // a factory-scoped runs route that does not exist yet.
+  //
+  // The OTHER site this entry used to cover, :1762, is GONE in this same diff:
+  // the PostgreSQL admin password is no longer asked for at all. The route
+  // mints it and writes it to Key Vault, and the editor shows the secret name
+  // (auto-bind-by-default.md §5) — which is what "the platform binds the value"
+  // means for a credential no discovery call could ever supply.
+  //
+  // Named acceptance: delete this entry when the factory-scoped runs route
+  // lands and :2205 becomes a Dropdown. Tracked in #3626. (Every `:N` in this
+  // block and in the entry below is re-measured from `--report` at the head
+  // that carries it; a number that moved and a sentence that did not is the
+  // §11 "prose out-lives the measurement" failure this file exists to catch.)
   [
     'apps/fiab-console/lib/editors/unified-sql-database-editor.tsx',
-    'GHSA-v8r7-c2p5-mjf2 required binding the server selection here; the 4 sites need UI work tracked in #3626',
+    'GHSA-v8r7-c2p5-mjf2 required binding the server selection here. Of the sites this entry once covered the Entra sid picker shipped (#3516, EntraAdminPicker at :669) and the PG admin password is minted server-side into Key Vault in this diff; the one that remains, :2205, is an ADF run ID needing a FACTORY-scoped runs route (the existing one resolves an adf-pipeline item binding this editor does not have) — #3626',
   ],
-  // #3731 threaded the COMPLETENESS ENVELOPE through both Spark runs grids: the
-  // grids kept `sessions` and dropped the envelope, which turns a walk that
-  // DISCLOSED it was cut short back into a silent wrong answer — a pool past the
-  // page ceiling reports the newest rows it could REACH as the newest rows that
-  // EXIST. That change does not go anywhere near the free-text sites here.
-  //
-  // Clearing them is real product work (a picker fed by a discovery call, or the
-  // platform binding the value per auto-bind-by-default.md §5), and landing it
-  // inside a PR about run pagination would make both halves harder to review.
-  // Dated exception, not amnesty: acceptance in #4201 includes DELETING these two
-  // entries, in the same shape the #3626 entry above established.
-  [
-    'apps/fiab-console/lib/editors/azure-services-editors.tsx',
-    '#3731 threaded the Spark runs completeness envelope here; the free-text sites need pickers, tracked in #4201',
-  ],
-  [
-    'apps/fiab-console/lib/editors/spark-job-definition-editor.tsx',
-    '#3731 threaded the Spark runs completeness envelope here; the free-text sites need pickers, tracked in #4201',
-  ],
+  // #4201 RETIRED (this diff). Both Spark editors carried a TOUCH_EXEMPT entry
+  // deferring their `abfss://` sites; the sites are gone, so the entries are
+  // gone with them — the acceptance #4201 wrote for itself.
+  //   spark-job-definition-editor.tsx  4 sites → 0. The main definition file is
+  //     an `AdlsPathPicker`; the three reference-file lists browse the lake
+  //     through `AdlsBrowseDialog`. The file has LEFT the baseline entirely.
+  //   azure-services-editors.tsx       2 sites → 1. :541 is now an
+  //     `AdlsPathPicker`. The survivor, :1135, is an ADF pagination JSONPath and
+  //     is declared in ACCEPTED below as a classifier false positive, which
+  //     removes the file from the ratchet and therefore from the boy-scout rule
+  //     too — an exemption is not what is holding it up.
   // ── console-ui-1 drain (#3541 / #3544 / #3565) ─────────────────────────────
   // Three editors were touched to REMOVE a free-text infrastructure value or to
   // wire a gate, and each still carries sites that this diff deliberately does
@@ -2033,13 +2085,101 @@ export const TOUCH_EXEMPT = new Map([
   // fallback, a restore control, the cross-sub pickers demoted). Its two sites
   // are in the connection-auth panel: Key Vault SECRET IDENTIFIERS. They are
   // already the correct-by-construction shape — the panel refuses raw key
-  // values and takes only a KV reference — but the identifier itself should be
-  // picked from a vault+secret discovery call rather than typed. That needs a
-  // new `keyvault-secret` picker kind (a KV child resource, so Resource Graph
-  // cannot serve it), i.e. the same out-of-scope work as :788 above.
+  // values and takes only a KV reference.
+  //
+  // ── REASON CORRECTED 2026-09-07 (#3518). The previous text said these needed
+  // "a new `keyvault-secret` picker kind (a KV child resource, so Resource
+  // Graph cannot serve it)". Half of that is now false and would have sent the
+  // next reader to build something that exists: `KeyVaultSecretPicker`
+  // (lib/components/azure/keyvault-secret-picker.tsx) SHIPPED, backed by
+  // GET /api/keyvault/secret-names, and it enumerates a vault's secrets without
+  // Resource Graph — exactly the control the old text called missing.
+  //
+  // What actually blocks the swap is narrower and is a REAL blocker: these two
+  // fields store a full secret IDENTIFIER URI
+  // (`https://<vault>.vault.azure.net/secrets/<name>`), which
+  // `isKeyVaultSecretUri()` in lib/azure/foundry-connection-shapes.ts validates
+  // and the Foundry connections REST body requires. The picker's `onChange`
+  // hands back the secret NAME only; the full id it already holds
+  // (`KeyVaultSecretName.id`) is not surfaced to the caller. Widening that
+  // callback is a change to a SHARED component used by other surfaces and sits
+  // outside this lane's file ownership, so it is not being made inside a diff
+  // about the Foundry target endpoint.
+  //
+  // What #3518 DID change in this file: the target-endpoint box is no longer
+  // free text for the categories whose endpoint is an ARM property — Azure
+  // OpenAI and Azure AI Services resolve through `aoaiEndpoint` and Azure Blob
+  // through the new `storage-blob-endpoint` kind. Those were never counted by
+  // this guard (the classifier does not tag :532), so this entry's site count
+  // is unchanged at 2 on purpose: lowering it would claim a deletion that did
+  // not happen.
+  //
+  // Named acceptance: delete this entry when the KV picker can return the
+  // secret identifier.
   [
     'apps/fiab-console/lib/editors/foundry-hub-editor.tsx',
-    '#3565 fixed the account picker here; the 2 sites are Key Vault secret identifiers needing a new keyvault-secret picker kind',
+    '#3565 fixed the account picker here and #3518 pickerized the ARM-derived target endpoints; the 2 sites are Key Vault secret IDENTIFIER URIs — KeyVaultSecretPicker exists but returns a secret NAME, and widening its callback is a shared-component change outside this lane',
+  ],
+  // ── console-ui-w2 drain (#3540) ────────────────────────────────────────────
+  // Both files were touched to REMOVE the storage-credential ARM-id asks: the
+  // Access Connector id and the user-assigned managed identity id are now
+  // `AzureBackedField` pickers (`databricks-access-connector` /
+  // `user-assigned-identity`, both added to lib/components/azure/
+  // azure-backed-field.tsx in the same diff). uc-dialogs.tsx went 11 → 9 sites
+  // and app/catalog/unity/page.tsx went 6 → 4, measured with `--report`.
+  //
+  // What REMAINS in each, and what actually blocks it — stated from what the
+  // code shows, not from what would be convenient (`deploy-integrity.md` R7):
+  //
+  //   uc-dialogs.tsx        :661 :778 :1077 :1696 are `abfss://` storage
+  //                         locations (catalog managed root, EXTERNAL table
+  //                         location, volume location, external-location URL).
+  //                         The remediation is `AdlsPathPicker`, and applying it
+  //                         across every `abfss://` ask in the item catalog is
+  //                         the SWEEP #3718 owns; four of them are here.
+  //                         :1024 is a UC owner — "user email, group name, or
+  //                         service-principal applicationId". Both
+  //                         `principal-search` routes in this app are
+  //                         ITEM-SCOPED (app/api/items/azure-sql-database/[id]/
+  //                         and app/api/data-products/[id]/), and a catalog
+  //                         dialog has neither id, so `EntraAdminPicker` cannot
+  //                         be reused here without a tenant-scoped route that
+  //                         does not exist yet.
+  //                         :1978 :1992 :1993 :1996 are a Lakehouse Federation
+  //                         CONNECTION to a system outside this estate — host,
+  //                         Databricks secret scope + key, or a literal
+  //                         password. The enumerable half is ALREADY a picker:
+  //                         the "Prefill from my Azure resources" Dropdown
+  //                         immediately above them is fed by `connectables` and
+  //                         fills the host. These are the BYO remainder, but
+  //                         they are left in the ratchet rather than declared
+  //                         ACCEPTED because that judgement should be made in
+  //                         the diff that also settles :661/:778/:1077/:1696 —
+  //                         an ACCEPTED entry names a whole FILE, and one
+  //                         covering this file today would also cover the four
+  //                         storage locations, which are real work.
+  //
+  //   catalog/unity/page.tsx :549 :650 :1106 are the same `abfss://` class and
+  //                         the same #3718 sweep — with one extra wrinkle
+  //                         :549's own hint records: in the OSS branch the
+  //                         metastore root may be `file:///…` as well as
+  //                         `abfss://…`, which `AdlsPathPicker` (an ADLS
+  //                         account → container → path browse) has no way to
+  //                         express, so that field needs a mode switch and not
+  //                         just an import.
+  //                         :945 is the same tenant-scoped principal search as
+  //                         :1024 above.
+  //
+  // Named acceptance: delete the unity-page entry and the four storage sites of
+  // the uc-dialogs entry when #3718's `abfss://` picker sweep lands; delete the
+  // rest when a tenant-scoped principal-search route exists.
+  [
+    'apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx',
+    '#3540 replaced the Access Connector + managed-identity ARM-id boxes here with AzureBackedField pickers (11→9 sites). The 4 abfss:// storage locations belong to the #3718 picker sweep, :1024 needs a tenant-scoped principal search (both existing routes are item-scoped), and :1978/:1992/:1993/:1996 are an external federation connection whose enumerable half is already the connectables Dropdown',
+  ],
+  [
+    'apps/fiab-console/app/catalog/unity/page.tsx',
+    '#3540 replaced the storage-credential ARM-id boxes here with AzureBackedField pickers (6→4 sites). :549/:650/:1106 are abfss:// locations for the #3718 sweep — :549 additionally accepts a file:/// OSS metastore root, which AdlsPathPicker cannot express — and :945 needs the same tenant-scoped principal search',
   ],
   // ── console-api-1 drain (#3878) ────────────────────────────────────────────
   // Both files were touched ONLY to fix the cosmos-items response-envelope
@@ -2491,6 +2631,79 @@ export const ACCEPTED = [
       'is why the fields were investigated rather than quietly deleted.',
   },
   {
+    file: 'apps/fiab-console/lib/editors/event-grid-topic-editor.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The WEB HOOK destination of an event subscription — an HTTPS receiver that by definition lives ' +
+      'outside this estate (Event Grid performs a validation handshake against it), and which nothing in ' +
+      'Azure could enumerate. Both sites are that one field: :620 is the Input and :58 is the ' +
+      'destination-table hint describing it. Every OTHER destination this editor offers now composes its ' +
+      'ARM id from a PICKED parent (`function-app-id`, `eventhubs-namespace-id`, ' +
+      '`servicebus-namespace-id`, `storage-account-id`) plus a child that is either picked — Service Bus ' +
+      'queues and topics come from /api/azure/servicebus-entities — or named where the child is not ' +
+      'enumerable anywhere in this app (an Event Hub inside a caller-chosen namespace; an individual ' +
+      'function, which /api/azure/resources DECLINES by name). The file went 10 sites to 2 in #3515, and ' +
+      'the dead-letter destination is now a storage-account picker plus a BlobContainerPicker rather than ' +
+      'two typed boxes.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/stream-analytics-editor.tsx',
+    sites: 2,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The two KEY boxes on the output dialog — a Storage account key and an Event Hubs shared access key ' +
+      '— and both are the disclosed ALTERNATIVE to the default, not the default. Each field\'s own hint ' +
+      'says so ("Leave blank to use the ASA managed identity"), and the ASA output is created with the job ' +
+      'identity when they are empty. They exist for a sink OUTSIDE this estate, whose key is minted by ' +
+      'whoever owns it; there is no Loom-side discovery call that could produce someone else\'s account ' +
+      'key. The addresses beside them are no longer typed: #3517 replaced the ADX cluster URL, the storage ' +
+      'account and the Event Hubs namespace with AzureBackedField pickers (`adxUri`, `storage`, ' +
+      '`eventhubs`) and the container with a BlobContainerPicker cascaded off the picked account, taking ' +
+      'the file from 4 sites to these 2.',
+  },
+  {
+    file: 'apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx',
+    sites: 4,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'Credentials minted on someone ELSE\'S cloud, for a shortcut that reads a bucket Loom does not own: ' +
+      'an AWS access key id and secret (:1000/:1003), a Google service-account JSON (:1028), and a SAS for ' +
+      'a storage account the Console UAMI cannot reach (:1059). No Azure discovery call could produce any ' +
+      'of them, and all four are already the compliant shape — each field disables once the value is ' +
+      'stashed (`value.secretName`), which is this wizard writing the secret to Key Vault and then ' +
+      'referring to it by name rather than holding it. The SAS one is explicitly the escape hatch, not the ' +
+      'default: its hint says "only needed for accounts the UAMI cannot reach". ' +
+      'The Dataverse export path is held to the same rule: `AdlsPathPicker` has no `disabled` prop, so ' +
+      'the stashed state renders a read-only field in its place rather than a live browser whose result ' +
+      'nothing would consume. ' +
+      'The AZURE-side asks in this file are gone, which is why the count is 4 and not 6: #3718 replaced ' +
+      'the ADLS storage account with an `AzureBackedField` (`storage`), the container with a ' +
+      '`BlobContainerPicker` cascaded off it, and the Dataverse Synapse-Link export path with an ' +
+      '`AdlsPathPicker` that browses the real lake.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx',
+    sites: 5,
+    kind: 'byo',
+    ref: 'auto-bind-by-default.md §Allowed',
+    why:
+      'The same BYO set as the OneLake wizard plus two addresses that are not in Azure at all. The three ' +
+      'credentials — a SAS for an account the Console identity cannot reach (:412), an S3 ' +
+      'AccessKeyId:SecretAccessKey (:431) and a GCS service-account JSON (:445) — are minted by whoever ' +
+      'owns the source, and each hint records that Loom stores it in Key Vault and never in the shortcut ' +
+      'record. The two locators are the S3-COMPATIBLE endpoint host (:427 — a MinIO or Wasabi API host, ' +
+      'which is the whole point of the "s3compatible" source type and is by definition not an Azure ' +
+      'resource) and the Dataverse environment URL (:456), whose own hint says it is INFORMATIONAL: the ' +
+      'data is read from the Synapse Link export path, which IS now a picker. ' +
+      '#3718 cleared the Azure-side asks: the ADLS storage account is an `AzureBackedField` (`storage`), ' +
+      'the container a `BlobContainerPicker` cascaded off it, and the Synapse Link export path an ' +
+      '`AdlsPathPicker` — 7 sites to these 5.',
+  },
+  {
     file: 'apps/fiab-console/lib/power-platform/flow-builder.tsx',
     sites: 1,
     kind: 'byo',
@@ -2513,6 +2726,22 @@ export const ACCEPTED = [
       'rendered as resolved text immediately above it, which is the platform having already done the ' +
       'binding. It matched `storage-loc` on `mount path`, a pattern written for a Databricks DBFS mount ' +
       'point; narrowing the pattern would lose that, so the correction is recorded here instead.',
+  },
+  {
+    file: 'apps/fiab-console/lib/editors/azure-services-editors.tsx',
+    sites: 1,
+    kind: 'false-positive',
+    ref: 'check-no-freeform.mjs §RESIDUAL FALSE POSITIVES',
+    why:
+      'The ADF REST-dataset PAGINATION RULE (:1135), whose placeholder is `$.paging.next` — a JSONPath ' +
+      'expression read out of the RESPONSE BODY of whatever API the linked service fronts, which is how ' +
+      'ADF expresses "where the next page link lives". It addresses a field in someone else\'s JSON, not a ' +
+      'resource in this deployment, so there is nothing for a discovery call to enumerate and ' +
+      '`auto-bind-by-default.md` §5 has no binding to perform. It matched the weakest tag the classifier ' +
+      'carries, `bare-locator`, on the label word "URL". The file\'s OTHER site (:541, the Synapse batch ' +
+      'job\'s `abfss://` main definition file) was a real ask and is FIXED in this same diff — it is now ' +
+      'an `AdlsPathPicker` browsing the real ADLS data plane — which is why this entry covers 1 site and ' +
+      'not 2, and why the #4201 TOUCH_EXEMPT entry for this file is deleted rather than reworded.',
   },
   {
     file: 'apps/fiab-console/lib/editors/components/inline-attribute-panel.tsx',

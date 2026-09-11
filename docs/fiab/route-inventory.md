@@ -19,7 +19,7 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | Owner-scoped | 675 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
-| Gated (backend config) | 498 |
+| Gated (backend config) | 499 |
 | Areas | 122 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1651,7 +1651,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/postgres-flexible-server/[id]/databases/route.ts` | GET | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/postgres-flexible-server/[id]/firewall/route.ts` | GET POST DELETE | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
 | `items/postgres-flexible-server/[id]/query/route.ts` | POST | owner-scoped |  | ARM, Azure SQL, Cosmos, Microsoft Graph, PostgreSQL |
-| `items/postgres-flexible-server/route.ts` | GET POST | session-only |  | ARM, PostgreSQL |
+| `items/postgres-flexible-server/route.ts` | GET POST | session-only | ● | ARM, Key Vault, PostgreSQL |
 | `items/power-app/[id]/publish/route.ts` | POST | owner-scoped |  | Cosmos, Power Automate, Power Platform |
 | `items/power-app/[id]/route.ts` | GET | owner-scoped |  | Cosmos, Power Automate, Power Platform |
 | `items/power-app/[id]/state/route.ts` | GET POST | owner-scoped |  | Cosmos |
@@ -2529,7 +2529,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-460 module(s) ORIGINATE a backend label — the derivation read an
+459 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2869,7 +2869,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/synapse/kqlscripts/[name]/run/route.ts` | Synapse |
 | `apps/fiab-console/app/api/thread/build-powerbi-model/route.ts` | Power BI |
 | `apps/fiab-console/app/catalog/metastores/page.tsx` | Databricks |
-| `apps/fiab-console/app/catalog/unity/page.tsx` | ADLS, Databricks |
+| `apps/fiab-console/app/catalog/unity/page.tsx` | ADLS |
 | `apps/fiab-console/app/copilot/page.tsx` | AI Foundry |
 | `apps/fiab-console/app/governance/purview/page.tsx` | Purview |
 | `apps/fiab-console/app/governance/scans/page.tsx` | ADLS |
@@ -3075,7 +3075,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/components/ai-search/ai-search-tree.tsx` | AI Search, Azure OpenAI |
 | `apps/fiab-console/lib/components/ai-search/index-designers.tsx` | Key Vault |
 | `apps/fiab-console/lib/components/ai-search/indexer-ops.tsx` | AI Search |
-| `apps/fiab-console/lib/components/azure/azure-backed-field.tsx` | ADX, ARM, Azure Networking, Azure SQL, Azure Storage, Container Apps, Databricks, Event Grid, Event Hubs, Logic Apps, Synapse |
+| `apps/fiab-console/lib/components/azure/azure-backed-field.tsx` | ADX, ARM, App Service, Azure Networking, Azure SQL, Azure Storage, Container Apps, Databricks, Event Grid, Event Hubs, Logic Apps, Managed Identity, Service Bus, Synapse |
 | `apps/fiab-console/lib/components/azure/private-link-target-field.tsx` | ACR, ADF, ADX, AI Search, AML, App Service, Azure AI Services, Azure Monitor, Azure SQL, Azure Storage, Container Apps, Cosmos, Databricks, Event Grid, Event Hubs, Key Vault, PostgreSQL, Purview, Service Bus, Synapse |
 | `apps/fiab-console/lib/components/catalog/cross-source-actions.tsx` | ADLS |
 | `apps/fiab-console/lib/components/catalog/permission-matrix.tsx` | Databricks |
@@ -3100,7 +3100,6 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/components/network/trusted-workspace-access.tsx` | Azure Storage |
 | `apps/fiab-console/lib/components/notebook/environment-panel.tsx` | ADLS |
 | `apps/fiab-console/lib/components/onelake/properties-panel.tsx` | ADLS |
-| `apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx` | ADLS |
 | `apps/fiab-console/lib/components/pipeline/activity-catalog.ts` | Azure AI Services |
 | `apps/fiab-console/lib/components/pipeline/dataflow-diagram.tsx` | Azure SQL |
 | `apps/fiab-console/lib/components/pipeline/manage-panel.tsx` | Azure SQL, Databricks, Synapse SQL |
@@ -3138,7 +3137,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/databricks/job-editor.tsx` | Databricks |
 | `apps/fiab-console/lib/editors/databricks/pipeline-editor.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/databricks/streaming-object-dialog.tsx` | ADLS |
-| `apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx` | ADLS, Azure SQL, Databricks |
+| `apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx` | ADLS, Azure SQL |
 | `apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx` | Azure SQL |
 | `apps/fiab-console/lib/editors/eventstream/geo-reference.ts` | Azure Storage |
 | `apps/fiab-console/lib/editors/foundry-account-picker-bar.tsx` | AML, Azure AI Services |
@@ -3148,7 +3147,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/editors/geo-editors.tsx` | Azure Maps |
 | `apps/fiab-console/lib/editors/graph-editors.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakebase-editor.tsx` | ARM |
-| `apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx` | ADLS, Dataverse |
+| `apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx` | Dataverse |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx` | ADLS |
 | `apps/fiab-console/lib/editors/lakehouse/dialogs/small-dialogs.tsx` | Synapse SQL |
 | `apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx` | ADLS |
