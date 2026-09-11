@@ -206,7 +206,7 @@ jobs:
         # the explicit skip-list with one-line rationale per check ID; PR #103
         # closed 33 findings and PR #104 closed another ~50.  When the residual
         # parser-limitation findings clear we will flip soft_fail off.
-        uses: bridgecrewio/checkov-action@59b9d7edfcad5b87fbe3f473a9a134a721ad03f8 # v12
+        uses: bridgecrewio/checkov-action@f967808197a8d784d3e72919f38c3ff0cda7884e # v12
         with:
           directory: deploy/
           config_file: .checkov.yaml
