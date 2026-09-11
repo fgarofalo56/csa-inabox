@@ -254,6 +254,71 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     sources: [{ type: 'Microsoft.EventHub/namespaces' }],
     manualLabel: 'Event Hubs namespace resource ID',
   },
+  'servicebus-namespace-id': {
+    label: 'Service Bus namespace',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.ServiceBus/namespaces' }],
+    manualLabel: 'Service Bus namespace resource ID',
+  },
+  /**
+   * A Function App (the SITE), not a function inside it. The distinction is not
+   * pedantry: `/api/azure/resources` DECLINES
+   * `Microsoft.Web/sites/functions` outright (UNSUPPORTED_TYPES in
+   * app/api/azure/resources/route.ts) because an individual function is a child
+   * of the site's own ARM/data plane and is not a Resource Graph row. So a
+   * surface that needs `…/sites/{app}/functions/{fn}` picks the app HERE and
+   * composes the function name onto it, rather than asking for the whole id.
+   *
+   * ── WHY `kindMatch: 'contains'` AND NOT A BARE `kind` (review, 2026-09-07) ──
+   * This first shipped as `kind: 'functionapp'` with a comment claiming that
+   * matched what `/api/azure/function-apps` filters on. It does not, and the
+   * narrowing EMPTIED the picker on Loom's own estate. The two predicates are
+   * different operators over the same token:
+   *
+   *   /api/azure/resources     `| where kind =~ '<kind>'` — Resource Graph `=~`
+   *                            is case-insensitive EQUALITY.
+   *   /api/azure/function-apps `s.kind.toLowerCase().includes('functionapp')`
+   *                            — a SUBSTRING test.
+   *
+   * ARM `kind` on `Microsoft.Web/sites` is a COMMA LIST, so they disagree on
+   * every row whose list has more than one token: `functionapp` → both true;
+   * `functionapp,linux` → equality FALSE, substring true;
+   * `functionapp,linux,container` → equality FALSE, substring true. Loom's own
+   * bicep declares 15 function-app `Microsoft.Web/sites` repo-wide and 14 of
+   * them carry a comma list — only `scc-labels-function.bicep` is bare
+   * `functionapp`. (Re-counted 2026-09-07: the first version of this comment
+   * said "8 of its 11", which no scope of the tree produces. Within
+   * `platform/fiab/bicep` alone it is 6 function apps of 7 sites, 5 of them
+   * comma-list.) Event Grid's destination picker DEFAULTS to `AzureFunction`
+   * — so the equality form gave a first-open dead end on the platform's own
+   * Function Apps, which is an `auto-bind-by-default.md` violation as well as
+   * a false comment.
+   *
+   * `kindMatch: 'contains'` emits `| where kind contains 'functionapp'`, KQL's
+   * case-insensitive substring operator, which is the same predicate the
+   * function-apps route applies in JS. The agreement is now a property of the
+   * operators and not an assertion.
+   *
+   * LOGIC APP STANDARD IS ADMITTED ON PURPOSE (re-review 2026-09-07, nit 5).
+   * `contains 'functionapp'` also matches `functionapp,workflowapp`, a Logic
+   * App Standard site. That is a DECISION, not a side effect of the operator:
+   * a Logic App Standard site IS a Function-App-hosted site — it runs on the
+   * Functions runtime, it is `Microsoft.Web/sites`, its resource id is the
+   * shape this picker stores, and Event Grid delivers to it through the same
+   * `…/sites/{app}/functions/{fn}` endpoint as any other function. Excluding
+   * it would need an extra `and kind !contains 'workflowapp'` that would (a)
+   * make this picker narrower than `/api/azure/function-apps`, which returns
+   * those rows, reintroducing exactly the two-predicates-disagree defect above,
+   * and (b) hide a valid destination the operator deployed on purpose. If a
+   * future surface genuinely needs "no workflow apps", it asks for that
+   * narrowing explicitly rather than getting it silently here.
+   */
+  'function-app-id': {
+    label: 'Function App',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.Web/sites', kind: 'functionapp', kindMatch: 'contains' }],
+    manualLabel: 'Function App resource ID',
+  },
   /**
    * The cluster's ARM id, WITH its URI projected alongside. `valueFrom: 'id'`
    * decides what is stored; the `select` costs nothing extra (it is a column in
@@ -266,6 +331,45 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     valueFrom: 'id',
     sources: [{ type: 'Microsoft.Kusto/clusters', select: 'properties.uri' }],
     manualLabel: 'Cluster resource ID',
+  },
+  /**
+   * The identity a Unity Catalog storage credential vends. TWO sources, and the
+   * second is `cloud-parity.md` doing real work rather than a nicety.
+   *
+   * On Commercial the answer is an Azure Databricks **Access Connector**
+   * (`Microsoft.Databricks/accessConnectors`) — the resource whose managed
+   * identity Databricks assumes to reach ADLS. In Azure Government there is no
+   * Databricks, so that type can never return a row there: a picker that knew
+   * only it would be PERMANENTLY EMPTY in the boundary that needs Loom Unity
+   * most, which is the exact inversion `catalog-endpoint` above exists to
+   * prevent. Gov's Loom Unity vends credentials for a user-assigned managed
+   * identity instead, so `Microsoft.ManagedIdentity/userAssignedIdentities` is
+   * listed alongside and whichever exists in the active boundary populates.
+   *
+   * Both sources are grouped and labelled distinctly by the picker, so a
+   * Commercial operator is never offered a bare identity where a connector is
+   * meant without being told which is which.
+   */
+  'databricks-access-connector': {
+    label: 'Access connector / identity',
+    valueFrom: 'id',
+    sources: [
+      {
+        type: 'Microsoft.Databricks/accessConnectors',
+        label: 'Databricks Access Connector (Commercial)',
+      },
+      {
+        type: 'Microsoft.ManagedIdentity/userAssignedIdentities',
+        label: 'User-assigned managed identity (Loom Unity — Gov + Commercial)',
+      },
+    ],
+    manualLabel: 'Access connector or identity resource ID',
+  },
+  'user-assigned-identity': {
+    label: 'User-assigned managed identity',
+    valueFrom: 'id',
+    sources: [{ type: 'Microsoft.ManagedIdentity/userAssignedIdentities' }],
+    manualLabel: 'Managed identity resource ID',
   },
 
   // ── DERIVED-ENDPOINT kinds with no loader, because no gate asks for them. ──
@@ -280,6 +384,25 @@ const EXTRA_FIELDS: Record<string, AzureBackedFieldDef> = {
     valueFrom: 'properties.primaryEndpoints.dfs',
     sources: [{ type: 'Microsoft.Storage/storageAccounts', select: 'properties.primaryEndpoints.dfs' }],
     manualLabel: 'DFS endpoint',
+  },
+  /**
+   * The BLOB endpoint of the same account — the sibling `storage-dfs-endpoint`
+   * was missing, and an AI Foundry `AzureBlob` connection targets
+   * `https://<account>.blob.<suffix>/<container>`, not the DFS host.
+   *
+   * Taken from ARM (`properties.primaryEndpoints.blob`) rather than composed
+   * from the account name, which is what makes it correct in every boundary:
+   * the sovereign suffix comes back WITH the row. Composing it in the browser
+   * could not work — `detectLoomCloud()` reads `LOOM_CLOUD`, which is not a
+   * `NEXT_PUBLIC_` variable and is therefore `undefined` in the client bundle,
+   * so a client-side suffix would emit the Commercial host in Gov
+   * (`cloud-parity.md`).
+   */
+  'storage-blob-endpoint': {
+    label: 'Blob storage endpoint',
+    valueFrom: 'properties.primaryEndpoints.blob',
+    sources: [{ type: 'Microsoft.Storage/storageAccounts', select: 'properties.primaryEndpoints.blob' }],
+    manualLabel: 'Blob endpoint',
   },
   /**
    * A T-SQL host. THREE sources on purpose: the surfaces that ask for one
@@ -356,6 +479,13 @@ export interface AzureBackedFieldProps {
   onChange: (value: string | null, resource: AzureResourceSelection | null) => void;
   /** Overrides the kind's default label. */
   label?: string;
+  /**
+   * Sub-label text under the control. Threaded straight to the picker's
+   * `<Field hint>`: a call site that replaced a hand-rolled `<Field>` keeps the
+   * sentence explaining what an EMPTY value means, instead of losing it with
+   * the wrapper (`ux-baseline.md`).
+   */
+  hint?: string;
   placeholder?: string;
   /** Human name of the calling surface, for the honest gate. */
   surface?: string;
@@ -364,7 +494,7 @@ export interface AzureBackedFieldProps {
 }
 
 export function AzureBackedField({
-  kind, value, onChange, label, placeholder, surface, allowManualEntry,
+  kind, value, onChange, label, hint, placeholder, surface, allowManualEntry,
 }: AzureBackedFieldProps) {
   // `Object.hasOwn`, not a bare index: `AZURE_BACKED_FIELDS` is a plain object,
   // so `AZURE_BACKED_FIELDS['toString']` returns a FUNCTION — truthy, and then
@@ -401,6 +531,7 @@ export function AzureBackedField({
       matchBy={matchByFor(def.valueFrom)}
       onChange={handle}
       label={label ?? def.label}
+      hint={hint}
       placeholder={placeholder}
       surface={surface ?? label ?? def.label}
       manualLabel={def.manualLabel}

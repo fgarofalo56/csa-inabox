@@ -132,7 +132,17 @@ export const BASELINE = new Set([
   'apps/fiab-console/lib/azure/topology.ts::bootstrap-dlz-rgs.sh',
   'apps/fiab-console/lib/components/recommended-apps.tsx::seed-catalogs.sh',
   'apps/fiab-console/lib/editors/geo-editors.tsx::install-synapse-h3.sh',
-  'apps/fiab-console/lib/gates/registry/azure-services.ts::grant-powerplatform-sp.sh',
+  // gates/registry/azure-services.ts::grant-powerplatform-sp.sh was here.
+  // REMOVED (#3688): `svc-dataverse`'s grantNote used to tell the operator to
+  // RUN grant-powerplatform-sp.sh — which was also the WRONG script (that one
+  // registers the BAP management app; the Dataverse application-user grant is
+  // dataverse-add-appuser.sh), so it was both an R7 false remediation and this
+  // guard's target. The note now reads "The platform performs this on every
+  // post-deploy bootstrap run (…dataverse-add-appuser.sh, invoked by
+  // csa-loom-post-deploy-bootstrap.yml)", which `isImperative` classifies as the
+  // compliant passive phrasing. Measured: findProblems() over this file returns
+  // 1 problem at parent 27ba44e and 0 at head. Ratchet tightened, not
+  // re-baselined.
   'apps/fiab-console/lib/panes/setup-service-choices.tsx::scan-and-deploy.sh',
 ]);
 

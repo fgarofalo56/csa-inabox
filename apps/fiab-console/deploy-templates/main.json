@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "17907236334542069879"
+      "templateHash": "13308905003240021383"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "17366333785670139780"
+              "templateHash": "18024623767376366909"
             }
           },
           "definitions": {
@@ -10999,6 +10999,12 @@
                   },
                   "complianceTags": {
                     "value": "[parameters('complianceTags')]"
+                  },
+                  "privateEndpointSubnetId": {
+                    "value": "[reference('network').outputs.privateEndpointsSubnetId.value]"
+                  },
+                  "privateDnsZoneCognitiveServicesId": {
+                    "value": "[reference('network').outputs.privateDnsZoneIds.value.cognitiveservices]"
                   }
                 },
                 "template": {
@@ -11008,7 +11014,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6732756177884132077"
+                      "templateHash": "8120284213348966054"
                     }
                   },
                   "parameters": {
@@ -11079,13 +11085,74 @@
                       "metadata": {
                         "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
                       }
+                    },
+                    "privateEndpointSubnetId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+                      }
+                    },
+                    "privateDnsZoneCognitiveServicesId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+                      }
                     }
                   },
                   "variables": {
                     "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-                    "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+                    "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+                    "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
                   },
                   "resources": [
+                    {
+                      "condition": "[variables('deployPrivateEndpoint')]",
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('pe-{0}', variables('accountName'))]",
+                      "location": "[parameters('location')]",
+                      "tags": "[parameters('complianceTags')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[parameters('privateEndpointSubnetId')]"
+                        },
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "[format('plsc-{0}', variables('accountName'))]",
+                            "properties": {
+                              "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                              "groupIds": [
+                                "account"
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[variables('deployPrivateEndpoint')]",
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-05-01",
+                      "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "cognitiveservices",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+                      ]
+                    },
                     {
                       "type": "Microsoft.CognitiveServices/accounts",
                       "apiVersion": "2024-10-01",
@@ -11156,7 +11223,8 @@
                 }
               },
               "dependsOn": [
-                "identity"
+                "identity",
+                "network"
               ]
             },
             "agentFoundry": {
@@ -62980,7 +63048,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -63051,13 +63119,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -63170,7 +63299,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -63241,13 +63370,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -63360,7 +63550,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -63431,13 +63621,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -65600,7 +65851,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -65671,13 +65922,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -65790,7 +66102,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -65861,13 +66173,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -65980,7 +66353,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -66051,13 +66424,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",
@@ -66170,7 +66604,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6732756177884132077"
+              "templateHash": "8120284213348966054"
             }
           },
           "parameters": {
@@ -66241,13 +66675,74 @@
               "metadata": {
                 "description": "Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep."
               }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint."
+              }
+            },
+            "privateDnsZoneCognitiveServicesId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint."
+              }
             }
           },
           "variables": {
             "accountName": "[take(format('cog-{0}-loom-{1}', parameters('nameFragment'), uniqueString(resourceGroup().id)), 64)]",
-            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]"
+            "effectivePublicNetworkAccess": "[if(parameters('privateEndpointsEnabled'), 'Disabled', 'Enabled')]",
+            "deployPrivateEndpoint": "[and(not(empty(parameters('privateEndpointSubnetId'))), not(empty(parameters('privateDnsZoneCognitiveServicesId'))))]"
           },
           "resources": [
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}', variables('accountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('plsc-{0}', variables('accountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('deployPrivateEndpoint')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}', variables('accountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "cognitiveservices",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneCognitiveServicesId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('accountName')))]"
+              ]
+            },
             {
               "type": "Microsoft.CognitiveServices/accounts",
               "apiVersion": "2024-10-01",

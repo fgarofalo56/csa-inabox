@@ -2329,25 +2329,6 @@
           }
         },
         {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "GET /api/admin/copilot-config -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "GET /api/admin/copilot-config:4",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
-          }
-        },
-        {
           "id": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
           "kind": "authorizer",
           "provenance": "declared",
@@ -2372,25 +2353,6 @@
             ],
             "reachesPrivilegedSink": false,
             "privilegedSinkKinds": []
-          }
-        },
-        {
-          "id": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "kind": "verdict-call",
-          "provenance": "declared",
-          "label": "PUT /api/admin/copilot-config -> requireTenantAdmin",
-          "facet": {
-            "kind": "verdict-call",
-            "callSite": "PUT /api/admin/copilot-config:4",
-            "symbol": "requireTenantAdmin",
-            "returnsVerdictUnion": true,
-            "pathsToPrivilegedSink": 0,
-            "pathsConsumingAsRefusal": 0,
-            "consumption": "returned",
-            "allowlisted": false,
-            "allowlistPremiseTested": false,
-            "sinkPrivileged": false,
-            "sinkKind": "none"
           }
         },
         {
@@ -16824,6 +16786,89 @@
           }
         },
         {
+          "id": "sec:publication:scripts/ci/__tests__/file-size-ratchet.mutations.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/__tests__/file-size-ratchet.mutations.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/__tests__/file-size-ratchet.mutations.mjs",
+            "declaredSinkCount": 7,
+            "sinks": [
+              {
+                "id": "console:member:202",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:207",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:212",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:216",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:218",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:220",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:223",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
           "id": "sec:publication:scripts/ci/__tests__/node-test-suites.test.mjs#module",
           "kind": "publication",
           "provenance": "declared",
@@ -24313,10 +24358,10 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/check-file-size.mjs",
-            "declaredSinkCount": 15,
+            "declaredSinkCount": 29,
             "sinks": [
               {
-                "id": "console:member:210",
+                "id": "console:member:361",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24326,7 +24371,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:211",
+                "id": "console:member:367",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24336,7 +24381,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:246",
+                "id": "console:member:373",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24346,7 +24391,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:247",
+                "id": "console:member:375",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24356,7 +24401,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:248",
+                "id": "console:member:417",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24366,7 +24411,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:251",
+                "id": "console:member:418",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24376,7 +24421,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:255",
+                "id": "console:member:421",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24386,7 +24431,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:258",
+                "id": "console:member:425",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24396,7 +24441,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:259",
+                "id": "console:member:428",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24406,7 +24451,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:260",
+                "id": "console:member:432",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24416,7 +24461,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:262",
+                "id": "console:member:435",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24426,7 +24471,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:263",
+                "id": "console:member:436",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24436,7 +24481,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:265",
+                "id": "console:member:437",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24446,7 +24491,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:266",
+                "id": "console:member:439",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -24456,7 +24501,147 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:272",
+                "id": "console:member:440",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:441",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:442",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:443",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:444",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:445",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:446",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:448",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:449",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:450",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:451",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:452",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:454",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:455",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:461",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28421,7 +28606,7 @@
             "declaredSinkCount": 23,
             "sinks": [
               {
-                "id": "console:member:2625",
+                "id": "console:member:2928",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28431,7 +28616,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2633",
+                "id": "console:member:2936",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28441,7 +28626,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2646",
+                "id": "console:member:2949",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28451,7 +28636,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2665",
+                "id": "console:member:2968",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28461,7 +28646,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2670",
+                "id": "console:member:2973",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28471,7 +28656,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2677",
+                "id": "console:member:2980",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28481,7 +28666,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2684",
+                "id": "console:member:2987",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28491,7 +28676,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2688",
+                "id": "console:member:2991",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28501,7 +28686,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2694",
+                "id": "console:member:2997",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28511,7 +28696,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2699",
+                "id": "console:member:3002",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28521,7 +28706,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2712",
+                "id": "console:member:3015",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28531,7 +28716,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2739",
+                "id": "console:member:3042",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28541,7 +28726,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2740",
+                "id": "console:member:3043",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28551,7 +28736,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2743",
+                "id": "console:member:3046",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28561,7 +28746,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2771",
+                "id": "console:member:3074",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28571,7 +28756,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2772",
+                "id": "console:member:3075",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28581,7 +28766,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2781",
+                "id": "console:member:3084",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28591,7 +28776,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2783",
+                "id": "console:member:3086",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28601,7 +28786,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2784",
+                "id": "console:member:3087",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28611,7 +28796,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2785",
+                "id": "console:member:3088",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28621,7 +28806,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2786",
+                "id": "console:member:3089",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28631,7 +28816,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2787",
+                "id": "console:member:3090",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -28641,7 +28826,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2788",
+                "id": "console:member:3091",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29452,27 +29637,7 @@
             "declaredSinkCount": 11,
             "sinks": [
               {
-                "id": "console:member:329",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:330",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:333",
+                "id": "console:member:339",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29492,7 +29657,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:347",
+                "id": "console:member:343",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29502,7 +29667,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:351",
+                "id": "console:member:350",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29512,7 +29677,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:359",
+                "id": "console:member:357",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29522,17 +29687,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:360",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:365",
+                "id": "console:member:361",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29552,7 +29707,37 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:374",
+                "id": "console:member:370",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:375",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:379",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:384",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -43652,20 +43837,6 @@
           "provenance": "declared"
         },
         {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET->sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
-          "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT->sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
-          "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
-          "kind": "calls",
-          "provenance": "declared"
-        },
-        {
           "id": "sec-edge:calls:sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE->sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
           "from": "sec:authorizer:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE",
           "to": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot/memory/[id]/route.ts#DELETE:requireTenantAdmin:3",
@@ -45116,17 +45287,7 @@
           "deployedAs": "loom-console"
         },
         {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#GET:requireTenantAdmin:4",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
           "nodeId": "sec:authorizer:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT",
-          "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
-          "deployedAs": "loom-console"
-        },
-        {
-          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/admin/copilot-config/route.ts#PUT:requireTenantAdmin:4",
           "codeModuleId": "code:apps/fiab-console/app/api/admin/copilot-config/route.ts",
           "deployedAs": "loom-console"
         },
@@ -48238,6 +48399,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/__tests__/file-size-ratchet.mutations.mjs#module",
+          "codeModuleId": "code:scripts/ci/__tests__/file-size-ratchet.mutations.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/__tests__/node-test-suites.test.mjs#module",
           "codeModuleId": "code:scripts/ci/__tests__/node-test-suites.test.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -49351,20 +49517,20 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-10T01:41:46.894Z",
-      "commit": "be792ecc137d66f87773836be49a2d8e46e88022",
-      "inputsDigest": "1cad36f56911dd15",
-      "filesScanned": 2098,
+      "generatedAt": "2026-09-11T04:17:54.692Z",
+      "commit": "f0a6e824ebb9dc7ee7fe47aac37e2f6debd0057d",
+      "inputsDigest": "15c8168bbacb3ba5",
+      "filesScanned": 2100,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1698,
-          "nodesEmitted": 707
+          "nodesEmitted": 705
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 400,
-          "nodesEmitted": 230
+          "filesMatched": 402,
+          "nodesEmitted": 231
         }
       ],
       "skipped": [
@@ -49535,6 +49701,10 @@
         {
           "subject": "scripts/ci/__tests__/deploy-retry.test.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 4). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/__tests__/file-size-ratchet.mutations.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 7). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/node-test-suites.test.mjs",
@@ -49794,7 +49964,7 @@
         },
         {
           "subject": "scripts/ci/check-file-size.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 15). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 29). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/check-fitness-messages.mjs",
@@ -50430,7 +50600,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2394 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2415 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

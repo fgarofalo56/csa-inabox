@@ -1973,9 +1973,26 @@ jobs:
             # The script's exit status was previously discarded with `|| true`, so a
             # failed registration was indistinguishable from a clean run and the
             # operator was told (in the runbook) to go do it by hand. Capture the
-            # status and SURFACE it instead — still non-fatal, because a tenant with
-            # no Dataverse environment is a legitimate no-op, but never silent
-            # (deploy-integrity.md: a discarded result is a gate that cannot fail).
+            # status and SURFACE it (deploy-integrity.md: a discarded result is a
+            # gate that cannot fail).
+            #
+            # #3688 — SURFACING WAS NOT ENOUGH, BECAUSE THE SCRIPT COULD NOT TELL
+            # THE TWO CASES APART. Discovery used `curl -s` with no status check,
+            # so a 401/403 from the BAP admin API produced an empty environment
+            # list, printed "(no envs with Dataverse found)" and exited 0. This
+            # step then read 0 and reported completion. Run 31572941870
+            # (2026-08-12) did exactly that on an estate with a live Dataverse
+            # org, and the whole Power Platform item family stayed blocked on a
+            # grant the deploy believed it had performed.
+            #
+            # The script now separates the two: exit 3 means "could not ESTABLISH
+            # the environment list" (token failure, non-2xx, or a body with no
+            # `value` array), exit 0 with the parsed-empty message means the
+            # tenant genuinely has no Dataverse environment. Only the first is
+            # fatal here — the genuine no-op stays a legitimate pass, and a
+            # PER-ENVIRONMENT failure (exit 1, e.g. one env still needs its
+            # one-time Promote To Admin) stays a warning because the other
+            # environments were registered.
             set +e
             LOOM_MSAL_CLIENT_ID="$LOOM_MSAL_CLIENT_ID" \
               bash scripts/csa-loom/dataverse-add-appuser.sh
@@ -1983,12 +2000,71 @@ jobs:
             set -e
             if [ "$DV_RC" -eq 0 ]; then
               echo "  Dataverse Application User registration completed (idempotent)."
+            elif [ "$DV_RC" -eq 3 ]; then
+              echo "::error title=Dataverse environment discovery REFUSED (exit 3)::dataverse-add-appuser.sh could not establish the tenant's Power Platform environment list — the BAP admin API refused the call or returned an unparseable body (its exact HTTP code and response are in the step output above). NOTHING WAS REGISTERED, and this is NOT the same as a tenant with no Dataverse. Most likely the bootstrap identity lacks Power Platform Administrator / Global Administrator. Until this succeeds the whole Power Platform + Copilot Studio item family stays blocked on the svc-dataverse gate. See docs/fiab/dataverse-app-user.md."
+              exit 1
             else
-              echo "::warning title=Dataverse Application User registration incomplete (exit $DV_RC)::dataverse-add-appuser.sh did not complete. Most common cause: the bootstrap identity is not yet Dataverse System Administrator on an environment where Dataverse was added AFTER the environment was created (the one-time 'Promote To Admin' click — docs/fiab/dataverse-app-user.md Step 1). The Dataverse-backed editors keep their honest gate until this succeeds; re-run this job after the promotion."
+              echo "::warning title=Dataverse Application User registration incomplete (exit $DV_RC)::dataverse-add-appuser.sh reached the environment list but did not complete every registration (see registered=/failed= in the step output). Most common cause: the bootstrap identity is not yet Dataverse System Administrator on an environment where Dataverse was added AFTER the environment was created (the one-time 'Promote To Admin' click — docs/fiab/dataverse-app-user.md Step 1). The Dataverse-backed editors keep their honest gate for those environments until this succeeds; re-run this job after the promotion."
             fi
           fi
 
       - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
+        # DECOUPLED FROM THE STEP ABOVE, WHICH THIS SAME CHANGE MADE FATAL.
+        #
+        # The Dataverse step now `exit 1`s on discovery-refused (exit 3). In
+        # GitHub Actions a failed step fails the JOB, and every later step
+        # without an explicit `if:` is then SKIPPED — so making exit 3 fatal
+        # silently took three unrelated grants down with it. Measured over the
+        # `bootstrap` job: of the 12 steps after the Dataverse step, 9 already
+        # carry `if: always()` and 3 did not — this one, "Verify the
+        # report-subscriptions delivery job" and "Grant Identity Picker Graph
+        # AppRoles". Exit 3 is the OBSERVED live state this workflow cites
+        # (run 31572941870), so that cascade is the path a real bootstrap takes,
+        # and /admin/security would have stayed on its 503 gate for a reason
+        # that has nothing to do with Dataverse.
+        #
+        # `if: always()` restores the decoupling. That is the WHOLE fix, and it
+        # is deliberately NOT accompanied by a `continue-on-error` excusal.
+        #
+        # WHY NOT, MEASURED. The review that raised the cascade asked for
+        # `if: always()` plus a `continue-on-error` excusal, "matching its four
+        # neighbours". The second half is wrong here, for two independent
+        # reasons, and adding it turned a guard red:
+        #
+        #   1. It is FORBIDDEN for this specific step, on purpose.
+        #      scripts/ci/__tests__/deploy-bootstrap-approles.test.mjs:154
+        #      asserts this step carries no `continue-on-error` excusal, with the
+        #      reason recorded at :45-48 — `bash script.sh` inherits no `set -e`
+        #      from an inline `run:`, so this step's RC is the ONLY thing that
+        #      can ever report a broken grant, and excusing it wholesale is the
+        #      "gate that cannot fail" shape. deploy-integrity.md lists
+        #      continue-on-error in its forbidden set for exactly this. Adding
+        #      it produced a real red: `node --test
+        #      scripts/ci/__tests__/deploy-bootstrap-approles.test.mjs` RC=1,
+        #      "the step is excused with continue-on-error — its result cannot
+        #      fail anything" (also seen in CI as `node:test suites (node 20)`).
+        #      The guard is right; the prescription was not, so the guard stays
+        #      as written and the edit was withdrawn.
+        #
+        #      NOTE for whoever edits this comment: that guard greps the raw
+        #      step text, so it cannot tell prose from YAML. Spelling the
+        #      excusal key followed by a literal `true` ANYWHERE in this block —
+        #      even inside a sentence explaining why it is absent — turns the
+        #      suite red. Measured: the first draft of this very comment did
+        #      exactly that. Name the key alone, never the key-and-value pair.
+        #
+        #   2. It would have protected against NOTHING. Read the `run:` below:
+        #      `set +e` brackets the invocation, the RC is captured into AR_RC,
+        #      `set -e` is restored, and the trailing `if`/`elif` only ever
+        #      `echo`s a ::warning. There is no path on which this step exits
+        #      non-zero today, so the excusal changed no behaviour while
+        #      disarming the one signal that would matter if that ever changed.
+        #
+        # The four neighbours it was told to match do not invoke a script whose
+        # RC is the sole failure signal, so the guard does not apply to them.
+        # Matching a neighbour's shape is not a reason; the step's own failure
+        # semantics are.
+        if: always()
         # THE PLATFORM RUNS THE SHIPPED SCRIPT (#3374, auto-bind-by-default.md §5).
         #
         # WHAT WAS HERE, AND WHY IT WAS A DEFECT. This step carried ~75 lines of
@@ -2316,6 +2392,12 @@ jobs:
           fi
 
       - name: Verify the report-subscriptions delivery job (WS-C2)
+        # `if: always()` ONLY — see the MIP+DLP step above for the cascade this
+        # decouples from. Deliberately NOT `continue-on-error`: this step exits 1
+        # on purpose (a missing delivery runtime means scheduled report delivery
+        # is dead), and neutering a verification to un-skip it would replace one
+        # silent failure with another.
+        if: always()
         run: |
           set -uo pipefail
           # B-FN C3 (2026-08-06): report-subscriptions is a scheduled Container
@@ -2374,6 +2456,11 @@ jobs:
           echo "  loom-console delivery gate reads: $WIRED"
 
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
+        # `if: always()` ONLY — see the MIP+DLP step above for the cascade this
+        # decouples from. No `continue-on-error`: both script invocations below
+        # are already `|| echo`-guarded, so this step does not fail on a refused
+        # grant; adding it would assert a non-fatality that is not this step's.
+        if: always()
         run: |
           # Grant the Console UAMI the three Microsoft Graph application
           # permissions required by the reusable Identity Picker

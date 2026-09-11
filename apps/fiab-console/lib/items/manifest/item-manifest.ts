@@ -185,6 +185,10 @@ export const PROVISIONABLE_ITEM_TYPES: readonly string[] = [
   'databricks-job',
   'synapse-serverless-sql-pool',
   'materialized-lake-view',
+  // #3573 — added with the provisioner that backs it. This list is asserted
+  // 1:1 against the live PROVISIONERS map, so registering a provisioner
+  // WITHOUT adding the slug here fails `item-manifest.test.ts`.
+  'stream-analytics-job',
 ];
 
 /**
@@ -340,6 +344,7 @@ export const AZURE_BACKENDS: Readonly<Record<string, string>> = {
   'databricks-job': 'Azure Databricks Jobs 2.1',
   'synapse-serverless-sql-pool': 'Synapse serverless SQL endpoint over the lake abfss root',
   'materialized-lake-view': 'Synapse Spark batch → Delta MLV + Cosmos lineage',
+  'stream-analytics-job': 'Azure Stream Analytics job (Microsoft.StreamAnalytics/streamingjobs)',
 };
 
 /**

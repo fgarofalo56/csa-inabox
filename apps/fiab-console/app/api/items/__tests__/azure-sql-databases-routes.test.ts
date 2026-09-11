@@ -35,11 +35,35 @@ vi.mock('@/lib/azure/postgres-flex-client', async () => {
   return {
     ...actual,
     listServers: vi.fn(),
+    // The CREATE path's existence check calls `listServersResult()`, not
+    // `listServers()`, because a name it did not see must be distinguishable
+    // from a listing that stopped on its paging budget (re-review 2026-09-07).
+    // Left in `actual` it would reach the real ARM walk, fail for want of
+    // `LOOM_SUBSCRIPTION_ID`, and the route's fail-closed 503 would make this
+    // whole file look like a route regression — MEASURED: `expected 503 to be
+    // 201` on `POST create — delegates and returns 201`.
+    listServersResult: vi.fn(),
     createServer: vi.fn(),
     listDatabases: vi.fn(),
     listFirewallRules: vi.fn(),
     upsertFirewallRule: vi.fn(),
     deleteFirewallRule: vi.fn(),
+  };
+});
+
+// The flexible-server CREATE mints its admin password into Key Vault, so the
+// route runs `kvSecretsConfigGate()` before anything else. Unmocked, that gate
+// reads the (absent) vault env in the test process and returns a 503
+// `kv_not_configured` — the happy path here could never reach 201. Mocked to
+// "configured" so this file keeps testing DELEGATION; the vault contract itself
+// (mint, KV-before-ARM ordering, no secret in any response body) is asserted in
+// `postgres-flexible-server/__tests__/provision-credentials.test.ts`.
+vi.mock('@/lib/azure/kv-secrets-client', async () => {
+  const actual: any = await vi.importActual('@/lib/azure/kv-secrets-client');
+  return {
+    ...actual,
+    kvSecretsConfigGate: () => null,
+    putKeyVaultSecret: vi.fn(async (secretName: string) => ({ name: secretName })),
   };
 });
 
@@ -57,7 +81,12 @@ import { GET as inventoryGET } from '../sql-databases/route';
 import { POST as createDbPOST } from '../azure-sql-database/[id]/create-db/route';
 import { POST as connectPOST } from '../azure-sql-database/[id]/connect/route';
 import { POST as sqlQueryPOST } from '../azure-sql-database/[id]/query/route';
-import { GET as pgListGET, POST as pgCreatePOST } from '../postgres-flexible-server/route';
+import {
+  GET as pgListGET,
+  POST as pgCreatePOST,
+  adminSecretNameFor,
+  SERVER_NAME_RE,
+} from '../postgres-flexible-server/route';
 import { GET as pgDbGET } from '../postgres-flexible-server/[id]/databases/route';
 import { GET as pgFwGET, POST as pgFwPOST, DELETE as pgFwDELETE } from '../postgres-flexible-server/[id]/firewall/route';
 import { POST as pgQueryPOST } from '../postgres-flexible-server/[id]/query/route';
@@ -65,11 +94,15 @@ import { POST as pgQueryPOST } from '../postgres-flexible-server/[id]/query/rout
 import { getSession } from '@/lib/auth/session';
 import { listServers as listSqlServers, listManagedInstances, createDatabase, executeQueryBatch } from '@/lib/azure/azure-sql-client';
 import {
-  listServers as listPgServers, createServer as createPgServer,
+  listServers as listPgServers, listServersResult as listPgServersResult, createServer as createPgServer,
   listDatabases as listPgDatabases, listFirewallRules as listPgFw,
   upsertFirewallRule as upsertPgFw, deleteFirewallRule as deletePgFw,
 } from '@/lib/azure/postgres-flex-client';
 import { updateOwnedItem, loadOwnedItem } from '../_lib/item-crud';
+// The mocked `putKeyVaultSecret` above. Every refusal arm below asserts it was
+// NOT called: "nothing was written" is the contract, and a status code alone
+// cannot establish it.
+import { putKeyVaultSecret } from '@/lib/azure/kv-secrets-client';
 
 function bodyReq(url: string, body: any) {
   return { url, nextUrl: new URL(url), json: async () => body } as any;
@@ -78,6 +111,13 @@ function getReq(url: string) {
   return { url, nextUrl: new URL(url), json: async () => ({}) } as any;
 }
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+/**
+ * Collection routes have no `[id]` segment, but a `withSession`-wrapped handler
+ * is still a `RouteHandler` — `(req, ctx)`, both required — so a call with no
+ * arguments is a type error even though it happens to run. Passing this keeps
+ * the call sites honest about the signature they are exercising.
+ */
+const noParamsCtx = { params: Promise.resolve({}) } as any;
 const session = { claims: { oid: 't1', upn: 'u@x.com' } };
 
 beforeEach(() => { vi.resetAllMocks(); });
@@ -271,14 +311,14 @@ describe('POST /azure-sql-database/[id]/connect', () => {
 describe('PostgreSQL flexible server routes', () => {
   it('GET list — 401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await pgListGET();
+    const res = await pgListGET(getReq('http://x/'), noParamsCtx);
     expect(res.status).toBe(401);
   });
 
   it('GET list — returns servers from the client', async () => {
     (getSession as any).mockReturnValue(session);
     (listPgServers as any).mockResolvedValue([{ id: 'p1', name: 'pg', location: 'eastus', fqdn: 'pg.postgres.database.azure.com' }]);
-    const res = await pgListGET();
+    const res = await pgListGET(getReq('http://x/'), noParamsCtx);
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.servers[0].name).toBe('pg');
@@ -286,21 +326,171 @@ describe('PostgreSQL flexible server routes', () => {
 
   it('POST create — 400 when required fields missing', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await pgCreatePOST(bodyReq('http://x/', { name: 'pg' }));
+    const res = await pgCreatePOST(bodyReq('http://x/', { name: 'pg' }), noParamsCtx);
     expect(res.status).toBe(400);
   });
 
+  // The create POST now RESOLVES THE NAME FIRST (blocking review, 2026-09-07):
+  // flexible-server names are globally unique, so reusing one this estate
+  // already created used to overwrite the LIVE server's admin password in Key
+  // Vault before ARM refused. `listServers()` is therefore on the create path
+  // and this happy-path case has to arrange "the name is free" — an unmocked
+  // lookup is now a 503 `existence_check_failed`, which is the fix working, not
+  // a regression. The 409 / 503 / nothing-minted assertions live in
+  // `postgres-flexible-server/__tests__/provision-credentials.test.ts`.
+  //
+  // The name is `pg1`, not `pg`: the route validates against the documented
+  // flexible-server rule (3-63 chars) BEFORE the vault gate, so a two-character
+  // name is now a 400 (re-review 2026-09-08, below).
   it('POST create — delegates and returns 201', async () => {
     (getSession as any).mockReturnValue(session);
-    (createPgServer as any).mockResolvedValue({ ok: true, id: '/subs/.../pg', provisioningState: 'Creating' });
+    (listPgServers as any).mockResolvedValue([]);
+    // A COMPLETE listing that found nothing — the only shape the create path
+    // treats as "the name is free". A truncated one is refused with a 503; that
+    // contract is asserted in provision-credentials.test.ts.
+    (listPgServersResult as any).mockResolvedValue({ servers: [], truncatedBy: null, pagesFetched: 1 });
+    (createPgServer as any).mockResolvedValue({ ok: true, id: '/subs/.../pg1', provisioningState: 'Creating' });
     const res = await pgCreatePOST(bodyReq('http://x/', {
-      name: 'pg', resourceGroup: 'rg', location: 'eastus2',
+      name: 'pg1', resourceGroup: 'rg', location: 'eastus2',
       administratorLogin: 'a', administratorLoginPassword: 'Secret1!', skuName: 'Standard_B1ms', tier: 'Burstable',
-    }));
+    }), noParamsCtx);
     const j = await res.json();
     expect(res.status).toBe(201);
     expect(j.ok).toBe(true);
-    expect(createPgServer).toHaveBeenCalledWith(expect.objectContaining({ name: 'pg', resourceGroup: 'rg', tier: 'Burstable' }));
+    expect(createPgServer).toHaveBeenCalledWith(expect.objectContaining({ name: 'pg1', resourceGroup: 'rg', tier: 'Burstable' }));
+  });
+
+  /**
+   * THE SECRET NAME IS WHERE THE WRITE LANDS, AND THAT MAP IS MANY-TO-ONE
+   * (independent re-review, 2026-09-08).
+   *
+   * `putKeyVaultSecret` runs its argument through `sanitizeSecretName`, which
+   * replaces every character outside `[0-9a-zA-Z-]` with a hyphen and collapses
+   * runs. The route's collision check used to compare the RAW request name
+   * against the listing, so `prod_pg` did not equal the live `prod-pg`, took
+   * the "free" branch, minted, and PUT a new version of `pg-admin-prod-pg` —
+   * the live server's credential slot — before ARM rejected the underscore.
+   *
+   * These four cases are the arms that fail on that code. Each asserts that
+   * `putKeyVaultSecret` was NOT called: the whole point is that nothing reaches
+   * Key Vault, not merely that the response carries a different status.
+   */
+  const validCreateBody = {
+    resourceGroup: 'rg', location: 'eastus2', administratorLogin: 'a',
+    skuName: 'Standard_B1ms', tier: 'Burstable',
+  };
+
+  it.each([
+    ['an underscore', 'prod_pg'],
+    ['a dot', 'prod.pg'],
+    ['a space', 'prod pg'],
+    ['a percent', 'prod%pg'],
+    ['an uppercase letter', 'ProdPg'],
+    ['a trailing hyphen', 'prod-pg-'],
+    ['fewer than 3 characters', 'pg'],
+  ])('POST create — 400 invalid_name for %s, and NOTHING is written to Key Vault', async (_why, name) => {
+    (getSession as any).mockReturnValue(session);
+    // A live server whose slot every one of those names folds onto.
+    (listPgServersResult as any).mockResolvedValue({
+      servers: [{ id: '/subs/s/rg/prod-pg', name: 'prod-pg', location: 'eastus', fqdn: 'prod-pg.postgres.database.azure.com' }],
+      truncatedBy: null, pagesFetched: 1,
+    });
+    const res = await pgCreatePOST(bodyReq('http://x/', { ...validCreateBody, name }), noParamsCtx);
+    const j = await res.json();
+    expect(res.status).toBe(400);
+    expect(j.code).toBe('invalid_name');
+    expect(putKeyVaultSecret).not.toHaveBeenCalled();
+    expect(createPgServer).not.toHaveBeenCalled();
+  });
+
+  it('POST create — 400 ambiguous_secret_name for a LEGAL name that folds (repeated hyphen)', async () => {
+    (getSession as any).mockReturnValue(session);
+    (listPgServersResult as any).mockResolvedValue({ servers: [], truncatedBy: null, pagesFetched: 1 });
+    // `prod--pg` passes the ARM charset rule, so calling it an invalid server
+    // name would be false. It still collapses onto `pg-admin-prod-pg`, so it is
+    // refused with its own reason, and the reason names the slot.
+    const res = await pgCreatePOST(bodyReq('http://x/', { ...validCreateBody, name: 'prod--pg' }), noParamsCtx);
+    const j = await res.json();
+    expect(res.status).toBe(400);
+    expect(j.code).toBe('ambiguous_secret_name');
+    expect(j.adminSecretName).toBe('pg-admin-prod-pg');
+    expect(j.error).toMatch(/legal server name/);
+    expect(putKeyVaultSecret).not.toHaveBeenCalled();
+    expect(createPgServer).not.toHaveBeenCalled();
+  });
+
+  it('POST create — 409 when a DIFFERENT server already owns the derived secret slot', async () => {
+    (getSession as any).mockReturnValue(session);
+    // `prod--pg` is a legal EXISTING server; its slot is `pg-admin-prod-pg`.
+    // A brand-new, perfectly legal `prod-pg` would write over its credential,
+    // and no name comparison can see that — only a slot comparison can.
+    (listPgServersResult as any).mockResolvedValue({
+      servers: [{ id: '/subs/s/rg/prod--pg', name: 'prod--pg', location: 'eastus', fqdn: 'x' }],
+      truncatedBy: null, pagesFetched: 1,
+    });
+    const res = await pgCreatePOST(bodyReq('http://x/', { ...validCreateBody, name: 'prod-pg' }), noParamsCtx);
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('secret_slot_taken');
+    expect(j.existingName).toBe('prod--pg');
+    expect(j.adminSecretName).toBe('pg-admin-prod-pg');
+    expect(putKeyVaultSecret).not.toHaveBeenCalled();
+    expect(createPgServer).not.toHaveBeenCalled();
+  });
+
+  it('POST create — every branch that names the secret names the SLOT the write uses (R7)', async () => {
+    (getSession as any).mockReturnValue(session);
+    (listPgServersResult as any).mockResolvedValue({
+      servers: [{ id: '/subs/s/rg/prod-pg', name: 'prod-pg', location: 'eastus', fqdn: 'x' }],
+      truncatedBy: null, pagesFetched: 1,
+    });
+    const res = await pgCreatePOST(bodyReq('http://x/', { ...validCreateBody, name: 'prod-pg' }), noParamsCtx);
+    const j = await res.json();
+    expect(res.status).toBe(409);
+    expect(j.code).toBe('server_exists');
+    expect(j.adminSecretName).toBe('pg-admin-prod-pg');
+    // The prose and the field agree; before this round four branches printed
+    // the unsanitized string and two printed the sanitized one for one slot.
+    expect(j.error).toContain("'pg-admin-prod-pg'");
+    expect(putKeyVaultSecret).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The route derives the secret slot itself (`adminSecretNameFor` collapses
+   * hyphen runs) instead of importing `sanitizeSecretName`, because
+   * `provision-credentials.test.ts` mocks `@/lib/azure/kv-secrets-client` and a
+   * route that reached through that mock for a pure string function would
+   * return `undefined` and 500 on every create. The reduction is only valid
+   * over names ARM accepts, so this asserts it against the REAL sanitizer —
+   * `vi.importActual`, not the spread mock — across that whole domain plus the
+   * shapes just outside it. If `sanitizeSecretName` ever changes, this goes red
+   * rather than the two definitions silently diverging (`deploy-integrity` R7).
+   */
+  it('adminSecretNameFor agrees with the REAL sanitizeSecretName on every ARM-legal name', async () => {
+    const { sanitizeSecretName } = await vi.importActual<
+      typeof import('@/lib/azure/kv-secrets-client')
+    >('@/lib/azure/kv-secrets-client');
+    const legal = [
+      'abc',                          // shortest legal
+      'prod-pg',
+      'prod--pg',                     // legal at ARM, folds
+      'a--------b',                   // a long run
+      'p-r-o-d-p-g',
+      '0pg9',                         // digit boundaries
+      'a1b',
+      'a'.repeat(63),                 // longest legal
+      `a${'-'.repeat(61)}b`,          // maximal run, still legal at ARM
+      'a-b'.repeat(21),               // 63 chars, alternating
+    ];
+    for (const n of legal) {
+      expect(SERVER_NAME_RE.test(n), `${n} should be ARM-legal for this table`).toBe(true);
+      expect(adminSecretNameFor(n), `slot for ${n}`).toBe(sanitizeSecretName(`pg-admin-${n}`));
+    }
+    // And the names the route refuses BEFORE ever calling the helper — proof the
+    // domain restriction is real, not a convenient assumption.
+    for (const n of ['prod_pg', 'prod.pg', 'prod pg', 'prod%pg', 'ProdPg', '-pg', 'pg-', 'pg', 'a'.repeat(64)]) {
+      expect(SERVER_NAME_RE.test(n), `${n} must be refused before the helper runs`).toBe(false);
+    }
   });
 
   // GHSA-v8r7-c2p5-mjf2 (fourth pass) — the databases DISCOVERY GET now runs
