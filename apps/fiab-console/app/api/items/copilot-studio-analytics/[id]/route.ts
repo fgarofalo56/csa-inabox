@@ -4,24 +4,23 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { getAnalytics, CopilotStudioError } from '@/lib/azure/copilot-studio-client';
+import { getAnalytics } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
   const { searchParams } = new URL(req.url);
   const envId = searchParams.get('envId');
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   const days = Math.max(1, Math.min(180, Number(searchParams.get('days') || '30')));
   try {
-    const analytics = await getAnalytics(envId, (await ctx.params).id, days);
+    const analytics = await getAnalytics(envId, params.id, days);
     return NextResponse.json({ ok: true, analytics });
   } catch (e: any) {
-    const status = e instanceof CopilotStudioError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+    const { status, body } = copilotStudioErrorEnvelope(e);
+    return NextResponse.json(body, { status });
   }
-}
+});
