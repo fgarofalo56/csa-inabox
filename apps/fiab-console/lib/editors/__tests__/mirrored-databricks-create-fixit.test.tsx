@@ -55,7 +55,21 @@ function jsonRes(body: unknown, status = 200) {
 /** The create POST body this test wants the editor to receive back. */
 let createResponse: unknown;
 
-afterEach(cleanup);
+/**
+ * Fluent's modal "hide siblings" bookkeeping unwinds ASYNCHRONOUSLY, and
+ * `cleanup()` does not wait for it. MEASURED: without this flush the unwind
+ * scheduled by one test lands DURING the next one and marks the freshly
+ * mounted surface `aria-hidden` — probed at 300ms intervals, a reopened dialog
+ * read `roles=1 ... openAttr=["visible"]` at t=0 and `roles=0 ...
+ * openAttr=["hidden"]` from t=300 onward. Every `*ByRole` query in this file is
+ * blind to that, in both directions: a presence assertion fails spuriously, and
+ * an ABSENCE assertion passes for the wrong reason. Draining the timer queue
+ * between tests removes the cause rather than hardening each assertion.
+ */
+afterEach(async () => {
+  cleanup();
+  await new Promise((r) => setTimeout(r, 50));
+});
 beforeEach(() => {
   fetchMock.mockReset();
   createResponse = null;
@@ -135,6 +149,8 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     // The id RESOLVED in the registry — the unknown-id fallback bar is absent.
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
     expect(screen.getAllByRole('link', { name: /Gate registry/i }).length).toBeGreaterThan(0);
+    // …and it resolved to the gate the ROUTE named, by that gate's own title.
+    expect(screen.getAllByText(/Azure Databricks \(notebooks \/ SQL \/ Warp\)/i).length).toBeGreaterThan(0);
     // The measured reason is still on screen…
     expect(screen.getAllByText(new RegExp(GATE_PROSE)).length).toBeGreaterThan(0);
     // …exactly ONCE. Before this, the editor printed `pairing.gate` in a
@@ -146,10 +162,22 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     expect(screen.getAllByText(/mirror item was created and is readable/i).length).toBe(1);
   });
 
+  /**
+   * WHAT THIS FIXTURE DOES AND DOES NOT PIN, corrected after review.
+   *
+   * It does NOT pin the route's NO_SYNAPSE -> `svc-synapse` mapping: the
+   * fixture supplies `gateId` directly, so `PAIRING_GATE_ID` (route.ts:61-64)
+   * is never consulted. Nor can a rename in `lib/gates/registry` break it —
+   * `GATE_META` only ENRICHES a registry derived from `ENV_CHECKS`, and
+   * `svc-synapse` is independently declared at
+   * `lib/admin/env-checks/azure-services.ts:13`, so the id keeps resolving.
+   *
+   * What it DOES pin, falsifiably, is that the editor renders whichever gate
+   * the route named rather than a constant — which is why both this test and
+   * the Databricks one assert the resolved gate's own TITLE. Hard-coding
+   * `gateId="svc-databricks"` at the call site reddens this test on that title.
+   */
   it('renders the Fix-it for the Synapse half of the pairing too, not only Databricks', async () => {
-    // Without this fixture only `svc-databricks` is exercised, so renaming or
-    // dropping the NO_SYNAPSE → svc-synapse mapping would kill that Fix-it with
-    // the suite green.
     const user = userEvent.setup();
     createResponse = {
       ok: false,
@@ -165,6 +193,10 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Fix it/i }).length).toBeGreaterThan(0));
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
     expect(screen.getAllByRole('link', { name: /Gate registry/i }).length).toBeGreaterThan(0);
+    // The gate that rendered is the one the ROUTE named — `svc-synapse`'s own
+    // registry title — and emphatically not the Databricks one.
+    expect(screen.getAllByText(/Synapse \(warehouse \/ notebooks \/ pipelines\)/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Azure Databricks \(notebooks \/ SQL \/ Warp\)/i)).toBeNull();
   });
 
   it('renders NO Fix-it when the failure has no registry entry', async () => {
@@ -245,10 +277,54 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
       return b;
     });
     await user.click(newBtn);
-    const live = await screen.findByRole('dialog', undefined, { timeout: 10000 });
+    // The reopened surface is located by CLASS, never by role. MEASURED
+    // mechanism for the flake this replaces (1 red in 9 full-file runs here,
+    // reported as 6 in 9 elsewhere): the dialog reopens VISIBLE —
+    // `roles=1 surfaces=1 openAttr=["visible"]` at t=0 — and is then
+    // RETROACTIVELY marked aria-hidden about 300ms later, when the FIRST
+    // dialog's aria-hidden bookkeeping finally unwinds and hides the surface
+    // that has already replaced it (`roles=0 ... openAttr=["hidden"]`, stable
+    // through t=1500). So `findByRole('dialog')` is a race that passes only
+    // when it samples before the unhide lands, and waiting LONGER makes it
+    // strictly worse. A class-rooted node plus text queries are immune to
+    // aria-hidden, and the `surfaces === 0` wait above guarantees this is a
+    // freshly mounted surface rather than the previous one's corpse.
+    const live = await waitFor(() => {
+      const el = document.body.querySelector('.fui-DialogSurface') as HTMLElement | null;
+      if (!el) throw new Error('no DialogSurface mounted yet');
+      return el;
+    }, { timeout: 10000 });
+    // Positive control FIRST: without it every absence assertion below could
+    // pass vacuously against an empty or never-reopened surface.
+    expect(within(live).getByLabelText(/Display name/i)).toBeTruthy();
     expect(within(live).queryByText(new RegExp(GATE_PROSE))).toBeNull();
     expect(within(live).queryByText(/endpoint not yet queryable/i)).toBeNull();
-    expect(within(live).queryByRole('button', { name: /Fix it/i })).toBeNull();
+    expect(within(live).queryByText(/Fix it/i)).toBeNull();
+  });
+
+  /**
+   * The registry surface rows are a DELIVERABLE of this change, so they get an
+   * assertion. Measured before adding this: deleting all four rows left
+   * `lib/gates` at 28/28 green, because the existing completeness test only
+   * requires a gate to declare at LEAST ONE surface and both gates keep six
+   * others. An unfalsifiable deliverable is not a deliverable.
+   *
+   * The claim being pinned: every gate id the create route can emit
+   * (`PAIRING_GATE_ID`, route.ts:61-64) declares the surface it actually
+   * blocks, so /admin/gates does not under-report where it fires
+   * (`ux-baseline.md` G2(c)).
+   */
+  it('the gate registry lists the mirrored-databricks surfaces these gates block (G2(c))', async () => {
+    // Resolved through `getGate` — the same function `HonestGate` calls, so
+    // this asserts the registry as the product reads it, not as it is authored.
+    const { getGate } = await import('@/lib/gates/registry');
+    for (const id of ['svc-databricks', 'svc-synapse']) {
+      const gate = getGate(id);
+      expect(gate, `${id} must exist in the registry`).toBeTruthy();
+      const paths = (gate?.surfaces || []).map((sf) => sf.path);
+      expect(paths, `${id} must declare the editor surface`).toContain('/items/mirrored-databricks');
+      expect(paths, `${id} must declare the BFF surface`).toContain('/api/items/mirrored-databricks');
+    }
   });
 
   it('positive control — a successful pairing shows neither the gate nor a Fix-it', async () => {
