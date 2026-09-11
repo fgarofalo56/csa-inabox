@@ -682,6 +682,57 @@ const TOUCH_EXEMPT = new Map([
   // code leaves the tests green.
   ['apps/fiab-console/app/api/help-copilot/chat/route.ts',
    "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod reports 'POST: streaming/SSE handler' (raw SSE Response, same as /api/copilot/orchestrate). 401 + both codes pinned by app/api/help-copilot/__tests__/chat-gate-codes.test.ts"],
+  // #3941 touched these four polymorphic `[type]/[id]` routes for ONE reason:
+  // their local `loadItem` authorized with an OWNER-ONLY partition point read,
+  // `workspacesContainer().item(item.workspaceId, callerOid)`. `workspaces` is
+  // partitioned on `/tenantId`, which holds the workspace CREATOR's oid — so
+  // that read could only ever answer "did YOU create this workspace?" and
+  // refused tenant admins and shared-ACL members on every item type without a
+  // dedicated route (the #2941/#2942 defect). Each now calls the canonical
+  // `authorizeItemWorkspace` ladder, read-scoped for GET and write-scoped for
+  // the mutations. The admitted set strictly GROWS; the `getSession()` → 401
+  // prologues are UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES ALL SEVEN HANDLERS, which is what this hatch is for.
+  // Falsifiable one command per file, verbatim output re-measured 2026-09-06:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/items/[type]/[id]/export-check/route.ts
+  //   →   app/api/items/[type]/[id]/export-check/route.ts: SKIPPED (POST: getSession() without the exact 401 guard)
+  //       DRY-RUN: 0 handlers across 0 files; 1 skipped
+  //   … impact → SKIPPED (GET: …), lineage → SKIPPED (GET: …), and
+  //   sensitivity-label → 4 skipped (GET, PUT, PATCH, DELETE), same cause: the
+  //   401 is `apiError('Unauthorized', 401)` rather than the literal shape
+  //   withSession replaces.
+  //
+  // AND `withWorkspaceOwner` CANNOT EXPRESS THESE ROUTES ANYWAY — two structural
+  // reasons, both read off route-toolkit.ts:120-147 rather than assumed:
+  //   1. It binds `itemType` as a call-site STRING constant. These are `[type]`
+  //      routes: the item type arrives in the URL and is only known per-request.
+  //   2. Every refusal returns `apiNotFound()`. #3941's whole point is that the
+  //      409 `tenant_unconfirmed` refusal must NOT be flattened into "item not
+  //      found" — saying the item does not exist when the workspace document
+  //      WAS read and the admin rights ARE real is a deploy-integrity R7 false
+  //      assertion. Migrating onto the wrapper would REVERT the fix this PR is.
+  //
+  // COMPENSATING CONTROL — verified per file, not assumed:
+  //   export-check      NEW in this PR. It was the one route of the four with no
+  //                     __tests__ directory at all; an exemption with no control
+  //                     is an unwatched hole, so
+  //                     export-check/__tests__/auth-prologue.test.ts now pins
+  //                     the 401 AND asserts the item container was never reached
+  //                     (nothing leaks before the caller is identified), with a
+  //                     CONTROL case proving an authenticated caller gets past.
+  //                     Mutation-checked: deleting the guard → RC=1, 2 failed.
+  //   impact            __tests__/impact-route.test.ts:63-66 '401 when unauthenticated'
+  //   lineage           lineage/__tests__/route.test.ts:105-108 'returns 401 when no session'
+  //   sensitivity-label sensitivity-label/__tests__/route.test.ts:106-110 '401 when unauthenticated'
+  ['apps/fiab-console/app/api/items/[type]/[id]/export-check/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (POST: 401 not the exact guard shape) and withWorkspaceOwner cannot take a per-request [type] nor preserve the 409. 401 + no-leak pinned by export-check/__tests__/auth-prologue.test.ts'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/impact/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by app/api/items/[type]/[id]/__tests__/impact-route.test.ts:66'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/lineage/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by lineage/__tests__/route.test.ts:108'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, all four 401 prologues untouched; codemod SKIPS every handler (401 not the exact guard shape). 401 pinned by sensitivity-label/__tests__/route.test.ts:110'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
