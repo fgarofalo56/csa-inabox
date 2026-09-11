@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import collections
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -80,13 +81,41 @@ DESCRIPTIONS = {
 ORDER = list(DESCRIPTIONS)
 
 
-def main() -> int:
-    if not SNAPSHOT.exists():
-        print(f"missing {SNAPSHOT}; run: gh issue list --state open --limit 1000 "
-              f'--json number,title,labels,createdAt > {SNAPSHOT}')
-        return 2
+def read_issues() -> list[dict]:
+    """Read the live issue list, falling back to a hand-made snapshot.
 
-    issues = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    This used to REQUIRE `temp/allissues.json` -- a gitignored file nothing in
+    the harness creates; the script only printed the command that would make
+    one. So on any clean checkout the inventory could not be regenerated, and
+    `tick.py` (which reads this script's output) filed all 297 issues into
+    `W9-rest`, silently collapsing the W0 -> W1 -> ... execution order the PRP
+    calls load-bearing. Fetch it.
+    """
+    if SNAPSHOT.exists():
+        print(f"using snapshot {SNAPSHOT}")
+        return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+
+    policy = json.loads((Path(__file__).resolve().parent / "policy.json").read_text("utf-8"))
+    repo = policy["repo"]
+    print(f"no snapshot; reading {repo} live")
+    run = subprocess.run(
+        ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
+         "--json", "number,title,labels,createdAt"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=ROOT,
+    )
+    if run.returncode != 0:
+        raise SystemExit(f"cannot read issues for {repo} (rc={run.returncode}): {run.stderr[:300]}")
+    issues = json.loads(run.stdout)
+    if not issues:
+        raise SystemExit(
+            "refusing to build an inventory over ZERO issues - an empty partition is "
+            "total over nothing, which is the one case the totality check cannot catch."
+        )
+    return issues
+
+
+def main() -> int:
+    issues = read_issues()
     rows: dict[str, list] = {key: [] for key in ORDER}
 
     for issue in issues:

@@ -48,7 +48,13 @@ are worth knowing:
 
 2. **`state.json` is seeded and clean**: 297 ready, 0 in-flight, 154
    unschedulable. If you ever want to start over:
-   `python tools/drain/tick.py --bootstrap`.
+   `python tools/drain/tick.py --bootstrap` — which now genuinely discards the
+   ledger and reseeds, rather than being a flag that was parsed and never read.
+
+   Starting over is not free: the ledger is the only record of what has already
+   been verified, and GitHub does not carry it. `--status` exits 2 on a missing
+   ledger rather than printing an empty queue, because `all([])` is `True` and
+   `drained: true` is this run's exit condition.
 
 ## What the first cycle will do
 
@@ -64,12 +70,15 @@ parallelized until it does.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 25 pass
-python tools/drain/mutate_gates.py       # 6 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 106 pass
+python tools/drain/mutate_gates.py       # 26 KILLED / 0 survived
+python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 
-**If `mutate_gates.py` ever reports a SURVIVOR, stop.** The gate suite has a
-blind spot and nothing it approves should be trusted until that is fixed.
+**If `mutate_gates.py` ever reports a SURVIVOR, stop** — but read the arm first.
+A survivor means the suite is blind **or** the mutation was a no-op, and those
+are different problems. One arm here "removed" three regex branches while
+leaving them in place and survived on that alone.
 
 ## How to stop it
 

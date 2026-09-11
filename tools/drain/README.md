@@ -12,6 +12,10 @@ python tools/drain/tick.py --status     # what is the queue holding right now?
 python tools/drain/tick.py              # advance one cycle, then launch what it prints
 ```
 
+If `--status` exits 2 saying **NO LEDGER**, the queue was never seeded or the
+file was deleted — `python tools/drain/tick.py --bootstrap`. It is deliberately
+not the same answer as an empty queue.
+
 ---
 
 ## What this replaces
@@ -29,9 +33,10 @@ dead session costs at most the cycle that was in flight.
 
 ```
 tick.py                              ledger (state.json)
-  1 APPLY      last cycle's results   ->  items change bucket
-  2 REFRESH    re-read live GitHub    ->  new issues appear, departed ones close
-  3 RECONCILE  park what shipped      ->  reopen anything auto-closed w/o a receipt
+  1 GUARD      sanity-check the read  ->  refuse a wrong-repo or truncated list
+  2 REFRESH    re-read live GitHub    ->  new issues appear; departed ones go to
+                                          `needs-audit`, NEVER to `closed`
+  3 REAP       --reap                 ->  return stranded in-flight lanes to ready
   4 SELECT     next lane set          ->  stream order, file-disjoint, WIP-capped
   5 EMIT       briefs + this runbook  ->  self-contained, regenerated every cycle
 
@@ -39,6 +44,19 @@ tick.py                              ledger (state.json)
 ```
 
 Every pass is independent. There is no state between passes.
+
+**Step 1 is not ceremony.** `gh issue list` resolves the repository from the
+working directory unless `--repo` is passed, so running the harness from another
+checkout returns rc=0 and a large, plausible, entirely **disjoint** issue list —
+which used to move every item out of the queue in one atomic save. The repo is
+now a policy input, and the guard refuses a live set that does not overlap the
+ledger (wrong repo) or that is a fraction of it (a truncated read).
+
+**An issue that left GitHub does not get a receipt.** The cycle does not know
+what closed it, so it does not get to say: the item lands in `needs-audit`,
+which is **non-terminal**, and stays in the queue until something names what
+closed it. Inventing a receipt to get past the receipt gate is the gate
+defeating itself.
 
 ---
 
@@ -61,7 +79,7 @@ summarized into vagueness, and the run degrades without anyone noticing.
 
 | state | means | requires |
 |---|---|---|
-| `closed` | done | a **receipt**. `ledger.transition()` REFUSES to close without one |
+| `closed` | done | a receipt **of the kind its class requires**. `ledger.transition()` refuses any other |
 | `parked` | genuinely blocked | a named **blocker AND owner**. Refused without both |
 | `declined` | will not do | a recorded decision |
 
@@ -69,8 +87,26 @@ summarized into vagueness, and the run degrades without anyone noticing.
 landed" is the single most common way a backlog lies about itself, so the ledger
 will not let you say it.
 
+**Presence is not enough — the KIND is checked.** The first version of this
+module tested that a receipt was truthy, which closed a console surface on the
+literal string `"merged"`: the one word R2 says is never a receipt. An item's
+class comes from its stream (`W1-deploy` → `deploy-path`, `W4-receipts` →
+`estate-behaviour`, …), the console lane overrides to `ui-surface`, and an
+explicit `receipt_class` reaches `human-only`. `ci-green` does not close a UI
+surface, and it does not close a deploy-path item either.
+
 A park with no owner is indistinguishable from forgetting — that is how an item
 leaves the queue without leaving the backlog.
+
+`needs-audit` is the fifth state and is **non-terminal**: an item that left
+GitHub with no receipt, or a terminal item seen open again (someone reopened it,
+which is how a false close gets disputed). `drained()` is false while any exist.
+
+**An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
+clause a fresh clone or a deleted scratch file reports the whole backlog drained
+before any work is done — and `drained: true` is this program's documented exit
+condition. `--status` now refuses outright when no ledger file exists, because
+"no queue" and "an empty queue" are different answers.
 
 ---
 
@@ -123,13 +159,43 @@ not known to watch anything — #4451 is the standing example: `pass=4 fail=4`
 printed "UAT-verified roll", four separate measurements, no observed input for
 which it returned anything else.
 
+**Run the gate; do not re-derive it.** `merge_gate.py` is the caller that
+composes all seven of PRP §6 from live GitHub data:
+
 ```bash
-python -m pytest tools/drain/__tests__/test_gates.py -q   # 25 tests
-python temp/mutate-gates.py                               # 6 arms, must be 6 KILLED
+python tools/drain/merge_gate.py <PR>            # GO / NO-GO with the evidence
+python tools/drain/merge_gate.py --audit-close <PR> --before <n> --intended <n,n>
+```
+
+Promoting `gates.py` out of `temp/` was necessary and not sufficient: at its
+first review it had **no production caller**, four of the seven gates were named
+in the spec and implemented nowhere, and five `policy.json` keys were read by
+nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
+still an agent's judgement. An unconsulted policy key is prose, not a control.
+
+```bash
+python -m pytest tools/drain/__tests__ -q    # 106 tests across gates/ledger/tick
+python tools/drain/mutate_gates.py           # 26 arms, must be 26 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
-gate is not trustworthy — fix that before trusting a merge.
+gate is not trustworthy — fix that before trusting a merge. Two caveats learned
+the hard way:
+
+- **A survivor can also mean a weak mutation.** One arm here "removed" three
+  regex branches while leaving them in place; it survived because it changed
+  nothing. Read the arm before believing the blind spot.
+- **Authors mutate what they just fixed.** The first six arms all weakened a
+  *check*. An independent reviewer wrote eight more and **six survived**, because
+  the ones that work narrow the *population* instead — parse only the newest
+  comment, scan only the last commit, scan only the first line, exempt fenced
+  code, take a `startswith` fast path. A filter placed INSIDE the predicate beats
+  a contract written about the predicate. Those are arms `N*`.
+
+The harness mutates a **copy in a temp dir outside the repo**. It used to write
+the mutation into the tracked `gates.py` and restore it in a `finally` — which
+does not run on SIGKILL, on a host that memory-kills processes, in a checkout up
+to four lanes share.
 
 ---
 
@@ -149,6 +215,14 @@ answer is triage, not a bigger WIP cap.
 
 ## Traps that cost real time — do not rediscover these
 
+- **`gh` with no `--repo` resolves from the working directory.** It returns
+  rc=0 and valid JSON for whatever repo you happen to be standing in. Every
+  `gh` call the harness makes pins `--repo` from `policy.json` and `cwd` to the
+  repo root.
+- **Deleting `state.json` erases every receipt, silently.** The next refresh
+  reseeds the same issues as `ready` with empty histories — the recorded
+  237-item reset. Absence of a row is not absence of a verdict. `--status`
+  refuses on a missing file rather than reporting an empty queue.
 - **Clear a conflict BEFORE pushing.** A commit pushed while the PR reads
   CONFLICTING gets **zero check-runs, permanently** — GitHub cannot compute
   `refs/pull/N/merge`, and clearing it afterwards does not create them
@@ -177,12 +251,14 @@ answer is triage, not a bigger WIP cap.
 
 | file | what |
 |---|---|
-| `policy.json` | the autonomy contract — the authority |
-| `ledger.py` | durable state; enforces receipt-before-close |
-| `gates.py` | merge/verdict/closing-keyword gates (promoted, tracked, tested) |
+| `policy.json` | the autonomy contract — the authority, and the repo it governs |
+| `ledger.py` | durable state; enforces receipt-of-the-right-KIND-before-close |
+| `gates.py` | the seven gates (promoted, tracked, tested) |
+| `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `state.json` | the ledger itself |
-| `__tests__/` | unit tests + a negative control per gate |
+| `mutate_gates.py` | 26 mutation arms against a sandbox copy; must be 26 KILLED |
+| `state.json` | the ledger itself (gitignored — per-run state, not a control) |
+| `__tests__/` | 106 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

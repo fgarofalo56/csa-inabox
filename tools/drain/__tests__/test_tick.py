@@ -1,0 +1,254 @@
+"""Unit tests for the cycle itself -- the refresh guard and the brief.
+
+Two of the three worst defects the first independent review found lived here,
+and both were in code that had no test:
+
+- the refresh path INVENTED a receipt (`"closed-externally"`) whose only effect
+  was to satisfy the truthiness check enforcing R2, then closed every item the
+  live set did not mention. `gh issue list` carried no `--repo` and `sh()` no
+  `cwd`, so running the harness from another checkout returned rc=0 and a
+  plausible, entirely disjoint population -- and closed all 297 in one save.
+- the brief keyed its receipt off `lane == 'lane:console'`, so every deploy-path
+  item -- the stream R1 says preempts all other work -- told its agent that CI
+  green closes it.
+
+Run:  python -m pytest tools/drain/__tests__/ -q
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import tick
+from ledger import CLOSED, IN_FLIGHT, NEEDS_AUDIT, READY, Ledger
+
+import gates
+
+POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
+
+
+def _led(tmp_path, n=20, first=1000) -> Ledger:
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    for i in range(n):
+        led.upsert(first + i, f"issue {first + i}", "W6-ci", lane="lane:ci", size=1)
+    return led
+
+
+def _live(numbers, labels=("lane:ci", "sp:1")):
+    return [
+        {"number": n, "title": f"issue {n}",
+         "labels": [{"name": x} for x in labels]}
+        for n in numbers
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The refresh guard -- both failures return rc=0 and valid JSON
+# ---------------------------------------------------------------------------
+
+
+def test_a_normal_refresh_passes_the_guard(tmp_path):
+    led = _led(tmp_path)
+    tick.guard_refresh(led, _live(range(1000, 1020)))
+
+
+def test_one_issue_closing_normally_passes_the_guard(tmp_path):
+    """The guard must not fire on ordinary progress, or it is just an outage."""
+    led = _led(tmp_path)
+    tick.guard_refresh(led, _live(range(1000, 1019)))
+
+
+def test_negative_control_an_empty_live_set_refuses(tmp_path):
+    """Zero open issues while the ledger believes twenty are open would move all
+    twenty out of the queue. Rate-limited, unauthorized and wrong-repo reads can
+    all produce it, and every one of them exits 0."""
+    led = _led(tmp_path)
+    with pytest.raises(SystemExit, match="ZERO open issues"):
+        tick.guard_refresh(led, [])
+
+
+def test_negative_control_a_truncated_read_refuses(tmp_path):
+    """A partial response is the shape that does NOT look wrong: valid JSON, a
+    plausible count, rc=0."""
+    led = _led(tmp_path)
+    with pytest.raises(SystemExit, match="of the 20 issues"):
+        tick.guard_refresh(led, _live(range(1000, 1010)))
+
+
+def test_negative_control_the_wrong_repo_refuses_despite_a_healthy_size(tmp_path):
+    """THE cross-repo case, and the reason a size check alone is not enough: a
+    different repository returns a full-sized, valid, entirely disjoint list.
+    Only overlap distinguishes it."""
+    led = _led(tmp_path)
+    with pytest.raises(SystemExit, match="different population"):
+        tick.guard_refresh(led, _live(range(5000, 5030)))
+
+
+def test_the_guard_stays_quiet_on_a_small_ledger(tmp_path):
+    """Under a handful of items the ratios are noise, not signal -- a guard that
+    fires on the first cycle of a fresh queue would never let one start."""
+    led = _led(tmp_path, n=3)
+    tick.guard_refresh(led, [])
+
+
+# ---------------------------------------------------------------------------
+# Departure: needs-audit, never a fabricated receipt
+# ---------------------------------------------------------------------------
+
+
+def test_negative_control_a_departed_issue_is_audited_not_closed(tmp_path):
+    """It left GitHub and this code does not know why, so it does not get to
+    say. `needs-audit` is non-terminal: the item stays in the queue until
+    something names what closed it."""
+    led = _led(tmp_path)
+    added, departed = tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
+    assert (added, departed) == (0, 1)
+    gone = led.items[1019]
+    assert gone.state == NEEDS_AUDIT
+    assert gone.receipt_kind is None
+    assert gone in led.remaining()
+    assert not led.drained()
+
+
+def test_negative_control_a_departure_never_becomes_a_receipt(tmp_path):
+    """Even after the audit state, closing still needs a real receipt of the
+    right kind. Inventing one to get past the receipt gate is the gate defeating
+    itself."""
+    led = _led(tmp_path)
+    tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1019, CLOSED)
+
+
+def test_a_new_issue_is_added_with_its_labels(tmp_path):
+    led = _led(tmp_path)
+    live = [
+        *_live(range(1000, 1020)),
+        {"number": 2001, "title": "new one",
+         "labels": [{"name": "lane:console"}, {"name": "sp:5"}]},
+    ]
+    added, departed = tick.refresh_from_github(led, {2001: "W5-console"}, live)
+    assert (added, departed) == (1, 0)
+    assert led.items[2001].lane == "lane:console"
+    assert led.items[2001].size == 5
+    assert led.items[2001].stream == "W5-console"
+
+
+def test_negative_control_the_stream_is_derived_without_the_pin_file(tmp_path):
+    """`inventory.json` is gitignored, and the stream map was read ONLY from it.
+    On a clean checkout that map was empty and every issue filed into `W9-rest`
+    -- with no error, because "no pins" and "no file" look identical -- which
+    collapses the W0 -> W1 -> ... ordering the PRP calls load-bearing."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    live = [
+        {"number": 4468, "title": "the merge gate is gitignored",
+         "labels": [{"name": "lane:ci"}, {"name": "sp:3"}]},
+        {"number": 9001, "title": "a console editor",
+         "labels": [{"name": "lane:console"}, {"name": "sp:5"}]},
+        {"number": 9002, "title": "bicep drift",
+         "labels": [{"name": "lane:bicep"}, {"name": "bicep-drift"}, {"name": "sp:3"}]},
+    ]
+    tick.refresh_from_github(led, {}, live)  # NO pin map at all
+    assert led.items[4468].stream == "W0-harness"
+    assert led.items[9001].stream == "W5-console"
+    assert led.items[9002].stream == "W1-deploy"
+    assert [i.stream for i in led.items.values()].count("W9-rest") == 0
+
+
+# ---------------------------------------------------------------------------
+# Reaping -- "a dead session costs at most the cycle in flight"
+# ---------------------------------------------------------------------------
+
+
+def test_negative_control_a_stranded_lane_is_recoverable(tmp_path):
+    """Nothing moved an in-flight item back, so a killed session removed up to
+    `max_lanes` items from scheduling permanently -- the opposite of the
+    property the whole design claims."""
+    led = _led(tmp_path)
+    led.transition(1000, IN_FLIGHT, "selected in cycle 1")
+    assert led.items[1000].state == IN_FLIGHT
+    assert tick.select_cycle(led, POLICY), "the lane is stranded, not the whole stream"
+    assert tick.reap_stranded(led, 2) == 1
+    assert led.items[1000].state == READY
+
+
+# ---------------------------------------------------------------------------
+# Selection
+# ---------------------------------------------------------------------------
+
+
+def test_two_items_on_one_lane_never_run_together(tmp_path):
+    """Lanes partition by FILE. A shared-file conflict must serialize."""
+    led = _led(tmp_path)
+    chosen = tick.select_cycle(led, POLICY)
+    assert len(chosen) == 1
+    assert len({i.lane for i in chosen}) == 1
+
+
+def test_negative_control_an_unlaned_item_is_never_scheduled(tmp_path):
+    """An item whose file footprint is unknown is unsafe to run alongside
+    anything."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(1, "unlaned", "W6-ci", lane=None, size=3)
+    led.upsert(2, "unsized", "W6-ci", lane="lane:ci", size=None)
+    assert tick.select_cycle(led, POLICY) == []
+    assert len(tick.triage_queue(led)) == 2
+
+
+def test_the_wip_cap_is_a_policy_input(tmp_path):
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    for i, lane in enumerate(["lane:ci", "lane:console", "lane:bicep", "lane:dataplane"]):
+        led.upsert(100 + i, "x", "W6-ci", lane=lane, size=1)
+    policy = {**POLICY, "wip": {**POLICY["wip"], "max_lanes": 2}}
+    assert len(tick.select_cycle(led, policy)) == 2
+
+
+# ---------------------------------------------------------------------------
+# The brief -- the ONLY thing a lane agent reads
+# ---------------------------------------------------------------------------
+
+
+def test_a_console_brief_demands_a_browser_receipt(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(9, "an editor", "W5-console", lane="lane:console", size=5)
+    assert "g1-browser" in tick.write_brief(item, POLICY)
+
+
+def test_negative_control_a_deploy_brief_does_not_say_ci_green(tmp_path):
+    """R1's stream. Keyed off the lane, `deploy-run` was unreachable and every
+    deploy-path brief said `ci-green` -- `report-a-merge-as-a-fix`, emitted by
+    the control that exists to prevent it."""
+    led = _led(tmp_path)
+    item = led.upsert(9, "a deploy lane", "W1-deploy", lane="lane:bicep", size=5)
+    brief = tick.write_brief(item, POLICY)
+    assert "deploy-run" in brief
+    assert "ci-green" not in brief
+
+
+def test_negative_control_an_estate_item_demands_an_estate_receipt(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(9, "owed receipt", "W4-receipts", lane="lane:ci", size=2)
+    brief = tick.write_brief(item, POLICY)
+    assert "`estate`" in brief
+    assert "ci-green" not in brief
+
+
+def test_the_brief_names_the_gate_as_a_command(tmp_path):
+    """A gate restated as prose is an agent's judgement. The brief must name the
+    program, or `gates.py` has no production caller at run time either."""
+    led = _led(tmp_path)
+    item = led.upsert(9, "x", "W6-ci", lane="lane:ci", size=1)
+    assert "python tools/drain/merge_gate.py" in tick.write_brief(item, POLICY)
+
+
+def test_negative_control_the_brief_does_not_leak_the_documentation_key(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(9, "x", "W6-ci", lane="lane:ci", size=1)
+    brief = tick.write_brief(item, POLICY)
+    assert "Stop and ask for: _," not in brief
+    assert "add_trivyignore_entry" in brief
+    assert "commit-a-secret" in brief  # the `never` list is surfaced at all

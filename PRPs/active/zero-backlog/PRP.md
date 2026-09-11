@@ -17,7 +17,7 @@ on **deployed-and-verified**, so the harness's terminal states are:
 
 | state | means | evidence required |
 |---|---|---|
-| `closed` | done | a **receipt** (§5) — never a merge alone |
+| `closed` | done | a receipt **of the kind §5 requires for its class** — never a merge alone |
 | `parked` | genuinely blocked | named blocker + owner + review date |
 | `declined` | will not do | recorded decision, operator-confirmed |
 
@@ -78,12 +78,18 @@ important lives in any agent's context.
 
 ```
 tick.py
-  1 APPLY     last cycle's returned results -> items change bucket
-  2 REFRESH   re-read live GitHub -> new issues/PRs appear, closed ones leave
-  3 RECONCILE park what shipped; reopen what auto-closed without a receipt
+  1 GUARD     refuse a live read that is the wrong repo or a truncated page
+  2 REFRESH   re-read live GitHub -> new issues appear; a departed issue goes to
+              `needs-audit` (non-terminal), NEVER to `closed`
+  3 REAP      --reap returns stranded in-flight lanes to ready
   4 SELECT    next lane set: file-disjoint, WIP<=N, dependency-ordered
   5 EMIT      per-lane briefs + a regenerated cold-start KICKOFF
 ```
+
+Step 1 exists because both failures exit 0 with valid JSON. `gh issue list`
+resolves the repo from the working directory unless `--repo` is passed, so
+running the harness from another checkout produced a large, plausible, entirely
+disjoint list — which moved every item out of the queue in one atomic save.
 
 Then agents run the briefs and return results; `tick.py` applies them next pass.
 **Every pass is independent.** A dead session loses at most one cycle.
@@ -150,7 +156,18 @@ an error path.
 
 ## 6. Gates the harness must pass before merging anything
 
-Promoted into `tools/drain/gates.py` (tracked, tested — this *is* W0/#4468):
+Implemented in `tools/drain/gates.py` and **composed by `tools/drain/merge_gate.py`**,
+which is the production caller (tracked, tested — this *is* W0/#4468):
+
+```bash
+python tools/drain/merge_gate.py <PR>     # prints GO / NO-GO with the evidence
+```
+
+That caller is load-bearing and was missing at first review: `gates.py` existed,
+was tested, and **nothing in the harness called it** — four of the seven gates
+below were named here and implemented nowhere, and the briefs restated them as
+instructions, so at run time GO/NO-GO was an agent's judgement. A gate with no
+caller is prose; so is a `policy.json` key nothing reads.
 
 1. **base == `origin/main`** exactly.
 2. **Conjunction, not recency** — a later APPROVE does not discharge an earlier
@@ -174,6 +191,10 @@ Promoted into `tools/drain/gates.py` (tracked, tested — this *is* W0/#4468):
 
 | risk | evidence | mitigation in the harness |
 |---|---|---|
+| The harness mass-closes the queue | `gh` with no `--repo` resolves from cwd; a disjoint live set closed every item with a fabricated `closed-externally` receipt | `--repo` from policy; overlap + retention guards; departures go to non-terminal `needs-audit` |
+| A brief tells its agent the wrong receipt | receipt keyed on `lane == 'lane:console'`, so 3 of 5 classes were unreachable and every deploy-path brief said `ci-green` | receipt derived from the item's CLASS; `ledger.transition()` enforces the kind |
+| An empty ledger reads as a finished run | `all([])` is True; a deleted scratch file printed `drained: true` over 297 open issues | `drained()` requires items; `--status` refuses a missing file with rc=2 |
+| A mutation matrix that measures the author | 6 of 8 reviewer-written arms survived a 6/6-KILLED matrix; all six narrowed the POPULATION, not the check | arms `N*`/`L*`/`T*` are population-narrowing; fixtures are multi-line and multi-element |
 | A fix lands on one side of a boundary | 5× in 4 PRs, every one with a green mutation matrix | brief mandates "what is the OTHER side?"; reviewer must mutate the **unpatched** sibling |
 | A gate that cannot fail | #4451 — `pass=4 fail=4` printed "UAT-verified roll", 4 measurements, no observed failing input | every gate the harness adds ships with a **negative control**; a gate never observed failing is not trusted |
 | A guard satisfied by a comment | #4467 — rewording prose moved the population 1010→1011 | guards match code, not raw source; `codeOnly()` before **all** predicates |

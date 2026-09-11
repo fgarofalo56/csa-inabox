@@ -2,6 +2,9 @@
   "schema": 1,
   "_": "The authority for what the drain may do unattended. tick.py refuses to emit a brief that would violate this file. Operator decision 2026-09-11.",
 
+  "repo": "fgarofalo56/csa-inabox",
+  "_repo": "Passed to every `gh` call as --repo. It is a POLICY input, never an accident of the working directory: `gh issue list` with no --repo resolves the repo from cwd, so running the harness from another checkout returned rc=0 and a valid-looking list for a DIFFERENT repository - whose numbers are disjoint from this ledger's, which would have moved all 297 items out of the queue in one save.",
+
   "scope": {
     "target": "all-open-issues",
     "definition_of_done": "every open issue reaches closed | parked | declined",

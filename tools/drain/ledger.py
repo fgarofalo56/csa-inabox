@@ -6,17 +6,20 @@ or the session dies and the plan dies with it. Here one cycle is one transaction
 against this ledger, and a dead session costs at most the cycle in flight.
 
 Terminal states are deliberately narrow. `deploy-integrity.md` R2: merged is
-never done, so `closed` requires a RECEIPT and nothing else reaches it.
+never done, so `closed` requires a RECEIPT OF THE KIND ITS CLASS REQUIRES and
+nothing else reaches it. Presence alone is not enough: the first version of this
+module checked that a receipt was truthy, which closed a console surface on the
+string `"merged"` -- the one thing R2 says is never a receipt.
 """
 from __future__ import annotations
 
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 
-SCHEMA = 1
+SCHEMA = 2
 DEFAULT_PATH = "tools/drain/state.json"
 
 # Non-terminal states flow left to right; terminal states end a run.
@@ -24,12 +27,35 @@ READY = "ready"
 IN_FLIGHT = "in-flight"
 IN_REVIEW = "in-review"
 AWAITING_RECEIPT = "awaiting-receipt"
+NEEDS_AUDIT = "needs-audit"
 CLOSED = "closed"
 PARKED = "parked"
 DECLINED = "declined"
 
 TERMINAL = (CLOSED, PARKED, DECLINED)
-ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, *TERMINAL)
+ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMINAL)
+
+# Which receipt class an item falls into, derived from the stream it sits in.
+# The brief an agent reads is generated from this, so a wrong entry here tells
+# an agent that CI green closes a deploy-path issue -- which is R2 inverted, and
+# emitted by the control that exists to prevent it.
+RECEIPT_CLASS_BY_STREAM = {
+    "W0-harness": "guard-or-test-only",
+    "W1-deploy": "deploy-path",
+    "W2-security": "guard-or-test-only",
+    "W3-gov": "deploy-path",
+    "W4-receipts": "estate-behaviour",
+    "W5-console": "ui-surface",
+    "W6-ci": "guard-or-test-only",
+    "W7-bicep": "deploy-path",
+    "W8-dataplane": "estate-behaviour",
+    "W9-rest": "guard-or-test-only",
+}
+DEFAULT_RECEIPT_CLASS = "guard-or-test-only"
+
+# A console-lane item is a UI surface whatever stream it was filed under, and a
+# UI surface closes on a browser walk (G1), never on CI.
+LANE_RECEIPT_CLASS = {"lane:console": "ui-surface"}
 
 
 def _now() -> str:
@@ -49,6 +75,7 @@ class Item:
     pr: int | None = None
     receipt_kind: str | None = None
     receipt_ref: str | None = None
+    receipt_class: str | None = None
     blocker: str | None = None
     owner: str | None = None
     review_by: str | None = None
@@ -64,15 +91,36 @@ class Item:
         """
         return self.lane is not None and self.size is not None
 
+    @property
+    def effective_receipt_class(self) -> str:
+        """Which of policy.json's five receipt classes closes this item.
+
+        An explicit `receipt_class` wins -- that is how `human-only` is reached
+        for an item only a person can verify. Otherwise the console lane wins
+        over the stream, and the stream over the default.
+        """
+        if self.receipt_class:
+            return self.receipt_class
+        if self.lane in LANE_RECEIPT_CLASS:
+            return LANE_RECEIPT_CLASS[self.lane]
+        return RECEIPT_CLASS_BY_STREAM.get(self.stream, DEFAULT_RECEIPT_CLASS)
+
 
 class Ledger:
-    """Load / mutate / atomically save the drain state."""
+    """Load / mutate / atomically save the drain state.
 
-    def __init__(self, path: str = DEFAULT_PATH):
+    `receipts` is `policy.json`'s receipts map. Without it the ledger CANNOT
+    validate that a receipt is of the kind an item's class requires, so it
+    refuses to close anything rather than falling back to a presence check.
+    """
+
+    def __init__(self, path: str = DEFAULT_PATH, receipts: dict | None = None):
         self.path = path
         self.items: dict[int, Item] = {}
         self.cycle: int = 0
         self.notes: list[str] = []
+        self.receipts = receipts or {}
+        self.loaded_from_disk = False
 
     # -- persistence --------------------------------------------------------
 
@@ -87,8 +135,10 @@ class Ledger:
             )
         self.cycle = raw.get("cycle", 0)
         self.notes = raw.get("notes", [])
+        known = {f.name for f in fields(Item)}
         for entry in raw.get("items", []):
-            self.items[entry["number"]] = Item(**entry)
+            self.items[entry["number"]] = Item(**{k: v for k, v in entry.items() if k in known})
+        self.loaded_from_disk = True
         return self
 
     def save(self) -> None:
@@ -118,16 +168,44 @@ class Ledger:
 
     # -- mutation -----------------------------------------------------------
 
-    def upsert(self, number: int, title: str, stream: str, **kwargs) -> Item:
-        """Add an issue, or refresh a known one without losing its progress."""
+    def upsert(
+        self,
+        number: int,
+        title: str,
+        stream: str,
+        lane: str | None = None,
+        size: int | None = None,
+        **kwargs,
+    ) -> Item:
+        """Add an issue, or refresh a known one without losing its progress.
+
+        `lane` and `size` are AUTHORITATIVE from GitHub's labels and are written
+        even when they arrive as None -- a label removed on GitHub must clear
+        the ledger's copy, or an item stays schedulable on a lane it no longer
+        claims. Everything else keeps the None-skip, so a partial refresh cannot
+        erase progress.
+
+        An item that is TERMINAL and is seen open on GitHub again has been
+        REOPENED. That is how a false close gets disputed, so it must re-enter
+        the queue: it lands in `needs-audit`, never silently back in `ready`
+        (whatever closed it may still be true) and never left terminal.
+        """
         existing = self.items.get(number)
         if existing:
             existing.title = title
+            existing.lane = lane
+            existing.size = size
             for key, value in kwargs.items():
                 if value is not None:
                     setattr(existing, key, value)
+            if existing.state in TERMINAL:
+                existing.state = NEEDS_AUDIT
+                existing.history.append(
+                    f"{_now()} -> {NEEDS_AUDIT} (was {CLOSED}/{PARKED}/{DECLINED} but is OPEN "
+                    "on GitHub - reopened, or closed in error)"
+                )
             return existing
-        item = Item(number=number, title=title, stream=stream, **kwargs)
+        item = Item(number=number, title=title, stream=stream, lane=lane, size=size, **kwargs)
         item.history.append(f"{_now()} discovered in {stream}")
         self.items[number] = item
         return item
@@ -137,9 +215,10 @@ class Ledger:
 
         The two refusals are the load-bearing ones:
 
-        - `closed` without a receipt. This is R2 in code. An issue closes on
-          deployed-and-verified, never on a merge, and "the PR landed" is the
-          single most common way a backlog lies about itself.
+        - `closed` without a receipt OF THE RIGHT KIND. This is R2 in code. An
+          issue closes on deployed-and-verified, never on a merge, and "the PR
+          landed" is the single most common way a backlog lies about itself. A
+          presence-only check let the literal string `"merged"` through.
         - `parked` without a named blocker and owner. A park with no owner is
           indistinguishable from forgetting, and it is how an item leaves the
           queue without leaving the backlog.
@@ -148,11 +227,8 @@ class Ledger:
             raise ValueError(f"unknown state {state!r}")
         item = self.items[number]
 
-        if state == CLOSED and not item.receipt_kind:
-            raise ValueError(
-                f"#{number}: refusing to close without a receipt "
-                "(deploy-integrity R2 - merged is not done)"
-            )
+        if state == CLOSED:
+            self._refuse_unless_receipted(item)
         if state == PARKED and not (item.blocker and item.owner):
             raise ValueError(
                 f"#{number}: refusing to park without a named blocker AND owner"
@@ -161,6 +237,31 @@ class Ledger:
         item.state = state
         item.history.append(f"{_now()} -> {state}" + (f" ({why})" if why else ""))
         return item
+
+    def _refuse_unless_receipted(self, item: Item) -> None:
+        """R2 in code, on the kind and not merely the presence."""
+        if not item.receipt_kind:
+            raise ValueError(
+                f"#{item.number}: refusing to close without a receipt "
+                "(deploy-integrity R2 - merged is not done)"
+            )
+        if not self.receipts:
+            raise ValueError(
+                f"#{item.number}: refusing to close - no policy receipts map, so the "
+                "receipt KIND cannot be validated. Construct Ledger(receipts=policy['receipts'])."
+            )
+        want = self.receipts.get(item.effective_receipt_class)
+        if not want:
+            raise ValueError(
+                f"#{item.number}: receipt class {item.effective_receipt_class!r} is not in "
+                "policy.json receipts - unclassifiable, so unclosable"
+            )
+        if item.receipt_kind != want:
+            raise ValueError(
+                f"#{item.number}: receipt {item.receipt_kind!r} does not close a "
+                f"{item.effective_receipt_class!r} item - that needs {want!r} "
+                "(deploy-integrity R2)"
+            )
 
     def record_receipt(self, number: int, kind: str, ref: str) -> Item:
         """Attach the evidence that will let this item close."""
@@ -184,8 +285,15 @@ class Ledger:
         return out
 
     def drained(self) -> bool:
-        """True only when every item is terminal. This is the run's exit test."""
-        return all(i.state in TERMINAL for i in self.items.values())
+        """True only when there ARE items and every one of them is terminal.
+
+        `all([])` is True. Without the emptiness clause a fresh clone, a wiped
+        scratch file or a `git clean -xfd` reports a 297-issue backlog DRAINED
+        before any work has been done -- and `--status` printing `drained: true`
+        is this program's documented exit condition, so that answer ends the
+        run. An empty ledger is the absence of a measurement, not a result.
+        """
+        return bool(self.items) and all(i.state in TERMINAL for i in self.items.values())
 
     def remaining(self) -> list[Item]:
         return [i for i in self.items.values() if i.state not in TERMINAL]
