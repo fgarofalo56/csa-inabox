@@ -226,28 +226,43 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     });
     // WHY LAZY-CREATE HERE, AND WHAT THAT DOES **NOT** ESTABLISH (#4406).
     //
-    // Lazy-create without an ARM row is the ESTABLISHED shape here, not a novel
-    // step this container takes first. Measured at this head, per container, so
-    // the claim is falsifiable rather than arithmetical:
+    // Lazy-create without an ARM row is the MAJORITY shape here, not a novel
+    // step this container takes first. Read off the ARM DECLARATIONS rather
+    // than a text search — `loomContainers` at
+    // `landing-zone/cosmos.bicep:222` (52 rows) and
+    // `admin-plane/loom-console-cosmos.bicep:154` (11 rows), plus every
+    // standalone `sqlDatabases/containers@` resource under `platform/`:
     //
-    //   `user-prefs`      created only at `cosmos-client.ts:862`; searching
-    //                     `platform/**`, `scripts/**`, `.github/**` for it
-    //                     returns ZERO files.
-    //   `tabs-state`, `rate-limits`, `notifications`   same: zero files.
-    //   `loom-workspaces` POSITIVE CONTROL — the same search returns 4 files,
-    //                     so the query is demonstrably able to find an ARM row.
+    //   126  container ids `cosmos-client.ts` opens lazily
+    //    47  of them carry an ARM row
+    //    79  of them DO NOT
     //
-    // The account sets `disableLocalAuth=true` and `cosmos-client.ts:779` passes
-    // `aadCredentials` only, so those creates ALREADY go over the data plane
-    // with exactly the credential this call uses.
+    // Named instances, each checkable against those two arrays directly:
+    // `user-prefs` (created at `cosmos-client.ts:862`), `tabs-state` (:863),
+    // `notifications` (:864), `rate-limits` (:1173) and `saved-queries` are all
+    // ABSENT from both. POSITIVE CONTROL: `loom-workspaces` is present in BOTH,
+    // so the arrays demonstrably can show a container that has one.
+    // `cosmos.bicep:676-677` states the same thing independently, in prose.
     //
-    // An earlier revision of this comment asserted the opposite — that every
-    // other lazily-opened container carries an ARM row, making this call "the
-    // first" such create in the app. That was reasoned, not measured, and it is
-    // false. It is corrected in place rather than deleted because this file's
-    // subject IS `deploy-integrity.md` R7: a message must not state as fact
-    // something the code did not establish, and a source comment is held to the
-    // same bar as an error string.
+    // The account sets `disableLocalAuth=true`
+    // (`loom-console-cosmos.bicep:129`) and `cosmos-client.ts:779` passes
+    // `aadCredentials` only, so those 79 creates ALREADY go over the data plane
+    // with exactly the credential this call uses. Nothing here is new.
+    //
+    // TWO CORRECTIONS TO THIS COMMENT'S OWN HISTORY, kept rather than tidied
+    // away, because the subject of this block is claims that outrun evidence:
+    //   1. An earlier revision asserted the OPPOSITE — that every other
+    //      lazily-opened container carries an ARM row, making this call "the
+    //      first" such create. That was reasoned, not measured, and it is false.
+    //   2. The revision that fixed it then declined to state ANY count, on the
+    //      grounds that two instruments disagreed. They did not: the second
+    //      instrument enumerated only `mk(...)` and so missed `rate-limits`
+    //      (:1173) and `audit-log` (:866). Declining to count was itself an
+    //      unmeasured claim about the measurement.
+    // Per `no-vaporware.md` a claim ships with its receipt or not at all, and
+    // that binds a source comment, not only what a route hands back. (The
+    // earlier revision cited `deploy-integrity.md` R7 here; R7 governs what the
+    // code HANDS BACK, so it was the wrong citation for a comment.)
     //
     // `sql-cancel-intents` still has no ARM row — deferred to #4406 — and that
     // is worth recording. It is simply not unprecedented, and nothing about the
