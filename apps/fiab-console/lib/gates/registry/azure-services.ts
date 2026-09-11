@@ -17,6 +17,13 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/api/items/warehouse/*', label: 'Warehouse BFF routes' },
       { path: '/admin/health?tab=spark', label: 'Spark pool health (Health hub, A10)' },
       { path: '/api/apps/[id]/install', label: 'App install — warehouse / synapse-pipeline provisioners' },
+      // #4183 — the mirrored-databricks create route emits this gate id for its
+      // NO_SYNAPSE pairing failure (app/api/items/mirrored-databricks/route.ts
+      // PAIRING_GATE_ID), and the editor now MOUNTS it. A registry row is a
+      // claim about where a gate fires; without these the Admin gate page
+      // under-reported the surfaces this one blocks (ux-baseline G2(c)).
+      { path: '/items/mirrored-databricks', label: 'Mirrored Databricks catalog — SQL endpoint pairing' },
+      { path: '/api/items/mirrored-databricks', label: 'Mirrored Databricks create (NO_SYNAPSE)' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_SYNAPSE_WORKSPACE: L.synapse },
@@ -194,6 +201,11 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/sql-warehouse', label: 'Databricks SQL' },
       { path: '/admin/domains', label: 'Unity Catalog mirror' },
       { path: '/api/apps/[id]/install', label: 'App install — databricks-job / ml-model provisioners' },
+      // #4183 — same as svc-synapse above: the mirrored-databricks create route
+      // emits this id for NO_DATABRICKS and the editor mounts the Fix-it, so the
+      // Admin gate page must list the surface (ux-baseline G2(c)).
+      { path: '/items/mirrored-databricks', label: 'Mirrored Databricks catalog — UC source validation' },
+      { path: '/api/items/mirrored-databricks', label: 'Mirrored Databricks create (NO_DATABRICKS)' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_DATABRICKS_HOSTNAME: L.databricks },
