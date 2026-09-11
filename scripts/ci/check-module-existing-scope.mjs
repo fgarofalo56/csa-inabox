@@ -206,9 +206,100 @@ export function staleRegistrations(findings, register = KNOWN_DORMANT) {
 
 // ── tiny bicep reader ───────────────────────────────────────────────────────
 
-/** Strip `//` line comments while PRESERVING length, so line numbers stay true. */
+/**
+ * Strip `//` line comments while PRESERVING length, so line numbers stay true.
+ *
+ * STRING-LITERAL AWARE, and that is not a nicety. A naive regex that blanks
+ * every `//` to end-of-line also blanks the `//` inside a quoted URL. Measured
+ * over `modules/admin-plane/main.bicep` at this commit, old reader vs new:
+ *
+ *   OLD  modules 92  resources 27  params 240  vars 311
+ *   NEW  modules 92  resources 27  params 240  vars 311   <- declarations IDENTICAL
+ *   var VALUES that differ: 9
+ *
+ * So the blast radius is NINE MIS-PARSED VAR VALUES, not a lost declaration.
+ * `parseBicep`'s var branch scans continuation lines with a local `j` and leaves
+ * `i` alone, so every `module` / `resource` / `param` line below is still
+ * visited. Eight of the nine were TRUNCATED at the `//` inside a quoted URL
+ * (`icebergCatalogUrl` 30 -> 69 chars, `trinoPolicyRulesUrl` 26 -> 86,
+ * `trinoConsoleAudience` 35 -> 76, `loomCosmosEndpointVal` 35 -> 167,
+ * `icebergConsoleAudience` 61 -> 102, `loomMsLearnMcpEndpoint` 41 -> 71,
+ * `loomPowerBiMcpEndpoint` 43 -> 85, `byoFoundryEndpoint` 44 -> 179). The ninth
+ * RAN AWAY to EOF:
+ *
+ *     var effectiveArmEndpoint = … ? 'https://management.usgovcloudapi.net' : …
+ *
+ * was truncated mid-literal, leaving one unbalanced `(`, so the var-continuation
+ * joiner ran on and `vars.get('effectiveArmEndpoint')` came back 121,678
+ * characters (the whole 9,216-line file from that point down; it is 165 chars
+ * now, and the longest var in the file is 223). THAT is the defect: any guard
+ * asking "which var mentions X" then answered `effectiveArmEndpoint` for any X
+ * appearing anywhere further down — an R7 message naming a var that never
+ * mentions the flag, pointing an investigation at the wrong line.
+ *
+ * (An earlier revision of this comment said the runaway swallowed "every
+ * declaration below it". It did not — measured above, the declaration counts are
+ * identical either way. The real bug needed no exaggeration.)
+ *
+ * Bicep string rules honoured here: single-quoted literals do not span a
+ * newline and escape with a backslash; `'''…'''` multi-line literals do span
+ * newlines and take no escapes. An unterminated quote is treated as an ordinary
+ * character so a malformed file degrades to the old behaviour instead of
+ * consuming the rest of the source.
+ */
 export function blankComments(src) {
-  return src.replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+
+    if (ch === "'" && src.startsWith("'''", i)) {
+      const end = src.indexOf("'''", i + 3);
+      const stop = end === -1 ? src.length : end + 3;
+      out += src.slice(i, stop);
+      i = stop;
+      continue;
+    }
+
+    if (ch === "'") {
+      let j = i + 1;
+      let closed = false;
+      while (j < src.length) {
+        const c = src[j];
+        if (c === '\n') break; // a single-quoted bicep literal cannot span lines
+        if (c === '\\') {
+          j += src[j + 1] === '\n' ? 1 : 2;
+          continue;
+        }
+        if (c === "'") {
+          closed = true;
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      if (closed) {
+        out += src.slice(i, j);
+        i = j;
+        continue;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '/' && src[i + 1] === '/') {
+      let j = i;
+      while (j < src.length && src[j] !== '\n') j += 1;
+      out += ' '.repeat(j - i);
+      i = j;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /** Net unclosed `{ [ (` in a line. */
@@ -240,24 +331,59 @@ export function blockAt(lines, start) {
 }
 
 /**
- * The value of `key:` at `indent` spaces inside a block, joining continuation
- * lines until brackets balance. Depth-sensitive so a `name:` nested inside
- * `properties:` is never mistaken for the resource's own name.
+ * The value of a declaration's OWN `key:`, joining continuation lines until
+ * brackets balance.
+ *
+ * ── BRACE DEPTH, NOT INDENTATION (2026-09-11) ───────────────────────────────
+ *
+ * This read `^ {2}key\s*:` — a regex anchored to EXACTLY two leading spaces.
+ * Bicep is whitespace-insensitive, so a declaration whose body is indented four
+ * spaces (or one, or with a tab) parsed `scope: null`, and every caller that
+ * asks "is this scoped?" got `false` for a declaration that is scoped. A
+ * reviewer used exactly that to slip a Console-UAMI Storage Blob Data
+ * Contributor grant on the cross-subscription lake past the #3338 guards:
+ * identical module, identical call site, body re-indented from 2 to 4, suite
+ * 44/44 GREEN and `az bicep build` rc 0 with the grant in the emitted ARM.
+ * That is the same failure this file's own `LOOM_PREFIX` note records for
+ * `MODULE_RE` — the guard's declared case beaten by a layout change — one
+ * reader further in.
+ *
+ * The fixed indent WAS load-bearing, which is why the fix is not a blanket
+ * `^\s*`: a `name:` nested inside `properties:` must never be mistaken for the
+ * resource's own name. That discrimination is a DEPTH property, and depth is
+ * what is measured now. `base` is the bracket delta of the declaration line
+ * itself — 1 for `resource x 'T@1' = {` and for `= if (cond) {`, and 2 for
+ * `= [for g in gs: {`, whose `[` is still open across the whole body — so a
+ * field is any line whose depth BEFORE it equals that. Everything nested deeper
+ * (a `name:` under `properties:`, a continuation line inside `guid(`) is at a
+ * greater depth and is skipped exactly as before.
+ *
+ * An inline `properties: { … principalId: x }` yields the whole object as the
+ * value of `properties`, never a spurious top-level `principalId` — the match
+ * is anchored to the start of the (trimmed) line.
  */
-export function fieldAt(body, key, indent) {
-  const re = new RegExp(`^ {${indent}}${key}\\s*:\\s*(.*)$`);
-  for (let i = 0; i < body.length; i += 1) {
-    const m = re.exec(body[i].text);
-    if (!m) continue;
-    let value = m[1].trim();
-    let open = delta(value);
-    for (let j = i + 1; j < body.length && open > 0; j += 1) {
-      const t = body[j].text.trim();
-      if (t === '') continue;
-      value += ` ${t}`;
-      open += delta(t);
+export function fieldAt(body, key) {
+  if (body.length === 0) return null;
+  const re = new RegExp(`^${key}\\s*:\\s*(.*)$`);
+  const base = delta(body[0].text);
+  let depth = base;
+  for (let i = 1; i < body.length; i += 1) {
+    const text = body[i].text;
+    if (depth === base) {
+      const m = re.exec(text.trim());
+      if (m) {
+        let value = m[1].trim();
+        let open = delta(value);
+        for (let j = i + 1; j < body.length && open > 0; j += 1) {
+          const t = body[j].text.trim();
+          if (t === '') continue;
+          value += ` ${t}`;
+          open += delta(t);
+        }
+        return { value: value.trim(), line: body[i].line };
+      }
     }
-    return { value: value.trim(), line: body[i].line };
+    depth += delta(text);
   }
   return null;
 }
@@ -265,8 +391,37 @@ export function fieldAt(body, key, indent) {
 /** Whitespace- and quote-normalised, for comparison only. */
 export const norm = (s) => String(s ?? '').replace(/\s+/g, '').replace(/"/g, "'");
 
-const RESOURCE_RE = /^resource\s+([A-Za-z_]\w*)\s+'([^'@]+)@[^']*'\s+(existing\s+)?=\s*(?:if\s*\((.*?)\)\s*)?\{/;
-const MODULE_RE = /^module\s+([A-Za-z_]\w*)\s+'([^']+)'\s*=\s*(?:\[[^\]]*\]\s*)?(?:if\s*\((.*?)\)\s*)?\{/;
+/**
+ * A declaration's optional `[for … :` loop header, matched as a prefix.
+ *
+ * `(?:\[\s*for\s+[^:]*:\s*)?` and NOT the `\[[^\]]*\]` this file shipped first.
+ * That earlier spelling required the bracket to CLOSE on the same line, and a
+ * bicep loop never closes it there — the `]` sits after the body's `}`, many
+ * lines below. So EVERY `module x '…' = [for g in gs: {` declaration in the tree
+ * was invisible to this reader, and any guard built on `parsed.modules` counted
+ * such a declaration as ABSENT rather than as something it had failed to parse.
+ *
+ * That is not hypothetical. A reviewer used exactly this to add a second,
+ * unregistered call site of `data-plane/dlz-lake-grant-pass.bicep` — in `[for]`
+ * form, in `main.bicep` itself. Re-measured here before the fix: the mutation
+ * applied to the real file left #3338's call-site guard GREEN at 39/39 and
+ * `check-module-existing-scope.mjs` at rc 0, and `az bicep build` accepted it
+ * (rc 0, ARM emitted). The guard's own declared case, beaten by a layout change.
+ *
+ * `[^:]*:` stops at the loop header's own colon, which covers `[for g in gs:`
+ * and `[for (g, i) in gs:`. A loop expression that itself contains a colon still
+ * fails to match — that is the pre-existing fail-CLOSED behaviour (no match, no
+ * declaration recorded), not a hole this widening introduces.
+ */
+const LOOP_PREFIX = '(?:\\[\\s*for\\s+[^:]*:\\s*)?';
+const RESOURCE_RE = new RegExp(
+  `^resource\\s+([A-Za-z_]\\w*)\\s+'([^'@]+)@[^']*'\\s+(existing\\s+)?=\\s*${LOOP_PREFIX}(?:if\\s*\\((.*?)\\)\\s*)?\\{`,
+);
+const MODULE_RE = new RegExp(
+  `^module\\s+([A-Za-z_]\\w*)\\s+'([^']+)'\\s*=\\s*${LOOP_PREFIX}(?:if\\s*\\((.*?)\\)\\s*)?\\{`,
+);
+/** True for the `= [for … :` form. Recorded so a finding can say so out loud. */
+const LOOP_FORM_RE = /=\s*\[\s*for\s/;
 const PARAM_RE = /^param\s+([A-Za-z_]\w*)\s/;
 const VAR_RE = /^var\s+([A-Za-z_]\w*)\s*=\s*(.*)$/;
 
@@ -312,9 +467,10 @@ export function parseBicep(source, file = '<memory>') {
         type: r[2],
         existing: Boolean(r[3]),
         condition: r[4] ? r[4].trim() : null,
+        loop: LOOP_FORM_RE.test(text),
         line: i + 1,
-        name: fieldAt(body, 'name', 2)?.value ?? null,
-        scope: fieldAt(body, 'scope', 2)?.value ?? null,
+        name: fieldAt(body, 'name')?.value ?? null,
+        scope: fieldAt(body, 'scope')?.value ?? null,
       });
       continue;
     }
@@ -326,8 +482,9 @@ export function parseBicep(source, file = '<memory>') {
         symbol: m[1],
         target: m[2],
         condition: m[3] ? m[3].trim() : null,
+        loop: LOOP_FORM_RE.test(text),
         line: i + 1,
-        scope: fieldAt(body, 'scope', 2)?.value ?? null,
+        scope: fieldAt(body, 'scope')?.value ?? null,
         params: paramBindings(body),
       });
     }
@@ -344,10 +501,32 @@ export function parseBicep(source, file = '<memory>') {
  * lake account name arrives as a PROPERTY of it. A reader that only saw
  * top-level keys would report those four modules as unreachable and print a
  * clean tree.
+ *
+ * THE BLOCK IS LOCATED BY DEPTH, not by indentation — the same 2026-09-11 fix
+ * `fieldAt` carries and for the same reason. This was
+ * `findIndex(/^ {2}params\s*:\s*\{/)`, so a call site whose body is indented
+ * four spaces bound NOTHING and read as a module that passes no arguments. The
+ * body of the block below was already depth-relative; only the way in was not.
+ *
+ * KNOWN AND FAIL-CLOSED: a fully inline `params: { a: b }` on one line yields
+ * an EMPTY map, because the walk terminates the moment depth returns to 0. That
+ * is a miss, not a silent pass — every consumer treats an absent binding as
+ * "registered but NOT BOUND" or as an unregistered call site, both of which are
+ * red. It is recorded here rather than left for someone to discover.
  */
 export function paramBindings(body) {
   const out = new Map();
-  const start = body.findIndex((b) => /^ {2}params\s*:\s*\{/.test(b.text));
+  if (body.length === 0) return out;
+  const base = delta(body[0].text);
+  let start = -1;
+  let scan = base;
+  for (let i = 1; i < body.length; i += 1) {
+    if (scan === base && /^params\s*:\s*\{/.test(body[i].text.trim())) {
+      start = i;
+      break;
+    }
+    scan += delta(body[i].text);
+  }
   if (start < 0) return out;
 
   let depth = 0;

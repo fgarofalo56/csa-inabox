@@ -79,6 +79,176 @@
 // failure, not a no-op. Grants for LONG-LIVED shared identities (the Console
 // UAMI above all) belong in a child story of #3336 that deals with reconciliation
 // explicitly; they are deliberately NOT in this pass.
+//
+// ── #3338 ASKED FOR EXACTLY THAT, AND IT IS REFUSED HERE (2026-09-07) ────────
+//
+// #3338 ("transform-runner is bound but not granted — artifact writes will
+// 403") proposes threading `adminPlane.outputs.uamiConsolePrincipalId` in and
+// adding a Storage Blob Data Contributor (ba92f5b4-…) assignment for it. That is
+// the Console UAMI — precisely the long-lived shared identity the paragraph
+// above excludes, at precisely the role and scope the 2026-08-13 measurement
+// recorded above as ALREADY ASSIGNED out-of-band on the live Commercial lake.
+// Taking it would trade an unreachable 403 for a RoleAssignmentExists that fails
+// the whole deployment: the #3329 / #3333 P0 class this file exists to avoid.
+// The repo has paid for that shape three times already, cited by SYMBOL because
+// line numbers rot (an earlier revision of this header cited
+// admin-plane/main.bicep:9095 and this file's own sibling diff moved that line):
+// main.bicep's `adminAppResourcesRbac` gating note (the app-resources leaf
+// "failed RoleAssignmentExists on EVERY deploy in BOTH topologies"),
+// main.bicep's monitoring-reader-rbac `digestPrincipalId: ''` note, and
+// admin-plane/main.bicep's note on the REMOVED `reportSubscriptionsPrincipalId`
+// output.
+//
+// It is refused on a second, independent ground: the 403 is not reachable at
+// head, so the grant would enable nothing while risking the estate. Measured
+// 2026-09-07 in apps/loom-transform-runner — `requirements.txt` pulls no
+// `azure-storage-*` package, `LOOM_TRANSFORM_ARTIFACTS_ACCOUNT` has no reader
+// anywhere in the repo, and every endpoint in `app/main.py` runs inside a
+// `tempfile.TemporaryDirectory` and returns target/manifest.json inline. There
+// is no write to 403 on. #3338's real acceptance criterion is an
+// artifact-persistence path in that app, which does not exist yet.
+//
+// Five guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
+// line. GUARDS 1-4 are keyed to an INVENTORY of this file and its call site;
+// GUARD 5 is keyed to an INVARIANT of the DEPLOYMENT and does not name this file
+// at all. Five earlier revisions each lost to one edit — revision 1 keyed the
+// refusal to param NAMES (`/PrincipalId$/`), so the identical Console-UAMI grant
+// under `consoleUamiObjectId` read green; revision 2 keyed it to a
+// `principalId:` at exactly four spaces inside a top-level `resource`, so an
+// inline `properties: { … }` and a grant delegated to a child module both read
+// green while compiling to the same ARM; revision 3 keyed everything to
+// declarations IN THIS FILE, so a reviewer left the file untouched and swapped
+// what main.bicep BINDS to it — one line at the call site made this pass grant
+// the Console UAMI with every guard green (measured 2026-09-09: the parent
+// commit's suite passed 35/35 on that mutation applied to the real main.bicep);
+// revision 4 added the call site but stayed keyed to THIS FILENAME and to the
+// 185 `.bicep` under platform/fiab/bicep, so a reviewer simply added a FILE —
+// a 25-line sibling granting the Console UAMI Storage Blob Data Contributor on
+// the same lake, invoked at the same scope — and every guard was green again
+// (re-measured 2026-09-11 against the real shipped tree: revision 4's suite
+// rc 0, 40/40; `az bicep build` rc 0, with the Contributor grant readable in the
+// emitted ARM under `[variables('lakeAdoptSub')]`); and revision 5 keyed the
+// population to a structural property of the DEPLOYMENT but read that property
+// with an indentation-anchored regex, so the same sibling with its call-site
+// body at FOUR spaces instead of two was invisible again — rc 0, 44/44, build
+// rc 0, same tuple in the ARM.
+// Enumerating one more syntax would only move the next escape, so the key is now
+// the three bicep KEYWORDS that must begin a statement and that no layout can
+// hide, plus the call site's ARGUMENTS, plus a fifth key that is not a filename
+// at all:
+//
+//   GUARD 1 — every `param` this file declares is in PASS_PARAM_REGISTER with a
+//     `kind` and a reason. A `principal` param must reach the `principalId` of a
+//     real role assignment; a `config` param must not. Adding ANY param under
+//     ANY name, referenced or not, is RED until a reviewer registers it — which
+//     is the half-applied form of #3338's fix (param threaded, assignment
+//     forgotten), including the form that is referenced by a `!empty(...)`
+//     grant-gate var and a counted output.
+//   GUARD 2 — every `resource` and `module` this file declares is in
+//     PASS_BODY_REGISTER, every principal that actually reaches a `principalId`
+//     is on a self-minted allowlist with a measured reason, and every role
+//     definition GUID reachable inside a roleAssignments declaration is in
+//     PASS_GRANTED_ROLES. The inventory half is what closes the inline-object,
+//     `[for]`-loop and delegated-module forms together instead of one at a time;
+//     the role half is what closes a one-token Reader→Contributor swap, which
+//     adds no declaration at all and would falsify this file's own
+//     `s3GatewayRoleDefinitionId` @description.
+//   GUARD 3 — only modules whose grant this pass OWNS may gate their deploy on
+//     `loomStorageWillBeGranted`.
+//   GUARD 4 — this pass has exactly ONE call site in the WHOLE REPOSITORY (every
+//     tracked `.bicep` — 357 of them at this commit, not the 185 under
+//     platform/fiab/bicep, and including the `= [for … : {` declaration form),
+//     that call site's
+//     `scope:` is registered, every argument bound to it is registered, and each
+//     `principal` argument is traced hop by hop — main.bicep's expression, the
+//     admin-plane output behind it, the minting module's output behind that — to
+//     a `userAssignedIdentities` resource s3-gateway-aca.bicep DECLARES rather
+//     than adopts. That terminal check is the structural form of "minted by this
+//     run", so it cannot be satisfied by renaming.
+//
+//     Revision 1 of this guard claimed that sentence while measuring only
+//     `main.bicep`, through a module regex that could not parse a loop header. A
+//     reviewer beat it twice, both compiling and both 39/39 GREEN: a second call
+//     site in `modules/admin-plane/main.bicep` (where the sibling lake-RBAC
+//     delegations already live), and a second call site in `main.bicep` itself
+//     written as `= [for … : {`. Revision 2 then read 185 files and a reviewer
+//     beat it a third time from OUTSIDE that tree: `deploy/bicep/gov/main.bicep`,
+//     which `.github/workflows/deploy-gov.yml` builds and deploys, and which
+//     cloud-parity.md makes the likeliest home for a boundary-specific grant
+//     (measured 2026-09-11: revision 2's suite rc 0, 40/40 GREEN; `az bicep
+//     build` of the mutated Gov orchestrator rc 0, 126,243 bytes). The
+//     population is now the repository, proved complete against
+//     `git ls-files '*.bicep'` rather than against a directory list.
+//
+//   GUARD 5 — and the fifth key is not this file's name. Three teeth:
+//
+//     TOOTH 1. Every module call site ANYWHERE in the repository whose `scope:`
+//       deploys into ANOTHER SUBSCRIPTION — a two-argument `resourceGroup()`, a
+//       `subscription(<id>)`, a `managementGroup()` — must be registered by
+//       (file, symbol, target). A new FILE that grants on this lake cannot avoid
+//       being deployed at this lake's scope, so it cannot avoid the register.
+//       Measured at this commit: 123 cross-subscription call sites across all
+//       357 `.bicep`, 112 in the vendored Azure Landing Zones tree (exempt, and
+//       the exemption is re-measured in-suite to prove that tree references
+//       neither this pass nor the lake's adopt symbols), 11 Loom's own.
+//     TOOTH 2a. Every `Microsoft.Authorization/roleAssignments` reachable from a
+//       call site that deploys TO THE SAME PLACE as this pass — compared by
+//       var-EXPANDED scope identity, so `resourceGroup(adoptSub(adopt,
+//       'storage-adls'), adoptRg(adopt, 'storage-adls'))` and
+//       `resourceGroup(lakeAdoptSub, lakeAdoptRg)` compare equal — must satisfy
+//       the SAME self-minted-principal and registered-role checks GUARD 2
+//       applies here. Keyed on the scope STRING it was beaten by respelling.
+//     TOOTH 2b. Every role assignment that could land on a storage account,
+//       anywhere in ANY cross-subscription subtree, must be registered —
+//       excluded only when its `scope:` names a local resource whose TYPE is
+//       structurally not a storage account. No `scope:` at all is IN (it lands
+//       at the deployment's resource group); an unresolved scope is IN. This is
+//       the tooth that does not care whether the enclosing call site is spelled
+//       like the lake's, and it is the answer to the residual below. Measured:
+//       36 modules reachable from the 11 Loom sites, 40 role assignments among
+//       them, 20 IN by that rule and each registered with a reason.
+//
+//     All three are read through a BRACE-DEPTH field reader. They were read
+//     through an indentation-anchored one, and a reviewer re-indented a call
+//     site body from two spaces to four: the scope parsed as null, the site
+//     left the population, and the Console-UAMI Contributor grant on this lake
+//     shipped 44/44 green with `az bicep build` rc 0. A structural population
+//     key is only as structural as the reader beneath it.
+//
+// WHAT THAT DOES NOT CLAIM. It is source analysis over this file, the
+// repository's module declarations, and the three call-chain hops named above,
+// not an assertion about the compiled ARM — only `az bicep build` over this pass
+// could make that one, and it is not run from node:test. Nor is it a claim about
+// every route by which this pass could come to grant something else: the chain's
+// registration stops at s3-gateway-aca.bicep's `storageIdentity` declaration,
+// and a change INSIDE that module that made the symbol resolve to a pre-existing
+// identity while keeping the `= {` form is outside what the guards read. The
+// call-site reader is line-oriented, so a declaration whose `{` is not on the
+// `module` line, or whose loop header itself contains a `:`, fails to match and
+// is not recorded — fail-CLOSED for the reader, but it means "one call site" is
+// a statement about declarations this reader can parse. GUARD 5 tooth 1's
+// population key is the SCOPE EXPRESSION, so a grant reaching this lake's
+// resource group without a two-argument `resourceGroup(...)` is outside THAT
+// tooth. An earlier revision of this paragraph went on to call that
+// unreachable, "not reachable from today's subscription-scoped main.bicep".
+// That was WRONG and a reviewer measured it: main.bicep runs in the ADMIN
+// subscription but already deploys INTO others (`dlz`, and
+// `setupOrchestratorSpokeRbac` at `subscription(subId)`), and inside one of
+// those a single-argument `resourceGroup(<rg>)` — or an assignment with no
+// `scope:` — resolves in the SPOKE, which holds this lake exactly when the
+// operator's `dlzSubscriptionIds` intersects the adopt plan's storage-adls
+// subscription. Nothing in the code forbids that and a dlz-attach estate makes
+// it natural. Tooth 2b is the answer: every storage-reaching grant in EVERY
+// cross-subscription subtree is registered, not only the lake-scoped ones.
+// `check-module-existing-scope.mjs`, the shipped checker, still walks
+// only platform/fiab/bicep and is blind to both of the 2026-09-11 bypasses
+// (rc 0, no NEW finding, on each) — its invariant is #3333's cross-RG residency,
+// not this one, and widening it is a separate change with its own measurement.
+// What IS checkable, and is checked: no new param, resource or module can enter
+// this file, no different role can be granted from it, no second call site or
+// different bound value or call-site scope can appear anywhere in the
+// repository, and no new module can be deployed into this lake's subscription at
+// all, without a reviewer registering the change.
 
 targetScope = 'resourceGroup'
 
