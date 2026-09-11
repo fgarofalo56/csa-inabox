@@ -34,7 +34,9 @@ subscription — the default answers plausibly and wrongly.
 | C3 | "v2 … leaves the gateway, management plane and developer portal publicly reachable" as a property of **v2** | True of **VNet integration** (Standard v2 and Premium v2). **Premium v2 also supports VNet injection** for complete inbound+outbound isolation — and the live PremiumV2 estate is `Internal`. | §2 |
 | C4 | "No availability zones and no multi-region" as a property of **v2** | **Premium v2 has availability zones.** Multi-region genuinely is on the v2 "currently unavailable features" list. Half right. | §2 |
 | C5 | `llm-content-safety` at the gateway in all boundaries (Q3, Waves D/E) | Azure AI Content Safety is **not in DoD IL4/IL5/IL6 audit scope**, and the policy hard-requires a Content Safety resource. **IL5 cannot run this policy.** | §2 Q3, §3.4, Wave D/E |
-| C6 | `llm-token-limit` "built, opt-in" with no boundary qualifier | `apim.bicep:423` `aoaiLlmPoliciesSupported = !isSovereign` — the LLM policies are **not authored in GCC-High or IL5 today**. An undeclared parity gap. | §3.2, Wave D |
+| C6 | `llm-token-limit` "built, opt-in" with no boundary qualifier | `apim.bicep:423` `aoaiLlmPoliciesSupported = !isSovereign` — the LLM policies are **not authored in GCC-High or IL5 today**. Now tracked independently of this PRP as **#4460**. | §3.2, Wave B2, Wave D |
+| C11 | "at IL5 neither layer is Content Safety" *(added 2026-09-11, wrong)* | **False.** `il5.bicepparam:178` → `admin-plane/main.bicep:2077` → `:3665` → `:6224`: the stock IL5 deploy falls back to the AIServices `/contentsafety` data plane, so IL5 **does** screen — a capability blank at IL4/IL5WI/IL6. | §3.4.1, Wave 0 task 5 |
+| C12 | Wave B defaulted the gateway ON in all six param files at once | B before D would route GCC-High and IL5 through a gateway with **no spend control** (C6), and B's Commercial-only receipt would not surface it. | Wave B split into **B1 / B2** |
 | C7 | GCC absent from the boundary list | `apim.bicep:18` allows `'GCC'` and `gcc.bicepparam:131` sets the SKU. GCC is in scope — and is **supported-in-code, never exercised**. | §2.1, §5 |
 | C8 | Wave acceptance was `build-params` / what-if / cost-delta only | No wave carried a deploy receipt. `deploy-integrity.md` R2: merged is never done. | every wave |
 | C9 | The Gov prerequisite check was a Verification/Risks bullet | #4442 states it "gates the rest. It should be the first task". | **Wave 0** |
@@ -67,10 +69,15 @@ deploy day-one in every boundary.
 3. All four service families route through the gateway (§2, Q3) — with the IL5
    content-safety substitution of §3.4 applied, not silently dropped.
 4. **Every supported boundary gets the same capability**, or the gap is declared
-   with an owner and a date (`cloud-parity.md`). Two gaps are declared here and
-   nowhere else: semantic cache in Gov (Q4) and content safety at IL5 (Q3/§3.4).
-   Each has an owner, a date, and a **substitute**, because `cloud-parity.md` §3
-   makes "that Azure service isn't in Gov" the START of the design problem.
+   with an owner and a date (`cloud-parity.md`). Three gaps are declared, each
+   with an owner, a date and a **substitute** — because `cloud-parity.md` §3
+   makes "that Azure service isn't in Gov" the START of the design problem:
+   semantic cache in Gov (Q4), content safety at IL5 (Q3 / §3.4 / §3.4.1), and
+   the sovereign LLM-policy exclusion (§3.2). **A gap recorded only in this file
+   is not tracked** — the third one is **#4460**, filed independently so it
+   outlives this PR either way. Q4 and the IL5 gap are owned here because they
+   are design decisions this epic makes; #4460 is a pre-existing tree defect this
+   epic merely found.
 5. Greenfield **and** brownfield, Commercial **and** sovereign, each with its own
    receipt (`deploy-integrity.md` R4/R5). A boundary with no receipt is named as
    unexercised, never implied working.
@@ -107,7 +114,7 @@ three. GCC was missing from the 2026-09-10 draft entirely.
 | Commercial | `PremiumV2` (`commercial.bicepparam:107`, `commercial-full.bicepparam:17`) | **exercised** — the live DMLZ estate, §3.5 |
 | DMLZ (the live estate) | `PremiumV2` (`tenant-dmlz.bicepparam:54`) | **exercised** |
 | GCC | `PremiumV2` (`gcc.bicepparam:131`) | **supported-in-code, NEVER exercised** — 0 runs have ever executed a deploy step; lane `disabled_manually`; last run 2026-08-08. Recorded decision: `cloud-parity.md` § Measured example — GCC, and `PRPs/active/drain-2026-08-31/DECISIONS.md` § "#4071 + #3078". |
-| GCC-High | `Premium` (`gcc-high.bicepparam:125`) | **exercised** — run 33519232492 (2026-09-01), job `Deploy + validate CSA Loom in GCC-High` = `failure`, **steps=33**. A failing deploy job that ran IS a receipt. Re-measured 2026-09-11: the most recent runs show that job at `steps=0`, so the receipt is dated, not current. |
+| GCC-High | `Premium` (`gcc-high.bicepparam:125`) | **exercised** — run 33519232492 (2026-09-01), job `Deploy + validate CSA Loom in GCC-High` = `failure`, **steps=33**. A failing deploy job that ran IS a receipt. The last receipt is dated 2026-09-01, but the lane is **live and one click from a fresh one**: runs 34485799151 / 34360878473 / 34235333861 are `status=waiting` on the `gcc-high-deploy` **environment approval gate** (`waitTimer=0`, `current_user_can_approve=true`), with the deploy job at `steps=0` **because it has not started**. That is NOT the GCC skipped-at-zero shape — an approval yields a receipt. |
 | IL5 | `Premium` (`il5.bicepparam:123`) | **supported-in-code, NEVER exercised** — `gh run list --workflow deploy-fiab-il5.yml` returns `[]`. Zero runs, ever. Watched by `scripts/ci/check-deploy-staleness.mjs`. |
 
 `dlz-attach.bicepparam` is **not** a boundary. It is `using
@@ -242,8 +249,8 @@ Wave C is blocked on this answer. Do not guess it.
 |---|---|---|
 | Per-endpoint backends + circuit breaker (429/5xx, honours `Retry-After`) | `apim.bicep:431-461` | built, authored in ALL boundaries (backend *properties*, not policies) |
 | Load-balanced backend **pool**, priority LB | `apim.bicep:462-480` | built, all boundaries |
-| `llm-token-limit` (per-consumer TPM) | `apim.bicep:507` | built, opt-in, **Commercial + GCC only** — see §3.2 |
-| `llm-semantic-cache-lookup` / `-store` | `apim.bicep:510-513` | built, opt-in, **Commercial + GCC only**; needs external Redis + embeddings |
+| `llm-token-limit` (per-consumer TPM) | `apim.bicep:506-508` | built, opt-in, **Commercial + GCC only** — see §3.2, #4460 |
+| `llm-semantic-cache-lookup` / `-store` | `apim.bicep:509-514` | built, opt-in, **Commercial + GCC only**; needs external Redis + embeddings |
 | Managed-identity auth to backends (keyless) | `apim.bicep:66-67`, audience switched per cloud at `:429` | built, all boundaries |
 | Console routing switch + graceful fallback | `LOOM_AOAI_VIA_APIM`, `LOOM_AOAI_APIM_URL` | built |
 | Brownfield adopt of an existing APIM | `main.bicep:624-626`, `adoptMode(adopt,'apim')` | built |
@@ -269,10 +276,21 @@ ABSENT in sovereign Azure Government APIM") but it is an **assumption recorded a
 a fact**, and it is unqualified: it disables token limiting, which is the
 gateway's only spend control, across two boundaries. Under `cloud-parity.md` this
 is either a gap that must be declared with an owner and a date, or a limitation
-that must be *measured* and then removed. **Wave 0 measures it** — the LLM
+that must be *measured* and then removed. **Wave 0 task 2 measures it** — the LLM
 policies' tier support (`Developer | Basic | Basic v2 | Standard | Standard v2 |
 Premium | Premium v2`) includes Premium classic, so the open question is
 availability in Gov APIM, not tier.
+
+**Tracked as #4460**, filed 2026-09-11 so this gap survives independently of
+whether this PRP merges. Before that issue existed the gap was recorded **only**
+inside this unmerged draft — which is not tracking. #4460 owns the measurement,
+the readiness row, and the substitute-if-absent decision; this PRP consumes its
+answer in Wave B2 and Wave D.
+
+It also gates more than token limiting: `aoaiSemanticCacheEnabled` is ANDed with
+`aoaiLlmPoliciesSupported` (`apim.bicep:509/512`), so a fully provisioned Gov
+RediSearch cache would still author nothing — Q4's whole point defeated by a flag
+it never mentions. Wave F must check this, not assume it.
 
 ### 3.3 The pool gap — verified at the line
 
@@ -373,12 +391,87 @@ Filtering for Azure OpenAI in Foundry Models*" — i.e. in Gov you must apply to
 *weaken* the filters, which only makes sense if they are on. And Azure OpenAI is
 ✅ through IL6 in audit scope.
 
-So at IL5 the gateway authors pool + circuit breaker + `llm-token-limit` +
-`llm-emit-token-metric`, and **the AOAI deployment's content filter owns the
-moderation verdict**. This is a *different layer*, not a missing capability — and
-it must be stated that way on the readiness surface, per boundary, so no operator
-reads "no gateway content safety" as "no content filtering". Silence here would
-be the `no-vaporware.md` failure in reverse: an unstated protection.
+So at IL5 the gateway authors pool + circuit breaker + `llm-emit-token-metric`
+(**not** `llm-token-limit` — that is unauthored in both sovereign boundaries
+today, §3.2 / #4460), and **the AOAI deployment's content filter is the
+audit-scope-clean layer that should own the moderation verdict**. This is a
+*different layer*, not a missing capability — and it must be stated that way on
+the readiness surface, per boundary, so no operator reads "no gateway content
+safety" as "no content filtering". Silence here would be the `no-vaporware.md`
+failure in reverse: an unstated protection.
+
+#### 3.4.1 What IL5 screens with TODAY — and the audit-scope exposure it creates
+
+The sentence above says what IL5 *should* run. It is not what the stock IL5
+deploy wires today, and the difference is the whole point of this subsection.
+Traced at head:
+
+```bicep
+// il5.bicepparam:178
+param agentFoundryEnabled = true
+// il5.bicepparam:346
+param aiFoundryEnabled = false
+
+// platform/fiab/bicep/main.bicep:606
+func adoptMode(a object, k string) string => a[?k].?mode ?? 'create'
+// platform/fiab/bicep/main.bicep:700
+var provisionAgentFoundry = agentFoundryEnabled && adoptMode(adopt, 'foundry') == 'create'
+
+// admin-plane/main.bicep:2077
+var agentFoundryCreate = agentFoundryEnabled && provisionAgentFoundry
+// admin-plane/main.bicep:3665
+var loomAiEnrichEndpoint = agentFoundryCreate
+  ? agentFoundry!.outputs.aiServicesEndpoint
+  : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : '')
+
+// admin-plane/main.bicep:6224
+{ name: 'LOOM_CONTENT_SAFETY_ENDPOINT', value: contentSafetyEnabled ? contentSafety!.outputs.endpoint : loomAiEnrichEndpoint }
+```
+
+`adoptMode` defaults an absent key to `'create'`, so on a stock IL5 deploy
+`agentFoundryCreate` is **true** and `LOOM_CONTENT_SAFETY_ENDPOINT` falls back to
+the multi-service AIServices endpoint. **The stock IL5 deploy therefore DOES
+screen prompts, via the `/contentsafety` data plane on the AIServices account** —
+even though `contentSafetyEnabled = false`. `admin-plane/main.bicep:170`
+documents this fallback as the intended design.
+
+**This corrects an earlier claim in this PRP that "at IL5 neither layer is
+Content Safety". That was false.** IL5 does reach a Content Safety surface.
+
+**The exposure that follows, which no other artifact closes.** The audit-scope
+table enumerates AI capabilities **per capability, not per account kind**: there
+is no generic "Azure AI Services (multi-service)" row that would authorize the
+`/contentsafety` data plane. The only row covering it is `Foundry: Azure AI
+Content Safety`, which is **blank at IL4 / IL5WI / IL6**. Hosting the call on a
+multi-service account does not change which capability is being exercised. So the
+stock IL5 deploy is wired to call a capability outside IL5's audit scope.
+
+**Mitigation, and why this is not a blocker:** IL5 has **never deployed** —
+`gh run list --workflow deploy-fiab-il5.yml` returns `[]`, zero runs ever (§2.1).
+There is no live exposure. But the fallback is already wired and would activate
+on IL5's **first** deploy, which is exactly what Wave 0 task 1 produces.
+**Therefore this must be resolved BEFORE Wave 0 stands IL5 up**, not after.
+
+**Resolution required (Wave 0 task 5):** decide whether IL5's moderation verdict
+comes from the AOAI deployment-level filter — which is audit-scope-clean, since
+Azure OpenAI is ✅ through IL6 — and if so, stop deriving
+`LOOM_CONTENT_SAFETY_ENDPOINT` from `loomAiEnrichEndpoint` at IL5 and surface the
+layer that actually owns the verdict. Do not leave the console pointed at a
+`/contentsafety` host that IL5's accreditation does not cover.
+
+Measured alternative, recorded for that decision but **not recommended without
+its own check**: `Foundry: Azure AI Content Moderator` is ✅ through IL5WI (blank
+at IL6) in the same audit-scope fetch. It is the older, separate service and this
+PRP has **not** verified its lifecycle status; treat it as a lead, not an answer.
+
+**Related — the adopt/BYO complement is already tracked.** #4458 covers the other
+branch of the same `:6224` expression: on an adopt/BYO Foundry (`EXISTING_AOAI`
+set → `provisionAgentFoundry` false) with `aiFoundryEnabled = false`,
+`loomAiEnrichEndpoint` is the **empty string**, and
+`foundry-client.ts` `shieldPrompt` returns `{ blocked: false }` silently rather
+than firing `safetyFailOpen` — a `deploy-integrity.md` R7 violation. #4458 states
+the stock path "is fine" from an R7 standpoint, which is correct; the audit-scope
+question above is a different axis and is owned here, not there.
 
 **Declared gap — owner and date (`cloud-parity.md` §1):**
 
@@ -491,20 +584,33 @@ Wave 0, re-scoped to the questions that are actually still open:
    up in `usgovvirginia` in GCC-High and IL5. Per the Gov access rule this comes
    from a **GitHub Actions run in the boundary, never local `az`**. IL5 has never
    had a deploy run at all (§2.1), so this is also IL5's first receipt.
-2. **Do the LLM policies exist in Gov APIM?** (§3.2). `aoaiLlmPoliciesSupported =
-   !isSovereign` is an assumption, not a measurement. Author
-   `llm-token-limit` on a Gov instance and record whether the PUT is accepted.
-   The answer decides whether Wave D removes the sovereign exclusion or Loom
-   declares a second dated gap.
+2. **Do the LLM policies exist in Gov APIM?** (§3.2, tracked by **#4460**).
+   `aoaiLlmPoliciesSupported = !isSovereign` is an assumption, not a
+   measurement. Author `llm-token-limit` on a Gov instance and record whether the
+   PUT is accepted. The answer decides whether Wave D removes the sovereign
+   exclusion or Loom declares a second dated gap — and it **unblocks Wave B2**.
 3. **Prompt Shields on AOAI at IL5** (§3.4, explicitly unverified). Decides
    whether IL5's jailbreak defence is covered by the substitute or is its own
    declared gap.
 4. **Q5** (§2.4) — the operator answers; record it in #4442 as Q1's addendum.
+5. **IL5's content-safety audit-scope exposure** (§3.4.1) — the stock IL5 deploy
+   wires `LOOM_CONTENT_SAFETY_ENDPOINT` to the AIServices `/contentsafety` data
+   plane, a capability blank at IL4/IL5WI/IL6. **This must be resolved BEFORE
+   task 1 stands IL5 up**, because task 1 is what makes it live. Decide the
+   owning layer, and re-point or gate the env accordingly.
 
-- **Acceptance:** each of 1–3 is a recorded observation from an in-boundary
-  Actions run (or, for 3, a Learn/portal statement naming Gov explicitly), and Q5
-  has an operator answer. **A negative is a successful Wave 0** — it redirects the
-  design instead of invalidating it late.
+**Cheapest first receipt — GCC-High is one click away.** Measured 2026-09-11:
+runs `34485799151`, `34360878473`, `34235333861` are `status=waiting`, and their
+`Deploy + validate CSA Loom in GCC-High` job is `status=waiting, steps=0`
+**because it has not started** — the run is paused on the `gcc-high-deploy`
+environment approval gate (`pending_deployments`: `waitTimer=0`,
+`current_user_can_approve=true`). This is **not** the GCC skipped-at-zero shape.
+An approval turns any one of the three into a fresh receipt for tasks 1 and 2.
+
+- **Acceptance:** each of 1, 2 and 5 is a recorded observation from an
+  in-boundary Actions run (for 3, a Learn/portal statement naming Gov
+  explicitly), and Q5 has an operator answer. **A negative is a successful
+  Wave 0** — it redirects the design instead of invalidating it late.
 
 ### Wave A — the multi-endpoint pool (the core of the issue)
 **Owns:** `platform/fiab/bicep/modules/admin-plane/main.bicep` (the
@@ -533,11 +639,42 @@ template, no APIM params). Do not glob.
 - **Keep them separable.** Author-then-cutover must survive.
 - Set them in **every** one of the six files above, with any boundary that must
   differ stating why at the line (the `il5.bicepparam` precedent).
-- **Acceptance:** each of the six `.bicepparam` builds and resolves the expected
-  values, **and** a Commercial deploy receipt shows the gateway authored and the
-  console routing through it — with the separability preserved (one deploy with
-  `aoaiGateway` on and `aoaiViaApim` off, proving the gateway stands up without
-  taking traffic).
+
+> **⛔ B is SPLIT. B1 ships; B2 is gated.**
+>
+> Defaulting `aoaiViaApim` ON in `gcc-high.bicepparam` and `il5.bicepparam`
+> routes those boundaries' AI traffic through a gateway that authors **no**
+> `llm-token-limit` — `aoaiLlmPoliciesSupported = !isSovereign`
+> (`apim.bicep:423`, §3.2, #4460). Wave D is where that gets resolved, so a
+> plain B-before-D order leaves GCC-High and IL5 carrying traffic with **no
+> spend control**. Wave B's receipt is Commercial-only, so it would not surface.
+> This is a sequencing hole, not a footnote.
+>
+> - **B1 — Commercial / GCC (now).** Default ON in `commercial.bicepparam`,
+>   `commercial-full.bicepparam`, `gcc.bicepparam`, `tenant-dmlz.bicepparam`.
+>   `isSovereign` excludes GCC (`apim.bicep:202`), so all four get the full
+>   policy set including `llm-token-limit`. No hole.
+> - **B2 — GCC-High / IL5 (BLOCKED on #4460's resolution, i.e. Wave D).**
+>   `gcc-high.bicepparam` and `il5.bicepparam` keep `aoaiViaApim` **off** until
+>   the sovereign spend control exists — either `llm-token-limit` authored
+>   (Wave 0 task 2 says the policy is available in Gov) or a declared Azure-native
+>   substitute wired (`rate-limit-by-key` / `quota-by-key`, which counts requests
+>   not tokens and must be labelled as such). `aoaiGateway` MAY default ON in B1
+>   for those two — authoring the gateway without routing to it is precisely the
+>   separability property, and it is what lets Wave 0 smoke-test in-boundary.
+>
+> B2 is not a deferral of cloud parity: it is a refusal to ship Gov a gateway
+> that is *worse* than the direct path it replaces. The parity target is B2
+> landing, and it is tracked by #4460, not by this PRP alone.
+
+- **Acceptance (B1):** each of the four B1 `.bicepparam` builds and resolves the
+  expected values, **and** a Commercial deploy receipt shows the gateway authored
+  and the console routing through it — with the separability preserved (one
+  deploy with `aoaiGateway` on and `aoaiViaApim` off, proving the gateway stands
+  up without taking traffic).
+- **Acceptance (B2):** the same, plus an in-boundary receipt showing a spend
+  control actually present in the authored policy XML for that boundary. A Gov
+  deploy whose policy XML has no rate/token ceiling fails this wave.
 
 ### Wave C — SKU + capacity — BLOCKED on Q5
 **Owns:** `apimSku` in the six boundary param files, `capacity` threading from
@@ -582,10 +719,15 @@ definitions.
   wrong.
 - **Where it is off, wire the substitute and SAY so** — the AOAI deployment's
   default-on content filter owns the verdict, surfaced per boundary on the
-  readiness page. An unstated protection is as wrong as an overstated one.
-- Resolve §3.2 with Wave 0's answer: either delete the `!isSovereign` exclusion
-  on `llm-token-limit`, or declare a second dated gap for it. Do not leave it
-  undeclared.
+  readiness page. An unstated protection is as wrong as an overstated one. At
+  IL5 this also means **undoing the `/contentsafety` fallback** at
+  `admin-plane/main.bicep:6224` per §3.4.1 / Wave 0 task 5 — otherwise the
+  readiness page and the wiring disagree, and the wiring wins.
+- Act on §3.2 — tracked by **#4460** — with Wave 0 task 2's answer: either delete the
+  `!isSovereign` exclusion on `llm-token-limit`, or wire the declared Azure-native
+  substitute (`rate-limit-by-key` / `quota-by-key`, labelled as request-counting,
+  not token-counting). Do not leave it undeclared. **This is what unblocks Wave
+  B2**, so it is the highest-priority item in this wave, not the last.
 - The LLM policies (`llm-token-limit`, `llm-semantic-cache-*`) only understand
   OpenAI-shaped traffic, so the other three families get backends + circuit
   breaker + routing, **not** token limiting. Say so rather than implying uniform
@@ -607,7 +749,11 @@ definitions.
 - **Note the interaction with #4432's remediation:** the console already screens
   prompts via Content Safety directly. Gateway-side screening must not
   double-charge or double-block; decide and record which layer owns the verdict —
-  and record it **per boundary**, because at IL5 neither layer is Content Safety.
+  and record it **per boundary**. At IL5 that record must reflect §3.4.1: the
+  console screens today via the AIServices `/contentsafety` fallback
+  (`admin-plane/main.bicep:6224`), which is an audit-scope exposure Wave 0 task 5
+  resolves — **not**, as an earlier draft of this PRP wrongly said, an absence of
+  Content Safety at both layers.
 - **Acceptance:** token metrics visible in App Insights from a live turn
   (Commercial receipt), and the per-boundary verdict-ownership table in `docs/`.
 
@@ -658,7 +804,7 @@ the target:
 |---|---|---|
 | Commercial / DMLZ | exercised (live estate) | a deploy receipt per wave, then a live AI turn through the gateway |
 | GCC | **supported-in-code, NEVER exercised** (0 runs ever executed a deploy step; lane `disabled_manually`; no GCC tenant or `AZURE_GCC_*` secrets exist) | `build-params` parity only. **Do not list GCC as covered.** It cannot gain a receipt without a GCC tenant, which is out of this epic's scope (#3078, #4071). |
-| GCC-High | exercised but **dated** — run 33519232492, 2026-09-01, deploy job `failure`, steps=33; recent runs show that job at steps=0 | a fresh in-boundary Actions run per Wave 0 and Wave D |
+| GCC-High | exercised; last receipt **dated 2026-09-01** — run 33519232492, deploy job `failure`, steps=33. Three later runs are `status=waiting` on the `gcc-high-deploy` environment approval gate, deploy job `steps=0` because **not started** — one approval from a fresh receipt | approve one of the waiting runs; that is the cheapest path to Wave 0 tasks 1 and 2 |
 | IL5 | **NEVER exercised** — `gh run list --workflow deploy-fiab-il5.yml` → `[]` | Wave 0 produces IL5's first deploy receipt in the repo's history |
 
 - The bar the copilot work just set applies here too — a test that accepts "a
@@ -679,7 +825,10 @@ the target:
 | A lane executes the withdrawn Q1 premise | "Flip the default from `Developer`" would move the **live** PremiumV2 estate to a classic resource shape — a stand-up-alongside migration, against a decision whose own text promised "no estate migration" | §0 C1/C2, §2.2, §2.4; Wave C is BLOCKED on Q5 |
 | Undeclared IL5 content-safety gap | Shipping `llm-content-safety` "everywhere" would fail at IL5, or silently drop moderation | §3.4 — declared gap, substitute, owner, review date; gate on `contentSafetyEnabled`, not boundary name |
 | Prompt Shields at IL5 unverified | If unavailable, IL5 has no jailbreak defence and the §3.4 substitute is incomplete | Wave 0 task 3; declare a second gap if negative |
-| Token limiting absent in Gov | `!isSovereign` removes the gateway's only spend control in GCC-High + IL5, undeclared | §3.2; Wave 0 task 2 measures it; Wave D removes or declares it |
+| **IL5 calls a capability outside its audit scope** | The stock IL5 deploy wires `LOOM_CONTENT_SAFETY_ENDPOINT` to the AIServices `/contentsafety` data plane (`admin-plane/main.bicep:6224`); `Foundry: Azure AI Content Safety` is blank at IL4/IL5WI/IL6 and there is no multi-service row that authorizes it | §3.4.1. Not live — IL5 has **never deployed** (`gh run list` → `[]`). **Wave 0 task 5 resolves it BEFORE task 1 stands IL5 up.** |
+| Token limiting absent in Gov | `!isSovereign` removes the gateway's only spend control in GCC-High + IL5 | **#4460** owns it; §3.2; Wave 0 task 2 measures it; Wave D removes or substitutes it; **Wave B2 is gated on it** |
+| Gov routed before the spend control exists | A plain B-before-D order turns the gateway ON in GCC-High + IL5 with no ceiling, and B's Commercial-only receipt would not surface it | Wave B is split **B1 / B2**; B2 blocked on #4460 |
+| A gap tracked only in an unmerged draft | If this PR did not land, the `!isSovereign` finding would vanish with it | **#4460** filed 2026-09-11 as an independent issue |
 | Capacity = 1 unit | One unit becomes the chokepoint for all AI traffic | Wave C item 2 threads `capacity` before cutover |
 | `azure-api.net` shadowing | Already caused #4432 at a smaller blast radius | §3.5 consequences 2/3; any new hostname owns its record |
 | Premium cost | Materially the most expensive tier | State the delta per PR, measured from the **deployed** SKU, not a `Developer` baseline |
@@ -698,7 +847,23 @@ the copilot is verified answering end-to-end on the live estate. #4432 remains
 open pending an operator-observed G1 walk, but it no longer blocks this design —
 and its measurement is now an input to it (§3.5).
 
-Within this epic: **Wave 0 → (A ∥ B) → D → E → F → G**, with **C blocked on Q5**
-and joinable once answered. Wave 0 is not optional and not parallelisable with
-the rest — its three measurements and one decision each change what a later wave
-builds.
+Within this epic:
+
+```
+Wave 0  →  (A ∥ B1)  →  D  →  B2  →  E  →  F  →  G
+                                 ↑
+                        C  (blocked on Q5, joins once answered)
+```
+
+Three hard edges, each for a measured reason rather than tidiness:
+
+- **Wave 0 is not optional and not parallelisable.** Its four measurements and
+  one decision each change what a later wave builds — and task 5 must land
+  before task 1, because task 1 is what makes IL5's `/contentsafety` wiring live
+  (§3.4.1).
+- **B2 sits AFTER D, not with B1.** Defaulting `aoaiViaApim` ON in GCC-High and
+  IL5 before Wave D lands the #4460 remediation would route those boundaries with
+  no spend control, and B's Commercial-only receipt would not catch it.
+- **C is blocked on Q5** and, if Q5 lands on Option B, splits out of this epic
+  entirely — a live-estate APIM migration is not a sub-task of turning a gateway
+  on.
