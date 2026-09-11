@@ -2,7 +2,8 @@
  * Azure Database for PostgreSQL — Flexible Server client.
  *
  * Real REST only (per .claude/rules/no-vaporware.md):
- *   - listServers / getServer                      — ARM REST (Microsoft.DBforPostgreSQL/flexibleServers)
+ *   - listServers / listServersResult / getServer  — ARM REST (Microsoft.DBforPostgreSQL/flexibleServers),
+ *                                                    `nextLink`-walked under the shared PagingBudget
  *   - listDatabases                                — ARM REST (.../databases)
  *   - createServer                                 — ARM PUT (LRO; returns the accept pointer)
  *   - listFirewallRules / upsertFirewallRule / deleteFirewallRule — ARM REST
@@ -25,6 +26,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase } from './cloud-endpoints';
+import { walkPagedListResult, type PagingTruncation } from './paging-budget';
 
 const PG_API_VERSION = '2024-08-01';
 
@@ -59,9 +61,18 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
-async function armRequest<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * One ARM round-trip. `pathOrUrl` is either a path relative to the sovereign ARM
+ * base OR an absolute URL — ARM hands `nextLink` back as an absolute URL and it
+ * must be followed verbatim (it carries the opaque continuation token), so the
+ * paging walkers pass it straight through. `timeoutMs` is the caller's remaining
+ * budget when the call is made under a {@link PagingBudget}; omitted, the shared
+ * per-request default applies.
+ */
+async function armRequest<T = any>(pathOrUrl: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(`${arm()}${path}`, {
+  const url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${arm()}${pathOrUrl}`;
+  const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -70,7 +81,7 @@ async function armRequest<T = any>(path: string, init: RequestInit = {}): Promis
       ...(init.headers as Record<string, string> | undefined),
     },
     cache: 'no-store',
-  });
+  }, timeoutMs);
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
@@ -130,13 +141,57 @@ function mapServer(s: any): PostgresFlexServer {
   };
 }
 
-export async function listServers(subscriptionId?: string): Promise<PostgresFlexServer[]> {
+/**
+ * What a subscription-wide server list collected, and whether it is the WHOLE
+ * list. `truncatedBy` is non-null when the bounded walk stopped on its page cap
+ * or wall clock instead of on an absent `nextLink` — i.e. there are pages ARM
+ * would have returned that were never read.
+ *
+ * That third state exists because a caller deciding "this name is FREE" from an
+ * incomplete list makes a false claim, and one caller
+ * (`POST /api/items/postgres-flexible-server`) turns that claim into an
+ * irreversible Key Vault write over a live server's admin password. TRUNCATED is
+ * not ABSENT (`deploy-integrity.md` R7).
+ */
+export interface PostgresServerListResult {
+  servers: PostgresFlexServer[];
+  /** Non-null when the walk was cut short — the list is INCOMPLETE. */
+  truncatedBy: PagingTruncation | null;
+  pagesFetched: number;
+}
+
+/**
+ * List every flexible server in the subscription, walking `nextLink` under the
+ * shared {@link PagingBudget} (page cap + wall clock, #2557) — the same shape
+ * `eventhubs-client.armList`, `eventgrid-topics-client` and `foundry-client`
+ * already use. This client was the outlier: it read `res.value` from ONE page
+ * and returned it as the subscription's inventory, so any server on page 2+ was
+ * invisible to every caller, including the existence gate in front of the
+ * credential mint.
+ *
+ * Prefer this over {@link listServers} whenever "not in this list" is about to
+ * be treated as "does not exist".
+ */
+export async function listServersResult(subscriptionId?: string): Promise<PostgresServerListResult> {
   const sub = subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
   if (!sub) throw new PostgresError('LOOM_SUBSCRIPTION_ID not set', 400);
-  const res = await armRequest<{ value: any[] }>(
-    `/subscriptions/${sub}/providers/Microsoft.DBforPostgreSQL/flexibleServers?api-version=${PG_API_VERSION}`,
-  );
-  return (res.value || []).map(mapServer);
+  const firstPage = `/subscriptions/${sub}/providers/Microsoft.DBforPostgreSQL/flexibleServers?api-version=${PG_API_VERSION}`;
+  const walk = await walkPagedListResult<any>('postgres flexibleServers', (next, timeoutMs) =>
+    armRequest<{ value?: any[]; nextLink?: string }>(next ?? firstPage, {}, timeoutMs));
+  return {
+    servers: walk.rows.map(mapServer),
+    truncatedBy: walk.truncatedBy,
+    pagesFetched: walk.pagesFetched,
+  };
+}
+
+/**
+ * Rows only — for pickers and inventory surfaces, where a page-capped list beats
+ * a wedged request path. A caller that must distinguish COMPLETE from PARTIAL
+ * (anything treating absence as a fact) uses {@link listServersResult}.
+ */
+export async function listServers(subscriptionId?: string): Promise<PostgresFlexServer[]> {
+  return (await listServersResult(subscriptionId)).servers;
 }
 
 async function resolveScope(serverName: string): Promise<string> {
@@ -145,9 +200,23 @@ async function resolveScope(serverName: string): Promise<string> {
   const c = cache || new Map<string, string>();
   if (!cache) (resolveScope as any)._c = c;
   if (c.has(serverName)) return c.get(serverName)!;
-  const servers = await listServers();
-  const hit = servers.find((s) => s.name === serverName);
-  if (!hit) throw new PostgresError(`PostgreSQL flexible server '${serverName}' not found in subscription`, 404);
+  const lookup = await listServersResult();
+  const hit = lookup.servers.find((s) => s.name === serverName);
+  if (!hit) {
+    // Say which of the two happened. A truncated walk did not establish that the
+    // server is absent, and a 404 here would send the caller (and the operator)
+    // after a resource that may well exist on a page we never read.
+    if (lookup.truncatedBy) {
+      throw new PostgresError(
+        `Could not resolve PostgreSQL flexible server '${serverName}': the subscription listing stopped on its ` +
+          `${lookup.truncatedBy} budget after ${lookup.pagesFetched} page(s), so the server was not found but was ` +
+          'also not shown to be absent. Raise LOOM_ARM_PAGING_MAX_PAGES / LOOM_ARM_PAGING_BUDGET_MS, or address ' +
+          'the server by its full ARM resource id to skip the lookup.',
+        503,
+      );
+    }
+    throw new PostgresError(`PostgreSQL flexible server '${serverName}' not found in subscription`, 404);
+  }
   c.set(serverName, hit.id);
   return hit.id;
 }

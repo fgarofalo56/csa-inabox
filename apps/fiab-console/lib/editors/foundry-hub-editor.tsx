@@ -48,9 +48,13 @@ import {
   isKeyVaultSecretUri,
   isValidConnectionName,
   authTypeToMode,
+  composeBlobTarget,
+  splitBlobTarget,
+  blobAccountFromEndpoint,
   type ConnectionCategory,
   type ConnectionAuthMode,
 } from '@/lib/azure/foundry-connection-shapes';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -59,6 +63,7 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, ImagesPlaygroundPanel, AudioPlaygroundPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { AzureBackedField, type AzureBackedKind } from '@/lib/components/azure/azure-backed-field';
 import { AccountPickerBar, type FoundryAccount } from './foundry-account-picker-bar';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
@@ -452,7 +457,36 @@ function CreateConnectionDialog({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
+  /**
+   * The three parts of a container-scoped target (`AzureBlob`). The picker
+   * above returns the account ENDPOINT from ARM — which is what makes the host
+   * right in every boundary — and the container is chosen from the ones that
+   * exist in the picked account, the same cascade the other four storage
+   * surfaces in this wave use. `blobAccount` is the ARM id when the value came
+   * from a pick and a bare account name when it was parsed back out of a
+   * stored target on edit; `BlobContainerPicker` accepts either. `blobPath` is
+   * the remainder BELOW the container (`…/bronze/raw/2026`): the form never
+   * produces one, it exists so an edit-prefill of a deeper target round-trips
+   * instead of being silently repointed at the container root, and any change
+   * of account, container or category clears it.
+   */
+  const [blobAccount, setBlobAccount] = useState('');
+  const [blobContainer, setBlobContainer] = useState('');
+  const [blobPath, setBlobPath] = useState('');
+
   const catRow = useMemo(() => CONNECTION_CATEGORIES.find((c) => c.value === category) || CONNECTION_CATEGORIES[0], [category]);
+
+  /**
+   * The value that is actually SENT. For a container-scoped category the stored
+   * target is endpoint + "/" + container, which is the shape the row's own
+   * `targetPlaceholder` declares; for every other category it is `target`
+   * unchanged. Composing here rather than at submit keeps the receipt the user
+   * reads and the value the PUT carries the same string.
+   */
+  const effectiveTarget = useMemo(
+    () => (catRow.containerScoped ? composeBlobTarget(target, blobContainer, blobPath) : target),
+    [catRow.containerScoped, target, blobContainer, blobPath],
+  );
 
   // Prefill from the connection being edited whenever the edit target changes.
   useEffect(() => {
@@ -460,7 +494,20 @@ function CreateConnectionDialog({
     setName(editConn.name || '');
     const cat = CONNECTION_CATEGORIES.find((c) => c.value === editConn.category);
     setCategory((cat?.value as ConnectionCategory) || 'AzureOpenAI');
-    setTarget(editConn.target || '');
+    // A container-scoped target is stored composed, so it is split back into the
+    // two controls that produced it rather than dropped into the endpoint box.
+    if (cat?.containerScoped) {
+      const { accountEndpoint, container, path } = splitBlobTarget(editConn.target || '');
+      setTarget(accountEndpoint);
+      setBlobContainer(container);
+      setBlobPath(path);
+      setBlobAccount(blobAccountFromEndpoint(accountEndpoint));
+    } else {
+      setTarget(editConn.target || '');
+      setBlobContainer('');
+      setBlobPath('');
+      setBlobAccount('');
+    }
     setAuthMode(authTypeToMode(editConn.authType));
     setKvUri('');
     setCustomRows([{ key: '', uri: '' }]);
@@ -478,6 +525,7 @@ function CreateConnectionDialog({
   const reset = () => {
     setName(''); setCategory('AzureOpenAI'); setTarget(''); setAuthMode('AAD');
     setKvUri(''); setCustomRows([{ key: '', uri: '' }]); setShared(true); setMsg(null);
+    setBlobAccount(''); setBlobContainer(''); setBlobPath('');
   };
 
   const nameValid = !name || isValidConnectionName(name);
@@ -488,7 +536,14 @@ function CreateConnectionDialog({
     if (!name.trim()) { setMsg({ intent: 'error', text: 'Name is required.' }); return; }
     if (!isValidConnectionName(name)) { setMsg({ intent: 'error', text: 'Name must be 2–63 chars: letters, digits, _ . -' }); return; }
     if (!target.trim()) { setMsg({ intent: 'error', text: 'Target endpoint is required.' }); return; }
-    const body: any = { name: name.trim(), category, target: target.trim(), authMode, isSharedToAll: shared };
+    // A container-scoped target without its container is the WRONG SHAPE, not a
+    // shorter one — the connection would point at the account, so it is refused
+    // here rather than sent and rejected (or worse, accepted) at ARM.
+    if (catRow.containerScoped && !blobContainer.trim()) {
+      setMsg({ intent: 'error', text: `${catRow.label} connections target a container: ${catRow.targetPlaceholder}. Choose one below.` });
+      return;
+    }
+    const body: any = { name: name.trim(), category, target: effectiveTarget.trim(), authMode, isSharedToAll: shared };
     if (authMode === 'ApiKey') {
       if (!isKeyVaultSecretUri(kvUri)) { setMsg({ intent: 'error', text: 'Provide a Key Vault secret identifier (https://<vault>.vault.azure.net/secrets/<name>). Raw keys are not accepted.' }); return; }
       body.keyVaultSecretUri = kvUri.trim();
@@ -528,13 +583,67 @@ function CreateConnectionDialog({
               </Field>
               <Field label="Category" required hint={isEdit ? 'Category is fixed for an existing connection.' : undefined}>
                 <Dropdown value={catRow.label} disabled={isEdit} selectedOptions={[category]}
-                  onOptionSelect={(_, d) => { if (d.optionValue) setCategory(d.optionValue as ConnectionCategory); }}>
+                  onOptionSelect={(_, d) => {
+                    if (!d.optionValue) return;
+                    // CLEAR THE CASCADE — the class fixed in
+                    // `event-grid-topic-editor`'s Handler-type dropdown, found
+                    // here by the re-review of 2026-09-07: pick AzureBlob,
+                    // choose an account and a container, switch to AzureOpenAI,
+                    // and the composed blob endpoint survives as the AOAI
+                    // target. `target`, `blobAccount`, `blobContainer` and
+                    // `blobPath` all describe the OLD category.
+                    setCategory(d.optionValue as ConnectionCategory);
+                    setTarget(''); setBlobAccount(''); setBlobContainer(''); setBlobPath('');
+                  }}>
                   {CONNECTION_CATEGORIES.map((c) => (<Option key={c.value} value={c.value} text={c.label}>{c.label}</Option>))}
                 </Dropdown>
               </Field>
-              <Field label="Target endpoint" required>
-                <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder={catRow.targetPlaceholder} />
-              </Field>
+              {catRow.kind ? (
+                <AzureBackedField
+                  kind={catRow.kind as AzureBackedKind}
+                  label={catRow.containerScoped ? 'Storage account' : 'Target endpoint'}
+                  value={target}
+                  surface="AI Foundry hub connection"
+                  onChange={(v, r) => {
+                    setTarget(v || '');
+                    // The ARM id off the SAME pick feeds the container listing,
+                    // so WITHIN a category the two controls can never describe
+                    // different accounts; across a category CHANGE they could,
+                    // which is why the Category dropdown clears all three
+                    // rather than relying on this handler. A hand-typed
+                    // endpoint has no row — fall back to the host's account.
+                    setBlobAccount(r?.id || blobAccountFromEndpoint(v || ''));
+                    setBlobContainer('');
+                    setBlobPath('');
+                  }}
+                />
+              ) : (
+                <Field label="Target endpoint" required>
+                  <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder={catRow.targetPlaceholder} />
+                </Field>
+              )}
+              {/* The CONTAINER half. The row declares the target is
+                  container-scoped; without this the picker emitted the account
+                  endpoint alone — the wrong shape by this file's own
+                  definition (blocking review, 2026-09-07). */}
+              {catRow.containerScoped && (
+                <>
+                  <BlobContainerPicker
+                    account={blobAccount}
+                    value={blobContainer}
+                    onChange={(c) => { setBlobContainer(c); setBlobPath(''); }}
+                    surface="AI Foundry hub connection"
+                    required
+                    hint="The connection targets this container, not the account."
+                  />
+                  {effectiveTarget && (
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Target:{' '}
+                      <span style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{effectiveTarget}</span>
+                    </Caption1>
+                  )}
+                </>
+              )}
               <Field label="Authentication" required>
                 <Dropdown value={authMode === 'AAD' ? 'Microsoft Entra ID (managed identity)' : authMode === 'ApiKey' ? 'API key (Key Vault reference)' : 'Custom keys (Key Vault references)'}
                   selectedOptions={[authMode]}

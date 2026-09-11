@@ -50,6 +50,11 @@ import {
   Play16Regular, Stop16Regular, Open16Regular, Power20Regular,
   Search20Regular, Warning20Regular, ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+// #3688 — the ONE classifier for a Power Platform / Dataverse admission refusal
+// (see lib/editors/copilot-studio-editors.tsx for why it is a phrase list and
+// why there must not be a second copy of it).
+import { isPowerPlatformAdmissionError } from '@/lib/editors/copilot-studio-editors';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
@@ -555,12 +560,22 @@ export function PowerPlatformTree({
 
       {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading environments…" /></div>}
       {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            <MessageBarTitle>Power Platform not reachable</MessageBarTitle>
-            {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
-          </MessageBarBody>
-        </MessageBar>
+        isPowerPlatformAdmissionError(error)
+          // #3688 (G2) — an admission refusal is a GATE with a real remediation
+          // (the per-environment Dataverse Application User grant), so it renders
+          // through the shared HonestGate: Fix-it, gate-registry link and
+          // /admin/gates presence included. The tree is the FIRST thing a user
+          // sees on every Power Platform surface, so leaving this one as a red
+          // bar would have kept the dead end regardless of the editors' fix.
+          ? <HonestGate gateId="svc-dataverse" surface="Power Platform explorer" detail={error} />
+          : (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Power Platform not reachable</MessageBarTitle>
+                {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
+              </MessageBarBody>
+            </MessageBar>
+          )
       )}
       {actionMsg && (
         <MessageBar intent={actionMsg.ok ? 'success' : 'error'}>
