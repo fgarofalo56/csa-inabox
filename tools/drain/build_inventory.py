@@ -1,0 +1,171 @@
+"""Derive the zero-backlog workstream inventory from live GitHub data.
+
+A hand-written inventory goes stale the moment an issue moves. This reads the
+live snapshot and emits the breakdown the PRP quotes, so every number in that
+document is measured rather than recalled.
+
+REFUSES a partition that loses an issue. A partition that silently drops one is
+worse than no partition, because the item leaves the plan without leaving the
+backlog -- the same failure mode the ledger refuses when it will not let you
+park without an owner.
+
+    python tools/drain/build_inventory.py
+
+Writes PRPs/active/zero-backlog/INVENTORY.md and tools/drain/inventory.json.
+"""
+from __future__ import annotations
+
+import collections
+import json
+import sys
+from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+ROOT = Path(__file__).resolve().parents[2]
+SNAPSHOT = ROOT / "temp" / "allissues.json"
+OUT_MD = ROOT / "PRPs" / "active" / "zero-backlog" / "INVENTORY.md"
+OUT_JSON = Path(__file__).resolve().parent / "inventory.json"
+
+POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
+
+# Issues pinned to a stream by number because no label distinguishes "blocks the
+# deploy path" from "is a feature". Everything else falls through to its lane.
+HARNESS = {4466, 4467, 4468, 4469}
+DEPLOY = {4451, 4461, 4464, 4471, 4472, 4473, 3676, 2958}
+SECURITY = {4456, 4457, 4458, 4460, 3941, 3338}
+RECEIPTS = {4470, 4432, 3720, 2626, 2583, 2581, 4361, 4183, 4405, 4406, 4387, 4442}
+
+
+def stream_for(number: int, title: str, labels: set[str]) -> str:
+    """Assign one issue to exactly one workstream.
+
+    Order IS precedence: a Gov-drift issue that also blocks the deploy path
+    belongs to the deploy stream, because R1 makes that the thing that preempts.
+    """
+    if number in HARNESS:
+        return "W0-harness"
+    if number in DEPLOY or "deploy-validation" in labels or "bicep-drift" in labels:
+        return "W1-deploy"
+    if number in SECURITY or "security" in labels:
+        return "W2-security"
+    if "drift-gov" in labels or "drift-commercial" in labels:
+        return "W3-gov"
+    if number in RECEIPTS or "receipt" in title.lower():
+        return "W4-receipts"
+    for lane, stream in (
+        ("lane:ci", "W6-ci"),
+        ("lane:bicep", "W7-bicep"),
+        ("lane:dataplane", "W8-dataplane"),
+        ("lane:console", "W5-console"),
+    ):
+        if lane in labels:
+            return stream
+    return "W9-rest"
+
+
+DESCRIPTIONS = {
+    "W0-harness": "Harness + gate integrity (the drain's own tooling)",
+    "W1-deploy": "Deploy-path integrity (R1 preempts all feature work)",
+    "W2-security": "Security + authz",
+    "W3-gov": "Sovereign / cloud-parity",
+    "W4-receipts": "Owed receipts (merged-not-verified)",
+    "W5-console": "Console surfaces (ui-parity / ux-baseline)",
+    "W6-ci": "CI guards + lanes",
+    "W7-bicep": "Bicep / infrastructure",
+    "W8-dataplane": "Data plane",
+    "W9-rest": "Unclassified remainder (triage before scheduling)",
+}
+ORDER = list(DESCRIPTIONS)
+
+
+def main() -> int:
+    if not SNAPSHOT.exists():
+        print(f"missing {SNAPSHOT}; run: gh issue list --state open --limit 1000 "
+              f'--json number,title,labels,createdAt > {SNAPSHOT}')
+        return 2
+
+    issues = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    rows: dict[str, list] = {key: [] for key in ORDER}
+
+    for issue in issues:
+        labels = {entry["name"] for entry in issue["labels"]}
+        key = stream_for(issue["number"], issue["title"], labels)
+        rows[key].append(
+            {
+                "n": issue["number"],
+                "t": issue["title"],
+                "pts": next((POINTS[x] for x in labels if x in POINTS), None),
+                "epic": "epic" in labels,
+                "blocked": "sprint:blocked" in labels,
+                "lane": next((x for x in labels if x.startswith("lane:")), None),
+            }
+        )
+
+    placed = sum(len(v) for v in rows.values())
+    if placed != len(issues):
+        print(f"REFUSING -- partition lost {len(issues) - placed} issue(s)")
+        return 2
+
+    out = [
+        "# Zero-backlog inventory (generated -- do not hand-edit)",
+        "",
+        f"Source: `gh issue list --state open --limit 1000`, {len(issues)} issues.",
+        "Regenerate: `python tools/drain/build_inventory.py`",
+        "",
+        "| stream | what | issues | sized pts | unsized | epics | blocked |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    totals: collections.Counter = collections.Counter()
+    for key in ORDER:
+        items = rows[key]
+        pts = sum(row["pts"] for row in items if row["pts"])
+        unsized = sum(1 for row in items if row["pts"] is None)
+        epics = sum(1 for row in items if row["epic"])
+        blocked = sum(1 for row in items if row["blocked"])
+        totals.update(n=len(items), pts=pts, unsized=unsized, epics=epics, blocked=blocked)
+        out.append(
+            f"| `{key}` | {DESCRIPTIONS[key]} | {len(items)} | {pts} | "
+            f"{unsized} | {epics} | {blocked} |"
+        )
+    out.append(
+        f"| **total** | | **{totals['n']}** | **{totals['pts']}** | "
+        f"**{totals['unsized']}** | **{totals['epics']}** | **{totals['blocked']}** |"
+    )
+    out.append("")
+
+    for key in ORDER:
+        items = rows[key]
+        if not items:
+            continue
+        out.append(f"## `{key}` -- {DESCRIPTIONS[key]}  ({len(items)})")
+        out.append("")
+        for row in sorted(items, key=lambda r: (-(r["pts"] or 0), r["n"])):
+            size = f"`{row['pts']}pt`" if row["pts"] else "`unsized`"
+            flags = "".join(["E" if row["epic"] else "", "B" if row["blocked"] else ""])
+            flag = f" `{flags}`" if flags else ""
+            out.append(f"- **#{row['n']}** {size}{flag} -- {row['t'][:100]}")
+        out.append("")
+
+    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
+    OUT_MD.write_text("\n".join(out), encoding="utf-8")
+    OUT_JSON.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+
+    for key in ORDER:
+        items = rows[key]
+        print(
+            f"  {key:<14} {len(items):3d} issues  "
+            f"{sum(r['pts'] for r in items if r['pts']):4d} pts  "
+            f"{sum(1 for r in items if r['pts'] is None):3d} unsized"
+        )
+    print()
+    print(
+        f"TOTAL {totals['n']} issues, {totals['pts']} pts, {totals['unsized']} unsized "
+        "-- partition is total (no issue lost)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

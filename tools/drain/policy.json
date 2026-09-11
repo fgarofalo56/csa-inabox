@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "_": "The authority for what the drain may do unattended. tick.py refuses to emit a brief that would violate this file. Operator decision 2026-09-11.",
+
+  "scope": {
+    "target": "all-open-issues",
+    "definition_of_done": "every open issue reaches closed | parked | declined",
+    "closed_requires_receipt": true
+  },
+
+  "wip": {
+    "_": "A policy INPUT, not a constant. The host carries ~66 GB committed before any agent starts (vmmemWSL 48 GB + llama-server ~18 GB), which is why three things were memory-killed on 2026-09-11. Lower this before blaming a command.",
+    "max_lanes": 4,
+    "max_lanes_hard_ceiling": 8,
+    "serialize_on_shared_checkout": true
+  },
+
+  "permitted_unattended": [
+    "open-pr",
+    "open-issue",
+    "comment",
+    "merge-on-gate-go",
+    "close-on-receipt",
+    "rerun-ci",
+    "approve-parked-ci-run",
+    "dispatch-deploy-workflow",
+    "dispatch-roll",
+    "playwright-walk-live-console"
+  ],
+
+  "stop_and_ask": {
+    "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",
+    "publish_security_advisory": "outward-facing and irreversible; operator decides once the fix is DEPLOYED",
+    "move_live_acr_tags": "a branch dispatch of build-fiab-images-acr-tasks hard-codes --image <name>:latest and moves :latest AND :v0.1 for all 13 images in the live Commercial ACR",
+    "delete_data_or_schema": "not reversible",
+    "force_push_shared_branch": "a stale worktree makes --force-with-lease unsafe; sweep first",
+    "weaken_or_baseline_a_guard": "making something green by widening its allowlist is the defect, not the fix",
+    "add_trivyignore_entry": "the baseline is deliberately EMPTY; fix the image",
+    "use_skip_valve": "LOOM_BUILD_SKIP_SUPPLY_CHAIN / skip_uat / skip_signature_verify ship unverified or unsigned artifacts"
+  },
+
+  "never": [
+    "touch-security-software",
+    "read-or-echo-a-credential",
+    "commit-a-secret",
+    "report-a-merge-as-a-fix"
+  ],
+
+  "receipts": {
+    "_": "Which receipt closes which class of issue. deploy-integrity.md R2: merged is never done.",
+    "guard-or-test-only": "ci-green",
+    "deploy-path": "deploy-run",
+    "estate-behaviour": "estate",
+    "ui-surface": "g1-browser",
+    "human-only": "operator",
+    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt."
+  },
+
+  "merge_gate": {
+    "base_must_equal_origin_main": true,
+    "reduce_verdicts_by": "conjunction",
+    "verdict_pinned_to_head": true,
+    "clause5_carries_artifact_only": true,
+    "clause5_refuses_source_change": true,
+    "require_no_red": true,
+    "require_no_incomplete": true,
+    "require_hollow_check_clean": true,
+    "scan_closing_keywords_in": ["body", "commit-trail"],
+    "audit_issue_count_around_every_merge": true
+  },
+
+  "verdict_parsing": {
+    "_": "merge-gate reads ISSUE COMMENTS, not review events. A verdict registers only if all three hold.",
+    "marker_any_of": ["Independent review", "Independent re-review"],
+    "token_any_of": ["REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS"],
+    "token_window_chars": 200,
+    "must_postdate_head_commit": true,
+    "note": "'CHANGES REQUIRED' is silently discarded and cost two rounds on 2026-09-11. The token is matched in the order listed, so an approving verdict must not mention a prior block inside the window."
+  },
+
+  "ordering": {
+    "_": "Execution order of the workstreams. A later stream may depend on an earlier one, never the reverse.",
+    "streams": ["W0-harness", "W1-deploy", "W2-security", "W3-gov", "W4-receipts",
+                "W6-ci", "W7-bicep", "W8-dataplane", "W5-console", "W9-rest"],
+    "W9_runs_continuously": true,
+    "W9_reason": "118 issues carry no lane and 153 carry no size; neither can be safely scheduled, so triage gates the parallelism for every other stream"
+  },
+
+  "stop_conditions": {
+    "_": "Conditions under which the harness halts the whole run rather than continuing.",
+    "deploy_path_red": "deploy-integrity R1 - a broken deploy path preempts all feature work; fix it before selecting anything else",
+    "estate_behind_and_not_recovering": "R3 - drift is a defect with an owner, not a background condition",
+    "gate_tooling_untracked": "a gate nobody can read cannot be trusted to merge; W0 must land first",
+    "consecutive_cycle_failures": 3
+  }
+}
