@@ -357,6 +357,233 @@ export function pipelineDefinitionFromContent(
 }
 
 /**
+ * The keys ADF/Synapse read at an ACTIVITY ROOT, used to decide what belongs
+ * under `typeProperties` when an activity arrives in the CANVAS shape.
+ *
+ * Grounded in the published ADF ARM schema — cloud-endpoint-literal-ok: a CITED
+ * document, not an endpoint this module calls, and the activity JSON it
+ * describes is identical in every sovereign cloud, so there is no per-cloud
+ * form for `cloud-endpoints.ts` to resolve.
+ * (`https://schema.management.azure.com/schemas/2018-06-01/Microsoft.DataFactory.json`, cloud-endpoint-literal-ok)
+ * Fetched 2026-09-07, HTTP 200, 693244 bytes: `definitions.Activity.properties`
+ * is exactly `{name, type, description, dependsOn, userProperties}` and
+ * `definitions.ExecutionActivity` adds `{linkedServiceName, policy}`;
+ * `typeProperties` is the per-activity-type body (`notebookPath`,
+ * `source`/`sink`, `expression`, `items`, nested `activities`, …). `inputs` and
+ * `outputs` are the legacy v1-style dataset siblings, kept because live
+ * definitions still carry them.
+ *
+ * THIS SET IS NOT — AND CANNOT BE — COMPLETE, which is why it is no longer the
+ * sole decision. That same fetched schema contains ZERO occurrences of `state`
+ * and `onInactiveMarkAs` (the Deactivate-activity fields), so the published
+ * schema does not even describe every root key ADF accepts today, and
+ * `Activity` declares `additionalProperties` precisely because the service
+ * tolerates root keys this document does not enumerate. Any closed allowlist
+ * used as "move everything else" is therefore destructive-by-default over
+ * definitions it did not author. See `normalizeActivity` for the discriminator
+ * that replaced that default.
+ */
+const ADF_ACTIVITY_ROOT_KEYS: ReadonlySet<string> = new Set([
+  'name', 'type', 'dependsOn', 'policy', 'linkedServiceName',
+  'inputs', 'outputs', 'description', 'userProperties', 'typeProperties',
+]);
+
+/** Control-flow containers nest child activities INSIDE `typeProperties`. Each
+ *  child is itself an activity and needs the same normalization. */
+const NESTED_ACTIVITY_KEYS = ['activities', 'ifTrueActivities', 'ifFalseActivities', 'defaultActivities'];
+
+/**
+ * Normalize ONE activity to the wire shape.
+ *
+ * THE DISCRIMINATOR IS THE PRESENCE OF `typeProperties`, NOT THE ALLOWLIST.
+ *
+ * The first cut of this function moved every root key absent from
+ * `ADF_ACTIVITY_ROOT_KEYS` into `typeProperties`. Review falsified that with a
+ * live-ADF fixture: a Copy activity deactivated in ADF Studio arrives as
+ * `{name, type, state:'Inactive', onInactiveMarkAs:'Skipped', policy,
+ * typeProperties:{source,sink}}`, and the allowlist MOVED `state` and
+ * `onInactiveMarkAs` under `typeProperties` — so a re-import silently
+ * RE-ACTIVATED a deliberately disabled activity and shipped ADF two keys it
+ * does not expect there. That is the very class of silent breakage #3700 exists
+ * to fix, inflicted by the fix itself, and it reaches three write boundaries:
+ * export branch 1 and the detail GET both read definitions LIVE FROM ADF and
+ * hand them to the editor, which PUTs them back.
+ *
+ * The allowlist could not be repaired by adding those two keys: I could not
+ * establish a complete root-key set from any source available here (the
+ * published ARM schema above omits both), and the next field ADF adds would
+ * break it again the same way. So the destructive default is gone:
+ *
+ *   - Activity HAS a `typeProperties` object  -> it is ALREADY wire-shaped.
+ *     Every root key stays at the root, untouched, whether or not this file
+ *     knows the key. Recursion still descends into control-flow children.
+ *   - Activity has NO `typeProperties`        -> it is the CANVAS shape (the
+ *     bundle install path spreads control-flow config onto the root). The
+ *     allowlist collects the body, exactly as before.
+ *
+ * That matches every authoring path in the app: the editors build activities
+ * with `typeProperties` already nested (see `azure-services-editors.tsx`
+ * activity builders), and only `pipelineDefinitionFromContent(target:'canvas')`
+ * produces the flat form. It makes the function idempotent for ANY definition
+ * ADF can return, not merely for the ones whose root keys were enumerated here
+ * — which is what the export route's round-trip comment actually promises.
+ *
+ * WHERE THIS DISCRIMINATOR IS BLIND, SAID OUT LOUD: THE MIXED SHAPE.
+ *
+ * "Only `target:'canvas'` produces the flat form" was true of this module and
+ * FALSE of the round trip through the editor, and review measured the gap. A
+ * canvas-shaped activity reaching the editor gets patched with
+ * `onPatch({ typeProperties: setPath(activity.typeProperties || {}, ...) })`
+ * (`lib/components/pipeline/activity-forms.tsx:545`) through the shallow merge
+ * in `patchActivity` (`lib/editors/data-pipeline-editor.tsx:582`), so ONE
+ * inspector edit yields `{ name, type, notebookPath, baseParameters,
+ * typeProperties: {...} }` — bundle config still at the root, a NEW
+ * `typeProperties` beside it. This function then sees `typeProperties`, takes
+ * the preserve-everything branch and leaves `notebookPath` where ADF does not
+ * look: #3700's own "publishes green and does nothing", surviving the fix for
+ * it. Probed, not reasoned:
+ *
+ *   root keys      : ['name','type','notebookPath','baseParameters','typeProperties']
+ *   typeProperties : {"libraries":[{"jar":"dbfs:/x.jar"}]}
+ *
+ * THIS FUNCTION CANNOT DECIDE IT, and that is why the repair is not here. On a
+ * mixed activity `{name,type,foo,typeProperties}` is byte-identical whether
+ * `foo` is leaked canvas config or a root key ADF added that this codebase does
+ * not know, so moving and preserving are both wrong for some real input. The
+ * published ARM schema cannot break the tie either — re-fetched 2026-09-08,
+ * HTTP 200, 693244 bytes: `definitions.Activity.properties` is
+ * `{additionalProperties, dependsOn, description, name, userProperties}` and the
+ * whole document contains ZERO occurrences of `onInactiveMarkAs` or `"state"`.
+ *
+ * SO THE CLASS IS NARROWED AT ITS SOURCE INSTEAD — ON TWO OF THREE BRANCHES:
+ * `GET /api/items/data-pipeline/[id]` wire-shapes the definition it hands the
+ * editor on the two branches whose PROVENANCE that route knows, because Loom
+ * authored both: a saved `state.definition` and a bundle `content` translation.
+ * A definition read LIVE from ADF is passed through untouched. On those two
+ * branches the editor holds a PURE wire shape and an inspector patch can no
+ * longer manufacture a mixed one. See the comment at that call site for why the
+ * live branch is deliberately excluded, and for the measurements that the
+ * translation is safe for the canvas and the inspector.
+ *
+ * RESIDUAL, not fixed and not hidden — TWO populations, because an earlier
+ * revision of this paragraph listed only the second and read as if the class
+ * were closed:
+ *
+ *   1. A PIPELINE PRE-FIX LOOM ITSELF PUBLISHED. #3700's finding is that three
+ *      write paths PUT the CANVAS shape, so for every pipeline published before
+ *      that fix, ADF holds `notebookPath` at the activity root. `getPipeline`
+ *      returns that canvas shape, the live branch hands it to the editor
+ *      unrepaired, and ONE inspector patch mints the mixed activity above —
+ *      which then reaches this function's preserve branch on the way back out.
+ *      "A definition read from ADF is already the wire shape" is therefore FALSE
+ *      of exactly the population Loom created, and it is NOT why the live branch
+ *      is skipped; the decidability argument at the call site is.
+ *   2. A client that POSTs a hand-built mixed activity straight to `publish` /
+ *      `PUT [id]`. That document was authored by neither this editor nor ADF,
+ *      and ADF ignoring or rejecting the stray key is the honest outcome.
+ *
+ * Repairing either HERE would require the guess the paragraph above shows is not
+ * available.
+ */
+function normalizeActivity(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const a = raw as Record<string, unknown>;
+  const existing = (a.typeProperties && typeof a.typeProperties === 'object' && !Array.isArray(a.typeProperties))
+    ? (a.typeProperties as Record<string, unknown>)
+    : undefined;
+  const alreadyWireShaped = existing !== undefined;
+
+  const root: Record<string, unknown> = {};
+  const moved: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(a)) {
+    if (k === 'typeProperties') continue;
+    // Already wire-shaped: PRESERVE every root key, known or not. Only the
+    // canvas shape gets its unknown keys collected into the type body.
+    if (alreadyWireShaped || ADF_ACTIVITY_ROOT_KEYS.has(k)) root[k] = v;
+    else moved[k] = v;
+  }
+  // ON CONFLICT THE EXISTING `typeProperties` WINS. A definition that already
+  // carries one is already wire-shaped for that key, and letting a stray root
+  // key overwrite it would let a half-migrated document silently downgrade.
+  const typeProperties: Record<string, unknown> = { ...moved, ...(existing ?? {}) };
+
+
+  for (const key of NESTED_ACTIVITY_KEYS) {
+    const nested = typeProperties[key];
+    if (Array.isArray(nested)) typeProperties[key] = nested.map(normalizeActivity);
+  }
+  // Switch: `cases: [{ value, activities[] }]`.
+  if (Array.isArray(typeProperties.cases)) {
+    typeProperties.cases = (typeProperties.cases as unknown[]).map((c) => {
+      if (!c || typeof c !== 'object') return c;
+      const cc = c as Record<string, unknown>;
+      return Array.isArray(cc.activities)
+        ? { ...cc, activities: (cc.activities as unknown[]).map(normalizeActivity) }
+        : cc;
+    });
+  }
+
+  // Only emit `typeProperties` when there is something in it OR the input had
+  // one — an activity type with no body (e.g. a bare Wait built by hand) should
+  // not gain an empty object it did not have.
+  const out: Record<string, unknown> = { ...root };
+  if (Object.keys(typeProperties).length > 0 || existing !== undefined) out.typeProperties = typeProperties;
+  return out;
+}
+
+/**
+ * Coerce a pipeline definition into the ADF/Synapse WIRE shape at the WRITE
+ * BOUNDARY (#3700).
+ *
+ * THE DEFECT. `pipelineDefinitionFromContent`'s default `'canvas'` target
+ * spreads each activity's config onto the activity ROOT, because that is where
+ * `extractActivities()` and the node inspectors look. The data-pipeline EDITOR
+ * therefore holds, saves to Cosmos, and POSTs that root shape — and three write
+ * paths PUT it to ADF verbatim:
+ *
+ *   1. `POST [id]/publish` with `body.definition` (the canvas spec the editor's
+ *      Publish button sends),
+ *   2. `POST [id]/publish` falling through to `state.definition` (which branch 1
+ *      persisted), and
+ *   3. `PUT [id]` — "Save = publish" — with `body.definition.properties`.
+ *
+ * ADF reads `typeProperties` and IGNORES root-level keys, so the PUT returned
+ * 200 and authored a pipeline whose `DatabricksNotebook` activity carried
+ * `notebookPath` where the service never looks: a pipeline that publishes
+ * successfully and does nothing. Only branch 4 (bundle content, no saved
+ * definition) passed `target: 'adf'` and got the nesting right.
+ *
+ * WHY AT THE BOUNDARY AND NOT IN THE EDITOR. The canvas shape is CORRECT for the
+ * canvas — `extractActivities()` depends on it — and Cosmos holds what the
+ * editor last showed. Translating on the way out is the one place both the
+ * editor's shape and the service's shape can be true at once, and it also
+ * repairs the ~13 items already persisted in the root shape without a migration.
+ *
+ * IDEMPOTENT on wire-shaped input: an activity that already has `typeProperties`
+ * and no stray root keys is returned with the same keys and the same values, so
+ * a definition read back FROM ADF (export, round-trip) survives this unchanged.
+ * That property is pinned by `__tests__/pipeline-binding.test.ts`, because
+ * "idempotent" asserted in a comment is how the second translator got written.
+ *
+ * NOT CLAIMED: this does not VALIDATE the definition. A `typeProperties` body
+ * that is wrong for its activity type is still wrong after this runs — ADF
+ * rejects it at commit, which is the honest outcome. This only puts each key
+ * where the service looks for it.
+ *
+ * Accepts either a full definition (`{ name?, properties }`) or a bare
+ * `properties` object; returns the same shape it was given.
+ */
+export function toAdfWireShape<T>(definition: T): T {
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) return definition;
+  const d = definition as Record<string, unknown>;
+  if (d.properties && typeof d.properties === 'object' && !Array.isArray(d.properties)) {
+    return { ...d, properties: toAdfWireShape(d.properties) } as T;
+  }
+  if (!Array.isArray(d.activities)) return definition;
+  return { ...d, activities: d.activities.map(normalizeActivity) } as T;
+}
+
+/**
  * Map a binding/lookup error to an HTTP status + structured body shape.
  * Routes use this so the editor always gets `{ ok:false, code, error }`.
  */

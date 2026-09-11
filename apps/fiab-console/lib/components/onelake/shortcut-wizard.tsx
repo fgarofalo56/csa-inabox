@@ -82,6 +82,9 @@ import {
   Link20Regular,
 } from '@fluentui/react-icons';
 import type { ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
+import { AdlsPathPicker } from '@/lib/components/storage/adls-path-picker';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors lib/azure/lakehouse-shortcuts.ts — kept local to avoid a
@@ -947,8 +950,9 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
-      // Drop the raw material from memory; keep only the secret name.
-      setSecretKey(''); setSaJson(''); setSasToken('');
+      // Drop the raw material from memory; keep only the secret name. `dvPath`
+      // is here because for a Dataverse source the path IS the stashed value.
+      setSecretKey(''); setSaJson(''); setSasToken(''); setDvPath('');
       set({ secretName: j.data.secretName });
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -1029,12 +1033,27 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       {sourceType === 'adls' && (
         <>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-            <Field label="Storage account" required style={{ flex: 1 }} hint="Account name (browse runs on the Console UAMI)">
-              <Input value={value.account || ''} onChange={(_, d) => set({ account: d.value })} placeholder="contosolake" />
-            </Field>
-            <Field label="Container / filesystem" required style={{ flex: 1 }}>
-              <Input value={value.container || ''} onChange={(_, d) => set({ container: d.value })} placeholder="landing" />
-            </Field>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <AzureBackedField
+                kind="storage"
+                label="Storage account"
+                value={value.account || ''}
+                surface="OneLake shortcut — ADLS source"
+                onChange={(v) => set({ account: v || '' })}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <BlobContainerPicker
+                account={value.account || ''}
+                value={value.container || ''}
+                label="Container / filesystem"
+                surface="OneLake shortcut — ADLS source"
+                required
+                disabled={!value.account}
+                onChange={(c) => set({ container: c })}
+                hint={value.account ? undefined : 'Pick a storage account first.'}
+              />
+            </div>
           </div>
           <Field label="SAS token (optional)" hint="Only needed for accounts the UAMI cannot reach — stored in Key Vault, never echoed.">
             <Input type={showSecret ? 'text' : 'password'} value={sasToken} onChange={(_, d) => setSasToken(d.value)} disabled={!!value.secretName}
@@ -1044,9 +1063,33 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       )}
 
       {sourceType === 'dataverse' && (
-        <Field label="Synapse-Link export path" required hint="abfss://<container>@<account>.dfs.core.windows.net/<path> that Azure Synapse Link for Dataverse writes tables to — stored in Key Vault.">
-          <Input value={dvPath} onChange={(_, d) => setDvPath(d.value)} placeholder="abfss://dataverse@contosolake.dfs.core.windows.net/exports" disabled={!!value.secretName} />
-        </Field>
+        /**
+         * The `<Input>` this picker replaced carried `disabled={!!value.secretName}`
+         * like every other control here, and `AdlsPathPicker` has no `disabled`
+         * prop. Left live, the picker stayed browsable after the stash while
+         * nothing consumed the result: `dvPath` feeds only `stash()`, whose
+         * button the "Credential stored" bar has already replaced. A control
+         * that accepts input and discards it is the shape `no-vaporware.md`
+         * forbids, so the stashed state renders the same read-only affordance
+         * the SAS-token and service-account fields do, and does not echo the
+         * stored value back for the same reason theirs do not.
+         */
+        value.secretName ? (
+          <Field
+            label="Synapse-Link export path"
+            hint="Stored in Key Vault. Choose Replace… below to browse for a different folder."
+          >
+            <Input value="" disabled placeholder="Stored — the value is not shown again" />
+          </Field>
+        ) : (
+          <AdlsPathPicker
+            label="Synapse-Link export path"
+            mode="folder"
+            value={dvPath}
+            onChange={(loc) => setDvPath(loc?.uri || '')}
+            hint="The ADLS Gen2 folder Azure Synapse Link for Dataverse writes tables to. Browse runs on the Console identity."
+          />
+        )
       )}
 
       {/* Stash / stashed status */}

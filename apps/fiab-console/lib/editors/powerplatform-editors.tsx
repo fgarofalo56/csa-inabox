@@ -37,6 +37,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { QueryErrorBar } from '@/lib/components/ui/query-error-bar';
+import { DATAVERSE_ADMISSION_GATE_ID, ErrorBar } from './powerplatform-admission-gate';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { SolutionsAlmPanel } from '@/lib/components/powerplatform/solutions-alm-panel';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
@@ -126,16 +127,10 @@ function baseRibbon(onReload: () => void, makerHref?: string, extra?: RibbonTab[
   ];
 }
 
-function ErrorBar({ msg, hint }: { msg: string; hint?: string }) {
-  return (
-    <MessageBar intent="error">
-      <MessageBarBody>
-        <MessageBarTitle>Power Platform error</MessageBarTitle>
-        {msg}{hint ? ` — ${hint}` : ''}
-      </MessageBarBody>
-    </MessageBar>
-  );
-}
+/** #3688 — the admission→gate decision and this family's ONE error surface live
+ *  in `./powerplatform-admission-gate`; see there for why they were extracted
+ *  and why they are IMPORTED above rather than bare-`export …from`'d. */
+export { DATAVERSE_ADMISSION_GATE_ID, ErrorBar };
 
 function EmptyText({ children }: { children: React.ReactNode }) {
   const s = useStyles();
@@ -709,6 +704,16 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected],
   );
   const [selectedTable, setSelectedTable] = useState<string | null>(id !== 'new' ? id : null);
+  // #3688 / ux-baseline "new-item first-open is clean". `useEnvironments`
+  // auto-selects the default environment, which immediately fires the table
+  // list — so a freshly created dataverse-table opened on an estate whose
+  // Application User grant has not run yet greeted the user with a red banner
+  // before they had touched anything. The failure is still shown (suppressing it
+  // would be its own defect), but as a guided warning until the user acts.
+  // A genuine ADMISSION refusal is unaffected: it renders as the svc-dataverse
+  // HonestGate on either path, because that IS the guided state.
+  const [touched, setTouched] = useState(false);
+  const firstOpen = id === 'new' && !touched;
   const [tab, setTab] = useState<DvTab>('columns');
   const tableEnc = selectedTable ? encodeURIComponent(selectedTable) : '';
 
@@ -892,10 +897,14 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           </MessageBar>
         )}
         <div className={s.toolbar}>
-          <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
-          <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
+          <EnvPicker
+            envs={env.envs}
+            selected={env.selected}
+            setSelected={(n) => { setTouched(true); env.setSelected(n); }}
+          />
+          <Button appearance="secondary" onClick={() => { setTouched(true); reloadActive(); }}>Reload</Button>
           {env.selected && !selectedTable && (
-            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { resetTbl(); setTblOpen(true); }}>New table</Button>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => { setTouched(true); resetTbl(); setTblOpen(true); }}>New table</Button>
           )}
           {tblMsg && !selectedTable && (
             <Caption1 style={{ color: tblMsg.kind === 'error' ? tokens.colorStatusDangerForeground1 : tokens.colorStatusSuccessForeground1 }}>{tblMsg.text}</Caption1>
@@ -912,7 +921,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
             >Open in Maker</Button>
           )}
         </div>
-        {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
+        {env.error && <ErrorBar msg={env.error} hint={env.hint} surface="Dataverse table editor" firstOpen={firstOpen} />}
         {!env.selected && !env.loading && (
           <EmptyState
             icon={<Earth24Regular />}
@@ -921,7 +930,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           />
         )}
         {tablesState.loading && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
-        {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} />}
+        {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} surface="Dataverse tables" firstOpen={firstOpen} />}
         {!selectedTable && !tablesState.loading && !tablesState.error && env.selected && tablesState.data && filtered.length === 0 && (
           <EmptyState
             icon={<Table24Regular />}

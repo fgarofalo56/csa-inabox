@@ -50,6 +50,7 @@ import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-obje
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { UcLineagePanel } from '@/lib/components/databricks/uc-lineage-panel';
 import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -1730,15 +1731,20 @@ function ExternalLocationsDialog({ open, onOpenChange }: {
                   </div>
                   <Subtitle2>Create storage credential (Azure Access Connector)</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                    Azure-native, secret-free: paste the ARM resource id of your Azure Databricks <b>Access Connector</b>.
-                    For a user-assigned managed identity, also set the Managed identity id; leave it blank for system-assigned.
+                    Azure-native, secret-free: pick your Azure Databricks <b>Access Connector</b> — or, where Databricks is not
+                    available, the user-assigned managed identity Loom Unity vends credentials for. Add a Managed identity only to
+                    pin one on a connector; leave it empty for the connector&apos;s system-assigned identity.
                   </Caption1>
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                     <Field label="Name" required style={{ minWidth: 160 }}><Input value={credName} onChange={(_, d) => setCredName(d.value)} placeholder="lake_access" /></Field>
-                    <Field label="Access connector ARM id" required style={{ flex: 1, minWidth: 320 }}><Input value={credConnector} onChange={(_, d) => setCredConnector(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Databricks/accessConnectors/…" /></Field>
+                    <div style={{ flex: 1, minWidth: 320 }}>
+                      <AzureBackedField kind="databricks-access-connector" label="Access connector" value={credConnector} surface="Unity Catalog storage credentials" onChange={(v) => setCredConnector(v || '')} />
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                    <Field label="Managed identity id (optional, user-assigned)" style={{ flex: 1, minWidth: 280 }}><Input value={credMi} onChange={(_, d) => setCredMi(d.value)} placeholder="/subscriptions/…/userAssignedIdentities/…" /></Field>
+                    <div style={{ flex: 1, minWidth: 280 }}>
+                      <AzureBackedField kind="user-assigned-identity" label="Managed identity (optional, user-assigned)" value={credMi} surface="Unity Catalog storage credentials" onChange={(v) => setCredMi(v || '')} />
+                    </div>
                     <Field label="Comment" style={{ minWidth: 180 }}><Input value={credComment} onChange={(_, d) => setCredComment(d.value)} /></Field>
                     <Switch label="Read-only" checked={credRO} onChange={(_, d) => setCredRO(d.checked)} />
                   </div>

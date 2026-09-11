@@ -616,17 +616,27 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
         kind: 'notebook',
         defaultLang: 'pyspark',
         // #3530 — the cells below `from azure.search.documents import …` and
-        // `from openai import AzureOpenAI`. Neither distribution is in the
-        // Synapse Spark or Databricks stock image, so Run-all used to stop at
-        // the first import with ModuleNotFoundError on a fresh install.
-        // Declaring them makes the notebook provisioner prepend a
-        // session-scoped `%pip install` bootstrap cell (auto-bind: the platform
-        // installs what the content it shipped needs).
+        // `from openai import AzureOpenAI`. This bundle takes the position that
+        // neither distribution is in the Synapse Spark or Databricks stock
+        // image — that is a REVIEWED claim about the pool image, not something
+        // this repo can verify; it is the issue's own premise, and the
+        // undeclared-import sweep now holds every other bundle to the same
+        // position for the same two packages. Declaring them makes the notebook
+        // provisioner prepend a session-scoped `%pip install` bootstrap cell
+        // (auto-bind: the platform installs what the content it shipped needs).
         //
-        // `azure-identity` is deliberately NOT listed: it IS in the Synapse
-        // Spark runtime image, and `pip install`ing it on top of the runtime's
-        // copy is a needless minute on every Run-all.
-        requiredLibraries: ['azure-search-documents', 'openai'],
+        // `azure-identity` is deliberately NOT listed: it is documented in-repo
+        // as present in the Synapse Spark runtime image, and `pip install`ing it
+        // on top of the runtime's copy is a needless minute on every Run-all.
+        //
+        // `langchain-text-splitters` was MISSING until the #3530 systemic sweep
+        // (bundle-notebook-libraries.test.ts) derived the declaration from the
+        // cells instead of hand-listing it: the `cell-chunk` cell does
+        // `from langchain_text_splitters import RecursiveCharacterTextSplitter`,
+        // which nothing declared. So fixing the cell-2 import this issue
+        // reported would have left Run-all failing on the SAME error two cells
+        // later — deduced from the cells, NOT observed on a live pool.
+        requiredLibraries: ['azure-search-documents', 'openai', 'langchain-text-splitters'],
         cells: [
           {
             id: 'cell-md-intro',

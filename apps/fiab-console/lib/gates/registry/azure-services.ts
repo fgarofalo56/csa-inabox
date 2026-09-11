@@ -464,6 +464,19 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
   'svc-dataverse': {
     surfaces: [
       { path: '/items/power-app', label: 'Power Platform / Dataverse tables' },
+      // #3688 — the Dataverse Application User refusal is the ONE blocker for
+      // the whole family, and it now RENDERS this gate on every one of these:
+      // `ErrorBar` (lib/editors/powerplatform-editors.tsx) and the explorer tree
+      // (lib/components/powerplatform/powerplatform-tree.tsx) both classify the
+      // admission prose with `isPowerPlatformAdmissionError` and return
+      // <HonestGate gateId="svc-dataverse">. Before that, this entry listed
+      // surfaces the gate was never mounted on — a registry row is a claim about
+      // where a gate fires, and that claim was false.
+      { path: '/items/dataverse-table', label: 'Dataverse table editor' },
+      { path: '/items/power-automate-flow', label: 'Power Automate flow editor' },
+      { path: '/items/power-page', label: 'Power Pages editor' },
+      { path: '/items/ai-builder-model', label: 'AI Builder model editor' },
+      { path: '/items/powerplatform-environment', label: 'Power Platform environment editor' },
       // #3544 — Copilot Studio agents, knowledge, topics and templates are
       // Dataverse rows. The "Use template" action that surfaced the admission
       // refusal live on 2026-08-15 writes one.
@@ -471,7 +484,24 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/copilot-template-library', label: 'Copilot Studio template library' },
       { path: '/api/items/copilot-studio-*', label: 'Copilot Studio BFF routes' },
     ],
-    fixit: { kind: 'wizard', grantNote: 'Requires the operator-run Power Platform SP grant (scripts/csa-loom/grant-powerplatform-sp.sh) — the S2S app must be added as an application user in the environment.' },
+    // R7 — THE SCRIPT NAMED HERE IS THE ONE THAT PERFORMS THIS GRANT.
+    // This used to name `grant-powerplatform-sp.sh`, which registers the BAP
+    // MANAGEMENT APP — a different one-time action, and the remediation for
+    // `svc-powerplatform`, not this gate. An operator following it would have
+    // run the wrong script and still been refused by Dataverse. The Application
+    // User grant is `dataverse-add-appuser.sh`.
+    //
+    // WHAT THIS FIX-IT DOES NOT YET DO, stated rather than implied: it is still
+    // PROSE. The platform CAN perform this action — the post-deploy bootstrap
+    // runs exactly that script — so under auto-bind-by-default.md a prose gate
+    // here remains a defect, and closing it needs an apply route the Fix-it
+    // dialog can POST to. That route is outside this change's file ownership
+    // and is tracked in #3688; the honest half that landed is that the bootstrap
+    // no longer reports the grant as done when the API refused it.
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Requires the per-environment Dataverse APPLICATION USER grant: the Loom MSAL app registration must be added as an application user with the System Administrator role in each environment. The platform performs this on every post-deploy bootstrap run (scripts/csa-loom/dataverse-add-appuser.sh, invoked by .github/workflows/csa-loom-post-deploy-bootstrap.yml). If it is still refused, re-run that workflow and read the step output: as of #3688 the script exits 3 and FAILS the job when the BAP admin API refuses environment discovery, instead of reporting an empty tenant. The usual cause is the one-time "Promote To Admin" click on an environment where Dataverse was added after creation (docs/fiab/dataverse-app-user.md Step 1). NOTE: this is NOT the same action as svc-powerplatform\'s management-app registration (grant-powerplatform-sp.sh).',
+    },
     legacyCodes: ['dataverse_not_configured', 'powerplatform_not_configured'],
   },
   'svc-lakebase': {
@@ -515,8 +545,27 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     // established (deploy-integrity R7).
   },
   'svc-stream-analytics': {
-    surfaces: [{ path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' }],
+    // #3573 — `stream-analytics-job` is a first-class item type with its own
+    // editor and BFF routes, and this gate listed only the eventstream surface,
+    // so the ASA config gate was invisible on the Admin gate page for the item
+    // type that gates on it hardest (`ux-baseline.md` G2).
+    surfaces: [
+      { path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' },
+      { path: '/items/stream-analytics-job', label: 'Stream Analytics job editor' },
+      { path: '/api/items/stream-analytics-job/*', label: 'Stream Analytics BFF routes' },
+      { path: '/api/apps/[id]/install', label: 'App install — stream-analytics-job provisioner' },
+    ],
     fixit: { kind: 'env-picker' },
+    // DELIBERATELY NOT registered here: `asa-job-not-provisioned`, the 404 the
+    // detail route returns when ASA is configured and the item's backing job
+    // does not exist. Every entry in `legacyCodes` resolves to THIS gate's
+    // env-picker Fix-it — i.e. "set LOOM_ASA_RG / LOOM_ASA_SUB" — and that is
+    // precisely the false remediation #3573 removed: the deployment IS
+    // configured, and no env var the operator could set would create the job.
+    // Its Fix-it is `POST …?provision=1`, which the PLATFORM performs, so under
+    // `auto-bind-by-default.md` §Explicitly-forbidden it is not a gate at all —
+    // a remediation Loom can execute itself must not be modelled as one the
+    // operator has to satisfy.
   },
   'svc-azure-sql': {
     surfaces: [

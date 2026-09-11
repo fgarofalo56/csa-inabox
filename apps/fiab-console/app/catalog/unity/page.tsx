@@ -32,6 +32,7 @@ import { Section } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
 import {
   Badge, Body1, Button, Caption1, Checkbox, Dialog, DialogActions, DialogBody,
   DialogContent, DialogSurface, DialogTitle, DialogTrigger, Dropdown, Field,
@@ -1164,13 +1165,21 @@ function CreateStorageCredentialDialog({ oss, onCreated }: { oss: boolean; onCre
           <DialogContent>
             {err && <MessageBar intent="error" className={s.mb}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
             <Field required label="Name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="lake_mi" /></Field>
-            <Field required label={oss ? 'Managed identity / connector resource id' : 'Access Connector ARM id'}
-              hint={oss ? 'The identity loom-unity vends credentials for' : '/subscriptions/…/providers/Microsoft.Databricks/accessConnectors/…'}>
-              <Input value={connector} onChange={(_, d) => setConnector(d.value)} placeholder="/subscriptions/…/accessConnectors/lake-connector" />
-            </Field>
-            <Field label="User-assigned MI id (optional)" hint="Omit for the connector's system-assigned identity">
-              <Input value={mi} onChange={(_, d) => setMi(d.value)} placeholder="/subscriptions/…/userAssignedIdentities/…" />
-            </Field>
+            <AzureBackedField
+              kind="databricks-access-connector"
+              label={oss ? 'Managed identity / connector' : 'Access connector'}
+              value={connector}
+              surface="Unity Catalog storage credentials"
+              onChange={(v) => setConnector(v || '')}
+            />
+            <AzureBackedField
+              kind="user-assigned-identity"
+              label="User-assigned managed identity (optional)"
+              hint="Omit for the connector's system-assigned identity."
+              value={mi}
+              surface="Unity Catalog storage credentials"
+              onChange={(v) => setMi(v || '')}
+            />
             <Field label="Comment"><Input value={comment} onChange={(_, d) => setComment(d.value)} /></Field>
           </DialogContent>
           <DialogActions>

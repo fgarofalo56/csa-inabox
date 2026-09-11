@@ -579,8 +579,20 @@ test('the corrected extractor finds MORE sites than the floor, not fewer', () =>
   // The population went UP because the detector stopped being blind. If a
   // future change silently reintroduces the hole, this is the canary that the
   // ratchet (which only fails on a RISE) cannot be.
+  //
+  // 2300 -> 2265 on 2026-09-07 (console-ui-w2). The extracted count is EVERY
+  // free-text site, not just the classified ones, so deleting an `<Input>` in
+  // favour of a picker lowers it: this wave removed 22 of them (2309 -> 2287)
+  // across the Spark, Event Grid, Stream Analytics, Unity Catalog, shortcut and
+  // PostgreSQL surfaces. That is the fix working, and it is the opposite of the
+  // brace hole, which made 52 sites INVISIBLE while leaving the markup in place.
+  //
+  // The new floor is chosen against that number, not by eyeballing a round one:
+  // 2287 - 2265 = 22 of slack, so reintroducing the hole (-52) still lands at
+  // ~2235 and still trips this. Lower it only alongside a diff that actually
+  // deletes controls, and say how many.
   const { sites } = collect();
-  assert.ok(sites > 2300, `site extraction fell to ${sites} — the brace hole may be back`);
+  assert.ok(sites > 2265, `site extraction fell to ${sites} — the brace hole may be back`);
 });
 
 // ── 10. end to end, as CI runs it ──────────────────────────────────────────
@@ -601,7 +613,13 @@ test('the measured population is real: hundreds of sites, and not everything is 
   const total = Object.values(current).reduce((a, b) => a + b, 0);
   assert.ok(files.length > 1000, `only ${files.length} tracked .tsx enumerated`);
   assert.ok(sites > 1800, `only ${sites} free-text sites extracted`);
-  assert.ok(total > 200, `only ${total} violations classified`);
+  // 178 is MIN_LIVE_SITES in check-no-freeform.mjs, and the two must move
+  // TOGETHER or one of them stops meaning anything. Both are the same control —
+  // "the detector still detects" — and this one was 200 while the guard's was
+  // 200, which is how it went red the moment console-ui-w2 removed real sites
+  // (211 -> 187) rather than when the classifier broke. Lower BOTH in the same
+  // PR that removes sites; never lower this one alone.
+  assert.ok(total > 178, `only ${total} violations classified`);
   // A classifier that flagged every free-text box would be useless in the other
   // direction: `<Input>` for a display name is correct and there are thousands.
   assert.ok(total < sites / 4, `${total}/${sites} sites flagged — the classifier is no longer discriminating`);

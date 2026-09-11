@@ -1258,10 +1258,72 @@ export interface ContentSafetyVerdict {
   severity?: number;
 }
 
-/** True when a Content Safety endpoint is configured via env. The copilot
- *  orchestrators call this to decide between filtering vs. honest-gating. */
+/** True when a Content Safety endpoint is CONFIGURED via env.
+ *  #4432: configured is NOT reachable — on the live estate this was true while
+ *  the host did not resolve at all. Anything reporting moderation STATUS to a
+ *  human must use {@link contentSafetyHealth}. */
 export function isSafetyConfigured(): boolean {
   return !!process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
+}
+
+export interface ContentSafetyHealth {
+  configured: boolean;
+  /** The endpoint answered. `false` with `configured:true` = failing open,
+   *  i.e. prompts are NOT being screened. */
+  reachable: boolean;
+  error?: string;
+}
+
+let _csHealth: { at: number; value: ContentSafetyHealth } | null = null;
+const CS_HEALTH_TTL_MS = 60_000;
+
+/**
+ * Measured Content Safety status (#4432).
+ *
+ * `/api/copilot/status` used to report `contentSafety: isSafetyConfigured()` —
+ * a bare env read — so it claimed prompts were filtered while the endpoint's
+ * host did not resolve from the console (`ENOTFOUND`, measured 2026-09-10) and
+ * nothing was screened. R7: a status must not assert what it did not establish,
+ * so this CALLS the endpoint; a completed round-trip proves reachability.
+ * Cached 60s — this runs on a status poll, not a chat turn.
+ */
+export async function contentSafetyHealth(): Promise<ContentSafetyHealth> {
+  const configured = isSafetyConfigured();
+  if (!configured) return { configured: false, reachable: false };
+  const hit = _csHealth;
+  if (hit && Date.now() - hit.at < CS_HEALTH_TTL_MS) return hit.value;
+
+  let value: ContentSafetyHealth;
+  try {
+    const ep = await resolveContentSafetyEndpoint();
+    if (!ep) {
+      value = { configured, reachable: false, error: 'No Content Safety endpoint resolved.' };
+    } else {
+      const tok = await contentSafetyToken();
+      const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'ping', categories: ['Hate'] }),
+      });
+      value = res.ok
+        ? { configured, reachable: true }
+        : { configured, reachable: false, error: `Content Safety answered HTTP ${res.status}. Prompts are NOT being screened.` };
+    }
+  } catch (e: any) {
+    // A statement of fact, not a chore: auto-bind-by-default.md forbids
+    // "go set LOOM_X" as the terminal user-facing state, and the platform now
+    // deploys this binding itself (deploy-planner/cognitive-account.bicep).
+    const cause = e?.cause?.code || e?.code;
+    value = {
+      configured,
+      reachable: false,
+      error:
+        `Could not reach the Content Safety endpoint (${cause ? `${cause}: ` : ''}` +
+        `${String(e?.message || e).slice(0, 200)}). Prompts are NOT being screened.`,
+    };
+  }
+  _csHealth = { at: Date.now(), value };
+  return value;
 }
 
 /**
@@ -1284,28 +1346,72 @@ export async function resolveContentSafetyEndpoint(): Promise<string | null> {
 }
 
 /**
+ * Fail open when a Content Safety round-trip never produced a verdict — a
+ * THROWN fetch (DNS `ENOTFOUND`, `ECONNREFUSED`, TLS, `FetchTimeoutError`).
+ *
+ * #4432: the helpers below documented "fail-open on a transient error" but only
+ * implemented it for `!res.ok`. A thrown fetch escaped both, propagated through
+ * `Promise.all([...])` in the orchestrate route (which had no wrapper), and
+ * became a bare Next.js 500 with a non-JSON body — the causeless "Error: HTTP
+ * 500" the chat pane showed. Measured live 2026-09-10: the endpoint is set and
+ * its host does not resolve from the console, so EVERY turn threw here.
+ *
+ * Failing open is correct — a moderation outage must not take chat down — but
+ * it must be LOUD, so the warning names the real cause (R7).
+ */
+function safetyFailOpen(op: string, e: unknown): ContentSafetyVerdict {
+  const cause = (e as any)?.cause?.code || (e as any)?.code;
+  const msg = e instanceof Error ? e.message : String(e);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[content-safety] ${op} could not reach the Content Safety endpoint ` +
+      `(${cause ? `${cause}: ` : ''}${msg.slice(0, 200)}). ` +
+      `Failing OPEN — the prompt was NOT screened. The platform deploys this ` +
+      `binding itself (deploy-planner/cognitive-account.bicep provisions the ` +
+      `account's private endpoint + privatelink.cognitiveservices A record). ` +
+      `The MOST COMMON cause is that infra deploy not having run, or not having ` +
+      `taken. This code has NOT established that, though: transient DNS, an NSG ` +
+      `change, throttling and a deleted account all produce this same symptom (R7).`,
+  );
+  return { blocked: false, reason: '' };
+}
+
+/**
  * Prompt Shields — detect direct jailbreak / prompt-injection in the user
  * prompt. POST /contentsafety/text:shieldPrompt?api-version=2024-09-01.
  * Returns { blocked:true } when attackDetected. Fail-open (blocked:false) on a
- * missing endpoint or a transient Content Safety error so chat is never broken
- * by a moderation-service blip.
+ * missing endpoint, an unreachable endpoint, or a transient Content Safety
+ * error so chat is never broken by a moderation-service blip.
  */
 export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVerdict> {
-  const ep = await resolveContentSafetyEndpoint();
+  let ep: string | null;
+  try { ep = await resolveContentSafetyEndpoint(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   if (!ep) return { blocked: false, reason: '' };
   let tok: string;
-  try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
-  const res = await fetchWithTimeout(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ userPrompt: userPrompt.slice(0, 10_000), documents: [] }),
-  });
+  // An unobtainable token (IMDS blip, or Cognitive Services User revoked
+  // out-of-band) is an UNSCREENED prompt too, so it gets the same loud
+  // treatment — a silent return here is how the UI reports "screened" while
+  // nothing is.
+  try { tok = await contentSafetyToken(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`${ep}/contentsafety/text:shieldPrompt?api-version=2024-09-01`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ userPrompt: userPrompt.slice(0, 10_000), documents: [] }),
+    });
+  } catch (e) {
+    return safetyFailOpen('shieldPrompt', e);
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     console.warn(`[content-safety] shieldPrompt failed ${res.status}: ${t.slice(0, 200)}`);
     return { blocked: false, reason: '' };
   }
-  const j: any = await res.json().catch(() => ({}));
+  // A 200 whose body will not parse is NOT a verdict of "no attack" — it is no
+  // verdict at all, and collapsing it to `{}` reads as clean. Fail open, loudly.
+  let j: any;
+  try { j = await res.json(); } catch (e) { return safetyFailOpen('shieldPrompt', e); }
   const attack = j?.userPromptAnalysis?.attackDetected === true;
   return {
     blocked: attack,
@@ -1317,28 +1423,39 @@ export async function shieldPrompt(userPrompt: string): Promise<ContentSafetyVer
  * Harm-category moderation for prompt input OR LLM output.
  * POST /contentsafety/text:analyze?api-version=2024-09-01.
  * Blocks when any category severity >= CONTENT_SAFETY_BLOCK_SEVERITY.
- * Fail-open on a missing endpoint / transient error.
+ * Fail-open on a missing endpoint, an unreachable endpoint, or a transient error.
  */
 export async function moderateContent(text: string): Promise<ContentSafetyVerdict> {
-  const ep = await resolveContentSafetyEndpoint();
+  let ep: string | null;
+  try { ep = await resolveContentSafetyEndpoint(); } catch (e) { return safetyFailOpen('moderateContent', e); }
   if (!ep) return { blocked: false, reason: '' };
   if (!text.trim()) return { blocked: false, reason: '' };
   let tok: string;
-  try { tok = await contentSafetyToken(); } catch { return { blocked: false, reason: '' }; }
-  const res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      text: text.slice(0, 10_000), // API limit: 10 000 chars per call
-      categories: ['Hate', 'SelfHarm', 'Sexual', 'Violence'],
-    }),
-  });
+  // Same reasoning as shieldPrompt: an unobtainable token is an unscreened
+  // prompt, and it must say so.
+  try { tok = await contentSafetyToken(); } catch (e) { return safetyFailOpen('moderateContent', e); }
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`${ep}/contentsafety/text:analyze?api-version=2024-09-01`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        text: text.slice(0, 10_000), // API limit: 10 000 chars per call
+        categories: ['Hate', 'SelfHarm', 'Sexual', 'Violence'],
+      }),
+    });
+  } catch (e) {
+    return safetyFailOpen('moderateContent', e);
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     console.warn(`[content-safety] moderateContent failed ${res.status}: ${t.slice(0, 200)}`);
     return { blocked: false, reason: '' };
   }
-  const j: any = await res.json().catch(() => ({}));
+  // Same as shieldPrompt: an unparseable 200 is an absent verdict, not a clean
+  // one, and must not read as "nothing was flagged".
+  let j: any;
+  try { j = await res.json(); } catch (e) { return safetyFailOpen('moderateContent', e); }
   const hits: Array<{ category: string; severity: number }> =
     (j?.categoriesAnalysis || []).filter((c: any) => (c?.severity ?? 0) >= CONTENT_SAFETY_BLOCK_SEVERITY);
   if (hits.length === 0) return { blocked: false, reason: '' };
