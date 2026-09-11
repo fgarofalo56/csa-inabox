@@ -69,7 +69,24 @@ import {
 // environment/agent-list probe (still a real BAP call) and tolerate the gate.
 const PP_ENV = process.env.LOOM_PP_ENV_ID || '';
 
-async function read(res: APIResponse): Promise<Probe> {
+/**
+ * The three members `read()` actually touches.
+ *
+ * It was typed `APIResponse`, and one call site passes the network `Response`
+ * from `page.waitForResponse(...)` — a different Playwright type that carries
+ * all three but is not assignable. `tsc` says so (TS2345) and nothing read this
+ * file until the copilot-decision tsconfig added in this change, so the error
+ * had been sitting there. Widening to the structural shape is the honest fix:
+ * a cast would have silenced the compiler without establishing that the two
+ * types really do share the surface, which is the thing in question.
+ */
+interface ReadableResponse {
+  headers(): Record<string, string>;
+  status(): number;
+  text(): Promise<string>;
+}
+
+async function read(res: ReadableResponse): Promise<Probe> {
   const ct = (res.headers()['content-type'] || '').toLowerCase();
   let text = '';
   try { text = await res.text(); } catch { /* stream/binary */ }
@@ -91,6 +108,40 @@ function assertPrimaryAction(surface: string, feature: string, p: Probe) {
   recordVerdict({ surface, feature, verdict: s.grade, status: s.status, notes: s.notes });
   expect(s.actual, s.message).not.toBe('fail');
   return s.verdict;
+}
+
+/**
+ * Record a REACHABILITY probe's verdict, then hand it back for assertion.
+ *
+ * Every one of these used to be `recordVerdict({… verdict:'A', status:'pass' …})`
+ * written AFTER its `expect(classify(probe).verdict).not.toBe('fail')`. Two
+ * separate defects in one line:
+ *
+ *   1. The grade was a CONSTANT. It said "pass" whatever the probe contained,
+ *      so the ndjson receipt could not disagree with itself.
+ *   2. It ran after the assertion, so on the run that matters — the failing one —
+ *      the test threw first and NOTHING was written. A verdict log that is only
+ *      appended to on success can only ever read green, which is the shape that
+ *      let a roll score `pass=0 fail=4` as "UAT-verified".
+ *
+ * Both matter more now, not less: this change tightened the rule those very
+ * `classify()` calls apply, so the new codeless-5xx verdict is exactly what
+ * would have thrown before the verdict was written.
+ *
+ * A 400 is a VALIDATION gate (envId/agentId missing), not a backend refusal, so
+ * it is excluded from the failure verdict here the same way the assertions
+ * below exclude it.
+ */
+function recordProbe(surface: string, feature: string, p: Probe) {
+  const v = classify(p);
+  const bad = v.verdict === 'fail' && p.status !== 400;
+  recordVerdict({
+    surface, feature,
+    verdict: bad ? 'F' : 'A',
+    status: bad ? 'fail' : 'pass',
+    notes: `${v.reason} (HTTP ${p.status})`,
+  });
+  return v;
 }
 
 // ── Shared workspace + item ids ─────────────────────────────────────────────
@@ -154,10 +205,7 @@ test.describe('Copilot Studio family — real BAP/Dataverse primary actions', ()
     const probe = await read(res);
     // A 400 "agentId/envId required" is a validation gate, not a backend reach;
     // only fail on 404 / unauthenticated / unexpected.
-    const v = classify(probe);
-    recordVerdict({ surface: 'persona:copilot-studio-topic', feature: 'list-topics',
-      verdict: v.verdict === 'fail' && probe.status !== 400 ? 'F' : 'A',
-      status: v.verdict === 'fail' && probe.status !== 400 ? 'fail' : 'pass', notes: `${v.reason}` });
+    const v = recordProbe('persona:copilot-studio-topic', 'list-topics', probe);
     expect(probe.status, 'topic route reachable').not.toBe(404);
     if (probe.status !== 400) expect(v.verdict, v.reason).not.toBe('fail');
     await ctx.close();
@@ -169,9 +217,9 @@ test.describe('Copilot Studio family — real BAP/Dataverse primary actions', ()
     const env = PP_ENV || '00000000-0000-0000-0000-000000000000';
     const res = await page.request.get(`${BASE}/api/items/copilot-studio-action?envId=${env}&agentId=uat-agent`);
     const probe = await read(res);
+    const v = recordProbe('persona:copilot-studio-action', 'list-actions', probe);
     expect(probe.status, 'action route reachable').not.toBe(404);
-    if (probe.status !== 400) expect(classify(probe).verdict).not.toBe('fail');
-    recordVerdict({ surface: 'persona:copilot-studio-action', feature: 'list-actions', verdict: 'A', status: 'pass', notes: `HTTP ${probe.status}` });
+    if (probe.status !== 400) expect(v.verdict, v.reason).not.toBe('fail');
     await ctx.close();
   });
 
@@ -181,9 +229,9 @@ test.describe('Copilot Studio family — real BAP/Dataverse primary actions', ()
     const env = PP_ENV || '00000000-0000-0000-0000-000000000000';
     const res = await page.request.get(`${BASE}/api/items/copilot-studio-knowledge?envId=${env}&agentId=uat-agent`);
     const probe = await read(res);
+    const v = recordProbe('persona:copilot-studio-knowledge', 'list-knowledge', probe);
     expect(probe.status, 'knowledge route reachable').not.toBe(404);
-    if (probe.status !== 400) expect(classify(probe).verdict).not.toBe('fail');
-    recordVerdict({ surface: 'persona:copilot-studio-knowledge', feature: 'list-knowledge', verdict: 'A', status: 'pass', notes: `HTTP ${probe.status}` });
+    if (probe.status !== 400) expect(v.verdict, v.reason).not.toBe('fail');
     await ctx.close();
   });
 
@@ -204,9 +252,9 @@ test.describe('Copilot Studio family — real BAP/Dataverse primary actions', ()
     const env = PP_ENV || '00000000-0000-0000-0000-000000000000';
     const res = await page.request.get(`${BASE}/api/items/copilot-studio-analytics/uat-agent?envId=${env}&days=30`);
     const probe = await read(res);
+    const v = recordProbe('persona:copilot-studio-analytics', 'kpi-fetch', probe);
     expect(probe.status, 'analytics route reachable').not.toBe(404);
-    if (probe.status !== 400) expect(classify(probe).verdict).not.toBe('fail');
-    recordVerdict({ surface: 'persona:copilot-studio-analytics', feature: 'kpi-fetch', verdict: 'A', status: 'pass', notes: `HTTP ${probe.status}` });
+    if (probe.status !== 400) expect(v.verdict, v.reason).not.toBe('fail');
     await ctx.close();
   });
 
@@ -332,15 +380,27 @@ test.describe('Docs/Help agent — backend + unified window', () => {
   test('the single Copilot window opens via the Sparkle button (no second popup)', async ({ browser }, testInfo) => {
     const ctx = await browser.newContext(); await signIn(ctx);
     const page = await ctx.newPage();
-    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: /Open Loom Copilot/i }).click();
-    // Exactly one window, and the retired floating widget is gone.
-    await expect(page.getByTestId('copilot-pane')).toHaveCount(1);
-    await expect(page.getByTestId('help-copilot-widget')).toHaveCount(0);
-    await page.screenshot({
-      path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-unified-window-receipt.png'),
-    }).catch(() => {});
-    recordVerdict({ surface: 'copilot:unified', feature: 'single-window', verdict: 'A', status: 'pass' });
+    // `finally`, so a FAILING run still writes a verdict. Recorded after the
+    // assertions with a hard-coded `pass`, this row could only ever read green:
+    // the run where the window did not open threw first and wrote nothing.
+    let failed = true;
+    try {
+      await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+      await page.getByRole('button', { name: /Open Loom Copilot/i }).click();
+      // Exactly one window, and the retired floating widget is gone.
+      await expect(page.getByTestId('copilot-pane')).toHaveCount(1);
+      await expect(page.getByTestId('help-copilot-widget')).toHaveCount(0);
+      await page.screenshot({
+        path: path.join(testInfo.outputDir, '..', '..', 'artifacts', 'copilot-unified-window-receipt.png'),
+      }).catch(() => {});
+      failed = false;
+    } finally {
+      recordVerdict({
+        surface: 'copilot:unified', feature: 'single-window',
+        verdict: failed ? 'F' : 'A', status: failed ? 'fail' : 'pass',
+        notes: failed ? 'the single Copilot window did not open as asserted' : '',
+      });
+    }
     await ctx.close();
   });
 });

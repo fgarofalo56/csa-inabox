@@ -59,6 +59,45 @@ const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\
 // exactly: a control passing on prose rather than code.
 const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
 
+/**
+ * Drop comment lines, so PROSE cannot decide membership in this population.
+ *
+ * The comment at :53-59 already records one version of this bug — a route that
+ * matched only via its header comment — and the fix taken then was to widen the
+ * regex so the real CALL matched. That left the other half untouched: the regex
+ * was still applied to RAW SOURCE, so a comment could still satisfy it, and the
+ * exclusion arm is where that is dangerous. `TOOLKIT_RE` is an EXCLUDE: a hit
+ * removes the file from the ratchet entirely.
+ *
+ * Measured before the fix, at da91bd5, across all 1692 route files: exactly ONE
+ * file was cloaked — `app/api/copilot/orchestrate/route.ts`, which imports
+ * `getSession` from '@/lib/auth/session', calls it, and hand-rolls its own 401,
+ * and whose ONLY toolkit-wrapper occurrence is the sentence "Unlike almost every
+ * sibling route this one is a bare handler, not `withSession(...)`". The
+ * counterfactual, run against the real guard and restored byte-identically:
+ *
+ *   AS-IS            : 1010 keys, orchestrate present = false
+ *   COMMENT REWORDED : 1011 keys, orchestrate present = true  (prose only)
+ *
+ * So a purely editorial change moved the population. That is the same defect
+ * class as the one this PR fixes in the UAT classifier: a rule keyed on a string
+ * that the thing under test does not actually have to MEAN.
+ *
+ * Same shape and same reason as the `isComment` filter in the sibling guard
+ * `check-owner-only-workspace-guard.mjs`. `\r?\n` is load-bearing: the working
+ * tree is CRLF, and a line filter split on `\n` alone leaves a trailing `\r` on
+ * every line, which silently defeats `trim()`-free matching elsewhere.
+ */
+const isCommentLine = (l) => {
+  const t = l.trim();
+  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+};
+
+/** The file with comment LINES removed — what every regex above is applied to. */
+function codeOnly(src) {
+  return src.split(/\r?\n/).filter((l) => !isCommentLine(l)).join('\n');
+}
+
 // ── Touched-file escape hatch ───────────────────────────────────────────────
 // Paths (repo-relative) a PR may modify WITHOUT migrating, each with a one-line
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
@@ -682,6 +721,31 @@ const TOUCH_EXEMPT = new Map([
   // code leaves the tests green.
   ['apps/fiab-console/app/api/help-copilot/chat/route.ts',
    "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod reports 'POST: streaming/SSE handler' (raw SSE Response, same as /api/copilot/orchestrate). 401 + both codes pinned by app/api/help-copilot/__tests__/chat-gate-codes.test.ts"],
+  // The route the comment cloak was HIDING. Until `codeOnly()` above, this file
+  // was excluded from the population by a single sentence of prose at :196 —
+  // "Unlike almost every sibling route this one is a bare handler, not
+  // `withSession(...)`" — so the boy-scout TOUCH arm could never fire on it and
+  // this PR edited it with no auditable entry, while its structural twin
+  // help-copilot/chat correctly required one. With the guard un-cloaked the
+  // route is visible (1010 -> 1011 keys) and needs the same treatment its twin
+  // gets.
+  //
+  // THE CODEMOD REFUSES IT, re-measured 2026-09-11 rather than assumed, rc=0:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/copilot/orchestrate/route.ts
+  //   → app/api/copilot/orchestrate/route.ts: SKIPPED (POST: no hand-rolled getSession() prologue)
+  //   DRY-RUN: 0 handlers across 0 files; 1 skipped
+  // The cause is structural and visible in the file: the exported `POST` (:207)
+  // is a thin error boundary, and the session check lives inside `handlePost`
+  // (:46-49), so there is no prologue in the exported handler for the codemod to
+  // rewrite. `withSession` could not take it anyway — `handlePost` returns a raw
+  // SSE `Response` (:182-184), not the JSON envelope the wrapper wraps.
+  //
+  // COMPENSATING CONTROL: the 401 is pinned by
+  // app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts:116-121,
+  // which this PR strengthened (it now also pins BOTH gate codes), and
+  // scripts/ci/mutate-copilot-verdict.py M9/M10 fail if either code is deleted.
+  ['apps/fiab-console/app/api/copilot/orchestrate/route.ts',
+   "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod SKIPS (POST: no hand-rolled getSession() prologue — the check is inside handlePost) and withSession cannot wrap a raw SSE Response. 401 + both codes pinned by app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts"],
   // #3941 touched these four polymorphic `[type]/[id]` routes for ONE reason:
   // their local `loadItem` authorized with an OWNER-ONLY partition point read,
   // `workspacesContainer().item(item.workspaceId, callerOid)`. `workspaces` is
@@ -751,12 +815,17 @@ export function scanHandRolled() {
   const current = {};
   for (const rel of listRouteFiles()) {
     const abs = path.join(REPO_ROOT, rel);
-    let src;
+    let raw;
     try {
-      src = fs.readFileSync(abs, 'utf8');
+      raw = fs.readFileSync(abs, 'utf8');
     } catch {
       continue;
     }
+    // EVERY predicate below reads code, never comments. Applied to all four and
+    // not only to TOOLKIT_RE on purpose: an include arm satisfied by prose would
+    // put a file INTO the ratchet that has no data surface, which is the same
+    // error pointed the other way.
+    const src = codeOnly(raw);
     if (!MUTATING_EXPORT_RE.test(src) && !GET_EXPORT_RE.test(src)) continue; // no data surface
     if (!AUTH_SESSION_IMPORT_RE.test(src)) continue; // not session-based (or session via toolkit only)
     if (TOOLKIT_RE.test(src)) continue; // migrated / composing the toolkit

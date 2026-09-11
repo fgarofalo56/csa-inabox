@@ -52,6 +52,10 @@ CONSOLE = os.path.join(ROOT, "apps", "fiab-console")
 MODULE = os.path.join(CONSOLE, "e2e", "_lib", "copilot-verdict.ts")
 CALLER = os.path.join(CONSOLE, "e2e", "copilot.uat.ts")
 CS_CLIENT = os.path.join(CONSOLE, "lib", "azure", "copilot-studio-client.ts")
+# The error CONTRACT moved out of the client so the client stays under its
+# check-file-size ratchet ceiling. M15/M16 mutate the envelope and therefore
+# follow it; M14 stays on the client, where the enablement throw lives.
+CS_ERROR = os.path.join(CONSOLE, "lib", "azure", "copilot-studio-error.ts")
 SUITES = [
     "__tests__/copilot-uat-verdict.test.ts",
     "app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts",
@@ -127,12 +131,22 @@ MUTATIONS = [
     ("M14 stop the Copilot Studio enablement throw carrying its code", CS_CLIENT,
      "        503, json || text, url, COPILOT_STUDIO_NOT_ENABLED,",
      "        503, json || text, url,"),
-    ("M15 give an UNEXPLAINED error the gate code (a fault reads as a gate)", CS_CLIENT,
-     "  const code = isCs ? (e.code || 'copilot_studio_error') : 'copilot_studio_unreachable';",
-     "  const code = isCs ? (e.code || 'copilot_studio_not_enabled') : 'copilot_studio_unreachable';"),
-    ("M16 call an UNREACHABLE backend 'not configured'", CS_CLIENT,
-     "  const code = isCs ? (e.code || 'copilot_studio_error') : 'copilot_studio_unreachable';",
-     "  const code = isCs ? (e.code || 'copilot_studio_error') : 'copilot_studio_not_enabled';"),
+    ("M15 give an UNEXPLAINED error the gate code (a fault reads as a gate)", CS_ERROR,
+     "  const code = isCs ? (e.code || COPILOT_STUDIO_ERROR) : COPILOT_STUDIO_UNREACHABLE;",
+     "  const code = isCs ? (e.code || COPILOT_STUDIO_NOT_ENABLED) : COPILOT_STUDIO_UNREACHABLE;"),
+    ("M16 call an UNREACHABLE backend 'not configured'", CS_ERROR,
+     "  const code = isCs ? (e.code || COPILOT_STUDIO_ERROR) : COPILOT_STUDIO_UNREACHABLE;",
+     "  const code = isCs ? (e.code || COPILOT_STUDIO_ERROR) : COPILOT_STUDIO_NOT_ENABLED;"),
+    # M19: the re-export the fourteen existing importers rely on. Extracting the
+    # contract is only safe while `CopilotStudioError` is still reachable from
+    # the client module; deleting the re-export must not be silent.
+    # A multi-line anchor would match ZERO here -- the worktree is CRLF and the
+    # harness reads with newline="" -- and a zero-match anchor is a dead
+    # mutation, so this is deliberately ONE line.
+    ("M19 drop the client's re-export of the envelope (breaks the 14 importers)",
+     CS_CLIENT,
+     "  copilotStudioErrorEnvelope,\n} from '@/lib/azure/copilot-studio-error';",
+     "} from '@/lib/azure/copilot-studio-error';"),
     ("M17 drop governance-copilot from the AOAI set (review 5's B2)", MODULE,
      "  'persona:governance-copilot',         // app/api/governance/govern/copilot",
      ""),
@@ -158,6 +172,20 @@ def run_suites():
     return p.returncode, ran, summary, out
 
 
+def to_file_eol(text, src):
+    """Rewrite a needle's newlines to match the FILE's own line ending.
+
+    The worktree is CRLF and `read_text` preserves that verbatim, so a
+    multi-line anchor written with bare \\n matches ZERO -- and a zero-match
+    anchor applies no mutation, which reads as a dead mutation rather than a
+    kill. The harness already refuses on anchor != 1, so this never produced a
+    false green; it produced a false STOP, which is its own kind of noise. This
+    removes the trap instead of asking every future mutation to remember it.
+    """
+    eol = "\r\n" if "\r\n" in src else "\n"
+    return text.replace("\r\n", "\n").replace("\n", eol)
+
+
 def main():
     originals = {}
     for _, path, _, _ in MUTATIONS:
@@ -178,6 +206,8 @@ def main():
     try:
         for label, path, frm, to in MUTATIONS:
             src = originals[path]
+            frm = to_file_eol(frm, src)
+            to = to_file_eol(to, src)
             n = src.count(frm)
             if n != 1:
                 print(f"{label:<62} ANCHOR MATCHED {n} -- HARNESS STOPS")

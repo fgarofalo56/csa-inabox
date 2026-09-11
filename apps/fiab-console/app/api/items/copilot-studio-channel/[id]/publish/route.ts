@@ -19,7 +19,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { publishToChannel, copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-client';
+import { publishToChannel } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';

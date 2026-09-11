@@ -5,41 +5,38 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
-  getAgent, updateAgent, deleteAgent, CopilotStudioError,
+  getAgent, updateAgent, deleteAgent,
 } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function handleErr(e: any) {
-  const status = e instanceof CopilotStudioError ? e.status : 502;
-  return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+  const { status, body: envelope } = copilotStudioErrorEnvelope(e);
+  return NextResponse.json(envelope, { status });
 }
 
 function envIdOf(req: NextRequest): string | null {
   return new URL(req.url).searchParams.get('envId');
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const envId = envIdOf(req);
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const agent = await getAgent(envId, (await ctx.params).id);
+    const agent = await getAgent(envId, params.id);
     return NextResponse.json({ ok: true, agent });
   } catch (e: any) { return handleErr(e); }
-}
+});
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const agent = await updateAgent(String(body.envId), (await ctx.params).id, {
+    const agent = await updateAgent(String(body.envId), params.id, {
       name: body.name,
       description: body.description,
       instructions: body.instructions,
@@ -47,15 +44,13 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     });
     return NextResponse.json({ ok: true, agent });
   } catch (e: any) { return handleErr(e); }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
   const envId = envIdOf(req);
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    await deleteAgent(envId, (await ctx.params).id);
+    await deleteAgent(envId, params.id);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return handleErr(e); }
-}
+});

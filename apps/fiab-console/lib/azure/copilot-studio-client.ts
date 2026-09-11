@@ -41,6 +41,9 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import {
+  CopilotStudioError, COPILOT_STUDIO_NOT_ENABLED,
+} from '@/lib/azure/copilot-studio-error';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import {
   powerPlatformFetch, bapBase, bapScope, type PpCallIdentity,
@@ -67,85 +70,17 @@ import {
 /** BAP admin control-plane api-version (host comes from `bapBase()`). */
 const BAP_API_VERSION = '2020-10-01';
 
-export class CopilotStudioError extends Error {
-  status: number;
-  body?: unknown;
-  endpoint?: string;
-  /**
-   * Machine-readable cause, when this client KNOWS it.
-   *
-   * A gate is honest only when it is DOCUMENTED (no-vaporware.md): the prose in
-   * `message` tells a human what to do, and `code` is what lets a CONSUMER tell
-   * "the add-on is not enabled" from "the server broke". Without it both were a
-   * bare 5xx with a string, and anything reading the response had to guess —
-   * which is stating a cause the response never established (deploy-integrity.md
-   * R7), in whichever direction the reader happened to guess.
-   *
-   * Empty string means "this client does not know", and that is deliberate: an
-   * unexplained failure must NOT acquire a reassuring code. `''` maps to the
-   * generic `copilot_studio_error` at the envelope, which is not a gate code.
-   */
-  code: string;
-  constructor(
-    message: string,
-    status: number,
-    body?: unknown,
-    endpoint?: string,
-    code = '',
-  ) {
-    super(message);
-    this.name = 'CopilotStudioError';
-    this.status = status;
-    this.body = body;
-    this.endpoint = endpoint;
-    this.code = code;
-  }
-}
-
-/**
- * The gate code for "the Copilot Studio add-on is not enabled on this
- * environment".
- *
- * Exported because it is a CONTRACT, not a spelling: `e2e/_lib/copilot-verdict.ts`
- * lists it in GATE_CODES and DELIBERATE_GATE_CODES, and until this existed that
- * list named a code NOTHING in `app/api/**` emitted — so the classifier was
- * matching on a string that could never arrive, while the real gate came back
- * codeless and scored as a server fault.
- */
-export const COPILOT_STUDIO_NOT_ENABLED = 'copilot_studio_not_enabled';
-
-/**
- * The envelope every Copilot Studio BFF route returns for a thrown error.
- *
- * ONE copy, on purpose. This expression was hand-duplicated verbatim in
- * fourteen route files:
- *
- *   const status = e instanceof CopilotStudioError ? e.status : 502;
- *   return NextResponse.json({ ok:false, error, body: e?.body, status }, { status });
- *
- * — which is how every one of them ended up codeless together, and how they
- * would have drifted apart one at a time if the `code` had been added fourteen
- * times by hand.
- *
- * `code` is NEVER invented from the status. A CopilotStudioError that did not
- * name its own cause gets the generic `copilot_studio_error`, which is not in
- * GATE_CODES and therefore scores as a fault, not a gate. A non-CopilotStudioError
- * is a 502 `copilot_studio_unreachable`: the call never reached a backend that
- * could refuse it, so "not configured" would be a claim nothing established.
- */
-export function copilotStudioErrorEnvelope(e: unknown): {
-  status: number;
-  body: { ok: false; code: string; error: string; body?: unknown; status: number };
-} {
-  const isCs = e instanceof CopilotStudioError;
-  const status = isCs ? e.status : 502;
-  const code = isCs ? (e.code || 'copilot_studio_error') : 'copilot_studio_unreachable';
-  const error = (e as any)?.message || String(e);
-  return {
-    status,
-    body: { ok: false, code, error, body: (e as any)?.body, status },
-  };
-}
+// The error CONTRACT — the thrown shape, the gate code and the one envelope
+// every Copilot Studio BFF route returns — lives in its own module so a route
+// can shape an error without importing this whole Dataverse/BAP client, and so
+// this file stays under its `check-file-size.mjs` ratchet ceiling. Re-exported
+// here because fourteen existing importers name `CopilotStudioError` off this
+// module; new code should import from `./copilot-studio-error` directly.
+export {
+  CopilotStudioError,
+  COPILOT_STUDIO_NOT_ENABLED,
+  copilotStudioErrorEnvelope,
+} from '@/lib/azure/copilot-studio-error';
 
 /**
  * Acquire the bearer token for a Copilot Studio (Dataverse / BAP) call.

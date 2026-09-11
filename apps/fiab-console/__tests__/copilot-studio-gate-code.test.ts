@@ -42,6 +42,22 @@ function res(status: number, body: unknown) {
 
 const ENV_ID = '11111111-1111-1111-1111-111111111111';
 const DV_HOST = 'contoso.crm.dynamics.com';
+const BAP_HOST = 'api.bap.microsoft.com';
+
+/**
+ * Which backend a mocked call is going to, by ORIGIN — never by substring.
+ *
+ * `url.includes('bap.microsoft.com')` is what this was, and CodeQL flagged it
+ * twice as HIGH (`js/incomplete-url-substring-sanitization`). Nothing was
+ * exploitable — the test builds the URL it then inspects — but the rule is
+ * pointing at something real even in a fixture: a substring test matches
+ * `https://evil.example.com/?x=bap.microsoft.com` and, more to the point here,
+ * it would silently keep matching if `bapBase()` ever moved to a sovereign host
+ * that merely CONTAINS the commercial one. Parsing the URL makes the fixture
+ * stricter as well as quiet, which is why this is the fix rather than an escape
+ * edit — the last `useless-escape` "fix" in this repo shipped a SyntaxError.
+ */
+const isBapCall = (url: string) => new URL(url).hostname === BAP_HOST;
 
 /** The BAP environment list, so `envHost()` resolves before the Dataverse call. */
 const BAP_ENVS = {
@@ -72,7 +88,7 @@ beforeEach(() => {
 describe('the client throws the enablement gate WITH its code', () => {
   it('a Dataverse 404 on msdyn_copilots becomes a 503 copilot_studio_not_enabled', async () => {
     powerPlatformFetch.mockImplementation(async (url: string) => {
-      if (url.includes('bap.microsoft.com')) return { res: res(200, BAP_ENVS), identity: 'sp' };
+      if (isBapCall(url)) return { res: res(200, BAP_ENVS), identity: 'sp' };
       return { res: res(404, DV_NOT_ENABLED), identity: 'sp' };
     });
     const { listAgents, CopilotStudioError, COPILOT_STUDIO_NOT_ENABLED } =
@@ -90,7 +106,7 @@ describe('the client throws the enablement gate WITH its code', () => {
     // "enable Copilot Studio" is an R7 untruth, and it is also how a real schema
     // defect would read as a supported configuration.
     powerPlatformFetch.mockImplementation(async (url: string) => {
-      if (url.includes('bap.microsoft.com')) return { res: res(200, BAP_ENVS), identity: 'sp' };
+      if (isBapCall(url)) return { res: res(200, BAP_ENVS), identity: 'sp' };
       return { res: res(404, { error: { message: "Resource not found for the segment 'msdyn_botchannels'." } }), identity: 'sp' };
     });
     const { listAgents } = await import('@/lib/azure/copilot-studio-client');
@@ -110,6 +126,29 @@ describe('the client throws the enablement gate WITH its code', () => {
     const { status, body } = copilotStudioErrorEnvelope(err);
     expect(classify({ status, ct: 'application/json', text: JSON.stringify(body) }).verdict)
       .toBe('fail');
+  });
+});
+
+describe('the client still re-exports the contract (14 importers depend on it)', () => {
+  // The contract moved to `lib/azure/copilot-studio-error.ts` so the client
+  // stays under its `check-file-size.mjs` ceiling. Fourteen files import
+  // `CopilotStudioError` off the CLIENT, so the re-export is a compatibility
+  // surface, not decoration — and a surface nothing asserts is one refactor
+  // away from disappearing quietly.
+  it('exposes CopilotStudioError, the gate code and the envelope', async () => {
+    const mod: any = await import('@/lib/azure/copilot-studio-client');
+    expect(typeof mod.CopilotStudioError).toBe('function');
+    expect(mod.COPILOT_STUDIO_NOT_ENABLED).toBe('copilot_studio_not_enabled');
+    expect(typeof mod.copilotStudioErrorEnvelope).toBe('function');
+  });
+
+  it('re-exports the SAME class the contract module defines', async () => {
+    // Not merely "a function called CopilotStudioError" — identity, so an
+    // `instanceof` check inside the envelope cannot silently start comparing
+    // against a different class.
+    const viaClient: any = await import('@/lib/azure/copilot-studio-client');
+    const viaContract: any = await import('@/lib/azure/copilot-studio-error');
+    expect(viaClient.CopilotStudioError).toBe(viaContract.CopilotStudioError);
   });
 });
 

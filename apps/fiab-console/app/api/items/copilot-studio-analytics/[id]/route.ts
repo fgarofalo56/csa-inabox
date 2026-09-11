@@ -4,7 +4,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getAnalytics, copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-client';
+import { getAnalytics } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';

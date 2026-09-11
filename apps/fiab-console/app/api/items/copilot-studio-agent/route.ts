@@ -9,8 +9,8 @@ import {
   listEnvironments,
   listAgents,
   createAgent,
-  copilotStudioErrorEnvelope,
 } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';

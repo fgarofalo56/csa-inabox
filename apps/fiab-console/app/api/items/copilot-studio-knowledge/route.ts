@@ -5,9 +5,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  listKnowledgeSources, addKnowledgeSource, copilotStudioErrorEnvelope,
+  listKnowledgeSources, addKnowledgeSource,
   type KnowledgeSourceType,
 } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';

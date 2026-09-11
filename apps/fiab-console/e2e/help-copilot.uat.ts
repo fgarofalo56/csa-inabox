@@ -25,7 +25,9 @@
  * downgrade deliberately.
  */
 import { test, expect } from '@playwright/test';
-import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
+import {
+  BASE, signIn, captureFailures, recordVerdict, type NetworkFailure,
+} from './_lib/uat';
 
 const LIVE = process.env.UNIFIED_COPILOT_LIVE !== '0';
 // Loom deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
@@ -96,18 +98,27 @@ test('unified copilot — one launcher opens exactly one window', async ({ brows
   const page = await ctx.newPage();
   await mockBackends(page);
 
-  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
-  // The single topbar launcher.
-  const btn = page.getByRole('button', { name: /Open Loom Copilot/i });
-  await expect(btn).toBeVisible();
-  await btn.click();
+  // `finally` — see the note on the live-AOAI test below. A verdict written
+  // only after the assertions pass is a row that can never say anything else.
+  let failed = true;
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+    // The single topbar launcher.
+    const btn = page.getByRole('button', { name: /Open Loom Copilot/i });
+    await expect(btn).toBeVisible();
+    await btn.click();
 
-  // Exactly one window. The retired floating widget testid must not exist.
-  await expect(page.getByTestId('copilot-pane')).toHaveCount(1);
-  await expect(page.getByTestId('help-copilot-widget')).toHaveCount(0);
-
-  recordVerdict({ surface: 'copilot:unified', feature: 'single-launcher-single-window',
-    verdict: 'A', status: 'pass', notes: '1 pane, 0 floating widget' });
+    // Exactly one window. The retired floating widget testid must not exist.
+    await expect(page.getByTestId('copilot-pane')).toHaveCount(1);
+    await expect(page.getByTestId('help-copilot-widget')).toHaveCount(0);
+    failed = false;
+  } finally {
+    recordVerdict({
+      surface: 'copilot:unified', feature: 'single-launcher-single-window',
+      verdict: failed ? 'F' : 'A', status: failed ? 'fail' : 'pass',
+      notes: failed ? 'launcher did not open exactly one window' : '1 pane, 0 floating widget',
+    });
+  }
   await ctx.close();
 });
 
@@ -118,34 +129,49 @@ test('unified copilot — docs vs build route to different agents with inline at
   await mockBackends(page);
   const start = Date.now();
 
-  const { consoleErrors, networkErrors } = await captureFailures(page, async () => {
-    await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: /Open Loom Copilot/i }).click();
-    await expect(page.getByTestId('copilot-pane')).toBeVisible();
+  let failed = true;
+  let consoleErrors: string[] = [];
+  let networkErrors: NetworkFailure[] = [];
+  try {
+    ({ consoleErrors, networkErrors } = await captureFailures(page, async () => {
+      await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+      await page.getByRole('button', { name: /Open Loom Copilot/i }).click();
+      await expect(page.getByTestId('copilot-pane')).toBeVisible();
 
-    // 1) A docs question → docs agent badge + a citation chip.
-    await page.getByTestId('copilot-input').fill('What is CSA Loom?');
-    await page.getByTestId('copilot-send').click();
-    await expect(page.getByTestId('copilot-msg-copilot').last())
-      .toContainText(/self-contained data \+ AI platform/i, { timeout: 10_000 });
-    const docsBadge = page.getByTestId('copilot-agent-badge').last();
-    await expect(docsBadge).toContainText(/Help & docs/i);
-    await expect(page.getByTestId('citation-chip').first()).toBeVisible();
+      // 1) A docs question → docs agent badge + a citation chip.
+      await page.getByTestId('copilot-input').fill('What is CSA Loom?');
+      await page.getByTestId('copilot-send').click();
+      await expect(page.getByTestId('copilot-msg-copilot').last())
+        .toContainText(/self-contained data \+ AI platform/i, { timeout: 10_000 });
+      const docsBadge = page.getByTestId('copilot-agent-badge').last();
+      await expect(docsBadge).toContainText(/Help & docs/i);
+      await expect(page.getByTestId('citation-chip').first()).toBeVisible();
 
-    // 2) A build question → build agent badge (different agent, same window).
-    await page.getByTestId('copilot-input').fill('list my workspaces');
-    await page.getByTestId('copilot-send').click();
-    await expect(page.getByTestId('copilot-msg-copilot').last())
-      .toContainText(/2 workspaces/i, { timeout: 10_000 });
-    await expect(page.getByTestId('copilot-agent-badge').last()).toContainText(/Build & data/i);
-  });
-
-  const verdict = consoleErrors.length || networkErrors.length ? 'C' : 'A';
-  recordVerdict({ surface: 'copilot:unified', feature: 'intent-routing-attribution',
-    verdict, status: 'pass',
-    notes: `mocked SSE; docs→Help & docs, build→Build & data; ${consoleErrors.length} console errs`,
-    consoleErrors: consoleErrors.slice(0, 5), networkErrors: networkErrors.slice(0, 5),
-    durationMs: Date.now() - start });
+      // 2) A build question → build agent badge (different agent, same window).
+      await page.getByTestId('copilot-input').fill('list my workspaces');
+      await page.getByTestId('copilot-send').click();
+      await expect(page.getByTestId('copilot-msg-copilot').last())
+        .toContainText(/2 workspaces/i, { timeout: 10_000 });
+      await expect(page.getByTestId('copilot-agent-badge').last()).toContainText(/Build & data/i);
+    }));
+    failed = false;
+  } finally {
+    // `status` was hard-coded to 'pass' while `verdict` could be 'C' — so the
+    // row disagreed with itself, and on a genuine routing failure no row was
+    // written at all. Both now follow what actually happened.
+    const degraded = consoleErrors.length > 0 || networkErrors.length > 0;
+    recordVerdict({
+      surface: 'copilot:unified', feature: 'intent-routing-attribution',
+      verdict: failed ? 'F' : (degraded ? 'C' : 'A'),
+      status: failed ? 'fail' : 'pass',
+      notes: failed
+        ? 'intent routing / attribution did not hold — see the Playwright failure'
+        : `mocked SSE; docs→Help & docs, build→Build & data; ${consoleErrors.length} console errs`,
+      consoleErrors: consoleErrors.slice(0, 5),
+      networkErrors: networkErrors.slice(0, 5),
+      durationMs: Date.now() - start,
+    });
+  }
   await ctx.close();
 });
 
@@ -167,7 +193,11 @@ test('unified copilot — Ctrl+/ toggles the one window', async ({ browser }) =>
 test.describe('unified copilot — live AOAI', () => {
   test.skip(!LIVE, 'UNIFIED_COPILOT_LIVE=0 — live AOAI walk deliberately downgraded');
 
-  test('asks a real question, gets a streamed answer or an honest AOAI gate', async ({ browser }) => {
+  // The title used to say "…or an honest AOAI gate", which is what the test did
+  // BEFORE this change. On the default path it now asserts the gate locator has
+  // count 0, so the old name described a behaviour the test no longer has —
+  // the same R7 shape as the header assertion this PR deleted, just smaller.
+  test('asks a real question and gets a real streamed answer (gate only if opted out)', async ({ browser }) => {
     const ctx = await browser.newContext();
     await signIn(ctx);
     const page = await ctx.newPage();

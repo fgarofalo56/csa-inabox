@@ -352,46 +352,79 @@ describe('AOAI_BACKED_PERSONAS agrees with the spec that uses it', () => {
  * classifier branch keyed on an unreachable string is not tolerance; it is a
  * rule that quietly does not apply, and no test could tell the difference.
  *
- * So the list is checked against the routes. This greps the emitted source
- * rather than importing the routes because the route modules pull in the whole
- * Next/Azure graph; the grep is the cheap instrument, and the positive control
- * below is what stops it passing by matching nothing.
+ * TWO THINGS THE FIRST VERSION OF THIS GUARD GOT WRONG, both found in review:
+ *
+ *   1. It HAND-LISTED the one lib file it also read. That made it exactly one
+ *      move from vacuity, and the move happened the very next commit: extracting
+ *      the contract into `lib/azure/copilot-studio-error.ts` took the literal out
+ *      of the listed path and the guard went red — correctly, but only because a
+ *      human was watching. The population is now DERIVED: every `.ts`/`.tsx`
+ *      under `app/api/**` and `lib/**`, minus tests.
+ *   2. It matched a BARE QUOTED LITERAL, which a comment or an unrelated enum
+ *      satisfies (`'disabled'` alone hits several unrelated route files). It now
+ *      matches an EMISSION SHAPE over comment-stripped source — the same lesson
+ *      as `check-route-toolkit.mjs`, where a rule keyed on raw text let prose
+ *      decide a population.
  */
 describe('GATE_CODES are emitted by real routes', () => {
-  const apiRoot = path.join(__dirname, '..', 'app', 'api');
+  const consoleRoot = path.join(__dirname, '..');
 
   function collect(dir: string, acc: string[] = []): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '__tests__') continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) collect(full, acc);
-      else if (entry.name.endsWith('.ts') && !full.includes('__tests__')) acc.push(full);
+      else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) acc.push(full);
     }
     return acc;
   }
 
-  const sources = collect(apiRoot).map((f) => readFileSync(f, 'utf-8'));
-  // Codes emitted by a LIBRARY the routes hand to the response envelope rather
-  // than writing inline. `copilot_studio_not_enabled` is thrown by
-  // lib/azure/copilot-studio-client.ts and reaches the wire through
-  // copilotStudioErrorEnvelope(), so the route files never contain the literal.
-  const libSources = [
-    readFileSync(path.join(__dirname, '..', 'lib', 'azure', 'copilot-studio-client.ts'), 'utf-8'),
-  ];
-  const emitted = [...sources, ...libSources].join('\n');
+  /** Comment lines cannot emit anything. Same filter, same reason, as the guard. */
+  const codeOnly = (s: string) =>
+    s.split(/\r?\n/)
+      .filter((l) => {
+        const t = l.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+      })
+      .join('\n');
 
-  it('read a non-trivial number of route sources (a zero read would pass everything)', () => {
-    expect(sources.length).toBeGreaterThan(100);
+  /**
+   * An EMISSION of `code`, not a mention of it. Either it is assigned to a
+   * `code` property on a response body, or it is the value of a constant (which
+   * the envelope then assigns). Both are how a code actually reaches the wire.
+   */
+  const emissionRe = (code: string) =>
+    new RegExp(`(?:\\bcode\\s*:\\s*|=\\s*)['"\`]${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`);
+
+  const files = [
+    ...collect(path.join(consoleRoot, 'app', 'api')),
+    ...collect(path.join(consoleRoot, 'lib')),
+  ];
+  const emitted = files.map((f) => codeOnly(readFileSync(f, 'utf-8'))).join('\n');
+
+  it('read a non-trivial number of sources (a zero read would pass everything)', () => {
+    expect(files.length).toBeGreaterThan(1000);
   });
 
-  it('every GATE_CODE appears in an emitting source', () => {
+  it('every GATE_CODE is EMITTED somewhere under app/api or lib', () => {
     for (const code of GATE_CODES) {
-      expect(emitted.includes(`'${code}'`), `${code} is in GATE_CODES but nothing emits it`)
+      expect(emissionRe(code).test(emitted), `${code} is in GATE_CODES but nothing emits it`)
         .toBe(true);
     }
   });
 
   it('a code nothing emits would be caught (negative control)', () => {
-    expect(emitted.includes("'no_such_gate_code_exists'")).toBe(false);
+    expect(emissionRe('no_such_gate_code_exists').test(emitted)).toBe(false);
+  });
+
+  it('a MENTION is not an emission — comments and bare literals do not count', () => {
+    // The two shapes that used to pass. If either starts counting again, the
+    // guard is back to matching prose.
+    expect(emissionRe('no_aoai').test(codeOnly("// code: 'no_aoai' in a comment"))).toBe(false);
+    expect(emissionRe('no_aoai').test("const reasons = ['no_aoai', 'other'];")).toBe(false);
+    // …and the real shapes still do.
+    expect(emissionRe('no_aoai').test("{ ok: false, code: 'no_aoai' }")).toBe(true);
+    expect(emissionRe('no_aoai').test("export const NO_AOAI = 'no_aoai';")).toBe(true);
   });
 });
 
