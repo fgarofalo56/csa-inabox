@@ -186,19 +186,11 @@ const TOUCH_EXEMPT = new Map([
   // /`domainScopeFor`, and contain none of them.
   ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
    "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and migrating loadRecycledItem would WIDEN recycle-bin restore/purge — separate PR"],
-  // #3753 touched this file for ONE line: `resolveWorkspaceRole(item.workspaceId,
-  // session.claims.oid, session.claims.upn)` became `resolveWorkspaceRole(
-  // item.workspaceId, session)` because that helper's second parameter (named
-  // `tenantId`, always filled with the caller's oid) is exactly the defect this
-  // guard exists for and was removed. The BASELINED occurrence is a different
-  // site: `loadItem`'s own owner-only workspace point read (the
-  // `ws.item(item.workspaceId, tenantId)` + `resource.tenantId !== tenantId`
-  // pair). It is not in this PR's diff. Migrating it WIDENS who may flip an
-  // item's data-access mode between service- and user-identity — an
-  // authorization change that needs its own review and its own tests, not a
-  // drive-by inside a 404 fix.
-  ['apps/fiab-console/app/api/items/[type]/[id]/access-mode/route.ts',
-   "#3753: the diff is one line (resolveWorkspaceRole's oid parameter removed — a correction in THIS guard's direction); loadItem's baselined owner-only point read is untouched, and migrating it would WIDEN who can change an item's data-access mode — separate PR"],
+  // REMOVED 2026-09-07 (#3941): `items/[type]/[id]/access-mode/route.ts`. The
+  // deferral this entry recorded — "migrating it would WIDEN who can change an
+  // item's data-access mode — separate PR" — is DONE. That route's `loadItem`
+  // now calls `authorizeItemWorkspace` write-scoped, so there is nothing left to
+  // exempt and the file is out of the baseline entirely.
   // #3823 tightened `resolveWorkspaceAccessByOid` STEP 6 (the tenant-admin
   // bypass), which granted `role:'Admin', canWrite:true` whenever the tid
   // comparison in step 4 decided nothing — i.e. whenever EITHER the workspace
@@ -226,38 +218,11 @@ const TOUCH_EXEMPT = new Map([
   // parameter, step 6's body, and the new `tenantUnconfirmedDenial` helper.
   ['apps/fiab-console/lib/auth/workspace-access.ts',
    '#3823: narrows the step-6 tenant-admin bypass (a correction in this guard’s direction). The baselined occurrence is step 1, the OWNER FAST PATH of the canonical ladder itself — and `authorizeWorkspace`, the prescribed migration target, is implemented by calling this very function, so there is nothing to migrate to.'],
-  // #3611 touched this route to (a) add `assertNoServerOwnedStateChange` to the
-  // PATCH body — the SECOND enforcement point of a write-side deny-list — and
-  // (b) migrate GET/PATCH/DELETE onto the `withSession` route-toolkit wrapper.
-  // Both are RESTRICTIONS; neither adds an ownership decision.
-  //
-  // THE SINGLE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF. Measured, not
-  // assumed: of the 97 changed lines in this file (75 added / 22 removed),
-  // ZERO match either of this guard's own two predicates (`POINT_READ_RE`,
-  // `.item(<x>, <oid-ish>)`, for the point read; `OWNER_CMP_RE`,
-  // `.tenantId [!=]==`, for the ownership compare).
-  //
-  // The count is from `gh pr diff 3925`, NOT a local three-dot diff: ancestry
-  // commands are not trustworthy on a shallow checkout, and an earlier revision
-  // of this comment said 93 on that basis. The zero is a LIVE negative, not a
-  // dead predicate — both REs still match exactly 1 line each in this same file
-  // as it stands, so they are demonstrably capable of firing on this source.
-  // Stated by FUNCTION rather than by line number, for the reason the item-crud
-  // entry above records: it is the pair `await ws.item(item.workspaceId,
-  // tenantId).read<Workspace>()` + `resource.tenantId !== tenantId` inside
-  // `loadItem`, and this PR adds a DOCBLOCK above that function without
-  // changing a line of its body.
-  //
-  // Migrating it WIDENS access, which is why it is an exemption and not a fix:
-  // `loadItem` backs GET, PATCH and DELETE for EVERY item type that has no
-  // dedicated `[id]/route.ts`, and `authorizeItemWorkspace` would newly admit
-  // tenant admins and shared-ACL members to all three verbs across all of them.
-  // The current check fails CLOSED, so deferring it leaks nothing. That is a
-  // real authorization change needing its own review and its own tests — not a
-  // drive-by inside a PR whose subject is RESTRICTING what may be written
-  // through this same PATCH.
-  ['apps/fiab-console/app/api/items/[type]/[id]/route.ts',
-   "#3611: adds the write-side server-owned-state guard to PATCH + a withSession migration, both RESTRICTIONS. loadItem's baselined owner-only point read is untouched (0 of 97 changed lines match either detector predicate, and both predicates still match 1 line each elsewhere in the file — a live negative, not a dead check), and migrating it would WIDEN GET/PATCH/DELETE to admins + ACL members for every item type with no dedicated route — separate PR"],
+  // REMOVED 2026-09-07 (#3941): `items/[type]/[id]/route.ts`. That entry deferred
+  // the widening with "needs its own review and its own tests, not a drive-by";
+  // #3941 IS that PR. GET/PATCH/DELETE now go through `authorizeItemWorkspace`
+  // (read-scoped / write-scoped respectively), so the file carries no owner-only
+  // point read and is out of the baseline.
   // 2026-09-07 · #3878/#4183: this PR touched the route for TWO things, neither
   // of which is an authorization decision — (a) the create response now reports
   // `ok:false, created:true` with a `gateId` when the Unity-Catalog → Synapse
