@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1692 |
 | Public (no session) | 59 |
-| Session-only | 649 |
-| Owner-scoped | 674 |
+| Session-only | 648 |
+| Owner-scoped | 675 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 498 |
@@ -898,8 +898,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `estate/execute/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Synapse |
-| `estate/plan/route.ts` | POST | session-only |  | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos |
+| `estate/execute/route.ts` | POST | owner-scoped |  | ADF, ADLS, ADX, AI Search, ARM, Azure SQL, Azure Storage, Compute, Cosmos, Microsoft Graph, PostgreSQL, Purview, Resource Graph, Stream Analytics, Synapse |
+| `estate/plan/route.ts` | POST | session-only |  | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Stream Analytics |
 
 ## eventhubs
 
@@ -1768,7 +1768,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/stream-analytics-job/[name]/metrics/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/outputs/route.ts` | PUT DELETE | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/query/route.ts` | PUT | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
-| `items/stream-analytics-job/[name]/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
+| `items/stream-analytics-job/[name]/route.ts` | GET POST | owner-scoped |  | ADX, ARM, Azure SQL, Azure Storage, Cosmos, Event Hubs, IoT Hub, Microsoft Graph, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/state/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/[name]/test/route.ts` | POST | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
 | `items/stream-analytics-job/route.ts` | GET | session-only |  | ADX, ARM, Azure SQL, Azure Storage, Event Hubs, IoT Hub, PostgreSQL, Service Bus, Stream Analytics |
@@ -2530,7 +2530,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-459 module(s) ORIGINATE a backend label — the derivation read an
+460 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -3203,6 +3203,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/install/provisioners/report.ts` | Fabric |
 | `apps/fiab-console/lib/install/provisioners/semantic-model.ts` | Fabric, Power BI |
 | `apps/fiab-console/lib/install/provisioners/workspace-monitor.ts` | ADX, APIM, ARM, Azure RBAC, Container Apps |
+| `apps/fiab-console/lib/items/manifest/item-manifest.ts` | Stream Analytics |
 | `apps/fiab-console/lib/logic-app/auto-bind.ts` | Logic Apps |
 | `apps/fiab-console/lib/mcp/catalog.ts` | AI Foundry, ARM, Azure DevOps, Dataverse, Fabric, Microsoft Graph, Microsoft Sentinel, Power BI |
 | `apps/fiab-console/lib/mesh/agent-mesh-console.tsx` | Azure OpenAI |
