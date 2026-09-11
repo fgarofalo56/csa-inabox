@@ -80,6 +80,33 @@ def gh_paginated(args: list[str], what: str) -> list:
     return flat
 
 
+def ledger_receipt_ready(number: int, policy: dict) -> tuple[bool, str]:
+    """Does the ledger hold a receipt of the right KIND for this issue?
+
+    The gate on `--allow-close`. Fails CLOSED on a missing ledger: if you cannot
+    show the receipt, you cannot declare the auto-close, because the whole point
+    of gate 6 is that an auto-close skips `ledger.transition()`'s refusal.
+    """
+    path = os.path.join(HERE, "state.json")
+    if not os.path.exists(path):
+        return False, (
+            f"no ledger at {path}, so the receipt for #{number} cannot be shown. "
+            "Seed it with `python tools/drain/tick.py --bootstrap`."
+        )
+    sys.path.insert(0, HERE)
+    from ledger import Ledger
+
+    led = Ledger(path, receipts=policy["receipts"]).load()
+    item = led.items.get(number)
+    if item is None:
+        return False, f"#{number} is not in the ledger at all"
+    try:
+        led._refuse_unless_receipted(item)
+    except ValueError as exc:
+        return False, str(exc)
+    return True, f"#{number} holds a {item.receipt_kind} receipt"
+
+
 def required_contexts(repo: str) -> list[str]:
     """The contexts branch protection will actually BLOCK on.
 
@@ -192,15 +219,21 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
     def record(name: str, ok: bool, detail: str) -> None:
         findings.append({"gate": name, "ok": ok, "detail": detail})
 
-    # 0 -- a CONFLICTING PR is NO-GO in its own right. Pushing into that window
-    # gets ZERO check-runs, permanently, and nothing later creates them.
-    mergeable = pr.get("mergeable", "")
+    # 0 -- the PR must be known-MERGEABLE. An ALLOW-list, not a deny-list: a
+    # deny-list on "CONFLICTING" passes GitHub's async `UNKNOWN`, which is the
+    # state a PR sits in for a few seconds after every push -- and UNKNOWN is
+    # precisely what precedes the hazard this gate names. Pushing into a
+    # conflicting window gets ZERO check-runs, permanently, and nothing later
+    # creates them. "I do not know yet" is not a pass; re-run in a moment.
+    mergeable = pr.get("mergeable") or "UNKNOWN"
     record(
-        "0 not conflicting",
-        mergeable != "CONFLICTING",
+        "0 mergeable",
+        mergeable == "MERGEABLE",
         f"mergeable={mergeable} mergeStateStatus={pr.get('mergeStateStatus')}"
         + (" - clear the conflict BEFORE pushing; a commit pushed while the PR reads "
-           "CONFLICTING never gets check-runs" if mergeable == "CONFLICTING" else ""),
+           "CONFLICTING never gets check-runs" if mergeable == "CONFLICTING"
+           else " - GitHub has not computed mergeability yet; re-run rather than assume"
+           if mergeable != "MERGEABLE" else ""),
     )
 
     # 1 -- base == origin/main, exactly.
@@ -272,8 +305,12 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
         for c in (pr.get("commits") or [])
     ]
     scan = gates.merge_is_close_safe(pr.get("body") or "", messages)
+    # `closingIssuesReferences` is reported BESIDE the scan and never subtracted
+    # from it. Trusting the API field to narrow the population re-introduces the
+    # exact defect this gate exists for: it read EMPTY while a squash commit
+    # closed an issue. The UNION is the answer, never the intersection.
     api_says = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
-    will_close = sorted(set(scan.hard))
+    will_close = sorted(set(scan.hard) | set(api_says))
     undeclared = sorted(set(will_close) - set(allow_close))
     record(
         "6 closing-keyword scan (body + commit trail)",
@@ -328,6 +365,17 @@ def main() -> int:
             return 2
         with open(args.before_file, encoding="utf-8") as handle:
             before = json.load(handle)
+        # The baseline must belong to THIS pr. Auditing #4483 against #4400's
+        # before-set prints AUDIT OK or AUDIT FAILED with equal confidence, and
+        # neither answer is about anything.
+        if before.get("pr") != args.audit_close:
+            print(
+                f"refusing: {args.before_file} was taken for PR #{before.get('pr')}, "
+                f"not #{args.audit_close}. An audit against another PR's baseline "
+                "is not a measurement.",
+                file=sys.stderr,
+            )
+            return 2
         after = gh_json(
             ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
              "--json", "number", "--jq", "[.[].number]"],
@@ -342,6 +390,16 @@ def main() -> int:
         parser.error("a PR number is required unless --audit-close is given")
 
     allow_close = [int(x) for x in args.allow_close.split(",") if x.strip()]
+    # Declaring an auto-close does not GIVE the item a receipt. Gate 6 exists
+    # because an auto-close bypasses the ledger, so `--allow-close` has to be
+    # checked against the ledger rather than taken on a lane's word -- otherwise
+    # the flag is simply a way to turn the gate off.
+    for number in allow_close:
+        ok, why = ledger_receipt_ready(number, policy)
+        if not ok:
+            print(f"refusing --allow-close {number}: {why}", file=sys.stderr)
+            return 2
+
     data = collect(repo, args.pr)
     result = run_gates(data, policy, allow_close)
 

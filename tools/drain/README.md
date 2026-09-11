@@ -151,7 +151,17 @@ estate · Playwright walks on the live console.
 weakening or baselining a guard · `.trivyignore` additions · any skip valve.
 
 `gates.action_is_permitted()` **fails closed**: an action in neither list is
-refused, so adding a capability is a deliberate edit to `policy.json`.
+refused, so adding a capability is a deliberate edit to `policy.json`. Matching
+is EXACT — `merge-without-review` is not a prefix of a permission.
+
+**The authority is checked against the code, mechanically.** Ten keys under
+`merge_gate` and four under `verdict_parsing` were once read by no code at all —
+including two that duplicated hardcoded constants, so editing the authority
+changed nothing, and one (`require_hollow_check_clean`) that asserted a
+capability the GitHub API cannot support. `gates.assert_policy_matches_code()`
+now fails in BOTH directions: a key with no implementation, and an
+implementation the policy does not declare. A dropped gate leaves a `_removed_*`
+entry saying why, so nobody re-adds it from the PRP.
 
 ---
 
@@ -183,8 +193,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 150 tests across every module
-python tools/drain/mutate_gates.py           # 45 arms, must be 45 KILLED
+python -m pytest tools/drain/__tests__ -q    # 175 tests across every module
+python tools/drain/mutate_gates.py           # 58 arms, must be 58 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -266,8 +276,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 45 mutation arms against a sandbox copy; must be 45 KILLED |
+| `mutate_gates.py` | 58 mutation arms against a sandbox copy; must be 58 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 150 tests; a negative control for every decision function |
+| `__tests__/` | 175 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

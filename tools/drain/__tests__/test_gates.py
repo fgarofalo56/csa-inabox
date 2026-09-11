@@ -226,7 +226,7 @@ def test_negative_control_missing_marker_is_reported_not_silent():
     )
     assert live == []
     assert len(near) == 1
-    assert "no marker" in near[0].reason
+    assert "no line announces it" in near[0].reason
 
 
 def test_negative_control_wrong_token_spelling_is_reported():
@@ -302,6 +302,91 @@ def test_negative_control_an_unresolvable_head_date_cannot_pin_anything():
     assert near[0].kind == gates.NEAR_UNPINNABLE
     ok, _ = gates.reduce_verdicts(live, near)
     assert not ok
+
+
+def test_negative_control_a_quoted_verdict_is_a_citation_not_a_decision():
+    """A comment that says DO NOT MERGE scored GO, because it quoted a previous
+    round's header 900 characters down. `_token_of` scanned the WHOLE body for
+    marker lines while `window` bounded only the fallback, so any line anywhere
+    containing a marker and a token decided the comment -- and the PR AUTHOR can
+    write that line. Quoting a reviewer in a multi-round thread is ordinary."""
+    body = (
+        "Coordinator status, round 3. For the record reviewer B wrote:\n"
+        + ("filler. " * 120)
+        + "\n> ## Independent re-review - APPROVE\n"
+        + "Reviewer A has not reported yet; do not merge on this.\n"
+    )
+    live, near = gates.parse_verdicts([_c(777, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+def test_negative_control_an_unquoted_marker_line_past_the_window_does_not_decide():
+    """The window contract, over LINES. `token_window_chars` exists so that body
+    prose cannot constitute a verdict; parsing marker lines over the whole body
+    bypassed it, and the quote rule alone does not cover this -- a verdict
+    reproduced without `>` (a paste, a summary, a coordinator's recap) is
+    unquoted and still not a decision about this head."""
+    body = "Recap of the round.\n\n" + ("filler line\n" * 40) + "## Independent review - APPROVE\n"
+    assert body.index("Independent review") > 200, "the fixture must clear the window"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+def test_negative_control_a_quoted_verdict_inside_the_window_is_still_a_citation():
+    """The narrower case, and the one a fixture whose quote sits past the window
+    cannot see: scoping marker lines to the window is NOT sufficient on its own,
+    because the ordinary way to open a reply is to quote what you are replying
+    to. Both conditions are load-bearing."""
+    body = "> ## Independent re-review - APPROVE\n\nThanks - but I am the author, not a reviewer.\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+def test_negative_control_a_sentence_about_a_verdict_is_not_a_verdict():
+    """The inverse, and worse: a BLOCKING review whose marker was misspelled,
+    with one sentence of prose mentioning the marker phrase beside the word
+    APPROVE, registered as a live APPROVE. A block inverted into an approval."""
+    body = (
+        "## Re-review - REQUEST-CHANGES\n\n"
+        "Blocker: the thing is broken.\n\n"
+        "For context, the earlier Independent review - APPROVE was measured at a "
+        "different head.\n"
+    )
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, _ = gates.reduce_verdicts(live, near)
+    assert not ok, "a misspelled marker over a block must never read as approval"
+
+
+def test_a_misspelled_marker_is_reported_loudly_not_dropped():
+    """The other side of that boundary. Silence is the enemy: a sound verdict
+    headed "Re-review" was discarded and the gate said only "no live APPROVE",
+    which cost three runs to diagnose. It must surface as a near-miss naming the
+    spelling."""
+    body = "## Re-review - REQUEST-CHANGES\n\nBlocker: the thing is broken.\n"
+    _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NO_MARKER
+    assert near[0].blocks
+    assert "marker spelling" in near[0].reason
+
+
+def test_a_misspelled_marker_over_an_approve_does_not_block_but_is_reported():
+    body = "## Re-review - APPROVE\n\nlooks fine.\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NO_MARKER
+    assert not near[0].blocks
 
 
 def test_negative_control_a_blocking_near_miss_is_pinned_to_head_like_any_verdict():
@@ -510,6 +595,19 @@ def test_negative_control_a_statuscontext_pending_or_error_is_not_green():
         checks[0] = {"context": "Python Lint", "state": state}
         ok, reasons = gates.classify_checks(checks, REQUIRED)
         assert not ok, f"{state} must not be green: {reasons}"
+
+
+def test_negative_control_a_skipped_run_does_not_hide_behind_a_green_twin():
+    """ORDER-DEPENDENCE, measured: with one required context published twice,
+    `['SUCCESS','SKIPPED']` scored GO and `['SKIPPED','SUCCESS']` scored NO-GO
+    on the same commit, because `_check_rank` tied them and the first won. Not
+    hypothetical -- 9 of 25 recent PRs publish a duplicated context name, and on
+    the harness's own PR the duplicate is a REQUIRED one."""
+    for order in (["SUCCESS", "SKIPPED"], ["SKIPPED", "SUCCESS"]):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED[1:]]
+        checks += [_run(REQUIRED[0], c) for c in order]
+        ok, reasons = gates.required_measured_nothing(checks, REQUIRED)
+        assert not ok, f"order {order} must be NO-GO: {reasons}"
 
 
 def test_negative_control_a_duplicated_context_is_judged_by_its_worst_run():

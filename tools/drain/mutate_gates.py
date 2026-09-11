@@ -269,9 +269,9 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        True,",
     ),
     (
-        "MG5 a CONFLICTING PR stops being NO-GO",
+        "MG5 gate 0 stops blocking at all",
         "merge_gate.py",
-        '        mergeable != "CONFLICTING",',
+        '        mergeable == "MERGEABLE",',
         "        True,",
     ),
     (
@@ -322,11 +322,93 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G3 the verdict token is read in list order over the FLAT window again",
         "gates.py",
-        ("    saw_template = False\n"
-         "    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]"),
-        ("    return next((t for t in VERDICT_TOKENS if t in head), None), False\n"
-         "    saw_template = False\n"
-         "    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]"),
+        "    saw_template = _saw_template(head)",
+        ("    return next((t for t in VERDICT_TOKENS if t in head), None), _saw_template(head)\n"
+         "    saw_template = _saw_template(head)"),
+    ),
+    # -- round 3: the regressions two independent reviewers found -----------
+    (
+        # NOT `head.splitlines()` -> `body_unused.splitlines()`: that raises
+        # NameError, and a mutant killed by a NameError proves only that the
+        # tests run Python. Pass the WHOLE body where the window belongs --
+        # in scope, valid, and exactly the defect.
+        "G4 the verdict is parsed over the WHOLE body again (a quoted verdict decides)",
+        "gates.py",
+        "        token, saw_template = _token_of(head)",
+        "        token, saw_template = _token_of(body)",
+    ),
+    (
+        "G5 a QUOTED verdict counts as a decision",
+        "gates.py",
+        "        if _is_quoted(line):\n            continue",
+        "        if False:\n            continue",
+    ),
+    (
+        "G6 a line that MENTIONS a marker counts as one that announces it",
+        "gates.py",
+        "        if any(stripped.startswith(m) for m in MARKERS):",
+        "        if any(m in stripped for m in MARKERS):",
+    ),
+    (
+        "G7 SKIPPED ties with SUCCESS, so a green twin hides a run that measured nothing",
+        "gates.py",
+        '    if verdict == "SKIPPED":\n        return 2',
+        "    if False:\n        return 2",
+    ),
+    (
+        "G8 a token in the window with no marker line is dropped silently",
+        "gates.py",
+        "            elif mentions_token:",
+        "            elif False:",
+    ),
+    (
+        "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",
+        "tick.py",
+        "    if len(known) < GUARD_FLOOR:",
+        "    if len(believed_open) < GUARD_FLOOR:",
+    ),
+    (
+        "T11 the OVERLAP denominator becomes the ledger (bricks a mostly-terminal run)",
+        "tick.py",
+        "    overlap = len(known & live_numbers) / len(live_numbers)",
+        "    overlap = len(known & live_numbers) / len(known)",
+    ),
+    (
+        "T12 only a READY item is audited when it departs",
+        "tick.py",
+        ("        if number not in live_numbers and item.state not in TERMINAL "
+         "and item.state != NEEDS_AUDIT:"),
+        "        if number not in live_numbers and item.state == READY:",
+    ),
+    (
+        "L9 the receipt refusal exempts one stream (the narrow bypass)",
+        "ledger.py",
+        "        if state == CLOSED:",
+        '        if state == CLOSED and item.stream != "W9-rest":',
+    ),
+    (
+        "L10 the decline refusal exempts one stream",
+        "ledger.py",
+        "        if state == DECLINED and not (why and why.strip()):",
+        '        if state == DECLINED and item.stream != "W9-rest" and not (why and why.strip()):',
+    ),
+    (
+        "MG8 gate 6 SUBTRACTS closingIssuesReferences (the field that is not an oracle)",
+        "merge_gate.py",
+        "    will_close = sorted(set(scan.hard) | set(api_says))",
+        "    will_close = sorted(set(scan.hard) - set(api_says))",
+    ),
+    (
+        "MG9 gate 0 becomes a deny-list again, so UNKNOWN passes",
+        "merge_gate.py",
+        '        mergeable == "MERGEABLE",',
+        '        mergeable != "CONFLICTING",',
+    ),
+    (
+        "P1 a policy key with no implementation stops being an error",
+        "gates.py",
+        "    if missing:\n        raise ValueError",
+        "    if False:\n        raise ValueError",
     ),
     (
         "BI1 the inventory stops refusing a partition that loses an issue",

@@ -66,7 +66,8 @@ def _data(**over) -> dict:
         "required": list(REQUIRED),
     }
     for key, value in over.items():
-        if key in ("body", "commits", "statusCheckRollup", "mergeable", "mergeStateStatus"):
+        if key in ("body", "commits", "statusCheckRollup", "mergeable", "mergeStateStatus",
+                   "closingIssuesReferences"):
             data["pr"][key] = value
         else:
             data[key] = value
@@ -179,6 +180,34 @@ def test_negative_control_an_undeclared_auto_close_blocks():
     assert result["verdict"] == "NO-GO"
     assert not _gate(result, "6 ")["ok"]
     assert result["will_close"] == [4468]
+
+
+def test_negative_control_the_api_field_never_narrows_the_scan():
+    """`closingIssuesReferences` is reported beside the scan, never subtracted
+    from it. Using the API field to filter the population re-introduces the
+    exact silent close this gate exists for: it read EMPTY while a squash commit
+    closed an issue. The UNION is the answer, never the intersection."""
+    result = _run(body="Closes #4468", closingIssuesReferences=[])
+    assert result["verdict"] == "NO-GO"
+    assert result["will_close"] == [4468]
+
+
+def test_the_api_field_adds_to_the_scan_when_the_text_is_clean():
+    """And the other direction: a linked issue with no keyword in the text still
+    counts. Neither oracle is complete, so both are consulted."""
+    result = _run(body="no keywords here", closingIssuesReferences=[{"number": 4469}])
+    assert result["verdict"] == "NO-GO"
+    assert result["will_close"] == [4469]
+
+
+def test_negative_control_an_unknown_mergeability_is_not_a_pass():
+    """A deny-list on CONFLICTING passes GitHub's async UNKNOWN -- the state
+    every PR sits in for a few seconds after a push, and precisely what precedes
+    the hazard this gate names. "I do not know yet" is not a pass."""
+    for value in ("UNKNOWN", "", None):
+        result = _run(mergeable=value)
+        assert result["verdict"] == "NO-GO", value
+        assert not _gate(result, "0 ")["ok"]
 
 
 def test_negative_control_the_commit_trail_blocks_too():

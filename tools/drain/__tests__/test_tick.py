@@ -124,6 +124,33 @@ def test_the_guard_stays_quiet_on_a_small_ledger(tmp_path):
     tick.guard_refresh(led, [])
 
 
+def test_negative_control_the_guard_still_watches_in_the_end_game(tmp_path):
+    """The floor's OTHER side. Keyed to `believed_open`, the guard switched
+    itself OFF once most items were terminal: 40 items, 31 parked, 9 left, and a
+    900-issue wrong-repo read sailed through -- 900 foreign issues upserted as
+    `ready` and the 9 real ones departed -- at exactly the moment the run was
+    about to report drained. The floor is keyed to everything the ledger KNOWS."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1031):
+        led.items[n].blocker, led.items[n].owner = "upstream", "operator"
+        led.transition(n, PARKED, "blocked")
+    assert len(led.remaining()) == 9
+    with pytest.raises(SystemExit, match="different population"):
+        tick.guard_refresh(led, _live(range(90000, 90900)))
+
+
+def test_negative_control_a_mostly_terminal_ledger_does_not_trip_on_a_small_live_set(tmp_path):
+    """And the OVERLAP denominator's other side. With 40 known and 9 open, a
+    healthy live set of those 9 must pass -- putting the ledger in the
+    denominator instead of the live set scores 22% and bricks the run, the same
+    defect as the numerator bug, mirrored."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1031):
+        led.items[n].blocker, led.items[n].owner = "upstream", "operator"
+        led.transition(n, PARKED, "blocked")
+    tick.guard_refresh(led, _live(range(1031, 1040)))
+
+
 # ---------------------------------------------------------------------------
 # Departure: needs-audit, never a fabricated receipt
 # ---------------------------------------------------------------------------
@@ -151,6 +178,22 @@ def test_negative_control_a_departure_never_becomes_a_receipt(tmp_path):
     tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
     with pytest.raises(ValueError, match="without a receipt"):
         led.transition(1019, CLOSED)
+
+
+def test_negative_control_an_item_in_any_non_terminal_state_is_audited_on_departure(tmp_path):
+    """The departure loop narrowed to `item.state == READY` survives every
+    fixture whose vanishing item happened to be ready -- and then an in-flight
+    or in-review item that disappears is never audited at all, so a lane's work
+    vanishes with it and `drained()` can still go true."""
+    from ledger import AWAITING_RECEIPT, IN_REVIEW
+
+    for state in (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):
+        led = _led(tmp_path)
+        if state != READY:
+            led.transition(1019, state, "in progress")
+        _, departed = tick.refresh_from_github(led, {}, _live(range(1000, 1019)))
+        assert departed == 1, f"a departing {state} item must be audited"
+        assert led.items[1019].state == NEEDS_AUDIT
 
 
 def test_a_new_issue_is_added_with_its_labels(tmp_path):

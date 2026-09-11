@@ -144,6 +144,68 @@ VERDICT_TOKENS = ("REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS")
 BLOCKING_TOKENS = ("REQUEST-CHANGES", "CANNOT-ASSESS")
 MARKERS = ("Independent review", "Independent re-review")
 
+# Which function implements each `merge_gate` key in policy.json. The mapping is
+# checked BOTH WAYS by `__tests__/test_policy.py`: a key with no implementation
+# is prose wearing a control's clothes, and an implementation with no key is a
+# behaviour the authority does not declare.
+#
+# This exists because ten keys under `merge_gate` and four under
+# `verdict_parsing` were read by NO CODE AT ALL -- while this module's own
+# docstring described "five policy keys read by nothing" as a repaired past
+# defect. Editing the authority changed nothing.
+MERGE_GATE_IMPLEMENTED_BY = {
+    "mergeable_must_be_known": "merge_gate.run_gates gate 0",
+    "base_must_equal_origin_main": "gates.base_is_current",
+    "reduce_verdicts_by": "gates.reduce_verdicts",
+    "verdict_pinned_to_head": "gates.parse_verdicts (postdates)",
+    "require_no_red": "gates.classify_checks (RED_CONCLUSIONS)",
+    "require_no_incomplete": "gates.classify_checks (INCOMPLETE_STATUSES)",
+    "require_no_skipped_required_context": "gates.required_measured_nothing",
+    "scan_closing_keywords_in": "gates.merge_is_close_safe",
+    "closing_keyword_scan_blocks_an_undeclared_close": "merge_gate.run_gates gate 6",
+    "audit_issue_numbers_around_every_merge": "gates.issue_set_audit",
+}
+VERDICT_PARSING_IMPLEMENTED_BY = {
+    "marker_any_of": "gates.MARKERS / _marker_lines",
+    "token_any_of": "gates.VERDICT_TOKENS / _token_of",
+    "token_window_chars": "gates.parse_verdicts(window=...)",
+    "must_postdate_head_commit": "gates.parse_verdicts (postdates)",
+    "note": "prose, deliberately - it explains the three above",
+}
+
+
+def policy_keys_without_implementation(policy: dict) -> list[str]:
+    """Keys under `merge_gate`/`verdict_parsing` that no function consults.
+
+    An unconsulted policy key is prose, not a control. Keys starting with `_`
+    are documentation by convention and are exempt.
+    """
+    missing = []
+    for section, mapping in (
+        ("merge_gate", MERGE_GATE_IMPLEMENTED_BY),
+        ("verdict_parsing", VERDICT_PARSING_IMPLEMENTED_BY),
+    ):
+        for key in policy.get(section, {}):
+            if not key.startswith("_") and key not in mapping:
+                missing.append(f"{section}.{key}")
+    return sorted(missing)
+
+
+def assert_policy_matches_code(policy: dict) -> None:
+    """Both directions. Raises with the offending keys named."""
+    missing = policy_keys_without_implementation(policy)
+    if missing:
+        raise ValueError(f"policy keys with no implementation: {missing}")
+    for section, mapping in (
+        ("merge_gate", MERGE_GATE_IMPLEMENTED_BY),
+        ("verdict_parsing", VERDICT_PARSING_IMPLEMENTED_BY),
+    ):
+        undeclared = sorted(set(mapping) - set(policy.get(section, {})))
+        if undeclared:
+            raise ValueError(
+                f"{section}: implemented but not declared in policy.json: {undeclared}"
+            )
+
 # Near-miss kinds. `blocks` is decided at parse time, not by the reducer.
 NEAR_NO_MARKER = "no-marker"
 NEAR_NO_TOKEN = "no-token"
@@ -215,13 +277,26 @@ def parse_verdicts(
         cid = comment.get("id", 0)
         when = comment.get("created_at", "")
         head = body[:window]
-        has_marker = any(m in body for m in MARKERS)
         postdates = bool(head_date) and when >= head_date
 
-        token, saw_template = _token_of(body, head)
+        token, saw_template = _token_of(head)
+        # `has_marker` is now "this comment ANNOUNCES a verdict in the window",
+        # not "the word appears somewhere in the body". Scanning the whole body
+        # let a quoted header from a previous round decide the gate.
+        has_marker = bool(_marker_lines(head))
+        # ... but a comment that carries a TOKEN in the window without a
+        # well-formed marker line must still be reported, never dropped. That is
+        # the recorded miss: a sound verdict headed "Re-review" instead of
+        # "Independent re-review" was discarded, and the gate said only "no live
+        # APPROVE" -- three runs to diagnose.
+        mentions_token = any(
+            not _is_quoted(ln) and any(t in ln for t in VERDICT_TOKENS)
+            and not all(t in ln for t in VERDICT_TOKENS)
+            for ln in head.splitlines()
+        )
 
         if not head_date:
-            if has_marker or token or saw_template:
+            if has_marker or token or saw_template or mentions_token:
                 near.append(
                     NearMiss(cid, when, "head commit date unknown - verdict cannot be pinned",
                              NEAR_UNPINNABLE, blocks=True)
@@ -238,19 +313,27 @@ def parse_verdicts(
             if saw_template:
                 near.append(
                     NearMiss(cid, when, "carries the verdict TEMPLATE line, not a decision",
-                             NEAR_TEMPLATE, blocks=has_marker and postdates)
+                             NEAR_TEMPLATE, blocks=(has_marker or mentions_token) and postdates)
                 )
             elif has_marker:
                 near.append(
-                    NearMiss(cid, when, f"marker, but no token in body[:{window}]",
+                    NearMiss(cid, when, f"marker line, but no token on it in body[:{window}]",
                              NEAR_NO_TOKEN, blocks=postdates)
                 )
-            continue
-        if not has_marker:
-            near.append(
-                NearMiss(cid, when, f"carries {token} but no marker", NEAR_NO_MARKER,
-                         blocks=postdates and token in BLOCKING_TOKENS)
-            )
+            elif mentions_token:
+                # A token in the window with no line ANNOUNCING it. Blocking
+                # only when the token itself blocks: a reviewer who misspells
+                # the marker over a REQUEST-CHANGES has still blocked, and one
+                # who misspells it over an APPROVE has not approved.
+                blocking = any(
+                    t in head for t in BLOCKING_TOKENS
+                )
+                near.append(
+                    NearMiss(cid, when,
+                             f"a verdict token appears in body[:{window}] but no line announces "
+                             f"it - check the marker spelling, it must be one of {MARKERS}",
+                             NEAR_NO_MARKER, blocks=postdates and blocking)
+                )
             continue
         if not postdates:
             near.append(
@@ -263,25 +346,76 @@ def parse_verdicts(
     return live, near
 
 
-def _token_of(body: str, head: str) -> tuple[str | None, bool]:
+def _is_quoted(line: str) -> bool:
+    """A Markdown blockquote. A quoted verdict is a CITATION, never a decision."""
+    return line.lstrip().startswith(">")
+
+
+def _marker_lines(head: str) -> list[str]:
+    """Lines in the WINDOW that ANNOUNCE a verdict, rather than mention one.
+
+    Three conditions, and every one of them was a hole:
+
+    - **Inside the window.** The first version scanned `body.splitlines()`, the
+      whole comment, while `window` bounded only the fallback. A PR author could
+      then manufacture an approval by quoting a previous round 900 characters
+      down, and a coordinator's status comment saying "do not merge" scored GO
+      because it quoted a reviewer's header. The window exists precisely so that
+      body prose cannot constitute a verdict.
+    - **Not quoted.** `> ## Independent re-review - APPROVE` is someone else's
+      verdict about some other head, being cited.
+    - **The line ANNOUNCES it.** After stripping heading marks and emphasis the
+      line must BEGIN with a marker. "For context, the earlier Independent
+      review - APPROVE was measured at a different head" mentions one; it is a
+      sentence about a verdict, and reading it as one inverted a block into an
+      approval.
+    """
+    out = []
+    for line in head.splitlines():
+        if _is_quoted(line):
+            continue
+        stripped = line.lstrip("#*_> \t")
+        if any(stripped.startswith(m) for m in MARKERS):
+            out.append(line)
+    return out
+
+
+def _saw_template(head: str) -> bool:
+    """Did any unquoted line in the window list ALL THREE tokens?
+
+    Scanned over the whole window rather than over marker lines only: the
+    template usually sits a line or two BELOW the header, so a scan restricted
+    to marker lines never saw it and reported the comment as "marker, no token"
+    -- true, but it buries the actual cause under a spelling hint.
+    """
+    return any(
+        not _is_quoted(ln) and all(t in ln for t in VERDICT_TOKENS)
+        for ln in head.splitlines()
+    )
+
+
+def _token_of(head: str) -> tuple[str | None, bool]:
     """Find this comment's verdict token, and whether a template line was seen.
 
-    Line-oriented, and the MARKER LINE is consulted first, because that is where
-    a reviewer writes the decision (`## Independent review - APPROVE`). A flat
-    scan of the first `window` characters reads the FIRST token in
+    Line-oriented, and ONLY a qualifying marker line decides (see
+    `_marker_lines`) -- that is where a reviewer writes the decision
+    (`## Independent review - APPROVE`). There is deliberately NO fallback to a
+    flat scan of the window: a flat scan reads the first token in
     `VERDICT_TOKENS` order anywhere in that window, so an approving review whose
-    prose happens to mention the other spellings registered as a block.
+    prose mentioned the other spellings registered as a block.
 
     A line carrying ALL THREE tokens is the review TEMPLATE -- an instruction to
     the reviewer, not a decision -- and is skipped rather than read in order. It
     is reported, so a reviewer who pasted the template and wrote nothing else
     does not pass silently.
+
+    Within one marker line the tokens are still read in `VERDICT_TOKENS` order,
+    so a header that hedges ("APPROVE, but REQUEST-CHANGES on the second half")
+    resolves to the block.
     """
-    saw_template = False
-    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]
-    for line in [*marker_lines, *head.splitlines()]:
+    saw_template = _saw_template(head)
+    for line in _marker_lines(head):
         if all(t in line for t in VERDICT_TOKENS):
-            saw_template = True
             continue
         token = next((t for t in VERDICT_TOKENS if t in line), None)
         if token:
@@ -407,11 +541,21 @@ def _outcome(check: dict) -> tuple[str, str]:
 
 
 def _check_rank(check: dict) -> int:
-    """Worst-first ranking, so a duplicated context is judged by its worst run."""
+    """Worst-first ranking, so a duplicated context is judged by its worst run.
+
+    SKIPPED ranks strictly worse than SUCCESS. It used to tie, which made the
+    de-duplication ORDER-DEPENDENT: with one required context published twice,
+    `['SUCCESS', 'SKIPPED']` scored GO and `['SKIPPED', 'SUCCESS']` scored NO-GO
+    on the same commit. That is not hypothetical here -- 9 of 25 recent PRs
+    publish a duplicated context name, and on this very PR the duplicate is a
+    REQUIRED one. A green twin must never hide a run that measured nothing.
+    """
     verdict, status = _outcome(check)
     if verdict in RED_CONCLUSIONS:
-        return 3
+        return 4
     if not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
+        return 3
+    if verdict == "SKIPPED":
         return 2
     return 1
 

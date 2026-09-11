@@ -117,7 +117,13 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
     """
     believed_open = {n for n, i in led.items.items() if i.state not in TERMINAL}
     known = set(led.items)
-    if len(believed_open) < GUARD_FLOOR:
+    # The floor is keyed to EVERYTHING the ledger knows, not to what is still
+    # open. Keyed to `believed_open` the guard switched itself off in the
+    # END-GAME: with 40 items, 31 legally parked and 9 left, a 900-issue
+    # wrong-repo read sailed through -- 900 foreign issues upserted as `ready`
+    # and the 9 real ones departed -- at exactly the moment the run was about to
+    # report drained. Same boundary as the OVERLAP denominator, other side.
+    if len(known) < GUARD_FLOOR:
         return
 
     live_numbers = {i["number"] for i in live}
@@ -136,6 +142,8 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
             "population - check `repo` in policy.json and GH_REPO in the environment."
         )
 
+    if not believed_open:
+        return
     retained = len(believed_open & live_numbers) / len(believed_open)
     if retained < MIN_RETAINED and not allow_shrink:
         raise SystemExit(
@@ -289,13 +297,15 @@ they just fixed.
 
     python tools/drain/merge_gate.py <PR>
 
-It checks base == origin/main, reduces verdicts by conjunction (a later APPROVE
-does not discharge an earlier block, and an unparseable review AT HEAD blocks),
-requires every required context present/green/non-hollow, scans BOTH the body
-and the commit trail for closing keywords (`closingIssuesReferences` is not a
-complete oracle), and prints the pre-merge open-issue count for the post-merge
-audit. Clear any conflict BEFORE pushing - a push into a CONFLICTING window gets
-zero check-runs, permanently.
+It checks the PR is known-MERGEABLE, base == origin/main (from the API, not a
+stale local ref), reduces verdicts by conjunction (a later APPROVE does not
+discharge an earlier block, and an unparseable review AT HEAD blocks), requires
+every required context present and green with none SKIPPED, blocks an UNDECLARED
+auto-close found in EITHER the body or the commit trail (`closingIssuesReferences`
+is not a complete oracle and is never subtracted from the scan), and writes the
+pre-merge open-issue NUMBERS for the post-merge set audit. Clear any conflict
+BEFORE pushing - a push into a CONFLICTING window gets zero check-runs,
+permanently.
 
 **Stop and ask for**: {stop}.
 **Never, regardless**: {never}.

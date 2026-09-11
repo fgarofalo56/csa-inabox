@@ -93,6 +93,45 @@ def test_negative_control_ci_green_does_not_close_a_deploy_path_item(tmp_path):
     assert led.transition(1, CLOSED).state == CLOSED
 
 
+def test_negative_control_the_receipt_refusal_applies_to_every_stream(tmp_path):
+    """THE narrow bypass: `if state == CLOSED and item.stream != "W9-rest":`
+    exempts 90 of 297 issues from R2 and survives any fixture built from one
+    stream. A filter placed INSIDE the predicate beats a contract written about
+    the predicate, so the contract has to be written over the POPULATION."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="without a receipt"):
+            led.transition(i, CLOSED)
+        led.record_receipt(i, "merged", "the PR landed")
+        with pytest.raises(ValueError, match="does not close"):
+            led.transition(i, CLOSED)
+
+
+def test_negative_control_the_decline_refusal_applies_to_every_stream(tmp_path):
+    """Same shape, same door. Both refusals that define a terminal state must be
+    contracted over every stream, not over the one the fixture happened to use."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="recorded decision"):
+            led.transition(i, DECLINED)
+
+
+def test_negative_control_the_park_refusal_applies_to_every_stream(tmp_path):
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="blocker AND owner"):
+            led.transition(i, PARKED)
+
+
 def test_negative_control_without_the_policy_map_nothing_closes(tmp_path):
     """A ledger that cannot validate the KIND must refuse, not fall back to a
     presence check -- falling back is exactly the defect, re-entered by a

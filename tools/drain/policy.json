@@ -35,7 +35,7 @@
     "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",
     "publish_security_advisory": "outward-facing and irreversible; operator decides once the fix is DEPLOYED",
     "move_live_acr_tags": "a branch dispatch of build-fiab-images-acr-tasks hard-codes --image <name>:latest and moves :latest AND :v0.1 for all 13 images in the live Commercial ACR",
-    "delete_data_or_schema": "not reversible",
+    "delete_data_or_schema": "not reversible, and the blast radius is unknowable from inside a lane - a dropped container or column takes every downstream consumer with it",
     "force_push_shared_branch": "a stale worktree makes --force-with-lease unsafe; sweep first",
     "weaken_or_baseline_a_guard": "making something green by widening its allowlist is the defect, not the fix",
     "add_trivyignore_entry": "the baseline is deliberately EMPTY; fix the image",
@@ -60,25 +60,28 @@
   },
 
   "merge_gate": {
+    "_": "Each key names a gate and maps to the function that IMPLEMENTS it. gates.MERGE_GATE_IMPLEMENTED_BY holds that mapping and tools/drain/__tests__/test_policy.py fails when a key here has no implementation, or an implementation no key. These were 10 keys READ BY NOTHING while both module docstrings described 'five policy keys read by nothing' as a repaired past defect - an unconsulted policy key is prose, not a control, including when the prose is about unconsulted policy keys.",
+    "mergeable_must_be_known": true,
     "base_must_equal_origin_main": true,
     "reduce_verdicts_by": "conjunction",
     "verdict_pinned_to_head": true,
-    "clause5_carries_artifact_only": true,
-    "clause5_refuses_source_change": true,
     "require_no_red": true,
     "require_no_incomplete": true,
-    "require_hollow_check_clean": true,
+    "require_no_skipped_required_context": true,
     "scan_closing_keywords_in": ["body", "commit-trail"],
-    "audit_issue_count_around_every_merge": true
+    "closing_keyword_scan_blocks_an_undeclared_close": true,
+    "audit_issue_numbers_around_every_merge": true,
+    "_removed_require_hollow_check_clean": "DROPPED 2026-09-11. It asserted a capability the API cannot support: statusCheckRollup publishes no per-check population, so a check that concluded SUCCESS over ZERO items is invisible to this gate. What IS detectable - a required context that concluded SKIPPED - is now require_no_skipped_required_context. Detecting green-over-nothing is an owed capability, not a claim.",
+    "_removed_clause5": "DROPPED 2026-09-11. clause5_carries_artifact_only / clause5_refuses_source_change described carrying a void APPROVE across an artifact-only re-derive. Nothing implements it, and a verdict is pinned to the head it measured; re-review after a push instead."
   },
 
   "verdict_parsing": {
-    "_": "merge-gate reads ISSUE COMMENTS, not review events. A verdict registers only if all three hold.",
+    "_": "merge-gate reads ISSUE COMMENTS, not review events. A verdict registers only if all three hold. Every key here is READ by gates.parse_verdicts - tools/drain/__tests__/test_policy.py fails if one stops being consulted.",
     "marker_any_of": ["Independent review", "Independent re-review"],
     "token_any_of": ["REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS"],
     "token_window_chars": 200,
     "must_postdate_head_commit": true,
-    "note": "'CHANGES REQUIRED' is silently discarded and cost two rounds on 2026-09-11. The token is matched in the order listed, so an approving verdict must not mention a prior block inside the window."
+    "note": "A verdict is announced by a LINE that BEGINS with a marker, inside the window, not quoted. Within that line the tokens are read in the order listed, so a hedged header resolves to the block. Prose elsewhere in the comment is NOT a verdict: scanning the whole body let a quoted header from a previous round decide the gate, and let a sentence ABOUT an approval register as one. A token in the window with no announcing line is reported as a near-miss and blocks when the token blocks - 'CHANGES REQUIRED' was silently discarded and cost two rounds on 2026-09-11."
   },
 
   "ordering": {
