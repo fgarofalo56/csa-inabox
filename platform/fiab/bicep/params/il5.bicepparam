@@ -365,15 +365,28 @@ param aiFoundryEnabled = false
 // it in an IL5 boundary is a COMPLIANCE violation, not a parity win. Azure
 // OpenAI is authorized through IL6, which is why the copilot itself runs here.
 // GCC-High shares the region and NOT the impact level; that is the axis these
-// two param files diverge on, exactly as `aiFoundryEnabled = false` three lines
-// above already does (Microsoft Foundry portal is IL2-only).
+// two param files diverge on, exactly as the `aiFoundryEnabled = false`
+// immediately above this comment already does (Microsoft Foundry portal is IL2-only).
 //
 // Prompts are still screened ON THE DEFAULT PATH. With this false,
 // `admin-plane/main.bicep:6224` wires LOOM_CONTENT_SAFETY_ENDPOINT to
 // `loomAiEnrichEndpoint` — the multi-service AIServices /contentsafety data
-// plane — which is populated here because `agentFoundryEnabled = true` (below)
+// plane — which is populated here because `agentFoundryEnabled = true` is set
+// earlier in this file (line 178)
 // and `adoptMode()` defaults an absent key to 'create'. So a stock IL5 deploy
 // is NOT an unscreened copilot.
+//
+// WHETHER THAT DEFAULT PATH IS ITSELF IN SCOPE IS UNDETERMINED, and is carried
+// on #4458 rather than settled here. That screening runs against the
+// multi-service AIServices /contentsafety data plane, but the audit-scope table
+// has no multi-service "Azure AI services" row -- the governing row is the
+// capability row quoted above, `Foundry: Azure AI Content Safety`, blank at
+// IL4/IL5WI/IL6. Hosting the capability on an AIServices account does not change
+// WHICH capability is exercised. So by the same reasoning that makes
+// `contentSafetyEnabled = true` a violation here, the default path may carry the
+// same exposure while reading as the reassuring state. Settling that needs a
+// compliance determination, not a code read. Until then this comment claims only
+// that the prompt IS screened -- NOT that the screening is authorized at IL5.
 //
 // ON THE BYO/ADOPT PATH IT IS, SILENTLY — tracked as #4458. Traced, not
 // inferred: setting EXISTING_AOAI puts `foundry` into 'adopt'
