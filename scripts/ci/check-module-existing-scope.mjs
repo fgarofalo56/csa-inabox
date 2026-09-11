@@ -331,24 +331,59 @@ export function blockAt(lines, start) {
 }
 
 /**
- * The value of `key:` at `indent` spaces inside a block, joining continuation
- * lines until brackets balance. Depth-sensitive so a `name:` nested inside
- * `properties:` is never mistaken for the resource's own name.
+ * The value of a declaration's OWN `key:`, joining continuation lines until
+ * brackets balance.
+ *
+ * ── BRACE DEPTH, NOT INDENTATION (2026-09-11) ───────────────────────────────
+ *
+ * This read `^ {2}key\s*:` — a regex anchored to EXACTLY two leading spaces.
+ * Bicep is whitespace-insensitive, so a declaration whose body is indented four
+ * spaces (or one, or with a tab) parsed `scope: null`, and every caller that
+ * asks "is this scoped?" got `false` for a declaration that is scoped. A
+ * reviewer used exactly that to slip a Console-UAMI Storage Blob Data
+ * Contributor grant on the cross-subscription lake past the #3338 guards:
+ * identical module, identical call site, body re-indented from 2 to 4, suite
+ * 44/44 GREEN and `az bicep build` rc 0 with the grant in the emitted ARM.
+ * That is the same failure this file's own `LOOM_PREFIX` note records for
+ * `MODULE_RE` — the guard's declared case beaten by a layout change — one
+ * reader further in.
+ *
+ * The fixed indent WAS load-bearing, which is why the fix is not a blanket
+ * `^\s*`: a `name:` nested inside `properties:` must never be mistaken for the
+ * resource's own name. That discrimination is a DEPTH property, and depth is
+ * what is measured now. `base` is the bracket delta of the declaration line
+ * itself — 1 for `resource x 'T@1' = {` and for `= if (cond) {`, and 2 for
+ * `= [for g in gs: {`, whose `[` is still open across the whole body — so a
+ * field is any line whose depth BEFORE it equals that. Everything nested deeper
+ * (a `name:` under `properties:`, a continuation line inside `guid(`) is at a
+ * greater depth and is skipped exactly as before.
+ *
+ * An inline `properties: { … principalId: x }` yields the whole object as the
+ * value of `properties`, never a spurious top-level `principalId` — the match
+ * is anchored to the start of the (trimmed) line.
  */
-export function fieldAt(body, key, indent) {
-  const re = new RegExp(`^ {${indent}}${key}\\s*:\\s*(.*)$`);
-  for (let i = 0; i < body.length; i += 1) {
-    const m = re.exec(body[i].text);
-    if (!m) continue;
-    let value = m[1].trim();
-    let open = delta(value);
-    for (let j = i + 1; j < body.length && open > 0; j += 1) {
-      const t = body[j].text.trim();
-      if (t === '') continue;
-      value += ` ${t}`;
-      open += delta(t);
+export function fieldAt(body, key) {
+  if (body.length === 0) return null;
+  const re = new RegExp(`^${key}\\s*:\\s*(.*)$`);
+  const base = delta(body[0].text);
+  let depth = base;
+  for (let i = 1; i < body.length; i += 1) {
+    const text = body[i].text;
+    if (depth === base) {
+      const m = re.exec(text.trim());
+      if (m) {
+        let value = m[1].trim();
+        let open = delta(value);
+        for (let j = i + 1; j < body.length && open > 0; j += 1) {
+          const t = body[j].text.trim();
+          if (t === '') continue;
+          value += ` ${t}`;
+          open += delta(t);
+        }
+        return { value: value.trim(), line: body[i].line };
+      }
     }
-    return { value: value.trim(), line: body[i].line };
+    depth += delta(text);
   }
   return null;
 }
@@ -434,8 +469,8 @@ export function parseBicep(source, file = '<memory>') {
         condition: r[4] ? r[4].trim() : null,
         loop: LOOP_FORM_RE.test(text),
         line: i + 1,
-        name: fieldAt(body, 'name', 2)?.value ?? null,
-        scope: fieldAt(body, 'scope', 2)?.value ?? null,
+        name: fieldAt(body, 'name')?.value ?? null,
+        scope: fieldAt(body, 'scope')?.value ?? null,
       });
       continue;
     }
@@ -449,7 +484,7 @@ export function parseBicep(source, file = '<memory>') {
         condition: m[3] ? m[3].trim() : null,
         loop: LOOP_FORM_RE.test(text),
         line: i + 1,
-        scope: fieldAt(body, 'scope', 2)?.value ?? null,
+        scope: fieldAt(body, 'scope')?.value ?? null,
         params: paramBindings(body),
       });
     }
@@ -466,10 +501,32 @@ export function parseBicep(source, file = '<memory>') {
  * lake account name arrives as a PROPERTY of it. A reader that only saw
  * top-level keys would report those four modules as unreachable and print a
  * clean tree.
+ *
+ * THE BLOCK IS LOCATED BY DEPTH, not by indentation — the same 2026-09-11 fix
+ * `fieldAt` carries and for the same reason. This was
+ * `findIndex(/^ {2}params\s*:\s*\{/)`, so a call site whose body is indented
+ * four spaces bound NOTHING and read as a module that passes no arguments. The
+ * body of the block below was already depth-relative; only the way in was not.
+ *
+ * KNOWN AND FAIL-CLOSED: a fully inline `params: { a: b }` on one line yields
+ * an EMPTY map, because the walk terminates the moment depth returns to 0. That
+ * is a miss, not a silent pass — every consumer treats an absent binding as
+ * "registered but NOT BOUND" or as an unregistered call site, both of which are
+ * red. It is recorded here rather than left for someone to discover.
  */
 export function paramBindings(body) {
   const out = new Map();
-  const start = body.findIndex((b) => /^ {2}params\s*:\s*\{/.test(b.text));
+  if (body.length === 0) return out;
+  const base = delta(body[0].text);
+  let start = -1;
+  let scan = base;
+  for (let i = 1; i < body.length; i += 1) {
+    if (scan === base && /^params\s*:\s*\{/.test(body[i].text.trim())) {
+      start = i;
+      break;
+    }
+    scan += delta(body[i].text);
+  }
   if (start < 0) return out;
 
   let depth = 0;

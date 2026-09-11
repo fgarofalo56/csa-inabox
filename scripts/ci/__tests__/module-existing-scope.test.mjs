@@ -256,8 +256,100 @@ test('fieldAt joins continuation lines instead of truncating the expression', ()
     ['resource x \'T@1\' = {', '  name: guid(', "    a,", '    b)', '  scope: y', '}'],
     0,
   );
-  assert.equal(fieldAt(body, 'name', 2).value, 'guid( a, b)');
-  assert.equal(fieldAt(body, 'scope', 2).value, 'y');
+  assert.equal(fieldAt(body, 'name').value, 'guid( a, b)');
+  assert.equal(fieldAt(body, 'scope').value, 'y');
+});
+
+test('fieldAt reads by BRACE DEPTH, not indentation — 2, 4, 1 spaces and a tab all parse', () => {
+  // The bypass this closes: `fieldAt` was `^ {2}key\s*:`, anchored to exactly
+  // two leading spaces, and bicep is whitespace-insensitive. A module body at
+  // four spaces parsed `scope: null`, so `crossSubscriptionScope(null)` was
+  // false and the call site fell out of GUARD 5's population entirely — a
+  // Console-UAMI Contributor grant on the cross-sub lake, suite 44/44 green,
+  // `az bicep build` rc 0. The guard's own declared case, beaten by layout,
+  // one reader further in than the `MODULE_RE` loop fix in this same PR.
+  for (const pad of ['  ', '    ', ' ', '\t', '\t\t', '      ']) {
+    const body = blockAt(
+      [
+        "module m 'x.bicep' = {",
+        `${pad}name: 'm'`,
+        `${pad}scope: resourceGroup(subA, rgB)`,
+        '}',
+      ],
+      0,
+    );
+    assert.equal(fieldAt(body, 'scope')?.value, 'resourceGroup(subA, rgB)', `indent ${JSON.stringify(pad)}`);
+    assert.equal(fieldAt(body, 'name')?.value, "'m'", `indent ${JSON.stringify(pad)}`);
+  }
+});
+
+test('fieldAt still refuses a `name:` nested under `properties:` — depth, not indent, is what discriminates', () => {
+  // The fixed indent WAS load-bearing, which is why this is depth-aware and not
+  // a blanket `^\s*`. Written here at a DEEPER nesting than the outer field so
+  // an indent-blind reader would pick the wrong one.
+  const body = blockAt(
+    [
+      "resource sa 'T@1' existing = {",
+      '    name: outer',
+      '    properties: {',
+      '      thing: {',
+      '        name: inner',
+      '      }',
+      '    }',
+      '}',
+    ],
+    0,
+  );
+  assert.equal(fieldAt(body, 'name').value, 'outer');
+  // …and the pathological case: the nested one written at LESS indentation than
+  // the outer field. Indent could never get this right; depth always does.
+  const twisted = blockAt(
+    [
+      "resource sa 'T@1' existing = {",
+      '      name: outer',
+      '      properties: {',
+      '  name: inner',
+      '      }',
+      '}',
+    ],
+    0,
+  );
+  assert.equal(fieldAt(twisted, 'name').value, 'outer');
+});
+
+test('fieldAt reads a `[for … :` body, whose fields sit one bracket deeper', () => {
+  // A loop declaration leaves `[` open across the whole body, so a field line's
+  // depth is 2, not 1. `base` is taken from the declaration line itself rather
+  // than assumed, which is what makes the loop form work without a special case.
+  const body = blockAt(
+    [
+      "module m 'x.bicep' = [for g in gs: {",
+      "    name: 'm-${g}'",
+      '    scope: resourceGroup(subA, rgB)',
+      '}]',
+    ],
+    0,
+  );
+  assert.equal(fieldAt(body, 'scope').value, 'resourceGroup(subA, rgB)');
+  assert.equal(fieldAt(body, 'name').value, "'m-${g}'");
+});
+
+test('parseBicep records a 4-space-indented module scope — the end-to-end form of the bypass', () => {
+  // fieldAt is the unit; this is the consumer. `parseBicep().modules[].scope` is
+  // what GUARD 5's population key reads, so this is the assertion that would
+  // have gone red on the reviewer's exploit.
+  const src = [
+    "module deep 'modules/data-plane/x.bicep' = if (flag) {",
+    "    name: 'deep'",
+    '    scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)',
+    '    params: {',
+    '        storageAccountName: lakeAdoptName',
+    '    }',
+    '}',
+  ].join('\n');
+  const [m] = parseBicep(src, '<memory>').modules;
+  assert.equal(m.scope, 'resourceGroup(lakeAdoptSub, lakeAdoptRg)');
+  assert.equal(m.params.get('storageAccountName'), 'lakeAdoptName');
 });
 
 test('paramBindings flattens one level and stops at the params block', () => {
@@ -418,6 +510,24 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //     cases `check-module-existing-scope.mjs` stayed rc 0 with no NEW finding —
 //     the shipped checker is blind to this class too, by design, and that is
 //     disclosed rather than fixed here.
+//   * revision 5 made the population a STRUCTURAL property of the deployment —
+//     and then read that property through `fieldAt(body, key, 2)`, a regex
+//     anchored to exactly two leading spaces. The same reviewer re-indented the
+//     sibling's call site to four and the whole thing fell out of the
+//     population: rc 0, 44/44 GREEN, `az bicep build` rc 0, the Contributor
+//     tuple in the emitted ARM. "A property, not a spelling" is only true down
+//     to where the property is READ. `fieldAt` and `paramBindings` are
+//     brace-depth-aware now, with the checker's full `--list` inventory proved
+//     byte-identical before and after so the #3333 reader that shares them is
+//     unchanged. Two more from the same round: tooth 2's lake selector was
+//     itself a scope-STRING key, beaten by respelling the scope as the
+//     definitions of its own vars; and the residual this file disclosed
+//     understated its reachability (see GUARD 5's RESIDUAL below).
+//
+// Every one of those was measured with BOTH HALVES PINNED — the previous head's
+// test file AND the previous head's checker — after a first attempt that ran
+// the old test against the NEW checker and reported the previous head as red on
+// its own bypass, the exact inverse of the truth.
 //
 // All of them were reviewer-built counterexamples, reproduced on disk against
 // the real files. Enumerating one more syntax would just move the next escape. So
@@ -450,11 +560,16 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //            DECLARES rather than adopts — the structural form of the
 //            self-minted claim.
 //   GUARD 5  every module call site whose `scope:` deploys into ANOTHER
-//            SUBSCRIPTION is registered, and every role assignment REACHABLE
-//            from one at the cross-sub LAKE scope passes GUARD 2's own
-//            principal and role registers. This is the only guard whose key is
-//            not a filename, and it is the one that catches half 2 of #3338
-//            written as a NEW FILE beside the pass.
+//            SUBSCRIPTION is registered (tooth 1); every role assignment
+//            reachable from one that deploys TO THE SAME PLACE as the pass —
+//            compared by var-expanded scope identity, not by the scope's
+//            spelling — passes GUARD 2's own principal and role registers
+//            (tooth 2a); and every role assignment that could land on a storage
+//            account, anywhere in ANY cross-subscription subtree, is registered
+//            (tooth 2b). This is the only guard whose key is not a filename,
+//            and it is the one that catches half 2 of #3338 written as a NEW
+//            FILE beside the pass — or written inside a spoke the orchestrator
+//            already deploys into.
 //
 // WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. GUARDS
 // 1-3 are keyed to declarations in ONE small file whose entire job is to make
@@ -466,16 +581,36 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 // Nor does it reach INSIDE s3-gateway-aca.bicep: the chain ends at that module's
 // `storageIdentity` declaration, and an edit there that made the symbol resolve
 // to a pre-existing identity while keeping the `= {` form is out of reach and is
-// said so rather than covered by implication. GUARD 5's population key is the
-// SCOPE EXPRESSION as written, so a grant that reached the lake's resource group
-// without a two-argument `resourceGroup(...)` is outside it — not reachable from
-// today's subscription-scoped orchestrator, but stated rather than implied
-// closed. What it DOES establish is that no new param, resource or module can
+// said so rather than covered by implication.
+//
+// GUARD 5's RESIDUAL, corrected. An earlier revision of this paragraph said a
+// grant reaching the lake's resource group without a two-argument
+// `resourceGroup(...)` was "not reachable from today's subscription-scoped
+// orchestrator". That was WRONG, and a reviewer measured it: `main.bicep` runs
+// in the ADMIN subscription but already deploys INTO others (`dlz` at `:2177`,
+// `setupOrchestratorSpokeRbac` at `subscription(subId)` at `:3272`), and inside
+// one of those a single-argument `resourceGroup(<rg>)` — or a role assignment
+// with no `scope:` at all — resolves in the SPOKE. Whether that spoke holds the
+// lake is the operator's `dlzSubscriptionIds`, which nothing in the code
+// forbids and a dlz-attach estate makes natural. That is a supported
+// configuration, not a future-orchestrator edge, and tooth 2b is the answer to
+// it: every storage-reaching grant in EVERY cross-subscription subtree is
+// registered, not only the ones under a lake-scoped call site.
+//
+// What tooth 2b still does not cover is a grant in a subtree the orchestrator
+// reaches WITHOUT a cross-subscription call site at all — i.e. purely
+// same-subscription paths. Those cannot reach a lake in another subscription by
+// construction, which is the whole premise of the pass; it is stated here so
+// the boundary is a claim rather than an omission.
+//
+// What GUARD 5 DOES establish is that no new param, resource or module can
 // enter the pass, no different role can be granted from it, no different value
-// can be bound to it at its call site anywhere in the repository, and no new
-// module can be deployed into the lake's subscription, without a reviewer
-// registering the change — which is what every #3338 half-fix measured so far,
-// including the two a reviewer built after GUARD 4 shipped, had to bypass.
+// can be bound to it at its call site anywhere in the repository, no new module
+// can be deployed into another subscription, and no role assignment that could
+// land on a storage account can appear anywhere in a cross-subscription
+// subtree — at any indentation — without a reviewer registering the change.
+// That is what every #3338 half-fix measured so far had to bypass, including
+// the five a reviewer built after GUARDS 4 and 5 shipped.
 //
 // These tests are GREEN at head — head carries neither break. They are trap
 // guards, not the fix for a red, and each carries a MUTATION control that
@@ -1292,6 +1427,25 @@ const PRINCIPAL_ARGUMENT_CHAIN = {
   },
 };
 
+/**
+ * `parseBicep` memoised on (path, SOURCE TEXT).
+ *
+ * The reachability walks below parse the same 36-module subtrees once per
+ * cross-subscription call site. Keying on the source text — not on the path —
+ * is what makes this safe for the mutation controls: a mutated file is a
+ * different key, so a control can never be served the unmutated parse.
+ */
+const PARSE_CACHE = new Map();
+function parseCached(src, rel) {
+  const key = `${rel} ${src}`;
+  let hit = PARSE_CACHE.get(key);
+  if (hit === undefined) {
+    hit = parseBicep(src, rel);
+    PARSE_CACHE.set(key, hit);
+  }
+  return hit;
+}
+
 /** Every `.bicep` under `dir`, keyed REPO-relative, skipping SCAN_SKIP_DIRS. */
 function walkBicep(dir, out) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -1356,7 +1510,7 @@ function platformOnlyTree(overrides = new Map()) {
 function passCallSites(tree) {
   const sites = [];
   for (const [rel, src] of tree) {
-    for (const m of parseBicep(src, rel).modules) {
+    for (const m of parseCached(src, rel).modules) {
       if (resolveTarget(rel, m.target) === GRANT_PASS_REPO_REL) sites.push({ ...m, file: rel });
     }
   }
@@ -1811,7 +1965,7 @@ function crossSubscriptionScope(scopeExpr) {
 function crossSubCallSites(tree) {
   const sites = [];
   for (const [rel, src] of tree) {
-    for (const m of parseBicep(src, rel).modules) {
+    for (const m of parseCached(src, rel).modules) {
       if (!crossSubscriptionScope(m.scope)) continue;
       sites.push({ ...m, file: rel, resolved: resolveTarget(rel, m.target) });
     }
@@ -1873,36 +2027,98 @@ function staleCrossSubRegistrations(tree) {
 
 /**
  * Every module reachable from `startRel` by following `module` targets, plus
- * the targets that could not be read.
+ * the targets the walk could not READ and the ones it stopped SHORT of.
  *
- * An unreadable target is returned, never dropped: "I could not follow this"
- * and "there is nothing there" are different answers, and only the second one
- * clears a grant.
+ * THREE outcomes, not two. An earlier revision recorded an unreadable target
+ * and dropped a too-deep one with `depth > maxDepth ? continue`, so "there is
+ * no grant down there" and "I stopped looking" collapsed into the same silent
+ * answer — the exact false-clean the docstring two lines up forbids, committed
+ * by the function that forbids it. Exhaustion is now returned as `truncated`
+ * and every caller turns it into a finding, so hitting the ceiling REDS instead
+ * of quietly shrinking the population.
  */
 function reachableModules(tree, startRel, maxDepth = 8) {
   const seen = new Set();
   const unreadable = [];
+  const truncated = [];
   const queue = [[startRel, 0]];
   while (queue.length > 0) {
     const [rel, depth] = queue.shift();
-    if (seen.has(rel) || depth > maxDepth) continue;
+    if (seen.has(rel)) continue;
+    if (depth > maxDepth) {
+      truncated.push(`${rel} (depth ${depth} > ${maxDepth})`);
+      continue;
+    }
     if (!tree.has(rel)) {
       unreadable.push(rel);
       continue;
     }
     seen.add(rel);
-    for (const m of parseBicep(tree.get(rel), rel).modules) {
+    for (const m of parseCached(tree.get(rel), rel).modules) {
       const target = resolveTarget(rel, m.target);
       if (target === null) continue; // a registry ref (br:/ts:) — not a file
       queue.push([target, depth + 1]);
     }
   }
-  return { modules: [...seen].sort(), unreadable: [...new Set(unreadable)].sort() };
+  return {
+    modules: [...seen].sort(),
+    unreadable: [...new Set(unreadable)].sort(),
+    truncated: [...new Set(truncated)].sort(),
+  };
 }
 
-/** Call sites deployed at the cross-sub LAKE scope, whatever they target. */
+/**
+ * `expr` with every identifier that names a `var` in the same file replaced by
+ * that var's expression, transitively and bounded.
+ *
+ * Used ONLY to decide whether two differently-spelled scopes name the same
+ * place. It is deliberately not a bicep evaluator: no parenthesisation is added,
+ * so an expansion inside a larger expression could in principle change
+ * precedence. That is tolerable HERE and nowhere else, because the result feeds
+ * an equality test that SELECTS sites into a STRICTER check — a miss falls
+ * through to the whole-subtree registration tooth below, which is the fail-closed
+ * backstop, rather than to nothing.
+ */
+function expandVars(expr, vars, depth = 0) {
+  if (depth > 6) return String(expr ?? '');
+  return String(expr ?? '').replace(/\b([A-Za-z_]\w*)\b/g, (id) =>
+    vars.has(id) ? expandVars(vars.get(id), vars, depth + 1) : id,
+  );
+}
+
+/**
+ * A cross-sub call site's scope reduced to its ARGUMENT LIST with every local
+ * `var` expanded — the identity of WHERE it deploys, not how it is spelled.
+ *
+ * WHY THIS REPLACED `norm(scope) === norm(PASS_CALLSITE_SCOPE)`. That string key
+ * is the same class of key this PR rejected for the POPULATION, half-applied one
+ * level down: a sibling module scoped
+ * `resourceGroup(adoptSub(adopt, 'storage-adls'), adoptRg(adopt, 'storage-adls'))`
+ * — provably the same place, those two calls ARE the definitions of
+ * `lakeAdoptSub` and `lakeAdoptRg` — was 44/44 green with one register row,
+ * because tooth 2 never looked at it. Expanding vars makes the two spellings
+ * compare equal.
+ */
+function scopeIdentity(tree, site) {
+  const src = tree.get(site.file);
+  if (src === undefined || !site.scope) return null;
+  const { vars } = parseCached(src, site.file);
+  const expanded = norm(expandVars(site.scope, vars));
+  const args = callArgs(expanded, 'resourceGroup');
+  return args ? args.join('|') : expanded;
+}
+
+/** The identity of the ONE registered lake call site, computed the same way. */
+function lakeScopeIdentity(tree) {
+  const registered = passCallSites(tree).find((s) => s.file === ORCHESTRATOR_REPO_REL);
+  return registered ? scopeIdentity(tree, registered) : null;
+}
+
+/** Cross-sub call sites that deploy to the same place as the registered one. */
 function lakeScopeCallSites(tree) {
-  return crossSubCallSites(tree).filter((s) => norm(s.scope ?? '') === norm(PASS_CALLSITE_SCOPE));
+  const lake = lakeScopeIdentity(tree);
+  if (lake === null) return [];
+  return crossSubCallSites(tree).filter((s) => scopeIdentity(tree, s) === lake);
 }
 
 /**
@@ -1920,8 +2136,9 @@ function unjustifiedLakeScopeGrants(tree) {
       out.push(`${at} -> ${site.target}: TARGET NOT READABLE — cannot judge what it grants`);
       continue;
     }
-    const { modules, unreadable } = reachableModules(tree, site.resolved);
+    const { modules, unreadable, truncated } = reachableModules(tree, site.resolved);
     for (const u of unreadable) out.push(`${at} -> ${u}: reachable module NOT READABLE`);
+    for (const t of truncated) out.push(`${at} -> ${t}: walk hit the depth limit — NOT a clean subtree`);
     for (const rel of modules) {
       const src = tree.get(rel);
       for (const p of unjustifiedGrantedPrincipals(src)) {
@@ -1933,6 +2150,154 @@ function unjustifiedLakeScopeGrants(tree) {
     }
   }
   return out.sort();
+}
+
+// ── TOOTH 2b — every grant that could land on a lake, in EVERY cross-sub subtree
+//
+// The lake-scope selector above, however it is keyed, only looks at subtrees
+// whose call site deploys AT the lake. A reviewer showed that is not the whole
+// reachable surface: `platform/fiab/bicep/main.bicep` is `targetScope =
+// 'subscription'` and runs in the ADMIN subscription, but it already deploys
+// INTO other subscriptions (`dlz` at `:2177`, `setupOrchestratorSpokeRbac` at
+// `subscription(subId)` at `:3272`), and inside one of those a SINGLE-argument
+// `resourceGroup(<rg>)` — or a role assignment with no `scope:` at all —
+// resolves in the SPOKE. Whether that reaches the lake turns on the operator's
+// `dlzSubscriptionIds` intersecting `adoptSub(adopt, 'storage-adls')`, which
+// nothing in the code forbids and a dlz-attach estate makes natural. Measured:
+// a grant added inside `modules/landing-zone/main.bicep` at
+// `scope: resourceGroup(<rg>)` was green on all 44 tests before this tooth.
+//
+// So: EVERY `Microsoft.Authorization/roleAssignments` reachable from ANY
+// non-exempt cross-subscription call site must be registered — unless its
+// `scope:` names a local resource symbol whose type is structurally not a
+// storage account. That exclusion is a property of the declaration, not a list
+// of blessed files: a grant scoped to a `Microsoft.EventHub/namespaces` symbol
+// cannot land on an ADLS account. Everything else is IN, fail-closed:
+//   * no `scope:` at all        -> IN. It lands at the deployment's RESOURCE
+//                                  GROUP, which contains the lake when that
+//                                  deployment is the lake's RG.
+//   * scope names a storage sym -> IN.
+//   * scope is anything else    -> IN (unresolved is not clean).
+//
+// Measured at this commit over the 11 non-ALZ cross-sub sites: 36 modules
+// reachable, 40 role assignments among them, 20 of which are IN by the rule
+// above (16 storage-scoped, 3 resource-group-scoped, 1 unresolved
+// `resourceGroup()`), and 20 excluded by a named non-storage resource type.
+
+const STORAGE_SCOPE_TYPES = new Set([
+  'Microsoft.Storage/storageAccounts',
+  'Microsoft.Storage/storageAccounts/blobServices',
+  'Microsoft.Storage/storageAccounts/blobServices/containers',
+]);
+
+/** Role assignments in one source that could land on a storage account. */
+function storageReachingGrants(src, rel) {
+  const parsed = parseCached(src, rel);
+  const out = [];
+  for (const r of parsed.resources) {
+    if (r.type !== 'Microsoft.Authorization/roleAssignments') continue;
+    const bare = r.scope && /^[A-Za-z_]\w*$/.test(r.scope.trim()) ? r.scope.trim() : null;
+    const local = bare ? parsed.resources.find((x) => x.symbol === bare) : null;
+    if (local && !STORAGE_SCOPE_TYPES.has(local.type)) continue; // structurally not a lake
+    out.push({
+      key: `${rel} ${r.symbol}`,
+      why: !r.scope ? 'no scope: — lands at the deployment resource group' : `scope: ${r.scope}`,
+    });
+  }
+  return out;
+}
+
+/**
+ * Every role assignment that could land on a storage account, reachable from any
+ * non-exempt cross-subscription call site, and the reason it is allowed.
+ *
+ * Keyed `<module> <symbol>`, never a line number. Each row says what the grant
+ * is for and why it cannot be the #3338 half-fix in disguise.
+ */
+const CROSS_SUB_STORAGE_GRANT_REGISTER = {
+  [`${GRANT_PASS_REPO_REL} s3GatewayLakeRead`]:
+    'THE pass. Additionally held to SELF_MINTED_PASS_PRINCIPALS and PASS_GRANTED_ROLES by the lake-scope tooth above — this row is inventory, not an exemption from those.',
+  [`${PLATFORM_PREFIX}modules/admin-plane/access-policy-rbac.bicep consoleRbacAdmin`]:
+    'Grants the console UAMI the RBAC-admin role needed to make ACCESS-POLICY grants on a DLZ storage account. Pre-dates this guard; registered as inventory.',
+  [`${PLATFORM_PREFIX}modules/admin-plane/app-resources-rbac.bicep consoleAppResourcesRbacAdmin`]:
+    'Resource-group-scoped (no scope:), in the DLZ RG. The collision-gated leaf main.bicep documents as having "failed RoleAssignmentExists on EVERY deploy in BOTH topologies" — the precedent the pass header cites.',
+  [`${PLATFORM_PREFIX}modules/admin-plane/dlz-attach-itemcreate-rbac.bicep itemCreateContributor`]:
+    'Resource-group-scoped item-create Contributor on a dlz-attach estate.',
+  [`${PLATFORM_PREFIX}modules/admin-plane/setup-orchestrator-rbac.bicep orchestratorContributor`]:
+    'Subscription-scoped Contributor for the setup orchestrator in each spoke.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/adf.bicep adfStorageBlobContributor`]:
+    "ADF's own managed identity on the DLZ storage it reads and writes. Minted with the factory on the same run.",
+  [`${PLATFORM_PREFIX}modules/landing-zone/databricks-storage-rbac.bicep dbxContributorGrant`]:
+    'Databricks access connector on the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/mirror-staging.bicep consoleBlobDelegator`]:
+    'Blob delegator on the mirror staging account, for SAS delegation.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/mirror-staging.bicep consoleBlobContributor`]:
+    'Console on the mirror STAGING account — a per-DLZ account this module creates, not the adopted lake.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/mirror-staging.bicep adfBlobContributor`]:
+    'ADF on the same mirror staging account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/storage-lifecycle-rbac.bicep lifecyclePolicyGrant`]:
+    'The lifecycle-policy writer on the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/storage-rbac-admin.bicep consoleRbacAdmin`]:
+    'RBAC-admin so the console can make its own storage grants at runtime.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/stream-analytics.bicep consoleAsaContributor`]:
+    'Scoped `resourceGroup()` — unresolved by the reader, so IN the population by the fail-closed rule rather than excluded. Stream Analytics Contributor for the console in the DLZ RG.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/stream-analytics.bicep asaBlobDataContributor`]:
+    "The Stream Analytics job's identity on the ADLS account it sinks to.",
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep grant`]:
+    'Synapse workspace identity on the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep consoleReaderGrant`]:
+    'Console Storage Blob Data Reader on the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep consoleContributorGrant`]:
+    'Console Storage Blob Data Contributor on the DLZ storage account — the SAME-SUBSCRIPTION path, which is exactly why the cross-sub pass exists and refuses to duplicate it.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep adxReaderGrant`]:
+    'ADX cluster identity reading the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep consoleOwnerGrant`]:
+    'Console Storage Blob Data Owner on the DLZ storage account.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/synapse-storage-rbac.bicep synapseMirrorBronzeReaderGrant`]:
+    'Synapse reading the mirror bronze account.',
+};
+
+/** Every storage-reaching grant in every non-exempt cross-sub subtree. */
+function crossSubStorageGrants(tree) {
+  const found = new Map();
+  const problems = [];
+  for (const site of crossSubCallSites(tree)) {
+    if (inExemptTree(site.file)) continue;
+    const at = siteLabel(site);
+    if (site.resolved === null || !tree.has(site.resolved)) {
+      problems.push(`${at} -> ${site.target}: TARGET NOT READABLE — cannot judge what the subtree grants`);
+      continue;
+    }
+    const { modules, unreadable, truncated } = reachableModules(tree, site.resolved);
+    for (const u of unreadable) problems.push(`${at} -> ${u}: reachable module NOT READABLE`);
+    for (const t of truncated) problems.push(`${at} -> ${t}: walk hit the depth limit — NOT a clean subtree`);
+    for (const rel of modules) {
+      for (const g of storageReachingGrants(tree.get(rel), rel)) {
+        if (!found.has(g.key)) found.set(g.key, { ...g, from: at });
+      }
+    }
+  }
+  return { found, problems: problems.sort() };
+}
+
+/** Storage-reaching grants in a cross-sub subtree that nobody has registered. */
+function unregisteredCrossSubStorageGrants(tree) {
+  const { found, problems } = crossSubStorageGrants(tree);
+  const out = [...problems];
+  for (const [key, g] of found) {
+    if (!Object.hasOwn(CROSS_SUB_STORAGE_GRANT_REGISTER, key)) {
+      out.push(`${key}  (${g.why})  reachable from ${g.from}`);
+    }
+  }
+  return out.sort();
+}
+
+/** Registered storage-reaching grants that no cross-sub subtree still contains. */
+function staleCrossSubStorageGrants(tree) {
+  const { found } = crossSubStorageGrants(tree);
+  return Object.keys(CROSS_SUB_STORAGE_GRANT_REGISTER)
+    .filter((k) => !found.has(k))
+    .sort();
 }
 
 test('#3338 GUARD 5: every module deployed into ANOTHER SUBSCRIPTION is registered, and every grant reachable at the cross-sub LAKE scope is justified', () => {
@@ -1954,7 +2319,23 @@ test('#3338 GUARD 5: every module deployed into ANOTHER SUBSCRIPTION is register
   const lakeSites = lakeScopeCallSites(tree);
   assert.ok(
     lakeSites.length > 0,
-    'no call site deploys at PASS_CALLSITE_SCOPE — the grant half of this guard would be vacuous',
+    'no call site resolves to the registered lake scope — the grant half of this guard would be vacuous',
+  );
+  // The var-expanding identity must actually EXPAND. If `lakeAdoptSub` stopped
+  // resolving, `scopeIdentity` would degrade to the string key this replaced and
+  // every "same place, different spelling" bypass would reopen silently.
+  const lakeId = lakeScopeIdentity(tree);
+  assert.ok(lakeId, 'the registered lake call site must have a resolvable scope identity');
+  assert.equal(
+    lakeId.includes('lakeAdoptSub'),
+    false,
+    `the lake scope identity still contains the raw var name (${lakeId}) — expandVars resolved nothing, so this is the string key again`,
+  );
+  assert.match(lakeId, /adoptSub\(adopt,'storage-adls'\)/, 'the identity must reduce to the adopt-plan expression');
+  const { found: storageGrantsFound } = crossSubStorageGrants(tree);
+  assert.ok(
+    storageGrantsFound.size > 0,
+    'no storage-reaching grant was found in any cross-subscription subtree — tooth 2b would be vacuous',
   );
 
   // The exemption is CHECKED, not asserted. A Loom lake grant written inside the
@@ -1987,6 +2368,16 @@ test('#3338 GUARD 5: every module deployed into ANOTHER SUBSCRIPTION is register
     unjustifiedLakeScopeGrants(tree),
     [],
     'a role assignment reachable from a call site at the cross-sub LAKE scope grants a principal or a role the pass\'s own registers refuse. This is the check that survives registration: adding the sibling module to CROSS_SUB_CALLSITE_REGISTER does not make a Console-UAMI Contributor grant on the lake acceptable.',
+  );
+  assert.deepEqual(
+    unregisteredCrossSubStorageGrants(tree),
+    [],
+    'a role assignment that could land on a storage account is reachable from a cross-subscription call site and is not registered. This is the tooth that does NOT depend on the scope being spelled like the lake\'s: a grant written inside modules/landing-zone/main.bicep at `scope: resourceGroup(<rg>)` reaches the SPOKE, and whether that spoke holds the lake is the operator\'s dlzSubscriptionIds, not this code\'s to assume. A grant scoped to a named non-storage resource is excluded structurally; everything else is in.',
+  );
+  assert.deepEqual(
+    staleCrossSubStorageGrants(tree),
+    [],
+    'CROSS_SUB_STORAGE_GRANT_REGISTER lists a grant no cross-subscription subtree still reaches — prune it, or the register is a mute button',
   );
 });
 
@@ -2086,10 +2477,269 @@ test('#3338 GUARD 5 — MUTATION control: the reviewer\'s SIBLING MODULE goes RE
     `the grandchild's grant must be reached and named: ${delegatedGrants.join(' | ')}`,
   );
 
-  // NEGATIVE control: head itself must be clean on both teeth, or every RED
+  // NEGATIVE control: head itself must be clean on all teeth, or every RED
   // above would be indistinguishable from a guard that flags everything.
   assert.deepEqual(unregisteredCrossSubCallSites(clean), []);
   assert.deepEqual(unjustifiedLakeScopeGrants(clean), []);
+  assert.deepEqual(unregisteredCrossSubStorageGrants(clean), []);
+});
+
+test('#3338 GUARD 5 — MUTATION control: the same sibling at FOUR-SPACE indent goes RED (the `fieldAt` bypass)', () => {
+  // A reviewer took the control above and varied exactly ONE thing: the body
+  // indentation of the call site. `fieldAt(body, 'scope', 2)` was anchored to
+  // two leading spaces, so a four-space body parsed `scope: null`,
+  // `crossSubscriptionScope(null)` was false, and the call site fell out of the
+  // population entirely — suite 44/44 GREEN, `az bicep build` rc 0, the Console
+  // UAMI + Storage Blob Data Contributor tuple in the emitted ARM at the lake.
+  // The population key was structural; the READER of that structure was not.
+  const SIBLING_REL = `${PLATFORM_PREFIX}modules/data-plane/dlz-lake-grant-pass-console.bicep`;
+  const sibling = [
+    "targetScope = 'resourceGroup'",
+    'param storageAccountName string',
+    "param consolePrincipalId string = ''",
+    '',
+    `var storageBlobDataContributorRoleId = '${SBDC_ROLE_ID}'`,
+    '',
+    "resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {",
+    '    name: storageAccountName',
+    '}',
+    '',
+    "resource consoleLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {",
+    '    name: guid(lake.id, consolePrincipalId, storageBlobDataContributorRoleId)',
+    '    scope: lake',
+    '    properties: {',
+    "        roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)",
+    '        principalId: consolePrincipalId',
+    "        principalType: 'ServicePrincipal'",
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+
+  const clean = bicepTree();
+  const orch = clean.get(ORCHESTRATOR_REPO_REL);
+
+  // Every indentation a human or a formatter might produce for the CALL SITE.
+  // Two is the repo's convention and was the only one the old reader could see.
+  for (const pad of ['  ', '    ', '\t', '      ']) {
+    const call =
+      `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass-console.bicep' = if (crossSubLakeGrantsActive) {\n` +
+      `${pad}name: 'dlz-lake-grant-pass-console'\n` +
+      `${pad}scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n` +
+      `${pad}params: {\n` +
+      `${pad}${pad}storageAccountName: lakeAdoptName\n` +
+      `${pad}${pad}consolePrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''\n` +
+      `${pad}}\n}\n`;
+    assert.notEqual(call, orch, `indent ${JSON.stringify(pad)}: the mutation must actually apply`);
+    const mutated = bicepTree(new Map([[ORCHESTRATOR_REPO_REL, call]]), new Map([[SIBLING_REL, sibling]]));
+
+    // The scope must be READ at every indent — this is the assertion that was
+    // false, and it is the reason everything below it was green.
+    const site = crossSubCallSites(mutated).find((s) => s.symbol === 'dlzLakeGrantPassConsole');
+    assert.ok(site, `indent ${JSON.stringify(pad)}: the call site must be IN the cross-subscription population`);
+    assert.equal(site.scope, 'resourceGroup(lakeAdoptSub, lakeAdoptRg)', `indent ${JSON.stringify(pad)}`);
+
+    // …and then all three teeth fire, exactly as at two spaces.
+    assert.equal(
+      unregisteredCrossSubCallSites(mutated).length,
+      1,
+      `indent ${JSON.stringify(pad)}: tooth 1`,
+    );
+    assert.ok(
+      unjustifiedLakeScopeGrants(mutated).some((g) => g.includes('grants `consolePrincipalId`')),
+      `indent ${JSON.stringify(pad)}: tooth 2a must name the Console principal`,
+    );
+    assert.ok(
+      unregisteredCrossSubStorageGrants(mutated).some((g) => g.includes('consoleLakeWrite')),
+      `indent ${JSON.stringify(pad)}: tooth 2b must name the unregistered grant`,
+    );
+  }
+});
+
+test('#3338 GUARD 5 — MUTATION control: a RESPELLED lake scope goes RED (tooth 2a is not a string key)', () => {
+  // `lakeScopeCallSites` used to select on `norm(scope) === norm(PASS_CALLSITE_SCOPE)`
+  // — the same string key this PR rejected for the population, half-applied one
+  // level down. A reviewer scoped the sibling
+  // `resourceGroup(adoptSub(adopt, 'storage-adls'), adoptRg(adopt, 'storage-adls'))`,
+  // which is PROVABLY the same place (those two calls are the definitions of
+  // `lakeAdoptSub` and `lakeAdoptRg`), added one register row to discharge tooth
+  // 1, and the suite was 44/44 green because tooth 2 never looked.
+  const SIBLING_REL = `${PLATFORM_PREFIX}modules/data-plane/dlz-lake-grant-pass-console.bicep`;
+  const sibling = [
+    "targetScope = 'resourceGroup'",
+    'param storageAccountName string',
+    "param consolePrincipalId string = ''",
+    '',
+    `var storageBlobDataContributorRoleId = '${SBDC_ROLE_ID}'`,
+    '',
+    "resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {",
+    '  name: storageAccountName',
+    '}',
+    '',
+    "resource consoleLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {",
+    '  name: guid(lake.id, consolePrincipalId, storageBlobDataContributorRoleId)',
+    '  scope: lake',
+    '  properties: {',
+    "    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)",
+    '    principalId: consolePrincipalId',
+    "    principalType: 'ServicePrincipal'",
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  const clean = bicepTree();
+  const orch = clean.get(ORCHESTRATOR_REPO_REL);
+  const respelled =
+    `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass-console.bicep' = if (crossSubLakeGrantsActive) {\n` +
+    "  name: 'dlz-lake-grant-pass-console'\n" +
+    "  scope: resourceGroup(adoptSub(adopt, 'storage-adls'), adoptRg(adopt, 'storage-adls'))\n" +
+    '  params: {\n' +
+    '    storageAccountName: lakeAdoptName\n' +
+    "    consolePrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''\n" +
+    '  }\n}\n';
+  assert.notEqual(respelled, orch, 'the mutation must actually apply');
+  const mutated = bicepTree(new Map([[ORCHESTRATOR_REPO_REL, respelled]]), new Map([[SIBLING_REL, sibling]]));
+
+  // It is NOT the registered string…
+  const site = crossSubCallSites(mutated).find((s) => s.symbol === 'dlzLakeGrantPassConsole');
+  assert.ok(site, 'the respelled site must still be in the cross-subscription population');
+  assert.notEqual(norm(site.scope), norm(PASS_CALLSITE_SCOPE), 'the spelling must genuinely differ');
+  // …and it IS the same place, which is what tooth 2a now measures.
+  assert.equal(
+    scopeIdentity(mutated, site),
+    lakeScopeIdentity(mutated),
+    'the var-expanded identity must match the registered lake call site',
+  );
+  assert.ok(
+    unjustifiedLakeScopeGrants(mutated).some((g) => g.includes('grants `consolePrincipalId`')),
+    'tooth 2a must reach the respelled site',
+  );
+  // Tooth 2b reds independently, which is the backstop when the identity
+  // resolver cannot prove two spellings equal.
+  assert.ok(
+    unregisteredCrossSubStorageGrants(mutated).some((g) => g.includes('consoleLakeWrite')),
+    'tooth 2b must red on the respelled site as well',
+  );
+});
+
+test('#3338 GUARD 5 — MUTATION control: a grant inside a SPOKE subtree at single-arg scope goes RED (tooth 2b)', () => {
+  // The residual this PR previously disclosed as "not reachable from main.bicep,
+  // which runs in the ADMIN subscription". A reviewer measured that it IS
+  // reachable: main.bicep already deploys INTO other subscriptions (`dlz` at
+  // :2177, `setupOrchestratorSpokeRbac` at `subscription(subId)` at :3272), and
+  // inside one of those a single-argument `resourceGroup(<rg>)` — or no `scope:`
+  // at all — resolves in the SPOKE. Whether that spoke holds the lake is the
+  // operator's `dlzSubscriptionIds`, which nothing in the code forbids.
+  const DLZ_MAIN = `${PLATFORM_PREFIX}modules/landing-zone/main.bicep`;
+  const clean = bicepTree();
+  const dlz = clean.get(DLZ_MAIN);
+  assert.ok(dlz, 'the DLZ landing-zone orchestrator must exist — it is the registered `dlz` cross-sub target');
+
+  const GRANT_REL = `${PLATFORM_PREFIX}modules/landing-zone/spoke-lake-write.bicep`;
+  const spokeGrant = [
+    "targetScope = 'resourceGroup'",
+    'param storageAccountName string',
+    "param consolePrincipalId string = ''",
+    '',
+    `var storageBlobDataContributorRoleId = '${SBDC_ROLE_ID}'`,
+    '',
+    "resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {",
+    '  name: storageAccountName',
+    '}',
+    '',
+    "resource spokeLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {",
+    '  name: guid(lake.id, consolePrincipalId, storageBlobDataContributorRoleId)',
+    '  scope: lake',
+    '  properties: {',
+    "    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)",
+    '    principalId: consolePrincipalId',
+    "    principalType: 'ServicePrincipal'",
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  const dlzMutated = `${dlz}\nmodule spokeLakeWrite 'spoke-lake-write.bicep' = {\n  name: 'spoke-lake-write'\n  params: {\n    storageAccountName: loomStorageAccount\n    consolePrincipalId: consolePrincipalId\n  }\n}\n`;
+  assert.notEqual(dlzMutated, dlz, 'the DLZ mutation must actually apply');
+
+  const mutated = bicepTree(new Map([[DLZ_MAIN, dlzMutated]]), new Map([[GRANT_REL, spokeGrant]]));
+
+  // Deliberately NOT a cross-subscription call site of its own — that is the
+  // whole point. It is a plain caller-scope module inside a subtree that main
+  // .bicep deploys cross-subscription, so tooth 1 does not fire…
+  assert.deepEqual(
+    unregisteredCrossSubCallSites(mutated),
+    [],
+    'tooth 1 must be GREEN here — the new call site is not itself cross-subscription',
+  );
+  // …and neither does tooth 2a, because the enclosing site is the DLZ scope,
+  // not the lake's.
+  assert.deepEqual(
+    unjustifiedLakeScopeGrants(mutated),
+    [],
+    'tooth 2a must be GREEN here — this is why tooth 2b exists',
+  );
+  // Tooth 2b is the one that sees it.
+  const found = unregisteredCrossSubStorageGrants(mutated);
+  assert.ok(
+    found.some((g) => g.includes(GRANT_REL) && g.includes('spokeLakeWrite')),
+    `tooth 2b must name the spoke grant: ${found.join(' | ')}`,
+  );
+
+  // The same grant with NO `scope:` at all — a RESOURCE-GROUP-scoped assignment
+  // in the spoke's RG, which is strictly worse than a storage-scoped one.
+  const rgScoped = spokeGrant.replace('  scope: lake\n', '');
+  assert.notEqual(rgScoped, spokeGrant, 'the unscoped mutation must actually apply');
+  const rgTree = bicepTree(new Map([[DLZ_MAIN, dlzMutated]]), new Map([[GRANT_REL, rgScoped]]));
+  assert.ok(
+    unregisteredCrossSubStorageGrants(rgTree).some((g) => g.includes('no scope:')),
+    'a role assignment with no scope: must be IN the population, named as resource-group-scoped',
+  );
+
+  // NEGATIVE control for the structural exclusion: the identical grant scoped to
+  // a named NON-storage resource is OUT, and that is what keeps the register at
+  // 20 rows instead of 40. If this ever reds, the exclusion has collapsed.
+  const eventHubScoped = spokeGrant
+    .replace(
+      "resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {",
+      "resource lake 'Microsoft.EventHub/namespaces@2024-01-01' existing = {",
+    );
+  const ehTree = bicepTree(new Map([[DLZ_MAIN, dlzMutated]]), new Map([[GRANT_REL, eventHubScoped]]));
+  assert.deepEqual(
+    unregisteredCrossSubStorageGrants(ehTree),
+    [],
+    'a grant scoped to an Event Hubs namespace cannot land on an ADLS account and must stay out of the population',
+  );
+});
+
+test('#3338 GUARD 5 — reachableModules reports THREE outcomes: walked, unreadable, and gave-up', () => {
+  // The trichotomy. An earlier revision recorded an unreadable target and
+  // dropped a too-deep one with no trace, so "no grant down there" and "I
+  // stopped looking" were the same answer — the false clean the function's own
+  // docstring forbids.
+  const chain = new Map([
+    ['a/0.bicep', "module n '1.bicep' = {\n  name: 'n'\n}\n"],
+    ['a/1.bicep', "module n '2.bicep' = {\n  name: 'n'\n}\n"],
+    ['a/2.bicep', "module n 'missing.bicep' = {\n  name: 'n'\n}\n"],
+  ]);
+  const deep = reachableModules(chain, 'a/0.bicep', 1);
+  assert.deepEqual(deep.modules, ['a/0.bicep', 'a/1.bicep']);
+  assert.deepEqual(deep.unreadable, [], 'nothing was unreadable — the walk stopped before reaching it');
+  assert.deepEqual(deep.truncated, ['a/2.bicep (depth 2 > 1)'], 'exhaustion must be REPORTED, not dropped');
+
+  const full = reachableModules(chain, 'a/0.bicep', 8);
+  assert.deepEqual(full.modules, ['a/0.bicep', 'a/1.bicep', 'a/2.bicep']);
+  assert.deepEqual(full.unreadable, ['a/missing.bicep'], 'an unreadable target is still reported');
+  assert.deepEqual(full.truncated, [], 'no truncation when the ceiling is not reached');
+
+  // And a cycle terminates without being mistaken for exhaustion.
+  const cyclic = new Map([
+    ['c/a.bicep', "module n 'b.bicep' = {\n  name: 'n'\n}\n"],
+    ['c/b.bicep', "module n 'a.bicep' = {\n  name: 'n'\n}\n"],
+  ]);
+  const cyc = reachableModules(cyclic, 'c/a.bicep', 8);
+  assert.deepEqual(cyc.modules, ['c/a.bicep', 'c/b.bicep']);
+  assert.deepEqual(cyc.truncated, []);
 });
 
 test('#3338 GUARD 5 — the scope reader: what counts as cross-subscription, and what deliberately does not', () => {

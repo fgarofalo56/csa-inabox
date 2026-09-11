@@ -111,7 +111,7 @@
 // Five guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
 // line. GUARDS 1-4 are keyed to an INVENTORY of this file and its call site;
 // GUARD 5 is keyed to an INVARIANT of the DEPLOYMENT and does not name this file
-// at all. Four earlier revisions each lost to one edit — revision 1 keyed the
+// at all. Five earlier revisions each lost to one edit — revision 1 keyed the
 // refusal to param NAMES (`/PrincipalId$/`), so the identical Console-UAMI grant
 // under `consoleUamiObjectId` read green; revision 2 keyed it to a
 // `principalId:` at exactly four spaces inside a top-level `resource`, so an
@@ -126,8 +126,12 @@
 // a 25-line sibling granting the Console UAMI Storage Blob Data Contributor on
 // the same lake, invoked at the same scope — and every guard was green again
 // (re-measured 2026-09-11 against the real shipped tree: revision 4's suite
-// rc 0, 40/40; `az bicep build` rc 0, 3,984,293 bytes, with the Contributor
-// grant readable in the emitted ARM under `[variables('lakeAdoptSub')]`).
+// rc 0, 40/40; `az bicep build` rc 0, with the Contributor grant readable in the
+// emitted ARM under `[variables('lakeAdoptSub')]`); and revision 5 keyed the
+// population to a structural property of the DEPLOYMENT but read that property
+// with an indentation-anchored regex, so the same sibling with its call-site
+// body at FOUR spaces instead of two was invisible again — rc 0, 44/44, build
+// rc 0, same tuple in the ARM.
 // Enumerating one more syntax would only move the next escape, so the key is now
 // the three bicep KEYWORDS that must begin a statement and that no layout can
 // hide, plus the call site's ARGUMENTS, plus a fifth key that is not a filename
@@ -176,21 +180,40 @@
 //     population is now the repository, proved complete against
 //     `git ls-files '*.bicep'` rather than against a directory list.
 //
-//   GUARD 5 — and the fifth key is not this file's name. Every module call site
-//     ANYWHERE in the repository whose `scope:` deploys into ANOTHER
-//     SUBSCRIPTION — a two-argument `resourceGroup()`, a `subscription(<id>)`,
-//     a `managementGroup()` — must be registered by (file, symbol, target), and
-//     every `Microsoft.Authorization/roleAssignments` REACHABLE from a call site
-//     at this pass's own lake scope, through the target module and the modules
-//     it in turn calls, must satisfy the SAME self-minted-principal and
-//     registered-role checks GUARD 2 applies here. That is the population key
-//     GUARDS 1-4 lacked: a new FILE that grants on this lake cannot avoid being
-//     deployed at this lake's scope, so it cannot avoid the register. Measured
-//     at this commit: 123 cross-subscription call sites across all 357 `.bicep`,
-//     112 of them in the vendored Azure Landing Zones tree (exempt, and the
-//     exemption is re-measured in-suite to prove that tree references neither
-//     this pass nor the lake's adopt symbols), 11 of them Loom's own and each
-//     registered with a reason.
+//   GUARD 5 — and the fifth key is not this file's name. Three teeth:
+//
+//     TOOTH 1. Every module call site ANYWHERE in the repository whose `scope:`
+//       deploys into ANOTHER SUBSCRIPTION — a two-argument `resourceGroup()`, a
+//       `subscription(<id>)`, a `managementGroup()` — must be registered by
+//       (file, symbol, target). A new FILE that grants on this lake cannot avoid
+//       being deployed at this lake's scope, so it cannot avoid the register.
+//       Measured at this commit: 123 cross-subscription call sites across all
+//       357 `.bicep`, 112 in the vendored Azure Landing Zones tree (exempt, and
+//       the exemption is re-measured in-suite to prove that tree references
+//       neither this pass nor the lake's adopt symbols), 11 Loom's own.
+//     TOOTH 2a. Every `Microsoft.Authorization/roleAssignments` reachable from a
+//       call site that deploys TO THE SAME PLACE as this pass — compared by
+//       var-EXPANDED scope identity, so `resourceGroup(adoptSub(adopt,
+//       'storage-adls'), adoptRg(adopt, 'storage-adls'))` and
+//       `resourceGroup(lakeAdoptSub, lakeAdoptRg)` compare equal — must satisfy
+//       the SAME self-minted-principal and registered-role checks GUARD 2
+//       applies here. Keyed on the scope STRING it was beaten by respelling.
+//     TOOTH 2b. Every role assignment that could land on a storage account,
+//       anywhere in ANY cross-subscription subtree, must be registered —
+//       excluded only when its `scope:` names a local resource whose TYPE is
+//       structurally not a storage account. No `scope:` at all is IN (it lands
+//       at the deployment's resource group); an unresolved scope is IN. This is
+//       the tooth that does not care whether the enclosing call site is spelled
+//       like the lake's, and it is the answer to the residual below. Measured:
+//       36 modules reachable from the 11 Loom sites, 40 role assignments among
+//       them, 20 IN by that rule and each registered with a reason.
+//
+//     All three are read through a BRACE-DEPTH field reader. They were read
+//     through an indentation-anchored one, and a reviewer re-indented a call
+//     site body from two spaces to four: the scope parsed as null, the site
+//     left the population, and the Console-UAMI Contributor grant on this lake
+//     shipped 44/44 green with `az bicep build` rc 0. A structural population
+//     key is only as structural as the reader beneath it.
 //
 // WHAT THAT DOES NOT CLAIM. It is source analysis over this file, the
 // repository's module declarations, and the three call-chain hops named above,
@@ -203,13 +226,21 @@
 // call-site reader is line-oriented, so a declaration whose `{` is not on the
 // `module` line, or whose loop header itself contains a `:`, fails to match and
 // is not recorded — fail-CLOSED for the reader, but it means "one call site" is
-// a statement about declarations this reader can parse. GUARD 5's population key
-// is the SCOPE EXPRESSION AS WRITTEN, so a grant that reached this lake's
-// resource group without a two-argument `resourceGroup(...)` — from an
-// orchestrator already running inside the lake's subscription — is outside it;
-// that is not reachable from today's subscription-scoped `main.bicep`, which is
-// the whole reason this pass exists, but it is stated rather than implied
-// closed. `check-module-existing-scope.mjs`, the shipped checker, still walks
+// a statement about declarations this reader can parse. GUARD 5 tooth 1's
+// population key is the SCOPE EXPRESSION, so a grant reaching this lake's
+// resource group without a two-argument `resourceGroup(...)` is outside THAT
+// tooth. An earlier revision of this paragraph went on to call that
+// unreachable, "not reachable from today's subscription-scoped main.bicep".
+// That was WRONG and a reviewer measured it: main.bicep runs in the ADMIN
+// subscription but already deploys INTO others (`dlz`, and
+// `setupOrchestratorSpokeRbac` at `subscription(subId)`), and inside one of
+// those a single-argument `resourceGroup(<rg>)` — or an assignment with no
+// `scope:` — resolves in the SPOKE, which holds this lake exactly when the
+// operator's `dlzSubscriptionIds` intersects the adopt plan's storage-adls
+// subscription. Nothing in the code forbids that and a dlz-attach estate makes
+// it natural. Tooth 2b is the answer: every storage-reaching grant in EVERY
+// cross-subscription subtree is registered, not only the lake-scoped ones.
+// `check-module-existing-scope.mjs`, the shipped checker, still walks
 // only platform/fiab/bicep and is blind to both of the 2026-09-11 bypasses
 // (rc 0, no NEW finding, on each) — its invariant is #3333's cross-RG residency,
 // not this one, and widening it is a separate change with its own measurement.
