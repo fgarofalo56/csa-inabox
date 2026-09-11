@@ -13,13 +13,28 @@
  *   3. a build question routes to the build agent — its badge.
  *
  * MOCKED is always run (deterministic SSE keyed on the prompt, so the visual +
- * routing contract is testable without AOAI). LIVE is opt-in via
- * UNIFIED_COPILOT_LIVE=1 and only asserts a real answer OR an honest AOAI gate.
+ * routing contract is testable without AOAI).
+ *
+ * LIVE IS ON BY DEFAULT, and it is the only case that joins the two halves.
+ * Every other test here runs against `mockBackends`, and the direct
+ * container-side probes exercise AOAI with no UI — so without this case the
+ * suite can be entirely green while the real UI has never once reached the real
+ * backend. It was `=== '1'`, i.e. opt-IN, and was therefore skipped on every run
+ * it has ever had: measured 2026-09-10, `pass=2 fail=1 skip=1`, the skip being
+ * this. Default-ON/opt-out per the day-one rule; set UNIFIED_COPILOT_LIVE=0 to
+ * downgrade deliberately.
  */
 import { test, expect } from '@playwright/test';
 import { BASE, signIn, captureFailures, recordVerdict } from './_lib/uat';
 
-const LIVE = process.env.UNIFIED_COPILOT_LIVE === '1';
+const LIVE = process.env.UNIFIED_COPILOT_LIVE !== '0';
+// Loom deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
+// wired" is a broken deployment rather than a supported shape
+// (auto-bind-by-default.md §5). Accepting the gate as an alternative outcome is
+// what makes a dead copilot indistinguishable from a working one — the same
+// defect this session found in copilot.uat.ts's classifier. Set
+// UNIFIED_COPILOT_ALLOW_GATE=1 only where AOAI genuinely is not deployed.
+const LIVE_ALLOW_GATE = process.env.UNIFIED_COPILOT_ALLOW_GATE === '1';
 
 /** Deterministic SSE for the docs agent: attribution → citation → final. */
 function docsSse(): string {
@@ -150,7 +165,7 @@ test('unified copilot — Ctrl+/ toggles the one window', async ({ browser }) =>
 });
 
 test.describe('unified copilot — live AOAI', () => {
-  test.skip(!LIVE, 'UNIFIED_COPILOT_LIVE=1 not set');
+  test.skip(!LIVE, 'UNIFIED_COPILOT_LIVE=0 — live AOAI walk deliberately downgraded');
 
   test('asks a real question, gets a streamed answer or an honest AOAI gate', async ({ browser }) => {
     const ctx = await browser.newContext();
@@ -162,10 +177,57 @@ test.describe('unified copilot — live AOAI', () => {
     await page.getByTestId('copilot-input').fill('What is CSA Loom?');
     await page.getByTestId('copilot-send').click();
 
-    // Either a final answer (with an attribution badge) OR the 503 AOAI gate.
     const finalMsg = page.getByTestId('copilot-msg-copilot').last();
     const aoaiGate = page.getByText(/Copilot AOAI deployment not wired/i);
-    await expect(finalMsg.or(aoaiGate)).toBeVisible({ timeout: 30_000 });
-    await ctx.close();
+
+    // The verdict is recorded in a `finally`, not after the assertions.
+    //
+    // A verdict emitted only on the success path is a verdict log that can only
+    // ever say "pass": the one run that matters — the failing one — throws at
+    // the first `expect` and writes NOTHING, so the ndjson receipt reads green
+    // over a red suite. That is the same shape as a roll gate scoring
+    // `pass=0 fail=4` as "UAT-verified". `failed` is set to false only after
+    // every assertion has been reached.
+    let failed = true;
+    try {
+      if (LIVE_ALLOW_GATE) {
+        await expect(finalMsg.or(aoaiGate)).toBeVisible({ timeout: 30_000 });
+      } else {
+        // A REAL answer, and the bar for that is an SSE `agent` step — NOT a
+        // visible non-empty bubble.
+        //
+        // The previous version of this asserted visible + gate-count-0 +
+        // non-empty, and a re-review showed all three are satisfied by an ERROR
+        // bubble: `copilot-pane.tsx` fills the streaming placeholder with
+        // `Error: ${j.error || res.statusText}` on ANY non-ok response, so the
+        // literal #4432 symptom — "Error: HTTP 500" — passed a test whose stated
+        // purpose was to catch exactly that. The gate locator only catches the
+        // 503, and the 400 branch drops the placeholder so `.last()` falls back
+        // to the non-empty greeting.
+        //
+        // `copilot-agent-badge` is set ONLY when the stream delivers an `agent`
+        // attribution step, so it cannot be produced by an error path or by a
+        // static greeting. That is the property worth asserting.
+        await expect(page.getByTestId('copilot-agent-badge').last())
+          .toBeVisible({ timeout: 30_000 });
+        await expect(finalMsg).toBeVisible({ timeout: 30_000 });
+        await expect(aoaiGate).toHaveCount(0);
+        await expect(finalMsg).not.toHaveText(/^\s*$/);
+        // Belt and braces: the #4432 string itself must not be what we are
+        // reading as an answer.
+        await expect(finalMsg).not.toContainText(/^Error:/);
+      }
+      failed = false;
+    } finally {
+      recordVerdict({
+        surface: 'copilot:unified', feature: 'live-aoai-real-answer',
+        verdict: failed ? 'F' : 'A',
+        status: failed ? 'fail' : 'pass',
+        notes: failed
+          ? 'no real streamed answer — see the Playwright failure for which assertion'
+          : (LIVE_ALLOW_GATE ? 'real answer or honest gate (downgraded)' : 'real streamed answer'),
+      });
+      await ctx.close();
+    }
   });
 });

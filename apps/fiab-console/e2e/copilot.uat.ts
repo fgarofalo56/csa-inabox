@@ -7,17 +7,47 @@
  *
  *   • real success  — HTTP 200 `{ok:true,…}` or a live `text/event-stream`
  *                      (the AOAI / Dataverse / BAP backend actually answered);
- *   • honest gate    — a documented config/tenant gate per no-vaporware.md
- *                      (`no_aoai` 503, `disabled` 403, `admin_only` 403, a
- *                      Dataverse/BAP 401/403/424/500/502 when Power Platform is
- *                      not wired in this deployment).
+ *   • honest gate    — a DOCUMENTED config/tenant gate per no-vaporware.md,
+ *                      i.e. one carrying a gate `code` (`no_aoai`, `disabled`,
+ *                      `admin_only`, `copilot_studio_not_enabled`), or a
+ *                      codeless Dataverse/BAP 401/403/424 when Power Platform
+ *                      is not wired in this deployment.
  *
  * A 404 (route missing), a Loom-session `unauthenticated`, or any unexpected
  * shape FAILS the test — those are the vaporware tells this spec guards against.
- * Because an honest gate is an acceptable outcome, the spec passes green whether
- * or not AOAI / Power Platform are wired in the target deployment, while still
- * proving every persona's route exists, validates the session, and reaches a
- * real backend (per .claude/rules/no-vaporware.md + ui-parity.md).
+ *
+ * TWO THINGS A GATE IS NOT (both learned while verifying the #4432 fix):
+ *
+ *   1. A CODELESS 5xx is not a gate, it is the server failing. An honest gate
+ *      names its remediation; a 500 with no code asserts nothing. 500/502/503
+ *      used to sit in the tolerated-status list beside 401/403/424.
+ *
+ *      To be precise about the history, because the obvious story is wrong:
+ *      this spec would have CAUGHT #4432. That 500 carried a non-JSON body, so
+ *      `JSON.parse` threw and the walk fell through to `fail`. The tolerance
+ *      only started mattering once the fix made the response well-formed
+ *      (`{ok:false, code:'orchestrate_failed'}` at 500) — a parseable 500 that
+ *      the old list scored as a gate. The rule below closes the window the fix
+ *      opened; it is not a retelling of the original bug.
+ *   2. For an AOAI-BACKED persona, even a well-formed gate is a defect. Loom
+ *      deploys its own Foundry/AOAI account in every boundary, so "AOAI is not
+ *      wired" is a broken deployment, not a supported shape — see
+ *      auto-bind-by-default.md §5. Those personas pass only on a REAL answer.
+ *      Opt out deliberately with LOOM_UAT_ALLOW_AOAI_GATE=true; never silently.
+ *
+ * WHICH personas are gate-tolerant is DATA, not prose: the partition lives in
+ * `_lib/copilot-verdict.ts` as `AOAI_BACKED_PERSONAS` /
+ * `NON_AOAI_BACKED_PERSONAS`, and a unit test requires the two together to
+ * cover every persona this file drives. An earlier revision of this comment
+ * asserted as fact that "Power Platform / Dataverse personas remain
+ * gate-tolerant" — true of the Copilot Studio surfaces, and FALSE of
+ * `persona:governance-copilot`, which the code classified as Power Platform
+ * while `app/api/governance/govern/copilot/route.ts` runs on Azure OpenAI and
+ * emits `code:'no_aoai'`. A comment that states a classification the code does
+ * not hold is a deploy-integrity.md R7 untruth with a very long shelf life, so
+ * the classification is no longer stated here at all — only where it is
+ * executable.
+ * (per .claude/rules/no-vaporware.md + ui-parity.md + auto-bind-by-default.md)
  *
  * Run:  SESSION_SECRET=<from-KV> LOOM_URL=<deployment> pnpm uat
  *       # optional deeper Copilot Studio create/publish flow:
@@ -28,6 +58,7 @@
  */
 import { test, expect, type APIResponse } from '@playwright/test';
 import path from 'node:path';
+import { classify, scorePersona, type Probe } from './_lib/copilot-verdict';
 import {
   BASE, signIn, captureFailures, recordVerdict,
   createWorkspace, deleteWorkspace, createItem,
@@ -38,33 +69,6 @@ import {
 // environment/agent-list probe (still a real BAP call) and tolerate the gate.
 const PP_ENV = process.env.LOOM_PP_ENV_ID || '';
 
-// ── Classification of a primary-action response ─────────────────────────────
-interface Probe { status: number; ct: string; text: string; }
-
-function classify(p: Probe): { verdict: 'real' | 'gate' | 'fail'; reason: string } {
-  if (p.status === 404) return { verdict: 'fail', reason: 'route 404 (missing)' };
-  if (p.ct.includes('text/event-stream')) {
-    return { verdict: 'real', reason: 'live SSE stream' };
-  }
-  let j: any = null;
-  try { j = JSON.parse(p.text); } catch { /* non-JSON */ }
-  if (j && j.ok === true) return { verdict: 'real', reason: 'HTTP 200 ok:true — real backend answered' };
-  // A broken Loom session would 401 with this exact body across EVERY persona —
-  // that is a real failure, not an honest gate.
-  if (j && j.error === 'unauthenticated') return { verdict: 'fail', reason: 'Loom session not authenticated' };
-  if (j && j.ok === false) {
-    const code = String(j.code || '');
-    const GATE_CODES = ['no_aoai', 'disabled', 'admin_only', 'copilot_studio_not_enabled'];
-    if (GATE_CODES.includes(code)) return { verdict: 'gate', reason: `honest gate code:'${code}'` };
-    // Dataverse/BAP/AOAI/schema backend not wired in this deployment → honest
-    // infra gate (the route still reached a real backend and reported why).
-    if ([401, 403, 424, 500, 502, 503].includes(p.status)) {
-      return { verdict: 'gate', reason: `honest infra gate HTTP ${p.status}` };
-    }
-  }
-  return { verdict: 'fail', reason: `unexpected HTTP ${p.status}: ${p.text.slice(0, 160)}` };
-}
-
 async function read(res: APIResponse): Promise<Probe> {
   const ct = (res.headers()['content-type'] || '').toLowerCase();
   let text = '';
@@ -72,17 +76,21 @@ async function read(res: APIResponse): Promise<Probe> {
   return { status: res.status(), ct, text };
 }
 
-/** Assert a persona's primary action reached a real backend OR an honest gate. */
+/**
+ * Record and assert one persona's primary action.
+ *
+ * Deliberately contains NO decision. Which personas must answer rather than
+ * gate, whether the opt-out applies, the letter grade, the pass/fail status
+ * and the value asserted on all come off `scorePersona` -- because a
+ * re-review mutated each of them here in turn and the suite stayed green
+ * every time. Glue that needs the Playwright runner cannot be unit-tested,
+ * so the answer is to leave no decision in it.
+ */
 function assertPrimaryAction(surface: string, feature: string, p: Probe) {
-  const { verdict, reason } = classify(p);
-  recordVerdict({
-    surface, feature,
-    verdict: verdict === 'fail' ? 'F' : 'A',
-    status: verdict === 'fail' ? 'fail' : 'pass',
-    notes: `${reason} (HTTP ${p.status})`,
-  });
-  expect(verdict, `${surface}:${feature} — ${reason}`).not.toBe('fail');
-  return verdict;
+  const s = scorePersona(surface, feature, p);
+  recordVerdict({ surface, feature, verdict: s.grade, status: s.status, notes: s.notes });
+  expect(s.actual, s.message).not.toBe('fail');
+  return s.verdict;
 }
 
 // ── Shared workspace + item ids ─────────────────────────────────────────────
@@ -363,7 +371,11 @@ test.describe('Governance Copilot — admin-gated AOAI Q&A', () => {
     const res = await page.request.post(`${BASE}/api/governance/govern/copilot`, {
       data: { question: 'Which governance dimension has the lowest coverage?', chartData: { dimensions: [{ name: 'Lineage', coverage: 0.42 }] } },
     });
-    // 200 SSE (admin + AOAI), 403 admin_only, or 503 no_aoai — all real-backend outcomes.
+    // 200 SSE (admin + AOAI) or 403 admin_only (a deliberate role check).
+    // NOT 503 no_aoai: this route is AOAI-backed (its own header says "Real
+    // backend: Azure OpenAI chat-completions via resolveAoaiTarget()"), so it is
+    // in AOAI_BACKED_PERSONAS and an AOAI gate here fails the test — Loom
+    // deploys the account, so "not wired" is broken, not honest.
     assertPrimaryAction('persona:governance-copilot', 'posture-qa', await read(res));
     await ctx.close();
   });

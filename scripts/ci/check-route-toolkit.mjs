@@ -648,6 +648,40 @@ const TOUCH_EXEMPT = new Map([
   //                     add a route-level 401/403 contract test.
   ['apps/fiab-console/app/api/admin/workspaces/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; 401 AND 403 both pinned by app/api/admin/__tests__/admin-routes.test.ts'],
   ['apps/fiab-console/app/api/admin/dspm-ai/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; NO route-level auth test exists for this route (pre-existing gap, follow-up owed)'],
+  // #4432 follow-up touched this route for ONE reason: its AOAI gate was a
+  // CODELESS 503/502. A gate is honest only when it is DOCUMENTED
+  // (no-vaporware.md) — the `code` is what lets a consumer tell "not
+  // configured" from "the server broke", and without it the Copilot UAT
+  // classifier scored a real outage as an honest gate. Two `code:` fields were
+  // added to existing NextResponse.json bodies. THE AUTH PROLOGUE IS UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES IT, measured not assumed — and RE-MEASURED on
+  // 2026-09-11 by a reviewer who was told not to take the sentence on trust,
+  // because a false justification for stepping around a required guard is the
+  // whole failure mode this hatch can produce. Verbatim, rc=0:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/help-copilot/chat/route.ts
+  //   → app/api/help-copilot/chat/route.ts: SKIPPED (POST: streaming/SSE handler)
+  //   DRY-RUN: 0 handlers across 0 files; 1 skipped
+  // Same structural cause as /api/copilot/orchestrate: the handler returns a
+  // raw SSE `Response`, not the JSON envelope `withSession` wraps. This is the
+  // codemod limitation the hatch exists for, not an opt-out of the boy-scout
+  // rule — and the count arm is unaffected (no new hand-rolled route).
+  //
+  // THE CONTRAST IS THE POINT: the SAME change also had to add a gate `code` to
+  // six Copilot Studio routes, and the codemod migrates every one of them
+  // (MIGRATED 2/2/2/2/1/1 handlers, 0 skipped). Those are NOT listed here —
+  // they were migrated, per the rule. An entry in this map is only ever for a
+  // route the codemod itself refuses.
+  //
+  // COMPENSATING CONTROL (added with this entry, not assumed): the 401
+  // prologue, BOTH gate codes, and the 400 empty-prompt path are now pinned by
+  // app/api/help-copilot/__tests__/chat-gate-codes.test.ts. The 401 case also
+  // asserts that nothing downstream is reached, so deleting the prologue fails
+  // a merge-blocking test rather than passing quietly. That suite is exercised
+  // by scripts/ci/mutate-copilot-verdict.py, which fails if deleting either
+  // code leaves the tests green.
+  ['apps/fiab-console/app/api/help-copilot/chat/route.ts',
+   "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod reports 'POST: streaming/SSE handler' (raw SSE Response, same as /api/copilot/orchestrate). 401 + both codes pinned by app/api/help-copilot/__tests__/chat-gate-codes.test.ts"],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
