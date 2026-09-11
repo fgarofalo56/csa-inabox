@@ -17004,7 +17004,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:3380",
+                "id": "console:member:3456",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38332,7 +38332,7 @@
             "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "console:member:2709",
+                "id": "console:member:3290",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38342,7 +38342,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:2717",
+                "id": "console:member:3298",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49801,9 +49801,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-11T15:30:47.556Z",
-      "commit": "9a3866dc9ffe3698fef0890aa39eccd83cb35980",
-      "inputsDigest": "07fbc6f85acb8034",
+      "generatedAt": "2026-09-11T16:29:26.296Z",
+      "commit": "617a27d7656610647e6b77f039549c1115680034",
+      "inputsDigest": "512b496f7e08dd33",
       "filesScanned": 2104,
       "scanScopes": [
         {
