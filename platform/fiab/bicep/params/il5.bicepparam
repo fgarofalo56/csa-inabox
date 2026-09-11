@@ -344,10 +344,58 @@ param dlzDomainNames = []
 //   - AI Search: limited IL5 region surface → false.
 param deployAppsEnabled = true
 param aiFoundryEnabled = false
-// Azure AI Content Safety is NOT offered in the DoD regions (US DoD Central /
-// US DoD East) per the Microsoft Learn region matrix. Leave off — the Console
-// honest-gates the copilot moderation pipeline with a warning MessageBar
-// (prompts pass unfiltered, never a silent claim of filtering).
+// Azure AI Content Safety stays OFF here, and the REASON is the impact level,
+// not the region. The previous comment said "NOT offered in the DoD regions (US
+// DoD Central / US DoD East)" — a true statement about a region set this param
+// file does not target (`location` above is `usgovvirginia`). That wording
+// invited exactly one wrong conclusion, and on 2026-09-10 it got it: this param
+// was briefly flipped to `true` on the argument that Content Safety IS available
+// in usgovvirginia and that `gcc-high.bicepparam` enables it there. Both halves
+// of that argument are true and the conclusion is still wrong, because REGION
+// AVAILABILITY IS NOT AUDIT SCOPE.
+//
+// Measured from Microsoft Learn, "Azure Government services by audit scope"
+// (last updated February 2026):
+//
+//   Foundry: Azure AI Content Safety | FedRAMP High ✅ | DoD IL2 ✅ |
+//                                      DoD IL4 — | DoD IL5WI — | DoD IL6 —
+//   Azure OpenAI                     | ✅ | ✅ | ✅ | ✅ | ✅   (positive control)
+//
+// Content Safety carries no IL4/IL5/IL6 provisional authorization, so deploying
+// it in an IL5 boundary is a COMPLIANCE violation, not a parity win. Azure
+// OpenAI is authorized through IL6, which is why the copilot itself runs here.
+// GCC-High shares the region and NOT the impact level; that is the axis these
+// two param files diverge on, exactly as `aiFoundryEnabled = false` three lines
+// above already does (Microsoft Foundry portal is IL2-only).
+//
+// Prompts are still screened ON THE DEFAULT PATH. With this false,
+// `admin-plane/main.bicep:6224` wires LOOM_CONTENT_SAFETY_ENDPOINT to
+// `loomAiEnrichEndpoint` — the multi-service AIServices /contentsafety data
+// plane — which is populated here because `agentFoundryEnabled = true` (below)
+// and `adoptMode()` defaults an absent key to 'create'. So a stock IL5 deploy
+// is NOT an unscreened copilot.
+//
+// ON THE BYO/ADOPT PATH IT IS, SILENTLY — tracked as #4458. Traced, not
+// inferred: setting EXISTING_AOAI puts `foundry` into 'adopt'
+// (legacyAdoptFromEnv above), so `provisionAgentFoundry` is false and
+// `agentFoundryCreate` (`admin-plane/main.bicep:2077`) with it.
+// `loomAiEnrichEndpoint` (`admin-plane/main.bicep:3665`) then falls to
+// `(aiFoundryEnabled && empty(existingFoundryAccountName)) ? … : ''`
+// — and `aiFoundryEnabled = false` here — so the endpoint is the EMPTY STRING.
+// `resolveContentSafetyEndpoint()` returns null, and `shieldPrompt`
+// (`foundry-client.ts:1388-1389`) takes `if (!ep) return { blocked: false }`:
+// the SILENT branch, not the loud `safetyFailOpen()` that exists precisely so
+// an unscreened prompt is never quiet. Prompt Shields is off and nothing says
+// so.
+//
+// That is a real gap on a supported path, recorded here rather than smoothed
+// over — an earlier revision of this comment said only that screening "depends
+// on the adopted account", which understated it, and recording it in a comment
+// with no tracked owner understated it again. #4458 carries the trace, the
+// per-boundary verification owed, and what closing it means: derive the
+// endpoint from the ADOPTED account (it is an AIServices account and exposes
+// /contentsafety) instead of falling through to empty, AND make the
+// empty-endpoint branch of `shieldPrompt` loud.
 param contentSafetyEnabled = false
 param apimEnabled = true
 
