@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 /**
  * MirroredDatabricksEditor — Fabric MirroredAzureDatabricksCatalog focused
  * editor. Lets a user mount a Databricks Unity Catalog as a read-only
@@ -12,8 +13,11 @@ import { clientFetch } from '@/lib/client-fetch';
  * Per .claude/rules/no-vaporware.md every action either:
  *   - calls a real Cosmos or Databricks REST endpoint (Overview list/create,
  *     UC schemas/tables listing), or
- *   - surfaces an honest MessageBar with the env var the operator must set
- *     (LOOM_DATABRICKS_HOSTNAME / Console UAMI as workspace user).
+ *   - surfaces an honest gate naming the measured reason. Where the create
+ *     route attaches a gate-registry id (#4183) that gate renders the shared
+ *     inline Fix-it wizard rather than telling the operator to set a value by
+ *     hand (ux-baseline G2); where it does not, the MessageBar carries the
+ *     reason alone and claims no Fix-it that would not resolve.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -122,6 +126,26 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const [cBusy, setCBusy] = useState(false);
   const [cErr, setCErr] = useState<string | null>(null);
   const [cPairing, setCPairing] = useState<PairingResult | null>(null);
+  /**
+   * The gate-registry id the create route attaches for a failed pairing
+   * (#4183). Held separately from `cPairing` because it is a top-level field of
+   * the envelope, not part of the pairing block. When set, the shared
+   * HonestGate REPLACES the warning bar and carries the inline Fix-it wizard
+   * instead of prose the operator would otherwise have to act on by hand
+   * (ux-baseline G2, auto-bind-by-default §5).
+   * A pairing failure with no registry entry (e.g. PAIR_CREATE_FAILED) leaves
+   * this null and keeps the honest MessageBar — naming a gate that does not
+   * resolve would assert a Fix-it that cannot exist (deploy-integrity R7).
+   */
+  const [cGateId, setCGateId] = useState<string | null>(null);
+  /**
+   * Whether the route confirmed the mirror item itself was written
+   * (`created:true`), read from the envelope rather than inferred. On the gated
+   * branch the HonestGate replaces the "Mirror created" MessageBar, so this is
+   * what keeps that fact on screen — and it is stated only when the response
+   * actually asserted it (deploy-integrity R7).
+   */
+  const [cCreated, setCCreated] = useState(false);
 
   // SQL endpoint tab (the paired Synapse Serverless endpoint over UC Delta tables)
   const [sqlInfo, setSqlInfo] = useState<SqlEndpointInfo | null>(null);
@@ -209,7 +233,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
   const create = useCallback(async () => {
     if (!workspaceId || !cName.trim() || !cCatalog.trim()) return;
-    setCBusy(true); setCErr(null); setCPairing(null);
+    setCBusy(true); setCErr(null); setCPairing(null); setCGateId(null); setCCreated(false);
     try {
       const r = await clientFetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -228,6 +252,10 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
       // Surface the real pairing outcome (endpoint paired vs honest gate). Keep
       // the dialog open so the operator sees whether the catalog is queryable.
       setCPairing((j.pairing as PairingResult) || null);
+      // Only carry a gate id the route actually attached; absent means "no
+      // registry entry for this failure", not "no gate".
+      setCGateId(typeof j.gateId === 'string' && j.gateId ? j.gateId : null);
+      setCCreated(j.created === true);
       await loadList(workspaceId);
       if (j.mirror?.id) {
         setMirrorId(j.mirror.id);
@@ -237,7 +265,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
       // Only auto-close + reset when the pairing fully succeeded; otherwise the
       // operator reads the gate and decides what to fix.
       if (j.pairing?.ok) {
-        setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc(''); setCPairing(null);
+        setCreateOpen(false); setCName(''); setCCatalog(''); setCHostname(''); setCDesc(''); setCPairing(null); setCGateId(null); setCCreated(false);
       }
     } finally { setCBusy(false); }
   }, [workspaceId, cName, cCatalog, cHostname, cDesc, loadList, loadSqlEndpoint]);
@@ -374,7 +402,21 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                   ))}
                 </Dropdown>
               </div>
-              <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+              {/*
+                Reset the pairing state on EVERY open/close transition, not
+                only on the secondary Close button. Escape and a backdrop click
+                both route here and neither touched `cPairing` / `cGateId`, so
+                a dismissed failure survived and re-rendered its warning bar —
+                and, since #4183, its Fix-it — on the next, untouched create.
+                `ux-baseline.md` §6: a freshly created item opens clean.
+              */}
+              <Dialog
+                open={createOpen}
+                onOpenChange={(_, d) => {
+                  setCreateOpen(d.open);
+                  setCPairing(null); setCGateId(null); setCCreated(false); setCErr(null);
+                }}
+              >
                 <DialogTrigger disableButtonEnhancement>
                   <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New mirror</Button>
                 </DialogTrigger>
@@ -404,27 +446,54 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                       />
                       <Field label="Description"><Textarea value={cDesc} onChange={(_, d) => setCDesc(d.value)} /></Field>
                       {cErr && <MessageBar intent="error"><MessageBarBody>{cErr}</MessageBarBody></MessageBar>}
-                      {cPairing && (
-                        <MessageBar intent={cPairing.ok ? 'success' : 'warning'}>
+                      {/*
+                        Exactly ONE bar per create outcome — a ternary, the same
+                        shape as lib/editors/databricks/uc-dialogs.tsx:2395.
+                        The first cut of #4183 rendered the HonestGate BELOW the
+                        warning MessageBar and passed the same `pairing.gate`
+                        string to both, so the ~70-word NO_DATABRICKS paragraph
+                        printed verbatim in two stacked yellow bars. The gated
+                        branch now owns the whole outcome: the HonestGate's
+                        `detail` carries the measured reason AND the "the mirror
+                        item exists" fact the replaced bar used to carry.
+                      */}
+                      {cPairing && (cPairing.ok ? (
+                        <MessageBar intent="success">
                           <MessageBarBody>
-                            <MessageBarTitle>
-                              {cPairing.ok ? 'Catalog mounted & queryable' : 'Mirror created — endpoint not yet queryable'}
-                            </MessageBarTitle>
-                            {cPairing.ok ? (
-                              <>
-                                Paired a Synapse Serverless SQL endpoint over {cPairing.tablesResolved ?? 0} Delta table(s)
-                                {typeof cPairing.tablesSkipped === 'number' && cPairing.tablesSkipped > 0 ? ` (${cPairing.tablesSkipped} skipped)` : ''}.
-                                Open the <strong>SQL endpoint</strong> tab to query them. You can close this dialog.
-                              </>
-                            ) : (
-                              <>{cPairing.gate || cPairing.error || 'The catalog could not be paired to a SQL endpoint.'}</>
-                            )}
+                            <MessageBarTitle>Catalog mounted &amp; queryable</MessageBarTitle>
+                            Paired a Synapse Serverless SQL endpoint over {cPairing.tablesResolved ?? 0} Delta table(s)
+                            {typeof cPairing.tablesSkipped === 'number' && cPairing.tablesSkipped > 0 ? ` (${cPairing.tablesSkipped} skipped)` : ''}.
+                            Open the <strong>SQL endpoint</strong> tab to query them. You can close this dialog.
                           </MessageBarBody>
                         </MessageBar>
-                      )}
+                      ) : cGateId ? (
+                        // The route named a gate-registry entry, so the operator
+                        // resolves it in-product instead of being told to go set
+                        // a value by hand (ux-baseline G2, auto-bind §5).
+                        <HonestGate
+                          gateId={cGateId}
+                          surface="Mirrored Databricks catalog"
+                          detail={[
+                            cCreated ? 'The mirror item was created and is readable, but its catalog is not queryable yet.' : null,
+                            cPairing.gate || cPairing.error || null,
+                          ].filter(Boolean).join(' ') || undefined}
+                          onResolved={() => { if (workspaceId) void loadList(workspaceId); }}
+                        />
+                      ) : (
+                        // No registry entry for this failure (e.g.
+                        // PAIR_CREATE_FAILED): the honest reason alone. Naming a
+                        // gate that would not resolve asserts something the code
+                        // did not establish (deploy-integrity R7).
+                        <MessageBar intent="warning">
+                          <MessageBarBody>
+                            <MessageBarTitle>Mirror created — endpoint not yet queryable</MessageBarTitle>
+                            {cPairing.gate || cPairing.error || 'The catalog could not be paired to a SQL endpoint.'}
+                          </MessageBarBody>
+                        </MessageBar>
+                      ))}
                     </DialogContent>
                     <DialogActions>
-                      <Button appearance="secondary" onClick={() => { setCreateOpen(false); setCPairing(null); }}>{cPairing ? 'Close' : 'Cancel'}</Button>
+                      <Button appearance="secondary" onClick={() => { setCreateOpen(false); setCPairing(null); setCGateId(null); setCCreated(false); }}>{cPairing ? 'Close' : 'Cancel'}</Button>
                       <Button appearance="primary" disabled={cBusy || !cName.trim() || !cCatalog.trim()} onClick={create}>{cBusy ? 'Creating & pairing…' : 'Create mirror'}</Button>
                     </DialogActions>
                   </DialogBody>
