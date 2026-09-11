@@ -508,6 +508,36 @@
         "signalId": null,
         "retryable": false
       }
+    },
+    {
+      "name": "config — the immutable budget start date, as classifyLeaves() builds the per-leaf text",
+      "source": "deploy-fiab-commercial run 34217993648 (2026-09-08, schedule), the last of the eight consecutive scheduled failures. The run's own log line reads `1 ARM leaf failure(s), EACH WITH ITS OWN CLASS: 400 -> unknown: Start date of budgets cannot be updated. Please delete and create a new budget. (Request ID: <guid>)`; deploy-retry.mjs classifies each leaf separately, and classifyLeaves() composes `${code}: ${message}` — this leaf carried no resourceType, so there is no trailing bracket. Re-pulled with `gh run view 34217993648 --log-failed` on 2026-09-11, one hit, rc=0.",
+      "input": "400: Start date of budgets cannot be updated. Please delete and create a new budget.\n (Request ID: <guid>)",
+      "expect": {
+        "class": "config",
+        "signalId": "config.budget-start-date-immutable",
+        "retryable": false
+      }
+    },
+    {
+      "name": "unknown — a budget refused for its AMOUNT is a different defect and must stay unclassified",
+      "source": "Synthesised as the DISCRIMINATION control for config.budget-start-date-immutable. It shares the noun (budget) and the refusal shape but names a different, mutable property. A signal keyed on the broader 'budget' or on the bare 400 would swallow it and assert an immutable start date that nothing established (R7).",
+      "input": "ERROR: The budget amount must be greater than zero.",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
+    },
+    {
+      "name": "unknown — 'Budgets cannot be updated at this scope' is a SCOPE refusal, not the immutable start date",
+      "source": "Synthesised as the second DISCRIMINATION control. It shares most of the matcher's words — budgets, cannot be updated — and differs only in what is immutable. The matcher is `start date of budgets cannot be updated`, so this must not match; a shorter needle would have made a scope/permission problem read as a date problem.",
+      "input": "ERROR: Budgets cannot be updated at this scope.",
+      "expect": {
+        "class": "unknown",
+        "signalId": null,
+        "retryable": false
+      }
     }
   ]
 }
