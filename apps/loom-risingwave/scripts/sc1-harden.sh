@@ -160,7 +160,163 @@ fi
 echo "assertions passed"
 
 # ---------------------------------------------------------------------------
-# 5) Link-check the classpath for real. This is the step that catches what the
+# 5) netty 4.1.77 -> 4.1.137 for the SIX CORE MODULES  (#4429, CVE-2026-75595,
+#    CRITICAL: io.netty:netty-handler. Fixed upstream in 4.1.137.Final on the
+#    4.1 line and 4.2.17.Final on the 4.2 line; 4.1.137 is the minimal version
+#    that clears it without leaving this image's netty line.)
+#
+# WHY SIX MODULES AND NOT JUST netty-handler. This is the one image of the four
+# where lifting the flagged jar ALONE is a real breakage, and it was measured
+# rather than guessed. netty-handler 4.1.137's
+#   io.netty.handler.ssl.util.LazyX509Certificate$CertFactoryHandle
+# references io.netty.util.Recycler$EnhancedHandle, which netty-common 4.1.77
+# does NOT contain (4.1.137 does). scripts/ci/netty_link_check.py, run forward
+# against the jars extracted from the pinned base, shows exactly one NEW
+# unresolved class versus the 4.1.77 CONTROL -- that one. A plain Class.forName
+# would not have caught it either: the reference is a member reference, not a
+# supertype, and HotSpot resolves those lazily.
+#
+# So the fix lifts the whole 4.1.77 CORE -- common, buffer, codec, resolver,
+# transport, handler -- to 4.1.137, and leaves the 4.1.100 LEAF modules
+# (codec-http, codec-dns, handler-proxy, transport-classes-epoll, the native
+# .so jars, ...) alone. That direction is the safe one: a 4.1.100 leaf calling a
+# 4.1.137 core uses API that existed at 4.1.100 and was not removed, whereas the
+# reverse is what just broke. Measured, over the WHOLE directory:
+#   * every one of the 35 netty jars re-checked against the lifted set:
+#     0 newly-unresolved classes, 0 newly-unresolved members;
+#   * it FIXES 182 references that were ALREADY unresolved in the unmodified
+#     base -- upstream's 4.1.100 leaves were sitting on a 4.1.77 core, so
+#     netty-codec-http, netty-codec-http2, transport-classes-epoll and
+#     transport-classes-kqueue each had dangling references before this change;
+#   * the other 439 jars on the connector-node classpath (157,656 classes):
+#     0 unresolved io.netty references, before AND after.
+# netty-all-4.1.100.Final.jar is deliberately untouched: measured, it contains
+# ZERO class entries (it is the empty aggregator jar, not a 4.0-era uber-jar),
+# so it cannot shadow anything.
+#
+# UPGRADE, not removal: netty is live code here -- the connector node's JDBC,
+# Elasticsearch, Cassandra and Iceberg sinks all sit on it.
+# ---------------------------------------------------------------------------
+NETTY_OLD=4.1.77.Final
+NETTY_NEW=4.1.137.Final
+# Each digest verified 2026-09-11 by downloading from Maven Central and hashing
+# locally; every value matched the published .jar.sha256 sidecar. The OLD digest
+# is the base image's own copy, so a re-pushed base tag that changed a jar fails
+# the build instead of being silently patched on top of something the link
+# analysis never saw.
+#   module|new sha256|old sha256
+NETTY_MODULES="
+netty-common|d31926b01adcc07af86f5e27b81b6d6c115df17d366e835d1fc3f5a1924e7e52|40dd9b5ef14878f050a1f7f4d5647d53473f134e349665b47243bde56de7a51f
+netty-buffer|f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929|41b7ddc4dd124c7e75af33a13a426fda4e1ec87c387cd234971e7df4c0b51c26
+netty-codec|9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798|84e4e01dd5b345311e971289b5bc08c0dfd6054a28d16853f0416943c9a3e458
+netty-resolver|b4cf2aeedd9fc7c8c439bbfe574f63cfe5b83392e88bbc07ca0e8424b7cff955|0161cfe9544b3656ed0de67d8937828101859e94bcd0caaf58d21ac7011eabd4
+netty-transport|6251adc2a2921572382732a2db188d4f4f2251fd6ebb49c5d44bbf33d6bfb1a7|034cdf7d81feaad9977c3d8b4fc05611952bc9861dfb9085b8962e2c1de582aa
+netty-handler|d0e4c6ee4779f59f6ab2fb5d388e4f57147c82270164b37945764bb9bda96a44|7911becd4850ff3fc3d93b4be7c468a2f6444fb48c17eec03c807856faf11e0a
+"
+
+NETTY_WORK=/tmp/loom-sc1-netty
+rm -rf "$NETTY_WORK"
+mkdir -p "$NETTY_WORK"
+
+echo "== SC1 netty core ${NETTY_OLD} -> ${NETTY_NEW} =="
+
+# 5a) Drift guard: every module we are about to replace must be the exact jar
+#     the link analysis was run against.
+for ROW in $NETTY_MODULES; do
+  M="${ROW%%|*}"; REST="${ROW#*|}"; OLD_SHA="${REST#*|}"
+  OLDF="${M}-${NETTY_OLD}.jar"
+  if [ ! -f "$OLDF" ]; then
+    echo "FATAL: ${OLDF} not found in ${LIBS} -- base image changed; re-derive the netty fix." >&2
+    exit 1
+  fi
+  GOT="$(sha256sum "$OLDF" | cut -d' ' -f1)"
+  if [ "$GOT" != "$OLD_SHA" ]; then
+    echo "FATAL: base-image drift. ${OLDF} hashes ${GOT}, expected ${OLD_SHA}." >&2
+    echo "       Re-run scripts/ci/netty_link_check.py against the new jar set." >&2
+    exit 1
+  fi
+done
+echo "all six ${NETTY_OLD} modules match the analysed base"
+
+# 5b) CONTROL RUN on the UNMODIFIED classpath. The verdict below is the
+#     DIFFERENCE against this, never the raw unresolved set: a netty-handler
+#     always names classes this image never carried (it ships no
+#     netty-tcnative, so the whole native-OpenSSL family is unresolvable and
+#     always was). See NettyLinkCheck's javadoc.
+#
+#     The control probes ALL SIX modules, not just the handler. Probing one and
+#     comparing against six is not a control at all -- it flagged four
+#     pre-existing absences on the first local run (the optional
+#     netty-codec-marshalling family, referenced by netty-codec, and
+#     io.netty.util.internal.Hidden$NettyBlockHoundIntegration, which needs
+#     reactor-blockhound) purely because the control had never looked at
+#     netty-codec or netty-common. Same subjects on both sides, or the
+#     difference measures the method instead of the change.
+echo "== SC1 netty link check: CONTROL (before the lift) =="
+javac -nowarn -d "$NETTY_WORK" "${SCRIPTS}/NettyLinkCheck.java"
+NETTY_CONTROL_ARGS=""
+for ROW in $NETTY_MODULES; do
+  M="${ROW%%|*}"
+  NETTY_CONTROL_ARGS="${NETTY_CONTROL_ARGS} --jar ${LIBS}/${M}-${NETTY_OLD}.jar --expect io.netty:${M}=${NETTY_OLD}"
+done
+# shellcheck disable=SC2086  # one --jar/--expect pair per module, built above
+java -cp "${NETTY_WORK}:${LIBS}/*" NettyLinkCheck \
+  $NETTY_CONTROL_ARGS \
+  --unresolved-out "${NETTY_WORK}/ctl.txt" \
+  --control --skip-ssl-probe
+
+# 5c) Fetch, verify, install, remove.
+NETTY_LINKCHECK_ARGS=""
+for ROW in $NETTY_MODULES; do
+  M="${ROW%%|*}"; REST="${ROW#*|}"; NEW_SHA="${REST%%|*}"
+  OLDF="${M}-${NETTY_OLD}.jar"
+  NEWF="${M}-${NETTY_NEW}.jar"
+  curl -fsSL -o "$NEWF" \
+    "https://repo1.maven.org/maven2/io/netty/${M}/${NETTY_NEW}/${NEWF}"
+  echo "${NEW_SHA}  ${NEWF}" | sha256sum -c -
+  rm -f "$OLDF"
+  echo "netty: ${OLDF} -> ${NEWF}"
+  NETTY_LINKCHECK_ARGS="${NETTY_LINKCHECK_ARGS} --jar ${LIBS}/${NEWF} --expect io.netty:${M}=${NETTY_NEW}"
+done
+
+# 5d) Assertions -- a curl that wrote an error page, or an rm of a name that
+#     moved, would otherwise ship silently.
+echo "== SC1 netty assertions =="
+for ROW in $NETTY_MODULES; do
+  M="${ROW%%|*}"
+  test ! -e "${M}-${NETTY_OLD}.jar" || { echo "FATAL: ${M}-${NETTY_OLD}.jar still present" >&2; exit 1; }
+  test -s "${M}-${NETTY_NEW}.jar" || { echo "FATAL: ${M}-${NETTY_NEW}.jar missing or empty" >&2; exit 1; }
+done
+if ls netty-*-"${NETTY_OLD}".jar >/dev/null 2>&1; then
+  echo "FATAL: a ${NETTY_OLD} netty jar is still present in ${LIBS}" >&2
+  ls netty-*-"${NETTY_OLD}".jar >&2
+  exit 1
+fi
+echo "netty assertions passed (6 modules lifted, 0 ${NETTY_OLD} jars left)"
+
+# 5e) TREATMENT RUN + the verdict. The SSL probe runs here too: SslContextBuilder
+#     -> SslHandler -> EmbeddedChannel links handler -> common -> buffer ->
+#     transport for real, which a class-loading check alone does not.
+echo "== SC1 netty link check: TREATMENT (after the lift) =="
+# shellcheck disable=SC2086  # the args are built above, one --jar/--expect pair per module
+java -cp "${NETTY_WORK}:${LIBS}/*" NettyLinkCheck \
+  $NETTY_LINKCHECK_ARGS \
+  --unresolved-out "${NETTY_WORK}/trt.txt"
+sort -o "${NETTY_WORK}/ctl.txt" "${NETTY_WORK}/ctl.txt"
+sort -o "${NETTY_WORK}/trt.txt" "${NETTY_WORK}/trt.txt"
+NETTY_NEWLY="$(comm -13 "${NETTY_WORK}/ctl.txt" "${NETTY_WORK}/trt.txt")"
+if [ -n "$NETTY_NEWLY" ]; then
+  echo "FATAL: the lifted netty core names io.netty classes that resolved before the" >&2
+  echo "       lift and do NOT resolve after it:" >&2
+  echo "$NETTY_NEWLY" | sed 's/^/         /' >&2
+  echo "       Re-derive the module set with scripts/ci/netty_link_check.py." >&2
+  exit 1
+fi
+echo "0 newly-unresolvable io.netty classes vs the control"
+rm -rf "$NETTY_WORK"
+
+# ---------------------------------------------------------------------------
+# 6) Link-check the classpath for real. This is the step that catches what the
 #    file assertions cannot: a class that no longer resolves its neighbours.
 # ---------------------------------------------------------------------------
 echo "== SC1 classpath smoke test =="
