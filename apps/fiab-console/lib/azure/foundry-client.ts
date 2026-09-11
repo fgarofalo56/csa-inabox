@@ -28,6 +28,7 @@ import { walkPagedListResult, type PagingBudgetOptions, type PagedWalkResult, ty
 import { cachedConnections, CONNECTIONS_PAGING } from './foundry-connections-cache';
 import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
 import { firstEnvEndpoint, AI_SERVICES_FALLBACK_ENVS } from './cognitive-common';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -136,6 +137,8 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
  * fetchWithTimeout's 30s ceiling but the LOOP had none (one cold /connections
  * walk took 22.9s inside a `maxDuration = 60` route). The `Result` form also
  * reports `truncatedBy`, for callers that must know the list is COMPLETE.
+ * SECURITY: `next` is a RESPONSE-BODY URL the fetch below mints an ARM token
+ * for — both pins below hold it to `armBase()`. See `lib/util/same-origin-url`.
  */
 function walkFoundryPages(
   label: string,
@@ -144,10 +147,10 @@ function walkFoundryPages(
 ): Promise<PagedWalkResult<any>> {
   return walkPagedListResult(`foundry ${label}`, async (next, timeoutMs) => {
     const res = next
-      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      ? await fetchWithTimeout(resolveSameOriginUrl(next, armBase(), 'the ARM token'), { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
       : await firstPage(timeoutMs);
     return readJson<{ value?: any[]; nextLink?: string }>(res); // 404 -> null -> stop
-  }, budgetOpts);
+  }, { ...budgetOpts, sameOriginAs: armBase() }); // GHSA-4gvx-9p49-p43g — refuse an off-origin nextLink inside the walker too, not only at the fetch above.
 }
 
 function pagedListResult(

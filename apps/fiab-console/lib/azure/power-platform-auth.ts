@@ -53,6 +53,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { powerPlatformEndpoints, assertPowerPlatformAvailable } from '@/lib/azure/cloud-endpoints';
 import { logSafe, logSafeError } from '@/lib/util/log-safe';
+import { isAbsoluteHttpUrl, resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // ---------------------------------------------------------------------------
 // Cloud-aware endpoint accessors (single source of truth)
@@ -76,6 +77,30 @@ export function powerAppsBase(): string {
 export function flowBase(): string {
   assertPowerPlatformAvailable('flow');
   return powerPlatformEndpoints().flowBase as string;
+}
+
+/**
+ * Resolve a Power Platform request target — a PATH or an absolute URL — against
+ * `base`, PINNED to `base`'s origin (advisory GHSA-4gvx-9p49-p43g).
+ *
+ * It lives in the transport chokepoint rather than in either client for the same
+ * structural reason the rest of this module does: two copies of a host policy
+ * have already drifted here once, and a boundary decision is a host policy.
+ *
+ * THE ABSOLUTE BRANCH IS REQUIRED AND IS THE HAZARD. A lifecycle poll follows
+ * the server's `Operation-Location` / `Location` RESPONSE HEADER, which is a
+ * whole URL rather than a path — a channel the SERVER chooses, exactly like the
+ * `nextLink` body field the advisory names. `powerPlatformFetch` attaches a BAP
+ * (or Power Apps / Flow) token to whatever this returns, so an absolute value
+ * that cannot be shown to be on `base`'s origin throws instead of being fetched.
+ *
+ * `base` is passed IN — `bapBase()`, `powerAppsBase()`, `flowBase()` — so this
+ * is boundary-correct by construction and never compares against a literal.
+ */
+export function ppRequestUrl(target: string, base: string, credentialLabel = 'a credential'): string {
+  const t = target ?? '';
+  const rel = isAbsoluteHttpUrl(t) || t.startsWith('/') ? t : `/${t}`;
+  return resolveSameOriginUrl(rel, base, credentialLabel);
 }
 
 // ---------------------------------------------------------------------------

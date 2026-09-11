@@ -41,6 +41,7 @@ import { armBase, armScope, graphBase, graphScope } from './cloud-endpoints';
 import { workspaceRolesContainer } from './cosmos-client';
 import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 import { logSafe, logSafeError } from '@/lib/util/log-safe';
+import { resolveSameOriginUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 import {
   ROLE_TO_RBAC,
   pickHighestRole,
@@ -691,7 +692,12 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
     `${graphBase()}/groups/${groupId}/transitiveMembers?$select=id&$top=999&$count=true`;
   let scanned = 0;
   while (budget.claimPage()) {
-    const res = await budget.runPage((timeoutMs) => fetchWithTimeout(next, {
+    // SECURITY (GHSA-4gvx-9p49-p43g): after the first page `next` is an absolute
+    // URL read out of a RESPONSE BODY, and a Graph bearer token rides on the
+    // request. It is already refused below before being assigned; this is the
+    // check at the point the credential is attached, so a future edit to the
+    // loop cannot quietly remove the only guard.
+    const res = await budget.runPage((timeoutMs) => fetchWithTimeout(resolveSameOriginUrl(next, graphBase(), 'the Microsoft Graph token'), {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
     }, timeoutMs));
@@ -729,7 +735,20 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
       // Finished cleanly with no match — this IS a measured negative.
       return 'not-member';
     }
-    next = json['@odata.nextLink'];
+    // A continuation link that is not Graph is refused, and — because this is an
+    // AUTHORIZATION check — refusing it means we never saw the whole closure.
+    // That is `unknown`, NOT `not-member`: the same distinction the truncation
+    // branch below makes, for the same reason.
+    const continuation = sameOriginUrlOrNull(json['@odata.nextLink'], graphBase());
+    if (continuation === null) {
+      console.warn(
+        '[graph-membership] UNKNOWN (not a measured negative): transitiveMembers enumeration at ' +
+          `${logSafe(graphBase(), 120)} returned a continuation link that is not on the Graph origin ` +
+          '(or does not parse) — refusing to send the Graph token there, so the closure was not fully read',
+      );
+      return 'unknown';
+    }
+    next = continuation;
   }
   // Loop exited without finishing: either the page budget ran out or the wall
   // clock did. Either way we never saw the whole closure, so this is UNKNOWN.
