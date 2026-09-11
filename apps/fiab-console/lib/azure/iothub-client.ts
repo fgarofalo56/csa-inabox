@@ -35,7 +35,8 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 // ARM endpoint is sovereign-cloud aware — canonical resolver, not a local copy
 // (keeps the management host literal solely in cloud-endpoints.ts).
 import { armBase } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // Stable GA api-version for Microsoft.Devices/IotHubs.
 const IOTHUB_API = '2023-06-30';
@@ -84,11 +85,16 @@ function resolveScope(opts?: { subscriptionId?: string; resourceGroup?: string }
   return { subscriptionId, resourceGroup };
 }
 
+/**
+ * SECURITY (GHSA-4gvx-9p49-p43g) — the consumer-group walk hands this function
+ * a `nextLink` read out of a RESPONSE BODY, and it attaches an ARM bearer
+ * token. Pin the target to `armBase()` and fail closed rather than fetching.
+ */
 async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const scope = `${armBase()}/.default`;
   const t = await credential.getToken(scope);
   if (!t?.token) throw new IoTHubArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -194,6 +200,7 @@ export async function listIoTHubConsumerGroups(
       if (cgName) out.push({ name: String(cgName), hubName: name });
     }
     if (!body?.nextLink) break; // finished cleanly — NOT a truncation
+    if (!isContinuationAllowed(budget.label, body.nextLink, armBase())) break;
     next = body.nextLink;
   }
   budget.warnIfTruncated(out.length);

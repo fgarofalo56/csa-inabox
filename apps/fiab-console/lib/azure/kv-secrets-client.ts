@@ -20,7 +20,8 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { kvScope, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { assertSecretReadAllowed, type KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
 
 export type { KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
@@ -56,6 +57,11 @@ export function vaultUrl(): string | null {
  */
 export function shortcutVaultUrl(): string | null {
   const ov = (process.env.LOOM_SHORTCUT_KEYVAULT || '').trim();
+  // SAME-ORIGIN-EXEMPT(deploy-config): `ov` is LOOM_SHORTCUT_KEYVAULT, which the
+  // deploy sets. It DEFINES the boundary for this vault rather than travelling
+  // through it, so there is no second origin to compare against — a check here
+  // would compare the endpoint with itself. Nothing a response body or header
+  // returns can reach this value.
   if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }
@@ -221,6 +227,9 @@ export interface KeyVaultCertificateRef {
  */
 export function certVaultUrl(): string | null {
   const ov = (process.env.LOOM_EVENTSTREAM_CERT_VAULT || '').trim();
+  // SAME-ORIGIN-EXEMPT(deploy-config): `ov` is LOOM_EVENTSTREAM_CERT_VAULT, set
+  // by the deploy. Same reasoning as shortcutVaultUrl above — this value IS the
+  // boundary for this vault, not a candidate that has to be shown inside one.
   if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }
@@ -257,7 +266,11 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
   const budget = new PagingBudget('key-vault certificates');
   let next: string = `${base}/certificates?api-version=${KV_API}`;
   while (budget.claimPage()) {
-    const res = await budget.runPage(async (timeoutMs) => fetchWithTimeout(next, {
+    // SECURITY (GHSA-4gvx-9p49-p43g): after the first page `next` is an
+    // absolute URL read out of a RESPONSE BODY, and a Key Vault data-plane
+    // bearer token rides on the request. Pin it to THIS vault's origin and fail
+    // closed rather than fetching.
+    const res = await budget.runPage(async (timeoutMs) => fetchWithTimeout(resolveSameOriginUrl(next, base, 'the Key Vault token'), {
       headers: { authorization: `Bearer ${await token()}` },
       cache: 'no-store',
     }, timeoutMs));
@@ -279,6 +292,7 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
       });
     }
     if (typeof j?.nextLink !== 'string' || !j.nextLink) break; // finished cleanly
+    if (!isContinuationAllowed(budget.label, j.nextLink, base)) break;
     next = j.nextLink;
   }
   budget.warnIfTruncated(out.length);

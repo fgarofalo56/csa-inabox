@@ -28,6 +28,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -93,9 +94,17 @@ async function token(): Promise<string> {
   return t.token;
 }
 
+/**
+ * SECURITY (GHSA-4gvx-9p49-p43g) — `path` may be an ABSOLUTE URL (ARM paginates
+ * with an absolute `nextLink` read out of a response body) and the next line
+ * attaches a management-plane bearer token, so this expression decides where
+ * that token goes. `resolveSameOriginUrl` pins it to `armBase()` — correct in
+ * every sovereign cloud — and throws rather than fetching an off-origin or
+ * unparseable target.
+ */
 async function armGet(path: string): Promise<any> {
   const tk = await token();
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, 'the ARM token');
   const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',

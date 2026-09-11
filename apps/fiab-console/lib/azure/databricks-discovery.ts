@@ -124,6 +124,10 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
     `databricks-discovery ${firstPath.split('?')[0]}`,
     // nextLink is an absolute URL; strip the host so armGet can re-prefix it.
     (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+    // …and `stripArmBase` only removes a MATCHING prefix, so an off-ARM link
+    // read out of a response body would survive it. Refuse it and stop
+    // (GHSA-4gvx-9p49-p43g).
+    { sameOriginAs: armBase() },
   );
 }
 

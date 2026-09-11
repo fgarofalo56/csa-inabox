@@ -26,6 +26,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase } from './cloud-endpoints';
+import { isAbsoluteHttpUrl, resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { walkPagedListResult, type PagingTruncation } from './paging-budget';
 
 const PG_API_VERSION = '2024-08-01';
@@ -68,10 +69,20 @@ async function armToken(): Promise<string> {
  * paging walkers pass it straight through. `timeoutMs` is the caller's remaining
  * budget when the call is made under a {@link PagingBudget}; omitted, the shared
  * per-request default applies.
+ *
+ * THE ABSOLUTE BRANCH IS REQUIRED AND IS THE HAZARD (advisory
+ * GHSA-4gvx-9p49-p43g). `nextLink` is read out of a RESPONSE BODY, so whatever
+ * can influence that body chooses the address this function attaches the ARM
+ * management-plane token to. `resolveSameOriginUrl` keeps the absolute branch
+ * and requires the ORIGIN to be `armBase()`'s — boundary-correct by
+ * construction, because the base is read here rather than hardcoded, so
+ * Commercial, GCC, GCC-High, IL5 and DoD each compare against their own ARM
+ * endpoint (`.claude/rules/cloud-parity.md`).
  */
 async function armRequest<T = any>(pathOrUrl: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const url = /^https?:\/\//i.test(pathOrUrl) ? pathOrUrl : `${arm()}${pathOrUrl}`;
+  const rel = isAbsoluteHttpUrl(pathOrUrl) || pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+  const url = resolveSameOriginUrl(rel, arm(), 'the ARM token');
   const res = await fetchWithTimeout(url, {
     ...init,
     headers: {
@@ -177,7 +188,11 @@ export async function listServersResult(subscriptionId?: string): Promise<Postgr
   if (!sub) throw new PostgresError('LOOM_SUBSCRIPTION_ID not set', 400);
   const firstPage = `/subscriptions/${sub}/providers/Microsoft.DBforPostgreSQL/flexibleServers?api-version=${PG_API_VERSION}`;
   const walk = await walkPagedListResult<any>('postgres flexibleServers', (next, timeoutMs) =>
-    armRequest<{ value?: any[]; nextLink?: string }>(next ?? firstPage, {}, timeoutMs));
+    armRequest<{ value?: any[]; nextLink?: string }>(next ?? firstPage, {}, timeoutMs),
+    // Refuse an off-origin `nextLink` inside the walker too, not only at the
+    // fetch — the walk then STOPS and keeps the rows it already has, which is
+    // the fail-closed outcome for a paging loop (GHSA-4gvx-9p49-p43g).
+    { sameOriginAs: armBase() });
   return {
     servers: walk.rows.map(mapServer),
     truncatedBy: walk.truncatedBy,

@@ -40,6 +40,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { randomUUID } from 'node:crypto';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { OffOriginUrlError, resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
 import { normalizePrivateLinkTargetId, privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
 import { listPrivateDnsZones } from '@/lib/azure/network-discovery';
@@ -158,27 +159,28 @@ async function token(): Promise<string> {
  *
  * Fails CLOSED: an unparseable or non-ARM URL throws rather than falling back to
  * treating it as a relative path, which would silently hit a wrong ARM route.
+ *
+ * The DECISION now lives in `lib/util/same-origin-url` (advisory
+ * GHSA-4gvx-9p49-p43g). Keying the #2652 fix to this one function is exactly
+ * why every sibling client stayed unguarded for two years; this wrapper survives
+ * only to keep `NetworkingArmError` as the error type its callers already
+ * handle.
  */
 export function resolveArmUrl(path: string, armBase: string = ARM): string {
-  if (!/^https?:\/\//i.test(path)) {
-    return `${armBase}${path}`;
-  }
-  let target: URL;
-  let base: URL;
   try {
-    target = new URL(path);
-    base = new URL(armBase);
-  } catch {
-    throw new NetworkingArmError('Refusing to send an ARM token to an unparseable URL', 400);
+    return resolveSameOriginUrl(path, armBase, 'the ARM token');
+  } catch (e) {
+    if (e instanceof OffOriginUrlError) {
+      // Deliberately does not echo the rejected origin back to a caller.
+      throw new NetworkingArmError(
+        e.reason === 'unparseable'
+          ? 'Refusing to send an ARM token to an unparseable URL'
+          : 'Refusing to send the ARM token to a non-ARM origin',
+        400,
+      );
+    }
+    throw e;
   }
-  if (target.origin !== base.origin) {
-    // Deliberately does not echo the rejected origin back to a caller.
-    throw new NetworkingArmError(
-      'Refusing to send the ARM token to a non-ARM origin',
-      400,
-    );
-  }
-  return target.toString();
 }
 
 async function armReq<T>(method: string, path: string, body?: unknown): Promise<T> {

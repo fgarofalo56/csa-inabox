@@ -46,6 +46,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase, getLogAnalyticsHost, logAnalyticsTokenScope, dfsUrl } from '@/lib/azure/cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { loomSubscriptionScope } from '@/lib/azure/loom-subscriptions';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
@@ -182,7 +183,11 @@ async function armToken(): Promise<string> {
 
 async function armGet<T = any>(pathOrUrl: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${armBase()}${pathOrUrl}`;
+  // SECURITY (GHSA-4gvx-9p49-p43g): `pathOrUrl` may be an ABSOLUTE URL — ARM
+  // paginates with a `nextLink` read out of a response body — and an ARM bearer
+  // token is attached below. Pin the target to `armBase()` (boundary-correct in
+  // every sovereign cloud) and fail closed instead of fetching.
+  const url = resolveSameOriginUrl(pathOrUrl, armBase(), 'the ARM token');
   // fetchWithTimeout, not bare fetch: this runs on a BFF request path, and an
   // ARM round-trip with NO deadline is the unbounded await #2557 exists to kill.
   const res = await fetchWithTimeout(url, {
@@ -210,6 +215,10 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
   return walkPagedList<T>(
     `azure-connections ${firstPath.split('?')[0]}`,
     (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+    // Stop the walk on a nextLink that is not ARM. `stripArmBase` only removes a
+    // matching prefix, so an off-origin link would otherwise be concatenated
+    // onto armBase() and hit a wrong ARM route instead of being refused.
+    { sameOriginAs: armBase() },
   );
 }
 
