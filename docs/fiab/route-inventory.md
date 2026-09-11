@@ -1107,34 +1107,34 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/[type]/[id]/alerts/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/assist/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure Monitor, Azure OpenAI, Azure SQL, Cosmos, Managed Identity, Synapse SQL |
 | `items/[type]/[id]/audit/route.ts` | GET POST | owner-scoped |  | Cosmos |
-| `items/[type]/[id]/business-metadata/route.ts` | GET POST | owner-scoped |  | Cosmos, Purview |
+| `items/[type]/[id]/business-metadata/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph, Purview |
 | `items/[type]/[id]/canvas-comments/[commentId]/route.ts` | PATCH DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/canvas-comments/route.ts` | GET POST | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/canvas-presence/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/canvas-suggest/route.ts` | POST | owner-scoped | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos, Microsoft Graph |
-| `items/[type]/[id]/classifications/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
+| `items/[type]/[id]/classifications/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Microsoft Graph, Purview |
 | `items/[type]/[id]/collab/stream/route.ts` | GET | owner-scoped |  | Azure Cache for Redis, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/comments/route.ts` | GET POST PATCH DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/definition/route.ts` | GET PUT | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/endorsement/route.ts` | GET PATCH | admin |  | AI Search, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/explain/route.ts` | POST | session-only | ● | AML, ARM, Azure AI Services, Azure Cache for Redis, Azure OpenAI, Cosmos |
 | `items/[type]/[id]/export-check/route.ts` | POST | owner-scoped |  | Cosmos, Microsoft Graph |
-| `items/[type]/[id]/impact/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Purview |
-| `items/[type]/[id]/lineage/route.ts` | GET | owner-scoped | ● | Azure Monitor, Cosmos, Purview |
+| `items/[type]/[id]/impact/route.ts` | GET | owner-scoped |  | Azure Monitor, Cosmos, Microsoft Graph, Purview |
+| `items/[type]/[id]/lineage/route.ts` | GET | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph, Purview |
 | `items/[type]/[id]/monitoring/route.ts` | GET | owner-scoped | ● | ARM, Azure Monitor, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Resource Graph, Synapse, Synapse SQL |
 | `items/[type]/[id]/onelake-security/[role]/cls/route.ts` | GET POST | session-only |  | ADLS, ADX, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/onelake-security/[role]/rls/route.ts` | GET POST | session-only |  | ADLS, ADX, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/onelake-security/schema/route.ts` | GET | session-only |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/optimize/route.ts` | POST | owner-scoped | ● | ADLS, ARM, Azure Monitor, Azure Storage, Cosmos, Managed Identity, Microsoft Graph |
 | `items/[type]/[id]/pbi-source/route.ts` | GET | owner-scoped |  | ADX, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `items/[type]/[id]/pbids/route.ts` | GET | owner-scoped |  | ADX, Azure SQL, Cosmos, Synapse SQL |
+| `items/[type]/[id]/pbids/route.ts` | GET | owner-scoped |  | ADX, Azure SQL, Cosmos, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | ADLS, ARM, Azure RBAC, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph |
-| `items/[type]/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos |
+| `items/[type]/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
 | `items/[type]/[id]/security-roles/preview-as/route.ts` | POST | admin |  | ADLS, ARM, Azure SQL, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/security-roles/route.ts` | GET POST PUT DELETE | owner-scoped |  | ADLS, ARM, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph |
 | `items/[type]/[id]/security/route.ts` | GET POST | owner-scoped | ● | Azure Monitor, Cosmos, Microsoft Graph |
 | `items/[type]/[id]/sensitivity-label/route.ts` | GET PUT PATCH DELETE | owner-scoped | ● | ADLS, ADX, ARM, Azure RBAC, Azure SQL, Azure Storage, Cosmos, Fabric, Managed Identity, Microsoft Graph, Purview, Resource Graph, Synapse, Synapse SQL |
-| `items/[type]/[id]/sensitivity/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
+| `items/[type]/[id]/sensitivity/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Microsoft Graph, Purview |
 | `items/[type]/[id]/share/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/shortcuts/[name]/route.ts` | PATCH DELETE | owner-scoped |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
 | `items/[type]/[id]/shortcuts/[name]/test/route.ts` | POST | owner-scoped |  | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
