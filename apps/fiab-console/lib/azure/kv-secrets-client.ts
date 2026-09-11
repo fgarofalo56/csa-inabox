@@ -57,6 +57,11 @@ export function vaultUrl(): string | null {
  */
 export function shortcutVaultUrl(): string | null {
   const ov = (process.env.LOOM_SHORTCUT_KEYVAULT || '').trim();
+  // SAME-ORIGIN-EXEMPT(deploy-config): `ov` is LOOM_SHORTCUT_KEYVAULT, which the
+  // deploy sets. It DEFINES the boundary for this vault rather than travelling
+  // through it, so there is no second origin to compare against — a check here
+  // would compare the endpoint with itself. Nothing a response body or header
+  // returns can reach this value.
   if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }
@@ -222,6 +227,9 @@ export interface KeyVaultCertificateRef {
  */
 export function certVaultUrl(): string | null {
   const ov = (process.env.LOOM_EVENTSTREAM_CERT_VAULT || '').trim();
+  // SAME-ORIGIN-EXEMPT(deploy-config): `ov` is LOOM_EVENTSTREAM_CERT_VAULT, set
+  // by the deploy. Same reasoning as shortcutVaultUrl above — this value IS the
+  // boundary for this vault, not a candidate that has to be shown inside one.
   if (ov) return /^https?:\/\//i.test(ov) ? ov.replace(/\/$/, '') : kvUrlFromName(ov);
   return vaultUrl();
 }

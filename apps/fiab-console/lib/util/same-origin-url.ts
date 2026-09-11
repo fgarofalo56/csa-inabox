@@ -174,21 +174,34 @@ export function sameOriginUrlOrNull(
 }
 
 /**
- * Assert `candidate` is on `base`'s origin, returning it unchanged.
+ * Assert `candidate` is on `base`'s origin, returning the NORMALIZED URL.
  *
- * For call sites that already hold a complete absolute URL (a `nextLink` about
- * to be fetched) and want the check without rebuilding the string.
+ * For call sites that already hold a complete absolute URL (a `nextLink`, or a
+ * `Location` / `Operation-Location` response header) and want the check without
+ * rebuilding the string.
+ *
+ * WHY IT RETURNS THE PARSED FORM RATHER THAN THE INPUT. The first draft checked
+ * `candidate.trim()` and returned `candidate`, so the value that was CHECKED and
+ * the value that would be FETCHED were not the same string. `String.trim()`
+ * strips a superset of what the URL parser strips, so a U+00A0-prefixed
+ * same-origin URL passed the check and then threw `Invalid URL` at the `fetch`.
+ * Independent review of #4454 probed this in both directions and could not turn
+ * the divergence into a different HOST — the untrimmed parse either equals the
+ * trimmed one or fails outright — so it was a consistency trap rather than a
+ * hole. It is closed anyway: returning `URL.toString()` makes the checked value
+ * and the returned value the same object by construction, which is the property
+ * the other two entry points already have.
  */
 export function assertSameOrigin(
   candidate: string,
   base: string,
   credentialLabel = 'a credential',
 ): string {
-  if (!isSameOrigin(candidate, base)) {
-    throw new OffOriginUrlError(
-      originOf((candidate || '').trim()) ? 'off-origin' : 'unparseable',
-      credentialLabel,
-    );
+  const trimmed = (candidate || '').trim();
+  if (!isSameOrigin(trimmed, base)) {
+    throw new OffOriginUrlError(originOf(trimmed) ? 'off-origin' : 'unparseable', credentialLabel);
   }
-  return candidate;
+  // `isSameOrigin` already parsed it, so this cannot throw; the second parse is
+  // what makes the RETURNED string the one whose origin was established.
+  return new URL(trimmed).toString();
 }

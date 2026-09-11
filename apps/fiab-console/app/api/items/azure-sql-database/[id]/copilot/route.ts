@@ -73,6 +73,11 @@ async function aoaiToken(): Promise<string> {
 function normalizeAoaiEndpoint(raw: string): string {
   const v = raw.trim().replace(/\/+$/, '');
   if (!v) return '';
+  // SAME-ORIGIN-EXEMPT(deploy-config): `raw` is LOOM_AZURE_OPENAI_ENDPOINT at
+  // this function's only call site (`resolveTarget`, below). It NAMES the Azure
+  // OpenAI account this deployment talks to, so it is the base a later check
+  // would compare against — there is no prior origin to hold it to, and no
+  // response body or header can reach it.
   if (/^https?:\/\//i.test(v)) return v;
   return `https://${v}.${getOpenAiSuffix()}`;
 }

@@ -140,9 +140,45 @@ describe('sameOriginUrlOrNull — the walker form', () => {
 });
 
 describe('assertSameOrigin / isAbsoluteHttpUrl', () => {
-  it('assertSameOrigin returns the candidate unchanged when it is on-origin', () => {
+  it('assertSameOrigin returns an on-origin URL that a fetch can use verbatim', () => {
     const u = `${GRAPH}/groups?$skiptoken=q`;
     expect(assertSameOrigin(u, GRAPH)).toBe(u);
+  });
+
+  it('the value CHECKED is the value RETURNED — no leading-whitespace divergence', () => {
+    // The first draft origin-checked `candidate.trim()` and returned `candidate`.
+    // `String.trim()` strips a superset of what the URL parser strips, so a
+    // U+00A0-prefixed same-origin URL passed the check and then threw
+    // `Invalid URL` at the fetch. Review of #4454 could not turn the divergence
+    // into a different HOST, so it was a consistency trap rather than a hole —
+    // but "checked one string, returned another" is not a property to leave in a
+    // security primitive, and nothing else in this module has it.
+    //
+    // ASSERT ON PARSEABILITY, not on equality with the input: the whole point is
+    // that the returned string must be one `new URL()` accepts.
+    for (const prefix of [' ', ' ', '\t', '\n', ' ']) {
+      const raw = `${prefix}${GRAPH}/groups`;
+      const out = assertSameOrigin(raw, GRAPH);
+      expect(() => new URL(out)).not.toThrow();
+      expect(new URL(out).origin).toBe(new URL(GRAPH).origin);
+      // …and the pre-fix return value was NOT parseable, for the prefixes the
+      // URL parser does not itself skip. Without this the row above passes
+      // trivially and the mutation survives (harness mutation R4).
+      if (prefix === ' ' || prefix === ' ') {
+        expect(() => new URL(raw)).toThrow();
+      }
+    }
+  });
+
+  it('normalization does not silently move the request', () => {
+    // The returned form is `URL.toString()`, so it must still name the same
+    // origin, path and query — a "normalizer" that dropped a `$skiptoken` would
+    // break every walk it touched.
+    const u = `${ARM}/subscriptions?api-version=2021-04-01&$skiptoken=abc%2Fdef`;
+    const out = assertSameOrigin(u, ARM);
+    expect(new URL(out).origin).toBe(ARM);
+    expect(new URL(out).pathname).toBe('/subscriptions');
+    expect(new URL(out).searchParams.get('$skiptoken')).toBe('abc/def');
   });
 
   it('assertSameOrigin throws with the right reason for each failure mode', () => {

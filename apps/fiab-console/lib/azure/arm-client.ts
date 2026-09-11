@@ -23,6 +23,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { isAbsoluteHttpUrl, resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 
@@ -35,10 +36,28 @@ const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
     )
   : new DefaultAzureCredential();
 
-/** Build a fully-qualified ARM URL from a bare `/subscriptions/...` path. */
+/**
+ * Build a fully-qualified ARM URL from a bare `/subscriptions/...` path, PINNED
+ * to this cloud's ARM origin (advisory GHSA-4gvx-9p49-p43g).
+ *
+ * This function used to return an absolute `path` verbatim. That branch is not
+ * decorative — an ARM `nextLink` is an absolute URL that must be fetched as
+ * given — but as written it accepted ANY host, and `armFetch` below attaches the
+ * management-plane token to whatever came back. The value is not always one this
+ * process chose: `monitor-client.listResources()` copies `id` straight out of an
+ * ARM list RESPONSE BODY, `cost-management-client` interpolates that id as the
+ * head of a path, and it arrives here. Whatever can influence that body chose
+ * the address the ARM token travelled to.
+ *
+ * `resolveSameOriginUrl` keeps the absolute branch and requires the ORIGIN to be
+ * `armBase()`'s, which is boundary-correct by construction: Commercial, GCC,
+ * GCC-High, IL5 and DoD each compare against their own ARM endpoint, because the
+ * base is read here rather than hardcoded there. A candidate that cannot be
+ * shown to be inside the boundary throws instead of being fetched.
+ */
 function armUrl(path: string): string {
-  if (/^https?:\/\//i.test(path)) return path;
-  return `${armBase()}${path.startsWith('/') ? '' : '/'}${path}`;
+  const rel = isAbsoluteHttpUrl(path) || path.startsWith('/') ? path : `/${path}`;
+  return resolveSameOriginUrl(rel, armBase(), 'the ARM token');
 }
 
 async function armFetch(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {

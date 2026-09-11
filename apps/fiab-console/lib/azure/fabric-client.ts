@@ -32,6 +32,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { assertSameOrigin, isAbsoluteHttpUrl } from '@/lib/util/same-origin-url';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -394,11 +395,20 @@ export interface FabricOperationState {
  * Location header (`https://api.fabric.microsoft.com/v1/operations/{guid}`),
  * but we accept a relative `/operations/{guid}` path or a bare guid too so
  * callers can pass whatever they captured.
+ *
+ * THE ABSOLUTE BRANCH IS PINNED TO THE FABRIC ORIGIN (GHSA-4gvx-9p49-p43g).
+ * `Location` is a RESPONSE HEADER — a second untrusted channel alongside the
+ * `nextLink` body field the advisory names, and the one this site reads.
+ * `getOperationState()` below mints a Fabric token and attaches it to whatever
+ * this returns, so an absolute value must be shown to be on `FABRIC_BASE`'s
+ * origin before it can become the request target. It is compared against
+ * `FABRIC_BASE` rather than a literal so `LOOM_FABRIC_BASE` (the sovereign /
+ * self-hosted override) still governs.
  */
 function operationUrl(locationOrId: string): string {
   const v = (locationOrId || '').trim();
   if (!v) throw new FabricError('operation location/id is required', 400);
-  if (/^https?:\/\//i.test(v)) return v;
+  if (isAbsoluteHttpUrl(v)) return assertSameOrigin(v, FABRIC_BASE, 'the Fabric token');
   if (v.startsWith('/')) return `${FABRIC_BASE.replace(/\/v1$/, '')}${v.startsWith('/v1') ? v : `/v1${v}`}`;
   return `${FABRIC_BASE}/operations/${encodeURIComponent(v)}`;
 }

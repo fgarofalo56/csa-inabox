@@ -981,6 +981,10 @@ export function aasServerBase(server: string): string {
  */
 export function aasXmlaUrl(server: string, database: string): string {
   const s = (server || '').trim();
+  // SAME-ORIGIN-EXEMPT(deploy-config): `server` is LOOM_AAS_SERVER at every call
+  // site — the deploy's own Analysis Services URI. This function CONSTRUCTS the
+  // AAS endpoint; it is the base, not a candidate to be checked against one, and
+  // no response body or header can reach it.
   if (s.startsWith('https://')) return s.endsWith('/xmla') ? s : `${s.replace(/\/+$/, '')}/xmla`;
   const m = /^asazure:\/\/([^/]+)\/(.+)$/.exec(s);
   if (m) return `https://${m[1]}/servers/${m[2]}/models/${encodeURIComponent(database || 'model')}/xmla`;
