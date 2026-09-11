@@ -145,6 +145,10 @@ async function armList<T = any>(firstPath: string): Promise<T[]> {
   return walkPagedList<T>(
     `network-discovery ${firstPath.split('?')[0]}`,
     (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+    // `nextLink` comes out of a RESPONSE BODY and `stripArmBase` only removes a
+    // MATCHING prefix, so an off-ARM link would survive it and be concatenated
+    // onto armBase(). Refuse it and stop (GHSA-4gvx-9p49-p43g).
+    { sameOriginAs: armBase() },
   );
 }
 

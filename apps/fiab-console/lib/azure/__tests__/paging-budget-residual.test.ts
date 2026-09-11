@@ -79,8 +79,22 @@ function stubHangAfterFirstPage(firstBody: (call: number) => unknown, answerFirs
   return calls;
 }
 
-/** `{ value, nextLink }` — the ARM / Key Vault / Graph list envelope. */
-const pagedArm = (value: unknown[]) => ({ value, nextLink: 'https://arm.example.com/next?p=2' });
+/**
+ * `{ value, nextLink }` — the ARM / Key Vault / Graph list envelope.
+ *
+ * THE CONTINUATION MUST BE ON THE SAME ORIGIN AS PAGE 1. Since advisory
+ * GHSA-4gvx-9p49-p43g every credentialed walker refuses an off-origin
+ * `nextLink` and stops, so the synthetic `arm.example.com` these fixtures used
+ * would end each walk at page 1 — and page 2, the HANG this whole suite exists
+ * to exercise, would never be issued. The `afterEach` fetch-count proof is what
+ * caught that, which is exactly the job it was written for.
+ */
+const ARM_ORIGIN = 'https://management.azure.com';
+const GRAPH_ORIGIN = 'https://graph.microsoft.com/v1.0';
+const VAULT_ORIGIN = 'https://kv-loom.vault.azure.net';
+const pagedOn = (base: string) => (value: unknown[]) => ({ value, nextLink: `${base}/next?p=2` });
+const pagedArm = pagedOn(ARM_ORIGIN);
+const pagedVault = pagedOn(VAULT_ORIGIN);
 
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -212,7 +226,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
   });
 
   it('kv-secrets-client listKeyVaultCertificates truncates instead of rejecting', async () => {
-    stubHangAfterFirstPage(() => pagedArm([
+    stubHangAfterFirstPage(() => pagedVault([
       { id: 'https://kv-loom.vault.azure.net/certificates/cert-1', attributes: { enabled: true } },
     ]));
     const { listKeyVaultCertificates } = await import('@/lib/azure/kv-secrets-client');
@@ -224,7 +238,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
   });
 
   it('cmk-client listVaultKeys truncates instead of rejecting', async () => {
-    stubHangAfterFirstPage(() => pagedArm([
+    stubHangAfterFirstPage(() => pagedVault([
       { kid: 'https://kv-loom.vault.azure.net/keys/key-1', attributes: { enabled: true, created: 1 } },
     ]));
     const { listVaultKeys } = await import('@/lib/clients/cmk-client');
@@ -236,7 +250,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
   });
 
   it('cmk-client listKeyVersions truncates instead of rejecting', async () => {
-    stubHangAfterFirstPage(() => pagedArm([
+    stubHangAfterFirstPage(() => pagedVault([
       { kid: 'https://kv-loom.vault.azure.net/keys/key-1/v1', attributes: { enabled: true, created: 1 } },
     ]));
     const { listKeyVersions } = await import('@/lib/clients/cmk-client');
@@ -276,7 +290,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
   it('graph-identity-client getGroupTransitiveMembers truncates instead of rejecting', async () => {
     stubHangAfterFirstPage(() => ({
       value: [{ id: 'u1', displayName: 'User One', '@odata.type': '#microsoft.graph.user' }],
-      '@odata.nextLink': 'https://graph.example.com/next?p=2',
+      '@odata.nextLink': `${GRAPH_ORIGIN}/next?p=2`,
     }));
     const { getGroupTransitiveMembers } = await import('@/lib/azure/graph-identity-client');
 
@@ -326,7 +340,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
         if (calls.length === 2) {
           return Promise.resolve(
             new Response(
-              JSON.stringify({ value: [{ id: 'someone-else' }], '@odata.nextLink': 'https://graph.example.com/next?p=2' }),
+              JSON.stringify({ value: [{ id: 'someone-else' }], '@odata.nextLink': `${GRAPH_ORIGIN}/next?p=2` }),
               { status: 200, headers: { 'content-type': 'application/json' } },
             ),
           );

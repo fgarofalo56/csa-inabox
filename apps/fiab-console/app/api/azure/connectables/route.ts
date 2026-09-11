@@ -62,8 +62,9 @@ import {
 } from '@/lib/azure/connectable-types';
 import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
 import {
-  PagingBudget, PAGE_DEADLINE, type PageDeadline, type PagingTruncation,
+  PagingBudget, PAGE_DEADLINE, isContinuationAllowed, type PageDeadline, type PagingTruncation,
 } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -270,7 +271,10 @@ async function armGet(
 ): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(url, {
+    // SECURITY (GHSA-4gvx-9p49-p43g): both walks below feed this a `nextLink`
+    // read out of a RESPONSE BODY while an ARM bearer token rides on the
+    // request. Pin it to `armBase()` and fail closed rather than fetching.
+    res = await fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
       method: 'GET',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     }, timeoutMs);
@@ -311,6 +315,7 @@ async function listSubscriptions(
       if (subId) subs.push({ id: subId, name: typeof s?.displayName === 'string' ? s.displayName : undefined });
     }
     if (typeof r.body?.nextLink !== 'string' || !r.body.nextLink) break; // finished cleanly
+    if (!isContinuationAllowed(budget.label, r.body.nextLink, armBase())) break;
     url = r.body.nextLink;
   }
   return { ok: true, subs: subs.slice(0, MAX_SUBSCRIPTIONS) };
@@ -356,6 +361,7 @@ async function listResourcesOfType(
       });
     }
     if (typeof r.body?.nextLink !== 'string' || !r.body.nextLink) break; // finished cleanly
+    if (!isContinuationAllowed(budget.label, r.body.nextLink, armBase())) break;
     url = r.body.nextLink;
   }
   return rows;

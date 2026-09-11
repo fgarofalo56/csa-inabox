@@ -25,7 +25,8 @@ import { getGate, type GateOptionsLoader } from '@/lib/gates/registry';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { PagingBudget, PAGE_DEADLINE, defaultPagingBudgetMs } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE, defaultPagingBudgetMs, isContinuationAllowed } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,8 +49,14 @@ function subs(): string[] {
   return Array.from(out);
 }
 
+/**
+ * SECURITY (GHSA-4gvx-9p49-p43g) — {@link listResources} feeds this a `nextLink`
+ * read out of a RESPONSE BODY while an ARM bearer token rides on the request.
+ * Pin the target to `armBase()` and fail closed rather than fetching.
+ */
 async function armGet(token: string, url: string, timeoutMs?: number): Promise<any> {
-  const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, timeoutMs);
+  const target = resolveSameOriginUrl(url, armBase(), 'the ARM token');
+  const r = await fetchWithTimeout(target, { headers: { Authorization: `Bearer ${token}` } }, timeoutMs);
   if (!r.ok) throw new Error(`ARM ${r.status}: ${(await r.text()).slice(0, 300)}`);
   return r.json();
 }
@@ -95,6 +102,7 @@ async function listResources(token: string, armType: string, budget: PagingBudge
       all.push(...(page.value || []));
       if (!page.nextLink) break;
       if (all.length >= 100) break; // bounded — a picker, not an inventory
+      if (!isContinuationAllowed(budget.label, page.nextLink, armBase())) break;
       url = page.nextLink;
     }
   }

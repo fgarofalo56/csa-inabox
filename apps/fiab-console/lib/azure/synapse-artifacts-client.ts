@@ -40,6 +40,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { detectLoomCloud } from './cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { resolveSameOriginUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 
 // The Synapse Studio data-plane host + token scope are sovereign-cloud aware.
 // Commercial / GCC run on `dev.azuresynapse.net`; GCC-High / IL5 / DoD run on
@@ -94,7 +95,10 @@ export function synapseConfigGate(): { missing: string } | null {
 async function callDev(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
-  return fetchWithTimeout(`${devBase()}${path}`, {
+  // SECURITY (GHSA-4gvx-9p49-p43g): `path` is a caller-supplied continuation
+  // and this attaches a Synapse dev-plane bearer token. Resolve it against the
+  // workspace dev endpoint and fail closed rather than fetching.
+  return fetchWithTimeout(resolveSameOriginUrl(path, devBase(), 'the Synapse dev-plane token'), {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -133,10 +137,19 @@ async function listAll<T>(collection: string, label: string): Promise<T[]> {
     if (body.nextLink) {
       // nextLink is an absolute URL on the same dev host; strip the host so
       // callDev (which prefixes devBase) re-targets it correctly.
-      try {
-        const u = new URL(body.nextLink);
+      //
+      // CHECK THE HOST BEFORE STRIPPING IT (GHSA-4gvx-9p49-p43g). Stripping
+      // first re-roots ANY host onto devBase, which quietly turns a link this
+      // workspace never served into a request against a path on OUR workspace —
+      // no token leak, but a fetch we never decided to make. Refusing it ends
+      // the walk with the rows already collected, like every sibling walker.
+      const checked = sameOriginUrlOrNull(body.nextLink, devBase());
+      if (!checked) {
+        path = null;
+      } else {
+        const u = new URL(checked);
         path = `${u.pathname}${u.search}`;
-      } catch { path = null; }
+      }
     } else {
       path = null;
     }

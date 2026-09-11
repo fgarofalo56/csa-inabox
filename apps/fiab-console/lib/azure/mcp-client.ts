@@ -41,7 +41,9 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { assertSecretReadAllowed } from '@/lib/azure/kv-secret-purpose';
-import { kvScope, kvSuffix } from './cloud-endpoints';
+import { kvScope, kvSuffix, kvUrlFromName } from './cloud-endpoints';
+import { urlHostHasSuffix } from '@/lib/util/host-match';
+import { isAbsoluteHttpUrl } from '@/lib/util/same-origin-url';
 import type { McpToolsListResponse } from '../types/mcp-config';
 
 // Resolve Key Vault secrets over the KV REST API (no @azure/keyvault-secrets
@@ -87,14 +89,19 @@ export async function resolveAuthHeader(
     let vaultUrl = process.env.LOOM_KEY_VAULT_URL || process.env.LOOM_KEY_VAULT_URI || '';
     if (parts.length) {
       const head = parts.join('/');
-      vaultUrl = head.startsWith('http') ? head : `https://${head}.${kvSuffix()}`;
+      vaultUrl = isAbsoluteHttpUrl(head) ? head : kvUrlFromName(head);
       // A Key Vault-scoped managed-identity token goes on this request, so the
       // host must actually be a Key Vault in THIS cloud — an arbitrary https head
       // in the ref would otherwise hand that token to whatever host it named.
-      const suffix = kvSuffix().toLowerCase();
-      let hostname = '';
-      try { hostname = new URL(vaultUrl).hostname.toLowerCase(); } catch { hostname = ''; }
-      if (!hostname || !hostname.endsWith(`.${suffix}`)) {
+      //
+      // The boundary here is a SUFFIX (any vault in this cloud), not a single
+      // fixed origin, so it uses `host-match`'s label-boundary matcher rather
+      // than `same-origin-url` — the sibling primitive for the same class
+      // (advisory GHSA-4gvx-9p49-p43g). It replaces a hand-rolled
+      // `hostname.endsWith('.' + suffix)`, which was correct but was the fourth
+      // private copy of a check that has ONE definition.
+      const suffix = kvSuffix();
+      if (!urlHostHasSuffix(vaultUrl, suffix)) {
         throw new Error(
           `MCP Key Vault ref "${authValue}" does not name a Key Vault in this cloud (expected a *.${suffix} host). ` +
           'Use a bare vault name or a vault URL under that suffix.',

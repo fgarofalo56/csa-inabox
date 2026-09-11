@@ -31,7 +31,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, serviceBusSuffix } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 const ARM_SCOPE = armScope();
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
@@ -106,10 +107,15 @@ export function eventHubsNamespaceResourceId(): string {
   return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
+/**
+ * SECURITY (GHSA-4gvx-9p49-p43g) — {@link armList} hands this function a
+ * `nextLink` read out of a RESPONSE BODY, and it attaches an ARM bearer token.
+ * Pin the target to `armBase()` and fail closed rather than fetching.
+ */
 async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');
-  return fetchWithTimeout(url, {
+  return fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -137,6 +143,7 @@ async function armList<T = any>(url: string): Promise<T[]> {
     const body: any = await r.json();
     if (Array.isArray(body?.value)) out.push(...body.value);
     if (!body?.nextLink) break;
+    if (!isContinuationAllowed(budget.label, body.nextLink, armBase())) break;
     next = body.nextLink;
   }
   budget.warnIfTruncated(out.length);

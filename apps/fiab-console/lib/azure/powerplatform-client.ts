@@ -28,7 +28,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 // each read a different, only-half-wired env var for the BAP host). See the
 // long rationale in power-platform-auth.ts.
 import {
-  powerPlatformFetch, ppAuthHint,
+  powerPlatformFetch, ppAuthHint, ppRequestUrl,
   powerAppsBase, powerAppsScope, flowBase, flowScope,
 } from '@/lib/azure/power-platform-auth';
 // #4138 — every BAP call resolves HOST and SCOPE from ONE read of this.
@@ -418,20 +418,20 @@ async function bapCallWithHeaders<T = any>(
 ): Promise<{ body: T; status: number; operationUrl?: string }> {
   const method = opts.method ?? 'GET';
   // ── #4138 — THE HOST AND THE SCOPE COME FROM ONE READ ────────────────────
-  // #4131 closed the INTRA-CALLEE half (two `bapScope()` calls straddling an
-  // await); the residual was CALLER/CALLEE. Callers built `${bapBase()}/...`
-  // while this function called `bapScope()` — two INDEPENDENT reads of env,
-  // since `powerPlatformEndpoints()` is deliberately UNCACHED. Nothing forced
-  // them to agree, so "the token is minted for the host the request is going to"
-  // was COINCIDENTALLY true: move the override between the reads and the token
-  // is minted for host B, sent to host A, under a 401 hint — derived from the
-  // callee's scope — naming the wrong principal (R7). Closed here three times
-  // (#3688, #4131, this), each earlier one a NARROWER enumeration than the
-  // class, so callers now pass a PATH and the ONE read below yields both. An
-  // ABSOLUTE url is still accepted, and must be: a lifecycle poll follows the
-  // server's `Operation-Location`, which is a whole URL, not a path.
+  // #4131 closed the INTRA-CALLEE half (two `bapScope()` calls straddling an await); the
+  // residual was CALLER/CALLEE. Callers built `${bapBase()}/...` while this function called
+  // `bapScope()` — two INDEPENDENT reads of a deliberately UNCACHED `powerPlatformEndpoints()`,
+  // so "the token is minted for the host the request is going to" was COINCIDENTALLY true: move
+  // the override between the reads and the token is minted for host B, sent to host A, under a
+  // 401 hint derived from the callee's scope, naming the wrong principal (R7). Closed here three
+  // times (#3688, #4131, this), each earlier one a NARROWER enumeration than the class, so
+  // callers now pass a PATH and the ONE read below yields both.
+  // ── GHSA-4gvx-9p49-p43g — AND THAT ONE READ NOW BOUNDS THE HOST ──────────
+  // An ABSOLUTE url is still accepted, and must be: a lifecycle poll follows the server's
+  // `Operation-Location` RESPONSE HEADER. `ppRequestUrl` pins it to `base`'s origin (rationale
+  // there); `base` is the same read `scope` came from, so pin and token stay bound per boundary.
   const { bapBase: base, bapScope: scope } = powerPlatformEndpoints();
-  let full = /^https?:\/\//i.test(target) ? target : `${base}${target.startsWith('/') ? '' : '/'}${target}`;
+  let full = ppRequestUrl(target, base, 'the Power Platform token');
   if (opts.query) {
     const qs = new URLSearchParams();
     Object.entries(opts.query).forEach(([k, v]) => { if (v !== undefined && v !== null) qs.append(k, String(v)); });

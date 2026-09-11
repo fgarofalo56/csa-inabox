@@ -25,8 +25,8 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, type PagingTruncation } from './paging-budget';
+import { armBase, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, isContinuationAllowed, type PagingTruncation } from './paging-budget';
 import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
 import { composeActionGroupBody, type ActionGroupInput } from './action-group-body';
 import {
@@ -932,6 +932,9 @@ async function _listActivityLog(
           });
         }
         if (!j?.nextLink) break; // finished cleanly — NOT a truncation
+        // Row-capped loop, so it cannot use walkPagedListResult — make the SAME
+        // continuation decision through the shared helper (GHSA-4gvx-9p49-p43g).
+        if (!isContinuationAllowed(budget.label, j.nextLink, armBase())) break;
         next = j.nextLink;
       }
       budget.warnIfTruncated(taken);
@@ -1756,6 +1759,9 @@ export async function listScheduledQueryRulesPaged(): Promise<{
   const walked = await walkPagedListResult<any>(
     `scheduledQueryRules ${rg}`,
     (next, timeoutMs) => armGet(next ?? first, timeoutMs),
+    // `next` is a response-body URL that armGet attaches an ARM token to —
+    // stop the walk before that rather than after (GHSA-4gvx-9p49-p43g).
+    { sameOriginAs: armBase() },
   );
   return {
     rules: walked.rows.map((r) => mapScheduledQueryRule(r, rg)),

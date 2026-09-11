@@ -64,7 +64,11 @@ function stubEndlessPager(opts: { delayMs?: number } = {}) {
       return new Response(
         JSON.stringify({
           value: [{ id: `/c/${n}`, name: `conn-${n}`, properties: { category: 'AzureOpenAI', target: 'https://aoai' } }],
-          nextLink: `https://arm.example.com/next?page=${n + 1}`,
+          // Same ORIGIN as page 1 (armBase()): since GHSA-4gvx-9p49-p43g a
+          // credentialed walker refuses an off-origin nextLink and stops, so a
+          // synthetic host here would end the walk at page 1 and the budget
+          // this suite measures would never be reached.
+          nextLink: `https://management.azure.com/next?page=${n + 1}`,
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
@@ -93,7 +97,8 @@ function stubHangingPager(opts: { fastFirst?: boolean } = {}) {
       const n = calls.length;
       const body = JSON.stringify({
         value: [{ id: `/c/${n}`, name: `conn-${n}`, properties: { category: 'AzureOpenAI', target: 'https://aoai' } }],
-        nextLink: `https://arm.example.com/next?page=${n + 1}`,
+        // Same ORIGIN as page 1 — see stubEndlessPager.
+        nextLink: `https://management.azure.com/next?page=${n + 1}`,
       });
       if (opts.fastFirst && n === 1) {
         return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }));
