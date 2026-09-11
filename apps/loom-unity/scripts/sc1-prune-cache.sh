@@ -65,6 +65,63 @@ fi
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
+# 0) REMOVE THE UPSTREAM EXAMPLES TREE FIRST (#4429).
+#
+# CVE-2026-75595 (CRITICAL) is reported TWICE on this image. One copy is the
+# netty-handler on the server classpath -- upgraded in place by sc1-netty.sh,
+# which runs before this script. The other is a netty-handler 4.1.115.Final
+# SHADED inside `software/amazon/awssdk/bundle/2.29.52/bundle-2.29.52.jar`, a
+# 641 MB AWS SDK fat jar. Measured, against the pinned base:
+#   * of the image's EIGHT classpath files, exactly ONE names that jar --
+#     examples/cli/target/classpath, the upstream demo CLI launched by bin/uc;
+#   * the SERVER classpath does not name it, and neither does any other. The
+#     server reaches S3 through the MODULAR awssdk jars (s3, sdk-core,
+#     netty-nio-client, ... at 2.24.0/2.27.12), not the bundle;
+#   * no surviving classpath file names anything under $UC_HOME/examples at all.
+# So the ONLY thing keeping a 641 MB jar with a CRITICAL in the image is a demo
+# CLI that the Loom runtime never invokes: the ENTRYPOINT is
+# bin/loom-entrypoint.sh -> bin/start-uc-server, and `bin/uc` appears nowhere in
+# apps/loom-unity.
+#
+# REMOVAL, not upgrade, and the precedent is exact. .trivyignore's audit trail
+# records npm + npx being DELETED from loom-console / loom-copilot-maf /
+# loom-onelake / lineage-extractor for the same reason -- "the runtime never
+# invokes a package manager" -- while loom-mcp-bridge, which DOES spawn npx, got
+# an in-place upgrade instead. Same shape here: upgrading the bundle would mean
+# jumping AWS SDK 2.29.52 -> 2.54.x (the first line whose netty.version is
+# 4.1.137.Final, read off the aws-sdk-java-pom parent POMs) and re-downloading
+# 641 MB on every build, to keep a demo tool this image does not ship a use for.
+#
+# bin/uc goes with it. Leaving a launcher that now fails would be worse than
+# removing it: the tool is gone, and the image says so.
+#
+# This is deliberately done BEFORE the keep-set is derived, so the bundle jar
+# falls out of the existing, already-justified mechanism as an unreferenced jar
+# rather than through a second hand-written deletion path. The assertions below
+# then cover it for free.
+EXAMPLES="${UC_HOME}/examples"
+BUNDLE_GLOB='bundle-*.jar'
+if [ -d "$EXAMPLES" ]; then
+  # Fail closed if a classpath OTHER than the examples CLI's has started naming
+  # the examples tree -- that would make this removal a real regression.
+  OTHERS="$(find "$UC_HOME" -type f -name classpath ! -path "${EXAMPLES}/*" -print0 \
+            | xargs -0 grep -l "${EXAMPLES}/" 2>/dev/null || true)"
+  if [ -n "$OTHERS" ]; then
+    echo "FATAL: a classpath outside ${EXAMPLES} now references it -- removing the" >&2
+    echo "       examples tree would break a live path. Re-derive the disposition." >&2
+    echo "$OTHERS" >&2
+    exit 1
+  fi
+  rm -rf "$EXAMPLES"
+  echo "removed ${EXAMPLES} (upstream demo CLI; carries the 641 MB awssdk bundle)"
+else
+  echo "FATAL: ${EXAMPLES} does not exist -- the upstream image layout changed, so the" >&2
+  echo "       awssdk-bundle disposition no longer matches reality. Re-scan and re-derive" >&2
+  echo "       rather than shipping a silent no-op." >&2
+  exit 1
+fi
+rm -f "${UC_HOME}/bin/uc"
+
 # 1) Every classpath file in the image (server, CLI, clients, sub-project targets).
 find "$UC_HOME" -type f -name classpath | sort > "$CPFILES"
 if [ ! -s "$CPFILES" ]; then
@@ -134,11 +191,27 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-# The specific CVE this prune exists to clear.
+# The specific CVEs this prune exists to clear.
 find "$CACHE" \( -name 'bcprov-*.jar' -o -name 'bcpg-*.jar' \) > "${WORK}/bc.txt"
 if [ -s "${WORK}/bc.txt" ]; then
   echo "FATAL: a bouncycastle jar survived the prune -- CVE-2025-14813 would still be reported:" >&2
   cat "${WORK}/bc.txt" >&2
+  exit 1
+fi
+
+# #4429: the awssdk fat jar that shades netty-handler 4.1.115.Final. Asserted by
+# NAME rather than by version so a future base that caches a different bundle
+# release is caught too -- the finding is "this image ships the AWS SDK uber-jar
+# for a demo CLI it does not run", not "it ships exactly 2.29.52".
+find "$CACHE" -name "$BUNDLE_GLOB" -path '*/awssdk/bundle/*' > "${WORK}/bundle.txt"
+if [ -s "${WORK}/bundle.txt" ]; then
+  echo "FATAL: an awssdk bundle fat jar survived the prune -- the shaded netty-handler" >&2
+  echo "       CVE-2026-75595 would still be reported:" >&2
+  cat "${WORK}/bundle.txt" >&2
+  exit 1
+fi
+if [ -e "${UC_HOME}/bin/uc" ] || [ -e "${UC_HOME}/examples" ]; then
+  echo "FATAL: the examples CLI survived -- bin/uc or examples/ is still present." >&2
   exit 1
 fi
 

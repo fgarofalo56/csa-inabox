@@ -363,6 +363,27 @@ RUN set -eu; \
       echo "FATAL: EntraPostgresAuthPlugin does NOT load from the server's real classpath (expected 'Main method not found' = class resolvable; got ClassNotFoundException?) — the Entra-Postgres boot would die with 'Unable to load Authentication Plugin'" >&2; \
       exit 1; }
 
+# ── SC1 supply-chain gate — netty layer (#4429) ───────────────────────────────
+# CVE-2026-75595 (CRITICAL) in io.netty:netty-handler 4.1.112.Final, which the
+# upstream image resolves onto the SERVER classpath. Upgraded in place to
+# 4.1.137.Final and every classpath file repointed; every justification, digest
+# and assertion lives in scripts/sc1-netty.sh, and scripts/NettyLinkCheck.java
+# re-proves the swap against the REAL server classpath at BUILD time — including
+# a CONTROL run taken before the swap, so the verdict is the DIFFERENCE and not
+# a raw unresolved set that would fail every build.
+#
+# It runs BEFORE the cache prune below on purpose: the prune derives its
+# keep-set from the classpath files, so doing the swap first means the prune
+# sees (and asserts) the NEW jar, and the old one falls out as unreferenced
+# through the existing mechanism instead of a second deletion path.
+#
+# Trivy reports this CVE TWICE on this image. The second copy — a netty-handler
+# 4.1.115.Final shaded inside the 641 MB awssdk `bundle` fat jar — is handled by
+# sc1-prune-cache.sh, because there the disposition is removal.
+COPY scripts/sc1-netty.sh scripts/NettyLinkCheck.java /opt/loom-sc1/
+RUN chmod 0755 /opt/loom-sc1/sc1-netty.sh \
+    && /opt/loom-sc1/sc1-netty.sh
+
 # ── SC1 supply-chain gate — Java layer ────────────────────────────────────────
 # The upstream image bakes its whole sbt/coursier build cache (864 jars, 1.3 GB)
 # into the runtime layer, but its launch scripts only ever load the 311 jars
@@ -385,7 +406,8 @@ RUN set -eu; \
 COPY scripts/sc1-prune-cache.sh /tmp/sc1-prune-cache.sh
 RUN chmod 0755 /tmp/sc1-prune-cache.sh \
     && /tmp/sc1-prune-cache.sh \
-    && rm -f /tmp/sc1-prune-cache.sh
+    && rm -f /tmp/sc1-prune-cache.sh \
+    && rm -rf /opt/loom-sc1
 
 # Thin config-rendering entrypoint (renders hibernate.properties + server.properties
 # from env, seeds the DB dir if empty, then execs the upstream start script).
