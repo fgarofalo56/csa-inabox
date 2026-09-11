@@ -235,7 +235,9 @@ export async function listVaultKeys(vaultUri: string): Promise<KvKeyItem[]> {
   const rows = await walkPagedList<any>(
     'key-vault keys',
     (next, timeoutMs) => kvGet<PagedEnvelope<any>>(next ?? first, timeoutMs),
-    { maxPages: 40 },
+    // `next` is an absolute URL out of a RESPONSE BODY and kvGet attaches a Key
+    // Vault data-plane token to it — pin it to THIS vault (GHSA-4gvx-9p49-p43g).
+    { maxPages: 40, sameOriginAs: base },
   );
   const out: KvKeyItem[] = rows.map((k) => {
     const kid = k.kid || '';
@@ -260,7 +262,8 @@ export async function listKeyVersions(vaultUri: string, keyName: string): Promis
   const rows = await walkPagedList<any>(
     `key-vault key-versions ${keyName}`,
     (next, timeoutMs) => kvGet<PagedEnvelope<any>>(next ?? first, timeoutMs),
-    { maxPages: 40 },
+    // Pinned to THIS vault, exactly as listVaultKeys (GHSA-4gvx-9p49-p43g).
+    { maxPages: 40, sameOriginAs: base },
   );
   const out: KvKeyVersionItem[] = rows.map((v) => {
     const kid = v.kid || '';

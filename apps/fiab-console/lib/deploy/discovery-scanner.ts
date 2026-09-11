@@ -58,6 +58,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
 import { PagingBudget, PAGE_DEADLINE, type PagingTruncation } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 import {
   COVERAGE_QUERY,
   buildInventoryQuery,
@@ -139,7 +140,10 @@ export const liveTransport: DiscoveryTransport = {
   },
   async armGet(token, url, timeoutMs) {
     const res = await fetchWithTimeout(
-      url,
+      // SECURITY (GHSA-4gvx-9p49-p43g): the subscription walk feeds this a
+      // `nextLink` read out of a RESPONSE BODY while an ARM bearer token rides
+      // on the request. Pin it to `armBase()` and fail closed.
+      resolveSameOriginUrl(url, armBase(), 'the ARM token'),
       { method: 'GET', headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
       timeoutMs,
     );
@@ -240,7 +244,12 @@ export async function listVisibleSubscriptions(
       if (state && state !== 'enabled' && state !== 'warned') continue;
       out.push({ subscriptionId: id, displayName: String(s?.displayName ?? '') });
     }
-    url = typeof body?.nextLink === 'string' && body.nextLink ? body.nextLink : null;
+    // A continuation link that is not ARM ends the walk with the subscriptions
+    // already collected — the same fail-closed decision every sibling walker
+    // makes (GHSA-4gvx-9p49-p43g).
+    url = typeof body?.nextLink === 'string' && body.nextLink
+      ? sameOriginUrlOrNull(body.nextLink, armBase())
+      : null;
   }
   return { ok: true, subscriptions: out, truncatedBy: budget.truncatedBy };
 }

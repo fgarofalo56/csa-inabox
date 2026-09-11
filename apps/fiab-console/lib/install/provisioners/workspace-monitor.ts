@@ -64,6 +64,7 @@ import {
   MonitorNotConfiguredError,
 } from '@/lib/azure/monitor-client';
 import { armBase, kustoClusterUri } from '@/lib/azure/cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -288,7 +289,10 @@ const ARM = armBase();
 
 async function armPut(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: any }> {
   const t = await armCredential.getToken(`${ARM}/.default`);
-  const res = await fetchWithTimeout(path.startsWith('http') ? path : `${ARM}${path}`, {
+  // SECURITY (GHSA-4gvx-9p49-p43g): the absolute branch accepted ANY host while
+  // an ARM bearer token rides on the request. Pin it to `armBase()` and fail
+  // closed instead of fetching.
+  const res = await fetchWithTimeout(resolveSameOriginUrl(path, ARM, 'the ARM token'), {
     method: 'PUT',
     headers: { authorization: `Bearer ${t?.token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),

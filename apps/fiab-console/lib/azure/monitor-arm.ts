@@ -33,6 +33,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { walkPagedList } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -130,9 +131,25 @@ export async function token(scope: string): Promise<string> {
   return t.token;
 }
 
+/**
+ * What a refused URL is called in this module's errors.
+ *
+ * SECURITY — every verb below accepts an ABSOLUTE `path`, because ARM paginates
+ * by handing back an absolute `nextLink` that must be fetched verbatim (see
+ * {@link armPagedList}, and `monitor-client`'s activity-log + scheduled-query
+ * walks which feed a response-body `nextLink` straight back in here). That link
+ * is read out of a RESPONSE BODY, and the line after it attaches a
+ * management-plane bearer token — so unchecked it decides where that token
+ * goes. `resolveSameOriginUrl` pins the target to `armBase()`, which is
+ * boundary-correct (Commercial / GCC-High / IL5 / DoD each compare against
+ * their own ARM host), and FAILS CLOSED: an unparseable or off-origin value
+ * throws instead of being fetched. Advisory GHSA-4gvx-9p49-p43g.
+ */
+const ARM_TOKEN_LABEL = 'the ARM token';
+
 export async function armGet(path: string, timeoutMs?: number): Promise<any> {
   const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
@@ -158,12 +175,17 @@ export async function armPagedList<T = any>(
   firstPath: string,
   maxPages: number,
 ): Promise<T[]> {
-  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs), { maxPages });
+  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs), {
+    maxPages,
+    // Stop the walk on a `nextLink` that is not ARM, BEFORE armGet mints a
+    // token for it. armGet refuses it too — this is the outer of the two.
+    sameOriginAs: ARM,
+  });
 }
 
 export async function armPut(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
@@ -181,7 +203,7 @@ export async function armPut(path: string, body: unknown): Promise<any> {
 
 export async function armPost(path: string, body: unknown, timeoutMs?: number): Promise<{ status: number; json: any; operationLocation?: string }> {
   const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
@@ -201,7 +223,7 @@ export async function armPost(path: string, body: unknown, timeoutMs?: number): 
 
 export async function armPatch(path: string, body: unknown): Promise<any> {
   const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     method: 'PATCH',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
@@ -219,7 +241,7 @@ export async function armPatch(path: string, body: unknown): Promise<any> {
 
 export async function armDelete(path: string): Promise<void> {
   const tk = await token(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     method: 'DELETE',
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },

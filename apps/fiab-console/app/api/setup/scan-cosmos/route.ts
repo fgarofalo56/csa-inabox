@@ -27,7 +27,8 @@
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -84,8 +85,13 @@ async function armGetAll(url: string, token: string, budget: PagingBudget): Prom
   const out: any[] = [];
   let next = url;
   while (budget.claimPage()) {
+    // SECURITY (GHSA-4gvx-9p49-p43g): after the first page `next` is an absolute
+    // URL read out of a RESPONSE BODY, and an ARM bearer token rides on the
+    // request. Pin it to `armBase()` and fail closed rather than fetching. The
+    // continuation is refused below too; this is the check at the point the
+    // credential is attached.
     const r = await budget.runPage((timeoutMs) =>
-      fetchWithTimeout(next, { headers: { authorization: `Bearer ${token}` } }, timeoutMs),
+      fetchWithTimeout(resolveSameOriginUrl(next, arm(), 'the ARM token'), { headers: { authorization: `Bearer ${token}` } }, timeoutMs),
     );
     if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep what we have
     if (!r.ok) {
@@ -95,6 +101,7 @@ async function armGetAll(url: string, token: string, budget: PagingBudget): Prom
     const j: any = await r.json().catch(() => ({}));
     for (const v of (j.value || []) as any[]) out.push(v);
     if (!j.nextLink) break;
+    if (!isContinuationAllowed(budget.label, j.nextLink, arm())) break;
     next = j.nextLink;
   }
   return out;

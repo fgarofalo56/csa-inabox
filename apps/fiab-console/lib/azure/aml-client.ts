@@ -51,7 +51,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
-import { PagingBudget, walkPagedList, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, walkPagedList, PAGE_DEADLINE, isContinuationAllowed } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -217,10 +218,18 @@ async function readAmlJson<T>(res: Response, label: string): Promise<T | null> {
 async function pagedList(path: string, label: string): Promise<any[]> {
   return walkPagedList(`aml ${label}`, async (next, timeoutMs) => {
     const res = next
-      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } }, timeoutMs)
+      // SECURITY (GHSA-4gvx-9p49-p43g): `next` is an absolute URL read out of a
+      // RESPONSE BODY and the same expression mints an ARM token for it. Pin it
+      // to `armBase()` — boundary-correct in every sovereign cloud — and fail
+      // closed rather than fetching.
+      ? await fetchWithTimeout(
+          resolveSameOriginUrl(next, armBase(), 'the ARM token'),
+          { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
+          timeoutMs,
+        )
       : await amlFetch(path, { timeoutMs });
     return readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
-  });
+  }, { sameOriginAs: armBase() });
 }
 
 // ============================================================
@@ -633,7 +642,8 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
     const res = await budget.runPage(async (timeoutMs) =>
       next
         ? fetchWithTimeout(
-            next,
+            // SECURITY (GHSA-4gvx-9p49-p43g) — response-body URL + ARM token.
+            resolveSameOriginUrl(next, armBase(), 'the ARM token'),
             { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
             timeoutMs,
           )
@@ -644,6 +654,9 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
     if (!j) break;
     if (Array.isArray(j.value)) for (const r of j.value) out.push(shapeJob(r));
     if (!j.nextLink || out.length >= cap) break;
+    // This row-capped loop cannot use walkPagedListResult, so it makes the SAME
+    // continuation decision through the shared helper rather than a second copy.
+    if (!isContinuationAllowed(budget.label, j.nextLink, armBase())) break;
     next = j.nextLink;
   }
   budget.warnIfTruncated(out.length);
