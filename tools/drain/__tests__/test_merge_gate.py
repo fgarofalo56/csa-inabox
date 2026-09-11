@@ -19,6 +19,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -248,6 +249,128 @@ def test_every_gate_of_the_spec_is_present():
     gate_names = [f["gate"] for f in _run()["findings"]]
     for prefix in ("0 ", "1 ", "2+3", "4 ", "5 ", "6 "):
         assert any(g.startswith(prefix) for g in gate_names), f"gate {prefix} missing"
+
+
+# ---------------------------------------------------------------------------
+# `--allow-close` is checked against the LEDGER, not taken on a lane's word
+# ---------------------------------------------------------------------------
+
+
+def _ledger_with(tmp_path, number, stream="W6-ci", lane="lane:ci", receipt=None):
+    from ledger import Ledger
+
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(number, "x", stream, lane=lane, size=1)
+    if receipt:
+        led.record_receipt(number, receipt, "evidence")
+    led.save()
+    return str(tmp_path / "state.json")
+
+
+def test_a_declared_close_is_allowed_when_the_ledger_holds_the_receipt(tmp_path):
+    path = _ledger_with(tmp_path, 4468, receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert ok, why
+
+
+def test_negative_control_a_declared_close_with_no_ledger_fails_closed(tmp_path):
+    """Declaring an auto-close does not GIVE the item a receipt. If you cannot
+    show the receipt, you cannot declare the close -- otherwise the flag is just
+    a way to switch gate 6 off. All three branches of this function shipped
+    uncovered and three reviewer mutations survived the whole suite."""
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, str(tmp_path / "nope.json"))
+    assert not ok
+    assert "no ledger" in why
+
+
+def test_negative_control_a_declared_close_for_an_unknown_issue_is_refused(tmp_path):
+    path = _ledger_with(tmp_path, 4468, receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(9999, POLICY, path)
+    assert not ok
+    assert "not in the ledger" in why
+
+
+def test_negative_control_a_declared_close_with_no_receipt_is_refused(tmp_path):
+    path = _ledger_with(tmp_path, 4468)
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert not ok
+    assert "without a receipt" in why
+
+
+def test_negative_control_a_declared_close_with_the_wrong_receipt_kind_is_refused(tmp_path):
+    """The KIND, not the presence -- the same rule the ledger enforces, reached
+    through the same code path rather than re-implemented beside it."""
+    path = _ledger_with(tmp_path, 4468, stream="W5-console", lane="lane:console",
+                        receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert not ok
+    assert "g1-browser" in why
+
+
+def test_the_ledger_check_applies_to_every_stream(tmp_path):
+    """Population contract, because a stream exemption is the narrow bypass that
+    survived two rounds on the ledger's own refusal."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        path = _ledger_with(tmp_path / f"s{i}", 4468, stream=stream)
+        ok, _ = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+        assert not ok, f"{stream} must not be exempt"
+
+
+# ---------------------------------------------------------------------------
+# WIRING -- main(). A check main() does not call is a check that does not run.
+# ---------------------------------------------------------------------------
+
+
+def _main_over(monkeypatch, tmp_path, argv, data=None, after=None):
+    """Drive `merge_gate.main()` with every network read stubbed."""
+    monkeypatch.setattr(merge_gate, "HERE", str(tmp_path))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(merge_gate, "collect", lambda _repo, _n: data or _data())
+    monkeypatch.setattr(merge_gate, "gh_json", lambda _args, _what: after or [1, 2])
+    monkeypatch.setattr(sys, "argv", ["merge_gate.py", *argv])
+    return merge_gate.main()
+
+
+def test_negative_control_main_cross_checks_allow_close_against_the_ledger(
+    monkeypatch, tmp_path
+):
+    """Unit-testing `ledger_receipt_ready` says nothing about whether anything
+    CALLS it. That gap is the exact shape of the defect this whole harness
+    exists to end, and it has now produced a regression in three consecutive
+    rounds."""
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"]) == 2
+
+
+def test_main_accepts_a_declared_close_the_ledger_backs(monkeypatch, tmp_path):
+    """The control. Without it the refusal above could come from anywhere."""
+    _ledger_with(tmp_path, 4468, receipt="ci-green")
+    data = _data(body="Closes #4468")
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 0
+
+
+def test_negative_control_main_refuses_a_before_file_from_another_pr(monkeypatch, tmp_path):
+    """Auditing #4483 against #4400's baseline prints AUDIT OK or AUDIT FAILED
+    with equal confidence, and neither answer is about anything."""
+    before = tmp_path / "before-4400.json"
+    before.write_text(json.dumps({"pr": 4400, "open_issues": [1, 2, 3]}), encoding="utf-8")
+    rc = _main_over(
+        monkeypatch, tmp_path,
+        ["--audit-close", "4483", "--before-file", str(before), "--intended", "3"],
+    )
+    assert rc == 2
+
+
+def test_main_audits_against_its_own_before_file(monkeypatch, tmp_path):
+    before = tmp_path / "before-4483.json"
+    before.write_text(json.dumps({"pr": 4483, "open_issues": [1, 2, 3]}), encoding="utf-8")
+    rc = _main_over(
+        monkeypatch, tmp_path,
+        ["--audit-close", "4483", "--before-file", str(before), "--intended", "3"],
+        after=[1, 2],
+    )
+    assert rc == 0
 
 
 # ---------------------------------------------------------------------------

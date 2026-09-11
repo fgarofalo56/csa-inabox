@@ -154,6 +154,18 @@ weakening or baselining a guard · `.trivyignore` additions · any skip valve.
 refused, so adding a capability is a deliberate edit to `policy.json`. Matching
 is EXACT — `merge-without-review` is not a prefix of a permission.
 
+**How to write a verdict that registers.** A verdict is announced by a LINE
+that **begins with** `Independent review` or `Independent re-review` (heading
+marks and emphasis are stripped), **inside the first 200 characters**, and **not
+cited** — not quoted, not fenced, not indented four spaces, not inside
+`<details>` or an HTML comment. Within that line the tokens are read in the
+order `REQUEST-CHANGES`, `APPROVE`, `CANNOT-ASSESS`, so a hedged header resolves
+to the block. Anything that *mentions* a verdict without announcing one is
+reported as a near-miss and never acted on — including a relayed verdict, which
+is recorded so it is visible rather than absent. Writing the contract down is
+part of the fix: a silently-dropped verdict is the incident that cost three
+rounds.
+
 **The authority is checked against the code, mechanically.** Ten keys under
 `merge_gate` and four under `verdict_parsing` were once read by no code at all —
 including two that duplicated hardcoded constants, so editing the authority
@@ -193,8 +205,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 175 tests across every module
-python tools/drain/mutate_gates.py           # 58 arms, must be 58 KILLED
+python -m pytest tools/drain/__tests__ -q    # 196 tests across every module
+python tools/drain/mutate_gates.py           # 74 arms, must be 74 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -276,8 +288,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 58 mutation arms against a sandbox copy; must be 58 KILLED |
+| `mutate_gates.py` | 74 mutation arms against a sandbox copy; must be 74 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 175 tests; a negative control for every decision function |
+| `__tests__/` | 196 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

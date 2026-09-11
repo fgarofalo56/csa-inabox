@@ -269,6 +269,19 @@ class Ledger:
         item.history.append(f"{_now()} -> {state}" + (f" ({why})" if why else ""))
         return item
 
+    def receipt_ok(self, item: Item) -> tuple[bool, str]:
+        """Public form of the R2 refusal, for callers that want to ASK.
+
+        `merge_gate` needs to know whether an item could close before it will
+        let a lane declare an auto-close, and it was reaching into the private
+        method to find out. Same rule, one implementation.
+        """
+        try:
+            self._refuse_unless_receipted(item)
+        except ValueError as exc:
+            return False, str(exc)
+        return True, f"#{item.number} holds a {item.receipt_kind} receipt"
+
     def _refuse_unless_receipted(self, item: Item) -> None:
         """R2 in code, on the kind and not merely the presence."""
         if not item.receipt_kind:

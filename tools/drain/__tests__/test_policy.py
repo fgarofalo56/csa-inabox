@@ -48,12 +48,76 @@ def test_negative_control_a_new_key_with_no_implementation_is_caught():
         gates.assert_policy_matches_code(fake)
 
 
+def test_negative_control_a_mapping_that_names_nothing_is_caught():
+    """Key-set equality is not evidence of implementation. A reviewer added
+    `"require_a_pony": "gates.there_is_no_such_function"` to the mapping and the
+    contract ACCEPTED it -- the same defect one level up, a control that checks
+    a spelling. The dotted name has to resolve to something callable."""
+    fake_policy = {**POLICY, "merge_gate": {**POLICY["merge_gate"], "require_a_pony": True}}
+    original = dict(gates.MERGE_GATE_IMPLEMENTED_BY)
+    gates.MERGE_GATE_IMPLEMENTED_BY["require_a_pony"] = "gates.there_is_no_such_function"
+    try:
+        with pytest.raises(ValueError, match="not a callable"):
+            gates.assert_policy_matches_code(fake_policy)
+    finally:
+        gates.MERGE_GATE_IMPLEMENTED_BY.clear()
+        gates.MERGE_GATE_IMPLEMENTED_BY.update(original)
+
+
+def test_the_gate_set_is_exactly_what_the_spec_names():
+    """A silent DELETION from both the policy and the mapping is invisible to a
+    both-ways key comparison -- the sets still agree, over a smaller world. The
+    literal list is what discriminates, and changing it is a deliberate edit."""
+    assert set(gates.MERGE_GATE_IMPLEMENTED_BY) == {
+        "mergeable_must_be_known",
+        "base_must_equal_origin_main",
+        "reduce_verdicts_by",
+        "verdict_pinned_to_head",
+        "require_no_red",
+        "require_no_incomplete",
+        "require_no_skipped_required_context",
+        "scan_closing_keywords_in",
+        "closing_keyword_scan_blocks_an_undeclared_close",
+        "audit_issue_numbers_around_every_merge",
+    }
+
+
 def test_negative_control_an_implementation_with_no_key_is_caught():
     """The other direction: a gate that blocks merges without the authority
     declaring it. Undeclared behaviour is as bad as undelivered behaviour."""
     trimmed = {k: v for k, v in POLICY["merge_gate"].items() if k != "require_no_red"}
     with pytest.raises(ValueError, match="require_no_red"):
         gates.assert_policy_matches_code({**POLICY, "merge_gate": trimmed})
+
+
+def test_every_key_in_the_whole_file_is_implemented_or_declared_prose():
+    """The contract used to cover two sections. Eleven keys outside them were
+    read by nothing -- all four `stop_conditions`, `max_lanes_hard_ceiling`,
+    `serialize_on_shared_checkout`, and the rest. An undeclared unconsulted key
+    is indistinguishable from a control that stopped working, so "this one
+    addresses the operator" is now written down rather than assumed."""
+    assert gates.policy_keys_without_implementation(POLICY) == []
+
+
+def test_negative_control_a_new_key_anywhere_in_the_file_is_caught():
+    fake = {**POLICY, "wip": {**POLICY["wip"], "max_agents_per_lane": 3}}
+    assert "wip.max_agents_per_lane" in gates.policy_keys_without_implementation(fake)
+    fake2 = {**POLICY, "brand_new_section": {"a": 1}}
+    assert "brand_new_section.a" in gates.policy_keys_without_implementation(fake2)
+
+
+def test_the_hard_ceiling_is_a_control_not_a_comment():
+    import tick
+
+    over = {**POLICY, "wip": {**POLICY["wip"], "max_lanes": 99}}
+    with pytest.raises(SystemExit, match="hard_ceiling"):
+        tick.select_cycle(_empty_ledger(), over)
+
+
+def _empty_ledger():
+    from ledger import Ledger
+
+    return Ledger("unused", receipts=POLICY["receipts"])
 
 
 def test_the_documentation_key_is_exempt():

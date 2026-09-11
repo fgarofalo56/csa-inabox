@@ -197,7 +197,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T3 an empty live set is treated as everything having closed",
         "tick.py",
-        "    if not live_numbers:",
+        "    if not live_numbers and believed_open:",
         "    if False:",
     ),
     (
@@ -222,8 +222,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T6 the OVERLAP denominator drops terminal items (a park bricks the run)",
         "tick.py",
-        "    overlap = len(known & live_numbers) / len(live_numbers)",
-        "    overlap = len(believed_open & live_numbers) / len(live_numbers)",
+        "        overlap = len(known & candidates) / len(candidates)",
+        "        overlap = len(believed_open & candidates) / len(candidates)",
     ),
     (
         "T7 --allow-shrink switches off the whole guard, not just the retention clause",
@@ -340,14 +340,14 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G5 a QUOTED verdict counts as a decision",
         "gates.py",
-        "        if _is_quoted(line):\n            continue",
-        "        if False:\n            continue",
+        "            and not _is_quoted(line)",
+        "            and True",
     ),
     (
         "G6 a line that MENTIONS a marker counts as one that announces it",
         "gates.py",
-        "        if any(stripped.startswith(m) for m in MARKERS):",
-        "        if any(m in stripped for m in MARKERS):",
+        '    return any(line.lstrip("#*_ \\t").startswith(m) for m in MARKERS)',
+        "    return any(m in line for m in MARKERS)",
     ),
     (
         "G7 SKIPPED ties with SUCCESS, so a green twin hides a run that measured nothing",
@@ -370,8 +370,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T11 the OVERLAP denominator becomes the ledger (bricks a mostly-terminal run)",
         "tick.py",
-        "    overlap = len(known & live_numbers) / len(live_numbers)",
-        "    overlap = len(known & live_numbers) / len(known)",
+        "        overlap = len(known & candidates) / len(candidates)",
+        "        overlap = len(known & candidates) / len(known)",
     ),
     (
         "T12 only a READY item is audited when it departs",
@@ -409,6 +409,103 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "    if missing:\n        raise ValueError",
         "    if False:\n        raise ValueError",
+    ),
+    # -- round 4: every idiom that marks text as NOT PROSE -------------------
+    (
+        "C1 a FENCED verdict header counts as a decision",
+        "gates.py",
+        "        if any(bare.startswith(f) for f in FENCES):\n            in_fence = not in_fence",
+        "        if any(bare.startswith(f) for f in FENCES):\n            in_fence = False",
+    ),
+    (
+        "C2 an INDENTED (code-block) verdict header counts as a decision",
+        "gates.py",
+        '            and len(line) - len(line.lstrip(" ")) < 4',
+        "            and True",
+    ),
+    (
+        "C3 a verdict header inside <details> counts as a decision",
+        "gates.py",
+        "            and details == 0",
+        "            and True",
+    ),
+    (
+        "C4 a verdict header inside an HTML comment counts as a decision",
+        "gates.py",
+        "            and not in_comment",
+        "            and True",
+    ),
+    (
+        "C5 a cited verdict vanishes without a trace again",
+        "gates.py",
+        "            elif cited:",
+        "            elif False:",
+    ),
+    (
+        "C6 a verdict below the window vanishes without a trace",
+        "gates.py",
+        "            elif out_of_window:",
+        "            elif False:",
+    ),
+    (
+        "C7 a CITED verdict starts blocking (a citation decides by another door)",
+        "gates.py",
+        "                             NEAR_CITED, blocks=False)",
+        "                             NEAR_CITED, blocks=True)",
+    ),
+    (
+        "T13 new ARRIVALS are counted as foreign (halts a nearly drained run)",
+        "tick.py",
+        "    arrivals = {n for n in live_numbers if n > ceiling}",
+        "    arrivals = set()",
+    ),
+    (
+        "T14 the HARD retention floor becomes suppressible by --allow-shrink",
+        "tick.py",
+        "    if retained < MIN_RETAINED_HARD:",
+        "    if retained < MIN_RETAINED_HARD and not allow_shrink:",
+    ),
+    (
+        "MGA --allow-close passes when there is no ledger to check",
+        "merge_gate.py",
+        "    if not os.path.exists(path):",
+        "    if False:",
+    ),
+    (
+        "MGB --allow-close skips the receipt-KIND check",
+        "merge_gate.py",
+        "    return led.receipt_ok(item)",
+        '    return True, "declared"',
+    ),
+    (
+        "MGC main() stops cross-checking --allow-close against the ledger",
+        "merge_gate.py",
+        "    for number in allow_close:\n        ok, why = ledger_receipt_ready(number, policy)",
+        "    for number in []:\n        ok, why = ledger_receipt_ready(number, policy)",
+    ),
+    (
+        "MGD the before-file's PR number is no longer validated",
+        "merge_gate.py",
+        '        if before.get("pr") != args.audit_close:',
+        "        if False:",
+    ),
+    (
+        "P3 the WIP hard ceiling stops being enforced",
+        "tick.py",
+        "    if cap > ceiling:",
+        "    if False:",
+    ),
+    (
+        "P4 the policy contract covers only the two gate sections again",
+        "gates.py",
+        "        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:\n            continue",
+        "        continue",
+    ),
+    (
+        "P2 the policy mapping accepts a name that resolves to nothing",
+        "gates.py",
+        "            unresolved = _unresolved(where)",
+        "            unresolved = None",
     ),
     (
         "BI1 the inventory stops refusing a partition that loses an issue",

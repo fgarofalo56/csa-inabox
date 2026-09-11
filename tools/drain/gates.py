@@ -174,25 +174,79 @@ VERDICT_PARSING_IMPLEMENTED_BY = {
 }
 
 
+# The rest of the file. Everything here is either implemented or DECLARED as
+# operator-facing documentation -- the point being that the distinction is
+# written down and checked, rather than left for the next reader to discover by
+# grepping. Eleven keys outside the two sections above were read by nothing.
+OTHER_IMPLEMENTED_BY = {
+    "repo": "tick.read_live_issues / build_inventory.read_issues",
+    "wip.max_lanes": "tick.select_cycle",
+    "wip.max_lanes_hard_ceiling": "tick.select_cycle",
+    "ordering.streams": "tick.select_cycle",
+    "receipts": "ledger.Ledger.receipt_ok",
+    "scope.closed_requires_receipt": "ledger.Ledger.receipt_ok",
+    "permitted_unattended": "gates.action_is_permitted",
+    "never": "gates.action_is_permitted",
+    "stop_and_ask": "gates.action_is_permitted",
+}
+# Keys that are DELIBERATELY prose: they address the operator, not the program.
+# Listing them is the point -- an undeclared unconsulted key is indistinguishable
+# from a control that stopped working.
+OPERATOR_DOCUMENTATION = {
+    "schema",
+    "scope.target", "scope.definition_of_done",
+    "wip.serialize_on_shared_checkout",
+    "ordering.W9_runs_continuously", "ordering.W9_reason",
+    "stop_conditions.deploy_path_red",
+    "stop_conditions.estate_behind_and_not_recovering",
+    "stop_conditions.gate_tooling_untracked",
+    "stop_conditions.consecutive_cycle_failures",
+}
+
+
 def policy_keys_without_implementation(policy: dict) -> list[str]:
-    """Keys under `merge_gate`/`verdict_parsing` that no function consults.
+    """Every key in the policy that no function consults and no list excuses.
 
     An unconsulted policy key is prose, not a control. Keys starting with `_`
-    are documentation by convention and are exempt.
+    are documentation by convention and are exempt; everything else must appear
+    in an `*_IMPLEMENTED_BY` mapping or in `OPERATOR_DOCUMENTATION`, which is
+    how "this one addresses the operator" stops being an unwritten assumption.
     """
+    sectioned = {
+        "merge_gate": MERGE_GATE_IMPLEMENTED_BY,
+        "verdict_parsing": VERDICT_PARSING_IMPLEMENTED_BY,
+    }
     missing = []
-    for section, mapping in (
-        ("merge_gate", MERGE_GATE_IMPLEMENTED_BY),
-        ("verdict_parsing", VERDICT_PARSING_IMPLEMENTED_BY),
-    ):
-        for key in policy.get(section, {}):
-            if not key.startswith("_") and key not in mapping:
-                missing.append(f"{section}.{key}")
+    for key, value in policy.items():
+        if key.startswith("_"):
+            continue
+        if key in sectioned:
+            for sub in value:
+                if not sub.startswith("_") and sub not in sectioned[key]:
+                    missing.append(f"{key}.{sub}")
+            continue
+        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:
+            continue
+        if isinstance(value, dict):
+            for sub in value:
+                dotted = f"{key}.{sub}"
+                if (not sub.startswith("_")
+                        and dotted not in OTHER_IMPLEMENTED_BY
+                        and dotted not in OPERATOR_DOCUMENTATION):
+                    missing.append(dotted)
+            continue
+        missing.append(key)
     return sorted(missing)
 
 
 def assert_policy_matches_code(policy: dict) -> None:
-    """Both directions. Raises with the offending keys named."""
+    """Both directions, and the implementation must RESOLVE.
+
+    Key-set equality alone is not evidence of implementation: a mapping value of
+    `"gates.there_is_no_such_function"` satisfied it, which is the same defect
+    one level up -- a contract that looks like a control and checks a spelling.
+    Every value names a real callable, and this resolves it.
+    """
     missing = policy_keys_without_implementation(policy)
     if missing:
         raise ValueError(f"policy keys with no implementation: {missing}")
@@ -205,6 +259,36 @@ def assert_policy_matches_code(policy: dict) -> None:
             raise ValueError(
                 f"{section}: implemented but not declared in policy.json: {undeclared}"
             )
+        for key, where in mapping.items():
+            unresolved = _unresolved(where)
+            if unresolved:
+                raise ValueError(
+                    f"{section}.{key} names {unresolved!r}, which is not a callable in "
+                    "this package - the mapping is a spelling, not an implementation"
+                )
+
+
+def _unresolved(where: str) -> str | None:
+    """Return the dotted name in `where` that does not resolve, or None.
+
+    `where` is free text naming a function, e.g.
+    `"gates.classify_checks (RED_CONCLUSIONS)"` or `"merge_gate.run_gates gate 0"`.
+    The FIRST dotted token is the claim; anything after it is commentary. A value
+    with no dotted token at all is prose and is allowed only when it says so.
+    """
+    import importlib
+
+    token = next((t for t in where.replace("(", " ").split() if "." in t), None)
+    if token is None:
+        return None if where.startswith("prose") else where
+    module_name, _, attr = token.partition(".")
+    attr = attr.split("(")[0].rstrip(",.")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        return token
+    target = getattr(module, attr, None)
+    return None if callable(target) or isinstance(target, (tuple, list, frozenset)) else token
 
 # Near-miss kinds. `blocks` is decided at parse time, not by the reducer.
 NEAR_NO_MARKER = "no-marker"
@@ -212,6 +296,8 @@ NEAR_NO_TOKEN = "no-token"
 NEAR_PREDATES_HEAD = "predates-head"
 NEAR_TEMPLATE = "template-line"
 NEAR_UNPINNABLE = "head-date-unknown"
+NEAR_CITED = "cited-not-decided"
+NEAR_OUT_OF_WINDOW = "below-the-window"
 
 
 @dataclass
@@ -290,13 +376,20 @@ def parse_verdicts(
         # "Independent re-review" was discarded, and the gate said only "no live
         # APPROVE" -- three runs to diagnose.
         mentions_token = any(
-            not _is_quoted(ln) and any(t in ln for t in VERDICT_TOKENS)
+            prose and any(t in ln for t in VERDICT_TOKENS)
             and not all(t in ln for t in VERDICT_TOKENS)
-            for ln in head.splitlines()
+            for ln, prose in classify_lines(head)
         )
+        # A marker line that is CITED, or one that sits past the window. Neither
+        # is a decision, and both used to vanish without a trace -- `live=[]`,
+        # `near=[]`, nothing in the evidence line at all.
+        cited = _cited_marker_lines(head)
+        out_of_window = bool(
+            [ln for ln, prose in classify_lines(body) if prose and _announces(ln)]
+        ) and not _marker_lines(head)
 
         if not head_date:
-            if has_marker or token or saw_template or mentions_token:
+            if has_marker or token or saw_template or mentions_token or cited:
                 near.append(
                     NearMiss(cid, when, "head commit date unknown - verdict cannot be pinned",
                              NEAR_UNPINNABLE, blocks=True)
@@ -319,6 +412,21 @@ def parse_verdicts(
                 near.append(
                     NearMiss(cid, when, f"marker line, but no token on it in body[:{window}]",
                              NEAR_NO_TOKEN, blocks=postdates)
+                )
+            elif cited:
+                near.append(
+                    NearMiss(cid, when,
+                             f"{len(cited)} verdict header(s) CITED here (quoted, fenced, "
+                             "indented or collapsed) - a citation is not a decision, but it "
+                             "is recorded so a relayed verdict is not invisible",
+                             NEAR_CITED, blocks=False)
+                )
+            elif out_of_window:
+                near.append(
+                    NearMiss(cid, when,
+                             f"a verdict header appears BELOW body[:{window}] - a verdict is "
+                             "announced in the window or it does not register",
+                             NEAR_OUT_OF_WINDOW, blocks=False)
                 )
             elif mentions_token:
                 # A token in the window with no line ANNOUNCING it. Blocking
@@ -346,38 +454,99 @@ def parse_verdicts(
     return live, near
 
 
+FENCES = ("```", "~~~")
+
+
 def _is_quoted(line: str) -> bool:
     """A Markdown blockquote. A quoted verdict is a CITATION, never a decision."""
     return line.lstrip().startswith(">")
 
 
-def _marker_lines(head: str) -> list[str]:
-    """Lines in the WINDOW that ANNOUNCE a verdict, rather than mention one.
+def classify_lines(head: str) -> list[tuple[str, bool]]:
+    """(line, is_prose) for every line in the window.
 
-    Three conditions, and every one of them was a hole:
+    "Prose" means the line is the author SPEAKING, as opposed to CITING. Three
+    successive reviews of this function each found the previous enumeration one
+    idiom deep, so the rule is now stated over the whole set of ways Markdown
+    marks text as not-prose, and every one of them is a measured bypass:
 
-    - **Inside the window.** The first version scanned `body.splitlines()`, the
-      whole comment, while `window` bounded only the fallback. A PR author could
-      then manufacture an approval by quoting a previous round 900 characters
-      down, and a coordinator's status comment saying "do not merge" scored GO
-      because it quoted a reviewer's header. The window exists precisely so that
-      body prose cannot constitute a verdict.
-    - **Not quoted.** `> ## Independent re-review - APPROVE` is someone else's
-      verdict about some other head, being cited.
-    - **The line ANNOUNCES it.** After stripping heading marks and emphasis the
-      line must BEGIN with a marker. "For context, the earlier Independent
-      review - APPROVE was measured at a different head" mentions one; it is a
-      sentence about a verdict, and reading it as one inverted a block into an
-      approval.
+    - **blockquote** (`>`, nested or indented) -- a coordinator comment reading
+      "do NOT merge on this" scored GO because it quoted a previous round.
+    - **fenced code** (``` / ~~~) -- relaying agent output in a fence is how
+      this program moves verdicts around, and `KICKOFF.md` is itself a fenced
+      paste-this block.
+    - **indented code** (4+ spaces) -- and note the old strip set `"#*_> \\t"`
+      removed the very spaces that MAKE it a code block, so it read as a header.
+    - **`<details>`** -- the standard way to collapse a superseded review. This
+      PR is carrying five.
+    - **HTML comment** -- invisible when rendered; a verdict nobody can see.
+
+    Each one produced a live APPROVE with zero blocking near-misses, which is
+    exactly what the verdict gate needs to record GO.
     """
-    out = []
+    out: list[tuple[str, bool]] = []
+    in_fence = False
+    details = 0
+    in_comment = False
     for line in head.splitlines():
-        if _is_quoted(line):
+        bare = line.strip()
+        opens_comment = "<!--" in bare and "-->" not in bare
+        if any(bare.startswith(f) for f in FENCES):
+            in_fence = not in_fence
+            out.append((line, False))
             continue
-        stripped = line.lstrip("#*_> \t")
-        if any(stripped.startswith(m) for m in MARKERS):
-            out.append(line)
+        lowered = bare.lower()
+        if lowered.startswith("<details"):
+            details += 1
+            out.append((line, False))
+            continue
+        if lowered.startswith("</details"):
+            details = max(0, details - 1)
+            out.append((line, False))
+            continue
+        prose = (
+            not in_fence
+            and not in_comment
+            and details == 0
+            and not _is_quoted(line)
+            and len(line) - len(line.lstrip(" ")) < 4
+            and not bare.startswith("<!--")
+        )
+        out.append((line, prose))
+        if opens_comment:
+            in_comment = True
+        elif in_comment and "-->" in bare:
+            in_comment = False
     return out
+
+
+def _announces(line: str) -> bool:
+    """Does this line BEGIN with a marker, rather than mention one?
+
+    "For context, the earlier Independent review - APPROVE was measured at a
+    different head" mentions one; it is a sentence ABOUT a verdict, and reading
+    it as one inverted a block into an approval. `>` is deliberately NOT in the
+    strip set -- quoting is handled by `classify_lines`, and stripping it here
+    would let a quote through if that check were ever narrowed.
+    """
+    return any(line.lstrip("#*_ \t").startswith(m) for m in MARKERS)
+
+
+def _marker_lines(head: str) -> list[str]:
+    """Lines in the window that ANNOUNCE a verdict, in prose."""
+    return [ln for ln, prose in classify_lines(head) if prose and _announces(ln)]
+
+
+def _cited_marker_lines(head: str) -> list[str]:
+    """Marker lines that are CITED -- quoted, fenced, indented or collapsed.
+
+    Reported, never acted on. A quoted verdict used to produce no verdict AND no
+    near-miss: `live=[] near=[]`, nothing printed at all, so a relayed block was
+    invisible in the evidence line while a genuine approval beside it decided
+    the merge. Conjunction defeated by formatting rather than by content, which
+    is the silence `NearMiss` exists to end.
+    """
+    return [ln for ln, prose in classify_lines(head) if not prose and _announces(ln.lstrip("> \t"))]
 
 
 def _saw_template(head: str) -> bool:
@@ -389,8 +558,8 @@ def _saw_template(head: str) -> bool:
     -- true, but it buries the actual cause under a spelling hint.
     """
     return any(
-        not _is_quoted(ln) and all(t in ln for t in VERDICT_TOKENS)
-        for ln in head.splitlines()
+        prose and all(t in ln for t in VERDICT_TOKENS)
+        for ln, prose in classify_lines(head)
     )
 
 

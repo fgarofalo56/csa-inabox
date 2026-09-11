@@ -45,7 +45,8 @@ STATE_PATH = os.path.join(HERE, "state.json")
 # cross-repo case produces a large, plausible, entirely disjoint answer.
 MIN_OVERLAP = 0.5
 MIN_RETAINED = 0.8
-GUARD_FLOOR = 10  # below this many believed-open items the ratios are noise
+MIN_RETAINED_HARD = 0.25  # --allow-shrink cannot suppress this one
+GUARD_FLOOR = 10  # below this many KNOWN items the ratios are noise
 
 
 def sh(args: list[str]) -> tuple[int, str, str]:
@@ -127,24 +128,51 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
         return
 
     live_numbers = {i["number"] for i in live}
-    if not live_numbers:
+    if not live_numbers and believed_open:
         raise SystemExit(
             f"refusing to refresh: GitHub returned ZERO open issues while the ledger "
             f"believes {len(believed_open)} are open. That would move all of them out of "
             "the queue. Confirm the repo and the token, then re-run."
         )
 
-    overlap = len(known & live_numbers) / len(live_numbers)
-    if overlap < MIN_OVERLAP:
-        raise SystemExit(
-            f"refusing to refresh: only {overlap:.0%} of the {len(live_numbers)} live issues "
-            f"appear anywhere in this ledger ({len(known)} known). That is a different "
-            "population - check `repo` in policy.json and GH_REPO in the environment."
-        )
+    # ARRIVALS ARE NOT FOREIGN. GitHub issue numbers are monotonic per repo, so
+    # a genuinely new issue in THIS repo always carries a number above the
+    # ledger's maximum. Counting arrivals as non-overlapping halted the run in
+    # the END-GAME: once most items are terminal the live set shrinks toward new
+    # arrivals, and this repo produces those continuously (release-please, CI
+    # auto-issues, and the drain itself may open them). Fully drained with six
+    # new issues scored 0% and exited with "check `repo` in policy.json" -- a
+    # cause the code had not established, on a state that is the whole point of
+    # the run. This is the same legal-state-trips-the-guard shape as the earlier
+    # denominator bug, moved to the floor.
+    ceiling = max(known)
+    arrivals = {n for n in live_numbers if n > ceiling}
+    candidates = live_numbers - arrivals
+    if candidates:
+        overlap = len(known & candidates) / len(candidates)
+        if overlap < MIN_OVERLAP:
+            raise SystemExit(
+                f"refusing to refresh: of the {len(candidates)} live issues numbered at or "
+                f"below this ledger's highest known issue (#{ceiling}), only {overlap:.0%} "
+                f"appear in it at all ({len(known)} known, {len(arrivals)} new arrivals "
+                "excluded). That is a different population - check `repo` in policy.json "
+                "and GH_REPO in the environment."
+            )
 
     if not believed_open:
         return
     retained = len(believed_open & live_numbers) / len(believed_open)
+    # A HARD floor --allow-shrink cannot suppress. A wrong-repo read whose
+    # numbers all sit above the ledger's ceiling is invisible to the overlap
+    # clause (every issue looks like an arrival) and is caught here instead --
+    # so the escape hatch must not open that door.
+    if retained < MIN_RETAINED_HARD:
+        raise SystemExit(
+            f"refusing to refresh: only {retained:.0%} of the {len(believed_open)} issues the "
+            f"ledger believes are open are still in the live set, below the HARD floor "
+            f"{MIN_RETAINED_HARD:.0%} that --allow-shrink cannot suppress. A whole population "
+            "does not depart in one cycle; a truncated or foreign read does."
+        )
     if retained < MIN_RETAINED and not allow_shrink:
         raise SystemExit(
             f"refusing to refresh: only {retained:.0%} of the {len(believed_open)} issues the "
@@ -218,7 +246,17 @@ def select_cycle(led: Ledger, policy: dict) -> list:
     because scheduling an item whose file footprint is unknown is how two lanes
     end up editing the same file.
     """
+    # The hard ceiling is a CONTROL, not a comment. The host carries ~66 GB
+    # committed before any agent starts, which is why three things were
+    # memory-killed on 2026-09-11; a WIP cap edited past the ceiling in a hurry
+    # is how a run discovers that again.
+    ceiling = policy["wip"]["max_lanes_hard_ceiling"]
     cap = policy["wip"]["max_lanes"]
+    if cap > ceiling:
+        raise SystemExit(
+            f"wip.max_lanes={cap} exceeds wip.max_lanes_hard_ceiling={ceiling}. "
+            "Raise the ceiling deliberately, in policy.json, or lower the cap."
+        )
     order = policy["ordering"]["streams"]
     chosen: list = []
     taken_lanes: set[str] = set()
@@ -306,6 +344,12 @@ is not a complete oracle and is never subtracted from the scan), and writes the
 pre-merge open-issue NUMBERS for the post-merge set audit. Clear any conflict
 BEFORE pushing - a push into a CONFLICTING window gets zero check-runs,
 permanently.
+
+**Writing the review verdict so it REGISTERS**: a line that BEGINS with
+`Independent review` or `Independent re-review`, inside the first 200 characters,
+not quoted / fenced / indented / inside `<details>`. Tokens are read in the order
+REQUEST-CHANGES, APPROVE, CANNOT-ASSESS, so a hedged header resolves to the
+block. A verdict that only MENTIONS those words is a near-miss, never a decision.
 
 **Stop and ask for**: {stop}.
 **Never, regardless**: {never}.

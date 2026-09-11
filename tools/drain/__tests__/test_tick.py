@@ -82,10 +82,46 @@ def test_negative_control_a_truncated_read_refuses(tmp_path):
 def test_negative_control_the_wrong_repo_refuses_despite_a_healthy_size(tmp_path):
     """THE cross-repo case, and the reason a size check alone is not enough: a
     different repository returns a full-sized, valid, entirely disjoint list.
-    Only overlap distinguishes it."""
+    Only overlap distinguishes it.
+
+    The numbers sit BELOW this ledger's ceiling on purpose -- that is the real
+    shape, because two repos of similar age share a numeric range (the measured
+    case was another repo's #2485 against this one's #2485)."""
     led = _led(tmp_path)
     with pytest.raises(SystemExit, match="different population"):
-        tick.guard_refresh(led, _live(range(5000, 5030)))
+        tick.guard_refresh(led, _live(range(500, 530)))
+
+
+def test_negative_control_a_wrong_repo_above_the_ceiling_hits_the_hard_floor(tmp_path):
+    """The other shape: every foreign number is above this ledger's ceiling, so
+    every one of them looks like a new ARRIVAL and the overlap clause cannot
+    see it. The hard retention floor is what catches it -- which is why
+    `--allow-shrink` must not be able to suppress that one."""
+    led = _led(tmp_path)
+    with pytest.raises(SystemExit, match="HARD floor"):
+        tick.guard_refresh(led, _live(range(90000, 90900)))
+    with pytest.raises(SystemExit, match="HARD floor"):
+        tick.guard_refresh(led, _live(range(90000, 90900)), allow_shrink=True)
+
+
+def test_negative_control_new_arrivals_do_not_halt_a_nearly_drained_run(tmp_path):
+    """The END-GAME. Once most items are terminal the live set shrinks toward
+    new arrivals, and this repo produces those continuously -- release-please,
+    CI auto-issues, and the drain itself may open them. Counting arrivals as
+    foreign exited with "check `repo` in policy.json" on a fully drained ledger
+    with six new issues: a cause the code had not established, fired on the
+    state the whole run exists to reach."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1040):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    tick.guard_refresh(led, _live(range(5000, 5006)))  # fully drained, 6 brand-new
+
+    led2 = _led(tmp_path, n=40)
+    for n in range(1000, 1036):
+        led2.record_receipt(n, "ci-green", "green at sha")
+        led2.transition(n, CLOSED)
+    tick.guard_refresh(led2, _live([*range(1036, 1040), *range(5000, 5005)]))
 
 
 def test_negative_control_parked_items_do_not_trip_the_wrong_repo_guard(tmp_path):
@@ -111,7 +147,7 @@ def test_negative_control_allow_shrink_does_not_disable_the_other_two_refusals(t
     refusals -- the two that prevent a mass departure."""
     led = _led(tmp_path)
     with pytest.raises(SystemExit, match="different population"):
-        tick.guard_refresh(led, _live(range(5000, 5030)), allow_shrink=True)
+        tick.guard_refresh(led, _live(range(500, 530)), allow_shrink=True)
     with pytest.raises(SystemExit, match="ZERO open issues"):
         tick.guard_refresh(led, [], allow_shrink=True)
     tick.guard_refresh(led, _live(range(1000, 1010)), allow_shrink=True)  # retention: suppressed
@@ -136,7 +172,7 @@ def test_negative_control_the_guard_still_watches_in_the_end_game(tmp_path):
         led.transition(n, PARKED, "blocked")
     assert len(led.remaining()) == 9
     with pytest.raises(SystemExit, match="different population"):
-        tick.guard_refresh(led, _live(range(90000, 90900)))
+        tick.guard_refresh(led, _live(range(200, 1100)))
 
 
 def test_negative_control_a_mostly_terminal_ledger_does_not_trip_on_a_small_live_set(tmp_path):
@@ -313,14 +349,14 @@ def test_negative_control_main_actually_calls_the_refresh_guard(monkeypatch, tmp
     of the defect this whole harness exists to end: a control that is tested,
     correct, and unreachable."""
     with pytest.raises(SystemExit, match="different population"):
-        _main_over(monkeypatch, tmp_path, _live(range(5000, 5030)), [])
+        _main_over(monkeypatch, tmp_path, _live(range(500, 530)), [])
 
 
 def test_negative_control_allow_shrink_does_not_disable_the_guard_in_main(monkeypatch, tmp_path):
     """`--allow-shrink` used to skip the CALL, not a clause, so the documented
     escape from a shrink warning also turned off the wrong-repo refusal."""
     with pytest.raises(SystemExit, match="different population"):
-        _main_over(monkeypatch, tmp_path, _live(range(5000, 5030)), ["--allow-shrink"])
+        _main_over(monkeypatch, tmp_path, _live(range(500, 530)), ["--allow-shrink"])
 
 
 def test_a_healthy_cycle_runs_through_main(monkeypatch, tmp_path):

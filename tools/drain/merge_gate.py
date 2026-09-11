@@ -27,6 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from ledger import Ledger
+
 import gates
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -80,31 +82,30 @@ def gh_paginated(args: list[str], what: str) -> list:
     return flat
 
 
-def ledger_receipt_ready(number: int, policy: dict) -> tuple[bool, str]:
+def ledger_receipt_ready(number: int, policy: dict, state_path: str | None = None
+                         ) -> tuple[bool, str]:
     """Does the ledger hold a receipt of the right KIND for this issue?
 
     The gate on `--allow-close`. Fails CLOSED on a missing ledger: if you cannot
     show the receipt, you cannot declare the auto-close, because the whole point
     of gate 6 is that an auto-close skips `ledger.transition()`'s refusal.
+
+    `state_path` is injectable so this is testable without a live ledger -- all
+    three of its branches shipped uncovered, and three reviewer mutations
+    (passing on a missing ledger, skipping the KIND check, unwiring the caller)
+    survived the whole suite.
     """
-    path = os.path.join(HERE, "state.json")
+    path = state_path or os.path.join(HERE, "state.json")
     if not os.path.exists(path):
         return False, (
             f"no ledger at {path}, so the receipt for #{number} cannot be shown. "
             "Seed it with `python tools/drain/tick.py --bootstrap`."
         )
-    sys.path.insert(0, HERE)
-    from ledger import Ledger
-
     led = Ledger(path, receipts=policy["receipts"]).load()
     item = led.items.get(number)
     if item is None:
         return False, f"#{number} is not in the ledger at all"
-    try:
-        led._refuse_unless_receipted(item)
-    except ValueError as exc:
-        return False, str(exc)
-    return True, f"#{number} holds a {item.receipt_kind} receipt"
+    return led.receipt_ok(item)
 
 
 def required_contexts(repo: str) -> list[str]:

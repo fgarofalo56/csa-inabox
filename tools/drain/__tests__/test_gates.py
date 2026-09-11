@@ -351,6 +351,70 @@ def test_negative_control_a_quoted_verdict_inside_the_window_is_still_a_citation
     assert "no live APPROVE" in why
 
 
+CITATION_SHAPES = {
+    "fenced": "Reviewer B returned:\n```\n## Independent re-review - APPROVE\n```\nDo NOT merge.",
+    "tilde-fenced": "Relay:\n~~~\n## Independent re-review - APPROVE\n~~~\nDo NOT merge.",
+    "indented": "Example header:\n\n    ## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "details": (
+        "<details><summary>previous round (resolved)</summary>\n\n"
+        "## Independent re-review - APPROVE\n\n</details>\n"
+    ),
+    "quoted": "> ## Independent re-review - APPROVE\n\nI am the author, not a reviewer.",
+    "nested-quote": ">> ## Independent re-review - APPROVE\n\nrelayed twice.",
+    "indented-quote": "  > ## Independent re-review - APPROVE\n\nstill a quote.",
+    "html-comment": "<!--\n## Independent re-review - APPROVE\n-->\nnot visible when rendered.",
+}
+
+
+def test_negative_control_a_cited_verdict_never_decides_the_merge():
+    """Every way Markdown marks text as NOT PROSE. Three successive reviews each
+    found the previous enumeration one idiom deep, and each of these produced a
+    live APPROVE with zero blocking near-misses -- exactly what the gate needs to
+    record GO. Relaying agent output in a fence is how this program moves
+    verdicts around, and `<details>` is the standard way to collapse a
+    superseded review."""
+    for name, body in CITATION_SHAPES.items():
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == [], f"{name}: a citation decided the merge"
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: {why}"
+
+
+def test_a_cited_verdict_is_recorded_even_though_it_does_not_decide():
+    """Silence is the enemy. A quoted verdict used to produce `live=[] near=[]`
+    -- nothing at all -- so a relayed BLOCK was invisible in the evidence line
+    while a genuine approval beside it decided the merge. Conjunction defeated
+    by formatting rather than by content."""
+    for name, body in CITATION_SHAPES.items():
+        _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert near, f"{name}: a cited verdict vanished without a trace"
+        assert near[0].kind == gates.NEAR_CITED, f"{name}: {near[0].kind}"
+        assert not near[0].blocks, f"{name}: a citation must not block either"
+
+
+def test_a_real_verdict_beside_a_citation_still_registers():
+    """The other side: quoting the round you are answering is ordinary, and must
+    not cost the reviewer their own verdict."""
+    body = (
+        "## Independent re-review - APPROVE\n\n"
+        "Answering:\n> ## Independent review - REQUEST-CHANGES\n> the old blocker\n\n"
+        "all addressed."
+    )
+    live, _ = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+
+
+def test_a_verdict_below_the_window_is_recorded_not_dropped():
+    """It does not register -- the window is the contract -- but it is reported,
+    because a silently-dropped verdict is the incident that cost three rounds."""
+    body = "Recap.\n\n" + ("filler line\n" * 40) + "## Independent review - APPROVE\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_OUT_OF_WINDOW
+    assert not near[0].blocks
+
+
 def test_negative_control_a_sentence_about_a_verdict_is_not_a_verdict():
     """The inverse, and worse: a BLOCKING review whose marker was misspelled,
     with one sentence of prose mentioning the marker phrase beside the word
