@@ -10,6 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -28,6 +29,7 @@ import {
   paramBindings,
   parseBicep,
   partitionFindings,
+  REPO_ROOT,
   resolveNameSource,
   resolveTarget,
   staleRegistrations,
@@ -402,9 +404,23 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //     3's suite passed 35/35 on that mutation. A one-token role flip (Reader →
 //     Contributor) was equally invisible, and it also falsified the pass's own
 //     shipped `s3GatewayRoleDefinitionId` @description.
+//   * revision 4 added the call site but kept the whole thing keyed to the
+//     pass's FILENAME and to a 185-file population. Two more bypasses, both
+//     reviewer-built, both reproduced here on disk against the real shipped
+//     tree with revision 4's own test file (`git show f9da36d07a0:…`) as the
+//     control: a SIBLING MODULE granting the Console UAMI Storage Blob Data
+//     Contributor at the lake's scope (revision 4: rc 0, 40/40 GREEN; head:
+//     rc 1, GUARD 5 red — and `az bicep build` rc 0, 3,984,293 bytes, with the
+//     grant readable in the emitted ARM at
+//     `subscriptionId=[variables('lakeAdoptSub')]`), and a second call site of
+//     the pass in `deploy/bicep/gov/main.bicep` (revision 4: rc 0, 40/40 GREEN;
+//     head: rc 1, GUARDS 4+5 red; `az bicep build` rc 0, 126,243 bytes). In both
+//     cases `check-module-existing-scope.mjs` stayed rc 0 with no NEW finding —
+//     the shipped checker is blind to this class too, by design, and that is
+//     disclosed rather than fixed here.
 //
-// All three were reviewer-built counterexamples, reproduced on disk against the
-// real files. Enumerating one more syntax would just move the next escape. So
+// All of them were reviewer-built counterexamples, reproduced on disk against
+// the real files. Enumerating one more syntax would just move the next escape. So
 // the primary key is an INVENTORY of the pass, taken from the three bicep
 // KEYWORDS that no layout can hide — `param`, `resource`, `module`, each of
 // which must begin a statement — plus the two things an inventory of the callee
@@ -425,27 +441,41 @@ test('every KNOWN_DORMANT entry records why it is dormant and where it is tracke
 //            layout. The last closes the one-token escalation, which adds none.
 //   GUARD 3  only modules whose grant the pass OWNS may gate their deploy on
 //            `loomStorageWillBeGranted`.
-//   GUARD 4  the pass has exactly ONE call site; every argument main.bicep binds
-//            there is registered next to the param; and each `principal`
-//            argument is traced hop by hop to a `userAssignedIdentities`
-//            resource that s3-gateway-aca.bicep DECLARES rather than adopts —
-//            the structural form of the self-minted claim.
+//   GUARD 4  the pass has exactly ONE call site in the WHOLE REPOSITORY (357
+//            `.bicep`, not the 185 under platform/fiab/bicep — one of the other
+//            172 is `deploy/bicep/gov/main.bicep`, which deploy-gov.yml
+//            deploys); every argument main.bicep binds there is registered next
+//            to the param; and each `principal` argument is traced hop by hop to
+//            a `userAssignedIdentities` resource that s3-gateway-aca.bicep
+//            DECLARES rather than adopts — the structural form of the
+//            self-minted claim.
+//   GUARD 5  every module call site whose `scope:` deploys into ANOTHER
+//            SUBSCRIPTION is registered, and every role assignment REACHABLE
+//            from one at the cross-sub LAKE scope passes GUARD 2's own
+//            principal and role registers. This is the only guard whose key is
+//            not a filename, and it is the one that catches half 2 of #3338
+//            written as a NEW FILE beside the pass.
 //
-// WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. It is
-// keyed to declarations in ONE small file (225 lines, of which the first 180
-// are the header explaining this) whose entire job is to make role assignments,
-// plus three named call-chain hops, so an inventory is a
+// WHAT THIS STILL IS NOT. It is source analysis, not the compiled ARM. GUARDS
+// 1-3 are keyed to declarations in ONE small file whose entire job is to make
+// role assignments (deliberately no line count here — that number has drifted
+// three times and been corrected three times), so an inventory is a
 // proportionate key there and would not be on a 9,000-line orchestrator. It does
 // not prove that the emitted ARM contains exactly one role assignment; only
 // `az bicep build` over the pass could, and that is not run from node:test here.
 // Nor does it reach INSIDE s3-gateway-aca.bicep: the chain ends at that module's
 // `storageIdentity` declaration, and an edit there that made the symbol resolve
 // to a pre-existing identity while keeping the `= {` form is out of reach and is
-// said so rather than covered by implication. What it DOES establish is that no
-// new param, resource or module can enter the pass, no different role can be
-// granted from it, and no different value can be bound to it at its call site,
-// without a reviewer registering the change — which is what both #3338
-// half-fixes, in every form measured so far, had to bypass.
+// said so rather than covered by implication. GUARD 5's population key is the
+// SCOPE EXPRESSION as written, so a grant that reached the lake's resource group
+// without a two-argument `resourceGroup(...)` is outside it — not reachable from
+// today's subscription-scoped orchestrator, but stated rather than implied
+// closed. What it DOES establish is that no new param, resource or module can
+// enter the pass, no different role can be granted from it, no different value
+// can be bound to it at its call site anywhere in the repository, and no new
+// module can be deployed into the lake's subscription, without a reviewer
+// registering the change — which is what every #3338 half-fix measured so far,
+// including the two a reviewer built after GUARD 4 shipped, had to bypass.
 //
 // These tests are GREEN at head — head carries neither break. They are trap
 // guards, not the fix for a red, and each carries a MUTATION control that
@@ -1113,10 +1143,25 @@ test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows 
 //       because a bicep loop does not close its bracket on the declaration line.
 //       The guard's OWN declared case, beaten by a layout change.
 //
-// Both are closed by the same two changes: read the WHOLE tree the checker
-// walks, and teach the reader the loop form (see `LOOP_PREFIX` in
-// check-module-existing-scope.mjs). `sites.length === 1` is now the invariant the
-// pass's header claims, rather than a claim about one file.
+// Both were closed by two changes: read a whole tree rather than one file, and
+// teach the reader the loop form (see `LOOP_PREFIX` in
+// check-module-existing-scope.mjs).
+//
+//   B3  and then the tree was still the WRONG ONE. `loadTree(BICEP_ROOT)` is 185
+//       of the repository's 357 tracked `.bicep`. Among the 172 it skipped is
+//       `deploy/bicep/gov/main.bicep`, which `.github/workflows/deploy-gov.yml`
+//       builds (:135) and deploys (:212, :296). A second call site written there
+//       is a real, deployed call site on the sovereign path — and per
+//       cloud-parity.md a boundary-specific grant is exactly the change that
+//       would be written there. Measured on the real file: revision 4's suite
+//       rc 0, 40/40 GREEN; `az bicep build` of the mutated Gov orchestrator
+//       rc 0, 126,243 bytes. The population is now the whole repository, proved
+//       complete against `git ls-files '*.bicep'` rather than against a
+//       directory list.
+//
+// `sites.length === 1` is now the invariant the pass's header claims — a
+// statement about the repository — rather than a claim about one file or one
+// tree.
 //
 // WHERE THE CHAIN'S REGISTRATION STOPS, stated rather than implied: at
 // s3-gateway-aca.bicep's `storageIdentity` declaration. A change INSIDE that
@@ -1129,13 +1174,63 @@ test('#3338 GUARD 3 — the admin-plane parse is not a runaway: no var swallows 
 const ORCHESTRATOR_REL = 'main.bicep';
 const S3_GATEWAY_REL = 'modules/data-plane/s3-gateway-aca.bicep';
 
+// REPO-RELATIVE keys, because the population is now the WHOLE repository and
+// not one tree. `readBicep` still reads BICEP_ROOT-relative paths (it is a file
+// reader, not a population), so both spellings exist on purpose and the prefix
+// is written once.
+const PLATFORM_PREFIX = 'platform/fiab/bicep/';
+const GRANT_PASS_REPO_REL = `${PLATFORM_PREFIX}${GRANT_PASS_REL}`;
+const ADMIN_PLANE_REPO_REL = `${PLATFORM_PREFIX}${ADMIN_PLANE_REL}`;
+const ORCHESTRATOR_REPO_REL = `${PLATFORM_PREFIX}${ORCHESTRATOR_REL}`;
+const S3_GATEWAY_REPO_REL = `${PLATFORM_PREFIX}${S3_GATEWAY_REL}`;
 /**
- * Discovery floor. The checker reports 185 `.bicep` under platform/fiab/bicep;
- * a scan that returned a handful would make "exactly one call site" true by
- * having looked at almost nothing. Deliberately slack — this is a broken-scan
- * tripwire, not a file census that a legitimate deletion should break.
+ * The GOV deploy orchestrator — `.github/workflows/deploy-gov.yml` builds it at
+ * :135 and deploys it at :212 and :296 (measured at this commit). It is NOT
+ * under platform/fiab/bicep, which is the whole point of BICEP_POPULATION_FLOOR
+ * moving to the repo-wide population: a call site written here was invisible.
  */
-const BICEP_POPULATION_FLOOR = 100;
+const GOV_ORCHESTRATOR_REPO_REL = 'deploy/bicep/gov/main.bicep';
+
+/**
+ * Directories the `.bicep` walk does not descend into.
+ *
+ * NOT a definition of the population — the population is "every `.bicep` in the
+ * repository", and the test below proves this walk finds every TRACKED one via
+ * `git ls-files`, so an over-broad entry here reds rather than silently
+ * shrinking the guard. `worktrees` is load-bearing locally: this repo carries
+ * agent worktrees under `.claude/worktrees/`, each a full copy of the tree, and
+ * without it a single run would parse the same orchestrator dozens of times and
+ * report every copy as an unregistered cross-subscription call site.
+ */
+const SCAN_SKIP_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  'dist',
+  'build',
+  'out',
+  'temp',
+  'worktrees',
+]);
+
+/**
+ * Discovery floor for the WHOLE-REPO population.
+ *
+ * Measured at this commit: `git ls-files '*.bicep'` -> **357**, of which **185**
+ * sit under platform/fiab/bicep. The 172 outside it are not a rounding error —
+ * one of them is `deploy/bicep/gov/main.bicep`, a live Gov deploy orchestrator,
+ * and per cloud-parity.md a sovereign-boundary grant is exactly the kind of
+ * change that would be written there. Deliberately slack: a broken-scan
+ * tripwire, not a census a legitimate deletion should break. The real
+ * completeness proof is the `git ls-files` cross-check below.
+ */
+const BICEP_POPULATION_FLOOR = 300;
 
 /**
  * The registered ARGUMENT for every param at the pass's single call site.
@@ -1146,7 +1241,7 @@ const BICEP_POPULATION_FLOOR = 100;
 const PASS_CALLSITE_REGISTER = {
   storageAccountName: {
     expr: "lakeAdoptName",
-    why: "main.bicep:670's `adoptName(adopt,'storage-adls')` — the lake's name comes from the ADOPT PLAN, the same document that bound loomStorageAccount, and the call site's `scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)` reads the sub/rg from the same three lines.",
+    why: "main.bicep's `var lakeAdoptName = adoptName(adopt, 'storage-adls')` — the lake's name comes from the ADOPT PLAN, the same document that bound loomStorageAccount, and the call site's `scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)` reads the sub/rg from its two neighbours, `lakeAdoptRg` and `lakeAdoptSub`. Cited by SYMBOL: this row said `main.bicep:670` for three revisions. That number is still correct at this commit (re-measured — `main.bicep:670` IS that var), which is exactly why it survived two deliberate sweeps of line citations out of this PR; correct-for-now is not the standard the rest of these registers hold.",
   },
   s3GatewayPrincipalId: {
     expr: "deployAdminPlane ? adminPlane!.outputs.s3GatewayStorageUamiPrincipalId : ''",
@@ -1197,29 +1292,72 @@ const PRINCIPAL_ARGUMENT_CHAIN = {
   },
 };
 
+/** Every `.bicep` under `dir`, keyed REPO-relative, skipping SCAN_SKIP_DIRS. */
+function walkBicep(dir, out) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (SCAN_SKIP_DIRS.has(e.name)) continue;
+      walkBicep(path.join(dir, e.name), out);
+    } else if (e.name.endsWith('.bicep')) {
+      const p = path.join(dir, e.name);
+      out.set(path.relative(REPO_ROOT, p).split(path.sep).join('/'), fs.readFileSync(p, 'utf8'));
+    }
+  }
+  return out;
+}
+
 /**
- * The WHOLE bicep tree — the same population `check-module-existing-scope.mjs`
- * walks — with optional in-memory overrides so a mutation control can rewrite a
- * shipped file without touching disk.
+ * The WHOLE REPOSITORY's bicep, keyed repo-relative, with in-memory mutations.
  *
- * An override must REPLACE a file that exists. A typo'd path that quietly
- * inserted a new key would make a mutation control mutate nothing and pass.
+ * WHY NOT `loadTree(BICEP_ROOT)`, which is what this was. That population was
+ * 185 of the repo's 357 `.bicep`, and among the 172 it skipped is
+ * `deploy/bicep/gov/main.bicep` — a file `.github/workflows/deploy-gov.yml`
+ * actually deploys. A second call site of the grant pass written there was
+ * invisible to GUARD 4 while being a real, deployed call site on the sovereign
+ * path. `platformOnlyTree()` below preserves the old population so the
+ * mutation control can measure that counterfactual rather than assert it.
+ *
+ * `overrides` must REPLACE a file that exists; `additions` must NOT. A typo'd
+ * path in either direction would make a mutation control mutate nothing and
+ * pass, which is the one failure a mutation control cannot survive.
  */
-function bicepTree(overrides = new Map()) {
-  const tree = loadTree(BICEP_ROOT);
+/**
+ * The on-disk walk, done ONCE. Every call below copies it; nothing in this file
+ * writes to the tree on disk, so a second walk would re-read 357 files to
+ * produce the same bytes. Measured: caching takes this suite from ~11s to ~3s,
+ * and the suite runs inside the required `guardrails` context alongside ~3,250
+ * other tests.
+ */
+let WALK_CACHE = null;
+
+function bicepTree(overrides = new Map(), additions = new Map()) {
+  if (WALK_CACHE === null) WALK_CACHE = walkBicep(REPO_ROOT, new Map());
+  const tree = new Map(WALK_CACHE);
   for (const [rel, src] of overrides) {
     assert.ok(tree.has(rel), `mutation override ${rel} must replace a real .bicep, not invent one`);
+    tree.set(rel, src);
+  }
+  for (const [rel, src] of additions) {
+    assert.ok(!tree.has(rel), `mutation addition ${rel} must be a NEW file, not silently replace a real one`);
     tree.set(rel, src);
   }
   return tree;
 }
 
-/** Every call site of the grant pass, in any file under platform/fiab/bicep. */
+/** The population this guard USED to have: platform/fiab/bicep only, re-keyed. */
+function platformOnlyTree(overrides = new Map()) {
+  const out = new Map();
+  for (const [rel, src] of loadTree(BICEP_ROOT)) out.set(`${PLATFORM_PREFIX}${rel}`, src);
+  for (const [rel, src] of overrides) if (out.has(rel)) out.set(rel, src);
+  return out;
+}
+
+/** Every call site of the grant pass, in any `.bicep` in the repository. */
 function passCallSites(tree) {
   const sites = [];
   for (const [rel, src] of tree) {
     for (const m of parseBicep(src, rel).modules) {
-      if (resolveTarget(rel, m.target) === GRANT_PASS_REL) sites.push({ ...m, file: rel });
+      if (resolveTarget(rel, m.target) === GRANT_PASS_REPO_REL) sites.push({ ...m, file: rel });
     }
   }
   return sites.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
@@ -1301,20 +1439,24 @@ test('#3338 GUARD 4: the pass has exactly ONE call site in the WHOLE tree, and e
   // single hard-coded filename.
   assert.ok(
     tree.size >= BICEP_POPULATION_FLOOR,
-    `discovered only ${tree.size} .bicep under ${BICEP_ROOT} — the scan is broken, not clean`,
+    `discovered only ${tree.size} .bicep under ${REPO_ROOT} — the scan is broken, not clean`,
   );
-  assert.ok(tree.has(GRANT_PASS_REL), `${GRANT_PASS_REL} must be in the scanned tree`);
-  assert.ok(tree.has(ORCHESTRATOR_REL), `${ORCHESTRATOR_REL} must be in the scanned tree`);
+  assert.ok(tree.has(GRANT_PASS_REPO_REL), `${GRANT_PASS_REPO_REL} must be in the scanned tree`);
+  assert.ok(tree.has(ORCHESTRATOR_REPO_REL), `${ORCHESTRATOR_REPO_REL} must be in the scanned tree`);
+  assert.ok(
+    tree.has(GOV_ORCHESTRATOR_REPO_REL),
+    `${GOV_ORCHESTRATOR_REPO_REL} must be in the scanned tree — it is a deployed Gov orchestrator outside platform/fiab/bicep, and its absence is what made this population too narrow`,
+  );
 
   const sites = passCallSites(tree);
   assert.equal(
     sites.length,
     1,
-    `dlz-lake-grant-pass.bicep must have exactly one call site anywhere under platform/fiab/bicep; found ${sites.length}${
+    `dlz-lake-grant-pass.bicep must have exactly one call site anywhere in the repository; found ${sites.length}${
       sites.length ? ` (${sites.map(siteLabel).join(', ')})` : ''
-    }. A second call site can bind a different principal to the same pass, which is #3338's half 2 with the callee untouched — and it does not have to be in main.bicep, nor in non-loop form.`,
+    }. A second call site can bind a different principal to the same pass, which is #3338's half 2 with the callee untouched — and it does not have to be in main.bicep, nor under platform/fiab/bicep, nor in non-loop form.`,
   );
-  assert.equal(sites[0].file, ORCHESTRATOR_REL, 'the registered call site lives in main.bicep');
+  assert.equal(sites[0].file, ORCHESTRATOR_REPO_REL, 'the registered call site lives in main.bicep');
   assert.ok(sites[0].params.size > 0, 'the call site must bind params for this guard to measure anything');
   assert.ok(
     Object.keys(PASS_CALLSITE_REGISTER).every((k) => Object.hasOwn(PASS_PARAM_REGISTER, k)),
@@ -1350,7 +1492,7 @@ test('#3338 GUARD 4: the principal argument chains back to an identity this depl
 
 test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a second call site, and a repointed chain all go RED', () => {
   const tree = bicepTree();
-  const orch = tree.get(ORCHESTRATOR_REL);
+  const orch = tree.get(ORCHESTRATOR_REPO_REL);
   const admin = readBicep(ADMIN_PLANE_REL);
   const s3gw = readBicep(S3_GATEWAY_REL);
   const minting = new Map([[S3_GATEWAY_REL, s3gw]]);
@@ -1366,17 +1508,17 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   );
   assert.notEqual(swapped, orch, 'the call-site mutation must actually apply');
   assert.ok(/output uamiConsolePrincipalId string =/.test(admin), 'the swap target output must really exist');
-  const swappedFindings = misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REL, swapped]])));
+  const swappedFindings = misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REPO_REL, swapped]])));
   assert.equal(swappedFindings.length, 1, `expected one finding, got ${swappedFindings.join(' | ')}`);
   assert.match(
     swappedFindings[0],
-    /^main\.bicep:\d+ dlzLakeGrantPass\.s3GatewayPrincipalId: deployAdminPlane \? adminPlane!\.outputs\.uamiConsolePrincipalId : ''$/,
+    /^platform\/fiab\/bicep\/main\.bicep:\d+ dlzLakeGrantPass\.s3GatewayPrincipalId: deployAdminPlane \? adminPlane!\.outputs\.uamiConsolePrincipalId : ''$/,
   );
 
   // (b) the pass invoked a SECOND time in main.bicep with a different principal,
   // leaving the registered call site untouched.
   const doubled = `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass.bicep' = if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: adminPlane!.outputs.uamiConsolePrincipalId\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
-  const doubledTree = bicepTree(new Map([[ORCHESTRATOR_REL, doubled]]));
+  const doubledTree = bicepTree(new Map([[ORCHESTRATOR_REPO_REL, doubled]]));
   assert.equal(passCallSites(doubledTree).length, 2, 'the second call site must parse');
   assert.ok(
     misboundCallSiteArgs(doubledTree).some((f) => f.includes('dlzLakeGrantPassConsole.s3GatewayPrincipalId:')),
@@ -1389,18 +1531,50 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   // Measured GREEN 39/39 against the one-file population this replaced.
   const elsewhere = `${admin}\nmodule dlzLakeGrantPassConsole '../data-plane/dlz-lake-grant-pass.bicep' = if (loomStorageGrantable && !skipRoleGrants) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(loomDlzRg)\n  params: {\n    storageAccountName: loomStorageAccount\n    s3GatewayPrincipalId: identity.outputs.uamiConsolePrincipalId\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
   assert.notEqual(elsewhere, admin, 'the out-of-orchestrator mutation must actually apply');
-  const elsewhereTree = bicepTree(new Map([[ADMIN_PLANE_REL, elsewhere]]));
+  const elsewhereTree = bicepTree(new Map([[ADMIN_PLANE_REPO_REL, elsewhere]]));
   const elsewhereSites = passCallSites(elsewhereTree);
   assert.equal(elsewhereSites.length, 2, 'the call site outside main.bicep must be SEEN');
   assert.ok(
-    elsewhereSites.some((s) => s.file === ADMIN_PLANE_REL && s.symbol === 'dlzLakeGrantPassConsole'),
+    elsewhereSites.some((s) => s.file === ADMIN_PLANE_REPO_REL && s.symbol === 'dlzLakeGrantPassConsole'),
     'the second site must be attributed to modules/admin-plane/main.bicep',
   );
   assert.ok(
     misboundCallSiteArgs(elsewhereTree).some((f) =>
-      f.startsWith(`${ADMIN_PLANE_REL}:`) && f.includes('dlzLakeGrantPassConsole.s3GatewayPrincipalId:'),
+      f.startsWith(`${ADMIN_PLANE_REPO_REL}:`) && f.includes('dlzLakeGrantPassConsole.s3GatewayPrincipalId:'),
     ),
     'the out-of-orchestrator principal swap must be named, with its file',
+  );
+
+  // (b1-gov) BLOCKER 2 — the same second call site written in
+  // `deploy/bicep/gov/main.bicep`, which `.github/workflows/deploy-gov.yml`
+  // DEPLOYS (:212, :296). That file is not under platform/fiab/bicep, so the
+  // 185-file population this guard used to walk could not see it at all. The
+  // counterfactual is MEASURED, not asserted: the same mutation is run through
+  // `platformOnlyTree()`, the old population, where it stays at ONE call site.
+  const govHead = tree.get(GOV_ORCHESTRATOR_REPO_REL);
+  assert.ok(govHead, 'the Gov orchestrator must be in the repo-wide tree');
+  const govMutated = `${govHead}\nmodule govLakeGrantPass '../../../platform/fiab/bicep/modules/data-plane/dlz-lake-grant-pass.bicep' = {\n  name: 'gov-lake-grant-pass'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: consoleUamiPrincipalId\n    assignRoles: true\n  }\n}\n`;
+  const govTree = bicepTree(new Map([[GOV_ORCHESTRATOR_REPO_REL, govMutated]]));
+  const govSites = passCallSites(govTree);
+  assert.equal(govSites.length, 2, 'the Gov call site must be SEEN by the repo-wide population');
+  assert.ok(
+    govSites.some((s) => s.file === GOV_ORCHESTRATOR_REPO_REL && s.symbol === 'govLakeGrantPass'),
+    'the Gov call site must be attributed to deploy/bicep/gov/main.bicep',
+  );
+  assert.ok(
+    misboundCallSiteArgs(govTree).some((f) => f.startsWith(`${GOV_ORCHESTRATOR_REPO_REL}:`)),
+    'the Gov call site must be named, with its file',
+  );
+  // The counterfactual: the population this replaced could not reach that file.
+  const oldPopulation = platformOnlyTree(new Map([[GOV_ORCHESTRATOR_REPO_REL, govMutated]]));
+  assert.ok(
+    !oldPopulation.has(GOV_ORCHESTRATOR_REPO_REL),
+    'the old platform-only population must not contain the Gov orchestrator — that is the gap',
+  );
+  assert.equal(
+    passCallSites(oldPopulation).length,
+    1,
+    'the old population must read ONE call site on the mutated tree — if it reads 2, this control is measuring the wrong thing',
   );
 
   // (b2) REVIEWER'S BYPASS 2 — a second call site inside main.bicep in `[for]`
@@ -1408,7 +1582,7 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   // beaten by a layout change, because MODULE_RE could not parse a loop header.
   // `az bicep build` accepted it (rc 0) and the suite stayed 39/39 GREEN.
   const looped = `${orch}\nvar extraLakeGrants = [\n  'console'\n]\nmodule dlzLakeGrantPassExtra 'modules/data-plane/dlz-lake-grant-pass.bicep' = [for g in extraLakeGrants: if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-x-\${g}'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    s3GatewayPrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''\n    assignRoles: !skipRoleGrants\n  }\n}]\n`;
-  const loopedTree = bicepTree(new Map([[ORCHESTRATOR_REL, looped]]));
+  const loopedTree = bicepTree(new Map([[ORCHESTRATOR_REPO_REL, looped]]));
   const loopedSites = passCallSites(loopedTree);
   assert.equal(loopedSites.length, 2, 'the `[for]` call site must PARSE — this is what MODULE_RE used to miss');
   const loopSite = loopedSites.find((s) => s.symbol === 'dlzLakeGrantPassExtra');
@@ -1427,8 +1601,8 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   );
   assert.notEqual(rescoped, orch, 'the scope mutation must actually apply');
   assert.deepEqual(
-    misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REL, rescoped]]))).map((f) => f.replace(/:\d+ /, ' ')),
-    ['main.bicep dlzLakeGrantPass.<scope>: resourceGroup(otherSub, otherRg)'],
+    misboundCallSiteArgs(bicepTree(new Map([[ORCHESTRATOR_REPO_REL, rescoped]]))).map((f) => f.replace(/:\d+ /, ' ')),
+    [`${ORCHESTRATOR_REPO_REL} dlzLakeGrantPass.<scope>: resourceGroup(otherSub, otherRg)`],
   );
 
   // (c) the chain repointed one hop out — the admin-plane output itself made to
@@ -1457,6 +1631,491 @@ test('#3338 GUARD 4 — MUTATION control: the reviewer\'s call-site swap, a seco
   assert.deepEqual(brokenPrincipalChains(admin, adopted), [
     's3GatewayPrincipalId: modules/data-plane/s3-gateway-aca.bicep storageIdentity is Microsoft.ManagedIdentity/userAssignedIdentities EXISTING — not an identity this run mints',
   ]);
+});
+
+test('the walk finds every TRACKED .bicep — the population is a repository fact, not a directory list', () => {
+  // The completeness proof behind SCAN_SKIP_DIRS. Every guard from here down
+  // states "…anywhere in the repository", and that sentence is only true if the
+  // walk actually reaches everywhere. A skip entry that grew a directory of
+  // bicep — or a walk that stopped early — would make every "exactly one" and
+  // "no unregistered" assertion below quietly weaker, with nothing red.
+  //
+  // Direction matters: this catches OVER-skipping (a tracked file the walk
+  // missed). Under-skipping is the safe direction — an untracked .bicep the
+  // walk finds is EXTRA scrutiny, and it goes through the same registration
+  // requirement as everything else.
+  const tracked = spawnSync('git', ['ls-files', '-z', '--', '*.bicep'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+  });
+  assert.equal(
+    tracked.status,
+    0,
+    `git ls-files failed, so this measured NOTHING: ${(tracked.stderr || '').trim() || tracked.error?.message}`,
+  );
+  const trackedPaths = tracked.stdout.split('\0').filter(Boolean).sort();
+  assert.ok(
+    trackedPaths.length >= BICEP_POPULATION_FLOOR,
+    `git tracks only ${trackedPaths.length} .bicep — below the floor, so the comparison below proves little`,
+  );
+  const walked = bicepTree();
+  assert.deepEqual(
+    trackedPaths.filter((p) => !walked.has(p)),
+    [],
+    'SCAN_SKIP_DIRS (or the walk) is dropping tracked .bicep files — every "anywhere in the repository" claim below is narrower than it says',
+  );
+});
+
+// ── GUARD 5 — the INVARIANT, not the FILENAME ───────────────────────────────
+//
+// GUARDS 1-4 are all keyed, one way or another, to ONE PATH:
+// `modules/data-plane/dlz-lake-grant-pass.bicep`. `GRANT_PASS_REL`,
+// `passCallSites`, `PASS_BODY_REGISTER`, `SELF_MINTED_PASS_PRINCIPALS` and
+// `PASS_GRANTED_ROLES` all read that file or its call sites. Nothing registered
+// WHAT MAY GRANT A ROLE ON THE CROSS-SUB LAKE — only what may be inside that one
+// file, and what may call it. So half 2 of #3338 lands by ADDING A FILE.
+//
+// A reviewer built it, compiled it, and read the grant out of the emitted ARM
+// (2026-09-09): a 25-line sibling `dlz-lake-grant-pass-console.bicep` with one
+// `Microsoft.Authorization/roleAssignments` granting the Console UAMI Storage
+// Blob Data CONTRIBUTOR, invoked from main.bicep at
+// `scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)` — the exact
+// (scope, principal, role) tuple the pass's header spends ~100 lines refusing —
+// with the suite 40/40 GREEN, `check-module-existing-scope.mjs` rc 0 and
+// `az bicep build` rc 0. That is not an exotic spelling: the delegated-module
+// form IS this repo's convention for lake RBAC, and the test file's own prose
+// said so while covering it only when the module is declared INSIDE the pass.
+//
+// So the population key stops being a filename and becomes a STRUCTURAL FACT
+// about the deployment: **a module call site whose `scope:` deploys into a
+// DIFFERENT SUBSCRIPTION**. That is `resourceGroup(<sub>, <rg>)` with two
+// arguments, `subscription(<id>)`, or `managementGroup(…)` — all three are
+// properties of the bicep scope function, not of any name, so a rename, a new
+// file, a new directory and a `[for]` loop all land inside the population.
+//
+// MEASURED at this commit over all 357 tracked `.bicep`: 123 such call sites,
+// of which 112 are in the vendored Azure Landing Zones tree
+// (`deploy/bicep/landing-zone-alz/`, 437 tracked files, upstream ALZ policy and
+// management-group plumbing) and 11 are Loom's own. Registering 11 is
+// proportionate; registering 123 would be a register nobody reads. The ALZ
+// exemption is therefore CHECKED rather than asserted — the test below proves
+// that tree references neither the grant pass nor the lake's adopt symbols, so
+// the exemption cannot come to hide a lake grant.
+//
+// TWO TEETH, not one:
+//   * every cross-subscription call site outside the exempt tree must be in
+//     CROSS_SUB_CALLSITE_REGISTER, keyed `<file> <symbol> -> <target>`. The
+//     reviewer's sibling module is RED here because it is a new, unregistered
+//     cross-subscription deployment.
+//   * every role assignment REACHABLE from a call site at the cross-sub LAKE
+//     scope — the target module and, transitively, the modules it calls — must
+//     pass the SAME `SELF_MINTED_PASS_PRINCIPALS` and `PASS_GRANTED_ROLES`
+//     checks GUARD 2 applies to the pass. So registering the sibling module does
+//     not wave it through: its Console-UAMI principal and its Contributor guid
+//     are both refused, by the registers that already existed.
+//
+// WHAT GUARD 5 DOES NOT CLAIM. It is still source analysis, and its population
+// key is the SCOPE EXPRESSION as written. A module that reached the lake's
+// resource group WITHOUT a two-argument `resourceGroup(...)` — a single-argument
+// scope in a deployment that is already running in the lake's subscription, say
+// — is outside it. That is not reachable from `platform/fiab/bicep/main.bicep`,
+// which is `targetScope = 'subscription'` and runs in the ADMIN subscription
+// (that is the whole reason this pass exists), but it is a real edge on a future
+// orchestrator and is written down rather than implied closed.
+
+const CROSS_SUB_EXEMPT_TREES = [
+  {
+    prefix: 'deploy/bicep/landing-zone-alz/',
+    why: 'Upstream Azure Landing Zones bicep (437 tracked files) — management-group policy assignment and subscription plumbing, vendored whole. It accounts for 112 of the 123 cross-subscription call sites in the repo and has nothing to do with the Loom lake; the assertion below re-measures that rather than trusting it.',
+  },
+];
+
+/** Files the cross-subscription registration requirement does not apply to. */
+const inExemptTree = (rel) => CROSS_SUB_EXEMPT_TREES.some((t) => rel.startsWith(t.prefix));
+
+/**
+ * Top-level, comma-separated arguments of `fn(...)` in `expr`, or null when
+ * `expr` is not a call to `fn`.
+ *
+ * Top-level matters: `resourceGroup(a, concat(b, c))` is TWO arguments, not
+ * three, and a naive `split(',')` would read `subscription(x)` nested in another
+ * call as a cross-subscription scope of its own. Quotes are honoured so a comma
+ * inside a string literal is not an argument boundary.
+ */
+function callArgs(expr, fn) {
+  const s = String(expr ?? '').trim();
+  if (!s.startsWith(`${fn}(`)) return null;
+  const args = [];
+  let depth = 0;
+  let quoted = false;
+  let cur = '';
+  for (let i = fn.length; i < s.length; i += 1) {
+    const ch = s[i];
+    if (quoted) {
+      cur += ch;
+      if (ch === '\\') {
+        cur += s[i + 1] ?? '';
+        i += 1;
+      } else if (ch === "'") quoted = false;
+      continue;
+    }
+    if (ch === "'") {
+      quoted = true;
+      cur += ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') {
+      depth += 1;
+      if (depth === 1) continue; // the opening paren of fn( itself
+    } else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        if (cur.trim()) args.push(cur.trim());
+        // Anything after the matching close means this is not a bare call
+        // (`resourceGroup(a, b).id`), which is not a module scope. Fail closed.
+        return s.slice(i + 1).trim() === '' ? args : null;
+      }
+    } else if (ch === ',' && depth === 1) {
+      args.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  return null; // unbalanced — fail closed rather than guess
+}
+
+/**
+ * True when a module call-site `scope:` deploys OUTSIDE the deployment's own
+ * subscription: a two-argument `resourceGroup()`, any `subscription(<id>)`, or
+ * any `managementGroup()`.
+ *
+ * A bare `resourceGroup()`, a one-argument `resourceGroup(<rg>)` and a bare
+ * `subscription()` all stay inside the current subscription and are not in the
+ * population — including them would put several hundred ordinary same-sub
+ * delegations in a register no reviewer would read, which is how a register
+ * becomes a mute button.
+ */
+function crossSubscriptionScope(scopeExpr) {
+  if (!scopeExpr) return false;
+  const s = norm(scopeExpr);
+  const rg = callArgs(s, 'resourceGroup');
+  if (rg && rg.length >= 2) return true;
+  const sub = callArgs(s, 'subscription');
+  if (sub && sub.length >= 1) return true;
+  return callArgs(s, 'managementGroup') !== null;
+}
+
+/** Every module call site in `tree` that deploys into another subscription. */
+function crossSubCallSites(tree) {
+  const sites = [];
+  for (const [rel, src] of tree) {
+    for (const m of parseBicep(src, rel).modules) {
+      if (!crossSubscriptionScope(m.scope)) continue;
+      sites.push({ ...m, file: rel, resolved: resolveTarget(rel, m.target) });
+    }
+  }
+  return sites.sort((a, b) => (a.file === b.file ? a.line - b.line : a.file.localeCompare(b.file)));
+}
+
+/** The registration key: file, symbol and resolved target — never a line. */
+const crossSubKey = (s) => `${s.file} ${s.symbol} -> ${s.resolved ?? s.target}`;
+
+/**
+ * Every module Loom deploys into another subscription, and why it is allowed to.
+ *
+ * This is the population key GUARD 5 replaces a filename with. A new file
+ * granting on the cross-sub lake cannot avoid appearing here, because it cannot
+ * grant on the lake without being deployed at the lake's scope.
+ */
+const CROSS_SUB_CALLSITE_REGISTER = {
+  [`${ORCHESTRATOR_REPO_REL} dlz -> ${PLATFORM_PREFIX}modules/landing-zone/main.bicep`]:
+    'The DLZ landing zone itself, deployed per domain subscription. Creates the domain resources; the grant-bearing leaves below are split out of it deliberately.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAccessPolicyRbac -> ${PLATFORM_PREFIX}modules/admin-plane/access-policy-rbac.bicep`]:
+    'Access-policy role assignments in each DLZ subscription. Pre-dates this guard; registered as inventory, not as a new grant.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAppResourcesRbac -> ${PLATFORM_PREFIX}modules/admin-plane/app-resources-rbac.bicep`]:
+    'The app-resources leaf whose collision gating main.bicep documents ("failed RoleAssignmentExists on EVERY deploy in BOTH topologies") — the precedent the pass header cites.',
+  [`${ORCHESTRATOR_REPO_REL} dlzItemCreateRbac -> ${PLATFORM_PREFIX}modules/admin-plane/dlz-attach-itemcreate-rbac.bicep`]:
+    'Item-create role assignments on a dlz-attach estate.',
+  [`${ORCHESTRATOR_REPO_REL} dlzLakeGrantPass -> ${GRANT_PASS_REPO_REL}`]:
+    'THE cross-sub lake grant pass — the one call site GUARD 4 registers argument by argument. Its scope is PASS_CALLSITE_SCOPE, so it is also the site whose reachable grants are checked below.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAttachHubPeering -> ${PLATFORM_PREFIX}modules/landing-zone/hub-side-peering.bicep`]:
+    'Hub-side VNet peering, written into the hub subscription on a dlz-attach estate. Networking, no role assignment on the lake.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAttachHubConsoleEnv -> ${PLATFORM_PREFIX}modules/landing-zone/hub-console-dlz-env.bicep`]:
+    'Console environment wiring in the hub subscription on a dlz-attach estate.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAttachS3Gateway -> ${PLATFORM_PREFIX}modules/data-plane/s3-gateway-aca.bicep`]:
+    'The S3 gateway itself on a dlz-attach estate — the module that MINTS uami-loom-s3gw-<location>, i.e. the far end of PRINCIPAL_ARGUMENT_CHAIN. Deployed at the hub, not at the lake.',
+  [`${ORCHESTRATOR_REPO_REL} dlzAttachAdfKeyVaultRbac -> ${PLATFORM_PREFIX}modules/admin-plane/adf-keyvault-rbac.bicep`]:
+    'Key Vault grants for ADF in the hub subscription on a dlz-attach estate. Key Vault, not the lake.',
+  [`${ORCHESTRATOR_REPO_REL} setupOrchestratorSpokeRbac -> ${PLATFORM_PREFIX}modules/admin-plane/setup-orchestrator-rbac.bicep`]:
+    'Subscription-scoped RBAC for the setup orchestrator in each spoke subscription.',
+  [`${PLATFORM_PREFIX}modules/landing-zone/adx.bicep inner -> ${PLATFORM_PREFIX}modules/landing-zone/adx-db-inner.bicep`]:
+    'ADX database creation against a cluster an estate may host in another subscription. Kusto, not storage.',
+};
+
+/** Cross-subscription call sites nobody has registered. */
+function unregisteredCrossSubCallSites(tree) {
+  return crossSubCallSites(tree)
+    .filter((s) => !inExemptTree(s.file))
+    .filter((s) => !Object.hasOwn(CROSS_SUB_CALLSITE_REGISTER, crossSubKey(s)))
+    .map((s) => `${siteLabel(s)} -> ${s.resolved ?? s.target}  scope=${s.scope}`)
+    .sort();
+}
+
+/** Registered cross-subscription call sites that no longer exist. */
+function staleCrossSubRegistrations(tree) {
+  const live = new Set(crossSubCallSites(tree).map(crossSubKey));
+  return Object.keys(CROSS_SUB_CALLSITE_REGISTER)
+    .filter((k) => !live.has(k))
+    .sort();
+}
+
+/**
+ * Every module reachable from `startRel` by following `module` targets, plus
+ * the targets that could not be read.
+ *
+ * An unreadable target is returned, never dropped: "I could not follow this"
+ * and "there is nothing there" are different answers, and only the second one
+ * clears a grant.
+ */
+function reachableModules(tree, startRel, maxDepth = 8) {
+  const seen = new Set();
+  const unreadable = [];
+  const queue = [[startRel, 0]];
+  while (queue.length > 0) {
+    const [rel, depth] = queue.shift();
+    if (seen.has(rel) || depth > maxDepth) continue;
+    if (!tree.has(rel)) {
+      unreadable.push(rel);
+      continue;
+    }
+    seen.add(rel);
+    for (const m of parseBicep(tree.get(rel), rel).modules) {
+      const target = resolveTarget(rel, m.target);
+      if (target === null) continue; // a registry ref (br:/ts:) — not a file
+      queue.push([target, depth + 1]);
+    }
+  }
+  return { modules: [...seen].sort(), unreadable: [...new Set(unreadable)].sort() };
+}
+
+/** Call sites deployed at the cross-sub LAKE scope, whatever they target. */
+function lakeScopeCallSites(tree) {
+  return crossSubCallSites(tree).filter((s) => norm(s.scope ?? '') === norm(PASS_CALLSITE_SCOPE));
+}
+
+/**
+ * Grants reachable at the cross-sub lake scope that the pass's own registers do
+ * not justify — the SAME `SELF_MINTED_PASS_PRINCIPALS` and `PASS_GRANTED_ROLES`
+ * checks GUARD 2 applies, applied to the whole reachable set rather than to one
+ * filename. This is the half that survives a reviewer registering their new
+ * module in CROSS_SUB_CALLSITE_REGISTER.
+ */
+function unjustifiedLakeScopeGrants(tree) {
+  const out = [];
+  for (const site of lakeScopeCallSites(tree)) {
+    const at = siteLabel(site);
+    if (site.resolved === null || !tree.has(site.resolved)) {
+      out.push(`${at} -> ${site.target}: TARGET NOT READABLE — cannot judge what it grants`);
+      continue;
+    }
+    const { modules, unreadable } = reachableModules(tree, site.resolved);
+    for (const u of unreadable) out.push(`${at} -> ${u}: reachable module NOT READABLE`);
+    for (const rel of modules) {
+      const src = tree.get(rel);
+      for (const p of unjustifiedGrantedPrincipals(src)) {
+        out.push(`${at} -> ${rel}: grants \`${p}\`, which no SELF_MINTED_PASS_PRINCIPALS row justifies`);
+      }
+      for (const g of unregisteredGrantedRoles(src)) {
+        out.push(`${at} -> ${rel}: grants role ${g}, which PASS_GRANTED_ROLES does not account for`);
+      }
+    }
+  }
+  return out.sort();
+}
+
+test('#3338 GUARD 5: every module deployed into ANOTHER SUBSCRIPTION is registered, and every grant reachable at the cross-sub LAKE scope is justified', () => {
+  const tree = bicepTree();
+
+  // Non-vacuity, three ways. A population of zero, an exemption that excludes
+  // nothing, or no lake-scope site at all would each make the assertions below
+  // true while measuring nothing.
+  const all = crossSubCallSites(tree);
+  assert.ok(all.length > 0, 'no cross-subscription call site was found at all — the scope reader is broken');
+  assert.ok(
+    all.some((s) => inExemptTree(s.file)),
+    'the exempt tree excludes nothing — either it moved, or the exemption is dead weight that should be deleted',
+  );
+  assert.ok(
+    all.some((s) => !inExemptTree(s.file)),
+    'every cross-subscription call site is exempt — the register is measuring nothing',
+  );
+  const lakeSites = lakeScopeCallSites(tree);
+  assert.ok(
+    lakeSites.length > 0,
+    'no call site deploys at PASS_CALLSITE_SCOPE — the grant half of this guard would be vacuous',
+  );
+
+  // The exemption is CHECKED, not asserted. A Loom lake grant written inside the
+  // vendored ALZ tree would otherwise be exempt by accident.
+  for (const t of CROSS_SUB_EXEMPT_TREES) {
+    const files = [...tree.keys()].filter((k) => k.startsWith(t.prefix));
+    assert.ok(files.length > 0, `exempt tree ${t.prefix} does not exist — prune the exemption`);
+    assert.ok(t.why.length > 60, `exempt tree ${t.prefix} needs a measured reason`);
+    const contaminated = files.filter((k) =>
+      /dlz-lake-grant-pass|lakeAdopt(Name|Rg|Sub)\b|loomStorageAccount/.test(tree.get(k)),
+    );
+    assert.deepEqual(
+      contaminated,
+      [],
+      `${t.prefix} references the Loom lake — the exemption is no longer safe and must be narrowed or removed`,
+    );
+  }
+
+  assert.deepEqual(
+    unregisteredCrossSubCallSites(tree),
+    [],
+    'a module is deployed into ANOTHER SUBSCRIPTION from an unregistered call site. That is the population key for the cross-sub lake: a NEW FILE granting Storage Blob Data Contributor to the Console UAMI on the lake needs one of these, and cannot get on the lake without one. Register it with a reason, or do not deploy it cross-subscription.',
+  );
+  assert.deepEqual(
+    staleCrossSubRegistrations(tree),
+    [],
+    'CROSS_SUB_CALLSITE_REGISTER lists a call site that no longer exists — a register nobody prunes is how a ratchet becomes a mute button',
+  );
+  assert.deepEqual(
+    unjustifiedLakeScopeGrants(tree),
+    [],
+    'a role assignment reachable from a call site at the cross-sub LAKE scope grants a principal or a role the pass\'s own registers refuse. This is the check that survives registration: adding the sibling module to CROSS_SUB_CALLSITE_REGISTER does not make a Console-UAMI Contributor grant on the lake acceptable.',
+  );
+});
+
+test('#3338 GUARD 5 — MUTATION control: the reviewer\'s SIBLING MODULE goes RED, and is measured GREEN under GUARDS 1-4', () => {
+  // The reviewer's counterexample, rebuilt: a new file next to the pass that
+  // grants exactly what the pass's header refuses, invoked from main.bicep at
+  // the lake's scope. Nothing in the pass changes; nothing in the registered
+  // call site changes.
+  const SIBLING_REL = `${PLATFORM_PREFIX}modules/data-plane/dlz-lake-grant-pass-console.bicep`;
+  const sibling = [
+    "targetScope = 'resourceGroup'",
+    'param storageAccountName string',
+    "param consolePrincipalId string = ''",
+    'param assignRoles bool = true',
+    '',
+    `var storageBlobDataContributorRoleId = '${SBDC_ROLE_ID}'`,
+    'var grantConsole = assignRoles && !empty(storageAccountName) && !empty(consolePrincipalId)',
+    '',
+    "resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (grantConsole) {",
+    "  name: empty(storageAccountName) ? 'placeholderaccount' : storageAccountName",
+    '}',
+    '',
+    "resource consoleLakeWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantConsole) {",
+    '  name: guid(lake.id, consolePrincipalId, storageBlobDataContributorRoleId)',
+    '  scope: lake',
+    '  properties: {',
+    "    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)",
+    '    principalId: consolePrincipalId',
+    "    principalType: 'ServicePrincipal'",
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  const clean = bicepTree();
+  const orch = clean.get(ORCHESTRATOR_REPO_REL);
+  const withSibling = `${orch}\nmodule dlzLakeGrantPassConsole 'modules/data-plane/dlz-lake-grant-pass-console.bicep' = if (crossSubLakeGrantsActive) {\n  name: 'dlz-lake-grant-pass-console'\n  scope: resourceGroup(lakeAdoptSub, lakeAdoptRg)\n  params: {\n    storageAccountName: lakeAdoptName\n    consolePrincipalId: deployAdminPlane ? adminPlane!.outputs.uamiConsolePrincipalId : ''\n    assignRoles: !skipRoleGrants\n  }\n}\n`;
+  assert.notEqual(withSibling, orch, 'the call-site half of the mutation must actually apply');
+
+  const mutated = bicepTree(
+    new Map([[ORCHESTRATOR_REPO_REL, withSibling]]),
+    new Map([[SIBLING_REL, sibling]]),
+  );
+
+  // THE COUNTERFACTUAL FIRST, measured rather than asserted: GUARDS 1-4 are
+  // blind to this, which is why GUARD 5 exists. The pass file is untouched, so
+  // GUARDS 1-3 read the same bytes as head; GUARD 4's population still sees
+  // exactly ONE call site of the pass, with its registered arguments intact.
+  assert.equal(mutated.get(GRANT_PASS_REPO_REL), clean.get(GRANT_PASS_REPO_REL), 'the pass must be byte-identical');
+  assert.equal(passCallSites(mutated).length, 1, 'GUARD 4 must still see exactly one call site — it is looking at the wrong population');
+  assert.deepEqual(misboundCallSiteArgs(mutated), [], 'GUARD 4 must be GREEN on this mutation — that is the finding');
+
+  // TOOTH 1 — the call site is an unregistered cross-subscription deployment.
+  const unregistered = unregisteredCrossSubCallSites(mutated);
+  assert.equal(unregistered.length, 1, `expected one unregistered site, got ${unregistered.join(' | ')}`);
+  assert.match(unregistered[0], /dlzLakeGrantPassConsole -> platform\/fiab\/bicep\/modules\/data-plane\/dlz-lake-grant-pass-console\.bicep/);
+
+  // TOOTH 2 — and registering it would NOT be enough: the grant itself is
+  // refused, by principal AND by role, through the registers GUARD 2 uses.
+  const grants = unjustifiedLakeScopeGrants(mutated);
+  assert.ok(
+    grants.some((g) => g.includes('grants `consolePrincipalId`')),
+    `the Console principal must be named: ${grants.join(' | ')}`,
+  );
+  assert.ok(
+    grants.some((g) => g.includes(`grants role ${SBDC_ROLE_ID}`)),
+    `the Contributor role must be named: ${grants.join(' | ')}`,
+  );
+
+  // …and the same grant reached one hop further out — the sibling registered,
+  // but DELEGATING to a grandchild module. Reachability, not adjacency.
+  const DELEGATE_REL = `${PLATFORM_PREFIX}modules/data-plane/dlz-lake-grant-pass-console-inner.bicep`;
+  const shell = [
+    "targetScope = 'resourceGroup'",
+    'param storageAccountName string',
+    "param consolePrincipalId string = ''",
+    '',
+    "module inner 'dlz-lake-grant-pass-console-inner.bicep' = {",
+    "  name: 'console-lake-write'",
+    '  params: {',
+    '    storageAccountName: storageAccountName',
+    '    consolePrincipalId: consolePrincipalId',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  const delegated = bicepTree(
+    new Map([[ORCHESTRATOR_REPO_REL, withSibling]]),
+    new Map([
+      [SIBLING_REL, shell],
+      [DELEGATE_REL, sibling],
+    ]),
+  );
+  const delegatedGrants = unjustifiedLakeScopeGrants(delegated);
+  assert.ok(
+    delegatedGrants.some((g) => g.includes(DELEGATE_REL) && g.includes('grants `consolePrincipalId`')),
+    `the grandchild's grant must be reached and named: ${delegatedGrants.join(' | ')}`,
+  );
+
+  // NEGATIVE control: head itself must be clean on both teeth, or every RED
+  // above would be indistinguishable from a guard that flags everything.
+  assert.deepEqual(unregisteredCrossSubCallSites(clean), []);
+  assert.deepEqual(unjustifiedLakeScopeGrants(clean), []);
+});
+
+test('#3338 GUARD 5 — the scope reader: what counts as cross-subscription, and what deliberately does not', () => {
+  // Direct unit cover for the population key, independent of the tree. A reader
+  // that answered `true` for everything would make the register unusable; one
+  // that answered `false` for the two-argument form would make GUARD 5 vacuous
+  // while every assertion above still passed.
+  assert.equal(crossSubscriptionScope('resourceGroup(lakeAdoptSub, lakeAdoptRg)'), true);
+  assert.equal(crossSubscriptionScope("resourceGroup(subId, 'rg-${name}-${location}')"), true);
+  assert.equal(crossSubscriptionScope('subscription(subId)'), true);
+  assert.equal(crossSubscriptionScope('managementGroup(varManagementGroupIds.intRoot)'), true);
+  // Same-subscription forms stay OUT of the population on purpose.
+  assert.equal(crossSubscriptionScope('resourceGroup(loomDlzRg)'), false);
+  assert.equal(crossSubscriptionScope('resourceGroup()'), false);
+  assert.equal(crossSubscriptionScope('subscription()'), false);
+  assert.equal(crossSubscriptionScope(null), false);
+  // A nested comma is ONE argument, not two — otherwise a same-sub
+  // `resourceGroup(concat(a, b))` would be read as cross-subscription and the
+  // register would fill with noise until someone deleted the guard.
+  assert.equal(crossSubscriptionScope('resourceGroup(concat(a, b))'), false);
+  assert.equal(crossSubscriptionScope("resourceGroup('rg-a,b')"), false);
+  assert.equal(crossSubscriptionScope('resourceGroup(concat(a, b), rg)'), true);
+  // Not a bare call, so not a module scope — fail closed rather than guess.
+  assert.equal(crossSubscriptionScope('resourceGroup(a, b).id'), false);
+  assert.deepEqual(callArgs('resourceGroup(a, b)', 'resourceGroup'), ['a', 'b']);
+  assert.equal(callArgs('resourceGroup(a, b', 'resourceGroup'), null, 'an unbalanced expression must fail closed');
 });
 
 test('the reader parses a `[for … :` declaration header — the form MODULE_RE used to miss', () => {

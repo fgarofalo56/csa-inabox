@@ -108,9 +108,10 @@
 // is no write to 403 on. #3338's real acceptance criterion is an
 // artifact-persistence path in that app, which does not exist yet.
 //
-// Four guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
-// line, and they are keyed to an INVENTORY of this file rather than to a
-// pattern. Three earlier revisions each lost to one edit — revision 1 keyed the
+// Five guards in scripts/ci/__tests__/module-existing-scope.test.mjs hold the
+// line. GUARDS 1-4 are keyed to an INVENTORY of this file and its call site;
+// GUARD 5 is keyed to an INVARIANT of the DEPLOYMENT and does not name this file
+// at all. Four earlier revisions each lost to one edit — revision 1 keyed the
 // refusal to param NAMES (`/PrincipalId$/`), so the identical Console-UAMI grant
 // under `consoleUamiObjectId` read green; revision 2 keyed it to a
 // `principalId:` at exactly four spaces inside a top-level `resource`, so an
@@ -119,10 +120,18 @@
 // declarations IN THIS FILE, so a reviewer left the file untouched and swapped
 // what main.bicep BINDS to it — one line at the call site made this pass grant
 // the Console UAMI with every guard green (measured 2026-09-09: the parent
-// commit's suite passed 35/35 on that mutation applied to the real main.bicep).
+// commit's suite passed 35/35 on that mutation applied to the real main.bicep);
+// revision 4 added the call site but stayed keyed to THIS FILENAME and to the
+// 185 `.bicep` under platform/fiab/bicep, so a reviewer simply added a FILE —
+// a 25-line sibling granting the Console UAMI Storage Blob Data Contributor on
+// the same lake, invoked at the same scope — and every guard was green again
+// (re-measured 2026-09-11 against the real shipped tree: revision 4's suite
+// rc 0, 40/40; `az bicep build` rc 0, 3,984,293 bytes, with the Contributor
+// grant readable in the emitted ARM under `[variables('lakeAdoptSub')]`).
 // Enumerating one more syntax would only move the next escape, so the key is now
 // the three bicep KEYWORDS that must begin a statement and that no layout can
-// hide, plus the call site's ARGUMENTS:
+// hide, plus the call site's ARGUMENTS, plus a fifth key that is not a filename
+// at all:
 //
 //   GUARD 1 — every `param` this file declares is in PASS_PARAM_REGISTER with a
 //     `kind` and a reason. A `principal` param must reach the `principalId` of a
@@ -142,10 +151,10 @@
 //     `s3GatewayRoleDefinitionId` @description.
 //   GUARD 3 — only modules whose grant this pass OWNS may gate their deploy on
 //     `loomStorageWillBeGranted`.
-//   GUARD 4 — this pass has exactly ONE call site in the WHOLE bicep tree (every
-//     `.bicep` under platform/fiab/bicep — 185 of them at this commit — not one
-//     hard-coded orchestrator, and including the `= [for … : {` declaration
-//     form), that call site's
+//   GUARD 4 — this pass has exactly ONE call site in the WHOLE REPOSITORY (every
+//     tracked `.bicep` — 357 of them at this commit, not the 185 under
+//     platform/fiab/bicep, and including the `= [for … : {` declaration form),
+//     that call site's
 //     `scope:` is registered, every argument bound to it is registered, and each
 //     `principal` argument is traced hop by hop — main.bicep's expression, the
 //     admin-plane output behind it, the minting module's output behind that — to
@@ -158,25 +167,57 @@
 //     reviewer beat it twice, both compiling and both 39/39 GREEN: a second call
 //     site in `modules/admin-plane/main.bicep` (where the sibling lake-RBAC
 //     delegations already live), and a second call site in `main.bicep` itself
-//     written as `= [for … : {`. Both are RED now, named with file:line; the
-//     claim above is the invariant the code enforces, not the one it aspired to.
+//     written as `= [for … : {`. Revision 2 then read 185 files and a reviewer
+//     beat it a third time from OUTSIDE that tree: `deploy/bicep/gov/main.bicep`,
+//     which `.github/workflows/deploy-gov.yml` builds and deploys, and which
+//     cloud-parity.md makes the likeliest home for a boundary-specific grant
+//     (measured 2026-09-11: revision 2's suite rc 0, 40/40 GREEN; `az bicep
+//     build` of the mutated Gov orchestrator rc 0, 126,243 bytes). The
+//     population is now the repository, proved complete against
+//     `git ls-files '*.bicep'` rather than against a directory list.
+//
+//   GUARD 5 — and the fifth key is not this file's name. Every module call site
+//     ANYWHERE in the repository whose `scope:` deploys into ANOTHER
+//     SUBSCRIPTION — a two-argument `resourceGroup()`, a `subscription(<id>)`,
+//     a `managementGroup()` — must be registered by (file, symbol, target), and
+//     every `Microsoft.Authorization/roleAssignments` REACHABLE from a call site
+//     at this pass's own lake scope, through the target module and the modules
+//     it in turn calls, must satisfy the SAME self-minted-principal and
+//     registered-role checks GUARD 2 applies here. That is the population key
+//     GUARDS 1-4 lacked: a new FILE that grants on this lake cannot avoid being
+//     deployed at this lake's scope, so it cannot avoid the register. Measured
+//     at this commit: 123 cross-subscription call sites across all 357 `.bicep`,
+//     112 of them in the vendored Azure Landing Zones tree (exempt, and the
+//     exemption is re-measured in-suite to prove that tree references neither
+//     this pass nor the lake's adopt symbols), 11 of them Loom's own and each
+//     registered with a reason.
 //
 // WHAT THAT DOES NOT CLAIM. It is source analysis over this file, the
-// tree's module declarations, and the three call-chain hops named above, not an
-// assertion about the compiled ARM — only `az bicep build` over this pass could
-// make that one, and it is not run from node:test. Nor is it a claim about every
-// route by which this pass could come to grant something else: the chain's
+// repository's module declarations, and the three call-chain hops named above,
+// not an assertion about the compiled ARM — only `az bicep build` over this pass
+// could make that one, and it is not run from node:test. Nor is it a claim about
+// every route by which this pass could come to grant something else: the chain's
 // registration stops at s3-gateway-aca.bicep's `storageIdentity` declaration,
 // and a change INSIDE that module that made the symbol resolve to a pre-existing
 // identity while keeping the `= {` form is outside what the guards read. The
 // call-site reader is line-oriented, so a declaration whose `{` is not on the
 // `module` line, or whose loop header itself contains a `:`, fails to match and
 // is not recorded — fail-CLOSED for the reader, but it means "one call site" is
-// a statement about declarations this reader can parse. What IS checkable, and
-// is checked: no new param, resource or module can enter this file, no different
-// role can be granted from it, and no second call site or different bound value
-// or call-site scope can appear anywhere in the tree, without a reviewer
-// registering the change.
+// a statement about declarations this reader can parse. GUARD 5's population key
+// is the SCOPE EXPRESSION AS WRITTEN, so a grant that reached this lake's
+// resource group without a two-argument `resourceGroup(...)` — from an
+// orchestrator already running inside the lake's subscription — is outside it;
+// that is not reachable from today's subscription-scoped `main.bicep`, which is
+// the whole reason this pass exists, but it is stated rather than implied
+// closed. `check-module-existing-scope.mjs`, the shipped checker, still walks
+// only platform/fiab/bicep and is blind to both of the 2026-09-11 bypasses
+// (rc 0, no NEW finding, on each) — its invariant is #3333's cross-RG residency,
+// not this one, and widening it is a separate change with its own measurement.
+// What IS checkable, and is checked: no new param, resource or module can enter
+// this file, no different role can be granted from it, no second call site or
+// different bound value or call-site scope can appear anywhere in the
+// repository, and no new module can be deployed into this lake's subscription at
+// all, without a reviewer registering the change.
 
 targetScope = 'resourceGroup'
 
