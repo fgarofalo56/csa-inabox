@@ -85,17 +85,21 @@ import {
   CONSOLE_APP_NAME,
   CONSOLE_IMAGE_KEY,
   CONSOLE_ROLL_SOURCES,
+  ESTATE_IMAGE_LEASE_TAGS,
   ESTATE_ROLL_LANES,
   SHA_TAG_RE,
   buildHealRequests,
   cliMain,
   comparePins,
+  decideEstateImageLeaseAcquire,
+  decideEstateImageLeaseRelease,
   decideEstateRegression,
   decideEstateRegressionAll,
   decidePinRefresh,
   describeRevisionReadFailure,
   parseRollRunTitle,
   pinsFromEnv,
+  readEstateImageLease,
   resolveRunningImageTags,
   selectLastConsoleRoll,
   selectRevisionOverwrite,
@@ -1918,6 +1922,47 @@ const AZ_STUB = [
   '  if [ -n "${AZ_SHOW_ERR:-}" ]; then printf "%s\\n" "$AZ_SHOW_ERR" >&2; exit 1; fi',
   '  printf "%s\\n" "$AZ_SHOW_IMAGE"; exit 0',
   'fi',
+  // ── THE ESTATE IMAGE-WRITE LEASE (#3676 bullet 1) ─────────────────────────
+  // A REAL tag store, not a canned answer: `az tag update` mutates the same
+  // file `az tag list` reads back. A stub that replayed a fixed document could
+  // not tell a lease that was TAKEN from one that was merely asked for, which
+  // is the only thing the acquire loop is trying to establish.
+  'if [ "$1" = "acr" ] && [ "$2" = "show" ]; then',
+  '  if [ -n "${AZ_ACR_ID_ERR:-}" ]; then printf "%s\\n" "$AZ_ACR_ID_ERR" >&2; exit 1; fi',
+  '  printf "%s\\n" "${AZ_ACR_ID:-/subscriptions/s/resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acrtest}"; exit 0',
+  'fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "list" ]; then',
+  // COUNTED, so a test can make the read succeed and then STOP succeeding. The
+  // claim protocol is read -> write -> settle -> read back, and the state the
+  // review found (the write LANDS, the read-back cannot be performed) is only
+  // reachable with a stub whose answer CHANGES between those two reads. A stub
+  // that fails every time never gets as far as writing anything.
+  '  N=$(cat "$AZ_TAG_LIST_COUNT"); N=$((N + 1)); printf "%s" "$N" > "$AZ_TAG_LIST_COUNT"',
+  '  if [ -n "${AZ_TAG_LIST_ERR_AFTER:-}" ] && [ "$N" -gt "${AZ_TAG_LIST_ERR_AFTER}" ]; then',
+  '    printf "%s\\n" "${AZ_TAG_LIST_ERR:-ERROR: (GatewayTimeout) the gateway did not receive a timely response}" >&2; exit 1',
+  '  fi',
+  '  if [ -z "${AZ_TAG_LIST_ERR_AFTER:-}" ] && [ -n "${AZ_TAG_LIST_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_LIST_ERR" >&2; exit 1; fi',
+  '  cat "$AZ_TAG_FILE"; exit 0',
+  'fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "update" ]; then',
+  '  if [ -n "${AZ_TAG_WRITE_ERR:-}" ]; then printf "%s\\n" "$AZ_TAG_WRITE_ERR" >&2; exit 1; fi',
+  '  SEEN=0; KVS=()',
+  '  for A in "$@"; do',
+  '    if [ "$SEEN" = "1" ]; then KVS+=("$A"); fi',
+  '    if [ "$A" = "--tags" ]; then SEEN=1; fi',
+  '  done',
+  '  for KV in "${KVS[@]}"; do',
+  '    printf "%s\\n" "$KV" >> "$AZ_TAG_WRITE_LOG"',
+  '    K="${KV%%=*}"; V="${KV#*=}"',
+  "    jq --arg k \"$K\" --arg v \"$V\" '.properties.tags[$k] = $v' < \"$AZ_TAG_FILE\" > \"$AZ_TAG_FILE.tmp\" && mv \"$AZ_TAG_FILE.tmp\" \"$AZ_TAG_FILE\"",
+  '  done',
+  // The claim race, made reproducible: another claimant's id lands in the tag
+  // AFTER this run's write, so the read-back cannot see itself.
+  '  if [ -n "${AZ_TAG_STEAL:-}" ]; then',
+  "    jq --arg v \"$AZ_TAG_STEAL\" '.properties.tags.loomEstateImgOwner = $v' < \"$AZ_TAG_FILE\" > \"$AZ_TAG_FILE.tmp\" && mv \"$AZ_TAG_FILE.tmp\" \"$AZ_TAG_FILE\"",
+  '  fi',
+  '  exit 0',
+  'fi',
   'echo "unstubbed az: $*" >&2; exit 99',
 ].join('\n');
 
@@ -1934,11 +1979,18 @@ function newStepCtx() {
   const fixDir = join(dir, 'fixtures');
   const runnerTemp = join(dir, 'runner-temp');
   for (const d of [binDir, fixDir, runnerTemp]) mkdirSync(d, { recursive: true });
+  // The lease tag store starts EMPTY-BUT-PRESENT. `az tag list` must always have
+  // something to read: an absent file would make the stub fail, and a stub
+  // failure is indistinguishable in the step from ARM refusing the read — the
+  // harness would then be exercising the unknown path while claiming to test the
+  // free one.
+  writeFileSync(join(dir, 'az-tags.json'), JSON.stringify({ properties: { tags: {} } }));
+  writeFileSync(join(dir, 'az-tag-writes.log'), '');
   return { dir, binDir, fixDir, runnerTemp, dispose: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, azRevisionsByApp = null, ctx = null } = {}) {
-  const yaml = readNorm(DEPLOY_WORKFLOW);
+function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisions = null, azRevisions2 = null, azRevisionsByApp = null, ctx = null, workflow = DEPLOY_WORKFLOW, leaseTags = null } = {}) {
+  const yaml = readNorm(workflow);
   const body = runBodyOf(yaml, namePrefix);
   const declared = envKeysOf(yaml, namePrefix);
   for (const k of declared) {
@@ -1992,6 +2044,25 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
     const dispatchLog = join(dir, 'gh-dispatch.log');
     writeFileSync(dispatchLog, '');
 
+    // The lease's tag store, SHARED across steps in one ctx so an acquire and
+    // the release that follows it read the same document — the hand-off that
+    // makes "did the mutex actually hold" answerable at all.
+    //
+    // SEEDED BY newStepCtx(), WRITTEN HERE ONLY WHEN A TEST SUPPLIES A STATE.
+    // The first draft was `if (!existsSync(f)) writeFileSync(f, ...)`, which
+    // CodeQL correctly flagged as check-then-write (js/file-system-race): the
+    // condition and the write are two operations over one path. Owning the
+    // creation at the one place that creates the directory removes the window
+    // instead of narrowing it, and it reads better besides — a reused ctx keeps
+    // whatever the previous step left, which is the property these tests need.
+    const tagFile = join(dir, 'az-tags.json');
+    const tagWriteLog = join(dir, 'az-tag-writes.log');
+    const tagListCount = join(dir, 'az-tag-list.count');
+    // Reset per STEP, like AZ_REV_COUNT: "how many reads has this step done" is
+    // a per-step question even when the tag STORE is shared across steps.
+    writeFileSync(tagListCount, '0');
+    if (leaseTags) writeFileSync(tagFile, JSON.stringify(leaseTags));
+
     const script = join(dir, 'step.sh');
     writeFileSync(script, body, 'utf8');
     const ghEnvFile = join(dir, 'github_env');
@@ -2019,6 +2090,9 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
         ...(azRevisions2 ? { AZ_REV_FILE2: azRevFile2 } : {}),
         ...(azRevisionsByApp ? { AZ_REV_DIR: azRevDir } : {}),
         AZ_REV_COUNT: azRevCount,
+        AZ_TAG_FILE: tagFile,
+        AZ_TAG_WRITE_LOG: tagWriteLog,
+        AZ_TAG_LIST_COUNT: tagListCount,
       },
     });
     return {
@@ -2027,6 +2101,8 @@ function runStep(namePrefix, { env = {}, fixtures = {}, azList = null, azRevisio
       envFile: readFileSync(ghEnvFile, 'utf8'),
       outFile: readFileSync(ghOutFile, 'utf8'),
       dispatches: readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean),
+      tags: JSON.parse(readFileSync(tagFile, 'utf8'))?.properties?.tags ?? null,
+      tagWrites: readFileSync(tagWriteLog, 'utf8').split('\n').filter(Boolean),
     };
   } finally {
     if (!ctx) own.dispose();
@@ -4160,4 +4236,1642 @@ test('the digest re-assertion step carries the id the rollback gate reads', () =
   assert.ok(at >= 0, 'the digest re-assertion step was renamed — the rollback gate now reads a dead id');
   assert.equal(lines[at + 1].trim(), 'id: digest',
     'the digest re-assertion step lost its `id: digest`, so steps.digest.outcome is empty in the rollback gate');
+});
+
+// ===========================================================================
+// THE ESTATE IMAGE-WRITE LEASE — #3676 acceptance bullet 1
+// ===========================================================================
+//
+// Bullet 2 (the post-apply gate) shipped in #4318 and was measured executing on
+// two live scheduled runs. Bullet 1 — "the two writers cannot both win" — was
+// re-measured NOT DONE on 2026-09-07: `grep -c '^concurrency:'` returned 0 on
+// all four deploy lanes and no image-write mutex existed. These tests cover the
+// lease that arbitrates the deploy lane's apply against loom-roll-and-validate,
+// which is the pair that collided on 2026-08-19 — NOT every writer of the
+// field. The POPULATION test below reads the writers off the workflow directory
+// and holds the uncovered ones (loom-dataplane-roll, full-app-deploy-commercial,
+// console-bluegreen-roll, this lane's own rollback) on a dated allowlist.
+// Bullet 1 is therefore narrowed, not closed, and #3676 stays open.
+//
+// A `concurrency:` group is deliberately NOT the mechanism (GitHub keeps one
+// pending run per group and CANCELS the previous one, converting a visible
+// self-healing revert into a silently dropped roll), so nothing here asserts
+// the presence of one.
+
+const LEASE_ACQUIRE_STEP = 'Take the ESTATE IMAGE-WRITE lease';
+const LEASE_RELEASE_STEP = 'Release the ESTATE IMAGE-WRITE lease';
+
+/** A tag document in the shape `az tag list --resource-id` returns. */
+const tagDoc = (tags = {}) => ({ id: 'acr-resource-id/providers/Microsoft.Resources/tags/default', name: 'default', properties: { tags } });
+
+/** A live lease held by somebody else — the run id is the 2026-08-17 deploy. */
+const foreignLease = (expires) => tagDoc({
+  [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:fgarofalo56/csa-inabox:32004118361:1',
+  [ESTATE_IMAGE_LEASE_TAGS.expires]: String(expires),
+  [ESTATE_IMAGE_LEASE_TAGS.holder]: 'https://github.com/fgarofalo56/csa-inabox/actions/runs/32004118361',
+  [ESTATE_IMAGE_LEASE_TAGS.since]: '2026-08-17T07:09:09Z',
+});
+
+const ME = 'gha:fgarofalo56/csa-inabox:99:1';
+const NOW = 1755420000;
+
+test('LEASE: a free registry is CLAIMED, with an expiry derived from the TTL', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: tagDoc({}), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'claim');
+  assert.equal(v.expiresEpoch, NOW + 900);
+});
+
+test('LEASE: a LIVE foreign holder is WAITED for, never claimed — this is the whole point', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW + 600), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 300,
+  });
+  assert.equal(v.action, 'wait');
+  assert.equal(v.remainingSeconds, 600);
+  assert.match(v.reason, /held by 'gha:fgarofalo56\/csa-inabox:32004118361:1'/);
+});
+
+test('LEASE: the wait is BOUNDED — at the deadline it REFUSES rather than writing anyway', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW + 600), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW,
+  });
+  assert.equal(v.action, 'refuse');
+  assert.match(v.reason, /wrote NOTHING/);
+});
+
+test('LEASE: an EXPIRED holder is taken over, loudly', () => {
+  const v = decideEstateImageLeaseAcquire({
+    doc: foreignLease(NOW - 30), me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'claim');
+  assert.match(v.reason, /STALE .* expired 30s ago/);
+});
+
+test('LEASE: this run RE-ENTERS its own lease instead of deadlocking against itself', () => {
+  const doc = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: ME,
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 10),
+  });
+  const v = decideEstateImageLeaseAcquire({ doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW });
+  assert.equal(v.action, 'reentrant');
+  assert.equal(v.expiresEpoch, NOW + 900);
+});
+
+test('LEASE: an UNREADABLE mutex is unknown and NEVER free — the fail-open that would void it', () => {
+  const v = decideEstateImageLeaseAcquire({
+    readError: "AuthorizationFailed: does not have authorization to perform action 'Microsoft.Resources/tags/read'",
+    me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /NOT established whether another lane is mid-write/);
+});
+
+test('LEASE: a CHANGED az projection is unknown, not an untagged registry', () => {
+  // If `az tag list` ever stops returning `properties`, reading that as "no
+  // tags" would report the mutex FREE to both lanes at the same instant — a
+  // guard that fails open at the exact moment it stopped working.
+  for (const doc of [{ tags: {} }, [], 'nope', null]) {
+    const v = decideEstateImageLeaseAcquire({
+      doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+    });
+    assert.equal(v.action, 'unknown', `doc ${JSON.stringify(doc)} must not resolve to a claimable lease`);
+  }
+  assert.equal(readEstateImageLease(tagDoc({})).status, 'read');
+});
+
+test('LEASE: an owner with an UNPARSEABLE expiry is unknown, not expired', () => {
+  // Treating it as expired would let a second writer in; waiting on it forever
+  // would deadlock the estate. It is UNKNOWN, with the exact clearing command.
+  const doc = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:other:1:1',
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: 'soon',
+  });
+  const v = decideEstateImageLeaseAcquire({ doc, me: ME, nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60 });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /--operation Merge --tags loomEstateImgOwner=none/);
+});
+
+test('LEASE: a holder id carrying "=" is refused before it can be written', () => {
+  // `az tag update --tags k=v` splits on the first '=', so such an id would be
+  // stored truncated and could never match itself on read-back — a lease held
+  // by a name nobody can spell.
+  const v = decideEstateImageLeaseAcquire({
+    doc: tagDoc({}), me: 'gha:repo:1:1=x', nowEpoch: NOW, ttlSeconds: 900, waitDeadlineEpoch: NOW + 60,
+  });
+  assert.equal(v.action, 'usage');
+});
+
+test('LEASE RELEASE: the recorded holder CLEARS; a stranger does NOT', () => {
+  const mineDoc = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 10) });
+  assert.equal(decideEstateImageLeaseRelease({ doc: mineDoc, me: ME, state: 'held' }).action, 'clear');
+
+  const stolen = decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 600), me: ME, state: 'held' });
+  assert.equal(stolen.action, 'stolen');
+  assert.match(stolen.reason, /NOT clearing the tags/);
+});
+
+test('LEASE RELEASE: an ERASED lease is its own verdict, and names no culprit it did not establish', () => {
+  const v = decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'held' });
+  assert.equal(v.action, 'erased');
+  assert.match(v.reason, /is NOT established/);
+  // R7: it may describe shapes to check, never assert which one happened.
+  assert.doesNotMatch(v.reason, /was (erased|removed|deleted) by (the|an) (apply|ARM)/i);
+});
+
+test('LEASE RELEASE: a run that never took the lease releases nothing', () => {
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'none' }).action, 'noop');
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: '' }).action, 'usage');
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'maybe' }).action, 'usage');
+});
+
+// ---------------------------------------------------------------------------
+// THE CLAIM THAT LANDS AND IS NEVER CONFIRMED. `az tag update` returns 0 and
+// the read-back cannot be performed: this run's owner id is in the registry
+// while it holds nothing. If that state never reaches the release path the
+// mutex is stranded for a FULL TTL and every write on the other lane queues
+// behind a run that has already exited — a transient ARM tag read turned into
+// a 45-minute estate freeze, i.e. the outage this lease exists to prevent,
+// reintroduced on a different key.
+//
+// `claimed` differs from `held` in what may be ASSERTED, not in whether the
+// tags get cleaned up: a run that never confirmed cannot have lost exclusivity,
+// so another run's id in the tag is an ordinary lost race, not the `stolen`
+// incident.
+// ---------------------------------------------------------------------------
+
+test('LEASE RELEASE: a CLAIMED-but-unconfirmed run still clears the id it left behind', () => {
+  const mine = tagDoc({
+    [ESTATE_IMAGE_LEASE_TAGS.owner]: ME,
+    [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900),
+  });
+  const v = decideEstateImageLeaseRelease({ doc: mine, me: ME, state: 'claimed' });
+  assert.equal(v.action, 'clear', 'a claim that landed and was never cleared strands the mutex for a whole TTL');
+  assert.match(v.reason, /never CONFIRMED/);
+  // R7: it did not establish exclusivity, so it may not report on it either way.
+  assert.doesNotMatch(v.reason, /was NOT exclusive\./);
+});
+
+test('LEASE RELEASE: a CLAIMED run that LOST the race leaves the winner alone, and does not call it theft', () => {
+  const v = decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 900), me: ME, state: 'claimed' });
+  assert.equal(v.action, 'noop', 'clearing here would erase the WINNER\'s live lease — the erasure this mutex exists to prevent');
+  assert.match(v.reason, /LOSING the claim race/);
+  assert.doesNotMatch(v.reason, /Two lanes believed they held the same mutex/,
+    'R7: a run that never confirmed cannot assert that two lanes held the mutex');
+
+  // The same tags under `held` ARE the incident, and must still go red.
+  assert.equal(decideEstateImageLeaseRelease({ doc: foreignLease(NOW + 900), me: ME, state: 'held' }).action, 'stolen');
+});
+
+test('LEASE RELEASE: a CLAIMED run over free tags has nothing stranded, so it is NOT the erasure case', () => {
+  const v = decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'claimed' });
+  assert.equal(v.action, 'noop');
+  assert.match(v.reason, /nothing to clear/);
+  // ... while the confirmed holder seeing the same thing is still the incident.
+  assert.equal(decideEstateImageLeaseRelease({ doc: tagDoc({}), me: ME, state: 'held' }).action, 'erased');
+});
+
+test('LEASE RELEASE: an unreadable read-back under CLAIMED names the strand and the exact clearing command', () => {
+  const v = decideEstateImageLeaseRelease({ readError: 'ARM said no', me: ME, state: 'claimed' });
+  assert.equal(v.action, 'unknown');
+  assert.match(v.reason, /is NOT established/, 'R7: it may not report a strand it could not observe');
+  assert.match(v.reason, /az tag update --resource-id/, 'deploy-integrity R6: the remediation must be concrete');
+  assert.doesNotMatch(v.reason, /this run holds the estate image-write lease and/,
+    'R7: a claimed-but-unconfirmed run does not hold anything');
+});
+
+// ---------------------------------------------------------------------------
+// The CLI, driven at its real entrypoint — the exit codes ARE the protocol the
+// workflow loop branches on, so they are asserted rather than assumed.
+// ---------------------------------------------------------------------------
+
+const TAGS_PATH = 'tags.json';
+
+function leaseCli(argv, { doc = null } = {}) {
+  const out = [];
+  const written = new Map();
+  const files = new Map();
+  if (doc !== null) files.set(TAGS_PATH, JSON.stringify(doc));
+  const rc = cliMain(argv, {
+    readFile: (p) => {
+      if (!files.has(p)) throw new Error(`ENOENT ${p}`);
+      return files.get(p);
+    },
+    writeFile: (p, body) => written.set(p, body),
+    writeEnv: () => {},
+    writeOutput: (line) => out.push(line),
+    log: (s) => out.push(s),
+    env: {},
+  });
+  return { rc, out: out.join('\n'), written };
+}
+
+test('LEASE CLI: the exit codes are the protocol — 0 claim, 3 wait, 1 refuse, 4 degrade, 2 usage', () => {
+  const base = ['--me', ME, '--now', String(NOW), '--ttl-seconds', '900', '--tags', TAGS_PATH];
+
+  const claim = leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW + 60),
+    '--unknown-policy', 'refuse', '--expires-out', 'exp.txt'], { doc: tagDoc({}) });
+  assert.equal(claim.rc, 0);
+  assert.equal(claim.written.get('exp.txt'), `${NOW + 900}\n`,
+    'the expiry must reach a FILE: the shell loop needs it on the next line, and a step output is collected at step end');
+
+  assert.equal(leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW + 300),
+    '--unknown-policy', 'refuse'], { doc: foreignLease(NOW + 600) }).rc, 3, 'a live holder before the deadline = WAIT');
+
+  assert.equal(leaseCli(['estate-image-lease-acquire', ...base, '--wait-deadline', String(NOW),
+    '--unknown-policy', 'refuse'], { doc: foreignLease(NOW + 600) }).rc, 1, 'at the deadline = REFUSE');
+
+  const unknownArgs = ['estate-image-lease-acquire', '--me', ME, '--now', String(NOW), '--ttl-seconds', '900',
+    '--wait-deadline', String(NOW + 60), '--tags-error', 'ARM said no'];
+  assert.equal(leaseCli([...unknownArgs, '--unknown-policy', 'refuse']).rc, 1);
+  const degraded = leaseCli([...unknownArgs, '--unknown-policy', 'degrade']);
+  assert.equal(degraded.rc, 4);
+  assert.match(degraded.out, /PROCEEDING UNLEASED/,
+    'the degraded path must be LOUD — a silent unleased write is the defect, not the fix');
+
+  // --unknown-policy has NO default: a lane must not inherit the other lane's
+  // risk appetite by omitting the flag.
+  assert.equal(leaseCli([...unknownArgs]).rc, 2);
+  assert.equal(leaseCli([...unknownArgs, '--unknown-policy', 'maybe']).rc, 2);
+});
+
+test('LEASE CLI: neither --tags nor --tags-error, or BOTH, is a usage error on every subcommand', () => {
+  for (const cmd of ['estate-image-lease-acquire', 'estate-image-lease-confirm', 'estate-image-lease-release']) {
+    assert.equal(leaseCli([cmd, '--me', ME, '--now', String(NOW)]).rc, 2, `${cmd}: neither`);
+    assert.equal(leaseCli([cmd, '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH,
+      '--tags-error', 'x'], { doc: tagDoc({}) }).rc, 2, `${cmd}: both`);
+  }
+});
+
+test('LEASE CLI: confirm is 0 only when the registry names THIS run', () => {
+  const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0);
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 1, 'another id in the tag means this run LOST the claim race');
+  assert.equal(leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW),
+    '--tags-error', 'read failed']).rc, 1, 'an unreadable read-back is not a confirmation');
+});
+
+test('LEASE CLI (R7): the confirm failure line asserts only what the READ-BACK established', () => {
+  // The exit code was asserted above and the MESSAGE was not, which is how this
+  // shipped: `estate-image-lease-confirm` forwarded the ACQUIRE path's refusal
+  // verbatim, and that string is written for a run that has not claimed yet. On
+  // the ORDINARY lost-claim race — the exact event the settle-and-read-back
+  // exists to detect — it told the operator "TIMED OUT waiting" (no wait
+  // happens: `waitDeadlineEpoch` is 0, so the timeout branch is unconditional),
+  // "this run wrote NOTHING" (in the same sentence as "after the claim write" —
+  // the four claim tags WERE written, which is what `claimed` records), and a
+  // remaining-TTL figure belonging to the other run's hold.
+  //
+  // A green `rc === 1` is exactly as green over the false line as over the true
+  // one. So the line is pinned.
+  const lost = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) });
+  const free = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW), '--tags', TAGS_PATH],
+    { doc: tagDoc({}) });
+  const unreadable = leaseCli(['estate-image-lease-confirm', '--me', ME, '--now', String(NOW),
+    '--tags-error', 'az tag list exited 1: forbidden']);
+  for (const r of [lost, free, unreadable]) assert.equal(r.rc, 1);
+
+  // The three assertions the code could not make. Checked FIRST and on EVERY
+  // failure branch, because forwarding the acquire reason put them on all of
+  // them, and checked before the positive matches so a re-forwarded reason reds
+  // on the R7 claim itself rather than on a missing phrase.
+  for (const [label, r] of [['lost', lost], ['free', free], ['unreadable', unreadable]]) {
+    assert.doesNotMatch(r.out, /wrote NOTHING/,
+      `the ${label} confirm line claims the run "wrote NOTHING" — it wrote its claim tags, and that is the state the release step has to clean up`);
+    assert.doesNotMatch(r.out, /TIMED OUT/,
+      `the ${label} confirm line claims a timeout — confirm passes waitDeadlineEpoch 0 and waits for nothing`);
+    assert.doesNotMatch(r.out, /for another -?\d+s/,
+      `the ${label} confirm line carries the acquire path's remaining-TTL arithmetic into a context where it means nothing`);
+  }
+
+  assert.match(lost.out, /names another run, 'gha:fgarofalo56\/csa-inabox:32004118361:1'/,
+    'the lost-claim line must still name the holder and its url — that is the operator-actionable part');
+  assert.match(lost.out, /HAS written its own claim tags/,
+    'the confirm line must say the claim tags may be recorded; a run told it "wrote NOTHING" has no reason to look for a strand');
+  assert.match(free.out, /records no LIVE holder/);
+  assert.match(free.out, /WHY is UNKNOWN from here/,
+    'a read-back that finds the tag empty does not establish WHY, and may not pick one of the causes');
+  assert.match(unreadable.out, /did not establish an owner/);
+});
+
+test('LEASE CLI: release exit codes distinguish CLEAR from "do not touch those tags"', () => {
+  const mine = tagDoc({ [ESTATE_IMAGE_LEASE_TAGS.owner]: ME, [ESTATE_IMAGE_LEASE_TAGS.expires]: String(NOW + 900) });
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0, '0 is the ONLY code that instructs the caller to write the clearing tags');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: mine }).rc, 0, 'a claim that landed and still names this run must be cleared, or it strands the mutex');
+
+  // 5 = fine, and DO NOT WRITE. Collapsing these into 0 would make the release
+  // step write `owner=none` over the winner of a claim race — the erasure this
+  // whole mutex exists to make impossible, performed by the release path.
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'none', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 5);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 5, 'a lost claim race must not clear the winner\'s tags');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 5, 'nothing of this run\'s is stranded, so there is nothing to write');
+
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: tagDoc({}) }).rc, 1, "ERASED must go red — it means this run's writes were not exclusive");
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held', '--tags', TAGS_PATH],
+    { doc: foreignLease(NOW + 900) }).rc, 1, 'STOLEN must go red for the same reason');
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'held',
+    '--tags-error', 'ARM said no']).rc, 1);
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--state', 'claimed',
+    '--tags-error', 'ARM said no']).rc, 1, 'a possible strand this run cannot see must be LOUD, not tidied away');
+
+  // `--state` has no default, for the same reason `--unknown-policy` has none.
+  assert.equal(leaseCli(['estate-image-lease-release', '--me', ME, '--tags', TAGS_PATH], { doc: mine }).rc, 2);
+});
+
+// ---------------------------------------------------------------------------
+// THE WIRING. A decision nobody calls arbitrates nothing, and this whole issue
+// is a case of every part working and the whole not.
+// ---------------------------------------------------------------------------
+
+test('WIRING: BOTH LEASED image writers take the lease, and the two shells are the SAME BYTES', () => {
+  const deploy = readNorm(DEPLOY_WORKFLOW);
+  const roll = readNorm(ROLL_WORKFLOW);
+  for (const [label, yaml] of [['deploy-fiab-commercial', deploy], ['loom-roll-and-validate', roll]]) {
+    assert.ok(yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`), `${label} does not take the image-write lease`);
+    assert.ok(yaml.includes(`      - name: ${LEASE_RELEASE_STEP}`), `${label} never releases the image-write lease`);
+  }
+  // Every difference between the lanes is an `env:` value. If the bodies ever
+  // diverge, one lane gets a fix and the other silently does not — the exact
+  // shape of #3888 (a re-pin ported to gcch/il5 without its guard).
+  assert.equal(runBodyOf(deploy, LEASE_ACQUIRE_STEP), runBodyOf(roll, LEASE_ACQUIRE_STEP),
+    'the two lanes\' lease-acquire shells have drifted apart');
+  assert.equal(runBodyOf(deploy, LEASE_RELEASE_STEP), runBodyOf(roll, LEASE_RELEASE_STEP),
+    'the two lanes\' lease-release shells have drifted apart');
+});
+
+// ---------------------------------------------------------------------------
+// THE POPULATION. The test above asserts a step name is present in two NAMED
+// files. It cannot notice a third image writer, and it could not notice a
+// fourth added tomorrow — which is how this PR shipped a review round asserting
+// the image field has "exactly two writers" in five places when the tree held
+// more. Presence is not reachability, and neither is coverage: a claim about a
+// POPULATION has to be measured against the population.
+//
+// So the writers are read off `.github/workflows/` rather than listed, exactly
+// as DEPLOY_LANES is (#3907), and every file that writes the field must EITHER
+// take this lease OR carry a dated, reasoned allowlist entry with an exact
+// count. Adding a writer, or a second write inside an already-listed file, goes
+// red until someone records why it is allowed to race.
+// ---------------------------------------------------------------------------
+
+/**
+ * One workflow's shell lines, with `\`-continuations joined.
+ *
+ * Shared by BOTH write-site scanners below. The repo's real writers are wrapped
+ * over four or five lines and several go through
+ * `deploy-retry.mjs -- az … `, so a per-physical-line search finds neither.
+ * Comment lines are dropped, because this file's own #2828-style commentary
+ * quotes the command it is describing and a guard that counts prose is a guard
+ * that reds on an edit to a comment.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @returns {{line:number, text:string}[]} 1-based line number + joined text
+ */
+function logicalShellLines(yaml) {
+  const lines = yaml.split('\n');
+  /** @type {{line:number, text:string}[]} */
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*#/.test(lines[i])) continue;
+    let logical = lines[i];
+    let j = i;
+    while (/\\\s*$/.test(lines[j]) && j + 1 < lines.length) {
+      j += 1;
+      logical += ` ${lines[j].replace(/^\s+/, '')}`;
+    }
+    out.push({ line: i + 1, text: logical });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * The `az containerapp` **CLI** image-write sites in one workflow.
+ *
+ * THIS ARM IS THE CLI ONE, AND ONLY THE CLI ONE. Naming that is not pedantry:
+ * an earlier revision of this docblock, of both lane comments, of
+ * reconcile-policy.mjs's header and of this PR's body said the guard required
+ * "every image writer" to take the lease or carry an allowlist entry. It
+ * required that of every `az containerapp` writer, and
+ * `properties.template.containers[0].image` has a SECOND writer mechanism —
+ * an ARM template deploy — which this function cannot see by construction. The
+ * leased deploy lane's own write IS one, which is why the population assertion
+ * below used to expect `deploy-fiab-commercial.yml` to be absent from this
+ * arm's results. `armImageWriteSites` is the second arm; between them the claim
+ * is again as wide as it is stated to be.
+ *
+ * KEYED TO THE SHAPE, NOT TO ONE SPELLING. The first cut of this matched
+ * `az containerapp update` AND `--image`, which is one of at least four ways
+ * the CLI writes the field — and the tree at head already held a second:
+ * `gov-provision-mongo.yml` writes it twice, once through `update --image` and
+ * once through `create … --image` in the else-branch of the same `if`. A guard
+ * that measures one spelling of a population makes the same over-broad claim it
+ * was written to stop, one level down (`each guard fix was a narrower
+ * enumeration`). So the needle is (verb ∈ update|create|up|revision copy) AND
+ * (an `--image` flag, OR a `--set` naming `containers[…].image`, OR a `--yaml`
+ * spec, which carries the image inside the file). Each arm has its own positive
+ * control below, so a rotted arm reds instead of silently reading zero.
+ *
+ * NOT boundary-filtered, on purpose. Which resource group a `-g "$RG"` resolves
+ * to is a runtime fact, and a guard that guesses it would exclude the writer it
+ * guessed wrong about. Every writer is in the population; the allowlist is
+ * where the boundary and the reason get stated by a human.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @returns {number[]} 1-based line numbers of the write sites
+ */
+function imageWriteSites(yaml) {
+  const hits = [];
+  for (const { line, text } of logicalShellLines(yaml)) {
+    const mutates = /az\s+containerapp\s+(update|create|up|revision\s+copy)\b/.test(text);
+    if (mutates && (
+      /(^|\s)--image[\s=]/.test(text)
+      || /(^|\s)--set[\s=][^\n]*containers\s*\[[^\]]*\]\s*\.\s*image/.test(text)
+      || /(^|\s)--yaml[\s=]/.test(text)
+    )) {
+      hits.push(line);
+    }
+  }
+  return hits;
+}
+
+// ---------------------------------------------------------------------------
+// ARM ARM. The second mechanism that writes
+// `properties.template.containers[0].image`: `az deployment <scope> create`
+// over a template that declares `Microsoft.App/containerApps`. The CLI arm
+// above is blind to it, and the tree holds an AUTOMATIC, COMMERCIAL, UNLEASED
+// instance — csa-loom-post-deploy-bootstrap.yml's iceberg-catalog deploy, which
+// deploy-fiab-commercial chains as `needs: deploy-validate`, i.e. AFTER the
+// deploy lane has released this lease, so it can write that field concurrently
+// with the leased roll lane with no mutex at all.
+// ---------------------------------------------------------------------------
+
+/** Memo for {@link templateRendersContainerApp}; keyed by absolute path. */
+const TEMPLATE_RENDER_MEMO = new Map();
+
+/**
+ * Does this bicep/JSON template — or any module it pulls in — declare a
+ * Container App?
+ *
+ * Transitive on purpose. `platform/fiab/bicep/main.bicep` declares no
+ * `Microsoft.App/containerApps` itself; it reaches them through the admin-plane
+ * module chain, and a one-level check would report the three Gov boundary
+ * deploys as non-writers. Bounded depth and memoised so a module cycle
+ * terminates rather than hanging the suite.
+ *
+ * @param {string} absPath
+ * @param {number} [depth]
+ * @returns {boolean}
+ */
+function templateRendersContainerApp(absPath, depth = 0) {
+  if (depth > 10) return false;
+  if (TEMPLATE_RENDER_MEMO.has(absPath)) return TEMPLATE_RENDER_MEMO.get(absPath);
+  if (!existsSync(absPath)) {
+    // Callers classify a missing template as OPAQUE before they get here; this
+    // is the module-walk case (a `module x '…'` pointing at a path that is not
+    // there), where "absent" genuinely contributes no Container App.
+    TEMPLATE_RENDER_MEMO.set(absPath, false);
+    return false;
+  }
+  const text = readFileSync(absPath, 'utf8');
+  if (/Microsoft\.App\/containerApps/.test(text)) {
+    TEMPLATE_RENDER_MEMO.set(absPath, true);
+    return true;
+  }
+  let found = false;
+  for (const m of text.matchAll(/^\s*module\s+\S+\s+'([^']+)'/gm)) {
+    if (templateRendersContainerApp(resolve(dirname(absPath), m[1]), depth + 1)) {
+      found = true;
+      break;
+    }
+  }
+  TEMPLATE_RENDER_MEMO.set(absPath, found);
+  return found;
+}
+
+/**
+ * The ARM-template image-write sites in one workflow, in THREE buckets.
+ *
+ * "I COULD NOT RESOLVE THE TEMPLATE" IS NOT "IT IS NOT A WRITER". That
+ * collapse is deploy-integrity R7 — the same one that turned "I could not reach
+ * the registry" into "the tag does not exist" — and a scanner that made it
+ * would read `-f "$BICEP_PATH"` as a clean bill of health. So an
+ * `az deployment … create` whose template cannot be resolved STATICALLY lands
+ * in `opaque`, which the population test requires to be disclosed and
+ * exactly counted, exactly like a writer.
+ *
+ * `$GITHUB_WORKSPACE/` is stripped before resolution because in Actions it IS
+ * the repo root by definition — a narrow, stated substitution, not a guess. Any
+ * other `$` in the path stays opaque.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @param {string} [root] repo root the template paths resolve against
+ * @returns {{writers:number[], opaque:number[]}}
+ */
+function armImageWriteSites(yaml, root = REPO_ROOT) {
+  /** @type {number[]} */ const writers = [];
+  /** @type {number[]} */ const opaque = [];
+  for (const { line, text } of logicalShellLines(yaml)) {
+    if (!/az\s+deployment\s+(group|sub|subscription|tenant|mg|management-group)\s+create\b/.test(text)) continue;
+    const m = text.match(/(?:^|\s)(?:-f|--template-file)[\s=]+["']?([^"'\s]+)/);
+    if (!m) {
+      // No `--template-file` on this logical line. Either the flag lives in an
+      // array the shell expands at runtime (deploy-fiab-commercial's
+      // `"${DEPLOY_ARGS[@]}"`), or it is `--template-uri` / `--template-spec`,
+      // or the line is prose quoting the command. All three are unresolvable
+      // HERE and none of them is evidence of not writing.
+      opaque.push(line);
+      continue;
+    }
+    const ref = m[1].replace(/^\$\{?GITHUB_WORKSPACE\}?\//, '').replace(/^\.\//, '');
+    if (/[$]/.test(ref)) { opaque.push(line); continue; }
+    const abs = resolve(root, ref);
+    if (!existsSync(abs)) { opaque.push(line); continue; }
+    if (templateRendersContainerApp(abs)) writers.push(line);
+  }
+  return { writers, opaque };
+}
+
+/** The two lanes this lease is wired into. Asserted, not assumed. */
+const LEASED_WRITER_FILES = Object.freeze(['deploy-fiab-commercial.yml', 'loom-roll-and-validate.yml']);
+
+/**
+ * Image writers that do NOT take the estate image-write lease, with the reason
+ * and the date the reason was taken. `writes` is the exact site count, so a new
+ * write inside an already-listed file is also a red.
+ *
+ * An entry here is a DISCLOSED GAP, not an exemption: #3676 stays open for
+ * every one of them.
+ */
+const UNLEASED_IMAGE_WRITERS = Object.freeze({
+  'loom-dataplane-roll.yml': {
+    writes: 2,
+    recorded: '2026-09-08',
+    reason:
+      'THE REAL SURVIVING GAP. Roll + rollback over loom-unity / iceberg-catalog / loom-trino, on the SAME `workflow_run: build-fiab-images-acr-tasks` completion that triggers the leased roll lane, against apps the nightly apply re-renders from appImageTags (reconcile-policy.mjs ESTATE_ROLL_LANES names this lane for three of the four apps, and deploy-fiab-commercial dispatches it in the #3799 auto-heal for "the image this apply overwrote"). The #3676 shape survives here. Not leased in this PR because it is a second lane with its own rollback and boundary inputs; #3676 stays open for it.',
+  },
+  'full-app-deploy-commercial.yml': {
+    writes: 1,
+    recorded: '2026-09-08',
+    reason:
+      'workflow_dispatch only, loops every app. A human-run full app deploy racing the nightly apply is a possible collision, but it is not automatic and it is not the 2026-08-19 shape. #3676.',
+  },
+  'console-bluegreen-roll.yml': {
+    writes: 1,
+    recorded: '2026-09-08',
+    reason:
+      'workflow_dispatch only, loom-console — the same app the leased roll lane writes, so a dispatched blue/green roll CAN still race the apply. Not automatic. #3676.',
+  },
+  'gov-console-roll.yml': {
+    writes: 3,
+    recorded: '2026-09-08',
+    reason:
+      'Gov boundary. Two real writes (roll + rollback) and one `ROLLBACK_ADVICE=` string that quotes the command for the operator; the string is counted rather than pattern-excluded, because a scanner clever enough to drop it is a scanner that can drop a real write. No estate image-write lease exists in GCC/GCC-High/IL5 at all: per cloud-parity.md this capability is INCOMPLETE until ported. #3676.',
+  },
+  'gov-provision-mongo.yml': {
+    writes: 2,
+    recorded: '2026-09-09',
+    reason:
+      'Gov boundary, provisioning-time writes of a pinned upstream image (loom-mongo:7) on a dispatch lane, not a roll of a Loom-built app. TWO sites, not one: `az containerapp update --image` when the app already exists, and `az containerapp create … --image` in the else-branch of the same `if`. The create branch was invisible to the first version of this scanner, which is why the needle is now keyed to the SHAPE. Same unported-to-Gov gap as above. #3676.',
+  },
+  'deploy-portal.yml': {
+    writes: 2,
+    recorded: '2026-09-08',
+    reason:
+      'Different estate entirely: rg-csa-portal-<env>, csa-portal-backend / csa-portal-frontend. The admin-plane apply never renders those apps, so there is no shared field to arbitrate.',
+  },
+});
+
+/**
+ * ARM-TEMPLATE image writers that do NOT take the estate image-write lease.
+ *
+ * Same discipline as UNLEASED_IMAGE_WRITERS — exact site count, ISO date,
+ * reason naming a tracking issue — for the mechanism the CLI arm cannot see.
+ * Measured 2026-09-11 by `armImageWriteSites` over `.github/workflows/`.
+ *
+ * An entry here is a DISCLOSED GAP, not an exemption. #3676 stays open for
+ * every one of them, and the first entry below is a GENUINE NEW FINDING, not a
+ * bookkeeping row: it is automatic, Commercial, and unmutexed.
+ */
+const UNLEASED_ARM_IMAGE_WRITERS = Object.freeze({
+  'csa-loom-post-deploy-bootstrap.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'THE SURVIVING AUTOMATIC COMMERCIAL ARM WRITER, and the one that motivated this whole second arm. `az deployment group create -f platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep -p catalogConfig=…` where catalogConfig carries "image":"$UNITY_IMG"; the module sets template.containers[0].image. It is NOT a dispatch lane: deploy-fiab-commercial runs this whole workflow as a chained `uses:` job on `needs: deploy-validate`, i.e. AFTER the deploy lane has RELEASED this lease, so it can write the image field concurrently with loom-dataplane-roll or the leased roll lane with no mutex. iceberg-catalog is also named in reconcile-policy.mjs ESTATE_ROLL_LANES for the #3799 auto-heal, so it is squarely inside the population this lease is about. Not leased in this PR because the lease shell is a 180-line block duplicated byte-identically across its lanes and a third copy needs its own TTL/wait/unknown-policy decision taken deliberately. #3676.',
+  },
+  'deploy-fiab-gcc.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'GCC boundary. `az deployment sub create -f platform/fiab/bicep/main.bicep`, which reaches Microsoft.App/containerApps through the admin-plane module chain. No estate image-write lease exists in GCC/GCC-High/IL5 at all: per cloud-parity.md this capability is INCOMPLETE until ported. GCC is additionally supported-in-code and never exercised (0 of 75 recorded runs executed a deploy step), so this site has never actually written anything. #3676.',
+  },
+  'deploy-fiab-gcch.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'GCC-High boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape, and this one DOES carry deploy receipts. Unported sovereign gap: no estate image-write lease exists in that boundary. cloud-parity.md, #3676.',
+  },
+  'deploy-fiab-il5.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'IL5 boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape. Unported sovereign gap, same as GCC-High. cloud-parity.md, #3676.',
+  },
+  'deploy-loom-sharing.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep does set containers[].image, but that app is not rendered by admin-plane/main.bicep, so the nightly apply never writes the same field — no shared field to arbitrate. Listed rather than pattern-excluded so the claim is checked by a human when the admin plane grows the app. #3676.',
+  },
+  'gov-provision-dataplane-images.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of data-plane/duckdb-aca.bicep on a dispatch lane. Unported sovereign gap: no lease exists in that boundary. cloud-parity.md, #3676.',
+  },
+  'gov-provision-dbt.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of integration/dbt-runner.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-maps.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of compute/loom-maps-app.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-streaming-migrate.yml': {
+    writes: 2,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, TWO sites: data-plane/loom-migrate-aca.bicep and data-plane/loom-risingwave-aca.bicep, both on the same dispatch lane. Counted separately so adding a third is a red. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-trino.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of data-plane/loom-trino-aca.bicep on a dispatch lane. Its SECOND az deployment site is counted in OPAQUE_ARM_DEPLOY_SITES, not here, because its template does not exist in the tree. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-wrangler.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of integration/wrangler.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-uc-purview-wire.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, deploy of compute/loom-unity-app.bicep while wiring Unity Catalog to Purview. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+});
+
+/**
+ * `az deployment … create` sites whose template could NOT be resolved
+ * statically — so whether they write a Container App image field is UNKNOWN.
+ *
+ * THIS LIST EXISTS BECAUSE UNKNOWN IS NOT NO. Dropping these would make the
+ * ARM arm read clean over a lane deploying an arbitrary `$BICEP_PATH`, which is
+ * the shape of every guard-that-does-not-watch this repo has had to fix. They
+ * are counted and dated like writers; reclassifying one is a deliberate act.
+ * Measured 2026-09-11.
+ */
+const OPAQUE_ARM_DEPLOY_SITES = Object.freeze({
+  'deploy-fiab-commercial.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'THE LEASED LANE ITSELF. Its apply is `deploy-retry.mjs … -- az deployment sub create "${DEPLOY_ARGS[@]}"`, so the template lives in a shell array this scanner cannot expand. It is not a gap: this file takes the estate image-write lease, which is placed AROUND that apply, and the WIRING test asserts the acquire step is present and adjacent to the re-pin. Listed so the array-indirection shape is disclosed rather than read as "no ARM write here". #3676.',
+  },
+  'csa-loom-post-deploy-bootstrap.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'A `::notice::` string quoting `az deployment sub create … -p loomPostureFunctionUrl=…` as operator advice (#4161). Prose, not a command. Counted rather than pattern-excluded for the same reason gov-console-roll.yml\'s ROLLBACK_ADVICE string is counted in the CLI arm: a scanner clever enough to drop prose is a scanner that can drop a real write. #3676.',
+  },
+  'deploy-copilot-function.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      '`az deployment group create -f "$BICEP_PATH"` — the template is chosen at runtime, so this scanner cannot say whether it renders a Container App. GENUINELY UNKNOWN, and recorded as unknown rather than as a pass. The lane deploys the copilot Azure Function, which is not a Container App on any path anyone has recorded, but that is a reading of intent and not a measurement. #3676.',
+  },
+  'deploy-fiab-gcc.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string quoting `az deployment sub create` in the "no target subscription" refusal. Prose, not a command; counted for the same reason as the other prose sites. #3676.',
+  },
+  'deploy-fiab-gcch.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string quoting `az deployment sub create` in the "no target subscription" refusal. Prose, not a command; counted for the same reason as the other prose sites. #3676.',
+  },
+  'gov-build-images.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string telling the operator to run phase 1 (`az deployment sub create … deployAppsEnabled=false`) first. Prose, not a command. #3676.',
+  },
+  'gov-provision-runner-images.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string telling the operator to run phase 1 (`az deployment sub create … deployAppsEnabled=false`) first. Prose, not a command. #3676.',
+  },
+  'gov-provision-trino.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'A SEPARATE DEFECT SURFACED BY THIS SCAN, recorded here rather than silently resolved: `-f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep` names a file that does not exist anywhere in the tree (`git ls-files | grep loom-trino-lake-rbac` returns nothing, measured 2026-09-11), so that Gov lake-RBAC deploy step cannot succeed as written. Whether the missing template would have rendered a Container App is unknowable; it is OPAQUE, not a non-writer. Out of scope for this PR, which touches neither that lane nor that module. #3676.',
+  },
+});
+
+test('POPULATION: every `az containerapp` CLI image writer is LEASED or is a dated, reasoned, exactly-counted gap', () => {
+  const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+  assert.ok(files.length > 40, `only ${files.length} workflows were read — the population scan found nothing to scan`);
+
+  /** @type {Record<string, number[]>} */
+  const writers = {};
+  const leaseTakers = [];
+  for (const f of files) {
+    const yaml = readNorm(join(WORKFLOW_DIR, f));
+    if (yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`)) leaseTakers.push(f);
+    const sites = imageWriteSites(yaml);
+    if (sites.length) writers[f] = sites;
+  }
+
+  // The scan has to actually find the writers it is counting. If the needle
+  // rots (a rename of `az containerapp update`, a new wrapper), every file
+  // reads zero and the guard congratulates the tree on having no writers.
+  //
+  // THIS COUNT IS NOT THE ONLY CONTROL, and on its own it would be a weak one:
+  // it counts files matching the SAME needle, so widening the tree with a
+  // spelling the needle does not know leaves it perfectly satisfied. The
+  // per-spelling positive control below is what covers that.
+  assert.ok(
+    Object.keys(writers).length >= 6,
+    `the image-write scan found only ${Object.keys(writers).length} workflow(s) with a Container App image-write site. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`,
+  );
+
+  assert.deepEqual(leaseTakers, LEASED_WRITER_FILES,
+    'the set of workflows taking the estate image-write lease changed. Update LEASED_WRITER_FILES and say in the lane comments which writers are covered.');
+
+  // 1. Nothing writes the field un-leased and un-disclosed.
+  for (const [file, sites] of Object.entries(writers)) {
+    if (LEASED_WRITER_FILES.includes(file)) continue;
+    const entry = UNLEASED_IMAGE_WRITERS[file];
+    assert.ok(entry,
+      `${file} writes a Container App image field at line(s) ${sites.join(', ')} and neither takes the estate image-write lease nor appears in UNLEASED_IMAGE_WRITERS. Either wire the lease into it, or record here WHY it may race the apply — an undisclosed writer is the #3676 shape with nobody watching.`);
+    assert.equal(sites.length, entry.writes,
+      `${file} now has ${sites.length} image-write site(s) (line(s) ${sites.join(', ')}), not the ${entry.writes} recorded on ${entry.recorded}. The recorded reason was taken against the old set and does not carry over by itself.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s allowlist entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s allowlist entry has no real reason`);
+    assert.ok(/#\d{3,}|rg-csa-portal/.test(entry.reason),
+      `${file}'s allowlist entry names no tracking issue and no reason it is out of scope`);
+  }
+
+  // 2. No stale entries. A file that stopped writing the field must leave the
+  //    list, or the list becomes a record of things that used to be true — the
+  //    failure mode a hand-listed population always ends in.
+  for (const file of Object.keys(UNLEASED_IMAGE_WRITERS)) {
+    assert.ok(writers[file],
+      `UNLEASED_IMAGE_WRITERS lists ${file}, but it has no Container App image-write site any more. Drop the entry.`);
+  }
+
+  // 3. The leased lanes' own counts are pinned too, so an image write added
+  //    OUTSIDE the leased window in a lane that happens to take the lease
+  //    somewhere is not silently covered by the file-level check above.
+  //    loom-roll-and-validate writes twice: the leased roll, and the rollback
+  //    (disclosed at its step). deploy-fiab-commercial writes through
+  //    `az deployment sub create`, never a `az containerapp` mutation — and
+  //    that ARM write is NOT invisible any more: it is counted by the ARM arm's
+  //    test below, as an OPAQUE site on a lane that takes the lease.
+  assert.equal((writers['loom-roll-and-validate.yml'] ?? []).length, 2,
+    'loom-roll-and-validate.yml no longer has exactly 2 image writes (the leased roll + the disclosed rollback). A third write needs its own disclosure at the step.');
+  assert.equal(writers['deploy-fiab-commercial.yml'], undefined,
+    'deploy-fiab-commercial.yml grew a direct `az containerapp` image write. Its image write is the ARM apply, which the lease is placed around; a direct CLI write is a second, unarbitrated path.');
+});
+
+test('POPULATION CONTROL: the scanner recognises EVERY spelling that writes the image field, not just the one the first cut matched', () => {
+  // THE POSITIVE CONTROL FOR THE NEEDLE ITSELF. The file-count assertion above
+  // cannot catch a spelling the needle does not know — it counts files matching
+  // that same needle, so a tree full of `containerapp create --image` reads as a
+  // tree with no writers and the guard congratulates it. That is exactly how
+  // `gov-provision-mongo.yml`'s create-branch write sat uncounted inside an
+  // allowlist entry that asserted an EXACT count of 1.
+  //
+  // So each arm of the shape is driven directly. If any arm rots, this reds and
+  // names the arm, rather than the population test silently under-reading.
+  const wrap = (cmd) => `jobs:\n  j:\n    steps:\n      - name: write\n        run: |\n          ${cmd}\n`;
+  const spellings = {
+    'update --image': 'az containerapp update -n loom-console -g rg --image "$ACR/loom-console:$TAG" -o none',
+    'create --image': 'az containerapp create -n loom-console -g rg --environment cae --image "$ACR/loom-console:$TAG" -o none',
+    'revision copy --image': 'az containerapp revision copy -n loom-console -g rg --image "$ACR/loom-console:$TAG" -o none',
+    'up --image': 'az containerapp up -n loom-console -g rg --image "$ACR/loom-console:$TAG"',
+    'update --set containers[0].image': 'az containerapp update -n loom-console -g rg --set "properties.template.containers[0].image=$ACR/loom-console:$TAG" -o none',
+    'update --yaml': 'az containerapp update -n loom-console -g rg --yaml app.yaml -o none',
+    'line-continued update --image': 'az containerapp update -n loom-console -g rg \\\n            --image "$ACR/loom-console:$TAG" \\\n            -o none',
+    'wrapped through deploy-retry': 'node scripts/ci/deploy-retry.mjs --step "roll" -- az containerapp create -n loom-console -g rg --environment cae --image "$IMG"',
+  };
+  for (const [label, cmd] of Object.entries(spellings)) {
+    assert.equal(imageWriteSites(wrap(cmd)).length, 1,
+      `the image-write scanner does not see the '${label}' spelling. A writer using it would be invisible to the POPULATION guard, and the allowlist's exact counts would be exact about the wrong set.`);
+  }
+
+  // NEGATIVE CONTROL. A needle that matches everything is not a measurement
+  // either: the tree is full of `az containerapp update --set-env-vars`, which
+  // does NOT touch the image field, and counting those would bury the writers
+  // that matter in noise the allowlist would then have to excuse.
+  const notWriters = {
+    'update --set-env-vars': 'az containerapp update -n loom-console -g rg --set-env-vars "LOOM_X=1" -o none',
+    'show': 'az containerapp show -n loom-console -g rg --query properties.latestRevisionName -o tsv',
+    'env var that merely names the field': 'echo "properties.template.containers[0].image is the field"',
+    'a commented-out writer': '# az containerapp update -n loom-console -g rg --image "$IMG"',
+    'a --set on a different property': 'az containerapp update -n loom-console -g rg --set "properties.template.scale.minReplicas=1" -o none',
+  };
+  for (const [label, cmd] of Object.entries(notWriters)) {
+    assert.equal(imageWriteSites(wrap(cmd)).length, 0,
+      `the image-write scanner counts '${label}' as an image write. It is not one, and a scanner that counts non-writers makes the allowlist a record of noise.`);
+  }
+
+  // And the real tree still contains the instance that motivated the widening,
+  // so this control cannot pass over a tree where the create branch was simply
+  // deleted and the needle left broken.
+  const mongo = imageWriteSites(readNorm(join(WORKFLOW_DIR, 'gov-provision-mongo.yml')));
+  assert.equal(mongo.length, 2,
+    `gov-provision-mongo.yml reads ${mongo.length} image-write site(s) (line(s) ${mongo.join(', ')}). It has an update branch and a create branch; if that is no longer true, re-take the allowlist count deliberately rather than letting this control be the thing that changed.`);
+});
+
+test('POPULATION (ARM): every `az deployment` writer of the image field is LEASED, disclosed, or recorded as UNRESOLVED', () => {
+  const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+  assert.ok(files.length > 40, `only ${files.length} workflows were read — the ARM population scan found nothing to scan`);
+
+  /** @type {Record<string, number[]>} */ const armWriters = {};
+  /** @type {Record<string, number[]>} */ const armOpaque = {};
+  const leaseTakers = [];
+  for (const f of files) {
+    const yaml = readNorm(join(WORKFLOW_DIR, f));
+    if (yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`)) leaseTakers.push(f);
+    const { writers, opaque } = armImageWriteSites(yaml);
+    if (writers.length) armWriters[f] = writers;
+    if (opaque.length) armOpaque[f] = opaque;
+  }
+
+  // The scan has to find something. A rename of `az deployment group create`, a
+  // new wrapper, or a broken path resolution would make every file read zero
+  // and the guard congratulate a tree it never looked at. The per-shape control
+  // below is what covers a spelling this count cannot see.
+  assert.ok(Object.keys(armWriters).length >= 10,
+    `the ARM image-write scan found only ${Object.keys(armWriters).length} workflow(s) deploying a template that renders Microsoft.App/containerApps. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`);
+
+  // 1. Every ARM writer takes the lease or is disclosed with an exact count.
+  for (const [file, sites] of Object.entries(armWriters)) {
+    if (LEASED_WRITER_FILES.includes(file)) continue;
+    const entry = UNLEASED_ARM_IMAGE_WRITERS[file];
+    assert.ok(entry,
+      `${file} deploys an ARM template that renders Microsoft.App/containerApps at line(s) ${sites.join(', ')} — i.e. it writes properties.template.containers[0].image — and neither takes the estate image-write lease nor appears in UNLEASED_ARM_IMAGE_WRITERS. The CLI arm cannot see this shape; that is the whole reason this list exists.`);
+    assert.equal(sites.length, entry.writes,
+      `${file} now has ${sites.length} ARM image-write site(s) (line(s) ${sites.join(', ')}), not the ${entry.writes} recorded on ${entry.recorded}.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s ARM allowlist entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s ARM allowlist entry has no real reason`);
+    assert.ok(/#\d{3,}/.test(entry.reason), `${file}'s ARM allowlist entry names no tracking issue`);
+  }
+
+  // 2. Every UNRESOLVED site is disclosed with an exact count too. This is the
+  //    R7 half: "I could not resolve the template" must not be storable as
+  //    "not a writer".
+  for (const [file, sites] of Object.entries(armOpaque)) {
+    const entry = OPAQUE_ARM_DEPLOY_SITES[file];
+    assert.ok(entry,
+      `${file} has ${sites.length} \`az deployment … create\` site(s) at line(s) ${sites.join(', ')} whose template this scan could NOT resolve statically, and it is not in OPAQUE_ARM_DEPLOY_SITES. Unknown is not no: record what it deploys, or make the template reference static.`);
+    assert.equal(sites.length, entry.sites,
+      `${file} now has ${sites.length} unresolvable \`az deployment … create\` site(s) (line(s) ${sites.join(', ')}), not the ${entry.sites} recorded on ${entry.recorded}.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s OPAQUE entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s OPAQUE entry has no real reason`);
+    assert.ok(/#\d{3,}/.test(entry.reason), `${file}'s OPAQUE entry names no tracking issue`);
+  }
+
+  // 3. No stale entries in either list.
+  for (const file of Object.keys(UNLEASED_ARM_IMAGE_WRITERS)) {
+    assert.ok(armWriters[file],
+      `UNLEASED_ARM_IMAGE_WRITERS lists ${file}, but it no longer deploys a container-app-rendering template. Drop the entry.`);
+  }
+  for (const file of Object.keys(OPAQUE_ARM_DEPLOY_SITES)) {
+    assert.ok(armOpaque[file],
+      `OPAQUE_ARM_DEPLOY_SITES lists ${file}, but every \`az deployment … create\` in it now resolves. Drop the entry, or move it to UNLEASED_ARM_IMAGE_WRITERS if it turned out to be a writer.`);
+  }
+
+  // 4. THE FINDING THIS ARM WAS BUILT FOR, pinned by name so a future edit that
+  //    leases it (good) or deletes it (also fine) has to say so deliberately.
+  assert.deepEqual(armWriters['csa-loom-post-deploy-bootstrap.yml']?.length, 1,
+    'csa-loom-post-deploy-bootstrap.yml no longer has exactly 1 ARM container-app deploy. That lane is AUTOMATIC on Commercial (deploy-fiab-commercial chains it as `needs: deploy-validate`) and unleased; re-take the count deliberately.');
+});
+
+test('POPULATION CONTROL (ARM): the scanner sees the deploy shape, resolves module chains, and refuses to call an unresolvable template a non-writer', () => {
+  const wrap = (cmd) => `jobs:\n  j:\n    steps:\n      - name: deploy\n        run: |\n          ${cmd}\n`;
+  const ICEBERG = 'platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep';
+  const ROOT_BICEP = 'platform/fiab/bicep/main.bicep';
+
+  // POSITIVE. Each scope verb and flag spelling that really deploys a template.
+  const writers = {
+    'group create -f': `az deployment group create -g rg -n n -f ${ICEBERG} -p catalogConfig='{"image":"acr/loom-unity:deadbeef"}' -o none`,
+    'sub create -f': `az deployment sub create -l eastus -n n -f ${ICEBERG} -o none`,
+    '--template-file long form': `az deployment group create -g rg -n n --template-file ${ICEBERG} -o none`,
+    'line-continued': `az deployment group create -g rg \\\n            -n n \\\n            -f ${ICEBERG} \\\n            -o none`,
+    'wrapped through deploy-retry': `node scripts/ci/deploy-retry.mjs --step "apply" -- az deployment sub create -l eastus -f ${ICEBERG}`,
+    '$GITHUB_WORKSPACE prefix': `az deployment group create -g rg -n n -f "$GITHUB_WORKSPACE/${ICEBERG}" -o none`,
+    // The transitive case. main.bicep declares no containerApps itself; a
+    // one-level check would score the three Gov boundary deploys as clean.
+    'module chain (main.bicep)': `az deployment sub create -l eastus -n n -f ${ROOT_BICEP} -o none`,
+  };
+  for (const [label, cmd] of Object.entries(writers)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(w.length, 1,
+      `the ARM image-write scanner does not see the '${label}' shape as a writer (writers=${w.length}, opaque=${opaque.length}). A writer using it would be invisible to the ARM POPULATION guard.`);
+  }
+
+  // NEGATIVE. A needle that matches every ARM deploy would bury the writers in
+  // noise the allowlist then has to excuse.
+  const notWriters = {
+    'a template with no Container App': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/admin-plane/ai-search.bicep -o none',
+    'what-if writes nothing': `az deployment group what-if -g rg -f ${ICEBERG}`,
+    'a commented-out deploy': `# az deployment group create -g rg -n n -f ${ICEBERG}`,
+    'a group show': 'az deployment group show -g rg -n n --query properties.outputs',
+  };
+  for (const [label, cmd] of Object.entries(notWriters)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(w.length + opaque.length, 0,
+      `the ARM image-write scanner counted '${label}' (writers=${w.length}, opaque=${opaque.length}). It is not an unresolved container-app deploy, and a scanner that counts non-writers makes the disclosure lists a record of noise.`);
+  }
+
+  // UNKNOWN IS ITS OWN BUCKET, and this is the arm that proves it. Each of
+  // these must land in `opaque`, NOT in the silent remainder — a runtime
+  // template path read as "no write here" is exactly the R7 collapse this
+  // whole guard exists to refuse.
+  const unresolvable = {
+    'runtime variable path': 'az deployment group create -g rg -n n -f "$BICEP_PATH" -o none',
+    'a template that does not exist': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep -o none',
+    'template-uri': 'az deployment group create -g rg -n n --template-uri https://example.invalid/t.json',
+    'flags hidden in a shell array': 'az deployment sub create "${DEPLOY_ARGS[@]}"',
+  };
+  for (const [label, cmd] of Object.entries(unresolvable)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(opaque.length, 1,
+      `the ARM scanner did not record '${label}' as UNRESOLVED (writers=${w.length}, opaque=${opaque.length}). Treating an unresolvable template as a non-writer is the deploy-integrity R7 collapse: it states as fact something it did not establish.`);
+    assert.equal(w.length, 0, `'${label}' was scored as a resolved writer, which cannot be right — its template is not statically knowable.`);
+  }
+
+  // And the real tree still holds the instance that motivated this arm, so the
+  // control cannot pass over a tree where the finding was deleted and the
+  // needle left broken.
+  const boot = armImageWriteSites(readNorm(join(WORKFLOW_DIR, 'csa-loom-post-deploy-bootstrap.yml')));
+  assert.equal(boot.writers.length, 1,
+    `csa-loom-post-deploy-bootstrap.yml reads ${boot.writers.length} ARM container-app deploy site(s) (line(s) ${boot.writers.join(', ')}). It deploys iceberg-catalog-aca.bicep with an image in catalogConfig; if that is no longer true, re-take the count deliberately rather than letting this control be the thing that changed.`);
+});
+
+// ---------------------------------------------------------------------------
+// THE OTHER WRITER ON THE SAME RESOURCE. The lease lives in the admin-plane
+// ACR's ARM tags, and `scripts/csa-loom/apply-acr-compliance-tags.sh` also
+// writes that tag dictionary — from FOUR deploy lanes (commercial, gcc, gcch,
+// il5) — and can `exit 4`. It had no test at all, so the lease-survival check
+// inside it was prose with an exit code attached.
+//
+// It is driven here against a stub `az` whose tag store is a real file: a
+// `--operation Merge` MUTATES the same document the read-back reads, so a
+// key that survived is distinguishable from one the stub was told to report.
+// ---------------------------------------------------------------------------
+
+const COMPLIANCE_SCRIPT = join(REPO_ROOT, 'scripts', 'csa-loom', 'apply-acr-compliance-tags.sh');
+
+const COMPLIANCE_AZ_STUB = [
+  '#!/usr/bin/env bash',
+  'set -u',
+  'if [ "$1" = "acr" ] && [ "$2" = "show" ]; then printf "%s\\n" "$AZ_ACR_ID"; exit 0; fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "list" ]; then cat "$AZ_TAG_STORE"; exit 0; fi',
+  'if [ "$1" = "tag" ] && [ "$2" = "update" ]; then',
+  '  SEEN=0; KVS=()',
+  '  for A in "$@"; do',
+  // `-o none` trails the pairs, so collection STOPS at the next flag. A stub
+  // that swallowed it would invent a tag named `-o` and the read-back would be
+  // measuring the stub's bug.
+  '    if [ "$SEEN" = "1" ]; then case "$A" in -*) SEEN=0 ;; *) KVS+=("$A") ;; esac; fi',
+  '    if [ "$A" = "--tags" ]; then SEEN=1; fi',
+  '  done',
+  '  for KV in "${KVS[@]}"; do',
+  '    K="${KV%%=*}"; V="${KV#*=}"',
+  "    jq --arg k \"$K\" --arg v \"$V\" '.[$k] = $v' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  done',
+  // OUT-OF-BAND ACTIVITY IN THE MERGE WINDOW. This is the whole point of the
+  // fixture: another lane taking or releasing its lease between the BEFORE read
+  // and the AFTER read is the ordinary healthy case, and a guard that reds on it
+  // fails a deploy lane on the mutex working.
+  //
+  // The tag store is reached by REDIRECT and the patch by `--argjson`, never as
+  // a path ARGUMENT. The script under test exports MSYS_NO_PATHCONV=1 (its own
+  // #3714 note explains why), which on this Windows host means a `/c/Users/...`
+  // argument reaches jq.exe unconverted and jq cannot open it — silently, since
+  // the script captures the update's stderr. Measured: the first cut of this
+  // stub used `jq -s "$STORE" "$PATCH"` and the patch never landed while
+  // everything still exited 0. Redirects are performed by bash and are immune.
+  '  if [ -n "${AZ_TAG_OOB_ADD:-}" ]; then',
+  '    OOB="$(cat "$AZ_TAG_OOB_ADD")"',
+  "    jq --argjson oob \"$OOB\" '. * $oob' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  fi',
+  '  if [ -n "${AZ_TAG_OOB_DROP:-}" ]; then',
+  "    jq --arg k \"$AZ_TAG_OOB_DROP\" 'del(.[$k])' < \"$AZ_TAG_STORE\" > \"$AZ_TAG_STORE.tmp\" && mv \"$AZ_TAG_STORE.tmp\" \"$AZ_TAG_STORE\"",
+  '  fi',
+  '  exit 0',
+  'fi',
+  'echo "unstubbed az: $*" >&2; exit 99',
+].join('\n');
+
+function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '', tagsJson = '{"loomCompliance":"iso27001"}' } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'acr-compliance-'));
+  const binDir = join(dir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  try {
+    writeFileSync(join(binDir, 'az'), COMPLIANCE_AZ_STUB);
+    chmodSync(join(binDir, 'az'), 0o755);
+    const store = join(dir, 'tags.json');
+    writeFileSync(store, JSON.stringify(before));
+    const oobFile = join(dir, 'oob.json');
+    if (oobAdd) writeFileSync(oobFile, JSON.stringify(oobAdd));
+    const res = spawnSync('bash', [toPosixPath(COMPLIANCE_SCRIPT),
+      '--acr', 'acrloomtest',
+      '--tags-json', tagsJson], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH}`,
+        AZ_ACR_ID: '/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg-loom-admin/providers/Microsoft.ContainerRegistry/registries/acrloomtest',
+        AZ_TAG_STORE: toPosixPath(store),
+        AZ_TAG_OOB_ADD: oobAdd ? toPosixPath(oobFile) : '',
+        AZ_TAG_OOB_DROP: oobDrop,
+      },
+    });
+    return { rc: res.status, out: `${res.stdout || ''}${res.stderr || ''}`, tags: JSON.parse(readFileSync(store, 'utf8')) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FW_LEASE = { loomAcrFwOwner: 'gha:owner/repo:777:1', loomAcrFwExpiresEpoch: '9999999999' };
+const IMG_LEASE = { loomEstateImgOwner: 'gha:owner/repo:888:1', loomEstateImgExpiresEpoch: '9999999999' };
+
+test('COMPLIANCE TAGS: a Merge that preserves BOTH leases passes, and the compliance keys really land', { skip: shellSkip }, () => {
+  const r = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE } });
+  assert.equal(r.rc, 0, `expected 0, got ${r.rc}. Output:\n${r.out}`);
+  assert.equal(r.tags.loomCompliance, 'iso27001', 'the merge did not actually write the compliance tag');
+  assert.equal(r.tags['loom-estate-id'], 'loom:00000000:rg-loom-admin', 'the ownership tag is derived from the resolved ARM id');
+  assert.equal(r.tags.loomEstateImgOwner, IMG_LEASE.loomEstateImgOwner, 'the estate image-write lease must survive a compliance merge');
+  assert.equal(r.tags.loomAcrFwOwner, FW_LEASE.loomAcrFwOwner, 'the firewall lease must survive a compliance merge');
+});
+
+test('COMPLIANCE TAGS: a lease key that DISAPPEARS across the merge is exit 4, for BOTH prefixes', { skip: shellSkip }, () => {
+  // THE POSITIVE CONTROL. The check below narrows this guard from set-inequality
+  // to removals-only, and a narrowing has to be shown still to catch its target
+  // or it is just a deletion.
+  for (const key of ['loomEstateImgOwner', 'loomAcrFwOwner']) {
+    const r = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE }, oobDrop: key });
+    assert.equal(r.rc, 4, `dropping ${key} across the merge must be exit 4, got ${r.rc}. Output:\n${r.out}`);
+    assert.match(r.out, new RegExp(`REMOVED lease key\\(s\\).*${key}`),
+      `the failure must NAME the key that vanished — "a lease key set changed" sends the reader to diff two lists by eye`);
+  }
+});
+
+test('COMPLIANCE TAGS: a lease key that APPEARS across the merge is NOT a clobber', { skip: shellSkip }, () => {
+  // The stated invariant is "held before and ABSENT after". The first cut
+  // compared the two key SETS for equality, which also reds on appearance — and
+  // a lease key appearing between these two reads is another lane legitimately
+  // TAKING the lease while this step runs. That is the mutex working, and
+  // failing a deploy lane for it is a false red on the healthy case.
+  //
+  // The window is real rather than theoretical for `loomEstateImg*`: the roll
+  // lane acquires whenever `build-fiab-images-acr-tasks` completes, which is not
+  // coordinated with when the deploy lane's compliance step runs.
+  const r = runComplianceTags({ before: FW_LEASE, oobAdd: IMG_LEASE });
+  assert.equal(r.rc, 0, `a lease being TAKEN during the merge window must not fail the step, got ${r.rc}. Output:\n${r.out}`);
+  assert.doesNotMatch(r.out, /REMOVED lease key/);
+  assert.equal(r.tags.loomEstateImgOwner, IMG_LEASE.loomEstateImgOwner, 'the other lane\'s freshly-taken lease must be intact');
+
+  // And the symmetric case: a holder RELEASING mid-merge writes `owner=none`
+  // rather than deleting the key, so the key set is unchanged — but if a future
+  // release path ever does delete it, that IS a removal and stays red. Pinned so
+  // the two behaviours are not conflated later.
+  const released = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE }, oobAdd: { loomEstateImgOwner: 'none', loomEstateImgExpiresEpoch: '0' } });
+  assert.equal(released.rc, 0, `a holder releasing mid-merge must not fail the step, got ${released.rc}. Output:\n${released.out}`);
+  assert.equal(released.tags.loomEstateImgOwner, 'none');
+});
+
+test('COMPLIANCE TAGS: a payload that would CLOBBER a lease VALUE is refused BEFORE the write', { skip: shellSkip }, () => {
+  // THE HOLE THE REMOVALS-ONLY CHECK CANNOT SEE. `--operation Merge` cannot
+  // delete a key and CAN replace one, so a payload carrying a mutex key
+  // overwrites the live holder id, leaves the key SET unchanged, and the
+  // post-merge check exits 0 over a mutex that now names the wrong run. Watching
+  // removals is right for the clobber that happened; it is not the only one.
+  for (const key of ['loomEstateImgOwner', 'loomAcrFwOwner']) {
+    const r = runComplianceTags({
+      before: { ...FW_LEASE, ...IMG_LEASE },
+      tagsJson: JSON.stringify({ loomCompliance: 'iso27001', [key]: 'gha:owner/repo:999:1' }),
+    });
+    assert.equal(r.rc, 1, `a payload naming ${key} must be refused, got ${r.rc}. Output:\n${r.out}`);
+    assert.match(r.out, new RegExp(`MUTEX key\\(s\\).*${key}`),
+      'the refusal must NAME the key, so the fix is obvious from the log alone');
+    // REFUSED BEFORE THE WRITE, not detected after it. The store is the same
+    // file `az tag update` mutates, so this asserts the holder id is untouched
+    // rather than merely that the script exited non-zero.
+    assert.equal(r.tags[key], { loomEstateImgOwner: IMG_LEASE.loomEstateImgOwner, loomAcrFwOwner: FW_LEASE.loomAcrFwOwner }[key],
+      `${key} was OVERWRITTEN before the refusal — the guard has to run before \`az tag update\`, not after it`);
+    assert.equal(r.tags.loomCompliance, undefined, 'nothing at all may be written once the payload is refused');
+  }
+
+  // NEGATIVE CONTROL for the same guard: a compliance key that merely LOOKS
+  // adjacent must still go through. A prefix test that swallowed ordinary keys
+  // would block every deploy lane's compliance step.
+  const ok = runComplianceTags({
+    before: { ...FW_LEASE, ...IMG_LEASE },
+    tagsJson: '{"loomCompliance":"iso27001","loomEstateTier":"prod","loomAcrRetentionDays":"30"}',
+  });
+  assert.equal(ok.rc, 0, `ordinary compliance keys must not trip the mutex-key refusal, got ${ok.rc}. Output:\n${ok.out}`);
+  assert.equal(ok.tags.loomEstateTier, 'prod');
+});
+
+test('COMPLIANCE TAGS: the script the FOUR deploy lanes call is the one under test here', () => {
+  // A test pointed at a path nothing invokes proves nothing. The lanes are read
+  // off the tree rather than listed, for the same reason the image-writer
+  // population is.
+  const callers = readdirSync(WORKFLOW_DIR)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .filter((f) => readNorm(join(WORKFLOW_DIR, f)).includes('apply-acr-compliance-tags.sh'))
+    .sort();
+  assert.deepEqual(callers, [
+    'deploy-fiab-commercial.yml', 'deploy-fiab-gcc.yml', 'deploy-fiab-gcch.yml', 'deploy-fiab-il5.yml',
+  ], 'the set of lanes invoking apply-acr-compliance-tags.sh changed. An edit to that script now reaches a different set of deploy lanes than this suite says it does.');
+  assert.ok(existsSync(COMPLIANCE_SCRIPT), 'apply-acr-compliance-tags.sh moved; the tests above are exercising nothing');
+});
+
+test('POPULATION: the roll lane waits AT LEAST as long as the deploy lane can hold the lease', () => {
+  // The two numbers used to contradict each other: the deploy chose a 2700s TTL
+  // because an apply CAN exceed the ~15m it historically takes, while the roll
+  // waited 1500s. In that 20-minute gap decideEstateImageLeaseAcquire returns
+  // `refuse` — not `unknown`, so the roll's `degrade` policy does not apply —
+  // the step exits non-zero, and a `workflow_run`-triggered roll is DROPPED at a
+  // specific SHA. That is the same lost delivery the design rejected a
+  // `concurrency:` group to avoid, just louder.
+  const envNum = (path, key) => {
+    const yaml = readNorm(path);
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    assert.notEqual(at, -1, `${path} has no acquire step`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    // `env:` mapping only. Both of these numbers are quoted in the surrounding
+    // commentary that explains them, and a guard a comment can answer for is
+    // not measuring the workflow.
+    const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const m = new RegExp(`^ {10}${key}: '(\\d+)'$`, 'm').exec(code);
+    assert.ok(m, `${path} does not set ${key} on the acquire step`);
+    return Number(m[1]);
+  };
+
+  const deployTtl = envNum(DEPLOY_WORKFLOW, 'LEASE_TTL_SECONDS');
+  const rollWait = envNum(ROLL_WORKFLOW, 'LEASE_WAIT_SECONDS');
+  assert.ok(rollWait >= deployTtl,
+    `the roll lane waits ${rollWait}s for a lease the deploy lane may hold for ${deployTtl}s, so there is a ${deployTtl - rollWait}s window in which the roll REFUSES and the roll is dropped at that SHA. The wait must be at least the other lane's TTL: past expiresEpoch the wait ends in a stale takeover instead of a refusal.`);
+
+  // Symmetrically, and for the same reason: the deploy queues behind a roll
+  // rather than refusing.
+  const rollTtl = envNum(ROLL_WORKFLOW, 'LEASE_TTL_SECONDS');
+  const deployWait = envNum(DEPLOY_WORKFLOW, 'LEASE_WAIT_SECONDS');
+  assert.ok(deployWait >= rollTtl,
+    `the deploy lane waits ${deployWait}s for a lease the roll lane may hold for ${rollTtl}s — a nightly apply that refuses is a night of drift.`);
+});
+
+test('WIRING: the acquire step can actually RUN on both writers — its `if:` is pinned, not merely present', () => {
+  // PRESENCE IS NOT REACHABILITY. The assertion above only says the step NAME is
+  // in each file. Narrowing `if:` to `false` on either lane switches the mutex
+  // off for one of the two LEASED image writers and the whole suite stayed
+  // green through it — the file's own stated property ("a decision nobody calls
+  // arbitrates nothing") going unasserted. So the gate STRING is pinned on the
+  // deploy lane and its ABSENCE is pinned on the roll lane.
+  //
+  // "The two leased writers" is not "the two writers": see the POPULATION test
+  // below for the writers this lease does NOT cover.
+  const ifOf = (yaml) => {
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    assert.notEqual(at, -1, 'the acquire step is not in this workflow at all');
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    return /\n {8}if: (.+)/.exec(seg)?.[1]?.trim() ?? null;
+  };
+
+  // The deploy lane's ONLY legitimate reason to skip is that no registry was
+  // resolved, in which case there is nothing to write the lease onto and the
+  // apply cannot run either. Any other condition — including a narrowing to
+  // `false` — takes one of the two leased writers out of the mutex.
+  assert.equal(ifOf(readNorm(DEPLOY_WORKFLOW)), "steps.acr_apply_lease.outputs.acr != ''",
+    'the deploy lane acquire gate changed: it is one of the two LEASED image writers, and a narrower gate means it can write an image without the mutex');
+
+  // The roll lane has no gate at all, and must not acquire one: every path
+  // through that job writes the image field.
+  assert.equal(ifOf(readNorm(ROLL_WORKFLOW)), null,
+    'the roll lane acquire step grew an `if:` — every path through that job writes a Container App image, so any gate is a path that writes unleased');
+});
+
+test('WIRING: each lane declares its OWN unknown-policy, and they are the opposite tie-breaks', () => {
+  // The asymmetry is deliberate and is each lane's existing policy: a nightly
+  // reconcile that skips a night costs a night; a roll blocked by an ARM tag
+  // read is a security fix that does not ship.
+  // The regex reads the `env:` MAPPING, not the step's prose. It used to scan
+  // the whole segment, and a comment in that segment quoting
+  // `LEASE_UNKNOWN_POLICY: degrade` matched first and won — a guard whose
+  // subject a comment can impersonate is a guard reading the wrong thing.
+  const envOf = (yaml) => {
+    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    return /^ {10}LEASE_UNKNOWN_POLICY: (\S+)$/m.exec(code)?.[1] ?? '';
+  };
+  assert.equal(envOf(readNorm(DEPLOY_WORKFLOW)), 'refuse');
+  assert.equal(envOf(readNorm(ROLL_WORKFLOW)), 'degrade');
+});
+
+test('WIRING: the deploy takes the lease BEFORE the re-pin, and the roll BEFORE the image write', () => {
+  const dSteps = stepsWithIds(readNorm(DEPLOY_WORKFLOW)).map((s) => s.name);
+  const acquireAt = dSteps.findIndex((n) => n.startsWith(LEASE_ACQUIRE_STEP));
+  const repinAt = dSteps.findIndex((n) => n.startsWith('Re-pin appImageTags to the RUNNING images'));
+  const releaseAt = dSteps.findIndex((n) => n.startsWith(LEASE_RELEASE_STEP));
+  const provisionAt = stepsWithIds(readNorm(DEPLOY_WORKFLOW)).findIndex((s) => s.id === 'provision');
+  assert.ok(acquireAt !== -1 && repinAt !== -1 && releaseAt !== -1 && provisionAt !== -1);
+  // The window this closes is between the re-pin's MEASUREMENT and the apply
+  // that spends it, so the lease must be held before the measurement is taken.
+  assert.ok(acquireAt < repinAt, 'the lease is taken after the re-pin measured — the stale-measurement window is still open');
+  assert.ok(releaseAt > provisionAt, 'the lease is released before the apply that writes the images');
+
+  const rSteps = stepsWithIds(readNorm(ROLL_WORKFLOW)).map((s) => s.name);
+  const rAcquire = rSteps.findIndex((n) => n.startsWith(LEASE_ACQUIRE_STEP));
+  const rWrite = rSteps.findIndex((n) => n.startsWith('Roll Container App to new image'));
+  const rRelease = rSteps.findIndex((n) => n.startsWith(LEASE_RELEASE_STEP));
+  const rHealth = rSteps.findIndex((n) => n.startsWith('Wait for revision health'));
+  assert.ok(rAcquire !== -1 && rWrite !== -1 && rRelease !== -1 && rHealth !== -1);
+  assert.equal(rAcquire + 1, rWrite, 'a step was inserted between the lease and the image write it guards');
+  // Held until the revision is actually RUNNING the image: until then a
+  // concurrent apply's re-pin could still read the old image and write it back.
+  assert.ok(rRelease > rHealth, 'the roll releases the lease before the revision is running the new image');
+});
+
+test('WIRING: the release runs on always(), and on a CLAIM that was never confirmed', () => {
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const yaml = readNorm(wf);
+    const at = yaml.indexOf(`      - name: ${LEASE_RELEASE_STEP}`);
+    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+    // `held` alone is not enough: a claim write that LANDS and a read-back that
+    // then FAILS reports held=false while this run's owner id sits in the
+    // registry. Gated on `held` only, the release step can never clear it and
+    // the other writer queues behind a run that has already exited for a full
+    // TTL — the outage this lease exists to prevent, on a different key.
+    assert.match(
+      seg,
+      /if: always\(\) && \(steps\.img_lease\.outputs\.held == 'true' \|\| steps\.img_lease\.outputs\.claimed == 'true'\)/,
+      `${wf}: the lease release cannot clear a claim that landed without being confirmed`,
+    );
+    // The two states are not interchangeable: only `held` may assert that
+    // exclusivity was lost, so the state is passed in rather than guessed.
+    assert.match(
+      seg,
+      /LEASE_STATE: \$\{\{ steps\.img_lease\.outputs\.held == 'true' && 'held' \|\| 'claimed' \}\}/,
+      `${wf}: the release step does not tell the policy file which state this run is in`,
+    );
+    assert.match(runBodyOf(yaml, LEASE_RELEASE_STEP), /--state "\$LEASE_STATE"/,
+      `${wf}: the release hard-codes its own state instead of reporting it`);
+  }
+});
+
+test('WIRING: neither lease step discards a result (no || true, no 2>/dev/null)', () => {
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const yaml = readNorm(wf);
+    for (const step of [LEASE_ACQUIRE_STEP, LEASE_RELEASE_STEP]) {
+      const body = runBodyOf(yaml, step);
+      assert.doesNotMatch(body, /\|\| true/, `${wf} / ${step}: a discarded result`);
+      assert.doesNotMatch(body, /2>\/dev\/null/, `${wf} / ${step}: stderr discarded (deploy-integrity R7)`);
+      assert.doesNotMatch(body, /2>&1/, `${wf} / ${step}: stderr spliced into a value`);
+    }
+  }
+});
+
+test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () => {
+  // Appending the same key twice leaves the result depending on undocumented
+  // runner precedence — the trap acr-firewall-lease.sh records against its own
+  // lease_state, and one this step's early `held=false` would have walked into.
+  //
+  // NOT KEYED TO THE REDIRECT SPELLING. The first cut required
+  // `echo "k=…" >> "$GITHUB_OUTPUT"` on ONE physical line, so grouping the three
+  // appends under a single `{ … } >> "$GITHUB_OUTPUT"` — which is what SC2129
+  // asks for, and what `guardrails` blocked this PR over — read as ZERO
+  // appends. It caught that as 0 !== 1 rather than passing, which is the right
+  // direction to fail in; but a needle that reds on the correct shell is still
+  // a needle keyed to a spelling. So the property is measured as it is actually
+  // stated: how many times is the KEY emitted, and does the step write
+  // $GITHUB_OUTPUT at all.
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const body = runBodyOf(readNorm(wf), LEASE_ACQUIRE_STEP);
+    assert.ok(/>>\s*"\$GITHUB_OUTPUT"/.test(body),
+      `${wf}: the lease step never appends to $GITHUB_OUTPUT at all. Every consumer of steps.img_lease.outputs.* — including the release step's if: — would read empty.`);
+    for (const key of ['held', 'claimed', 'acr_id']) {
+      const n = body.split('\n').filter((l) => new RegExp(`echo\\s+"${key}=`).test(l)).length;
+      assert.equal(n, 1, `${wf}: the lease step emits the ${key} output ${n} time(s), not once. Two writes of one key leave the result to undocumented runner precedence.`);
+    }
+  }
+});
+
+test('PRECONDITION: registry.bicep must NOT declare tags on the ACR, or this mutex evaporates', () => {
+  // An ARM resource PUT replaces a resource's top-level `tags`, which is how the
+  // firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:`
+  // from the ACR for exactly that reason, and this lease is stored in the same
+  // place. That is a PRECONDITION of the mutex, not a coincidence: if it comes
+  // back, this guard goes red instead of the lease silently arbitrating nothing.
+  const bicep = readNorm(join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'modules', 'admin-plane', 'registry.bicep'));
+  const at = bicep.indexOf("resource acr 'Microsoft.ContainerRegistry/registries@");
+  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this precondition before trusting the lease');
+  const decl = bicep.slice(at, bicep.indexOf('\n}\n', at));
+  assert.doesNotMatch(decl, /^ {2}tags:/m,
+    'registry.bicep declares `tags:` on the ACR again. An ARM PUT replaces a resource\'s tags, so every apply '
+    + 'would erase the estate image-write lease mid-apply and both writers would proceed (#3681 / #3676).');
+});
+
+// ---------------------------------------------------------------------------
+// THE SHELL, EXECUTED. Not grepped.
+//
+// `bash -e {0}` is GitHub's own invocation, and the `az` stub keeps a REAL tag
+// store: `az tag update` mutates the same document `az tag list` reads back, so
+// a claim that was merely REQUESTED is distinguishable from one that was TAKEN.
+// A DOM-string / grep assertion could not tell those apart, and this issue is
+// entirely about a control that ran and measured nothing.
+// ---------------------------------------------------------------------------
+
+/** The run identity both lease steps derive their holder id from. */
+const LEASE_GH = {
+  GITHUB_REPOSITORY: 'owner/repo',
+  GITHUB_RUN_ID: '4242',
+  GITHUB_RUN_ATTEMPT: '1',
+  GITHUB_SERVER_URL: 'https://github.com',
+};
+
+/** The env every lease-acquire run needs; `envKeysOf` asserts nothing is missing. */
+const leaseEnv = (over = {}) => ({
+  ...LEASE_GH,
+  LEASE_ACR: 'acrtest',
+  DEPLOY_SUB: '',
+  LEASE_TTL_SECONDS: '900',
+  LEASE_WAIT_SECONDS: '0',
+  LEASE_UNKNOWN_POLICY: 'refuse',
+  LEASE_SETTLE_SECONDS: '0',
+  LEASE_RETRY_SECONDS: '0',
+  ...over,
+});
+
+/**
+ * The env the release step needs. `state` mirrors what the step's own `if:`
+ * narrows LEASE_STATE to: 'held' when the read-back confirmed this run,
+ * 'claimed' when only the claim WRITE landed.
+ */
+const leaseReleaseEnv = (acrId, state = 'held') => ({
+  ...LEASE_GH, LEASE_ACR_ID: acrId, LEASE_STATE: state, DEPLOY_SUB: '',
+});
+
+test('SHELL: the deploy lane TAKES the lease on a free registry and records itself in the tags', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv(),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.outFile, /held=true/);
+  assert.match(r.outFile, /acr_id=.+ContainerRegistry/);
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
+  assert.ok(Number(r.tags[ESTATE_IMAGE_LEASE_TAGS.expires]) > Math.floor(Date.now() / 1000),
+    'the lease was written without a future expiry, so it is stale the instant it is taken');
+  assert.match(r.tags[ESTATE_IMAGE_LEASE_TAGS.holder], /actions\/runs\/4242/);
+  assert.match(r.out, /HELD by gha:owner\/repo:4242:1/);
+});
+
+test('SHELL: a lane BLOCKED by the other writer refuses and writes NOTHING — the mutual exclusion', { skip: shellSkip }, () => {
+  // The other writer is live with 10 minutes left and this run's bounded wait is
+  // exhausted, which is the state that used to produce a silent overwrite.
+  const held = {
+    properties: {
+      tags: {
+        [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:owner/repo:32004118361:1',
+        [ESTATE_IMAGE_LEASE_TAGS.expires]: String(Math.floor(Date.now() / 1000) + 600),
+        [ESTATE_IMAGE_LEASE_TAGS.holder]: 'https://github.com/owner/repo/actions/runs/32004118361',
+      },
+    },
+  };
+  for (const [label, workflow, policy] of [
+    ['deploy', DEPLOY_WORKFLOW, 'refuse'],
+    ['roll', ROLL_WORKFLOW, 'degrade'],
+  ]) {
+    const r = runStep(LEASE_ACQUIRE_STEP, {
+      workflow,
+      env: leaseEnv({ LEASE_UNKNOWN_POLICY: policy }),
+      leaseTags: held,
+    });
+    assert.equal(r.status, 1, `${label}: a live foreign holder must REFUSE on both lanes — degrade covers UNKNOWN, not a holder that is provably there.\n${r.out}`);
+    assert.match(r.outFile, /held=false/, `${label}: held must be false`);
+    assert.equal(r.tagWrites.length, 0, `${label}: the blocked lane wrote to the lease anyway`);
+    assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:32004118361:1',
+      `${label}: the holder's own lease was overwritten by the lane that was supposed to be excluded`);
+  }
+});
+
+test('SHELL: an UNREADABLE mutex refuses on the deploy lane and degrades LOUDLY on the roll lane', { skip: shellSkip }, () => {
+  const azErr = "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Resources/tags/read'";
+
+  const deploy = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_LIST_ERR: azErr }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(deploy.status, 1, deploy.out);
+  assert.match(deploy.outFile, /held=false/);
+  assert.equal(deploy.tagWrites.length, 0);
+  assert.match(deploy.out, /REFUSING/);
+  assert.match(deploy.out, /AuthorizationFailed/, 'the az error must reach the log verbatim, not be replaced by a guess (R7)');
+
+  const roll = runStep(LEASE_ACQUIRE_STEP, {
+    workflow: ROLL_WORKFLOW,
+    env: leaseEnv({ LEASE_UNKNOWN_POLICY: 'degrade', AZ_TAG_LIST_ERR: azErr }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(roll.status, 0, roll.out);
+  assert.match(roll.outFile, /held=false/,
+    'a degraded roll must NOT claim to hold the lease — it would then "release" one it never took');
+  assert.match(roll.out, /PROCEEDING UNLEASED/);
+  assert.match(roll.out, /NOT mutually exclusive/,
+    'the degraded path must say what it gave up, or it reads as a pass');
+});
+
+test('SHELL: losing the CLAIM RACE is not a claim — the read-back is what decides', { skip: shellSkip }, () => {
+  // ARM tags have no compare-and-swap. Both claimants write; the stub puts the
+  // other one's id in after ours, which is exactly what the settle-and-read-back
+  // exists to catch. Without it both runs would believe they hold the mutex.
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_STEAL: 'gha:owner/repo:777:1' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.outFile, /held=false/);
+  assert.match(r.out, /lost the claim race/);
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:777:1');
+});
+
+test('SHELL: a write the identity cannot perform is a REFUSAL, and names the missing permission', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ AZ_TAG_WRITE_ERR: 'ERROR: (AuthorizationFailed) tags/write denied' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.outFile, /held=false/);
+  assert.match(r.out, /Tag Contributor/, 'deploy-integrity R6: the remediation must be concrete');
+});
+
+test('SHELL: acquire then release round-trips — the holder clears the lease it took', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    const acq = runStep(LEASE_ACQUIRE_STEP, { ctx, env: leaseEnv(), leaseTags: { properties: { tags: {} } } });
+    assert.equal(acq.status, 0, acq.out);
+    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(acrId, '');
+
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId) });
+    assert.equal(rel.status, 0, rel.out);
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
+      'the release did not free the mutex, so the other lane stays blocked until the TTL');
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
+    assert.match(rel.out, /RELEASED by/);
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL: releasing a lease that was ERASED under this run goes RED, and does not pretend', { skip: shellSkip }, () => {
+  const r = runStep(LEASE_RELEASE_STEP, {
+    env: leaseReleaseEnv('acr-resource-id'),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /WAS ERASED WHILE THIS RUN/);
+  assert.match(r.out, /is NOT established/, 'R7: it may not name a culprit it did not establish');
+});
+
+// ---------------------------------------------------------------------------
+// THE CLAIM THAT LANDS AND THE READ-BACK THAT DOES NOT — end to end through the
+// real `run:` bodies. The suite could not see this before: the only claim-race
+// arm asserted a STEALER had overwritten our id, and nothing covered the branch
+// where nothing overwrote it. One transient ARM tag read then left this run's
+// owner id in the registry for a full TTL with the release step gated so it
+// could never clear it, which is precisely the "roll fails after a 20-minute
+// wait" outage the PR body gives as the reason NOT to reuse the #2603 lease.
+// ---------------------------------------------------------------------------
+
+test('SHELL: a claim that LANDS with an unreadable read-back reports claimed=true, and says UNKNOWN not "lost the race"', { skip: shellSkip }, () => {
+  // The first `az tag list` (the free registry) succeeds; every read after it
+  // fails, so the claim write lands and the confirmation cannot be taken.
+  const unreadableAfterClaim = {
+    AZ_TAG_LIST_ERR_AFTER: '1',
+    AZ_TAG_LIST_ERR: 'ERROR: (GatewayTimeout) the gateway did not receive a timely response',
+  };
+
+  // DEPLOY LANE, wait budget exhausted: this is the message finding 2 is about.
+  const deploy = runStep(LEASE_ACQUIRE_STEP, {
+    env: leaseEnv({ ...unreadableAfterClaim, LEASE_WAIT_SECONDS: '0' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(deploy.status, 1, deploy.out);
+  assert.match(deploy.outFile, /held=false/, 'an unconfirmed claim is NOT a held lease');
+  assert.match(deploy.outFile, /claimed=true/,
+    'the claim write LANDED — without this output the release step can never clear it and the mutex is stranded for a whole TTL');
+  assert.equal(deploy.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1',
+    "this run's id really is in the registry, which is why the release step has to run");
+  // R7 (finding 2): there is no holding run. The registry records THIS one.
+  assert.doesNotMatch(deploy.out, /lost the claim race/,
+    'the read-back could not be PERFORMED, so a lost race is a cause the code did not establish');
+  assert.doesNotMatch(deploy.out, /Re-run once the holding run finishes/,
+    "there is no holding run to wait for — the last id written was this run's own");
+  assert.match(deploy.out, /is UNKNOWN/, 'it must say what it does not know');
+  assert.match(deploy.out, /loomEstateImgOwner=none/,
+    'deploy-integrity R6 — the remediation must be the exact command');
+
+  // ROLL LANE with a real wait budget: the next attempt reads UNKNOWN and its
+  // `degrade` policy proceeds, so the step exits 0 — while this run's id sits
+  // in the registry for the full TTL. Exactly the state the review measured.
+  const roll = runStep(LEASE_ACQUIRE_STEP, {
+    workflow: ROLL_WORKFLOW,
+    env: leaseEnv({ ...unreadableAfterClaim, LEASE_UNKNOWN_POLICY: 'degrade', LEASE_WAIT_SECONDS: '600' }),
+    leaseTags: { properties: { tags: {} } },
+  });
+  assert.equal(roll.status, 0, roll.out);
+  assert.match(roll.out, /PROCEEDING UNLEASED/);
+  assert.match(roll.outFile, /held=false/);
+  assert.match(roll.outFile, /claimed=true/,
+    'the roll wrote the image AND left its own id in the tags; without claimed the apply queues behind a run that has exited');
+  assert.equal(roll.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
+});
+
+test('SHELL: the stranded claim is CLEARED by the release step, so the other writer is not blocked for a TTL', { skip: shellSkip }, () => {
+  const ctx = newStepCtx();
+  try {
+    const acq = runStep(LEASE_ACQUIRE_STEP, {
+      ctx,
+      env: leaseEnv({ AZ_TAG_LIST_ERR_AFTER: '1', AZ_TAG_LIST_ERR: 'ERROR: (GatewayTimeout) no timely response' }),
+      leaseTags: { properties: { tags: {} } },
+    });
+    assert.equal(acq.status, 1, acq.out);
+    assert.match(acq.outFile, /claimed=true/);
+    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(acrId, '');
+
+    // This is the step the workflow's `if:` now reaches on claimed=true. The
+    // tag store is the SAME document the acquire left behind (shared ctx), so
+    // "was the mutex actually freed" is answerable rather than assumed.
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId, 'claimed') });
+    assert.equal(rel.status, 0, rel.out);
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
+      'the claim is still in the registry: every write on the other lane now queues behind a run that has already exited');
+    assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
+    assert.match(rel.out, /never CONFIRMED/,
+      'R7: it cleared the tags, but it may not report that it held the mutex');
+  } finally {
+    ctx.dispose();
+  }
+});
+
+test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', { skip: shellSkip }, () => {
+  // Exit 5 exists for exactly this: `noop` collapsed into 0 would send the shell
+  // on to write `owner=none` over a LIVE holder — the erasure this mutex exists
+  // to make impossible, performed by the release path itself.
+  const r = runStep(LEASE_RELEASE_STEP, {
+    env: leaseReleaseEnv('acr-resource-id', 'claimed'),
+    leaseTags: {
+      properties: {
+        tags: {
+          [ESTATE_IMAGE_LEASE_TAGS.owner]: 'gha:owner/repo:777:1',
+          [ESTATE_IMAGE_LEASE_TAGS.expires]: String(Math.floor(Date.now() / 1000) + 600),
+        },
+      },
+    },
+  });
+  assert.equal(r.status, 0, r.out);
+  assert.equal(r.tagWrites.length, 0, 'the release wrote to a lease that belongs to another run');
+  assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:777:1');
+  assert.match(r.out, /LOSING the claim race/);
+  assert.doesNotMatch(r.out, /Two lanes believed they held the same mutex/,
+    'R7: this run never confirmed, so it cannot assert that two lanes held the mutex');
 });

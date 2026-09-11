@@ -843,11 +843,16 @@ test('POPULATION — the deploy_sub binding sites are enumerated EXACTLY', () =>
   const steps = src.split(/^ {6}- name: /m).slice(1);
   assert.ok(steps.length > 20, `only ${steps.length} steps parsed — the step split is broken`);
 
+  // 17 -> 19 (#3676 bullet 1): the estate image-write lease's acquire and
+  // release steps each read the deploy subscription for their `az tag`
+  // control-plane calls. Both use `${DEPLOY_SUB:+--subscription ...}` and
+  // neither tests the value for emptiness, so the offender assertion below is
+  // still empty — confirmed by running it.
   const bindings = [...src.matchAll(new RegExp(DEPLOY_SUB_BINDING, 'g'))];
-  assert.equal(bindings.length, 17, 'the deploy_sub consumer population changed');
+  assert.equal(bindings.length, 19, 'the deploy_sub consumer population changed');
 
   const consumerSteps = steps.filter((s) => new RegExp(DEPLOY_SUB_BINDING).test(s));
-  assert.equal(consumerSteps.length, 17,
+  assert.equal(consumerSteps.length, 19,
     'binding sites and consumer steps diverged — a step binds deploy_sub twice, or the split lost one');
 
   assert.deepEqual(
