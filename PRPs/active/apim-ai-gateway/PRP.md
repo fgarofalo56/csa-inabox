@@ -123,7 +123,7 @@ three. GCC was missing from the 2026-09-10 draft entirely.
 | Commercial | `PremiumV2` (`commercial.bicepparam:107`, `commercial-full.bicepparam:17`) | **exercised** — the live DMLZ estate, §3.5 |
 | DMLZ (the live estate) | `PremiumV2` (`tenant-dmlz.bicepparam:54`) | **exercised** |
 | GCC | `PremiumV2` (`gcc.bicepparam:131`) | **supported-in-code, NEVER exercised** — 0 runs have ever executed a deploy step; lane `disabled_manually`; last run 2026-08-08. Recorded decision: `cloud-parity.md` § Measured example — GCC, and `PRPs/active/drain-2026-08-31/DECISIONS.md` § "#4071 + #3078". |
-| GCC-High | `Premium` (`gcc-high.bicepparam:125`) | **exercised** — run 33519232492 (2026-09-01), job `Deploy + validate CSA Loom in GCC-High` = `failure`, **steps=33**. A failing deploy job that ran IS a receipt. The last receipt is dated 2026-09-01, but the lane is **live and one click from a fresh one**: runs 34485799151 / 34360878473 / 34235333861 are `status=waiting` on the `gcc-high-deploy` **environment approval gate** (`waitTimer=0`, `current_user_can_approve=true`), with the deploy job at `steps=0` **because it has not started**. That is NOT the GCC skipped-at-zero shape — an approval yields a receipt. |
+| GCC-High | `Premium` (`gcc-high.bicepparam:125`) | **exercised** — run 33519232492 (2026-09-01), job `Deploy + validate CSA Loom in GCC-High` = `failure`, **steps=33**. A failing deploy job that ran IS a receipt. The last receipt is dated 2026-09-01, but the lane is **live and one click from a fresh one**: **14 of the last 30 runs are `status=waiting`** (2026-08-27 → 2026-09-10), **9 of them created after that receipt**, all parked on the `gcc-high-deploy` **environment approval gate** (`waitTimer=0`, `current_user_can_approve=true`) with the deploy job at `steps=0` **because it has not started**. That is NOT the GCC skipped-at-zero shape — an approval yields a receipt. |
 | IL5 | `Premium` (`il5.bicepparam:123`) | **supported-in-code, NEVER exercised** — `gh run list --workflow deploy-fiab-il5.yml` returns `[]`. Zero runs, ever. Watched by `scripts/ci/check-deploy-staleness.mjs`. |
 
 `dlz-attach.bicepparam` is **not** a boundary. It is `using
@@ -369,7 +369,7 @@ restating it: **#4459 (merged 2026-09-11) rewrote the `il5.bicepparam` comment**
 to argue from audit scope instead of region. `il5.bicepparam:347-356` states the
 axis explicitly ("REGION AVAILABILITY IS NOT AUDIT SCOPE") and records that the
 param was briefly flipped to `true` on 2026-09-10 on exactly the wrong argument;
-`:357-361` carries the same table rows measured here, with Azure OpenAI as the
+`:357-362` carries the same table rows measured here, with Azure OpenAI at `:362` as the
 same positive control. An earlier revision of this PRP said that comment used the
 wrong instrument and was "tracked separately" — **that is stale; #4459 fixed it.**
 
@@ -416,7 +416,7 @@ the readiness surface, per boundary, so no operator reads "no gateway content
 safety" as "no content filtering". Silence here would be the `no-vaporware.md`
 failure in reverse: an unstated protection.
 
-#### 3.4.1 What IL5 screens with TODAY — and the audit-scope exposure it creates
+#### 3.4.1 What IL5 screens with TODAY — and the open audit-scope question it raises
 
 The sentence above says what IL5 *should* run. It is not what the stock IL5
 deploy wires today, and the difference is the whole point of this subsection.
@@ -509,9 +509,12 @@ branch of the same `:6224` expression: on an adopt/BYO Foundry (`EXISTING_AOAI`
 set → `provisionAgentFoundry` false) with `aiFoundryEnabled = false`,
 `loomAiEnrichEndpoint` is the **empty string**, and
 `foundry-client.ts` `shieldPrompt` returns `{ blocked: false }` silently rather
-than firing `safetyFailOpen` — a `deploy-integrity.md` R7 violation. #4458 states
-the stock path "is fine" from an R7 standpoint, which is correct; the audit-scope
-question above is a different axis and is owned here, not there.
+than firing `safetyFailOpen` — a `deploy-integrity.md` R7 violation. #4458's body
+states the stock path "is fine" from an R7 standpoint, which is correct on that
+axis. The audit-scope question above is a **different axis on the same
+expression**, and it is **owned by #4458 too** — routed there by
+`il5.bicepparam:379-389` — not by this PRP. The reasoning was missing from that
+issue's body, so it has been added there as a comment.
 
 **Declared gap — owner and date (`cloud-parity.md` §1):**
 
@@ -792,10 +795,21 @@ definitions.
   wrong.
 - **Where it is off, wire the substitute and SAY so** — the AOAI deployment's
   default-on content filter owns the verdict, surfaced per boundary on the
-  readiness page. An unstated protection is as wrong as an overstated one. At
-  IL5 this also means **undoing the `/contentsafety` fallback** at
-  `admin-plane/main.bicep:6224` per §3.4.1 / Wave 0 task 5 — otherwise the
-  readiness page and the wiring disagree, and the wiring wins.
+  readiness page. An unstated protection is as wrong as an overstated one.
+- **At IL5, do NOT touch the `/contentsafety` fallback until Wave 0 task 5
+  returns.** `admin-plane/main.bicep:6224` is IL5's **only working screening
+  path** today (§3.4.1). Whether it is in audit scope is **UNDETERMINED and owned
+  by #4458**, so this wave is conditional on that answer, not on a default:
+  - **Determination = not in scope** → stop deriving
+    `LOOM_CONTENT_SAFETY_ENDPOINT` from `loomAiEnrichEndpoint` at IL5 and move the
+    verdict to the AOAI deployment-level filter, surfacing which layer owns it.
+  - **Determination = in scope** → **record it and leave the wiring alone.**
+  - **No determination yet** → change nothing here, and do not stand IL5 up
+    (Wave 0 task 5 gates task 1).
+
+  An earlier revision of this bullet said undoing the fallback was simply what
+  Wave D does. A lane executing that verbatim would **strip IL5's only screening
+  on a question nobody has answered** — the precise hazard §0 exists to prevent.
 - Act on §3.2 — tracked by **#4460** — with Wave 0 task 2's answer: either delete the
   `!isSovereign` exclusion on `llm-token-limit`, or wire the declared Azure-native
   substitute (`rate-limit-by-key` / `quota-by-key`, labelled as request-counting,
@@ -891,7 +905,7 @@ the target:
 |---|---|---|
 | Commercial / DMLZ | exercised (live estate) | a deploy receipt per wave, then a live AI turn through the gateway |
 | GCC | **supported-in-code, NEVER exercised** (0 runs ever executed a deploy step; lane `disabled_manually`; no GCC tenant or `AZURE_GCC_*` secrets exist) | `build-params` parity only. **Do not list GCC as covered.** It cannot gain a receipt without a GCC tenant, which is out of this epic's scope (#3078, #4071). |
-| GCC-High | exercised; last receipt **dated 2026-09-01** — run 33519232492, deploy job `failure`, steps=33. Three later runs are `status=waiting` on the `gcc-high-deploy` environment approval gate, deploy job `steps=0` because **not started** — one approval from a fresh receipt | approve one of the waiting runs; that is the cheapest path to Wave 0 tasks 1 and 2 |
+| GCC-High | exercised; last receipt **dated 2026-09-01** — run 33519232492, deploy job `failure`, steps=33. **9 later runs** are `status=waiting` on the `gcc-high-deploy` environment approval gate (14 waiting across the last 30), deploy job `steps=0` because **not started** — one approval from a fresh receipt | approve one of the waiting runs; that is the cheapest path to Wave 0 tasks 1 and 2 |
 | IL5 | **NEVER exercised** — `gh run list --workflow deploy-fiab-il5.yml` → `[]` | Wave 0 produces IL5's first deploy receipt in the repo's history |
 
 - The bar the copilot work just set applies here too — a test that accepts "a
