@@ -1112,9 +1112,171 @@ export function unwrittenEarlyExits(body, output = VERDICT_OUTPUT) {
   return bad;
 }
 
+/** Tri-state logic over 'yes' | 'maybe' | 'no'. */
+const triNot = (a) => (a === 'yes' ? 'no' : a === 'no' ? 'yes' : 'maybe');
+const triAnd = (a, b) => (a === 'no' || b === 'no' ? 'no' : a === 'yes' && b === 'yes' ? 'yes' : 'maybe');
+const triOr = (a, b) => (a === 'yes' || b === 'yes' ? 'yes' : a === 'no' && b === 'no' ? 'no' : 'maybe');
+
+/**
+ * WHICH value does the producer write on a successful early return, when every
+ * verdict it reads is UNKNOWN?
+ *
+ * ROUND 11, on a review finding, and it is the same class round 9 closed for
+ * the CONSUMER carried across to the PRODUCER — which is exactly the
+ * narrower-enumeration shape this lane keeps producing: a property fixed on one
+ * side of a boundary and not the other. Round 9's entry in this file reads
+ * "POLARITY was never asserted at all" and added
+ * `refusalFiresWhenVerdictsUnknown` for the Teardown refusal. Round 10 created a
+ * SECOND place the same property lives — the producer's write — and asserted
+ * only that a write EXISTED. Two edits of the real workflow, the reviewer's,
+ * both green at 61 pass / 0 fail:
+ *
+ *   A1  polarity: the dlz test `= "false"` rewritten to `!= "true"`     +0 B
+ *   A2  value:    the else arm writes `estate_paused=false`             +1 B
+ *
+ * A2 restores round 10's own blocker in one byte: the verdict becomes a constant
+ * `false` on `dlz-attach` regardless of the declaration, so every gate opens on
+ * a DECLARED-PAUSED estate — and both arms write, so the dataflow check above is
+ * satisfied and the ratchet stays green.
+ *
+ * A1 is the more serious one because it costs ZERO bytes and reads as a
+ * tidy-up. It preserves behaviour on `true` and on `false` and changes it only
+ * on EMPTY: today an empty `ESTATE_DECLARED` takes the else arm and publishes
+ * `estate_paused=true` (fail-CLOSED); after the rewrite it takes the other arm
+ * and publishes `false` (fail-OPEN). That is precisely the property the workflow
+ * comment declares load-bearing — "an unknown is not a no" — deleted by a
+ * refactor.
+ *
+ * WHAT IS EVALUATED, AND WHAT IS EXPLORED. A condition that READS a verdict is
+ * evaluated with that verdict held EMPTY (the state it collapses to when its
+ * producer declines) and every other name left at a non-empty stand-in, exactly
+ * as `refusalFiresWhenVerdictsUnknown` does — so the check is keyed to the SHAPE
+ * of the test and a consistent rename of the variable stays green. A condition
+ * that reads NO verdict — `[ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]`, the
+ * outer branch — is not evaluated at all; BOTH of its arms are explored as
+ * 'maybe'. Evaluating it would resolve it false against the stand-in and the
+ * whole check would pass over an unvisited branch, which is the zero-match
+ * anchor this repo keeps re-finding.
+ *
+ * FAIL-CLOSED throughout: an unmodelled test shape, a written value this cannot
+ * read (`estate_paused=$SOMETHING`), a producer that binds no verdict at all, or
+ * a reachable path whose write is anything but `true` are all reported. A branch
+ * that consults no verdict and writes `false` on one of its arms is a finding,
+ * not an exemption — an unconsulted verdict cannot have been honoured.
+ *
+ * @param {string} body the producer step's block
+ * @param {string[]} verdictNames shell names bound to a job/step verdict output
+ * @param {string} output the output key whose value is being judged
+ * @returns {string[]}
+ */
+export function verdictValueOnUnknown(body, verdictNames, output = VERDICT_OUTPUT) {
+  const problems = [];
+  if (!verdictNames || verdictNames.length === 0) {
+    return [
+      `the producer of \`${output}\` binds NO verdict in its env:, so whatever it writes on an early ` +
+        'return is a constant. A constant cannot be fail-closed against an unknown declaration: the ' +
+        'value has to be DERIVED from a verdict that is populated on every topology and every trigger.',
+    ];
+  }
+  const lines = String(body || '').split('\n');
+  const values = new Map(verdictNames.map((n) => [n, '']));
+  const readsVerdict = (t) => verdictNames.some((n) => new RegExp(`\\$\\{?${n}\\b`).test(t));
+  const writeRe = new RegExp(`${output}=([^"'\\s]*)`);
+  const armFires = (cond) => {
+    // NOT evaluated when no verdict is in the test — both arms are explored.
+    if (!readsVerdict(cond)) return 'maybe';
+    const r = refusalFiresWhenVerdictsUnknown(cond, values);
+    if (r.unevaluable) {
+      problems.push(
+        `the producer of \`${output}\` branches on \`${cond.trim()}\`, which this check cannot evaluate ` +
+          `(${r.unevaluable}). Whether the value it publishes on an UNKNOWN verdict is fail-closed is ` +
+          'therefore not established, and an unknown must not be recorded as a no.',
+      );
+      return 'maybe';
+    }
+    return r.fires ? 'yes' : 'no';
+  };
+  const stack = [];
+  let live = 'yes';
+  let seen = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const t = lines[i].trim();
+    if (/^if\b.*;\s*then$/.test(t)) {
+      const f = armFires(t);
+      stack.push({ parent: live, taken: f });
+      live = triAnd(live, f);
+      continue;
+    }
+    if (/^elif\b.*;\s*then$/.test(t)) {
+      const fr = stack[stack.length - 1];
+      if (fr) {
+        const f = armFires(t);
+        live = triAnd(fr.parent, triAnd(triNot(fr.taken), f));
+        fr.taken = triOr(fr.taken, f);
+      }
+      continue;
+    }
+    if (/^else$/.test(t)) {
+      const fr = stack[stack.length - 1];
+      if (fr) {
+        live = triAnd(fr.parent, triNot(fr.taken));
+        fr.taken = 'yes';
+      }
+      continue;
+    }
+    if (/^fi$/.test(t)) {
+      const fr = stack.pop();
+      if (fr) live = fr.parent;
+      continue;
+    }
+    if (live !== 'no' && new RegExp(`${output}=[^\\n]*GITHUB_OUTPUT`).test(t)) {
+      const m = writeRe.exec(t);
+      seen.push({ value: m ? m[1] : null, line: t });
+    }
+    if (/^exit\s+0\s*$/.test(t) && live !== 'no') {
+      for (const w of seen) {
+        if (w.value === 'true') continue;
+        problems.push(
+          `the producer of \`${output}\` reaches \`exit 0\` on a path that publishes ` +
+            `\`${w.value === null ? w.line : `${output}=${w.value}`}\` while every verdict it reads is ` +
+            'UNKNOWN (empty). An unpublished verdict is empty, an empty verdict is not `true`, and every ' +
+            'consumer of `!= \'true\'` therefore OPENS — so the value written on the unknown path must be ' +
+            '`true`, or the stand-down is fail-OPEN on exactly the state it exists for.',
+        );
+      }
+      seen = [];
+    }
+  }
+  // …and the value must actually VARY with the verdict. "The unknown path writes
+  // `true`" is necessary and not sufficient: writing `true` on EVERY arm also
+  // satisfies it, and that is a constant, not a derivation — the reviewer's
+  // framing was the VALUE's derivation, not the presence of a write. Measured:
+  // rewriting the other arm's `false` to `true` (−1 B) left this check green
+  // before this block existed. A constant `true` is fail-closed rather than
+  // fail-open, so it is not the sovereign-estate defect — but it silently
+  // stands the lane down on a topology nobody declared, which is the "green
+  // over nothing" shape, and it means the declaration is no longer consulted.
+  const arms = lines
+    .map((l) => l.trim())
+    .filter((t) => new RegExp(`${output}=[^\\n]*GITHUB_OUTPUT`).test(t))
+    .map((t) => (writeRe.exec(t) || [])[1])
+    .filter((v) => v !== undefined);
+  const hasEarlyReturn = lines.some((l) => /^exit\s+0\s*$/.test(l.trim()));
+  if (hasEarlyReturn && arms.length > 0 && new Set(arms).size === 1) {
+    problems.push(
+      `every early-return arm of the producer writes the SAME value \`${output}=${arms[0]}\`, so the ` +
+        'verdict is a CONSTANT and not derived from ' +
+        `{${verdictNames.join(', ')}}. A constant cannot be right on both a declared and an undeclared ` +
+        'estate: one of those two runs is being decided by a literal rather than by the declaration.',
+    );
+  }
+  return problems;
+}
+
 /**
  * The STEP-level verdict must be TOTAL: written on every successful path its
- * producer can take.
+ * producer can take, AND written with the SUPPRESSING value on the path an
+ * unknown verdict takes.
  *
  * ROUND 10, on a review finding, and it is the `steps.*` half of what round 8
  * built for `needs.*`. `judgeUnconditionalVerdict` proved the TEARDOWN refusal
@@ -1160,6 +1322,13 @@ export function judgeVerdictProducerTotality(steps) {
   }
   const problems = [];
   for (const p of producers) {
+    // ROUND 11: …and WHICH value it writes on the unknown path, not merely that
+    // it wrote one. The verdict names are DERIVED from the step's own env:
+    // bindings, so a consistent rename follows and a constant cannot pass.
+    const bound = jobOutputBindings(stepEnv(p.body)).map((c) => c.key);
+    for (const problem of verdictValueOnUnknown(p.body, bound)) {
+      problems.push(`step '${p.name}': ${problem}`);
+    }
     for (const { line } of unwrittenEarlyExits(p.body)) {
       problems.push(
         `step '${p.name}' is the producer of \`${VERDICT_OUTPUT}\`, and it can reach \`${line}\` without ` +
@@ -2991,12 +3160,44 @@ test('refusalBlock anchors on the SHAPE of the conditional, not on the variable 
   );
 });
 
-const VERDICT_PRODUCER = 'ADX preflight — a stopped cluster cannot take its principal assignments';
+/**
+ * The producer step and the name of the verdict it reads, both DERIVED.
+ *
+ * ROUND 11. These were a hard-coded step name and a hard-coded shell variable,
+ * and a consistent rename of `ESTATE_DECLARED` — the exact direction that is
+ * supposed to stay GREEN — made three fixtures below anchor on nothing. They
+ * failed CLOSED, which is right (a zero-match anchor must report NOT-RUN, never
+ * a silent pass), but "the rename control is noisy" is a fixture defect, not a
+ * finding. It is the same fixture-spelling brittleness round 8 recorded about
+ * the E1 test. Derived from the parsed workflow instead: the producer is the
+ * step that invokes VERDICT_SCRIPT, and the verdict name is whatever its own
+ * `env:` binds to a job output.
+ */
+function producerStep() {
+  const p = parseSteps(workflowText()).find((s) => s.id && String(s.body || '').includes(VERDICT_SCRIPT));
+  assert.ok(p, `no step of ${STEP_JOB} invokes ${VERDICT_SCRIPT} — the producer anchor resolves to nothing`);
+  return p;
+}
+
+function producerVerdictName() {
+  const [binding] = jobOutputBindings(stepEnv(producerStep().body));
+  assert.ok(binding, 'the producer binds no job-output verdict — these mutations would target nothing');
+  return binding.key;
+}
+
+/** The producer's declaration test, as written, built from the derived name. */
+function producerBranchAnchor() {
+  const anchor = `if [ "\${${producerVerdictName()}:-}" = "false" ]; then`;
+  assert.ok(
+    workflowText().includes(anchor),
+    `the producer's declaration test is not \`${anchor}\` — these mutations would anchor on nothing`,
+  );
+  return anchor;
+}
 
 function mutateProducer(rewrite) {
-  return parseSteps(workflowText()).map((s) =>
-    s.name === VERDICT_PRODUCER ? { ...s, body: rewrite(s.body) } : s,
-  );
+  const target = producerStep().name;
+  return parseSteps(workflowText()).map((s) => (s.name === target ? { ...s, body: rewrite(s.body) } : s));
 }
 
 test('MUTATION R10: the producer returning WITHOUT writing the verdict is caught', () => {
@@ -3047,8 +3248,108 @@ test('the totality check is per-PATH, so losing ONE arm of the branch is caught'
     ),
   );
   assert.ok(dropped, 'the mutation must have removed exactly one write');
+  // TWO findings, and both are right: the surviving arm reaches `exit 0` with
+  // nothing written, AND the one write that remains is now the only one, i.e. a
+  // constant rather than a value derived from the declaration (round 11).
+  assert.equal(problems.length, 2, `expected exactly two problems, got: ${problems.join(' | ') || '(none)'}`);
+  assert.ok(
+    problems.some((p) => /can reach `exit 0` without\s+writing that output/.test(p)),
+    `the totality arm must fire: ${problems.join(' | ')}`,
+  );
+  assert.ok(
+    problems.some((p) => /writes the SAME value/.test(p)),
+    `the derivation arm must fire: ${problems.join(' | ')}`,
+  );
+});
+
+test('MUTATION R11: the +0-byte POLARITY rewrite of the producer branch is caught', () => {
+  // The reviewer's A1, and the one most likely to actually happen: `= "false"`
+  // rewritten to `!= "true"` is byte-neutral, identical on `true` and on
+  // `false`, and inverts the EMPTY case from fail-closed to fail-open. Measured
+  // green at 61/0 before round 11.
+  const anchor = producerBranchAnchor();
+  const flipped = anchor.replace('" = "false"', '" != "true"');
+  assert.notEqual(flipped, anchor, 'the polarity rewrite must change the text');
+  assert.equal(flipped.length, anchor.length, 'A1 is byte-neutral, or it is not the mutation that was measured');
+  const problems = judge(mutateProducer((b) => b.replace(anchor, flipped)));
   assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ') || '(none)'}`);
-  assert.match(problems[0], /can reach `exit 0` without\s+writing that output/);
+  assert.match(problems[0], /publishes `estate_paused=false` while every verdict it reads is\s+UNKNOWN/);
+});
+
+test('MUTATION R11: the +1-byte VALUE flip on the unknown arm is caught', () => {
+  // The reviewer's A2: both arms still write, so the round-10 dataflow check is
+  // satisfied, and the verdict is a constant `false` on dlz-attach — round 10's
+  // own blocker restored in one byte.
+  const problems = judge(
+    mutateProducer((b) =>
+      b.replace('echo "estate_paused=true" >> "$GITHUB_OUTPUT"', 'echo "estate_paused=false" >> "$GITHUB_OUTPUT"'),
+    ),
+  );
+  assert.ok(
+    problems.some((p) => /publishes `estate_paused=false` while every verdict it reads is\s+UNKNOWN/.test(p)),
+    `the unknown-path arm must fire: ${problems.join(' | ') || '(none)'}`,
+  );
+});
+
+test('MUTATION R11: a verdict that is WRITTEN but not DERIVED is caught', () => {
+  // Writing `true` on every arm satisfies "the unknown path writes true" and is
+  // still not a derivation — the declaration stops being consulted and the lane
+  // stands down on a topology nobody declared.
+  const problems = judge(
+    mutateProducer((b) =>
+      b.replace('echo "estate_paused=false" >> "$GITHUB_OUTPUT"', 'echo "estate_paused=true" >> "$GITHUB_OUTPUT"'),
+    ),
+  );
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ') || '(none)'}`);
+  assert.match(problems[0], /writes the SAME value `estate_paused=true`, so the verdict is a CONSTANT/);
+});
+
+test('MUTATION R11: a producer branch that consults NO verdict is caught', () => {
+  // Fail-closed on the shape: an unconsulted verdict cannot have been honoured,
+  // so both arms are explored and the `false` arm is reachable under unknown.
+  const problems = judge(
+    mutateProducer((b) => b.replace(producerBranchAnchor(), 'if [ "${CSA_LOOM_SKIP:-}" = "1" ]; then')),
+  );
+  assert.ok(
+    problems.some((p) => /publishes `estate_paused=false` while every verdict it reads is\s+UNKNOWN/.test(p)),
+    `an unconsulted verdict must be a finding: ${problems.join(' | ') || '(none)'}`,
+  );
+});
+
+test('the value check is keyed to the SHAPE, so a consistent rename stays green', () => {
+  // The direction that makes this an assertion about behaviour rather than a ban
+  // on a spelling. The verdict names are derived from the step's own `env:`
+  // bindings, so renaming the shell variable AND its binding together changes
+  // nothing this check depends on.
+  const was = producerVerdictName();
+  // DERIVED from the current name, so this control cannot become a no-op by
+  // colliding with whatever the workflow already calls the variable.
+  const now = `${was}_RENAMED_BY_THIS_CONTROL`;
+  const renamed = mutateProducer((b) => b.split(was).join(now));
+  const producer = renamed.find((s) => s.name === producerStep().name);
+  assert.ok(
+    producer.body.includes(now) && !new RegExp(`\\b${was}\\b`).test(producer.body),
+    'the rename must have applied everywhere in the producer, or this control proved nothing',
+  );
+  assert.deepEqual(judge(renamed), []);
+  // …and an unmodelled test shape is REPORTED, never assumed correct.
+  const anchor = producerBranchAnchor();
+  const weird = judge(mutateProducer((b) => b.replace(anchor, anchor.replace(`\${${was}:-}`, `\${${was}##x}`))));
+  assert.ok(
+    weird.some((p) => /which this check cannot evaluate/.test(p)),
+    `an unmodelled expansion must be reported: ${weird.join(' | ') || '(none)'}`,
+  );
+});
+
+test('verdictValueOnUnknown refuses a producer that binds no verdict at all', () => {
+  const body = [
+    '        run: |',
+    '          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then',
+    '            echo "estate_paused=false" >> "$GITHUB_OUTPUT"',
+    '            exit 0',
+    '          fi',
+  ].join('\n');
+  assert.match(verdictValueOnUnknown(body, [])[0], /binds NO verdict in its env:/);
 });
 
 test('unwrittenEarlyExits models the branch, and says nothing about exit 1', () => {
