@@ -1437,7 +1437,7 @@ const PRINCIPAL_ARGUMENT_CHAIN = {
  */
 const PARSE_CACHE = new Map();
 function parseCached(src, rel) {
-  const key = `${rel} ${src}`;
+  const key = `${rel}\0${src}`;
   let hit = PARSE_CACHE.get(key);
   if (hit === undefined) {
     hit = parseBicep(src, rel);
