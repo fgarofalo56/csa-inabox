@@ -57,7 +57,7 @@
  * it must never race another job in the same checkout. Run it on demand, and on
  * any PR that touches these clients, the resolver, or the guard.
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -350,12 +350,25 @@ function occurrences(hay, needle) {
 for (const m of MUTATIONS) {
   if (only.length && !only.includes(m.id)) continue;
   const abs = path.join(CONSOLE_ROOT, m.file);
-  if (!existsSync(abs)) {
-    results.push({ id: m.id, verdict: 'SKIPPED', ok: m.expect === 'SKIPPED', line: '', desc: m.desc });
-    console.log(`[${m.id}] SKIPPED — target file absent: ${m.file}`);
+  // READ, then classify the failure — never `existsSync()` then read. This
+  // harness rewrites source files, so a check-then-use here is a real TOCTOU
+  // window on a file it is about to overwrite (`js/file-system-race`, flagged
+  // by CodeQL on the first push of this file). The single read is also the
+  // honest instrument: a missing file and an unreadable one are different
+  // facts, and `existsSync` collapses them into one guess.
+  let original;
+  try {
+    original = readFileSync(abs, 'utf8');
+  } catch (e) {
+    const absent = e && e.code === 'ENOENT';
+    const ok = absent && m.expect === 'SKIPPED';
+    results.push({ id: m.id, verdict: 'SKIPPED', ok, line: '', desc: m.desc });
+    console.log(
+      `[${m.id}] SKIPPED — target file not read (${(e && e.code) || 'unknown error'}): ${m.file}`
+      + `${absent ? '' : ' *** this is an I/O failure, NOT an absent file ***'}`,
+    );
     continue;
   }
-  const original = readFileSync(abs, 'utf8');
   // The checkout is CRLF; match and mutate against an LF-normalised copy and
   // ALWAYS restore the byte-exact original afterwards.
   const lf = original.replace(/\r\n/g, '\n');
