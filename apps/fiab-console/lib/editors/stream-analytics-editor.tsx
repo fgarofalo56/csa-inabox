@@ -50,6 +50,8 @@ import { useSharedEditorStyles } from './shared-styles';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { PreviewTable, type PreviewSource } from '@/lib/components/shared/preview-table';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
 // can reference inline setState / save / loadList / setTab state.)
@@ -642,9 +644,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     </Field>
                     {outKind === 'kusto' && (
                       <>
-                        <Field label="Cluster URL" required>
-                          <Input value={outForm.cluster || ''} placeholder="https://adx-csa-loom-shared.eastus2.kusto.windows.net" onChange={(_, d) => setOF('cluster', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="adxUri"
+                          label="Cluster URL"
+                          value={outForm.cluster || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('cluster', v || '')}
+                        />
                         <Field label="Database" required>
                           <Input value={outForm.database || ''} placeholder="loomdb-default" onChange={(_, d) => setOF('database', d.value)} />
                         </Field>
@@ -655,32 +661,47 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     )}
                     {outKind === 'blob' && (
                       <>
-                        <Field label="Storage account (ADLS Gen2)" required>
-                          <Input value={outForm.storageAccount || ''} placeholder="loomdatalake01" onChange={(_, d) => setOF('storageAccount', d.value)} />
-                        </Field>
-                        <Field label="Container / filesystem" required>
-                          <Input value={outForm.container || ''} placeholder="bronze" onChange={(_, d) => setOF('container', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="storage"
+                          label="Storage account (ADLS Gen2)"
+                          value={outForm.storageAccount || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('storageAccount', v || '')}
+                        />
+                        <BlobContainerPicker
+                          account={outForm.storageAccount || ''}
+                          value={outForm.container || ''}
+                          label="Container / filesystem"
+                          surface="Stream Analytics output"
+                          required
+                          disabled={!outForm.storageAccount}
+                          onChange={(c) => setOF('container', c)}
+                          hint={outForm.storageAccount ? undefined : 'Pick a storage account first — the container list is read from it.'}
+                        />
                         <Field label="Path pattern" hint="Files land under account/container/pathPattern.">
                           <Input value={outForm.pathPattern || ''} placeholder="events/{date}/{time}" onChange={(_, d) => setOF('pathPattern', d.value)} />
                         </Field>
-                        <Field label="Account key" hint="Leave blank to use the ASA managed identity (Storage Blob Data Contributor).">
+                        <Field label="Account key" hint="Leave blank to use the ASA managed identity (Storage Blob Data Contributor). Only needed for an account outside this estate.">
                           <Input type="password" value={outForm.storageAccountKey || ''} onChange={(_, d) => setOF('storageAccountKey', d.value)} />
                         </Field>
                       </>
                     )}
                     {outKind === 'eventhub' && (
                       <>
-                        <Field label="Namespace" required>
-                          <Input value={outForm.namespace || ''} placeholder="loom-eventhub-ns" onChange={(_, d) => setOF('namespace', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="eventhubs"
+                          label="Namespace"
+                          value={outForm.namespace || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('namespace', v || '')}
+                        />
                         <Field label="Event Hub name" required>
                           <Input value={outForm.eventHubName || ''} placeholder="transformed-events" onChange={(_, d) => setOF('eventHubName', d.value)} />
                         </Field>
                         <Field label="Shared access policy name" hint="Leave SAS blank to use the ASA managed identity (Event Hubs Data Sender).">
                           <Input value={outForm.sharedAccessPolicyName || ''} onChange={(_, d) => setOF('sharedAccessPolicyName', d.value)} />
                         </Field>
-                        <Field label="Shared access key">
+                        <Field label="Shared access key" hint="Only needed for a namespace outside this estate; the managed identity covers the rest.">
                           <Input type="password" value={outForm.sharedAccessPolicyKey || ''} onChange={(_, d) => setOF('sharedAccessPolicyKey', d.value)} />
                         </Field>
                       </>
