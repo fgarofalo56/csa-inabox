@@ -54,6 +54,12 @@ CALLER = os.path.join(CONSOLE, "e2e", "copilot.uat.ts")
 SUITES = [
     "__tests__/copilot-uat-verdict.test.ts",
     "app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts",
+    # Load-bearing: `check-route-toolkit.mjs`'s TOUCH_EXEMPT entry for
+    # help-copilot/chat cites THIS harness as the thing that proves its
+    # compensating control. That sentence was false when written -- this suite
+    # was absent here and no mutation targeted that route, so the claim
+    # justifying a step around a required guard was not exercised by anything.
+    "app/api/help-copilot/__tests__/chat-gate-codes.test.ts",
 ]
 VITEST = os.path.join(CONSOLE, "node_modules", ".bin", "vitest.cmd")
 if not os.path.exists(VITEST):  # non-Windows
@@ -93,6 +99,22 @@ MUTATIONS = [
      os.path.join(CONSOLE, "app", "api", "copilot", "orchestrate", "route.ts"),
      "{ ok: false, code: 'aoai_unreachable', error: e?.message || String(e) }",
      "{ ok: false, code: 'no_aoai', error: e?.message || String(e) }"),
+    # M11-M13 are the COMPENSATING CONTROL for the help-copilot/chat
+    # TOUCH_EXEMPT entry. That exemption steps around a required guard, and its
+    # justification names this harness -- so the harness has to actually kill a
+    # deletion in that route, or the justification is prose.
+    ("M11 delete the gate code from the help-copilot chat route",
+     os.path.join(CONSOLE, "app", "api", "help-copilot", "chat", "route.ts"),
+     "{ ok: false, code: 'no_aoai', error: e.message, gate: 'aoai' }",
+     "{ ok: false, error: e.message, gate: 'aoai' }"),
+    ("M12 collapse help-copilot's 502 into the gate code",
+     os.path.join(CONSOLE, "app", "api", "help-copilot", "chat", "route.ts"),
+     "{ ok: false, code: 'aoai_unreachable', error: e?.message || String(e) }",
+     "{ ok: false, code: 'no_aoai', error: e?.message || String(e) }"),
+    ("M13 remove help-copilot's 401 prologue (the exemption's other claim)",
+     os.path.join(CONSOLE, "app", "api", "help-copilot", "chat", "route.ts"),
+     "    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });",
+     "    return NextResponse.json({ ok: false, error: 'anonymous-ok' }, { status: 200 });"),
 ]
 
 

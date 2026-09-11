@@ -183,13 +183,29 @@ test.describe('unified copilot — live AOAI', () => {
     if (LIVE_ALLOW_GATE) {
       await expect(finalMsg.or(aoaiGate)).toBeVisible({ timeout: 30_000 });
     } else {
-      // A REAL answer, not "an answer or a gate". The disjunction is what made
-      // this pass mean nothing: it is satisfied by the copilot telling the user
-      // it is not wired, which is precisely the state the test should catch.
+      // A REAL answer, and the bar for that is an SSE `agent` step — NOT a
+      // visible non-empty bubble.
+      //
+      // The previous version of this asserted visible + gate-count-0 +
+      // non-empty, and a re-review showed all three are satisfied by an ERROR
+      // bubble: `copilot-pane.tsx` fills the streaming placeholder with
+      // `Error: ${j.error || res.statusText}` on ANY non-ok response, so the
+      // literal #4432 symptom — "Error: HTTP 500" — passed a test whose stated
+      // purpose was to catch exactly that. The gate locator only catches the
+      // 503, and the 400 branch drops the placeholder so `.last()` falls back
+      // to the non-empty greeting.
+      //
+      // `copilot-agent-badge` is set ONLY when the stream delivers an `agent`
+      // attribution step, so it cannot be produced by an error path or by a
+      // static greeting. That is the property worth asserting.
+      await expect(page.getByTestId('copilot-agent-badge').last())
+        .toBeVisible({ timeout: 30_000 });
       await expect(finalMsg).toBeVisible({ timeout: 30_000 });
       await expect(aoaiGate).toHaveCount(0);
-      // A rendered bubble is not an answer — an empty one satisfies toBeVisible.
       await expect(finalMsg).not.toHaveText(/^\s*$/);
+      // Belt and braces: the #4432 string itself must not be what we are
+      // reading as an answer.
+      await expect(finalMsg).not.toContainText(/^Error:/);
     }
 
     recordVerdict({

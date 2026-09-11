@@ -9,6 +9,8 @@
  * itself.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   classify,
   gateIsFailure,
@@ -250,6 +252,39 @@ describe('AOAI_BACKED_PERSONAS', () => {
     for (const persona of ['persona:copilot-studio-agent', 'persona:governance-copilot']) {
       expect(AOAI_BACKED_PERSONAS.has(persona), persona).toBe(false);
       expect(scorePersona(persona, 'primary', noAoai).bad, persona).toBe(false);
+    }
+  });
+});
+
+/**
+ * The set must describe the SPEC, not just itself.
+ *
+ * A re-review pointed out that every test above asserts membership in
+ * `AOAI_BACKED_PERSONAS` — so renaming a surface string at the call site in
+ * `copilot.uat.ts` left the whole suite green while silently removing the
+ * must-answer rule from that persona. Membership in a set nothing checks
+ * against is the same class of gap as the call-site flag this set replaced.
+ *
+ * So the population comes off the SPEC FILE, and the two are required to agree.
+ */
+describe('AOAI_BACKED_PERSONAS agrees with the spec that uses it', () => {
+  const specPath = path.join(__dirname, '..', 'e2e', 'copilot.uat.ts');
+  const spec = readFileSync(specPath, 'utf-8');
+  const driven = new Set(
+    [...spec.matchAll(/assertPrimaryAction\(\s*'([^']+)'/g)].map((m) => m[1]),
+  );
+
+  it('the spec really does drive personas (a zero match would pass everything)', () => {
+    expect(driven.size).toBeGreaterThan(5);
+  });
+
+  it('every AOAI-backed persona is a surface the spec actually drives', () => {
+    for (const persona of AOAI_BACKED_PERSONAS) {
+      // If this fails, either the set has a stale name or the spec renamed a
+      // call site — and in the second case that persona silently stopped being
+      // required to answer.
+      expect(driven.has(persona), `${persona} is in the set but not driven by the spec`)
+        .toBe(true);
     }
   });
 });
