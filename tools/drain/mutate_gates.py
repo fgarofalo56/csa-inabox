@@ -144,8 +144,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "N8 head pinning applies only when more than one comment exists",
         "gates.py",
-        "        if when < head_date:",
-        "        if when < head_date and len(comments) > 1:",
+        "        postdates = bool(head_date) and when >= head_date",
+        "        postdates = (bool(head_date) and when >= head_date) or len(comments) == 1",
     ),
     # -- the ledger: R2 in code -------------------------------------------
     (
@@ -191,8 +191,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "T2 the refresh guard checks SIZE but not OVERLAP (the wrong-repo read)",
         "tick.py",
-        "    overlap = len(shared) / len(live_numbers)",
-        "    overlap = 1.0  # len(shared) / len(live_numbers)",
+        "    if overlap < MIN_OVERLAP:",
+        "    if False:",
     ),
     (
         "T3 an empty live set is treated as everything having closed",
@@ -219,6 +219,127 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if item.state != READY or not item.schedulable:",
         "            if item.state != READY:",
     ),
+    (
+        "T6 the OVERLAP denominator drops terminal items (a park bricks the run)",
+        "tick.py",
+        "    overlap = len(known & live_numbers) / len(live_numbers)",
+        "    overlap = len(believed_open & live_numbers) / len(live_numbers)",
+    ),
+    (
+        "T7 --allow-shrink switches off the whole guard, not just the retention clause",
+        "tick.py",
+        "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+        "    if not args.allow_shrink:\n        guard_refresh(led, live)",
+    ),
+    (
+        "T8 the reaper returns TERMINAL items to ready, undoing every receipt",
+        "tick.py",
+        "        if item.state == IN_FLIGHT:",
+        "        if item.state != READY:",
+    ),
+    (
+        "T9 main() stops calling the refresh guard at all",
+        "tick.py",
+        "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+        "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+    ),
+    # -- the composed caller: the file that actually decides a merge -------
+    (
+        "MG1 the verdict is reduced over an EMPTY finding set (the rubber stamp)",
+        "merge_gate.py",
+        '    blocking = [f for f in findings if not f["ok"]]',
+        "    blocking = []",
+    ),
+    (
+        "MG2 gate 4 always records GO - required contexts stop blocking",
+        "merge_gate.py",
+        '    ok, reasons = gates.classify_checks(rollup, data["required"])',
+        '    _, reasons = gates.classify_checks(rollup, data["required"])\n    ok = True',
+    ),
+    (
+        "MG3 the verdict gate always records GO - review stops blocking",
+        "merge_gate.py",
+        "    ok, why = gates.reduce_verdicts(live, near)",
+        "    _, why = gates.reduce_verdicts(live, near)\n    ok = True",
+    ),
+    (
+        "MG4 gate 6 is informational again - an undeclared auto-close stops blocking",
+        "merge_gate.py",
+        "        not undeclared,",
+        "        True,",
+    ),
+    (
+        "MG5 a CONFLICTING PR stops being NO-GO",
+        "merge_gate.py",
+        '        mergeable != "CONFLICTING",',
+        "        True,",
+    ),
+    (
+        "MG6 gate 5 stops blocking on a required context that ran nothing",
+        "merge_gate.py",
+        '    ok, hollow = gates.required_measured_nothing(rollup, data["required"])',
+        '    _, hollow = gates.required_measured_nothing(rollup, data["required"])\n    ok = True',
+    ),
+    (
+        "MG7 the post-merge audit compares COUNTS again (a set swap reads clean)",
+        "gates.py",
+        "    before_set, after_set, want = set(before), set(after), set(intended)",
+        ("    before_set = after_set = want = set()\n"
+         "    return len(before) - len(after) == len(intended), 'delta matches'"),
+    ),
+    # -- the ledger's third terminal state ---------------------------------
+    (
+        "L6 `declined` needs no recorded decision (a backlog declines itself drained)",
+        "ledger.py",
+        "        if state == DECLINED and not (why and why.strip()):",
+        "        if False:",
+    ),
+    (
+        "L7 a transient departure never returns to the queue (needs-audit is one-way)",
+        "ledger.py",
+        "            elif existing.state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
+        "            elif False:",
+    ),
+    (
+        "L8 a DISPUTED close is swept back to ready by the departure rescue",
+        "ledger.py",
+        "            elif existing.state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
+        "            elif existing.state == NEEDS_AUDIT:",
+    ),
+    # -- the vocabularies, and the inventory -------------------------------
+    (
+        "G1 the StatusContext vocabulary is dropped from the INCOMPLETE test",
+        "gates.py",
+        "        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:",
+        "        elif not verdict or status in INCOMPLETE_STATUSES:",
+    ),
+    (
+        "G2 a blocking near-miss stops being pinned to head (stale text blocks forever)",
+        "gates.py",
+        "        postdates = bool(head_date) and when >= head_date",
+        "        postdates = True",
+    ),
+    (
+        "G3 the verdict token is read in list order over the FLAT window again",
+        "gates.py",
+        ("    saw_template = False\n"
+         "    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]"),
+        ("    return next((t for t in VERDICT_TOKENS if t in head), None), False\n"
+         "    saw_template = False\n"
+         "    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]"),
+    ),
+    (
+        "BI1 the inventory stops refusing a partition that loses an issue",
+        "build_inventory.py",
+        "    if lost or dupes or len(placed) != len(want):",
+        "    if False:",
+    ),
+    (
+        "BI2 the totality check counts instead of comparing sets (a swap reads clean)",
+        "build_inventory.py",
+        "    if lost or dupes or len(placed) != len(want):",
+        "    if len(placed) != len(want):",
+    ),
 ]
 
 
@@ -243,8 +364,22 @@ def main() -> int:
             shutil.copy2(HERE / name, sandbox / name)
         shutil.copytree(HERE / "__tests__", sandbox / "__tests__",
                         ignore=shutil.ignore_patterns("__pycache__"))
-        originals = {name: (sandbox / name).read_text(encoding="utf-8", newline="")
-                     for name in SOURCES if name.endswith(".py")}
+        # NORMALIZE TO LF before matching. `newline=""` preserves whatever the
+        # working tree has, `core.autocrlf=true` is set on this machine and no
+        # `.gitattributes` rule covers `tools/`, so a fresh clone checks these
+        # files out CRLF -- and every MULTI-LINE anchor below is written with
+        # LF. Three arms lost their needle that way, including the mass-close
+        # one. It fails closed (SKIP -> rc=1), but a matrix that reports
+        # "anchor not found" reads as tooling breakage rather than as the
+        # guard it is. The sandbox is a copy, so rewriting its line endings
+        # costs nothing.
+        originals = {}
+        for name in SOURCES:
+            if not name.endswith(".py"):
+                continue
+            text = (sandbox / name).read_text(encoding="utf-8", newline="").replace("\r\n", "\n")
+            (sandbox / name).write_text(text, encoding="utf-8", newline="")
+            originals[name] = text
         cmd = [sys.executable, "-m", "pytest", str(sandbox / "__tests__"), "-q",
                "-p", "no:cacheprovider"]
 

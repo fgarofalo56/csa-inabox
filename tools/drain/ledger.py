@@ -35,6 +35,11 @@ DECLINED = "declined"
 TERMINAL = (CLOSED, PARKED, DECLINED)
 ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMINAL)
 
+# Why an item is in `needs-audit`. The two have OPPOSITE resolutions when the
+# issue turns up open again, so collapsing them made the state one-way.
+AUDIT_DEPARTED = "departed"   # vanished from the live set; nobody said why
+AUDIT_REOPENED = "reopened"   # was terminal here and is open on GitHub
+
 # Which receipt class an item falls into, derived from the stream it sits in.
 # The brief an agent reads is generated from this, so a wrong entry here tells
 # an agent that CI green closes a deploy-path issue -- which is R2 inverted, and
@@ -76,6 +81,7 @@ class Item:
     receipt_kind: str | None = None
     receipt_ref: str | None = None
     receipt_class: str | None = None
+    audit_reason: str | None = None
     blocker: str | None = None
     owner: str | None = None
     review_by: str | None = None
@@ -199,10 +205,24 @@ class Ledger:
                 if value is not None:
                     setattr(existing, key, value)
             if existing.state in TERMINAL:
+                was = existing.state
                 existing.state = NEEDS_AUDIT
+                existing.audit_reason = AUDIT_REOPENED
                 existing.history.append(
-                    f"{_now()} -> {NEEDS_AUDIT} (was {CLOSED}/{PARKED}/{DECLINED} but is OPEN "
-                    "on GitHub - reopened, or closed in error)"
+                    f"{_now()} -> {NEEDS_AUDIT} (was {was} but is OPEN on GitHub - "
+                    "reopened, or closed in error)"
+                )
+            elif existing.state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:
+                # It was flagged because it VANISHED from the live set, and here
+                # it is. The departure was a truncated read or a transient, and
+                # its premise is now void -- so it returns to the queue. Without
+                # this, `needs-audit` was one-way: a flaky read could strand
+                # items no lane would ever pick up again and no CLI could clear.
+                existing.state = READY
+                existing.audit_reason = None
+                existing.history.append(
+                    f"{_now()} -> {READY} (open on GitHub again; the departure that "
+                    "flagged it was transient)"
                 )
             return existing
         item = Item(number=number, title=title, stream=stream, lane=lane, size=size, **kwargs)
@@ -232,6 +252,17 @@ class Ledger:
         if state == PARKED and not (item.blocker and item.owner):
             raise ValueError(
                 f"#{number}: refusing to park without a named blocker AND owner"
+            )
+        # `declined` is the THIRD terminal state and had no refusal at all: an
+        # empty `why` recorded "-> declined" and nothing else, so 297 items
+        # could reach `drained(): True` -- this program's exit condition -- with
+        # zero evidence. PRP §1 and the README both say declined requires a
+        # recorded decision; two of the three refusals were in code and this one
+        # was only in prose.
+        if state == DECLINED and not (why and why.strip()):
+            raise ValueError(
+                f"#{number}: refusing to decline without a recorded decision - "
+                "pass `why` naming WHO decided and on what grounds"
             )
 
         item.state = state

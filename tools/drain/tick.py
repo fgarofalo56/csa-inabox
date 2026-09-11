@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -21,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from build_inventory import stream_for
 from ledger import (
+    AUDIT_DEPARTED,
     IN_FLIGHT,
     NEEDS_AUDIT,
     READY,
@@ -81,7 +83,7 @@ def read_live_issues(repo: str) -> list[dict]:
         raise SystemExit(f"unparseable issue list for {repo}: {exc}") from exc
 
 
-def guard_refresh(led: Ledger, live: list[dict]) -> None:
+def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> None:
     """Refuse a refresh whose live set is not plausibly this ledger's population.
 
     Departure from the live set is how an item leaves the queue, so a refresh
@@ -97,8 +99,24 @@ def guard_refresh(led: Ledger, live: list[dict]) -> None:
       looking for a pagination bug instead of at `repo` in policy.json.
     - RETAINED: the live set is a SUBSET of what the ledger believes is open.
       That is truncation, a narrower token, or the `--limit` ceiling.
+
+    THE TWO DENOMINATORS ARE DIFFERENT, and getting that wrong bricks the run.
+    OVERLAP is measured against EVERY number the ledger knows; RETENTION only
+    against the ones it believes are still open. **Parking does not close an
+    issue on GitHub** -- a `parked` item is terminal here and open there -- so
+    measuring overlap against the non-terminal set alone made every legal park
+    lower the ratio. With 40 items and 25 parked, a perfectly healthy live set
+    of the same 40 numbers scored 38% and the harness exited with "that is a
+    different population - check `repo`". Nothing was wrong with the repo: the
+    guard fired on the drain's own definition of progress, in the back half of
+    every run, and asserted a cause it had not established (R7).
+
+    `allow_shrink` suppresses the RETENTION clause ONLY. It used to skip the
+    whole function, so the documented escape from a shrink warning also turned
+    off the wrong-repo and zero-issue refusals.
     """
     believed_open = {n for n, i in led.items.items() if i.state not in TERMINAL}
+    known = set(led.items)
     if len(believed_open) < GUARD_FLOOR:
         return
 
@@ -106,26 +124,25 @@ def guard_refresh(led: Ledger, live: list[dict]) -> None:
     if not live_numbers:
         raise SystemExit(
             f"refusing to refresh: GitHub returned ZERO open issues while the ledger "
-            f"believes {len(believed_open)} are open. That would close all of them. "
-            "Confirm the repo and the token, then re-run."
+            f"believes {len(believed_open)} are open. That would move all of them out of "
+            "the queue. Confirm the repo and the token, then re-run."
         )
 
-    shared = believed_open & live_numbers
-    overlap = len(shared) / len(live_numbers)
+    overlap = len(known & live_numbers) / len(live_numbers)
     if overlap < MIN_OVERLAP:
         raise SystemExit(
-            f"refusing to refresh: the live set ({len(live_numbers)} issues) overlaps the "
-            f"ledger's open set ({len(believed_open)}) by only {overlap:.0%}. That is a "
-            "different population - check `repo` in policy.json and GH_REPO in the environment."
+            f"refusing to refresh: only {overlap:.0%} of the {len(live_numbers)} live issues "
+            f"appear anywhere in this ledger ({len(known)} known). That is a different "
+            "population - check `repo` in policy.json and GH_REPO in the environment."
         )
 
-    retained = len(shared) / len(believed_open)
-    if retained < MIN_RETAINED:
+    retained = len(believed_open & live_numbers) / len(believed_open)
+    if retained < MIN_RETAINED and not allow_shrink:
         raise SystemExit(
             f"refusing to refresh: only {retained:.0%} of the {len(believed_open)} issues the "
             f"ledger believes are open are still in the live set (floor {MIN_RETAINED:.0%}). "
             "A partial or truncated read looks exactly like this. Re-run; if the drop is real, "
-            "pass --allow-shrink."
+            "pass --allow-shrink (which suppresses THIS clause only)."
         )
 
 
@@ -159,6 +176,7 @@ def refresh_from_github(led: Ledger, streams: dict, live: list[dict]) -> tuple[i
     departed = 0
     for number, item in led.items.items():
         if number not in live_numbers and item.state not in TERMINAL and item.state != NEEDS_AUDIT:
+            item.audit_reason = AUDIT_DEPARTED
             led.transition(
                 number, NEEDS_AUDIT,
                 f"not open on GitHub at refresh, was {item.state} - what closed it?"
@@ -329,7 +347,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--allow-shrink", action="store_true",
-        help="permit a refresh whose live set is much smaller than the ledger's open set",
+        help="suppress the RETENTION clause only; the wrong-repo and zero-issue "
+             "refusals still apply",
     )
     args = parser.parse_args()
 
@@ -371,8 +390,14 @@ def main() -> int:
         return 0
 
     live = read_live_issues(repo)
-    if not args.allow_shrink:
-        guard_refresh(led, live)
+    guard_refresh(led, live, allow_shrink=args.allow_shrink)
+    if args.bootstrap and os.path.exists(STATE_PATH):
+        # Back it up first. The ledger is the ONLY record of what has already
+        # been verified -- GitHub carries which issues are open, never which
+        # were receipted -- and `.gitignore` says so in as many words.
+        backup = STATE_PATH + ".bak"
+        shutil.copy2(STATE_PATH, backup)
+        print(f"BOOTSTRAP: prior ledger copied to {backup}")
     if args.bootstrap:
         print(f"BOOTSTRAP: discarding any prior ledger, seeding from {repo}")
 

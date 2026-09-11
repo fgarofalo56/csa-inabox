@@ -81,6 +81,22 @@ DESCRIPTIONS = {
 ORDER = list(DESCRIPTIONS)
 
 
+def read_issues_from(source) -> list[dict]:
+    """Refuse an EMPTY issue list, whatever produced it.
+
+    An empty partition is total over nothing -- the one case the totality check
+    cannot catch, because zero placed equals zero wanted. Separated from the
+    reader so it has a negative control.
+    """
+    issues = source()
+    if not issues:
+        raise SystemExit(
+            "refusing to build an inventory over ZERO issues - an empty partition is "
+            "total over nothing, which is the one case the totality check cannot catch."
+        )
+    return issues
+
+
 def read_issues() -> list[dict]:
     """Read the live issue list, falling back to a hand-made snapshot.
 
@@ -93,25 +109,49 @@ def read_issues() -> list[dict]:
     """
     if SNAPSHOT.exists():
         print(f"using snapshot {SNAPSHOT}")
-        return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        return read_issues_from(lambda: json.loads(SNAPSHOT.read_text(encoding="utf-8")))
 
     policy = json.loads((Path(__file__).resolve().parent / "policy.json").read_text("utf-8"))
     repo = policy["repo"]
     print(f"no snapshot; reading {repo} live")
-    run = subprocess.run(
-        ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-         "--json", "number,title,labels,createdAt"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=ROOT,
-    )
-    if run.returncode != 0:
-        raise SystemExit(f"cannot read issues for {repo} (rc={run.returncode}): {run.stderr[:300]}")
-    issues = json.loads(run.stdout)
-    if not issues:
-        raise SystemExit(
-            "refusing to build an inventory over ZERO issues - an empty partition is "
-            "total over nothing, which is the one case the totality check cannot catch."
+
+    def fetch() -> list[dict]:
+        run = subprocess.run(
+            ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
+             "--json", "number,title,labels,createdAt"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=ROOT,
         )
-    return issues
+        if run.returncode != 0:
+            raise SystemExit(
+                f"cannot read issues for {repo} (rc={run.returncode}): {run.stderr[:300]}"
+            )
+        return json.loads(run.stdout)
+
+    return read_issues_from(fetch)
+
+
+def assert_partition_is_total(issues: list, rows: dict[str, list]) -> None:
+    """REFUSE a partition that loses an issue -- PRP §8's acceptance box.
+
+    A partition that silently drops one is worse than no partition: the item
+    leaves the plan without leaving the backlog, which is the same failure the
+    ledger refuses when it will not let you park without an owner. Extracted
+    from `main()` so it has a negative control; inline it had none, and an
+    acceptance criterion with no test is an assertion about untested code.
+
+    Both directions are checked. Counting alone passes a SWAP -- one issue lost
+    and one counted twice sum to the right total.
+    """
+    placed = [row["n"] for bucket in rows.values() for row in bucket]
+    want = [issue["number"] for issue in issues]
+    lost = sorted(set(want) - set(placed))
+    dupes = sorted({n for n in placed if placed.count(n) > 1})
+    if lost or dupes or len(placed) != len(want):
+        raise SystemExit(
+            f"REFUSING -- partition is not total: {len(want)} issues in, {len(placed)} placed"
+            + (f"; LOST {lost}" if lost else "")
+            + (f"; DUPLICATED {dupes}" if dupes else "")
+        )
 
 
 def main() -> int:
@@ -132,10 +172,7 @@ def main() -> int:
             }
         )
 
-    placed = sum(len(v) for v in rows.values())
-    if placed != len(issues):
-        print(f"REFUSING -- partition lost {len(issues) - placed} issue(s)")
-        return 2
+    assert_partition_is_total(issues, rows)
 
     out = [
         "# Zero-backlog inventory (generated -- do not hand-edit)",

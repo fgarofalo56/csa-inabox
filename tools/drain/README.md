@@ -114,7 +114,7 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 | kind | closes | how it is obtained |
 |---|---|---|
-| `ci-green` | guard/test-only | required contexts green **and** hollow-check clean at the merged sha |
+| `ci-green` | guard/test-only | every required context green at the merged sha, and none of them SKIPPED |
 | `deploy-run` | deploy-path | a run whose deploy job **executed steps** against a live subscription |
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
@@ -126,6 +126,15 @@ fills its streaming placeholder with the error text on any non-ok response. The
 corrected assertion keyed on `copilot-agent-badge`, a testid set *only* by an SSE
 `agent` step — unreachable from an error path. **Every `g1-browser` receipt must
 name why its assertion cannot be satisfied by a failure.**
+
+**What `ci-green` does NOT prove, stated rather than implied.**
+`statusCheckRollup` publishes no per-check population — its entries carry
+`__typename, completedAt, conclusion, detailsUrl, name, startedAt, status,
+workflowName` and nothing else (measured). So a check that concluded SUCCESS
+over **zero items** — the #4451 shape — is *not visible* to this gate. It
+detects a required context that concluded SKIPPED, and says so in those words.
+Detecting green-over-nothing needs a population source this API does not have,
+and is an owed capability, not a claim.
 
 ---
 
@@ -174,8 +183,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 106 tests across gates/ledger/tick
-python tools/drain/mutate_gates.py           # 26 arms, must be 26 KILLED
+python -m pytest tools/drain/__tests__ -q    # 150 tests across every module
+python tools/drain/mutate_gates.py           # 45 arms, must be 45 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -257,8 +266,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 26 mutation arms against a sandbox copy; must be 26 KILLED |
+| `mutate_gates.py` | 45 mutation arms against a sandbox copy; must be 45 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 106 tests; a negative control for every decision function |
+| `__tests__/` | 150 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

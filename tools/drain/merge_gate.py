@@ -55,6 +55,31 @@ def gh_json(args: list[str], what: str) -> object:
         raise SystemExit(f"unparseable {what}: {exc}") from exc
 
 
+def gh_paginated(args: list[str], what: str) -> list:
+    """Read a paginated API list into ONE flat list.
+
+    `gh api --paginate --jq` emits one JSON document PER PAGE, concatenated, so
+    `json.loads` dies with "Extra data" the moment the result crosses a page.
+    The default page size is 30 comments: this gate worked on every PR that had
+    not been reviewed twice, and took itself down on exactly the PRs that had.
+
+    `--slurp` collects the pages into a single array -- but `gh` REFUSES
+    `--slurp` together with `--jq` ("the `--slurp` option is not supported with
+    `--jq` or `--template`", measured). So the field selection moves to Python
+    and this passes no `--jq` at all.
+    """
+    raw = gh_json([*args, "--paginate", "--slurp"], what)
+    if not isinstance(raw, list):
+        raise SystemExit(f"unexpected shape for {what}: {type(raw).__name__}")
+    flat: list = []
+    for page in raw:
+        if isinstance(page, list):
+            flat.extend(page)
+        else:
+            flat.append(page)
+    return flat
+
+
 def required_contexts(repo: str) -> list[str]:
     """The contexts branch protection will actually BLOCK on.
 
@@ -93,26 +118,49 @@ def collect(repo: str, number: int) -> dict:
     if not head_date:
         print(f"WARNING: could not resolve head commit date: {err[:200]}", file=sys.stderr)
 
-    comments = gh_json(
-        ["gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate",
-         "--jq", "[.[] | {id, body, created_at}]"],
-        f"comments on #{number}",
-    )
+    comments = [
+        {"id": c.get("id", 0), "body": c.get("body") or "",
+         "created_at": c.get("created_at", "")}
+        for c in gh_paginated(
+            ["gh", "api", f"repos/{repo}/issues/{number}/comments"],
+            f"comments on #{number}",
+        )
+    ]
 
-    base_sha = ""
-    rc, out, _ = sh(["git", "rev-parse", f"origin/{pr['baseRefName']}"])
-    if rc == 0:
-        origin_main_sha = out.strip()
-    else:
-        origin_main_sha = ""
-    rc, out, _ = sh(["git", "merge-base", f"origin/{pr['baseRefName']}", head])
-    if rc == 0:
-        base_sha = out.strip()
+    # The base sha comes from the API, not from a local ref. `git rev-parse
+    # origin/main` and `git merge-base origin/main <head>` read the SAME local
+    # remote-tracking ref, so on a stale clone they agree with each other and
+    # the gate answers "is this based on the last main I fetched" while
+    # printing "base == origin/main". Branch protection here is strict=false,
+    # so GitHub does not catch it either -- this gate is the only defence.
+    base_ref = pr["baseRefName"]
+    # `--jq .sha` prints a BARE string, not JSON, so it must not go through
+    # `gh_json` -- which would report the remote tip as unparseable and take the
+    # whole gate down on a value it read perfectly well.
+    rc, out, err = sh(["gh", "api", f"repos/{repo}/commits/{base_ref}", "--jq", ".sha"])
+    if rc != 0 or not out.strip():
+        raise SystemExit(f"cannot read the remote tip of {base_ref} (rc={rc}): {err[:300]}")
+    origin_main_sha = out.strip()
+    rc, out, err = sh(["git", "fetch", "--quiet", "origin", base_ref])
+    if rc != 0:
+        print(f"WARNING: git fetch origin {base_ref} failed: {err[:200]}", file=sys.stderr)
+    rc, out, err = sh(["git", "merge-base", origin_main_sha, head])
+    base_sha = out.strip() if rc == 0 else ""
+    if rc != 0:
+        print(f"WARNING: merge-base failed: {err[:200]}", file=sys.stderr)
 
     open_issues = gh_json(
         ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-         "--json", "number", "--jq", "length"],
-        "open issue count",
+         "--json", "number", "--jq", "[.[].number]"],
+        "open issue numbers",
+    )
+
+    head_runs = gh_json(
+        ["gh", "api", f"repos/{repo}/commits/{head}/check-runs",
+         "--jq", ("{n: .total_count, waiting: ([.check_runs[] | "
+                  'select(.status == "waiting" or .conclusion == "action_required")] '
+                  "| length)}")],
+        f"check-runs on {head[:12]}",
     )
 
     return {
@@ -123,16 +171,37 @@ def collect(repo: str, number: int) -> dict:
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
         "open_issues": open_issues,
+        "head_runs": head_runs,
         "required": required_contexts(repo),
     }
 
 
-def run_gates(data: dict, policy: dict) -> dict:
+def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) -> dict:
+    """Run every gate over an already-collected `data` dict.
+
+    PURE over its inputs, and it computes the verdict itself. `main()` used to
+    reduce the findings -- so `blocking = []` there was a one-token edit that
+    turned the program deciding every merge into a rubber stamp, invisible to
+    106 tests and a 26-arm mutation matrix that never touched this file. The
+    reduction lives here, where `test_merge_gate.py` drives it over fixtures.
+    """
     pr = data["pr"]
+    allow_close = allow_close or []
     findings: list[dict] = []
 
     def record(name: str, ok: bool, detail: str) -> None:
         findings.append({"gate": name, "ok": ok, "detail": detail})
+
+    # 0 -- a CONFLICTING PR is NO-GO in its own right. Pushing into that window
+    # gets ZERO check-runs, permanently, and nothing later creates them.
+    mergeable = pr.get("mergeable", "")
+    record(
+        "0 not conflicting",
+        mergeable != "CONFLICTING",
+        f"mergeable={mergeable} mergeStateStatus={pr.get('mergeStateStatus')}"
+        + (" - clear the conflict BEFORE pushing; a commit pushed while the PR reads "
+           "CONFLICTING never gets check-runs" if mergeable == "CONFLICTING" else ""),
+    )
 
     # 1 -- base == origin/main, exactly.
     ok, why = gates.base_is_current(
@@ -160,52 +229,71 @@ def run_gates(data: dict, policy: dict) -> dict:
         "; ".join(reasons) if reasons else f"all {len(data['required'])} required contexts green",
     )
 
-    # 4b -- the two states that BOTH present as a missing required check.
+    # 4b -- the two states that BOTH present as a missing required check. The
+    # discriminator is the count of check-runs ON THE COMMIT and whether any run
+    # is genuinely waiting for approval -- not the rollup length and not
+    # `mergeStateStatus == BLOCKED`, which is true for essentially every PR with
+    # an unsatisfied required check and so answered "parked" every time. The two
+    # remedies are opposite, which is the whole reason this gate exists.
     missing = [r.split(":")[0] for r in reasons if "MISSING" in r]
     if missing:
-        shape = gates.classify_missing(len(rollup), pr["mergeStateStatus"] == "BLOCKED")
+        runs = data.get("head_runs") or {}
+        shape = gates.classify_missing(int(runs.get("n", 0)), bool(runs.get("waiting")))
         record(
             "4b missing-check shape",
             False,
-            f"{len(missing)} required context(s) absent; rollup carries {len(rollup)} runs -> "
+            f"{len(missing)} required context(s) absent; the commit carries "
+            f"{runs.get('n', '?')} check-run(s), {runs.get('waiting', '?')} waiting -> "
             f"{shape}. never-created means the push landed in a CONFLICTING window and no "
             "re-run creates them; parked means approve the run. Opposite remedies.",
         )
 
-    # 5 -- hollow check: did each green context MEASURE anything?
-    hollow: list[str] = []
-    for check in rollup:
-        name = check.get("name") or check.get("context") or ""
-        if name not in data["required"]:
-            continue
-        conclusion = (check.get("conclusion") or check.get("state") or "")
-        is_hollow, note = gates.check_is_hollow(name, conclusion, check.get("measured"))
-        if is_hollow and conclusion.upper() == "SKIPPED":
-            hollow.append(note)
+    # 5 -- did a required context measure anything? See the docstring on
+    # `required_measured_nothing`: statusCheckRollup publishes NO population, so
+    # this detects a required context that concluded SKIPPED and says so, rather
+    # than claiming a measurement it cannot make.
+    ok, hollow = gates.required_measured_nothing(rollup, data["required"])
     record(
-        "5 hollow-check",
-        not hollow,
-        "; ".join(hollow) if hollow else "no required context concluded SKIPPED",
+        "5 required contexts that measured nothing",
+        ok,
+        "; ".join(hollow) if hollow
+        else ("no required context concluded SKIPPED (note: the rollup API exposes no "
+              "per-check population, so a green-over-zero-items check is NOT visible here)"),
     )
 
-    # 6 -- closing keywords in BOTH the body and the commit trail.
+    # 6 -- closing keywords in BOTH the body and the commit trail. This BLOCKS.
+    # It used to record `True` unconditionally with a comment calling itself
+    # informational, which made it a gate that could not fail sitting inside the
+    # composed caller. An auto-close bypasses the ledger entirely -- the item
+    # never gets a receipt of its class -- so an unintended one is a NO-GO, and
+    # an intended one is declared with --allow-close.
     messages = [
         f"{c.get('messageHeadline', '')}\n{c.get('messageBody', '')}"
         for c in (pr.get("commits") or [])
     ]
     scan = gates.merge_is_close_safe(pr.get("body") or "", messages)
     api_says = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
+    will_close = sorted(set(scan.hard))
+    undeclared = sorted(set(will_close) - set(allow_close))
     record(
         "6 closing-keyword scan (body + commit trail)",
-        True,  # informational: what WILL close is not a block, being wrong about it is
-        f"will close {sorted(set(scan.hard))} | near-miss {sorted(set(scan.near))} | "
+        not undeclared,
+        (f"UNDECLARED auto-close of {undeclared} - an auto-close bypasses the ledger, so the "
+         f"item never gets the receipt its class requires. Remove the keyword, or declare it "
+         f"with --allow-close {','.join(str(n) for n in undeclared)}. "
+         if undeclared else "nothing in this merge closes an issue. ")
+        + f"will close {will_close} | near-miss {sorted(set(scan.near))} | "
         f"closingIssuesReferences says {api_says} "
-        "(that field is NOT a complete oracle - it read empty while a squash commit closed an issue)",
+        "(that field is NOT a complete oracle - it read empty while a squash commit "
+        "closed an issue)",
     )
 
+    blocking = [f for f in findings if not f["ok"]]
     return {
         "findings": findings,
-        "will_close": sorted(set(scan.hard)),
+        "blocking": blocking,
+        "verdict": "NO-GO" if blocking else "GO",
+        "will_close": will_close,
         "open_issues_before": data["open_issues"],
     }
 
@@ -216,60 +304,73 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable")
     parser.add_argument("--audit-close", type=int, metavar="PR",
                         help="gate 7: post-merge open-issue audit for this PR")
-    parser.add_argument("--before", type=int, help="open-issue count taken BEFORE the merge")
+    parser.add_argument("--before-file",
+                        help="the temp/before-<PR>.json this tool wrote before the merge")
     parser.add_argument("--intended", default="",
                         help="comma-separated issue numbers the merge was meant to close")
+    parser.add_argument("--allow-close", default="",
+                        help="issue numbers this merge is ALLOWED to auto-close; anything "
+                             "else the keyword scan finds is a NO-GO")
     args = parser.parse_args()
 
     policy = gates.load_policy(POLICY_PATH)
     repo = policy["repo"]
 
-    # Gate 7 -- the before/after audit. Run AFTER merging, with the count this
-    # tool printed before it. The count is DETECTION and the scan is PREVENTION,
-    # and the count has caught what the strongest API oracle did not.
+    # Gate 7 -- the before/after audit. Run AFTER merging, with the issue-number
+    # list this tool wrote before it. The scan is PREVENTION and this is
+    # DETECTION, and detection has caught what the strongest API oracle did not.
+    # It compares SETS: a count delta of 1 reads clean when the intended issue
+    # closed, a second closed silently, and release-please opened a third.
     if args.audit_close is not None:
-        if args.before is None:
-            print("--audit-close needs --before <count taken before the merge>", file=sys.stderr)
+        if not args.before_file or not os.path.exists(args.before_file):
+            print("--audit-close needs --before-file <the before-*.json this tool wrote>",
+                  file=sys.stderr)
             return 2
+        with open(args.before_file, encoding="utf-8") as handle:
+            before = json.load(handle)
         after = gh_json(
             ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "1000",
-             "--json", "number", "--jq", "length"],
-            "open issue count",
+             "--json", "number", "--jq", "[.[].number]"],
+            "open issue numbers",
         )
         intended = [int(x) for x in args.intended.split(",") if x.strip()]
-        ok, why = gates.issue_count_audit(args.before, int(after), intended)
+        ok, why = gates.issue_set_audit(before["open_issues"], after, intended)
         print(("AUDIT OK: " if ok else "AUDIT FAILED: ") + why)
         return 0 if ok else 1
 
     if args.pr is None:
         parser.error("a PR number is required unless --audit-close is given")
 
+    allow_close = [int(x) for x in args.allow_close.split(",") if x.strip()]
     data = collect(repo, args.pr)
-    result = run_gates(data, policy)
-    blocking = [f for f in result["findings"] if not f["ok"]]
-    result["verdict"] = "NO-GO" if blocking else "GO"
+    result = run_gates(data, policy, allow_close)
+
+    before_path = os.path.join(REPO_ROOT, "temp", f"before-{args.pr}.json")
+    os.makedirs(os.path.dirname(before_path), exist_ok=True)
+    with open(before_path, "w", encoding="utf-8") as handle:
+        json.dump({"pr": args.pr, "head": data["head"],
+                   "open_issues": data["open_issues"]}, handle)
 
     if args.json:
         print(json.dumps(result, indent=1))
-        return 0 if not blocking else 1
+        return 0 if result["verdict"] == "GO" else 1
 
     pr = data["pr"]
     print(f"# merge gate - {repo}#{args.pr} @ {data['head'][:12]}")
     print(f"  {pr['title'][:100]}")
-    print(f"  mergeable={pr['mergeable']} mergeStateStatus={pr['mergeStateStatus']}")
     print()
     for finding in result["findings"]:
         print(f"  [{'GO  ' if finding['ok'] else 'STOP'}] {finding['gate']}")
         print(f"         {finding['detail']}")
     print()
     print(f"VERDICT: {result['verdict']}")
-    print(f"open issues BEFORE merge: {result['open_issues_before']}  "
-          f"(intended to close: {result['will_close'] or 'none'})")
+    print(f"open issues BEFORE merge: {len(result['open_issues_before'])} "
+          f"(numbers saved to {before_path})")
     print("after merging, run:")
     intended = ",".join(str(n) for n in result["will_close"])
     print(f"  python tools/drain/merge_gate.py --audit-close {args.pr} "
-          f"--before {result['open_issues_before']} --intended {intended}")
-    return 0 if not blocking else 1
+          f"--before-file {before_path} --intended {intended}")
+    return 0 if result["verdict"] == "GO" else 1
 
 
 if __name__ == "__main__":

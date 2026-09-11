@@ -67,8 +67,14 @@ CLOSING_RE = re.compile(
 # own `owner/repo` slug and far shorter than an issue URL -- so the three forms
 # the hard pattern missed did not even surface as near-misses, and the gate
 # returned a clean bill of health on text that closes an issue.
+# The span may not cross a SENTENCE BOUNDARY -- a `.`/`!`/`?` followed by
+# whitespace. At a flat 80 chars this matched across ordinary prose ("… we
+# cannot fix this until. See #N"), producing near-misses on 7 of 40 real PR
+# bodies. A list the reader learns to skim is a gate that has stopped working.
+# The rule is keyed to the boundary rather than to a length, so a URL -- whose
+# dots are never followed by a space -- still matches.
 NEAR_RE = re.compile(
-    r"\b" + _VERB + r"[^\n]{0,80}?" + _REF + r"(?P<num>\d+)",
+    r"\b" + _VERB + r"(?:(?![.!?]\s)[^\n]){0,80}?" + _REF + r"(?P<num>\d+)",
     re.IGNORECASE,
 )
 
@@ -209,40 +215,44 @@ def parse_verdicts(
         cid = comment.get("id", 0)
         when = comment.get("created_at", "")
         head = body[:window]
-
-        token = next((t for t in VERDICT_TOKENS if t in head), None)
         has_marker = any(m in body for m in MARKERS)
+        postdates = bool(head_date) and when >= head_date
 
-        # The review TEMPLATE lists every token on one line. It is an
-        # instruction to the reviewer, not a decision, and reading it in token
-        # order would register the first one listed.
-        if token and all(t in head for t in VERDICT_TOKENS):
-            near.append(
-                NearMiss(cid, when, "carries the verdict TEMPLATE line, not a decision",
-                         NEAR_TEMPLATE, blocks=has_marker)
-            )
-            continue
+        token, saw_template = _token_of(body, head)
 
-        if not has_marker:
-            if token:
+        if not head_date:
+            if has_marker or token or saw_template:
                 near.append(
-                    NearMiss(cid, when, f"carries {token} but no marker", NEAR_NO_MARKER,
-                             blocks=token in BLOCKING_TOKENS)
+                    NearMiss(cid, when, "head commit date unknown - verdict cannot be pinned",
+                             NEAR_UNPINNABLE, blocks=True)
                 )
             continue
-        if not head_date:
-            near.append(
-                NearMiss(cid, when, "head commit date unknown - verdict cannot be pinned",
-                         NEAR_UNPINNABLE, blocks=True)
-            )
-            continue
+
+        # EVERY near-miss that blocks is PINNED TO HEAD, exactly like a parsed
+        # verdict. Unpinned, a 2020 comment from anyone that happened to contain
+        # a blocking token made the PR permanently unmergeable -- no push could
+        # discharge it, because the comment does not move when the diff does.
+        # That made unparseable stale text STRONGER than a parseable stale
+        # block, inverting the module's own pinning rule.
         if token is None:
+            if saw_template:
+                near.append(
+                    NearMiss(cid, when, "carries the verdict TEMPLATE line, not a decision",
+                             NEAR_TEMPLATE, blocks=has_marker and postdates)
+                )
+            elif has_marker:
+                near.append(
+                    NearMiss(cid, when, f"marker, but no token in body[:{window}]",
+                             NEAR_NO_TOKEN, blocks=postdates)
+                )
+            continue
+        if not has_marker:
             near.append(
-                NearMiss(cid, when, f"marker, but no token in body[:{window}]",
-                         NEAR_NO_TOKEN, blocks=True)
+                NearMiss(cid, when, f"carries {token} but no marker", NEAR_NO_MARKER,
+                         blocks=postdates and token in BLOCKING_TOKENS)
             )
             continue
-        if when < head_date:
+        if not postdates:
             near.append(
                 NearMiss(cid, when, f"marker and {token} present, but predates head {head_date}",
                          NEAR_PREDATES_HEAD, blocks=False)
@@ -251,6 +261,32 @@ def parse_verdicts(
         live.append(Verdict(token=token, created_at=when, comment_id=cid))
 
     return live, near
+
+
+def _token_of(body: str, head: str) -> tuple[str | None, bool]:
+    """Find this comment's verdict token, and whether a template line was seen.
+
+    Line-oriented, and the MARKER LINE is consulted first, because that is where
+    a reviewer writes the decision (`## Independent review - APPROVE`). A flat
+    scan of the first `window` characters reads the FIRST token in
+    `VERDICT_TOKENS` order anywhere in that window, so an approving review whose
+    prose happens to mention the other spellings registered as a block.
+
+    A line carrying ALL THREE tokens is the review TEMPLATE -- an instruction to
+    the reviewer, not a decision -- and is skipped rather than read in order. It
+    is reported, so a reviewer who pasted the template and wrote nothing else
+    does not pass silently.
+    """
+    saw_template = False
+    marker_lines = [ln for ln in body.splitlines() if any(m in ln for m in MARKERS)]
+    for line in [*marker_lines, *head.splitlines()]:
+        if all(t in line for t in VERDICT_TOKENS):
+            saw_template = True
+            continue
+        token = next((t for t in VERDICT_TOKENS if t in line), None)
+        if token:
+            return token, saw_template
+    return None, saw_template
 
 
 def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> tuple[bool, str]:
@@ -282,13 +318,22 @@ def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> 
 # Check-run interpretation
 # ---------------------------------------------------------------------------
 
-# GitHub conclusions that mean the check MEASURED something and it was bad.
+# Bad outcomes, in BOTH GitHub vocabularies. `statusCheckRollup` returns two
+# shapes: a CheckRun (`name`/`status`/`conclusion`) and a StatusContext
+# (`context`/`state`). Their words differ -- a StatusContext says `ERROR` where a
+# CheckRun says `FAILURE`, and `PENDING` where a CheckRun says `IN_PROGRESS` --
+# so a set built from one vocabulary silently passes the other. `ERROR` and
+# `EXPECTED` were missing and a StatusContext carrying them read GREEN.
 RED_CONCLUSIONS = frozenset(
-    {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"}
+    {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
+     "ERROR"}
 )
-# Conclusions that mean the check has not finished. A required context that has
-# not concluded is INCOMPLETE, never a pass.
-INCOMPLETE_STATUSES = frozenset({"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"})
+# Not finished. A required context that has not concluded is INCOMPLETE, never a
+# pass. `EXPECTED` is a StatusContext that has been announced and never
+# reported -- the check-run equivalent of never-created.
+INCOMPLETE_STATUSES = frozenset(
+    {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED", "EXPECTED"}
+)
 
 
 def classify_missing(total_count: int, waiting: bool) -> str:
@@ -339,28 +384,73 @@ def classify_checks(checks: list[dict], required: list[str]) -> tuple[bool, list
         if check is None:
             reasons.append(f"{name}: MISSING (no check-run published this context)")
             continue
-        status = (check.get("status") or "").upper()
-        conclusion = (check.get("conclusion") or check.get("state") or "").upper()
-        if conclusion in RED_CONCLUSIONS:
-            reasons.append(f"{name}: RED ({conclusion})")
-        elif not conclusion or status in INCOMPLETE_STATUSES:
-            reasons.append(f"{name}: INCOMPLETE (status={status or 'unknown'})")
+        verdict, status = _outcome(check)
+        if verdict in RED_CONCLUSIONS:
+            reasons.append(f"{name}: RED ({verdict})")
+        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
+            reasons.append(f"{name}: INCOMPLETE (state={verdict or status or 'unknown'})")
     return (not reasons), reasons
+
+
+def _outcome(check: dict) -> tuple[str, str]:
+    """(verdict, status) from EITHER rollup shape, upper-cased.
+
+    A StatusContext has no `status` key at all, so a reader that tests
+    completeness against `status` alone can never see a PENDING one -- it falls
+    through every branch and is scored green. Both values are returned and BOTH
+    sets are consulted against BOTH.
+    """
+    return (
+        (check.get("conclusion") or check.get("state") or "").upper(),
+        (check.get("status") or "").upper(),
+    )
 
 
 def _check_rank(check: dict) -> int:
     """Worst-first ranking, so a duplicated context is judged by its worst run."""
-    conclusion = (check.get("conclusion") or check.get("state") or "").upper()
-    status = (check.get("status") or "").upper()
-    if conclusion in RED_CONCLUSIONS:
+    verdict, status = _outcome(check)
+    if verdict in RED_CONCLUSIONS:
         return 3
-    if not conclusion or status in INCOMPLETE_STATUSES:
+    if not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
         return 2
     return 1
 
 
+def required_measured_nothing(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
+    """PRP §6 gate 5, over ONLY what `statusCheckRollup` actually exposes.
+
+    Stated plainly, because the previous version of this gate overstated itself:
+    **the rollup API carries no per-check population.** Its entries are
+    `__typename, completedAt, conclusion, detailsUrl, name, startedAt, status,
+    workflowName` -- measured, not assumed. So `check_is_hollow(..., measured=None)`
+    is the only branch reachable from live data, and a caller that then discards
+    every `None` has a gate that can only ever see SKIPPED.
+
+    What this DOES detect is a required context that concluded SKIPPED: it ran
+    nothing, and a required gate that ran nothing is not a pass. Detecting the
+    #4451 shape -- green over `pass=0 fail=4` -- needs a population source this
+    API does not have, so that remains an owed capability rather than a claim.
+    Returns (ok, reasons).
+    """
+    worst: dict[str, dict] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if name in required and (name not in worst or _check_rank(check) > _check_rank(worst[name])):
+            worst[name] = check
+    reasons = [
+        f"{name}: SKIPPED - a required context that ran nothing is not a pass"
+        for name, check in sorted(worst.items())
+        if _outcome(check)[0] == "SKIPPED"
+    ]
+    return (not reasons), reasons
+
+
 def check_is_hollow(name: str, conclusion: str, measured: int | None) -> tuple[bool, str]:
-    """PRP §6 gate 5: did this check MEASURE anything, or pass over zero files?
+    """Did this check MEASURE anything, or pass over zero files?
+
+    Used wherever a population IS available (a test count, a lint file count, a
+    UAT pass/fail pair). It is NOT reachable from `statusCheckRollup`, which
+    publishes no population -- see `required_measured_nothing`.
 
     #4451 is the standing example -- `pass=0 fail=4` printed "UAT-verified
     roll", four separate measurements, no observed input for which it returned
@@ -405,6 +495,41 @@ def base_is_current(
     if base_sha != origin_main_sha:
         return False, f"base {base_sha[:12]} != origin/{expected_base} {origin_main_sha[:12]}"
     return True, f"base == origin/{expected_base} @ {base_sha[:12]}"
+
+
+def issue_set_audit(
+    before: list[int] | set[int], after: list[int] | set[int], intended: list[int]
+) -> tuple[bool, str]:
+    """PRP §6 gate 7, on the SETS rather than on their sizes.
+
+    The count version passes a SET SWAP: `before=297, after=296, intended=[N]`
+    reads clean even when the issue that actually left was a different one and
+    something else opened concurrently. On this repo concurrent movement is the
+    normal case -- release-please opens issues, and merges auto-close unclaimed
+    ones -- so the two errors cancel and the audit reports OK over exactly the
+    silent-close it exists to catch.
+
+    The caller already holds both number lists; comparing them costs nothing
+    extra and is strictly stronger.
+    """
+    before_set, after_set, want = set(before), set(after), set(intended)
+    departed = before_set - after_set
+    arrived = after_set - before_set
+    if departed == want:
+        note = f"{len(departed)} issue(s) closed, exactly the intended set {sorted(want)}"
+        if arrived:
+            note += f"; {len(arrived)} opened concurrently {sorted(arrived)} (not a finding)"
+        return True, note
+    unexpected = sorted(departed - want)
+    missing = sorted(want - departed)
+    parts = []
+    if unexpected:
+        parts.append(f"{len(unexpected)} issue(s) closed that nobody chose: {unexpected}")
+    if missing:
+        parts.append(f"{len(missing)} issue(s) meant to close did not: {missing}")
+    if arrived:
+        parts.append(f"(also {len(arrived)} opened concurrently: {sorted(arrived)})")
+    return False, "; ".join(parts)
 
 
 def issue_count_audit(before: int, after: int, intended: list[int]) -> tuple[bool, str]:

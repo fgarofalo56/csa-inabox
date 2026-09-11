@@ -138,7 +138,7 @@ commit a secret · report a merge as a fix.
 
 | receipt | satisfies | how the harness gets it |
 |---|---|---|
-| `ci-green` | guard/test-only change | required contexts green **and** hollow-check clean at the merged sha |
+| `ci-green` | guard/test-only change | every required context green at the merged sha, none SKIPPED. **Not** proof that any of them measured a non-empty population: `statusCheckRollup` publishes none, so green-over-zero-items is invisible to this gate and remains an owed capability |
 | `deploy-run` | deploy-path item | a workflow run whose deploy job **executed steps** against a live subscription |
 | `estate` | behaviour on the estate | live `build-marker.txt` contains the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |

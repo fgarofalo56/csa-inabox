@@ -134,6 +134,37 @@ def test_negative_control_a_park_with_no_blocker_refuses(tmp_path):
         led.transition(1, PARKED)
 
 
+def test_a_recorded_decision_declines(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    assert led.transition(
+        1, DECLINED, "operator 2026-09-11: superseded by the Iceberg path"
+    ).state == DECLINED
+
+
+def test_negative_control_a_decline_with_no_recorded_decision_refuses(tmp_path):
+    """`declined` is the THIRD terminal state and had NO refusal: an empty `why`
+    recorded the transition and nothing else, so a whole backlog could reach
+    `drained(): True` -- this program's exit condition -- with zero evidence.
+    Two of the three refusals were in code; this one was only in prose."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    with pytest.raises(ValueError, match="without a recorded decision"):
+        led.transition(1, DECLINED)
+    with pytest.raises(ValueError, match="without a recorded decision"):
+        led.transition(1, DECLINED, "   ")
+
+
+def test_negative_control_a_backlog_cannot_be_declined_into_drained(tmp_path):
+    led = _led(tmp_path)
+    for n in range(10):
+        led.upsert(n, "x", "W9-rest", lane="lane:ci", size=1)
+    for n in range(10):
+        with pytest.raises(ValueError, match="recorded decision"):
+            led.transition(n, DECLINED)
+    assert not led.drained()
+
+
 def test_an_unknown_state_is_refused(tmp_path):
     led = _led(tmp_path)
     led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)

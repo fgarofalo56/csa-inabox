@@ -46,8 +46,9 @@ are worth knowing:
    survives a branch switch either way. The first cycle merges #4483, after
    which `main` carries it.
 
-2. **`state.json` is seeded and clean**: 297 ready, 0 in-flight, 154
-   unschedulable. If you ever want to start over:
+2. **`state.json` is gitignored**, so what it holds depends on the machine —
+   ask it (`tick.py --status`) rather than trusting a number written here. If
+   it does not exist, `--status` exits 2 and tells you to seed. To start over:
    `python tools/drain/tick.py --bootstrap` — which now genuinely discards the
    ledger and reseeds, rather than being a flag that was parsed and never read.
 
@@ -70,8 +71,8 @@ parallelized until it does.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 106 pass
-python tools/drain/mutate_gates.py       # 26 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 150 pass
+python tools/drain/mutate_gates.py       # 45 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

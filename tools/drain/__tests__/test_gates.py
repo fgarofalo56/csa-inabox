@@ -304,6 +304,53 @@ def test_negative_control_an_unresolvable_head_date_cannot_pin_anything():
     assert not ok
 
 
+def test_negative_control_a_blocking_near_miss_is_pinned_to_head_like_any_verdict():
+    """A near-miss that blocks was NOT pinned, so a comment from ANY date by
+    ANYONE that happened to contain a blocking token made the PR permanently
+    unmergeable -- no push could discharge it, because a comment does not move
+    when the diff does. That made unparseable STALE text stronger than a
+    parseable stale block, inverting the module's own pinning rule."""
+    stale = _c(1, "use REQUEST-CHANGES only for demonstrable defects", "2020-01-01T00:00:00Z")
+    approve = _c(2, "## Independent re-review - APPROVE\n\nall good.", "2026-09-11T11:00:00Z")
+    live, near = gates.parse_verdicts([stale, approve], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+    assert not any(n.blocks for n in near)
+    ok, why = gates.reduce_verdicts(live, near)
+    assert ok, why
+
+
+def test_negative_control_a_blocking_near_miss_at_head_still_blocks():
+    """The other side of that boundary: pinning must not turn the guard off."""
+    fresh = _c(1, "REQUEST-CHANGES - this is broken", "2026-09-11T11:00:00Z")
+    approve = _c(2, "## Independent re-review - APPROVE", "2026-09-11T12:00:00Z")
+    live, near = gates.parse_verdicts([fresh, approve], HEAD)
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "unparseable review at head" in why
+
+
+def test_an_approve_that_mentions_the_other_tokens_in_prose_still_approves():
+    """A reviewer writing "nothing that warrants REQUEST-CHANGES and nothing I
+    had to mark CANNOT-ASSESS" is approving. A flat scan of the first 200 chars
+    reads tokens in list order and registered that as a block, so the gate
+    inverted a genuine verdict. The MARKER LINE is consulted first."""
+    body = ("## Independent re-review - APPROVE\n\n"
+            "Nothing that warrants REQUEST-CHANGES and nothing I had to mark CANNOT-ASSESS.")
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+    ok, why = gates.reduce_verdicts(live, near)
+    assert ok, why
+
+
+def test_a_template_line_beside_a_real_verdict_does_not_swallow_it():
+    """The template is skipped, not read in order -- and skipping it must not
+    discard the decision written next to it."""
+    body = ("## Independent review - APPROVE\n\n"
+            "VERDICT: APPROVE | REQUEST-CHANGES | CANNOT-ASSESS\n")
+    live, _ = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+
+
 def test_negative_control_the_template_line_is_not_a_decision():
     """The review template lists every token on one line. Read in token order it
     registers as REQUEST-CHANGES, so a reviewer who leaves the header in blocks
@@ -449,6 +496,20 @@ def test_negative_control_the_statuscontext_shape_is_read_too():
     checks[0] = {"context": "Python Lint", "state": "FAILURE"}
     ok, reasons = gates.classify_checks(checks, REQUIRED)
     assert not ok
+
+
+def test_negative_control_a_statuscontext_pending_or_error_is_not_green():
+    """The two GitHub vocabularies differ: a StatusContext says ERROR where a
+    CheckRun says FAILURE, and PENDING where a CheckRun says IN_PROGRESS -- and
+    a StatusContext has NO `status` key at all. Testing completeness against
+    `status` alone meant a PENDING external context fell through every branch
+    and was scored green. Latent until an external status joins the required
+    list, and silent when it does."""
+    for state in ("PENDING", "ERROR", "EXPECTED"):
+        checks = [{"context": n, "state": "SUCCESS"} for n in REQUIRED]
+        checks[0] = {"context": "Python Lint", "state": state}
+        ok, reasons = gates.classify_checks(checks, REQUIRED)
+        assert not ok, f"{state} must not be green: {reasons}"
 
 
 def test_negative_control_a_duplicated_context_is_judged_by_its_worst_run():
