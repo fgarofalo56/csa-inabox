@@ -22,18 +22,38 @@
  *                                               asserting the list was complete
  *   the inline `SELECT TOP n * FROM ${obj}` in the lakehouse-shortcut
  *     POST action=query path
- *   lib/foundry/ontology-resolver.ts:190 — `buildSqlSelect(engineObject, …)`
+ *   lib/foundry/ontology-resolver.ts — `buildSqlSelect(...)` on the
+ *     `shortcut`, `lakehouse-table` and `warehouse-table` binding kinds
  *
  * Coverage of those ten, stated as it actually is:
  *   - 8 go through `dropShortcutObject` / `testEngineObject`, which call
  *     `assertMintedEngineObject` INTERNALLY. That is what this file pins, and it
  *     is why a ninth caller of either helper is covered the day it is written.
  *   - 1 (the inline query) is covered by the ROUTE-level `isSafeEngineObject`.
- *   - 1 (`ontology-resolver.ts:190`) is NOT covered by either. It validates only
- *     against a shape regex (`SQL_REF_RE` in lib/foundry/ontology-binding.ts),
- *     which is the same identifier-shaped check this guard replaced — so
- *     `master.sys.sql_logins` passes it. Different item type, same primitive.
- *     Open, tracked in #3959; do not read this file as covering it.
+ *   - 1 (the ontology resolver) is covered by neither of those, and is covered
+ *     ELSEWHERE as of #4219 — see
+ *     `lib/foundry/__tests__/ontology-resolver-sql-sink-authz.test.ts`.
+ *
+ *     WHAT THIS ENTRY USED TO SAY, and why the correction matters: "Open,
+ *     tracked in #3959; do not read this file as covering it", pinned to
+ *     `ontology-resolver.ts:190`. Two things were wrong with it by the time it
+ *     was read. The line number had rotted — a comment citation always does —
+ *     and, worse, the sentence described ONE unguarded site when the resolver's
+ *     `switch` had THREE SQL sinks: #3959 guarded `case 'shortcut'` with
+ *     `isMintedEngineObject` and left `lakehouse-table` and `warehouse-table`,
+ *     which reach the same `buildSqlSelect`, behind nothing but `SQL_REF_RE` —
+ *     a shape regex `master.sys.sql_logins` satisfies character for character.
+ *     A reader following the stale pointer landed on the branch that HAD been
+ *     fixed and could reasonably conclude the note was merely out of date.
+ *
+ *     Those two kinds now refuse an engine-metadata schema (`sys`,
+ *     `INFORMATION_SCHEMA`, …) and a cross-database 3-part ref, in
+ *     `lib/foundry/ontology-resolver.ts` — named by SYMBOL, not by line. The
+ *     REMAINING gap is stated there rather than closed: they do not yet check
+ *     the ref against the objects their catalog actually exposes, so a real user
+ *     table in the binding's own database is still resolved. Do not read this
+ *     entry as "covered"; read it as "the reported class is closed, one named
+ *     class is not".
  *
  * Each covered site builds `DROP VIEW` / `DROP TABLE` / `SELECT TOP 1 * FROM` /
  * `SELECT * FROM … LIMIT 1` and runs it as the Console UAMI, a Synapse SQL admin.

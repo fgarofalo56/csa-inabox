@@ -47,6 +47,7 @@ import { databricksJobProvisioner } from './provisioners/databricks-job';
 import { synapseSqlPoolProvisioner } from './provisioners/synapse-serverless-sql-pool';
 import { workspaceMonitorProvisioner } from './provisioners/workspace-monitor';
 import { materializedLakeViewProvisioner } from './provisioners/materialized-lake-view';
+import { streamAnalyticsJobProvisioner } from './provisioners/stream-analytics-job';
 import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
@@ -85,6 +86,11 @@ export const PROVISIONERS: Record<string, Provisioner> = {
   'databricks-job': databricksJobProvisioner, // create/reset multi-task job w/ shared cluster + run-now + poll (real Jobs 2.1)
   'synapse-serverless-sql-pool': synapseSqlPoolProvisioner, // lakehouse SQL analytics endpoint: external data source over the lake abfss root + SELECT 1 (real TDS)
   'materialized-lake-view': materializedLakeViewProvisioner, // materialize a Delta MLV via a Synapse Spark batch + record Cosmos lineage (Azure-native, no Fabric)
+  // #3573 — stream-analytics-job shipped an editor and a real ARM read route with
+  // NO provisioner behind it, so the backing Microsoft.StreamAnalytics/streamingjobs
+  // resource was never created and the editor 404'd forever. Real ARM PUT, name
+  // derived from the display name, reference recorded on the item.
+  'stream-analytics-job': streamAnalyticsJobProvisioner,
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
