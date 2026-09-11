@@ -41,6 +41,9 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import {
+  CopilotStudioError, COPILOT_STUDIO_NOT_ENABLED,
+} from '@/lib/azure/copilot-studio-error';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import {
   powerPlatformFetch, bapBase, bapScope, type PpCallIdentity,
@@ -67,18 +70,17 @@ import {
 /** BAP admin control-plane api-version (host comes from `bapBase()`). */
 const BAP_API_VERSION = '2020-10-01';
 
-export class CopilotStudioError extends Error {
-  status: number;
-  body?: unknown;
-  endpoint?: string;
-  constructor(message: string, status: number, body?: unknown, endpoint?: string) {
-    super(message);
-    this.name = 'CopilotStudioError';
-    this.status = status;
-    this.body = body;
-    this.endpoint = endpoint;
-  }
-}
+// The error CONTRACT — the thrown shape, the gate code and the one envelope
+// every Copilot Studio BFF route returns — lives in its own module so a route
+// can shape an error without importing this whole Dataverse/BAP client, and so
+// this file stays under its `check-file-size.mjs` ratchet ceiling. Re-exported
+// here because fourteen existing importers name `CopilotStudioError` off this
+// module; new code should import from `./copilot-studio-error` directly.
+export {
+  CopilotStudioError,
+  COPILOT_STUDIO_NOT_ENABLED,
+  copilotStudioErrorEnvelope,
+} from '@/lib/azure/copilot-studio-error';
 
 /**
  * Acquire the bearer token for a Copilot Studio (Dataverse / BAP) call.
@@ -174,10 +176,13 @@ async function rawCall<T = any>(url: string, opts: CallOpts): Promise<T> {
     const CS_ENABLEMENT_ENTITIES = /^(msdyn_copilots?|msdyn_knowledgesources?|msdyn_botcomponents?)$/i;
 
     if (res.status === 404 && missingSegment && CS_ENABLEMENT_ENTITIES.test(missingSegment)) {
+      // The ONE place in this client that can honestly say "the add-on is off",
+      // so it is the one place that carries the gate code. Every other failure
+      // stays codeless on purpose — see CopilotStudioError.code.
       throw new CopilotStudioError(
         'Copilot Studio is not enabled in this environment. ' +
         'Enable it from Power Platform admin centre → Environments → <env> → Settings → Product → Features → "Copilot Studio".',
-        503, json || text, url,
+        503, json || text, url, COPILOT_STUDIO_NOT_ENABLED,
       );
     }
 

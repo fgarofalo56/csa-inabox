@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Field, Input, Divider,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Select,
   makeStyles, tokens,
@@ -50,6 +50,8 @@ import { useSharedEditorStyles } from './shared-styles';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { PreviewTable, type PreviewSource } from '@/lib/components/shared/preview-table';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { BlobContainerPicker } from '@/lib/components/storage/blob-container-picker';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
 // can reference inline setState / save / loadList / setTab state.)
@@ -166,6 +168,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  // #3573 — the MessageBar's TITLE is an assertion about the cause, so it is
+  // keyed on the status code that establishes it, never on "a hint came back".
+  // 501 = ASA genuinely not configured. 404 = configured, this item's job has
+  // not been created — which the platform can fix itself, so it offers to.
+  const [errStatus, setErrStatus] = useState<number | null>(null);
+  const [fixIt, setFixIt] = useState<{ label: string; method: string; href: string } | null>(null);
+  const [fixItBusy, setFixItBusy] = useState(false);
 
   // ── Transform builder (guided) state ──────────────────────────────
   const [builderSource, setBuilderSource] = useState('input');
@@ -192,11 +201,11 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const dirtyRef = useRef(false);
 
   const loadList = useCallback(async () => {
-    setError(null); setHint(null);
+    setError(null); setHint(null); setErrStatus(null); setFixIt(null);
     try {
       const r = await fetch('/api/items/stream-analytics-job');
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'Failed to list'); setHint(j.hint); setJobs([]); return; }
+      if (!j.ok) { setError(j.error || 'Failed to list'); setHint(j.hint); setErrStatus(r.status); setJobs([]); return; }
       setJobs(j.jobs || []);
       if ((j.jobs || []).length && !selected) setSelected(j.jobs[0].name);
     } catch (e: any) { setError(e?.message || String(e)); setJobs([]); }
@@ -204,11 +213,11 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
 
   const loadDetail = useCallback(async (name: string, opts?: { force?: boolean }) => {
     if (!name) return;
-    setError(null);
+    setError(null); setErrStatus(null); setFixIt(null);
     try {
       const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(name)}`);
       const j = await r.json();
-      if (!j.ok) { setError(j.error); setHint(j.hint); return; }
+      if (!j.ok) { setError(j.error); setHint(j.hint); setErrStatus(r.status); setFixIt(j.fixIt || null); return; }
       setJob(j.job);
       const q = j.job?.query || STARTER_QUERY;
       // Only overwrite the editor buffer when the user has no unsaved
@@ -223,9 +232,40 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   }, []);
 
   useEffect(() => { loadList(); }, [loadList]);
-  // When switching jobs, force-load (user expects buffer to reset to that
-  // job's persisted query). On other refreshes we respect dirty edits.
+
+  // When switching jobs, force-load (the user expects the buffer to reset to
+  // that job's persisted query). On other refreshes we respect dirty edits.
   useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
+
+  /**
+   * #3573 / `ux-baseline.md` G2 — the 404's inline Fix it. Calls the route's
+   * POST, which runs the SAME Phase-2 provisioner an app install runs, then
+   * re-reads the job. No env var to set, no wizard to find: the platform
+   * creates the resource it was always supposed to create
+   * (`auto-bind-by-default.md` §1).
+   */
+  const runFixIt = useCallback(async () => {
+    if (!fixIt) return;
+    setFixItBusy(true); setStatus(null);
+    try {
+      const r = await fetch(fixIt.href, { method: fixIt.method || 'POST' });
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || 'Could not create the streaming job');
+        setHint(j.hint || null);
+        setErrStatus(r.status);
+        return;
+      }
+      setStatus(`Created Stream Analytics job '${j.jobName || ''}'.`);
+      setFixIt(null); setErrStatus(null); setError(null);
+      await loadList();
+      await loadDetail(selected, { force: true });
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setFixItBusy(false);
+    }
+  }, [fixIt, loadList, loadDetail, selected]);
 
   const save = useCallback(async () => {
     if (!selected) return;
@@ -563,12 +603,25 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           </div>
 
           {error && (
-            <MessageBar intent={hint ? 'warning' : 'error'}>
+            <MessageBar intent={errStatus === 501 || errStatus === 404 ? 'warning' : 'error'}>
               <MessageBarBody>
-                <MessageBarTitle>{hint ? 'Stream Analytics not configured' : 'Error'}</MessageBarTitle>
+                <MessageBarTitle>
+                  {errStatus === 501
+                    ? 'Stream Analytics not configured'
+                    : errStatus === 404
+                      ? 'Streaming job not created yet'
+                      : 'Error'}
+                </MessageBarTitle>
                 {error}
-                {hint && <><br /><Caption1>{hint}</Caption1></>}
+                {errStatus === 501 && hint && <><br /><Caption1>{hint}</Caption1></>}
               </MessageBarBody>
+              {fixIt && errStatus === 404 && (
+                <MessageBarActions>
+                  <Button appearance="primary" disabled={fixItBusy} onClick={runFixIt}>
+                    {fixItBusy ? 'Creating…' : (fixIt.label || 'Fix it')}
+                  </Button>
+                </MessageBarActions>
+              )}
             </MessageBar>
           )}
           {status && <MessageBar intent="success"><MessageBarBody>{status}</MessageBarBody></MessageBar>}
@@ -591,9 +644,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     </Field>
                     {outKind === 'kusto' && (
                       <>
-                        <Field label="Cluster URL" required>
-                          <Input value={outForm.cluster || ''} placeholder="https://adx-csa-loom-shared.eastus2.kusto.windows.net" onChange={(_, d) => setOF('cluster', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="adxUri"
+                          label="Cluster URL"
+                          value={outForm.cluster || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('cluster', v || '')}
+                        />
                         <Field label="Database" required>
                           <Input value={outForm.database || ''} placeholder="loomdb-default" onChange={(_, d) => setOF('database', d.value)} />
                         </Field>
@@ -604,32 +661,47 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     )}
                     {outKind === 'blob' && (
                       <>
-                        <Field label="Storage account (ADLS Gen2)" required>
-                          <Input value={outForm.storageAccount || ''} placeholder="loomdatalake01" onChange={(_, d) => setOF('storageAccount', d.value)} />
-                        </Field>
-                        <Field label="Container / filesystem" required>
-                          <Input value={outForm.container || ''} placeholder="bronze" onChange={(_, d) => setOF('container', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="storage"
+                          label="Storage account (ADLS Gen2)"
+                          value={outForm.storageAccount || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('storageAccount', v || '')}
+                        />
+                        <BlobContainerPicker
+                          account={outForm.storageAccount || ''}
+                          value={outForm.container || ''}
+                          label="Container / filesystem"
+                          surface="Stream Analytics output"
+                          required
+                          disabled={!outForm.storageAccount}
+                          onChange={(c) => setOF('container', c)}
+                          hint={outForm.storageAccount ? undefined : 'Pick a storage account first — the container list is read from it.'}
+                        />
                         <Field label="Path pattern" hint="Files land under account/container/pathPattern.">
                           <Input value={outForm.pathPattern || ''} placeholder="events/{date}/{time}" onChange={(_, d) => setOF('pathPattern', d.value)} />
                         </Field>
-                        <Field label="Account key" hint="Leave blank to use the ASA managed identity (Storage Blob Data Contributor).">
+                        <Field label="Account key" hint="Leave blank to use the ASA managed identity (Storage Blob Data Contributor). Only needed for an account outside this estate.">
                           <Input type="password" value={outForm.storageAccountKey || ''} onChange={(_, d) => setOF('storageAccountKey', d.value)} />
                         </Field>
                       </>
                     )}
                     {outKind === 'eventhub' && (
                       <>
-                        <Field label="Namespace" required>
-                          <Input value={outForm.namespace || ''} placeholder="loom-eventhub-ns" onChange={(_, d) => setOF('namespace', d.value)} />
-                        </Field>
+                        <AzureBackedField
+                          kind="eventhubs"
+                          label="Namespace"
+                          value={outForm.namespace || ''}
+                          surface="Stream Analytics output"
+                          onChange={(v) => setOF('namespace', v || '')}
+                        />
                         <Field label="Event Hub name" required>
                           <Input value={outForm.eventHubName || ''} placeholder="transformed-events" onChange={(_, d) => setOF('eventHubName', d.value)} />
                         </Field>
                         <Field label="Shared access policy name" hint="Leave SAS blank to use the ASA managed identity (Event Hubs Data Sender).">
                           <Input value={outForm.sharedAccessPolicyName || ''} onChange={(_, d) => setOF('sharedAccessPolicyName', d.value)} />
                         </Field>
-                        <Field label="Shared access key">
+                        <Field label="Shared access key" hint="Only needed for a namespace outside this estate; the managed identity covers the rest.">
                           <Input type="password" value={outForm.sharedAccessPolicyKey || ''} onChange={(_, d) => setOF('sharedAccessPolicyKey', d.value)} />
                         </Field>
                       </>

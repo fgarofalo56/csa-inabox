@@ -48,8 +48,29 @@ import { clientFetch } from '@/lib/client-fetch';
  * enumerate — and the alternative (a disabled box) is the forbidden dead end.
  * It is never the primary surface: it appears only after discovery has actually
  * failed or returned nothing, under the gate that offers to fix the cause, and
- * the typed value is shape-validated before it is accepted. check-no-freeform
- * SHOULD see it; it is one site in one file rather than the ~40 it replaces.
+ * the typed value is shape-validated before it is accepted.
+ *
+ * AND `check-no-freeform` DOES NOT SEE IT. Measured, not assumed:
+ * `node scripts/ci/check-no-freeform.mjs --report` finds ZERO sites in this
+ * file, and this file appears in neither the ratchet baseline nor ACCEPTED.
+ * An earlier revision of this comment claimed the opposite ("check-no-freeform
+ * SHOULD see it") — that claim was never true. The classifier keys on a
+ * site-local placeholder LITERAL, and the Input below passes
+ * `MANUAL_PLACEHOLDER[matchBy]`, a dynamic table lookup. Counterfactual, run
+ * and reverted: inlining that literal at the call site moves the classified
+ * population by exactly +1 site across +1 file and turns the gate RED with this
+ * file as a NEW baseline key. (Absolutes are deliberately not quoted here —
+ * they move whenever main does. At the merge that produced this comment it was
+ * 184 sites / 81 files -> 185 / 82, baseline 130 across 55 keys -> 131 across
+ * 56.) So when a surface swaps a hand-typed Input for this picker, the honest
+ * reading of the ratchet delta is "N sites are no longer classifier-VISIBLE",
+ * not "N hand-typing paths were removed": `allowManualEntry` defaults to true,
+ * so every adopting call site retains a typing path the ratchet cannot count.
+ * Whether that arm should itself be classified — and whether adopters that can
+ * always enumerate should pass `allowManualEntry={false}` — is tracked in
+ * #4404. The BEHAVIOUR is the sanctioned hybrid (`ux-baseline.md` G2: a picker
+ * with no escape hatch is a dead end when discovery fails); only the
+ * MEASUREMENT was overstated.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -84,6 +105,15 @@ export interface AzureResourceSource {
   type: string;
   /** Optional ARM `kind` filter, e.g. 'Hub' | 'Project' | 'OpenAI'. */
   kind?: string;
+  /**
+   * How `kind` is compared. Default `equals` is Resource Graph `=~` —
+   * case-insensitive EQUALITY. Use `contains` where ARM `kind` is a COMMA LIST
+   * rather than a single token: a Function App is `functionapp` on Windows but
+   * `functionapp,linux` on Linux and `functionapp,linux,container` in a
+   * container, so `kind: 'functionapp'` under `equals` matches none of the
+   * Linux ones. Only meaningful alongside `kind`.
+   */
+  kindMatch?: 'equals' | 'contains';
   /** Resource Graph property path projected into `value` (the derived endpoint). */
   select?: string;
   /**
@@ -140,6 +170,17 @@ export interface AzureResourcePickerProps {
   /** Fires with the selected resource, or null when cleared. */
   onChange: (r: AzureResourceSelection | null) => void;
   label?: string;
+  /**
+   * Sub-label text under the control, rendered by Fluent's `<Field hint>`.
+   *
+   * Not decoration: several call sites replaced a hand-rolled `<Field>` whose
+   * hint said what an EMPTY value means — "Omit for the connector's
+   * system-assigned identity" — and a picker with no `hint` silently dropped
+   * that sentence, leaving "(optional)" in the label to carry a meaning it
+   * does not carry. The hint is how a picker keeps the guidance the control it
+   * replaced already had (`ux-baseline.md`).
+   */
+  hint?: string;
   placeholder?: string;
   /** Human name of the surface, for the honest gate ("<surface> needs …"). */
   surface?: string;
@@ -200,16 +241,20 @@ const MANUAL_LABEL: Record<MatchBy, string> = {
 /**
  * The SHAPE of the value the escape hatch wants, spelled out.
  *
- * Two jobs, both deliberate. For the user it turns "type something" into "type
- * this shape" — the thing that makes a hand-entered ARM id right the first
- * time. For CI it makes the site CLASSIFIABLE: a free-text ask whose
- * placeholder literally reads `/subscriptions/<sub>/resourceGroups/<rg>/…`
- * classifies as `arm-id`, which is what it is, so `check-no-freeform`'s
- * classifier counts it as a ratcheted violation instead of an unlabelled
- * `sites` entry. That matters precisely because ~40 editors are about to adopt
- * this component: their own classified asks drop to zero, and if this one
- * stayed invisible the free-text ask would have RELOCATED here rather than
- * gone. An escape hatch we intend to keep should be baselined out loud.
+ * For the user it turns "type something" into "type this shape" — the thing
+ * that makes a hand-entered ARM id right the first time.
+ *
+ * It does NOT make the site classifiable, and an earlier revision of this
+ * comment said it did ("for CI it makes the site CLASSIFIABLE … the classifier
+ * counts it as a ratcheted violation"). That was an assertion about a tool's
+ * behaviour that the tool refutes: `check-no-freeform --report` reports zero
+ * sites in this file. The classifier reads a placeholder LITERAL at the call
+ * site, and line ~593 passes `MANUAL_PLACEHOLDER[matchBy]` — a table lookup it
+ * cannot resolve. Inlining the `id` literal there is the counterfactual: the
+ * classified population rises by exactly one site in one new file and the gate
+ * fails on a new key. The table stays a table because four value kinds need
+ * four shapes; the consequence for the ratchet is disclosed in the file header
+ * and tracked in #4404 rather than asserted away here.
  */
 const MANUAL_PLACEHOLDER: Record<MatchBy, string> = {
   id: '/subscriptions/<sub>/resourceGroups/<rg>/providers/<provider>/<type>/<name>',
@@ -302,7 +347,7 @@ function fetchSource(url: string): Promise<{ j: ApiResponse; status: number }> {
 }
 
 export function AzureResourcePicker({
-  type, kind, select, sources, value, matchBy = 'id', onChange, label, placeholder,
+  type, kind, select, sources, value, matchBy = 'id', onChange, label, hint, placeholder,
   surface, manualLabel, allowManualEntry = true,
 }: AzureResourcePickerProps) {
   const s = useStyles();
@@ -336,6 +381,9 @@ export function AzureResourcePicker({
       const results = await Promise.all(list.map(async (src, srcIdx) => {
         const qs = new URLSearchParams({ type: src.type });
         if (src.kind) qs.set('kind', src.kind);
+        // Sent only alongside `kind` and only when it is not the default, so
+        // every existing call site's request URL is byte-identical to before.
+        if (src.kind && src.kindMatch && src.kindMatch !== 'equals') qs.set('kindMatch', src.kindMatch);
         if (src.select) qs.set('select', src.select);
         if (src.name) qs.set('name', src.name);
         const { j, status } = await fetchSource(`/api/azure/resources?${qs.toString()}`);
@@ -499,7 +547,7 @@ export function AzureResourcePicker({
         </MessageBar>
       )}
 
-      <Field label={label || 'Azure resource'}>
+      <Field label={label || 'Azure resource'} hint={hint}>
         <div className={s.row}>
           {/* DEFECT 2 — `disabled` is now bound to the in-flight query ALONE. A
               failed discovery never leaves the user without a working control:

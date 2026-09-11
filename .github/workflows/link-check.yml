@@ -1,10 +1,41 @@
 # Check for broken links in documentation.
 #
-# Runs weekly and on PRs that touch docs. Uses lychee for fast, parallel
-# link checking with sensible defaults (retry, timeout, exclude patterns).
+# Two scopes, deliberately different (#4425):
 #
-# Failures are advisory — the check surfaces dead links but does not block
-# merges, since external sites can have transient outages.
+#   * pull_request — ONLY the docs files this PR changed. Runtime is bounded by
+#     the diff, not by the corpus, so it cannot re-break as docs grow.
+#
+#     Measured on #4369 (branch drain/h-docs-4), all 7 Link Check runs, job
+#     durations from the jobs API: 605s, 616s, 110s, 116s, 616s, 194s, 615s —
+#     4 killed at the old `timeout-minutes: 10`, 3 finishing in under 3m15s.
+#     So the old sweep was INTERMITTENTLY over budget, not structurally over it:
+#     at --timeout 30 --max-retries 2 one unreachable host costs 90s, and how
+#     many hosts are slow on a given day is luck. Sweeping the corpus on every
+#     docs PR is what made a run capable of exceeding the budget at all; the
+#     diff-scoped path removes that growth term regardless of the day's luck.
+#
+#     Note what that sweep actually covered, because it is NOT what the pathspec
+#     suggests: the bare `docs/**/*.md` was expanded by BASH inside the action's
+#     `eval`, with globstar off, so `**` degraded to `*` and only the 421 files
+#     at depth 2 were ever checked — of 2548 tracked docs .md. The pattern is
+#     quoted below so lychee's own glob crate expands it, which fixes that 6x
+#     coverage hole and makes the full sweep substantially larger than any run
+#     measured so far.
+#
+#   * schedule / workflow_dispatch — the full docs/** sweep, with a cache.
+#
+# Dead links are ADVISORY: reported, never merge-blocking, because external
+# sites have transient outages. "I could not look" is NOT advisory — a setup
+# failure fails closed and says so, and a timeout writes a marker distinguishing
+# it from a superseded run. A run that established nothing must never be
+# reported as a run that found nothing (R7).
+#
+# What that marker does NOT do: it does not change the check-run CONCLUSION. A
+# job timeout still reports `cancelled` to the API, so a merge preflight reading
+# only the conclusion still sees `cancelled` and still treats it as advisory-red.
+# The marker is for a human, or for a preflight taught to read the
+# `lychee/status.json` artifact. The merge unblock in #4425 comes from the scope
+# narrowing removing the timeout, not from the marker renaming it.
 name: Link Check
 
 on:
@@ -22,16 +53,227 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Backstop only, NOT the operating budget. The PR path is bounded by the
+    # diff; only the full sweep can approach this. The classifier below re-reads
+    # this exact line rather than restating the number, so the two cannot drift.
+    #
+    # MEASURED, not guessed, and now measured to COMPLETION.
+    #
+    # First: dispatch run 34393875137 swept the real 2548-file corpus ONLINE and
+    # was killed by the old 45m backstop at 2699s having emitted no verdict — so
+    # 45 was not a backstop for the sweep, it was a guaranteed weekly TIMEOUT
+    # marker. A scheduled control that can never produce a verdict is the mirror
+    # of one that can never fail, and this workflow is not shipping one.
+    #
+    # Then: dispatch run 34402571605, same branch, same full online scope
+    # (`SCOPE=full (full docs/** sweep); 2548 file(s) in scope`), ran to
+    # COMPLETION in 4918s — 81m58s, 20:42:41Z → 22:04:39Z on the `Check links`
+    # step — and classified DEAD_LINKS over 18080 link occurrences actually
+    # contacted (18196 found, 116 excluded). The cache MISSED on that run
+    # (`Cache not found for input keys: lychee-34402571605, lychee-`), so 4918s
+    # is the cold, fully-online cost — which is the weekly cron's shape too,
+    # since `--max-cache-age 1d` against a 7-day cron means the sweep never
+    # reuses an entry.
+    #
+    # 150m is 1.83x that. It is deliberately NOT tighter: 4918s is a single
+    # observation, not a distribution, and the corpus is largely external hosts
+    # whose latency is the day's luck (the same variance that made the OLD
+    # 10-minute PR sweep intermittently rather than structurally over budget —
+    # see the 110s..616s spread noted at the top of this file). The floor test
+    # `test_budget_backstop_has_a_floor` pins that 1.5x margin against 4918 so
+    # this number cannot be quietly dropped back under the measurement.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the PR path diffs against the merge-base, and a shallow
+          # clone makes that diff lie. The scope decides what gets checked, so a
+          # lying diff is a silently narrowed check.
+          fetch-depth: 0
+
+      - name: Select scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+          # The full sweep is the default and every narrowing failure falls back
+          # to it. The failure direction is always "check MORE", never "check
+          # nothing and report success". Every way out of the narrowing path is
+          # enumerated and widens: no base sha, an absent base sha, a failed
+          # diff, a git-quoted path, ANY deleted-or-renamed path anywhere in the
+          # repo (not only under docs/, and not only .md — a doc can link
+          # outward, and 227 occurrences do), a path unsafe to interpolate, a
+          # changed path missing from the checkout, and a diff over the argv
+          # budget.
+          # `tests/repo/test_link_check_classifier.py` drives this script
+          # against throwaway git repos for each of those, and asserts the
+          # full-sweep count as well — an earlier revision of this comment
+          # claimed that coverage before two of the exits actually had it.
+          # On a PR the widen runs --offline, so widening is cheap.
+          SCOPE="full"
+          REASON="full docs/** sweep"
+
+          if [ "$EVENT" = "pull_request" ]; then
+            if [ -z "${BASE_SHA:-}" ]; then
+              REASON="pull_request carried no base sha — fell back to the full sweep"
+            elif ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" > /dev/null; then
+              REASON="base sha ${BASE_SHA} absent after checkout — fell back to the full sweep"
+            else
+              # core.quotepath=false: with the default (true) git C-quotes any
+              # path containing a non-ASCII byte, so `docs/café.md` is printed as
+              # "docs/caf\303\251.md" — a line that fails the ^docs/ test below
+              # and is therefore DROPPED rather than classified. That is a silent
+              # narrowing, which is the one direction this step must never fail.
+              git -c core.quotepath=false diff --name-only --diff-filter=d "${BASE_SHA}...HEAD" > changed-all.txt 2> diff-err.txt
+              DIFF_RC=$?
+              # --no-renames: with rename detection ON, --name-only prints only
+              # a rename's POST-image. That once decided the widen — moving
+              # docs/a.md OUT to other/a.md emitted no docs path and the widen
+              # never fired. It no longer decides it (the widen below now fires
+              # on ANY entry here), so this flag is not load-bearing for the
+              # decision. It is kept because it makes the CONTENT honest: with
+              # it, gone-all.txt lists the paths that went AWAY, which is what
+              # the REASON below counts and reports.
+              git -c core.quotepath=false diff --name-only --no-renames --diff-filter=DR "${BASE_SHA}...HEAD" > gone-all.txt 2> gone-err.txt
+              GONE_RC=$?
+
+              if [ "$DIFF_RC" -ne 0 ] || [ "$GONE_RC" -ne 0 ]; then
+                REASON="git diff vs ${BASE_SHA} failed (rc=${DIFF_RC}/${GONE_RC}; $(wc -c < diff-err.txt)/$(wc -c < gone-err.txt) stderr bytes) — fell back to the full sweep"
+              elif grep -q '^"' changed-all.txt gone-all.txt; then
+                # quotepath=false stops git escaping non-ASCII, but git still
+                # C-quotes a path carrying an embedded quote, backslash or
+                # control character. Such a line starts with `"` and so fails the
+                # ^docs/ test — it would vanish silently. Refuse to classify the
+                # diff at all rather than classify a subset of it.
+                REASON="the diff contains a path git had to quote, which cannot be classified safely — fell back to the full sweep"
+              elif [ -s gone-all.txt ]; then
+                # ANY deleted or renamed path, anywhere in the repo — not just
+                # under docs/, and not just *.md. Two rounds narrowed this twice
+                # and were wrong both times:
+                #   - keyed on ^docs/.*\.md$ it missed a deleted ASSET an
+                #     unchanged doc links to (docs/img/arch.png);
+                #   - keyed on ^docs/ it missed a deleted OUTBOUND target —
+                #     measured, 227 link occurrences in docs/ point outside
+                #     docs/, 41 of them at README.md. Deleting README.md while
+                #     touching only docs/ reported "nothing needed to be
+                #     checked".
+                # This workflow only runs when a PR touches docs/** (or this
+                # file), so "a docs PR that also deletes something" is a small
+                # population, and the widen it triggers is an --offline sweep
+                # measured at ~33s. Widening on any deletion is cheaper than
+                # another round of guessing which deletions can break a link.
+                REASON="this PR deletes or renames $(wc -l < gone-all.txt) path(s), any of which an unchanged doc may link to — full sweep"
+              else
+                # docs/_includes is handed to lychee as --exclude-path, so a
+                # changed file under it is NOT checkable. Leaving it in scope
+                # made count=1, ran lychee over an excluded path, and reported
+                # "0 link(s) checked, and found no dead links" — a clean bill of
+                # health for a file nothing looked at. Dropping it here makes
+                # the same PR an honest NO_DOCS_IN_SCOPE instead.
+                grep -E '^docs/.*\.md$' changed-all.txt | grep -vE '^docs/_includes/' > changed-docs.txt || true
+                : > scope-files.txt
+                WIDEN=""
+                while IFS= read -r f; do
+                  [ -n "$f" ] || continue
+                  # lychee-action `eval`s its args, so a path containing shell
+                  # metacharacters must never be interpolated into them. Tested
+                  # FIRST, before anything below can drop the line: an unsafe
+                  # path has to widen the sweep, never disappear from it.
+                  case "$f" in
+                    *[!A-Za-z0-9/._-]*) WIDEN="changed path '${f}' has characters unsafe to interpolate"; break ;;
+                  esac
+                  if [ ! -f "$f" ]; then
+                    # --diff-filter=d already excludes deletions, so every path
+                    # here should exist in the checkout. One that does not is
+                    # unexplained — widen rather than drop it and report success.
+                    WIDEN="changed path '${f}' is absent from the checkout"
+                    break
+                  fi
+                  printf '%s\n' "$f" >> scope-files.txt
+                done < changed-docs.txt
+
+                if [ -n "$WIDEN" ]; then
+                  REASON="${WIDEN} — fell back to the full sweep"
+                else
+                  N=$(wc -l < scope-files.txt)
+                  if [ "$N" -gt 300 ]; then
+                    REASON="${N} changed docs files exceeds the 300-file argv budget — fell back to the full sweep"
+                  else
+                    SCOPE="changed"
+                    REASON="${N} docs file(s) changed by this PR"
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+          OFFLINE=""
+          if [ "$SCOPE" = "full" ]; then
+            # QUOTED on purpose. lychee-action `eval`s its args (entrypoint.sh),
+            # and bash there runs with globstar OFF, where `**` degrades to `*` —
+            # so a BARE docs/**/*.md is expanded by bash to the 421 files at
+            # depth 2 and lychee never sees the other 2127. Quoting hands the
+            # literal pattern to lychee, whose own glob crate honours `**`.
+            TARGETS="'docs/**/*.md'"
+            # The corpus this is POINTED AT. It is not a count of what got
+            # checked — only lychee can report that, and the classifier reads it
+            # back from lychee's own output rather than asserting this number.
+            CORPUS=$(git ls-files -- docs | grep -cE '[.]md$')
+
+            if [ "$EVENT" = "pull_request" ]; then
+              # A widen on a PR is not the weekly sweep and must not cost like
+              # one. EVERY widen exit exists for the same reason — an inbound
+              # INTERNAL link from a doc this PR did not touch — and a deletion,
+              # a rename or an unparseable path cannot change whether some
+              # external host is up. --offline checks local file: links only, so
+              # the widen is seconds instead of the unmeasured 2548-file sweep,
+              # and it cannot reintroduce the #4425 timeout on the PR path.
+              # The scheduled sweep is the one that goes to the network.
+              OFFLINE="--offline"
+            fi
+          else
+            TARGETS=$(tr '\n' ' ' < scope-files.txt)
+            CORPUS=$(wc -l < scope-files.txt)
+          fi
+
+          {
+            echo "scope=$SCOPE"
+            echo "count=$CORPUS"
+            echo "reason=$REASON"
+            echo "targets=$TARGETS"
+            echo "offline=$OFFLINE"
+          } >> "$GITHUB_OUTPUT"
+          echo "SCOPE=$SCOPE ($REASON); $CORPUS file(s) in scope${OFFLINE:+ (offline — local links only)}"
+
+      # Deliberately sized for the PR path, not the sweep. `--max-cache-age 1d`
+      # against a weekly cron means every restored entry is already stale on the
+      # Monday run, so the sweep gets no reuse from this — that is the correct
+      # trade, not an oversight: raising the age to cover a week would make the
+      # weekly sweep re-serve last week's answers and check almost nothing. The
+      # cache earns its keep on back-to-back PR runs.
+      - name: Restore link-check cache
+        if: steps.scope.outputs.count != '0'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.run_id }}
+          restore-keys: |
+            lychee-
 
       - name: Check links
+        id: lychee
+        if: steps.scope.outputs.count != '0'
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: >-
             --verbose
             --no-progress
+            --cache
+            --max-cache-age 1d
             --timeout 30
             --max-retries 2
             --exclude-path docs/_includes
@@ -45,13 +287,248 @@ jobs:
             --exclude '<rg>'
             --exclude '<action-group-id>'
             --exclude 'aka\.ms/'
-            docs/**/*.md
-          fail: false    # advisory — don't block PRs on transient external failures
+            ${{ steps.scope.outputs.offline }}
+            ${{ steps.scope.outputs.targets }}
+          fail: false          # advisory — a dead link must not block a merge
+          # Default is true, which exits 1 when lychee reports "Total | 0". A
+          # docs file that legitimately carries no links would then fail the
+          # workflow, and the classifier below would have to read that as a
+          # setup failure. Turning it off is what makes `outcome == failure`
+          # mean *only* "the checker could not run".
+          failIfEmpty: false
+
+      - name: Classify result
+        id: classify
+        if: always()
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+          COUNT: ${{ steps.scope.outputs.count }}
+          REASON: ${{ steps.scope.outputs.reason }}
+          STARTED_AT: ${{ steps.scope.outputs.started_at }}
+          LYCHEE_OUTCOME: ${{ steps.lychee.outcome }}
+          LYCHEE_EXIT: ${{ steps.lychee.outputs.exit_code }}
+          OFFLINE: ${{ steps.scope.outputs.offline }}
+        run: |
+          set -uo pipefail
+          mkdir -p lychee
+
+          NOW=$(date +%s)
+          ELAPSED=$(( NOW - ${STARTED_AT:-$NOW} ))
+
+          # Single source of truth for the budget: re-read the job's own
+          # timeout-minutes rather than restate it. Two hand-maintained copies of
+          # one constant is how this repo's guards have drifted before (#3862).
+          BUDGET_MIN=$(grep -m1 -E '^    timeout-minutes: [0-9]+' .github/workflows/link-check.yml | grep -oE '[0-9]+' || true)
+
+          # Slack is proportional, not a fixed 90s. A constant large enough to be
+          # meaningful at a 45-minute budget goes NEGATIVE at a small one, which
+          # would make every cancel — superseded ones included — read as TIMEOUT.
+          # That matters because a deliberately tiny budget is how the TIMEOUT
+          # branch gets exercised in the first place.
+          BUDGET_S=$(( ${BUDGET_MIN:-0} * 60 ))
+          SLACK=$(( BUDGET_S / 10 ))
+          if [ "$SLACK" -gt 90 ]; then SLACK=90; fi
+
+          # Ground truth for "what was actually checked" is lychee's own summary,
+          # never a number we predicted. On the full sweep the two can differ by
+          # 6x (see the glob note in Select scope), and asserting the prediction
+          # would be the very R7 defect this workflow exists to remove.
+          MEASURED=""
+          EXCLUDED=""
+          if [ -f lychee/out.md ]; then
+            MEASURED=$(grep -oE 'Total[^0-9]*[0-9]+' lychee/out.md | grep -oE '[0-9]+' | head -1 || true)
+            EXCLUDED=$(grep -oE 'Excluded[^0-9]*[0-9]+' lychee/out.md | grep -oE '[0-9]+' | head -1 || true)
+          fi
+          # lychee's "Total" INCLUDES links it never contacted — everything the
+          # --exclude / --exclude-path list matched, and on an --offline run
+          # every external URL. Reporting Total as "checked" credits the run
+          # with work it did not do. Measured: a file whose links are all on the
+          # exclude list gives Total 4 / Excluded 4 and used to print "4 link(s)
+          # checked, and found no dead links" when ZERO were checked; on the
+          # offline widen it is structural (18197 Total / 6291 Excluded).
+          # This is the same sentence already fixed once for docs/_includes.
+          CHECKED_N=""
+          if [ -n "$MEASURED" ]; then
+            CHECKED_N=$(( MEASURED - ${EXCLUDED:-0} ))
+            # Clamp. Excluded <= Total holds for real lychee output (both count
+            # occurrences), but a negative "checked -6" would be a worse lie
+            # than the one this arithmetic exists to remove.
+            if [ "$CHECKED_N" -lt 0 ]; then CHECKED_N=0; fi
+          fi
+          if [ -z "$MEASURED" ]; then
+            CHECKED="lychee emitted no summary total, so how much it checked is unknown"
+          elif [ "${EXCLUDED:-0}" -gt 0 ]; then
+            CHECKED="lychee actually checked ${CHECKED_N} link occurrence(s) — it found ${MEASURED}, of which ${EXCLUDED} were excluded and never contacted"
+          else
+            CHECKED="lychee reports ${MEASURED} link occurrence(s) checked"
+          fi
+
+          # An offline run contacted no external host, so it may not report on
+          # one. Every DETAIL below that says something about "links" is scoped
+          # by this, or it overstates what the run established.
+          SCOPE_NOTE=""
+          if [ -n "${OFFLINE:-}" ]; then
+            SCOPE_NOTE=" LOCAL links only — this run was --offline and contacted no external host, so it says NOTHING about external URLs."
+          fi
+
+          if [ -z "${COUNT:-}" ]; then
+            # `Select scope` failed before writing its outputs. `${COUNT:-0}`
+            # would collapse that to "0" and print NO_DOCS_IN_SCOPE — "nothing
+            # was checked, and nothing needed to be" — over a run that never
+            # established what it was supposed to check. The step's own failure
+            # already reds the job; this keeps the MARKER from saying otherwise.
+            STATUS="SCOPE_FAILED"
+            DETAIL="The scope step produced no file count, so this run never established what it was supposed to check, let alone checked it. Nothing here is a statement about the links."
+          elif [ "${COUNT}" = "0" ]; then
+            STATUS="NO_DOCS_IN_SCOPE"
+            DETAIL="No docs/**/*.md file was in scope (${REASON}). Nothing was checked, and nothing needed to be."
+          elif [ "${LYCHEE_OUTCOME:-}" = "success" ]; then
+            # fail:false + failIfEmpty:false means the step always exits 0, so
+            # lychee's own code is the only verdict. 2 is its dead-link code;
+            # anything else non-zero is the checker erroring, which is not a
+            # statement about links.
+            if [ -z "${LYCHEE_EXIT:-}" ]; then
+              # The step said success but published NO exit code. Defaulting
+              # that to 0 would print "found no dead links" on the strength of a
+              # verdict never observed — the same shape as the empty COUNT
+              # above, and the same reason it is not allowed.
+              STATUS="CHECKER_ERROR"
+              DETAIL="The link step reported success but published no exit code, so lychee's own verdict is unavailable. This run establishes NOTHING about the links; it is not a clean bill of health."
+            else
+            case "${LYCHEE_EXIT}" in
+              0) # Exit 0 over ZERO contacted links is the shape this whole file
+                 # exists to refuse: a clean bill of health from a run that
+                 # touched nothing. It is reachable because `failIfEmpty: false`
+                 # removed the action's own `Total | 0` backstop — right for the
+                 # diff-scoped PR path, but the disable is global.
+                 #
+                 # On the FULL sweep it cannot happen legitimately: 2548 docs do
+                 # not collectively hold zero links, so zero means the input glob
+                 # matched nothing or every link was excluded. Fail closed and
+                 # say so.
+                 #
+                 # This guard is a floor at EXACTLY zero, and that is ALL it is.
+                 # It would NOT have caught the docs/**/*.md -> docs/*.md
+                 # degradation that hid 2127 files for years: that matched 421 of
+                 # 2548 files and produced a large NON-zero count. A partial
+                 # narrowing — say 3,000 of the ~18,000 expected occurrences — is
+                 # still a green OK here. That residual is open, not covered.
+                 #
+                 # On the PR path the same shape IS legitimate — a changed doc
+                 # may simply contain no links — which is why failIfEmpty is off.
+                 # That stays green, but it does not get to claim it checked
+                 # anything, and it does not get to say the file HOLDS no links:
+                 # all-excluded contacts zero over links that DO exist, so the
+                 # ${CHECKED} builder — which already distinguishes the two
+                 # causes — states it, rather than one sentence that is false for
+                 # one of them.
+                 #
+                 # An unrecognised scope fails CLOSED, matching every other
+                 # unknown in this classifier, so a third scope value added later
+                 # cannot silently inherit the green branch.
+                 if [ "${CHECKED_N:-}" = "0" ]; then
+                   if [ "${SCOPE:-}" = "changed" ]; then
+                     STATUS="OK"
+                     DETAIL="${CHECKED}. Nothing was dead because nothing was checked; this says nothing about any URL.${SCOPE_NOTE}"
+                   elif [ "${SCOPE:-}" = "full" ]; then
+                     STATUS="CHECKER_ERROR"
+                     DETAIL="lychee was pointed at ${COUNT} file(s) and contacted ZERO link occurrence(s). A full docs/** sweep cannot legitimately reach zero — either the input glob matched no file or every link was excluded. This run establishes NOTHING about the links; it is not a clean bill of health."
+                   else
+                     STATUS="CHECKER_ERROR"
+                     DETAIL="lychee contacted ZERO link occurrence(s) over ${COUNT} file(s), and the scope was reported as '${SCOPE:-}', which is neither 'full' nor 'changed'. This run establishes NOTHING about the links; a scope this classifier does not recognise does not get the benefit of the doubt."
+                   fi
+                 else
+                   STATUS="OK"
+                   DETAIL="${CHECKED}, and found no dead links.${SCOPE_NOTE}"
+                 fi ;;
+              2) STATUS="DEAD_LINKS"
+                 DETAIL="${CHECKED}, and reported dead links. Advisory — this does not block a merge. See the link-check-report artifact.${SCOPE_NOTE}" ;;
+              *) STATUS="CHECKER_ERROR"
+                 DETAIL="lychee exited ${LYCHEE_EXIT}, which is neither success nor its dead-link code. This run established NOTHING about the links; it is not a dead-link report." ;;
+            esac
+            fi
+          elif [ "${LYCHEE_OUTCOME:-}" = "failure" ]; then
+            STATUS="SETUP_FAILED"
+            DETAIL="The link checker could not run at all, so NO link was checked and this run establishes nothing about the docs. This is the shape that previously surfaced as a bare 'exit code 35' (curl SSL error while downloading the lychee binary, 0 links checked)."
+          elif [ -z "${LYCHEE_OUTCOME:-}" ] || [ "${LYCHEE_OUTCOME}" = "cancelled" ]; then
+            # A job timeout and a supersede BOTH surface as `cancelled`. Elapsed
+            # time against the declared budget is what separates them, and that
+            # ambiguity is the substance of #4425.
+            if [ -z "$BUDGET_MIN" ]; then
+              STATUS="TIMEOUT_OR_CANCELLED"
+              DETAIL="The link step did not complete after ${ELAPSED}s, and the job budget could not be re-read from the workflow file, so a timeout cannot be told apart from a supersede here. Either way NO link verdict was established."
+            elif [ "$ELAPSED" -ge $(( BUDGET_S - SLACK )) ]; then
+              STATUS="TIMEOUT"
+              DETAIL="The link step did not complete, and ${ELAPSED}s had elapsed against the ${BUDGET_MIN}-minute (${BUDGET_S}s) budget. A job timeout is INFERRED from that elapsed time, not observed — a supersede arriving this late is indistinguishable here. Either way the step emitted NO verdict: this run is ABSENT, not red, and says nothing about whether the links are good."
+            else
+              STATUS="CANCELLED"
+              DETAIL="Cancelled after ${ELAPSED}s, well inside the ${BUDGET_MIN}-minute budget — superseded by a newer push, or cancelled by hand. No link verdict was established."
+            fi
+          else
+            STATUS="UNKNOWN"
+            DETAIL="The link step reported outcome '${LYCHEE_OUTCOME}', which this classifier does not recognise. Treat this run as establishing nothing."
+          fi
+
+          printf '%s\n' "$STATUS" > lychee/status.txt
+          cat > lychee/status.json <<JSON
+          {
+            "status": "${STATUS}",
+            "scope": "${SCOPE:-unknown}",
+            "scope_reason": "${REASON}",
+            "files_in_scope": "${COUNT:-0}",
+            "links_checked": "${CHECKED_N:-unknown}",
+            "links_found": "${MEASURED:-unknown}",
+            "links_excluded": "${EXCLUDED:-unknown}",
+            "offline": "${OFFLINE:+true}",
+            "lychee_outcome": "${LYCHEE_OUTCOME:-none}",
+            "lychee_exit_code": "${LYCHEE_EXIT:-none}",
+            "elapsed_seconds": ${ELAPSED},
+            "budget_minutes": "${BUDGET_MIN:-unknown}",
+            "run": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          JSON
+
+          # lychee's own jobSummary step writes with `>` (it overwrites). This
+          # append runs after it, so the marker survives.
+          {
+            echo "## Link Check — ${STATUS}"
+            echo
+            echo "${DETAIL}"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| scope | \`${SCOPE:-unknown}\` — ${REASON} |"
+            echo "| files in scope | ${COUNT:-0} (what lychee was pointed at) |"
+            echo "| links checked | ${CHECKED_N:-unknown} (lychee found ${MEASURED:-unknown}, excluded ${EXCLUDED:-unknown}) |"
+            if [ -n "${OFFLINE:-}" ]; then
+              echo "| network | offline — LOCAL links only, no external host contacted |"
+            else
+              echo "| network | online |"
+            fi
+            echo "| lychee outcome | \`${LYCHEE_OUTCOME:-none}\` (exit \`${LYCHEE_EXIT:-none}\`) |"
+            echo "| elapsed | ${ELAPSED}s of ${BUDGET_MIN:-?}m budget |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          echo "STATUS=${STATUS} — ${DETAIL}"
+
+          # Fail closed ONLY when the checker could not look. A dead link stays
+          # advisory; being unable to look is a defect in this workflow and must
+          # not pass silently as a green check.
+          case "$STATUS" in
+            SETUP_FAILED|CHECKER_ERROR|UNKNOWN|SCOPE_FAILED)
+              echo "::error title=Link Check established nothing::${DETAIL}"
+              exit 1 ;;
+          esac
 
       - name: Upload report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: link-check-report
-          path: lychee/out.md
+          path: |
+            lychee/out.md
+            lychee/status.txt
+            lychee/status.json
+          if-no-files-found: warn
           retention-days: 14

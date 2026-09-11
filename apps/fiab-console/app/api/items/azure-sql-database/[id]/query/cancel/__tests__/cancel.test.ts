@@ -1,39 +1,179 @@
 /**
- * Unit tests for /api/items/azure-sql-database/[id]/query/cancel BFF route.
+ * Unit tests for /api/items/azure-sql-database/[id]/query/cancel BFF route, and
+ * for the cross-replica cancel-intent mechanism in azure-sql-client that backs
+ * it (#3400).
  *
+ * ROUTE
  *   1. unauthenticated → 401
  *   2. missing requestId → 400
- *   3. unknown requestId → idempotent { ok:true, cancelled:false }
- *   4. live request → calls request.cancel() (TDS ATTENTION) and removes it
- *   5. cancel() throwing → 502
+ *   3. unknown requestId, no intent store → idempotent { ok:true, cancelled:false }
+ *   4. unknown requestId, intent store up → { ok:true, cancelled:'requested' }
+ *   5. live request → calls request.cancel() (TDS ATTENTION) and removes it
+ *   6. cancel() throwing → 502
+ *
+ * BOUNDS ON THE WRITE (added 2026-09-09 re-review)
+ *   6a. requestId must match a shape a Loom client mints, checked BEFORE any
+ *       Cosmos upsert — UUID, or the editors' `req-<ms>-<base36>` fallback
+ *   6b. the /query route's own 'query' rate-limit bucket, also before the write
+ *
+ * MECHANISM (added after review; see the M3/M4 note further down)
+ *   7. the watcher's LIFECYCLE — registering a request is what starts the poll
+ *   8. recordCancelIntent's PERSISTENCE — the claim the route's answer rests on
+ *   9. the REAL Cosmos-backed store — container, document shape, point-read
+ *
+ * The /query route's ECANCEL receipt (M5) lives in the sibling suite
+ * app/api/items/azure-sql-database/[id]/query/__tests__/query-cancel-receipt.test.ts.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // vi.mock factories are hoisted above module-scope consts, so the shared map
 // must itself be hoisted (vi.hoisted) to be referenceable inside the factory.
-const { liveRequests } = vi.hoisted(() => ({
-  liveRequests: new Map<string, { cancel: () => void }>(),
-}));
+const { liveRequests, unregisterLiveRequest, recordCancelIntent, cancelIntentUnavailableReason } = vi.hoisted(() => {
+  const liveRequests = new Map<string, { cancel: () => void }>();
+  return {
+    liveRequests,
+    // Mirrors the real export (azure-sql-cancel-intents.ts): delete + stop the
+    // idle watcher. A spy, so the route's teardown call site is asserted rather
+    // than assumed — the local branch used to call `liveRequests.delete` directly
+    // and leave the watcher running.
+    unregisterLiveRequest: vi.fn((requestId: string) => { liveRequests.delete(requestId); }),
+    recordCancelIntent: vi.fn(async (_requestId: string) => false),
+    cancelIntentUnavailableReason: vi.fn(() => 'no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)'),
+  };
+});
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/azure/azure-sql-client', () => ({ liveRequests }));
+vi.mock('@/lib/azure/azure-sql-client', () => ({
+  liveRequests,
+  unregisterLiveRequest,
+  recordCancelIntent,
+  cancelIntentUnavailableReason,
+}));
+
+// The route now shares the /query route's rate-limit bucket. Mocked (same
+// pattern as query-cancel-receipt.test.ts) so these specs measure the ROUTE's
+// call and its ordering, not the limiter's own token arithmetic — and so the
+// durable Cosmos tier is never pulled in here.
+const enforceRateLimitMock = vi.fn(async () => null as any);
+vi.mock('@/lib/azure/rate-limiter', () => ({ enforceRateLimit: (...a: any[]) => enforceRateLimitMock(...a) }));
+
+/**
+ * A fake Cosmos SDK, so the REAL `cancelIntentStore()` init path — the client,
+ * `databases.createIfNotExists`, `containers.createIfNotExists`, the upsert
+ * document shape and the `(id, id)` point-read — is exercised rather than
+ * skipped by an injected store. The describe block that uses it is the only
+ * consumer; nothing else in this file imports @azure/cosmos.
+ */
+const cosmos = vi.hoisted(() => ({
+  failInit: false,
+  /** How many times the CosmosClient constructor ran — the "am I hammering it?" counter. */
+  constructs: 0,
+  clientOpts: null as any,
+  databases: [] as any[],
+  containers: [] as any[],
+  upserts: [] as any[],
+  reads: [] as Array<[string, string]>,
+  deletes: [] as Array<[string, string]>,
+  docs: new Map<string, any>(),
+  reset() {
+    this.failInit = false;
+    this.constructs = 0;
+    this.clientOpts = null;
+    this.databases.length = 0;
+    this.containers.length = 0;
+    this.upserts.length = 0;
+    this.reads.length = 0;
+    this.deletes.length = 0;
+    this.docs.clear();
+  },
+}));
+
+vi.mock('@azure/cosmos', () => {
+  const container = {
+    items: {
+      upsert: async (doc: any) => { cosmos.upserts.push(doc); cosmos.docs.set(doc.id, doc); },
+    },
+    item: (id: string, partitionKey: string) => ({
+      read: async () => { cosmos.reads.push([id, partitionKey]); return { resource: cosmos.docs.get(id) }; },
+      delete: async () => { cosmos.deletes.push([id, partitionKey]); cosmos.docs.delete(id); },
+    }),
+  };
+  return {
+    CosmosClient: class {
+      databases = {
+        createIfNotExists: async (spec: any) => {
+          cosmos.databases.push(spec);
+          return { database: { containers: { createIfNotExists: async (cspec: any) => { cosmos.containers.push(cspec); return { container }; } } } };
+        },
+      };
+      constructor(opts: any) {
+        cosmos.constructs += 1;
+        if (cosmos.failInit) throw new Error('Cosmos endpoint unreachable');
+        cosmos.clientOpts = opts;
+      }
+    },
+  };
+});
+
+type SqlClient = typeof import('@/lib/azure/azure-sql-client');
+/** The real module — the describe blocks above mock the whole thing. */
+function realClient(): Promise<SqlClient> {
+  return vi.importActual<SqlClient>('@/lib/azure/azure-sql-client');
+}
+
+/** An in-memory CancelIntentStore that records what was asked of it. */
+function memStore(seed: string[] = []) {
+  const intents = new Set(seed);
+  const recorded: string[] = [];
+  const cleared: string[] = [];
+  return {
+    intents, recorded, cleared,
+    store: {
+      record: async (id: string) => { recorded.push(id); intents.add(id); },
+      has: async (id: string) => intents.has(id),
+      clear: async (id: string) => { cleared.push(id); intents.delete(id); },
+    },
+  };
+}
 
 import { POST } from '../route';
 import { getSession } from '@/lib/auth/session';
 
 function postReq(body: any) { return { json: async () => body } as any; }
 
+/**
+ * Request ids are UUIDs because REAL callers mint `crypto.randomUUID()` and the
+ * route now shape-checks that (see the ABUSE SURFACE block below). These four
+ * stand in for the short mnemonics this file used before — `r1`, `gone`,
+ * `elsewhere`, `on-another-replica` — which the route rejects at 400 now, and
+ * rightly: the unknown-id branch performs a Cosmos upsert keyed by this value.
+ */
+const ID_LOCAL = '11111111-1111-4111-8111-111111111111';
+const ID_GONE = '22222222-2222-4222-8222-222222222222';
+const ID_ELSEWHERE = '33333333-3333-4333-8333-333333333333';
+const ID_OTHER_REPLICA = '44444444-4444-4444-8444-444444444444';
+
 beforeEach(() => {
   vi.resetAllMocks();
   liveRequests.clear();
+  // Default: no intent store reachable (local dev / no Cosmos endpoint).
+  recordCancelIntent.mockResolvedValue(false);
+  cancelIntentUnavailableReason.mockReturnValue('no Cosmos endpoint is configured (LOOM_COSMOS_ENDPOINT)');
+  // `vi.resetAllMocks()` strips implementations, not just call history, so
+  // re-arm the real behaviour of the teardown export — otherwise this spy would
+  // be a no-op and `liveRequests.has(...) === false` would stop measuring
+  // anything.
+  unregisterLiveRequest.mockImplementation((requestId: string) => { liveRequests.delete(requestId); });
+  enforceRateLimitMock.mockResolvedValue(null);
 });
 
 describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
   it('returns 401 when no session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await POST(postReq({ requestId: 'r1' }));
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     expect(res.status).toBe(401);
   });
 
@@ -43,9 +183,9 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
     expect(res.status).toBe(400);
   });
 
-  it('is idempotent for an unknown requestId (already completed)', async () => {
+  it('is idempotent for an unknown requestId when no intent store is reachable', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    const res = await POST(postReq({ requestId: 'gone' }));
+    const res = await POST(postReq({ requestId: ID_GONE }));
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -55,23 +195,129 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
   it('cancels a live request (sends TDS ATTENTION) and removes it', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     const cancel = vi.fn();
-    liveRequests.set('r1', { cancel });
-    const res = await POST(postReq({ requestId: 'r1' }));
+    liveRequests.set(ID_LOCAL, { cancel });
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.cancelled).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
-    expect(liveRequests.has('r1')).toBe(false);
+    expect(liveRequests.has(ID_LOCAL)).toBe(false);
+    // Removed through `unregisterLiveRequest`, NOT a bare `liveRequests.delete`.
+    // The bare delete leaves the poll watcher running on this replica; both
+    // teardown call sites must use the same one.
+    expect(unregisterLiveRequest).toHaveBeenCalledWith(ID_LOCAL);
+    // A locally-owned request is cancelled directly — no intent is published.
+    expect(recordCancelIntent).not.toHaveBeenCalled();
   });
 
   it('returns 502 when cancel() throws', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    liveRequests.set('r1', { cancel: () => { throw new Error('boom'); } });
-    const res = await POST(postReq({ requestId: 'r1' }));
+    liveRequests.set(ID_LOCAL, { cancel: () => { throw new Error('boom'); } });
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
     const j = await res.json();
     expect(res.status).toBe(502);
     expect(j.ok).toBe(false);
     expect(j.error).toContain('boom');
+  });
+});
+
+/**
+ * THE COST SURFACE THIS DIFF INTRODUCED, AND ITS TWO BOUNDS (re-review
+ * 2026-09-09).
+ *
+ * Before the cross-replica store, an unknown requestId was a replica-local
+ * `Map` miss with no side effect, so `withSession` alone was proportionate.
+ * The same branch now runs `container.items.upsert({ id: requestId, … })`, so
+ * an authenticated session could write unbounded documents into
+ * `sql-cancel-intents` under ids it chose. These specs hold both bounds in
+ * place, in the order the route applies them: shape first, then rate limit,
+ * BOTH before `recordCancelIntent` can be reached.
+ *
+ * WHAT THIS IS NOT. Not an access-control fix and not claimed as one — request
+ * ids are `crypto.randomUUID()`, so another user's in-flight id is not
+ * guessable, and this route still does not run the `[id]` owner check its
+ * sibling /query route runs (#4407). It is a cost/DoS bound.
+ */
+describe('cancel — the intent write is bounded (#3400 re-review)', () => {
+  it('rejects a requestId that is not a UUID, BEFORE any Cosmos write', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: 'attacker-chosen-document-id' }));
+    const j = await res.json();
+    expect(res.status).toBe(400);
+    expect(j.ok).toBe(false);
+    // The write is what matters — the status code alone would still pass if the
+    // route 400'd after upserting.
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects an id that merely CONTAINS a UUID (anchored, not a substring match)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: `x${ID_ELSEWHERE}` }));
+    expect(res.status).toBe(400);
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('accepts an upper-case UUID (crypto.randomUUID is lower-case, but callers may echo)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE.toUpperCase() }));
+    expect(res.status).toBe(200);
+    expect(recordCancelIntent).toHaveBeenCalledWith(ID_ELSEWHERE.toUpperCase());
+  });
+
+  /**
+   * THE REGRESSION A BARE UUID CHECK WOULD HAVE SHIPPED. All three SQL editors
+   * fall back to `req-${Date.now()}-${base36}` when `crypto.randomUUID` is
+   * missing — it is secure-context-only, so that branch is live on a plain-http
+   * host (unified-sql-database-editor.tsx:915-917, azure-sql-editors.tsx:956-958
+   * and :1442-1444). A UUID-only shape check would have made Cancel return 400
+   * exactly there, on the path with the least-capable browser.
+   *   MUTATION: narrow REQUEST_ID_RE to the UUID alternative alone → red.
+   */
+  it('accepts the editors\' non-crypto fallback id shape', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const fallbackId = `req-${Date.now()}-${(123456789).toString(36)}`;
+    const res = await POST(postReq({ requestId: fallbackId }));
+    expect(res.status).toBe(200);
+    expect(recordCancelIntent).toHaveBeenCalledWith(fallbackId);
+  });
+
+  /** The fallback alternative must not be a hole: `req-` + anything is not it. */
+  it('does not let the fallback alternative admit arbitrary ids', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    for (const bad of ['req-notdigits-abc', 'req-123-UPPER/slash', `req-1-${'x'.repeat(40)}`]) {
+      const res = await POST(postReq({ requestId: bad }));
+      expect(res.status, `accepted ${bad}`).toBe(400);
+    }
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+  });
+
+  it('applies the SAME rate-limit bucket as the /query route, before the write', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    await POST(postReq({ requestId: ID_ELSEWHERE }));
+    // 'query' — not a bespoke class — so a cancel cannot be a cheaper way to
+    // reach the same backends than the query it cancels.
+    expect(enforceRateLimitMock).toHaveBeenCalledWith({ claims: { oid: 'u' } }, 'query');
+  });
+
+  it('a 429 from the limiter is returned and NOTHING is written or cancelled', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const cancel = vi.fn();
+    liveRequests.set(ID_LOCAL, { cancel });
+    enforceRateLimitMock.mockResolvedValue(
+      new NextResponse(JSON.stringify({ ok: false, error: 'rate limited' }), { status: 429 }),
+    );
+    const res = await POST(postReq({ requestId: ID_LOCAL }));
+    expect(res.status).toBe(429);
+    expect(recordCancelIntent).not.toHaveBeenCalled();
+    // The local cancel is gated too — the limiter runs before the map lookup.
+    expect(cancel).not.toHaveBeenCalled();
   });
 });
 
@@ -96,11 +342,12 @@ describe('POST /api/items/azure-sql-database/[id]/query/cancel', () => {
  * platform forbids and self-heals away — an R7 assertion the code never
  * established, and a user-performed step under auto-bind-by-default.
  *
- * The cross-replica intent store that WOULD fix the underlying no-op needs a
- * Cosmos container registered in `lib/azure/cosmos-client.ts` and in the cosmos
- * bicep `loomContainers` list; both are outside this change. Until it lands the
- * route must report the no-op honestly rather than claim a cancellation, which
- * is what these assertions pin.
+ * The cross-replica intent store now EXISTS (azure-sql-client:
+ * `recordCancelIntent` + the poll watcher), so the wrong-replica case is no
+ * longer a no-op. What these assertions pin is that the route still never
+ * over-claims: `cancelled:'requested'` when the signal was persisted,
+ * `cancelled:false` when it could not be, and `cancelled:true` only when this
+ * replica cancelled the request itself.
  */
 describe('cancel route honesty (#3400)', () => {
   const SRC_ROUTE = readFileSync(join(__dirname, '..', 'route.ts'), 'utf8');
@@ -108,26 +355,56 @@ describe('cancel route honesty (#3400)', () => {
     join(process.cwd(), 'lib', 'azure', 'azure-sql-client.ts'),
     'utf8',
   );
+  const SRC_INTENTS = readFileSync(
+    join(process.cwd(), 'lib', 'azure', 'azure-sql-cancel-intents.ts'),
+    'utf8',
+  );
 
-  it('neither file instructs the operator to enable sticky sessions', () => {
-    for (const [name, src] of [['cancel/route.ts', SRC_ROUTE], ['azure-sql-client.ts', SRC_CLIENT]] as const) {
+  /**
+   * The population, declared ONCE.
+   *
+   * It was two files until the cancel machinery was split out of
+   * azure-sql-client.ts (that module crossed the 1500-LOC monolith-creep line).
+   * The split moved the anti-affinity record with the code and this guard went
+   * red — correctly: a source-content guard whose subject moves out from under
+   * it is asserting nothing. Enumerating the files in each `it` separately is
+   * how that becomes a silent hole next time, so the list lives here and every
+   * assertion iterates it. azure-sql-client.ts keeps a summary of the record
+   * because it is still where a reader looking for `liveRequests` lands.
+   */
+  const SOURCES = [
+    ['cancel/route.ts', SRC_ROUTE],
+    ['azure-sql-client.ts', SRC_CLIENT],
+    ['azure-sql-cancel-intents.ts', SRC_INTENTS],
+  ] as const;
+
+  it('no file instructs the operator to enable sticky sessions', () => {
+    for (const [name, src] of SOURCES) {
       expect(src, `${name} still prescribes affinity:'sticky'`).not.toMatch(/enable ingress sticky sessions/i);
       expect(src, `${name} still offers affinity:'sticky' as the remedy`)
         .not.toMatch(/stickySessions\.affinity:\s*'sticky'\)?\s*(?:or run a single replica|\*\/)/i);
     }
   });
 
-  it('both files record that affinity is FORBIDDEN and name the real mechanism', () => {
-    for (const [name, src] of [['cancel/route.ts', SRC_ROUTE], ['azure-sql-client.ts', SRC_CLIENT]] as const) {
+  it('every file records that affinity is FORBIDDEN and names the real mechanism', () => {
+    for (const [name, src] of SOURCES) {
       expect(src, `${name} does not say affinity is not the answer`).toMatch(/NOT SESSION AFFINITY|NOT "FIX" THIS WITH SESSION AFFINITY/i);
       expect(src, `${name} does not name the cross-replica signal`).toMatch(/cross-replica cancel signal/i);
       expect(src, `${name} does not record the multiRevision constraint`).toMatch(/multiRevision/);
     }
   });
 
-  it('an unknown requestId reports the no-op honestly — no invented cause', async () => {
+  it('no file still claims the intent store is unimplemented', () => {
+    for (const [name, src] of SOURCES) {
+      expect(src, `${name} still says the store is not implemented`)
+        .not.toMatch(/store is (?:NOT|not) implemented yet/);
+    }
+  });
+
+  it('an unknown requestId with NO reachable store reports the no-op honestly', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    const res = await POST(postReq({ requestId: 'elsewhere' }));
+    recordCancelIntent.mockResolvedValue(false);
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE }));
     const j = await res.json();
     expect(j.cancelled).toBe(false);
     expect(j.crossReplica).toBe(false);
@@ -138,5 +415,635 @@ describe('cancel route honesty (#3400)', () => {
     // And it must not tell the operator to go set an affinity the platform
     // forbids (auto-bind-by-default: no user-performed plumbing).
     expect(j.reason).not.toMatch(/sticky/i);
+  });
+
+  /**
+   * R7, review finding 4. The reason used to assert "(no Cosmos endpoint
+   * configured, or the write failed)" as the cause. TWO other branches reach
+   * here: the documented `LOOM_SQL_CANCEL_INTENTS_DISABLED=1` opt-out, where the
+   * store was deliberately switched off rather than unreachable, and an init
+   * that failed earlier and is still backing off, where nothing was attempted on
+   * this call at all. The route must report the branch the client actually took,
+   * not a guess.
+   *   MUTATION: inline a fixed sentence instead of calling
+   *   `cancelIntentUnavailableReason()` → this spec goes red.
+   */
+  it('reports the REASON the client actually recorded, not a guessed cause', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(false);
+    cancelIntentUnavailableReason.mockReturnValue(
+      'the cross-replica cancel-intent store is switched off in this deployment '
+      + '(LOOM_SQL_CANCEL_INTENTS_DISABLED=1), so the signal was not carried to any other replica',
+    );
+
+    const res = await POST(postReq({ requestId: ID_ELSEWHERE }));
+    const j = await res.json();
+
+    expect(cancelIntentUnavailableReason).toHaveBeenCalled();
+    expect(j.cancelled).toBe(false);
+    expect(j.reason).toContain('LOOM_SQL_CANCEL_INTENTS_DISABLED=1');
+    // The old wording named a cause that does not hold on this branch.
+    expect(j.reason).not.toMatch(/no Cosmos endpoint configured, or the write failed/);
+  });
+
+  /** The reason function is consulted only when there was nothing to report. */
+  it('does not ask for an unavailability reason when the intent WAS published', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    await POST(postReq({ requestId: ID_OTHER_REPLICA }));
+    expect(cancelIntentUnavailableReason).not.toHaveBeenCalled();
+  });
+
+  /**
+   * RED before the fix: the route had no intent store at all, so a requestId
+   * owned by another replica returned `cancelled:false` and the signal died
+   * there. GREEN now: the intent is persisted and the response says exactly
+   * that — 'requested', not 'cancelled'.
+   */
+  it('publishes a cross-replica intent when the id is not local, and reports it as REQUESTED', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    recordCancelIntent.mockResolvedValue(true);
+    const res = await POST(postReq({ requestId: ID_OTHER_REPLICA }));
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(recordCancelIntent).toHaveBeenCalledWith(ID_OTHER_REPLICA);
+    expect(j.ok).toBe(true);
+    expect(j.crossReplica).toBe(true);
+    // NOT `true` — persisting a signal is not observing a cancellation (R7).
+    expect(j.cancelled).toBe('requested');
+    expect(j.cancelled).not.toBe(true);
+    // It must point at the thing that DOES establish the cancellation.
+    expect(j.reason).toMatch(/ECANCEL/);
+    expect(j.reason).toMatch(/does not claim/i);
+  });
+});
+
+/**
+ * The client half of the cross-replica signal (#3400): the replica that OWNS
+ * the request must notice an intent published by a different replica and send
+ * the TDS ATTENTION packet itself.
+ *
+ * RED before the fix: `azure-sql-client` had no watcher and no intent store, so
+ * `_pollCancelIntentsOnce` did not exist and nothing ever consumed an intent.
+ *
+ * Uses `importActual` because the describe block above mocks the whole module.
+ * The intent store is injected, so this exercises the real poll logic with no
+ * Cosmos and no network.
+ */
+describe('azure-sql-client cancel-intent watcher (#3400)', () => {
+  it('cancels a locally-owned request when an intent exists for its id', async () => {
+    const client = await realClient();
+    const m = memStore(['mine']);
+    client._setCancelIntentStore(m.store);
+
+    const cancel = vi.fn();
+    const untouched = vi.fn();
+    client.liveRequests.set('mine', { cancel } as any);
+    client.liveRequests.set('no-intent', { cancel: untouched } as any);
+
+    await client._pollCancelIntentsOnce();
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(untouched).not.toHaveBeenCalled();
+    // The cancelled request is deregistered; the other is left alone.
+    expect(client.liveRequests.has('mine')).toBe(false);
+    expect(client.liveRequests.has('no-intent')).toBe(true);
+    // The spent intent is cleaned up so it can never cancel a later request.
+    expect(m.cleared).toContain('mine');
+
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  it('does nothing when no intent store is configured', async () => {
+    const client = await realClient();
+    client._setCancelIntentStore(null);
+    const cancel = vi.fn();
+    client.liveRequests.set('mine', { cancel } as any);
+    // No LOOM_COSMOS_ENDPOINT in the test env → the store is off, and the poll
+    // must be a silent no-op rather than an error or a spurious cancel.
+    await client._pollCancelIntentsOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(client.liveRequests.has('mine')).toBe(true);
+    client.liveRequests.clear();
+  });
+
+  /**
+   * R7, review finding 3. A FAILED store read is UNKNOWN, never "an intent
+   * exists". The branch had no guard, so inverting `catch { continue; }` to
+   * `catch { wanted = true; }` — the store read failed, therefore cancel — left
+   * the suite fully green while silently killing users' running queries on the
+   * next transient Cosmos error. That inversion is exactly the R7 shape this
+   * repo keeps getting bitten by.
+   *   MUTATION: `catch { wanted = true; }` in `_pollCancelIntentsOnce` → red here.
+   */
+  it('a store read that THROWS is unknown, not a cancel — the request stays registered', async () => {
+    const client = await realClient();
+    const cancel = vi.fn();
+    let reads = 0;
+    client._setCancelIntentStore({
+      record: async () => {},
+      has: async () => { reads += 1; throw new Error('Cosmos 429 TooManyRequests'); },
+      clear: async () => { throw new Error('clear must not be called for an unknown intent'); },
+    });
+    client.liveRequests.set('mine', { cancel } as any);
+
+    await expect(client._pollCancelIntentsOnce()).resolves.toBeUndefined();
+
+    expect(reads).toBe(1);
+    expect(cancel).not.toHaveBeenCalled();
+    // Still ours: the next tick must get another chance to read the intent.
+    expect(client.liveRequests.has('mine')).toBe(true);
+
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  /** One id failing its read must not stop the loop reaching the others. */
+  it('a throwing read for one id does not prevent a real intent cancelling another', async () => {
+    const client = await realClient();
+    const bad = vi.fn();
+    const good = vi.fn();
+    client._setCancelIntentStore({
+      record: async () => {},
+      has: async (id: string) => {
+        if (id === 'bad') throw new Error('read failed');
+        return id === 'good';
+      },
+      clear: async () => {},
+    });
+    client.liveRequests.set('bad', { cancel: bad } as any);
+    client.liveRequests.set('good', { cancel: good } as any);
+
+    await client._pollCancelIntentsOnce();
+
+    expect(bad).not.toHaveBeenCalled();
+    expect(good).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('bad')).toBe(true);
+    expect(client.liveRequests.has('good')).toBe(false);
+
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+});
+
+/**
+ * ═══ WHAT THE FIRST ROUND OF THIS PR DID NOT GUARD (review, #3400) ═══
+ *
+ * Review authored three mutations that each restore the original defect and
+ * each left the suite fully green. They are the spec for everything below:
+ *
+ *   M3  azure-sql-client.ts `registerLiveRequest` — drop the
+ *       `startCancelWatcher()` call. The watcher then never starts on ANY
+ *       replica, `_pollCancelIntentsOnce` is never invoked in production, and
+ *       cross-replica cancel is the exact permanent no-op #3400 describes.
+ *       Only `_pollCancelIntentsOnce` was tested — never the thing that CALLS
+ *       it. Killed by 'watcher lifecycle' below.
+ *
+ *   M4  `recordCancelIntent` — replace the body's first statement with
+ *       `return true;`. The route then reports `cancelled:'requested'` while
+ *       nothing was stored, which is precisely the R7 lie its own comment
+ *       forbids. The route specs vi.mock the module, so the real function and
+ *       the whole Cosmos store path had ZERO coverage. Killed by
+ *       'recordCancelIntent persistence' and 'the Cosmos-backed store' below.
+ *
+ *   M5  ../../route.ts (the /query route) — delete the `e?.code === 'ECANCEL'`
+ *       block, i.e. the only thing that establishes a query stopped. Killed in
+ *       app/api/items/azure-sql-database/[id]/query/__tests__/
+ *       query-cancel-receipt.test.ts, which did not exist and now does.
+ */
+
+describe('watcher lifecycle — registering a request is what STARTS the poll (#3400, M3)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null); // also stops any interval left running
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    if (savedEndpoint === undefined) delete process.env.LOOM_COSMOS_ENDPOINT;
+    else process.env.LOOM_COSMOS_ENDPOINT = savedEndpoint;
+  });
+
+  /**
+   * THE M3 KILLER, and the closest thing this suite has to the real scenario:
+   * NOTHING in this spec calls `_pollCancelIntentsOnce`. The request is
+   * registered exactly as `executeQuery` registers it, another replica publishes
+   * an intent, time passes — and the TDS ATTENTION must happen on its own.
+   *   MUTATION: remove `startCancelWatcher()` from `registerLiveRequest`.
+   */
+  it('a request registered by executeQuery is cancelled by the watcher alone', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    const cancel = vi.fn();
+
+    client.registerLiveRequest('mine', { cancel } as any);
+    // ...meanwhile, the cancel POST lands on a DIFFERENT replica, which writes:
+    m.intents.add('mine');
+
+    expect(cancel).not.toHaveBeenCalled(); // nothing has polled yet
+    await vi.advanceTimersByTimeAsync(1_100); // one default poll interval
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('mine')).toBe(false);
+    expect(m.cleared).toContain('mine');
+  });
+
+  /**
+   * The watcher must exist only while this replica has work. An always-on
+   * interval would point-read Cosmos forever on every idle replica.
+   *   MUTATION: remove `stopCancelWatcherIfIdle()` from
+   *   `unregisterLiveRequest` → the timer survives the last request.
+   */
+  it('stops the watcher once the replica goes idle', async () => {
+    client._setCancelIntentStore(memStore().store);
+    client.registerLiveRequest('mine', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    client.unregisterLiveRequest('mine');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /**
+   * ...and it must never start where there is no store to poll (local dev, or
+   * the documented `LOOM_SQL_CANCEL_INTENTS_DISABLED=1` opt-out).
+   *   MUTATION: drop the `!cancelIntentStoreConfigured()` guard from
+   *   `startCancelWatcher`.
+   */
+  it('never starts a watcher when no intent store is configured', async () => {
+    client._setCancelIntentStore(null);
+    client.registerLiveRequest('mine', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /** A single watcher, not one per concurrent query. */
+  it('registering a second request does not start a second watcher', async () => {
+    client._setCancelIntentStore(memStore().store);
+    client.registerLiveRequest('a', { cancel: vi.fn() } as any);
+    const after1 = vi.getTimerCount();
+    client.registerLiveRequest('b', { cancel: vi.fn() } as any);
+    expect(vi.getTimerCount()).toBe(after1);
+  });
+});
+
+describe('recordCancelIntent persistence — the claim the route relies on (#3400, M4)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    if (savedEndpoint === undefined) delete process.env.LOOM_COSMOS_ENDPOINT;
+    else process.env.LOOM_COSMOS_ENDPOINT = savedEndpoint;
+  });
+
+  /**
+   * R7. The cancel route answers `cancelled:'requested'` on a TRUE here, so a
+   * `true` that stored nothing is the route asserting a persistence that never
+   * happened.
+   *   MUTATION: `return true;` as the first statement of recordCancelIntent.
+   */
+  it('returns FALSE when there is no store — it never claims a write it could not make', async () => {
+    await expect(client.recordCancelIntent('nowhere')).resolves.toBe(false);
+  });
+
+  it('WRITES the intent, and only then returns true', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    await expect(client.recordCancelIntent('r-42')).resolves.toBe(true);
+    expect(m.recorded).toEqual(['r-42']);
+  });
+
+  /** A store that throws is not a store that stored. */
+  it('returns FALSE when the store throws', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+    await expect(client.recordCancelIntent('r-43')).resolves.toBe(false);
+  });
+
+  /**
+   * The full loop in one process: replica A publishes through the PUBLIC api
+   * the route calls, replica B (holding the request) consumes it. Kills M4 even
+   * if the `false` cases above were somehow satisfied, because a
+   * `recordCancelIntent` that stores nothing leaves nothing for the poll to find.
+   */
+  it('an intent published by recordCancelIntent is what the owning replica acts on', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+
+    // Replica A: the cancel POST landed here, the request is not local.
+    expect(await client.recordCancelIntent('cross')).toBe(true);
+
+    // Replica B: it owns the request and polls for its own keys.
+    const cancel = vi.fn();
+    client.liveRequests.set('cross', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(client.liveRequests.has('cross')).toBe(false);
+  });
+
+  /** Nobody else's request is touched by an intent that names one id. */
+  it('an intent cancels ONLY the request it names', async () => {
+    const m = memStore();
+    client._setCancelIntentStore(m.store);
+    await client.recordCancelIntent('theirs');
+
+    const mine = vi.fn();
+    client.liveRequests.set('mine', { cancel: mine } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(mine).not.toHaveBeenCalled();
+    expect(client.liveRequests.has('mine')).toBe(true);
+  });
+});
+
+/**
+ * The REAL Cosmos-backed store (#3400, M4 second half).
+ *
+ * Everything above injects a store, so `cancelIntentStore()`'s own init path —
+ * the one that actually runs in production — had no coverage at all: the
+ * container it provisions, the document it writes, and whether the `(id, id)`
+ * point-read it does on the other replica can even find that document. A
+ * partition-key path that disagreed with the point-read would make every
+ * cross-replica cancel silently miss, with every injected-store test green.
+ *
+ * @azure/cosmos is faked at module scope; the azure-sql-client code under test
+ * is the real thing.
+ */
+describe('the Cosmos-backed intent store (#3400, M4)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+  let savedDb: string | undefined;
+  let savedDisabled: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    savedDb = process.env.LOOM_COSMOS_DATABASE;
+    savedDisabled = process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    process.env.LOOM_COSMOS_DATABASE = 'loom';
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    cosmos.reset();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null); // clears the injected store AND the memo
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    cosmos.reset();
+    for (const [k, v] of [
+      ['LOOM_COSMOS_ENDPOINT', savedEndpoint],
+      ['LOOM_COSMOS_DATABASE', savedDb],
+      ['LOOM_SQL_CANCEL_INTENTS_DISABLED', savedDisabled],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  /**
+   * auto-bind-by-default: the container is provisioned by the platform on first
+   * use. No operator step, no separate ARM deployment.
+   */
+  it('provisions its own TTL container and writes a document keyed for the point-read', async () => {
+    expect(await client.recordCancelIntent('xrep')).toBe(true);
+
+    expect(cosmos.databases).toEqual([{ id: 'loom' }]);
+    expect(cosmos.containers).toEqual([{
+      id: client.CANCEL_INTENT_CONTAINER,
+      partitionKey: { paths: ['/requestId'] },
+      defaultTtl: client.CANCEL_INTENT_TTL_SECONDS,
+    }]);
+
+    const doc = cosmos.upserts.at(-1);
+    expect(doc.id).toBe('xrep');
+    // id === the partition-key VALUE, which is what makes `item(id, id)` a
+    // legal point read on the other replica. If these ever diverge the read
+    // below misses and every cross-replica cancel silently no-ops.
+    expect(doc.requestId).toBe('xrep');
+    expect(doc.ttl).toBe(client.CANCEL_INTENT_TTL_SECONDS);
+    expect(typeof doc.requestedAt).toBe('number');
+  });
+
+  /** The other half of the round trip, through the real Cosmos accessors. */
+  it('the owning replica point-reads that document and cancels the request', async () => {
+    await client.recordCancelIntent('xrep');
+
+    const cancel = vi.fn();
+    client.liveRequests.set('xrep', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+
+    expect(cosmos.reads).toContainEqual(['xrep', 'xrep']);
+    expect(cancel).toHaveBeenCalledOnce();
+    // clear() is fire-and-forget, so wait for it rather than assume ordering.
+    await vi.waitFor(() => expect(cosmos.deletes).toContainEqual(['xrep', 'xrep']));
+  });
+
+  /** No intent for this replica's key → no read result, no cancel. */
+  it('a request with no intent is left running', async () => {
+    const cancel = vi.fn();
+    client.liveRequests.set('untouched', { cancel } as any);
+    await client._pollCancelIntentsOnce();
+    expect(cosmos.reads).toContainEqual(['untouched', 'untouched']);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  /**
+   * R7 — an unreachable store must surface as "could not persist", never as a
+   * claimed request. This is what the cancel route's `cancelled:false` branch
+   * is built on.
+   */
+  it('an init failure yields FALSE, not a claimed write', async () => {
+    cosmos.failInit = true;
+    await expect(client.recordCancelIntent('boom')).resolves.toBe(false);
+    expect(cosmos.upserts).toEqual([]);
+  });
+
+  /** The documented opt-out really opts out — no Cosmos client is constructed. */
+  it('LOOM_SQL_CANCEL_INTENTS_DISABLED=1 disables the store entirely', async () => {
+    process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED = '1';
+    client._setCancelIntentStore(null);
+    expect(client.cancelIntentStoreConfigured()).toBe(false);
+    await expect(client.recordCancelIntent('nope')).resolves.toBe(false);
+    expect(cosmos.databases).toEqual([]);
+    expect(cosmos.clientOpts).toBeNull();
+  });
+
+  /**
+   * Review finding 2. The init used to be a ONE-SHOT memo (`_cosmosIntentInitTried`
+   * set before the try, never reset outside the test hook). One 429 / cold start
+   * / DNS blip on the very first call therefore left that replica unable to
+   * publish OR consume an intent for its entire lifetime — the permanent
+   * cross-replica no-op #3400 exists to remove, re-introduced through a
+   * different door and observable nowhere.
+   *
+   * Bounded backoff is the contract: don't hammer a failing endpoint...
+   *   MUTATION: drop the `Date.now() - _cosmosIntentInitFailedAt < ...` guard →
+   *   red here (a second construct inside the window).
+   */
+  it('backs off after a failed init instead of hammering the endpoint', async () => {
+    cosmos.failInit = true;
+    await expect(client.recordCancelIntent('a')).resolves.toBe(false);
+    expect(cosmos.constructs).toBe(1);
+
+    // Immediately again, inside the backoff window: no second attempt.
+    await expect(client.recordCancelIntent('b')).resolves.toBe(false);
+    expect(cosmos.constructs).toBe(1);
+  });
+
+  /**
+   * ...but ALWAYS re-arm. This is the half the one-shot memo got wrong.
+   *   MUTATION: restore `if (_cosmosIntentInitTried) return _cosmosIntentStore;`
+   *   with the flag set before the try → red here, permanently false.
+   */
+  it('RECOVERS on its own once the backoff window has passed — the failure is not permanent', async () => {
+    vi.useFakeTimers();
+    try {
+      cosmos.failInit = true;
+      await expect(client.recordCancelIntent('during-outage')).resolves.toBe(false);
+      expect(cosmos.constructs).toBe(1);
+      expect(cosmos.upserts).toEqual([]);
+
+      // The blip passes. Nothing resets anything — no redeploy, no test hook.
+      cosmos.failInit = false;
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      await expect(client.recordCancelIntent('after-recovery')).resolves.toBe(true);
+      expect(cosmos.constructs).toBe(2);
+      expect(cosmos.upserts.at(-1)?.id).toBe('after-recovery');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A successful init is still memoised — one client per replica, not one per call. */
+  it('memoises a SUCCESSFUL init', async () => {
+    await expect(client.recordCancelIntent('one')).resolves.toBe(true);
+    await expect(client.recordCancelIntent('two')).resolves.toBe(true);
+    expect(cosmos.constructs).toBe(1);
+  });
+});
+
+/**
+ * Review finding 4 — the cancel route's `cancelled:false` copy asserted "(no
+ * Cosmos endpoint configured, or the write failed)". FOUR branches reach that
+ * response, and on two of them neither named cause holds. R7: the message must
+ * report the branch that was actually taken.
+ */
+describe('cancelIntentUnavailableReason — the cancel route\'s R7 copy (#3400)', () => {
+  let client: SqlClient;
+  let savedEndpoint: string | undefined;
+  let savedDisabled: string | undefined;
+
+  beforeEach(async () => {
+    client = await realClient();
+    savedEndpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    savedDisabled = process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    cosmos.reset();
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+  });
+
+  afterEach(() => {
+    client.liveRequests.clear();
+    client._setCancelIntentStore(null);
+    cosmos.reset();
+    for (const [k, v] of [
+      ['LOOM_COSMOS_ENDPOINT', savedEndpoint],
+      ['LOOM_SQL_CANCEL_INTENTS_DISABLED', savedDisabled],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('names the deliberate opt-out as an opt-out, not as an unreachable store', async () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED = '1';
+    client._setCancelIntentStore(null);
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toContain('LOOM_SQL_CANCEL_INTENTS_DISABLED=1');
+    expect(why).toMatch(/switched off/i);
+    // It must NOT claim the endpoint is missing — it is set.
+    expect(why).not.toMatch(/no Cosmos endpoint/i);
+  });
+
+  it('names the missing endpoint when there is genuinely no store to reach', async () => {
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    client._setCancelIntentStore(null);
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    expect(client.cancelIntentUnavailableReason()).toContain('LOOM_COSMOS_ENDPOINT');
+  });
+
+  it('names the INIT failure — including that nothing was attempted on this call', async () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://cosmos.invalid/';
+    delete process.env.LOOM_SQL_CANCEL_INTENTS_DISABLED;
+    client._setCancelIntentStore(null);
+    cosmos.failInit = true;
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toMatch(/could not be opened/i);
+    expect(why).toContain('Cosmos endpoint unreachable'); // the real error text
+    expect(why).toMatch(/backing off/i);
+  });
+
+  it('names the WRITE failure, and reports the real driver message', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).toMatch(/write failed/i);
+    expect(why).toContain('429 TooManyRequests');
+  });
+
+  /** A stale write error must not be reported for a later, different failure. */
+  it('does not carry a previous write error into a later attempt', async () => {
+    client._setCancelIntentStore({
+      record: async () => { throw new Error('Cosmos 429 TooManyRequests'); },
+      has: async () => false,
+      clear: async () => {},
+    });
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    expect(client.cancelIntentUnavailableReason()).toContain('429');
+
+    // Now the store goes away entirely — the reason must follow the new branch.
+    client._setCancelIntentStore(null);
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    expect(await client.recordCancelIntent('x')).toBe(false);
+    const why = client.cancelIntentUnavailableReason();
+    expect(why).not.toContain('429');
+    expect(why).toContain('LOOM_COSMOS_ENDPOINT');
   });
 });

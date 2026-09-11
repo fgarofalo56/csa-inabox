@@ -4,23 +4,22 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
-  listKnowledgeSources, addKnowledgeSource, CopilotStudioError,
+  listKnowledgeSources, addKnowledgeSource,
   type KnowledgeSourceType,
 } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function handleErr(e: any) {
-  const status = e instanceof CopilotStudioError ? e.status : 502;
-  return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+  const { status, body } = copilotStudioErrorEnvelope(e);
+  return NextResponse.json(body, { status });
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const { searchParams } = new URL(req.url);
   const envId = searchParams.get('envId');
   const agentId = searchParams.get('agentId');
@@ -29,11 +28,9 @@ export async function GET(req: NextRequest) {
     const knowledge = await listKnowledgeSources(envId, agentId);
     return NextResponse.json({ ok: true, knowledge });
   } catch (e: any) { return handleErr(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.envId || !body?.agentId) return NextResponse.json({ ok: false, error: 'envId and agentId are required' }, { status: 400 });
   if (!body?.type) return NextResponse.json({ ok: false, error: 'type is required' }, { status: 400 });
@@ -45,4 +42,4 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, knowledge: ks });
   } catch (e: any) { return handleErr(e); }
-}
+});

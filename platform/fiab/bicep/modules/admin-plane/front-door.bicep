@@ -40,6 +40,132 @@ param scriptLocation string = location
 @description('Cache-busting tag so the approval script re-runs on each deploy (idempotent — approve is a no-op once Approved).')
 param forceUpdateTag string = utcNow()
 
+// ── ORIGIN RESPONSE TIMEOUT: PINNED, NOT INHERITED (#3472) ──────────────────
+//
+// Until this change, this template set `originResponseTimeoutSeconds` NOWHERE
+// in platform/fiab/bicep, so the edge used whatever the AFD default (60s) or an
+// out-of-band portal change left it — and three separate places in this repo
+// cited that absence in prose while nothing enforced it. THAT IS NOW HISTORY,
+// stated in the past tense because this file is what changed it: the
+// `param originResponseTimeoutSeconds` declaration below, and the property of
+// the same name on the `fdProfile` (`Microsoft.Cdn/profiles`) resource, declare
+// and apply the value. It is a PROFILE-level property — `fdOriginGroup` exists
+// in this file and does NOT carry it, so do not go looking there.
+// (This one sentence is deliberately cited by SYMBOL, not line number, because
+// it is the sentence that has gone stale twice: it said `:121`/`:287` when the
+// real lines were 153 and 319, and its round-7 replacement named the wrong
+// RESOURCE. It sits at the top of the file, so every comment edit below it
+// shifts the numbers it would cite. Every OTHER line number in this comment
+// points into a DIFFERENT file, which this file's edits cannot move — a
+// different risk, and one this note does not claim to cover.)
+// All three citations were updated in the same change to describe the pin
+// rather than its absence
+// (apps/fiab-console/app/api/help-copilot/reindex/route.ts,
+// apps/fiab-console/lib/azure/reindex-job.ts, scripts/ci/reindex-loom-docs.sh).
+//
+// WHAT IS MEASURED, in this tree, today:
+//   * 71 console API routes declare `maxDuration`, and 30 of them declare MORE
+//     THAN 60 SECONDS — 11 at 90s, 7 at 120s, 12 at 300s:
+//       git grep -h "export const maxDuration" -- 'apps/fiab-console/app/api/**/*.ts'
+//     Every one of those 30 is, by its own declaration, allowed to run longer
+//     than the un-set edge default would wait for it. That is a template gap
+//     regardless of any single incident.
+//   * copilot-quality-evals has repeatedly gone red on an EDGE `HTTP 504` for
+//     `POST /api/help-copilot/reindex` (runs 33472611043 2026-09-01 and
+//     33347903080 2026-08-31; 4 of 12 runs on 2026-08-13) — a handler that
+//     returns 202 without awaiting the rebuild.
+//
+// WHAT IS *NOT* MEASURED, and is therefore NOT asserted here (deploy-integrity
+// R7). This value was chosen from the route declarations above, not from a
+// reading of the live edge:
+//   * the LIVE profile's effective value. No `az cdn profile show` receipt
+//     exists for ANY boundary from this change — the estate is paused and Gov
+//     is only reachable from an in-boundary runner.
+//   * WHY the edge gave up at ~30s when the default is 60s, or whether the POST
+//     ever reached a replica.
+//   * whether pinning this changes the reindex 504 rate AT ALL. This is not
+//     offered as the fix for that; it removes an unpinned variable. The CI half
+//     of #3472 (scripts/ci/reindex-loom-docs.sh) is what converts the remaining
+//     unknown into a measurement, and it still fails closed either way.
+//
+// RESIDUAL GAP #1, stated rather than hidden: the AFD portal exposes 16–240s, so
+// the 12 routes declaring `maxDuration = 300` exceed ANY value settable here.
+// Those must stay async-and-pollable the way the reindex route already is; this
+// pin does not cover them and must not be read as covering them.
+//
+// Pinning it in the template also closes the re-render hazard: an operator's
+// portal change to this field was invisible to this module and would be dropped
+// by the next apply (the class that blanked the bootstrap admin OID and
+// LOOM_ADLS_ACCOUNT).
+//
+// WHICH BOUNDARIES THIS ACTUALLY COVERS — one module, but not every boundary
+// instantiates it (#4373 review §B2, cloud-parity.md). admin-plane/main.bicep
+// gates it `if (frontDoorEnabled && containerPlatform == 'containerApps' &&
+// deployAppsEnabled)`, and the param files set `frontDoorEnabled` as follows:
+//   * true  — commercial-full, commercial, tenant-dmlz (Commercial), gcc-high
+//             (GCC-High). Those are the boundaries this value can reach.
+//             `commercial.bicepparam` leaves `deployAppsEnabled` unset and has
+//             it passed by deploy-fiab-commercial.yml (see its note at :271-275),
+//             so its coverage depends on that workflow input, not on the file.
+//   * FALSE — il5.bicepparam:419, stated at its :8 as "Front Door not
+//             IL5-certified — use AGW only". IL5 NEVER deploys this module.
+//   * unset (=> false, main.bicep:1007) — gcc.bicepparam and
+//             dlz-attach.bicepparam, which also leave `deployAppsEnabled`
+//             unset, so they stand up no apps to front.
+// Per cloud-parity.md those four are NOT equivalent states and must not be
+// listed as though they were. Re-measured 2026-09-09:
+//   * commercial (the live Commercial lane) — EXERCISED.
+//     deploy-fiab-commercial.yml deploys it and passes `deployAppsEnabled`.
+//   * gcc-high — EXERCISED ONCE, AND IT FAILED. Of its last 12 runs exactly one
+//     executed the `Deploy + validate CSA Loom in GCC-High` job: 33519232492
+//     (2026-09-01), 33 steps, conclusion `failure`. The other 11 sit at
+//     `status: waiting` (environment approval) with that job at 0 steps. A
+//     failing job that RAN is a receipt; a waiting one is not.
+//   * commercial-full — LATENT, not exercised. Every known invocation overrides
+//     `deployAppsEnabled=false` (grep that string in bicep-whatif.yml and
+//     loom-drift-check.yml, and no-vaporware.md's from-scratch PHASE 1) — the
+//     very gate this module hangs on — so it compiles this value and has never
+//     deployed it. Recorded in loom-guardrails.yml's boundary table. (Cited by
+//     grep, not line number: loom-guardrails.yml's own copy of this note says
+//     `bicep-whatif.yml:291`, which is a `clientSecret` line — the real one is
+//     406. That stale citation is out of this PR's lane and is left alone.)
+//   * tenant-dmlz — SUPPORTED-IN-CODE, NEVER EXERCISED. `git grep -ln
+//     tenant-dmlz.bicepparam -- .github/` returns NOTHING: no workflow
+//     references it at all, and loom-guardrails.yml:570-571 records it as
+//     having "no automated caller at all (operator/manual only)".
+// IL5 sits outside that list entirely (frontDoorEnabled=false) and has no deploy
+// receipt of its own either — `gh run list --workflow deploy-fiab-il5.yml`
+// returns ZERO runs.
+//
+// RESIDUAL GAP #2 — the APPLICATION GATEWAY edge is not moved by this change,
+// and that is FOUR param files, not just IL5. In
+// modules/admin-plane/app-gateway.bicep, `:122` hardcodes `requestTimeout: 30`
+// with no param to override it (the only occurrence in the bicep tree) — below
+// 54 of the 71 route declarations, never mind the 30 above 60. Its gate at
+// admin-plane/main.bicep:8705 is the same shape as this module's, and
+// `appGatewayEnabled = true` in commercial-full:347, gcc-high:406, il5:418 AND
+// tenant-dmlz:308 (it is unset, hence false, in commercial, gcc and
+// dlz-attach). Both modules are handed the
+// SAME origin — `loom-console.${caeDefaultDomain}`, main.bicep:8710 and :8723 —
+// so wherever both flags and `deployAppsEnabled` are true the console has two
+// public edges and this pin moves only one of them. IL5 is the boundary where
+// the App Gateway is the ONLY edge, not the only one where it is capped at 30s.
+// Tracked as #4431 (filed IL5-scoped, widened after this measurement) and
+// deliberately NOT fixed here: a different module's edge belongs in its own
+// lane. So what this pin closes is the FRONT DOOR path's edge-timeout gap, on
+// the boundaries enumerated above and with the exercise caveats stated there —
+// it must not be read as closing the App Gateway path's gap on ANY boundary.
+@description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240. Front Door is not deployed on IL5 (frontDoorEnabled=false) — that boundary\'s edge is App Gateway, see #4431.')
+@minValue(16)
+// BOTH ENDS OF THE RANGE, NOT ONE (#4373 review §5). The description and the
+// note above both state the settable range as 16-240, and `maxDuration: 300`
+// is called out as exceeding it — but only the floor was enforced, so a caller
+// passing 300 compiled fine and was rejected by ARM at deploy time. A bound
+// that the docs assert and the type does not is the cheap half of an honest
+// claim; 240 makes the rejection a compile-time one.
+@maxValue(240)
+param originResponseTimeoutSeconds int = 120
+
 resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = {
   name: 'wafloomfd${uniqueString(resourceGroup().id)}'
   location: 'global'
@@ -202,6 +328,10 @@ resource fdProfile 'Microsoft.Cdn/profiles@2024-02-01' = {
   location: 'global'
   tags: complianceTags
   sku: { name: 'Premium_AzureFrontDoor' }
+  properties: {
+    // See the #3472 note above the parameter: template-owned, not inherited.
+    originResponseTimeoutSeconds: originResponseTimeoutSeconds
+  }
 }
 
 // AFD Standard/Premium derives the endpoint's public hostname deterministically

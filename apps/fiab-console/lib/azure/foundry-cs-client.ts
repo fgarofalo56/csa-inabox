@@ -108,6 +108,70 @@ async function readJson<T>(res: Response): Promise<T | null> {
   return (parsed as T) ?? ({} as T);
 }
 
+/** Page ceiling for an ARM list walk. Bounds PAGES, not TIME — at a 30s per-fetch
+ *  timeout 50 pages is ~25min, so the loop also carries the wall-clock deadline
+ *  below and a visited-url set. Calling this a latency bound would overclaim. */
+const MAX_ARM_PAGES = 50;
+const MAX_ARM_PAGING_MS = 60_000;
+
+/**
+ * Follow an ARM collection across ALL of its pages.
+ *
+ * #4432: the account/deployment/model list calls read only `body.value` and
+ * dropped `nextLink`. Scope this honestly — adopted by the calls feeding account
+ * and model pickers, NOT every ARM list here. `usages`, `roleAssignments`,
+ * `raiPolicies` and `privateEndpointConnections` still read page 1 only and can
+ * under-report; tracked separately, not claimed fixed. (The activity-log call is
+ * a deliberate `.slice(0, 200)`, not a paging defect.)
+ *
+ * ARM's `Accounts_List` is RBAC-FILTERED PER PAGE, so an early page is routinely
+ * empty while accounts arrive later. Measured inside the loom-console container
+ * 2026-09-10 with the console UAMI: the accounts list answered HTTP 200,
+ * `value: []`, nextLink present, while that subscription held three accounts.
+ * Page-1-only therefore produced an EMPTY-BUT-SUCCESSFUL result: zero options,
+ * every model dropdown "(none)", no error because nothing failed — a claim of
+ * absence the code never established (R7). A 404 on page 1 still means "not
+ * found" and yields `null`, preserving the `readJson` contract `resolveAccount`
+ * depends on.
+ *
+ * SECURITY — `nextLink` is attacker-shaped data: an absolute URL read VERBATIM
+ * from a response body, to which this loop attaches a management-plane bearer
+ * token. Unchecked, that forwards an ARM token to whatever host the body names.
+ * The origin check runs BEFORE the token is minted; `armBase()` is
+ * boundary-correct, so it holds in sovereign clouds too. */
+async function armListAll<T>(fullPath: string, apiVersion?: string): Promise<T[] | null> {
+  const first = await armFetch(fullPath, apiVersion ? { apiVersion } : {});
+  const page1 = await readJson<{ value?: T[]; nextLink?: string }>(first);
+  if (page1 === null) return null; // 404 — genuinely absent
+  const out: T[] = [...(page1.value || [])];
+  let next = page1.nextLink;
+  const armOrigin = new URL(armBase()).origin;
+  const seen = new Set<string>();
+  const deadline = Date.now() + MAX_ARM_PAGING_MS;
+  for (let p = 1; next && p < MAX_ARM_PAGES; p++) {
+    // nextLink is an ABSOLUTE url carrying api-version + $skiptoken. Refuse to
+    // carry the ARM token anywhere but ARM; a malformed url ends the walk rather
+    // than being guessed at. A repeated nextLink is a cycle, not progress.
+    let nextOrigin: string;
+    try {
+      nextOrigin = new URL(next).origin;
+    } catch { break; }
+    if (nextOrigin !== armOrigin) break;
+    if (seen.has(next)) break;
+    seen.add(next);
+    if (Date.now() > deadline) break;
+    const tok = await token();
+    const res = await fetchWithTimeout(next, {
+      headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    });
+    const page = await readJson<{ value?: T[]; nextLink?: string }>(res);
+    if (!page) break;
+    out.push(...(page.value || []));
+    next = page.nextLink;
+  }
+  return out;
+}
+
 // ---------------- Account resolution ----------------
 
 export interface CsAccount {
@@ -175,9 +239,11 @@ async function accessibleSubscriptions(): Promise<string[]> {
 
   let discovered: string[] = [];
   try {
-    const res = await armFetch('/subscriptions', { apiVersion: '2022-12-01' });
-    const j = await readJson<{ value?: Array<{ subscriptionId?: string; state?: string }> }>(res);
-    discovered = (j?.value || [])
+    const all = await armListAll<{ subscriptionId?: string; state?: string }>(
+      '/subscriptions',
+      '2022-12-01',
+    );
+    discovered = (all || [])
       .filter((s) => !s.state || String(s.state).toLowerCase() === 'enabled')
       .map((s) => s.subscriptionId)
       .filter((s): s is string => !!s);
@@ -195,21 +261,47 @@ async function accessibleSubscriptions(): Promise<string[]> {
  * is configured.
  *
  * ARM: GET /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts
- *      (Operation Accounts_List). Per-subscription failures (no Reader, throttle)
- *      are tolerated so one inaccessible subscription never blanks the picker.
+ *      (Operation Accounts_List), followed across ALL pages — see armListAll;
+ *      the first page of an RBAC-filtered list is routinely empty (#4432).
+ *      Per-subscription failures (no Reader, throttle) are tolerated so one
+ *      inaccessible subscription never blanks the picker — but they are now
+ *      REPORTED (see listAccountsDetailed) instead of being swallowed into an
+ *      indistinguishable empty list.
  *      Never throws — returns the aggregated, de-duplicated, name-sorted list.
  */
 export async function listAccounts(): Promise<CsAccount[]> {
+  return (await listAccountsDetailed()).accounts;
+}
+
+/** A per-subscription failure encountered while listing accounts. */
+export interface AccountListFailure {
+  subscriptionId: string;
+  status?: number;
+  message: string;
+}
+
+/**
+ * {@link listAccounts} plus the per-subscription failures it tolerated.
+ *
+ * #4432: swallowing every per-subscription error made "you have no Foundry
+ * accounts" and "I could not ask" the same observable state — an empty dropdown
+ * with no MessageBar. Callers that render a picker MUST use this variant so a
+ * 403/429/timeout surfaces as an honest gate rather than a silent blank.
+ */
+export async function listAccountsDetailed(): Promise<{
+  accounts: CsAccount[];
+  failures: AccountListFailure[];
+}> {
   const subs = await accessibleSubscriptions();
   const HOSTING = new Set(['aiservices', 'openai']);
   const seen = new Set<string>();
   const out: CsAccount[] = [];
+  const failures: AccountListFailure[] = [];
   await Promise.all(
     subs.map(async (s) => {
       try {
-        const res = await armFetch(`/subscriptions/${s}/providers/Microsoft.CognitiveServices/accounts`);
-        const j = await readJson<{ value?: any[] }>(res);
-        for (const raw of j?.value || []) {
+        const raws = await armListAll<any>(`/subscriptions/${s}/providers/Microsoft.CognitiveServices/accounts`);
+        for (const raw of raws || []) {
           const a = shapeAccount(raw);
           if (!HOSTING.has(String(a.kind || '').toLowerCase())) continue;
           const key = String(a.id || `${s}/${a.rg}/${a.name}`).toLowerCase();
@@ -217,12 +309,21 @@ export async function listAccounts(): Promise<CsAccount[]> {
           seen.add(key);
           out.push(a);
         }
-      } catch {
-        /* tolerate per-subscription auth / throttle failures; aggregate the rest */
+      } catch (e: any) {
+        // Tolerate so one inaccessible subscription never blanks the picker —
+        // but RECORD it, so the caller can tell "none" from "couldn't ask".
+        failures.push({
+          subscriptionId: s,
+          status: e instanceof CsError ? e.status : undefined,
+          message: String(e?.message || e).slice(0, 300),
+        });
       }
     }),
   );
-  return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return {
+    accounts: out.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+    failures,
+  };
 }
 
 /**
@@ -274,12 +375,12 @@ export async function resolveAccount(force = false, selector?: AccountSelector):
     return _accountCache;
   }
 
-  // Discover in the Foundry RG.
-  const res = await armFetch(
-    `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.CognitiveServices/accounts`,
-  );
-  const j = await readJson<{ value?: any[] }>(res);
-  const all = j?.value || [];
+  // Discover in the Foundry RG. Paged (#4432): reading only page 1 of an
+  // RBAC-filtered ARM list produced a FALSE "no account found" claim below.
+  const all =
+    (await armListAll<any>(
+      `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.CognitiveServices/accounts`,
+    )) || [];
   if (all.length === 0) {
     throw new CsNotConfiguredError(
       `No Microsoft.CognitiveServices account found in resource group "${rg()}". AI Foundry model deployments, quota, ` +
@@ -332,9 +433,10 @@ function shapeDeployment(raw: any): ModelDeployment {
 
 export async function listModelDeployments(selector?: AccountSelector): Promise<{ account: CsAccount; deployments: ModelDeployment[] }> {
   const acct = await resolveAccount(false, selector);
-  const res = await armFetch(`${accountPath(acct)}/deployments`);
-  const j = await readJson<{ value?: any[] }>(res);
-  return { account: acct, deployments: (j?.value || []).map(shapeDeployment) };
+  // Paged (#4432) — Deployments_List is an ARM collection and an account with
+  // many deployments (or an RBAC-filtered caller) does not fit on one page.
+  const raws = await armListAll<any>(`${accountPath(acct)}/deployments`);
+  return { account: acct, deployments: (raws || []).map(shapeDeployment) };
 }
 
 export interface CreateDeploymentInput {
@@ -500,9 +602,9 @@ function shapeCatalogModel(r: any): CatalogModel {
  */
 export async function listCatalogModels(selector?: AccountSelector): Promise<{ account: CsAccount; models: CatalogModel[] }> {
   const acct = await resolveAccount(false, selector);
-  const res = await armFetch(`${accountPath(acct)}/models`);
-  const j = await readJson<{ value?: any[] }>(res);
-  const rows = j?.value || [];
+  // Paged (#4432): this backs an AI-MODEL PICKER, so page-1-only would reproduce
+  // the empty-but-successful dropdown here after fixing it everywhere else.
+  const rows = (await armListAll<any>(`${accountPath(acct)}/models`)) || [];
   const models = rows.map(shapeCatalogModel)
     // De-dupe by name, preferring the default version.
     .reduce((acc: CatalogModel[], m: CatalogModel) => {
