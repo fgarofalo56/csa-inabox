@@ -4624,26 +4624,62 @@ test('WIRING: BOTH LEASED image writers take the lease, and the two shells are t
 // ---------------------------------------------------------------------------
 
 /**
- * The Container App image-write sites in one workflow.
+ * One workflow's shell lines, with `\`-continuations joined.
+ *
+ * Shared by BOTH write-site scanners below. The repo's real writers are wrapped
+ * over four or five lines and several go through
+ * `deploy-retry.mjs -- az … `, so a per-physical-line search finds neither.
+ * Comment lines are dropped, because this file's own #2828-style commentary
+ * quotes the command it is describing and a guard that counts prose is a guard
+ * that reds on an edit to a comment.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @returns {{line:number, text:string}[]} 1-based line number + joined text
+ */
+function logicalShellLines(yaml) {
+  const lines = yaml.split('\n');
+  /** @type {{line:number, text:string}[]} */
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*#/.test(lines[i])) continue;
+    let logical = lines[i];
+    let j = i;
+    while (/\\\s*$/.test(lines[j]) && j + 1 < lines.length) {
+      j += 1;
+      logical += ` ${lines[j].replace(/^\s+/, '')}`;
+    }
+    out.push({ line: i + 1, text: logical });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * The `az containerapp` **CLI** image-write sites in one workflow.
+ *
+ * THIS ARM IS THE CLI ONE, AND ONLY THE CLI ONE. Naming that is not pedantry:
+ * an earlier revision of this docblock, of both lane comments, of
+ * reconcile-policy.mjs's header and of this PR's body said the guard required
+ * "every image writer" to take the lease or carry an allowlist entry. It
+ * required that of every `az containerapp` writer, and
+ * `properties.template.containers[0].image` has a SECOND writer mechanism —
+ * an ARM template deploy — which this function cannot see by construction. The
+ * leased deploy lane's own write IS one, which is why the population assertion
+ * below used to expect `deploy-fiab-commercial.yml` to be absent from this
+ * arm's results. `armImageWriteSites` is the second arm; between them the claim
+ * is again as wide as it is stated to be.
  *
  * KEYED TO THE SHAPE, NOT TO ONE SPELLING. The first cut of this matched
  * `az containerapp update` AND `--image`, which is one of at least four ways
- * the CLI writes `properties.template.containers[0].image` — and the tree at
- * head already held a second: `gov-provision-mongo.yml` writes the field twice,
- * once through `update --image` and once through `create … --image` in the
- * else-branch of the same `if`. A guard that measures one spelling of a
- * population makes the same over-broad claim it was written to stop, one level
- * down (`each guard fix was a narrower enumeration`). So the needle is
- * (verb ∈ update|create|up|revision copy) AND (an `--image` flag, OR a `--set`
- * naming `containers[…].image`, OR a `--yaml` spec, which carries the image
- * inside the file). Each arm has its own positive control below, so a rotted
- * arm reds instead of silently reading zero.
- *
- * Line-continued: the repo's real writers are wrapped over four or five lines
- * and several go through `deploy-retry.mjs -- az containerapp update …`, so a
- * per-physical-line search finds neither. Comment lines are dropped, because
- * this file's own #2828-style commentary quotes the command it is describing
- * and a guard that counts prose is a guard that reds on an edit to a comment.
+ * the CLI writes the field — and the tree at head already held a second:
+ * `gov-provision-mongo.yml` writes it twice, once through `update --image` and
+ * once through `create … --image` in the else-branch of the same `if`. A guard
+ * that measures one spelling of a population makes the same over-broad claim it
+ * was written to stop, one level down (`each guard fix was a narrower
+ * enumeration`). So the needle is (verb ∈ update|create|up|revision copy) AND
+ * (an `--image` flag, OR a `--set` naming `containers[…].image`, OR a `--yaml`
+ * spec, which carries the image inside the file). Each arm has its own positive
+ * control below, so a rotted arm reds instead of silently reading zero.
  *
  * NOT boundary-filtered, on purpose. Which resource group a `-g "$RG"` resolves
  * to is a runtime fact, and a guard that guesses it would exclude the writer it
@@ -4654,27 +4690,115 @@ test('WIRING: BOTH LEASED image writers take the lease, and the two shells are t
  * @returns {number[]} 1-based line numbers of the write sites
  */
 function imageWriteSites(yaml) {
-  const lines = yaml.split('\n');
   const hits = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    if (/^\s*#/.test(lines[i])) continue;
-    let logical = lines[i];
-    let j = i;
-    while (/\\\s*$/.test(lines[j]) && j + 1 < lines.length) {
-      j += 1;
-      logical += ` ${lines[j].replace(/^\s+/, '')}`;
-    }
-    const mutates = /az\s+containerapp\s+(update|create|up|revision\s+copy)\b/.test(logical);
+  for (const { line, text } of logicalShellLines(yaml)) {
+    const mutates = /az\s+containerapp\s+(update|create|up|revision\s+copy)\b/.test(text);
     if (mutates && (
-      /(^|\s)--image[\s=]/.test(logical)
-      || /(^|\s)--set[\s=][^\n]*containers\s*\[[^\]]*\]\s*\.\s*image/.test(logical)
-      || /(^|\s)--yaml[\s=]/.test(logical)
+      /(^|\s)--image[\s=]/.test(text)
+      || /(^|\s)--set[\s=][^\n]*containers\s*\[[^\]]*\]\s*\.\s*image/.test(text)
+      || /(^|\s)--yaml[\s=]/.test(text)
     )) {
-      hits.push(i + 1);
+      hits.push(line);
     }
-    i = j;
   }
   return hits;
+}
+
+// ---------------------------------------------------------------------------
+// ARM ARM. The second mechanism that writes
+// `properties.template.containers[0].image`: `az deployment <scope> create`
+// over a template that declares `Microsoft.App/containerApps`. The CLI arm
+// above is blind to it, and the tree holds an AUTOMATIC, COMMERCIAL, UNLEASED
+// instance — csa-loom-post-deploy-bootstrap.yml's iceberg-catalog deploy, which
+// deploy-fiab-commercial chains as `needs: deploy-validate`, i.e. AFTER the
+// deploy lane has released this lease, so it can write that field concurrently
+// with the leased roll lane with no mutex at all.
+// ---------------------------------------------------------------------------
+
+/** Memo for {@link templateRendersContainerApp}; keyed by absolute path. */
+const TEMPLATE_RENDER_MEMO = new Map();
+
+/**
+ * Does this bicep/JSON template — or any module it pulls in — declare a
+ * Container App?
+ *
+ * Transitive on purpose. `platform/fiab/bicep/main.bicep` declares no
+ * `Microsoft.App/containerApps` itself; it reaches them through the admin-plane
+ * module chain, and a one-level check would report the three Gov boundary
+ * deploys as non-writers. Bounded depth and memoised so a module cycle
+ * terminates rather than hanging the suite.
+ *
+ * @param {string} absPath
+ * @param {number} [depth]
+ * @returns {boolean}
+ */
+function templateRendersContainerApp(absPath, depth = 0) {
+  if (depth > 10) return false;
+  if (TEMPLATE_RENDER_MEMO.has(absPath)) return TEMPLATE_RENDER_MEMO.get(absPath);
+  if (!existsSync(absPath)) {
+    // Callers classify a missing template as OPAQUE before they get here; this
+    // is the module-walk case (a `module x '…'` pointing at a path that is not
+    // there), where "absent" genuinely contributes no Container App.
+    TEMPLATE_RENDER_MEMO.set(absPath, false);
+    return false;
+  }
+  const text = readFileSync(absPath, 'utf8');
+  if (/Microsoft\.App\/containerApps/.test(text)) {
+    TEMPLATE_RENDER_MEMO.set(absPath, true);
+    return true;
+  }
+  let found = false;
+  for (const m of text.matchAll(/^\s*module\s+\S+\s+'([^']+)'/gm)) {
+    if (templateRendersContainerApp(resolve(dirname(absPath), m[1]), depth + 1)) {
+      found = true;
+      break;
+    }
+  }
+  TEMPLATE_RENDER_MEMO.set(absPath, found);
+  return found;
+}
+
+/**
+ * The ARM-template image-write sites in one workflow, in THREE buckets.
+ *
+ * "I COULD NOT RESOLVE THE TEMPLATE" IS NOT "IT IS NOT A WRITER". That
+ * collapse is deploy-integrity R7 — the same one that turned "I could not reach
+ * the registry" into "the tag does not exist" — and a scanner that made it
+ * would read `-f "$BICEP_PATH"` as a clean bill of health. So an
+ * `az deployment … create` whose template cannot be resolved STATICALLY lands
+ * in `opaque`, which the population test requires to be disclosed and
+ * exactly counted, exactly like a writer.
+ *
+ * `$GITHUB_WORKSPACE/` is stripped before resolution because in Actions it IS
+ * the repo root by definition — a narrow, stated substitution, not a guess. Any
+ * other `$` in the path stays opaque.
+ *
+ * @param {string} yaml normalised (LF) workflow text
+ * @param {string} [root] repo root the template paths resolve against
+ * @returns {{writers:number[], opaque:number[]}}
+ */
+function armImageWriteSites(yaml, root = REPO_ROOT) {
+  /** @type {number[]} */ const writers = [];
+  /** @type {number[]} */ const opaque = [];
+  for (const { line, text } of logicalShellLines(yaml)) {
+    if (!/az\s+deployment\s+(group|sub|subscription|tenant|mg|management-group)\s+create\b/.test(text)) continue;
+    const m = text.match(/(?:^|\s)(?:-f|--template-file)[\s=]+["']?([^"'\s]+)/);
+    if (!m) {
+      // No `--template-file` on this logical line. Either the flag lives in an
+      // array the shell expands at runtime (deploy-fiab-commercial's
+      // `"${DEPLOY_ARGS[@]}"`), or it is `--template-uri` / `--template-spec`,
+      // or the line is prose quoting the command. All three are unresolvable
+      // HERE and none of them is evidence of not writing.
+      opaque.push(line);
+      continue;
+    }
+    const ref = m[1].replace(/^\$\{?GITHUB_WORKSPACE\}?\//, '').replace(/^\.\//, '');
+    if (/[$]/.test(ref)) { opaque.push(line); continue; }
+    const abs = resolve(root, ref);
+    if (!existsSync(abs)) { opaque.push(line); continue; }
+    if (templateRendersContainerApp(abs)) writers.push(line);
+  }
+  return { writers, opaque };
 }
 
 /** The two lanes this lease is wired into. Asserted, not assumed. */
@@ -4727,7 +4851,154 @@ const UNLEASED_IMAGE_WRITERS = Object.freeze({
   },
 });
 
-test('POPULATION: every image writer in the tree is LEASED or is a dated, reasoned, exactly-counted gap', () => {
+/**
+ * ARM-TEMPLATE image writers that do NOT take the estate image-write lease.
+ *
+ * Same discipline as UNLEASED_IMAGE_WRITERS — exact site count, ISO date,
+ * reason naming a tracking issue — for the mechanism the CLI arm cannot see.
+ * Measured 2026-09-11 by `armImageWriteSites` over `.github/workflows/`.
+ *
+ * An entry here is a DISCLOSED GAP, not an exemption. #3676 stays open for
+ * every one of them, and the first entry below is a GENUINE NEW FINDING, not a
+ * bookkeeping row: it is automatic, Commercial, and unmutexed.
+ */
+const UNLEASED_ARM_IMAGE_WRITERS = Object.freeze({
+  'csa-loom-post-deploy-bootstrap.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'THE SURVIVING AUTOMATIC COMMERCIAL ARM WRITER, and the one that motivated this whole second arm. `az deployment group create -f platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep -p catalogConfig=…` where catalogConfig carries "image":"$UNITY_IMG"; the module sets template.containers[0].image. It is NOT a dispatch lane: deploy-fiab-commercial runs this whole workflow as a chained `uses:` job on `needs: deploy-validate`, i.e. AFTER the deploy lane has RELEASED this lease, so it can write the image field concurrently with loom-dataplane-roll or the leased roll lane with no mutex. iceberg-catalog is also named in reconcile-policy.mjs ESTATE_ROLL_LANES for the #3799 auto-heal, so it is squarely inside the population this lease is about. Not leased in this PR because the lease shell is a 180-line block duplicated byte-identically across its lanes and a third copy needs its own TTL/wait/unknown-policy decision taken deliberately. #3676.',
+  },
+  'deploy-fiab-gcc.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'GCC boundary. `az deployment sub create -f platform/fiab/bicep/main.bicep`, which reaches Microsoft.App/containerApps through the admin-plane module chain. No estate image-write lease exists in GCC/GCC-High/IL5 at all: per cloud-parity.md this capability is INCOMPLETE until ported. GCC is additionally supported-in-code and never exercised (0 of 75 recorded runs executed a deploy step), so this site has never actually written anything. #3676.',
+  },
+  'deploy-fiab-gcch.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'GCC-High boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape, and this one DOES carry deploy receipts. Unported sovereign gap: no estate image-write lease exists in that boundary. cloud-parity.md, #3676.',
+  },
+  'deploy-fiab-il5.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'IL5 boundary. Same `az deployment sub create -f platform/fiab/bicep/main.bicep` shape. Unported sovereign gap, same as GCC-High. cloud-parity.md, #3676.',
+  },
+  'deploy-loom-sharing.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep does set containers[].image, but that app is not rendered by admin-plane/main.bicep, so the nightly apply never writes the same field — no shared field to arbitrate. Listed rather than pattern-excluded so the claim is checked by a human when the admin plane grows the app. #3676.',
+  },
+  'gov-provision-dataplane-images.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of data-plane/duckdb-aca.bicep on a dispatch lane. Unported sovereign gap: no lease exists in that boundary. cloud-parity.md, #3676.',
+  },
+  'gov-provision-dbt.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of integration/dbt-runner.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-maps.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of compute/loom-maps-app.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-streaming-migrate.yml': {
+    writes: 2,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, TWO sites: data-plane/loom-migrate-aca.bicep and data-plane/loom-risingwave-aca.bicep, both on the same dispatch lane. Counted separately so adding a third is a red. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-trino.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of data-plane/loom-trino-aca.bicep on a dispatch lane. Its SECOND az deployment site is counted in OPAQUE_ARM_DEPLOY_SITES, not here, because its template does not exist in the tree. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-provision-wrangler.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, provisioning-time deploy of integration/wrangler.bicep on a dispatch lane. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+  'gov-uc-purview-wire.yml': {
+    writes: 1,
+    recorded: '2026-09-11',
+    reason:
+      'Gov boundary, deploy of compute/loom-unity-app.bicep while wiring Unity Catalog to Purview. Unported sovereign gap. cloud-parity.md, #3676.',
+  },
+});
+
+/**
+ * `az deployment … create` sites whose template could NOT be resolved
+ * statically — so whether they write a Container App image field is UNKNOWN.
+ *
+ * THIS LIST EXISTS BECAUSE UNKNOWN IS NOT NO. Dropping these would make the
+ * ARM arm read clean over a lane deploying an arbitrary `$BICEP_PATH`, which is
+ * the shape of every guard-that-does-not-watch this repo has had to fix. They
+ * are counted and dated like writers; reclassifying one is a deliberate act.
+ * Measured 2026-09-11.
+ */
+const OPAQUE_ARM_DEPLOY_SITES = Object.freeze({
+  'deploy-fiab-commercial.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'THE LEASED LANE ITSELF. Its apply is `deploy-retry.mjs … -- az deployment sub create "${DEPLOY_ARGS[@]}"`, so the template lives in a shell array this scanner cannot expand. It is not a gap: this file takes the estate image-write lease, which is placed AROUND that apply, and the WIRING test asserts the acquire step is present and adjacent to the re-pin. Listed so the array-indirection shape is disclosed rather than read as "no ARM write here". #3676.',
+  },
+  'csa-loom-post-deploy-bootstrap.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'A `::notice::` string quoting `az deployment sub create … -p loomPostureFunctionUrl=…` as operator advice (#4161). Prose, not a command. Counted rather than pattern-excluded for the same reason gov-console-roll.yml\'s ROLLBACK_ADVICE string is counted in the CLI arm: a scanner clever enough to drop prose is a scanner that can drop a real write. #3676.',
+  },
+  'deploy-copilot-function.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      '`az deployment group create -f "$BICEP_PATH"` — the template is chosen at runtime, so this scanner cannot say whether it renders a Container App. GENUINELY UNKNOWN, and recorded as unknown rather than as a pass. The lane deploys the copilot Azure Function, which is not a Container App on any path anyone has recorded, but that is a reading of intent and not a measurement. #3676.',
+  },
+  'deploy-fiab-gcc.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string quoting `az deployment sub create` in the "no target subscription" refusal. Prose, not a command; counted for the same reason as the other prose sites. #3676.',
+  },
+  'deploy-fiab-gcch.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string quoting `az deployment sub create` in the "no target subscription" refusal. Prose, not a command; counted for the same reason as the other prose sites. #3676.',
+  },
+  'gov-build-images.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string telling the operator to run phase 1 (`az deployment sub create … deployAppsEnabled=false`) first. Prose, not a command. #3676.',
+  },
+  'gov-provision-runner-images.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'An `::error::` string telling the operator to run phase 1 (`az deployment sub create … deployAppsEnabled=false`) first. Prose, not a command. #3676.',
+  },
+  'gov-provision-trino.yml': {
+    sites: 1,
+    recorded: '2026-09-11',
+    reason:
+      'A SEPARATE DEFECT SURFACED BY THIS SCAN, recorded here rather than silently resolved: `-f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep` names a file that does not exist anywhere in the tree (`git ls-files | grep loom-trino-lake-rbac` returns nothing, measured 2026-09-11), so that Gov lake-RBAC deploy step cannot succeed as written. Whether the missing template would have rendered a Container App is unknowable; it is OPAQUE, not a non-writer. Out of scope for this PR, which touches neither that lane nor that module. #3676.',
+  },
+});
+
+test('POPULATION: every `az containerapp` CLI image writer is LEASED or is a dated, reasoned, exactly-counted gap', () => {
   const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
   assert.ok(files.length > 40, `only ${files.length} workflows were read — the population scan found nothing to scan`);
 
@@ -4784,7 +5055,9 @@ test('POPULATION: every image writer in the tree is LEASED or is a dated, reason
   //    somewhere is not silently covered by the file-level check above.
   //    loom-roll-and-validate writes twice: the leased roll, and the rollback
   //    (disclosed at its step). deploy-fiab-commercial writes through
-  //    `az deployment sub create`, never a `az containerapp` mutation.
+  //    `az deployment sub create`, never a `az containerapp` mutation — and
+  //    that ARM write is NOT invisible any more: it is counted by the ARM arm's
+  //    test below, as an OPAQUE site on a lane that takes the lease.
   assert.equal((writers['loom-roll-and-validate.yml'] ?? []).length, 2,
     'loom-roll-and-validate.yml no longer has exactly 2 image writes (the leased roll + the disclosed rollback). A third write needs its own disclosure at the step.');
   assert.equal(writers['deploy-fiab-commercial.yml'], undefined,
@@ -4839,6 +5112,133 @@ test('POPULATION CONTROL: the scanner recognises EVERY spelling that writes the 
   const mongo = imageWriteSites(readNorm(join(WORKFLOW_DIR, 'gov-provision-mongo.yml')));
   assert.equal(mongo.length, 2,
     `gov-provision-mongo.yml reads ${mongo.length} image-write site(s) (line(s) ${mongo.join(', ')}). It has an update branch and a create branch; if that is no longer true, re-take the allowlist count deliberately rather than letting this control be the thing that changed.`);
+});
+
+test('POPULATION (ARM): every `az deployment` writer of the image field is LEASED, disclosed, or recorded as UNRESOLVED', () => {
+  const files = readdirSync(WORKFLOW_DIR).filter((f) => /\.ya?ml$/.test(f)).sort();
+  assert.ok(files.length > 40, `only ${files.length} workflows were read — the ARM population scan found nothing to scan`);
+
+  /** @type {Record<string, number[]>} */ const armWriters = {};
+  /** @type {Record<string, number[]>} */ const armOpaque = {};
+  const leaseTakers = [];
+  for (const f of files) {
+    const yaml = readNorm(join(WORKFLOW_DIR, f));
+    if (yaml.includes(`      - name: ${LEASE_ACQUIRE_STEP}`)) leaseTakers.push(f);
+    const { writers, opaque } = armImageWriteSites(yaml);
+    if (writers.length) armWriters[f] = writers;
+    if (opaque.length) armOpaque[f] = opaque;
+  }
+
+  // The scan has to find something. A rename of `az deployment group create`, a
+  // new wrapper, or a broken path resolution would make every file read zero
+  // and the guard congratulate a tree it never looked at. The per-shape control
+  // below is what covers a spelling this count cannot see.
+  assert.ok(Object.keys(armWriters).length >= 10,
+    `the ARM image-write scan found only ${Object.keys(armWriters).length} workflow(s) deploying a template that renders Microsoft.App/containerApps. That is fewer than this tree is known to have, so the scan — not the tree — is what changed.`);
+
+  // 1. Every ARM writer takes the lease or is disclosed with an exact count.
+  for (const [file, sites] of Object.entries(armWriters)) {
+    if (LEASED_WRITER_FILES.includes(file)) continue;
+    const entry = UNLEASED_ARM_IMAGE_WRITERS[file];
+    assert.ok(entry,
+      `${file} deploys an ARM template that renders Microsoft.App/containerApps at line(s) ${sites.join(', ')} — i.e. it writes properties.template.containers[0].image — and neither takes the estate image-write lease nor appears in UNLEASED_ARM_IMAGE_WRITERS. The CLI arm cannot see this shape; that is the whole reason this list exists.`);
+    assert.equal(sites.length, entry.writes,
+      `${file} now has ${sites.length} ARM image-write site(s) (line(s) ${sites.join(', ')}), not the ${entry.writes} recorded on ${entry.recorded}.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s ARM allowlist entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s ARM allowlist entry has no real reason`);
+    assert.ok(/#\d{3,}/.test(entry.reason), `${file}'s ARM allowlist entry names no tracking issue`);
+  }
+
+  // 2. Every UNRESOLVED site is disclosed with an exact count too. This is the
+  //    R7 half: "I could not resolve the template" must not be storable as
+  //    "not a writer".
+  for (const [file, sites] of Object.entries(armOpaque)) {
+    const entry = OPAQUE_ARM_DEPLOY_SITES[file];
+    assert.ok(entry,
+      `${file} has ${sites.length} \`az deployment … create\` site(s) at line(s) ${sites.join(', ')} whose template this scan could NOT resolve statically, and it is not in OPAQUE_ARM_DEPLOY_SITES. Unknown is not no: record what it deploys, or make the template reference static.`);
+    assert.equal(sites.length, entry.sites,
+      `${file} now has ${sites.length} unresolvable \`az deployment … create\` site(s) (line(s) ${sites.join(', ')}), not the ${entry.sites} recorded on ${entry.recorded}.`);
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(entry.recorded), `${file}'s OPAQUE entry has no ISO date`);
+    assert.ok(entry.reason.length > 60, `${file}'s OPAQUE entry has no real reason`);
+    assert.ok(/#\d{3,}/.test(entry.reason), `${file}'s OPAQUE entry names no tracking issue`);
+  }
+
+  // 3. No stale entries in either list.
+  for (const file of Object.keys(UNLEASED_ARM_IMAGE_WRITERS)) {
+    assert.ok(armWriters[file],
+      `UNLEASED_ARM_IMAGE_WRITERS lists ${file}, but it no longer deploys a container-app-rendering template. Drop the entry.`);
+  }
+  for (const file of Object.keys(OPAQUE_ARM_DEPLOY_SITES)) {
+    assert.ok(armOpaque[file],
+      `OPAQUE_ARM_DEPLOY_SITES lists ${file}, but every \`az deployment … create\` in it now resolves. Drop the entry, or move it to UNLEASED_ARM_IMAGE_WRITERS if it turned out to be a writer.`);
+  }
+
+  // 4. THE FINDING THIS ARM WAS BUILT FOR, pinned by name so a future edit that
+  //    leases it (good) or deletes it (also fine) has to say so deliberately.
+  assert.deepEqual(armWriters['csa-loom-post-deploy-bootstrap.yml']?.length, 1,
+    'csa-loom-post-deploy-bootstrap.yml no longer has exactly 1 ARM container-app deploy. That lane is AUTOMATIC on Commercial (deploy-fiab-commercial chains it as `needs: deploy-validate`) and unleased; re-take the count deliberately.');
+});
+
+test('POPULATION CONTROL (ARM): the scanner sees the deploy shape, resolves module chains, and refuses to call an unresolvable template a non-writer', () => {
+  const wrap = (cmd) => `jobs:\n  j:\n    steps:\n      - name: deploy\n        run: |\n          ${cmd}\n`;
+  const ICEBERG = 'platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep';
+  const ROOT_BICEP = 'platform/fiab/bicep/main.bicep';
+
+  // POSITIVE. Each scope verb and flag spelling that really deploys a template.
+  const writers = {
+    'group create -f': `az deployment group create -g rg -n n -f ${ICEBERG} -p catalogConfig='{"image":"acr/loom-unity:deadbeef"}' -o none`,
+    'sub create -f': `az deployment sub create -l eastus -n n -f ${ICEBERG} -o none`,
+    '--template-file long form': `az deployment group create -g rg -n n --template-file ${ICEBERG} -o none`,
+    'line-continued': `az deployment group create -g rg \\\n            -n n \\\n            -f ${ICEBERG} \\\n            -o none`,
+    'wrapped through deploy-retry': `node scripts/ci/deploy-retry.mjs --step "apply" -- az deployment sub create -l eastus -f ${ICEBERG}`,
+    '$GITHUB_WORKSPACE prefix': `az deployment group create -g rg -n n -f "$GITHUB_WORKSPACE/${ICEBERG}" -o none`,
+    // The transitive case. main.bicep declares no containerApps itself; a
+    // one-level check would score the three Gov boundary deploys as clean.
+    'module chain (main.bicep)': `az deployment sub create -l eastus -n n -f ${ROOT_BICEP} -o none`,
+  };
+  for (const [label, cmd] of Object.entries(writers)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(w.length, 1,
+      `the ARM image-write scanner does not see the '${label}' shape as a writer (writers=${w.length}, opaque=${opaque.length}). A writer using it would be invisible to the ARM POPULATION guard.`);
+  }
+
+  // NEGATIVE. A needle that matches every ARM deploy would bury the writers in
+  // noise the allowlist then has to excuse.
+  const notWriters = {
+    'a template with no Container App': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/admin-plane/ai-search.bicep -o none',
+    'what-if writes nothing': `az deployment group what-if -g rg -f ${ICEBERG}`,
+    'a commented-out deploy': `# az deployment group create -g rg -n n -f ${ICEBERG}`,
+    'a group show': 'az deployment group show -g rg -n n --query properties.outputs',
+  };
+  for (const [label, cmd] of Object.entries(notWriters)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(w.length + opaque.length, 0,
+      `the ARM image-write scanner counted '${label}' (writers=${w.length}, opaque=${opaque.length}). It is not an unresolved container-app deploy, and a scanner that counts non-writers makes the disclosure lists a record of noise.`);
+  }
+
+  // UNKNOWN IS ITS OWN BUCKET, and this is the arm that proves it. Each of
+  // these must land in `opaque`, NOT in the silent remainder — a runtime
+  // template path read as "no write here" is exactly the R7 collapse this
+  // whole guard exists to refuse.
+  const unresolvable = {
+    'runtime variable path': 'az deployment group create -g rg -n n -f "$BICEP_PATH" -o none',
+    'a template that does not exist': 'az deployment group create -g rg -n n -f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep -o none',
+    'template-uri': 'az deployment group create -g rg -n n --template-uri https://example.invalid/t.json',
+    'flags hidden in a shell array': 'az deployment sub create "${DEPLOY_ARGS[@]}"',
+  };
+  for (const [label, cmd] of Object.entries(unresolvable)) {
+    const { writers: w, opaque } = armImageWriteSites(wrap(cmd));
+    assert.equal(opaque.length, 1,
+      `the ARM scanner did not record '${label}' as UNRESOLVED (writers=${w.length}, opaque=${opaque.length}). Treating an unresolvable template as a non-writer is the deploy-integrity R7 collapse: it states as fact something it did not establish.`);
+    assert.equal(w.length, 0, `'${label}' was scored as a resolved writer, which cannot be right — its template is not statically knowable.`);
+  }
+
+  // And the real tree still holds the instance that motivated this arm, so the
+  // control cannot pass over a tree where the finding was deleted and the
+  // needle left broken.
+  const boot = armImageWriteSites(readNorm(join(WORKFLOW_DIR, 'csa-loom-post-deploy-bootstrap.yml')));
+  assert.equal(boot.writers.length, 1,
+    `csa-loom-post-deploy-bootstrap.yml reads ${boot.writers.length} ARM container-app deploy site(s) (line(s) ${boot.writers.join(', ')}). It deploys iceberg-catalog-aca.bicep with an image in catalogConfig; if that is no longer true, re-take the count deliberately rather than letting this control be the thing that changed.`);
 });
 
 // ---------------------------------------------------------------------------
@@ -4897,7 +5297,7 @@ const COMPLIANCE_AZ_STUB = [
   'echo "unstubbed az: $*" >&2; exit 99',
 ].join('\n');
 
-function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '' } = {}) {
+function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '', tagsJson = '{"loomCompliance":"iso27001"}' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'acr-compliance-'));
   const binDir = join(dir, 'bin');
   mkdirSync(binDir, { recursive: true });
@@ -4910,7 +5310,7 @@ function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '' } = {}) {
     if (oobAdd) writeFileSync(oobFile, JSON.stringify(oobAdd));
     const res = spawnSync('bash', [toPosixPath(COMPLIANCE_SCRIPT),
       '--acr', 'acrloomtest',
-      '--tags-json', '{"loomCompliance":"iso27001"}'], {
+      '--tags-json', tagsJson], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -4973,6 +5373,39 @@ test('COMPLIANCE TAGS: a lease key that APPEARS across the merge is NOT a clobbe
   const released = runComplianceTags({ before: { ...FW_LEASE, ...IMG_LEASE }, oobAdd: { loomEstateImgOwner: 'none', loomEstateImgExpiresEpoch: '0' } });
   assert.equal(released.rc, 0, `a holder releasing mid-merge must not fail the step, got ${released.rc}. Output:\n${released.out}`);
   assert.equal(released.tags.loomEstateImgOwner, 'none');
+});
+
+test('COMPLIANCE TAGS: a payload that would CLOBBER a lease VALUE is refused BEFORE the write', { skip: shellSkip }, () => {
+  // THE HOLE THE REMOVALS-ONLY CHECK CANNOT SEE. `--operation Merge` cannot
+  // delete a key and CAN replace one, so a payload carrying a mutex key
+  // overwrites the live holder id, leaves the key SET unchanged, and the
+  // post-merge check exits 0 over a mutex that now names the wrong run. Watching
+  // removals is right for the clobber that happened; it is not the only one.
+  for (const key of ['loomEstateImgOwner', 'loomAcrFwOwner']) {
+    const r = runComplianceTags({
+      before: { ...FW_LEASE, ...IMG_LEASE },
+      tagsJson: JSON.stringify({ loomCompliance: 'iso27001', [key]: 'gha:owner/repo:999:1' }),
+    });
+    assert.equal(r.rc, 1, `a payload naming ${key} must be refused, got ${r.rc}. Output:\n${r.out}`);
+    assert.match(r.out, new RegExp(`MUTEX key\\(s\\).*${key}`),
+      'the refusal must NAME the key, so the fix is obvious from the log alone');
+    // REFUSED BEFORE THE WRITE, not detected after it. The store is the same
+    // file `az tag update` mutates, so this asserts the holder id is untouched
+    // rather than merely that the script exited non-zero.
+    assert.equal(r.tags[key], { loomEstateImgOwner: IMG_LEASE.loomEstateImgOwner, loomAcrFwOwner: FW_LEASE.loomAcrFwOwner }[key],
+      `${key} was OVERWRITTEN before the refusal — the guard has to run before \`az tag update\`, not after it`);
+    assert.equal(r.tags.loomCompliance, undefined, 'nothing at all may be written once the payload is refused');
+  }
+
+  // NEGATIVE CONTROL for the same guard: a compliance key that merely LOOKS
+  // adjacent must still go through. A prefix test that swallowed ordinary keys
+  // would block every deploy lane's compliance step.
+  const ok = runComplianceTags({
+    before: { ...FW_LEASE, ...IMG_LEASE },
+    tagsJson: '{"loomCompliance":"iso27001","loomEstateTier":"prod","loomAcrRetentionDays":"30"}',
+  });
+  assert.equal(ok.rc, 0, `ordinary compliance keys must not trip the mutex-key refusal, got ${ok.rc}. Output:\n${ok.out}`);
+  assert.equal(ok.tags.loomEstateTier, 'prod');
 });
 
 test('COMPLIANCE TAGS: the script the FOUR deploy lanes call is the one under test here', () => {
@@ -5139,10 +5572,24 @@ test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () 
   // Appending the same key twice leaves the result depending on undocumented
   // runner precedence — the trap acr-firewall-lease.sh records against its own
   // lease_state, and one this step's early `held=false` would have walked into.
-  const body = runBodyOf(readNorm(DEPLOY_WORKFLOW), LEASE_ACQUIRE_STEP);
-  for (const key of ['held', 'claimed', 'acr_id']) {
-    const n = body.split('\n').filter((l) => l.includes(`echo "${key}=`) && l.includes('GITHUB_OUTPUT')).length;
-    assert.equal(n, 1, `the lease step appends ${key} to $GITHUB_OUTPUT ${n} times`);
+  //
+  // NOT KEYED TO THE REDIRECT SPELLING. The first cut required
+  // `echo "k=…" >> "$GITHUB_OUTPUT"` on ONE physical line, so grouping the three
+  // appends under a single `{ … } >> "$GITHUB_OUTPUT"` — which is what SC2129
+  // asks for, and what `guardrails` blocked this PR over — read as ZERO
+  // appends. It caught that as 0 !== 1 rather than passing, which is the right
+  // direction to fail in; but a needle that reds on the correct shell is still
+  // a needle keyed to a spelling. So the property is measured as it is actually
+  // stated: how many times is the KEY emitted, and does the step write
+  // $GITHUB_OUTPUT at all.
+  for (const wf of [DEPLOY_WORKFLOW, ROLL_WORKFLOW]) {
+    const body = runBodyOf(readNorm(wf), LEASE_ACQUIRE_STEP);
+    assert.ok(/>>\s*"\$GITHUB_OUTPUT"/.test(body),
+      `${wf}: the lease step never appends to $GITHUB_OUTPUT at all. Every consumer of steps.img_lease.outputs.* — including the release step's if: — would read empty.`);
+    for (const key of ['held', 'claimed', 'acr_id']) {
+      const n = body.split('\n').filter((l) => new RegExp(`echo\\s+"${key}=`).test(l)).length;
+      assert.equal(n, 1, `${wf}: the lease step emits the ${key} output ${n} time(s), not once. Two writes of one key leave the result to undocumented runner precedence.`);
+    }
   }
 });
 

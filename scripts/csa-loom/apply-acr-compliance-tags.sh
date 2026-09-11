@@ -265,6 +265,31 @@ if [ "${#TAG_PAIRS[@]}" -eq 0 ]; then
 fi
 _note "tags to merge: ${TAG_PAIRS[*]}"
 
+# ── THE FAILURE MODE THE READ-BACK BELOW CANNOT SEE ──────────────────────────
+# The post-merge check watches for lease keys that were REMOVED, which is right
+# for the clobber that happened (an ARM PUT replacing the tag dictionary) and
+# is deliberately not an equality test — a lease key APPEARING between the two
+# reads is another lane legitimately taking the mutex, and reddening on the
+# healthy case is how a guard gets ignored.
+#
+# But `--operation Merge` cannot remove a key and CAN replace one. So a payload
+# that happened to carry `loomEstateImgOwner` (or any `loomAcrFw*` key) would
+# overwrite the LIVE HOLDER ID, both mutexes would silently point at the wrong
+# run, and every assertion after this point would pass: the key survived, its
+# value merely became a lie. Watching removals alone leaves that open.
+#
+# It is closed HERE, before the write, rather than inferred afterwards. After
+# the merge a changed value is ambiguous — this script may have written it, or
+# another lane may have re-claimed between the two reads — and a guard built on
+# an ambiguous signal either false-positives or is ignored. Before the merge the
+# question is exact and local: does THIS payload name a key that belongs to a
+# mutex? If it does, this script must not send it, whatever the reason.
+LEASE_KEYS_IN_PAYLOAD="$(printf '%s' "$TAGS_JSON" | jq -r '[keys[] | select(startswith("loomAcrFw") or startswith("loomEstateImg"))] | sort | join(" ")')"
+if [ -n "$LEASE_KEYS_IN_PAYLOAD" ]; then
+  _err "the compliance-tag payload names MUTEX key(s): $LEASE_KEYS_IN_PAYLOAD. \`--operation Merge\` cannot delete a key but it DOES replace one, so sending these would overwrite the live holder id of the ACR firewall lease (#2603) and/or the estate image-write lease (#3676 bullet 1) — leaving a mutex that still has all its keys and points at the wrong run. The post-merge read-back watches REMOVALS and would report success. Refusing before the write. Compliance tags and lease tags share this resource and must never share a key."
+  exit 1
+fi
+
 # What is on the registry BEFORE the merge — captured so the receipt can SHOW
 # that an out-of-band lease survived rather than merely asserting that it did.
 BEFORE="$(az tag list --resource-id "$ACR_ID" --query "properties.tags" -o json 2>/dev/null | tr -d '\r')"
@@ -330,6 +355,18 @@ for PREFIX in loomAcrFw loomEstateImg; do
     '[$before | keys[] | . as $k | select($k | startswith($p)) | select(($after | has($k)) | not)] | sort | join(" ")')"
   if [ -n "$DROPPED" ]; then
     CLOBBERED="${CLOBBERED}${CLOBBERED:+; }${PREFIX}* dropped: $DROPPED"
+  fi
+  # A lease key whose VALUE moved across the merge is REPORTED, never asserted
+  # on. This script cannot have caused it — the pre-write guard above refuses a
+  # payload naming any mutex key — so the only explanation left is another lane
+  # claiming, refreshing or releasing between these two reads. That is the mutex
+  # working, and it is exactly the concurrency this receipt should record rather
+  # than pass over in silence. It is stated as an observation, not a cause
+  # (deploy-integrity R7): this step did not establish WHICH lane wrote it.
+  CHANGED="$(jq -rn --argjson before "${BEFORE:-{\}}" --argjson after "$AFTER" --arg p "$PREFIX" \
+    '[$before | to_entries[] | select(.key | startswith($p)) | select(($after | has(.key)) and ($after[.key] != .value)) | .key] | sort | join(" ")')"
+  if [ -n "$CHANGED" ]; then
+    _note "${PREFIX}* key(s) changed VALUE across this merge: $CHANGED. Not this script's doing — its payload is refused above if it names a mutex key — so another lane claimed, refreshed or released while this step ran."
   fi
 done
 if [ -n "$CLOBBERED" ]; then

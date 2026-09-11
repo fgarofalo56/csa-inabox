@@ -2132,12 +2132,38 @@ export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes 
 //                                      write, disclosed at that step.
 //
 // So the #3676 shape SURVIVES on the data-plane trio and on the two dispatch
-// lanes. #3676 stays open for them; nothing here closes it. The population is
-// not left as prose: roll-race.test.mjs's POPULATION test reads the workflow
-// directory, counts each file's `az containerapp update … --image` sites, and
-// requires every such file to either take this lease or carry a dated, reasoned
-// allowlist entry with an exact count — so a new writer, or a new write inside
-// an already-listed file, is a red test rather than an unexamined gap.
+// lanes. #3676 stays open for them; nothing here closes it.
+//
+// AND THAT LIST IS THE CLI MECHANISM ONLY. The field has a SECOND writer
+// mechanism — an ARM template deploy of anything that declares
+// `Microsoft.App/containerApps` — and this apply is itself one of them. The
+// tree holds an AUTOMATIC, COMMERCIAL, UNLEASED instance:
+// `csa-loom-post-deploy-bootstrap.yml` deploys
+// `platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep` with the
+// image inside `catalogConfig`, and deploy-fiab-commercial chains that whole
+// workflow as `needs: deploy-validate` — i.e. AFTER this lane releases the
+// lease — so it can write the field concurrently with a roll, with no mutex.
+// `iceberg-catalog` is in ESTATE_ROLL_LANES above, so it is inside the
+// population this lease is about. #3676 stays open for it too.
+//
+// THE POPULATION IS MEASURED, NOT LEFT AS PROSE, AND FOR BOTH MECHANISMS.
+// roll-race.test.mjs reads the workflow directory and runs two scanners over
+// it: `imageWriteSites` counts each file's `az containerapp (update|create|up|
+// revision copy)` image-write sites, and `armImageWriteSites` counts each
+// file's `az deployment <scope> create` sites whose template — transitively
+// through its module chain — declares `Microsoft.App/containerApps`. Every file
+// either takes this lease or carries a dated, reasoned, exactly-counted
+// allowlist entry, in whichever list applies. A third scanner outcome is kept
+// distinct on purpose: a deploy whose template cannot be resolved statically
+// (`-f "$BICEP_PATH"`, a template-uri, flags hidden in a shell array) is
+// recorded as UNRESOLVED and must be disclosed too, because "I could not
+// resolve it" is not "it does not write" — that collapse is R7.
+//
+// WHAT IS STILL NOT MEASURED, stated rather than implied: a writer reached
+// through a script this scan does not open (no shell under `scripts/` writes
+// the image field today — `deploy-v2-synapse.sh:128` and
+// `openlineage-pool-setup.sh` are `--set-env-vars` — so the indirection hole is
+// currently theoretical), and anything an UNRESOLVED site turns out to deploy.
 //
 // WHY ITS OWN TAG KEYS AND NOT THE #2603 ACR FIREWALL LEASE. That mutex is held
 // by PUSHERS — `az acr build` holds it for up to 120 minutes — and a push does

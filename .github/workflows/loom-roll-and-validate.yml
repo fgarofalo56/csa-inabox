@@ -934,9 +934,28 @@ jobs:
       # console-bluegreen-roll.yml (dispatch, loom-console — the same app this
       # lane writes), and this lane's own rollback below. The #3676 shape
       # survives on the data-plane trio and #3676 stays open for it.
-      # roll-race.test.mjs's POPULATION test pins that set by exact per-file
-      # count off the workflow directory, so a new writer is a red test and not
-      # a coverage claim nobody made.
+      #
+      # AND THAT SET WAS THE `az containerapp` CLI MECHANISM ONLY. The field has
+      # a SECOND writer mechanism — an ARM template deploy of anything declaring
+      # `Microsoft.App/containerApps` — which a CLI-keyed scan cannot see.
+      # Measured 2026-09-11, the tree holds an AUTOMATIC, COMMERCIAL, UNLEASED
+      # one: csa-loom-post-deploy-bootstrap.yml deploys
+      # data-plane/iceberg-catalog-aca.bicep with the image inside
+      # `catalogConfig`, and deploy-fiab-commercial chains that workflow on
+      # `needs: deploy-validate` — after the deploy lane has RELEASED the lease
+      # — so it can write the image field concurrently with THIS lane, with no
+      # mutex. `iceberg-catalog` is in reconcile-policy.mjs ESTATE_ROLL_LANES.
+      # #3676 stays open for it, alongside the three sovereign boundary applies
+      # and the gov-provision-* set, all disclosed by name in the test file.
+      #
+      # roll-race.test.mjs pins BOTH populations by exact per-file count off the
+      # workflow directory — `imageWriteSites` for the CLI arm,
+      # `armImageWriteSites` for the ARM arm (resolving the template's module
+      # chain transitively) — and keeps a THIRD outcome, UNRESOLVED, for a
+      # deploy whose template is not statically knowable, which must also be
+      # disclosed: "I could not resolve it" is not "it does not write"
+      # (deploy-integrity R7). A new writer of either shape is a red test and
+      # not a coverage claim nobody made.
       #
       # NOT THE #2603 FIREWALL LEASE THIS JOB ALREADY USES. That one is released
       # by the step above, one step before the write it would need to cover, and
@@ -983,13 +1002,37 @@ jobs:
           # specific SHA — louder than a cancellation but the same lost
           # delivery this design rejected `concurrency:` to avoid.
           #
-          # At >= the holder's TTL the bounded wait always terminates in an
-          # acquire rather than a refusal: either the holder releases, or its
-          # lease is past `loomEstateImgExpiresEpoch` and this run takes it over
-          # as STALE (reconcile-policy.mjs `decideEstateImageLeaseAcquire`,
-          # the `expiresEpoch <= nowEpoch` branch). The cost is that a roll can
-          # now sit for up to 50 minutes behind a wedged apply; that is the
-          # trade this lane already declares — it queues, it never drops.
+          # WITH THE DEPLOY LANE AS THE ONLY OTHER CLAIMANT, the bounded wait at
+          # >= the holder's TTL always terminates in an acquire rather than a
+          # refusal: either the holder releases, or its lease is past
+          # `loomEstateImgExpiresEpoch` and this run takes it over as STALE
+          # (reconcile-policy.mjs `decideEstateImageLeaseAcquire`, the
+          # `expiresEpoch <= nowEpoch` branch).
+          #
+          # THAT IS A TWO-CLAIMANT PROPERTY AND IT IS STATED AS ONE. An earlier
+          # revision said "always", unqualified. With a THIRD claimant — a
+          # re-run attempt, or a second roll run that gets in first once the
+          # deploy releases — this deadline can be reached with a LIVE holder
+          # whose expiry is beyond it. `decideEstateImageLeaseAcquire` then
+          # returns `refuse` (not `unknown`, so `LEASE_UNKNOWN_POLICY: degrade`
+          # does not apply), this step exits 1, and the roll IS dropped at that
+          # SHA. Raising LEASE_WAIT_SECONDS shrinks that window; it does not
+          # close it, because a third claimant can always re-take the lease
+          # before this run's next pass.
+          #
+          # AND THE WAIT WIDENS AN EXISTING TRADE, not just this step. The
+          # `concurrency:` group at the top of this job
+          # (`loom-roll-rg-…-loom-console`, `cancel-in-progress: false`) accepts
+          # that a superseded PENDING run is dropped because "rolling the newer
+          # SHA is strictly better". That rationale was written for a roll
+          # occupying the group for ~10 minutes. This lease can hold it for up
+          # to 50, which widens the window in which intermediate SHAs are
+          # silently superseded — the same class of lost delivery the design
+          # section spends several paragraphs rejecting `concurrency:` to avoid.
+          # The trade is already recorded there; what is new is its size. So
+          # "it queues; it never cancels" is true of THIS lease and is NOT true
+          # of the job as a whole, and must not be quoted unqualified next to a
+          # 50-minute wait.
           LEASE_WAIT_SECONDS: '3000'
           LEASE_UNKNOWN_POLICY: degrade
         run: |
@@ -1090,12 +1133,30 @@ jobs:
             # simultaneous claimants both write and last write wins, so each
             # re-reads and at most one sees itself — PROVIDED both writes have
             # landed before either read-back. That is what LEASE_SETTLE_SECONDS
-            # buys, and it is a probabilistic guarantee, not an absolute one: if
-            # one claimant's `az tag update` takes longer than the settle window
-            # to become visible, both can confirm. Real ARM write-to-read latency
-            # has not been measured here, so the settle is deliberately generous
-            # relative to a tag write and the post-apply estate gate (#4318) plus
-            # its auto-heal (#3799) remain the backstop for the residue.
+            # buys, and it is a probabilistic guarantee, not an absolute one.
+            #
+            # TWO WAYS BOTH CLAIMANTS CAN WIN, NOT ONE. This comment used to name
+            # only the first, which made ARM latency read as the whole residue:
+            #
+            #   1. WRITE-TO-READ. One claimant's `az tag update` takes longer
+            #      than the settle window to become visible, so the other's
+            #      read-back still shows itself.
+            #   2. READ-TO-WRITE — B's OWN GAP, and the larger one. B's sequence
+            #      is `az tag list`, then `node reconcile-policy.mjs`, then
+            #      `az tag update`: THREE process starts. If A's claim write
+            #      lands inside that gap, A's confirm at W_A + settle can
+            #      complete before B's write is even issued, and B's read-back
+            #      then sees B. Both hold, with ARM perfectly prompt. On a cold
+            #      runner the node + az startup cost alone is plausibly
+            #      comparable to the 6s default.
+            #
+            # NEITHER GAP HAS BEEN MEASURED HERE — not ARM's write-to-read
+            # latency and not this loop's own read-to-write span — so the settle
+            # is deliberately generous relative to a tag write rather than tuned
+            # to a number, and the post-apply estate gate (#4318) plus its
+            # auto-heal (#3799) remain the backstop for the residue. Raising
+            # LEASE_SETTLE_SECONDS only narrows (1); nothing in this loop closes
+            # (2) short of a compare-and-swap store, which ARM tags are not.
             EXPIRES="$(tr -d '\r\n' < "$EXP")"
             : > "$TAGS_ERR"
             set +e
@@ -1171,9 +1232,19 @@ jobs:
           # says this run's owner id reached the registry, and is what decides
           # whether the release step has anything to clean up. They are different
           # questions and collapsing them is what strands the mutex.
-          echo "held=$HELD" >> "$GITHUB_OUTPUT"
-          echo "claimed=$CLAIMED" >> "$GITHUB_OUTPUT"
-          echo "acr_id=$ACR_ID" >> "$GITHUB_OUTPUT"
+          #
+          # ONE REDIRECT, NOT THREE (SC2129). Written as three separate appends
+          # this block was +1 actionlint finding in EACH lane, which moved the
+          # `guardrails` ratchet 152 -> 154 and turned a REQUIRED merge-blocking
+          # check RED at b06f1471 — measured, run 34304343308 job 102317789944,
+          # step `workflow-actionlint`, VERDICT FAIL over 127 of 127 workflow
+          # files. The grouping changes nothing about the exactly-once property
+          # above: the same three keys, written once each, through one redirect.
+          {
+            echo "held=$HELD"
+            echo "claimed=$CLAIMED"
+            echo "acr_id=$ACR_ID"
+          } >> "$GITHUB_OUTPUT"
           if [ "$HELD" = "true" ]; then
             echo "::notice::estate-image-lease: HELD by ${ME} for ${LEASE_TTL_SECONDS}s after ${ATTEMPT} attempt(s). No other lane that can READ this mutex will write a Container App image until this run releases it. That is the whole of what is established: a lane whose LEASE_UNKNOWN_POLICY is 'degrade' and which cannot read the tags at all still writes, loudly, by design."
           fi
