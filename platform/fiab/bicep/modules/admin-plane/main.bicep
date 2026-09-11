@@ -3538,6 +3538,18 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
     grantContributor: true
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // #4432 — bind the account into the hub VNet in EVERY boundary, Commercial
+    // included. `publicNetworkAccess: Enabled` is not the same as "reachable
+    // from the Console": the account's public CNAME chain traverses
+    // *.azure-api.net, and Loom links a private `azure-api.net` zone to this
+    // VNet for the APIM private endpoint, which makes that zone authoritative
+    // and answers NXDOMAIN for every name not in it. Measured on the live
+    // Commercial estate: the Content Safety host did not resolve from inside
+    // loom-console at all, so every Copilot turn failed to screen its prompt.
+    // A private endpoint + a privatelink.cognitiveservices A record resolves
+    // the name inside the VNet and bypasses the shadowed namespace entirely.
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    privateDnsZoneCognitiveServicesId: network.outputs.privateDnsZoneIds.cognitiveservices
   }
 }
 

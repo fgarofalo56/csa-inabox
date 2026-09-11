@@ -4,7 +4,7 @@
   "_unblock": "node scripts/ci/check-no-freeform.mjs --update-baseline (run in the blocked PR with a one-line justification)",
   "entries": {
     "apps/fiab-console/app/catalog/metastores/page.tsx": 3,
-    "apps/fiab-console/app/catalog/unity/page.tsx": 6,
+    "apps/fiab-console/app/catalog/unity/page.tsx": 4,
     "apps/fiab-console/app/governance/policies/page.tsx": 1,
     "apps/fiab-console/app/governance/scans/page.tsx": 1,
     "apps/fiab-console/lib/coe-library/report-render/report-view.tsx": 3,
@@ -22,7 +22,6 @@
     "apps/fiab-console/lib/components/deployment/deployment-pipelines-pane.tsx": 2,
     "apps/fiab-console/lib/components/eventstream/visual-designer.tsx": 5,
     "apps/fiab-console/lib/components/notebook/environment-panel.tsx": 1,
-    "apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx": 6,
     "apps/fiab-console/lib/components/pipeline/integration-runtime-manager.tsx": 1,
     "apps/fiab-console/lib/components/pipeline/manage-panel.tsx": 14,
     "apps/fiab-console/lib/components/pipeline/param-source-picker.tsx": 2,
@@ -35,7 +34,6 @@
     "apps/fiab-console/lib/editors/access-request-inbox.tsx": 1,
     "apps/fiab-console/lib/editors/apim-editors/data-product-editor.tsx": 2,
     "apps/fiab-console/lib/editors/apim-editors/data-product/publish-as-api-dialog.tsx": 1,
-    "apps/fiab-console/lib/editors/azure-services-editors.tsx": 2,
     "apps/fiab-console/lib/editors/components/predict-wizard.tsx": 2,
     "apps/fiab-console/lib/editors/copilot-studio-editors.tsx": 1,
     "apps/fiab-console/lib/editors/copilot-topic-canvas.tsx": 1,
@@ -43,12 +41,10 @@
     "apps/fiab-console/lib/editors/databricks/job-editor.tsx": 2,
     "apps/fiab-console/lib/editors/databricks/pipeline-editor.tsx": 1,
     "apps/fiab-console/lib/editors/databricks/streaming-object-dialog.tsx": 1,
-    "apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx": 11,
-    "apps/fiab-console/lib/editors/event-grid-topic-editor.tsx": 10,
+    "apps/fiab-console/lib/editors/databricks/uc-dialogs.tsx": 9,
     "apps/fiab-console/lib/editors/foundry-hub-editor.tsx": 2,
     "apps/fiab-console/lib/editors/foundry-playground.tsx": 1,
     "apps/fiab-console/lib/editors/graph-editors.tsx": 1,
-    "apps/fiab-console/lib/editors/lakehouse-shortcut-editor.tsx": 7,
     "apps/fiab-console/lib/editors/lakehouse/dialogs/shortcut-wizard-dialog.tsx": 8,
     "apps/fiab-console/lib/editors/ml-model-editor.tsx": 1,
     "apps/fiab-console/lib/editors/palantir/health-check-editor.tsx": 2,
@@ -60,9 +56,7 @@
     "apps/fiab-console/lib/editors/phase3/semantic-model-editor/direct-lake-tab.tsx": 1,
     "apps/fiab-console/lib/editors/phase4/ontology-functions-panel.tsx": 2,
     "apps/fiab-console/lib/editors/report/get-data-gallery.tsx": 1,
-    "apps/fiab-console/lib/editors/spark-job-definition-editor.tsx": 4,
-    "apps/fiab-console/lib/editors/stream-analytics-editor.tsx": 4,
     "apps/fiab-console/lib/editors/synapse-spark-editor.tsx": 4,
-    "apps/fiab-console/lib/editors/unified-sql-database-editor.tsx": 2
+    "apps/fiab-console/lib/editors/unified-sql-database-editor.tsx": 1
   }
 }

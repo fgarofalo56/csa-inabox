@@ -310,6 +310,10 @@ export function CopilotPane() {
   // when no Content Safety endpoint is configured in this deployment.
   const [safetyBlock, setSafetyBlock] = useState<string | null>(null);
   const [safetyGate, setSafetyGate] = useState<boolean>(false);
+  // #4432: "not configured" and "configured but unreachable" are DIFFERENT
+  // states and must not share one message. The second one is a defect on the
+  // estate, not something the user is expected to go and set.
+  const [safetyUnreachable, setSafetyUnreachable] = useState<string | null>(null);
   const [ratings, setRatings] = useState<Record<number, 'up' | 'down'>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -335,7 +339,13 @@ export function CopilotPane() {
     if (!open) return;
     fetch('/api/copilot/status')
       .then((r) => r.json())
-      .then((j) => { if (j?.ok && j.contentSafety === false) setSafetyGate(true); })
+      .then((j) => {
+        if (!j?.ok || j.contentSafety !== false) return;
+        const d = j.contentSafetyDetail as { configured?: boolean; reachable?: boolean; error?: string } | undefined;
+        // Configured but not answering → the platform's own binding is broken.
+        if (d?.configured && !d.reachable) setSafetyUnreachable(d.error || 'The Content Safety endpoint did not respond.');
+        else setSafetyGate(true);
+      })
       .catch(() => {});
   }, [open]);
 
@@ -773,6 +783,15 @@ export function CopilotPane() {
                 Prompts and responses are not filtered in this deployment. Ask your administrator to
                 provision Azure AI Content Safety and set <strong>LOOM_CONTENT_SAFETY_ENDPOINT</strong> on
                 the Console Container App.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {safetyUnreachable && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Content Safety is deployed but not answering</MessageBarTitle>
+                Prompts and responses are <strong>not</strong> being filtered right now. Chat still
+                works — the moderation pipeline fails open rather than blocking you. {safetyUnreachable}
               </MessageBarBody>
             </MessageBar>
           )}

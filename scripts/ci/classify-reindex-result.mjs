@@ -55,8 +55,15 @@
  *   # the POST
  *   HTTP_CODE=$CODE RESP_BODY="$(cat body)" node scripts/ci/classify-reindex-result.mjs
  *   # the poll verdict (after polling GET to a terminal state)
- *   MODE=poll POLL_OUTCOME=fresh|failed|timeout|unreachable POLL_BODY="$(cat get.json)" \
- *     POLL_WAITED_S=$SECS node scripts/ci/classify-reindex-result.mjs
+ *   MODE=poll POLL_OUTCOME=fresh|failed|timeout|unreachable|trigger_refused \
+ *     POLL_BODY="$(cat get.json)" POLL_WAITED_S=$SECS POLL_ATTEMPTS=$N \
+ *     POLL_IDLE_STREAK=$K POST_CODE=$CODE POST_CODES=504,502 POST_ATTEMPTS=$N \
+ *     node scripts/ci/classify-reindex-result.mjs
+ *
+ * POLL_ATTEMPTS is EVERY poll the loop made; POLL_IDLE_STREAK is the TRAILING
+ * run of them that read `stale`/`idle` with an unchanged chunk count. They are
+ * different numbers and the `trigger_refused` message may only claim a reading
+ * for the second (#4373).
  */
 import { pathToFileURL } from 'node:url';
 
@@ -252,11 +259,21 @@ export function classifyReindexResult({ code, body }) {
  *   - 'unreachable' — every poll failed to connect (curl 000). Tolerated for
  *                     the same reason the POST's 000 is: the eval reaches the
  *                     console over the CAE-internal network, not Front Door.
+ *   - 'trigger_refused' — every POST attempt was answered by the EDGE (gateway
+ *                     5xx, no application body) and the TRAILING polls read
+ *                     `stale`/`idle` with an unchanged chunk count. FAIL, and
+ *                     named separately from 'timeout' because the next step is
+ *                     different: this points at the request PATH, not at the
+ *                     rebuild's duration. It is a RENAME of 'timeout' produced
+ *                     after the same ceiling, never an early exit — the shell
+ *                     evaluates it once the loop has ended, because no durable
+ *                     "a rebuild is in flight" signal exists to end a wait on
+ *                     (#3472; see the header note in reindex-loom-docs.sh).
  *
- * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string }} input
+ * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, idleStreak?: number|string, postCode?: number|string, postCodes?: string, postAttempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts }) {
+export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, idleStreak, postCode, postCodes, postAttempts }) {
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
   try {
@@ -333,6 +350,90 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts }) 
           'TRANSIENT — the eval run reaches the console over the CAE-internal network (LOOM_EVAL_PROBE_URL), ' +
           'not Front Door, so it proceeds against the last-indexed corpus.',
       };
+    // #3472 — A REFUSED TRIGGER IS NOT A SLOW REBUILD, AND THE OLD MESSAGE SAID
+    // IT WAS. Run 33472611043 burned 904s over 57 polls and then reported "did
+    // not reach a fresh state within 904s", which sent the reader at the
+    // rebuild's duration. The rebuild was never accepted: the POST was answered
+    // by the gateway, twice, and no poll ever saw a job.
+    //
+    // EVERY CLAUSE BELOW IS SCOPED TO WHAT WAS OBSERVED (deploy-integrity R7).
+    // Established: N POST attempts each answered by the edge with no application
+    // body, and the trailing polls reading freshness=stale job=idle with an
+    // unchanged indexedChunkCount. NOT established, and therefore not asserted:
+    // that no job ran anywhere (`job.state` is the answering REPLICA's view and
+    // loom-console runs 2-6 replicas), or that no work progressed (the corpus
+    // manifest is only written at the END of a rebuild, so the chunk count would
+    // not move mid-run either way), or that the wait was shortened — it was not.
+    case 'trigger_refused': {
+      // NEVER INVENT THE ATTEMPT COUNT. This used to default to 2 when
+      // `postAttempts` was absent, so a caller that did not pass it got the
+      // sentence "All 2 POST attempt(s) were answered by the EDGE" over a run
+      // that may have made one (POST_RETRIES=0, or the shell's pre-retry probe
+      // skipped the retry). That is a number stated as measured and not
+      // measured — deploy-integrity R7. With no count, say "Every".
+      const n = Number(postAttempts);
+      const tries = Number.isFinite(n) && n > 0 ? `All ${n}` : 'Every';
+      // Same rule for the status: `trigger_refused` is only produced after a
+      // gateway 5xx, but this function is pure and a caller that passes no code
+      // has not established one. Name it only when it was handed over.
+      //
+      // AND NAME IT PER ATTEMPT, NOT ONCE FOR ALL OF THEM (#4373 review §4).
+      // `postCode` alone is the LAST attempt's status, and the sentence around
+      // it is plural ("All 2 POST attempt(s) were answered by the EDGE (HTTP
+      // 502…)") — so a run whose attempt 1 was a 504 and attempt 2 a 502 was
+      // reporting one sample as if it described both. The shell now hands over
+      // EVERY attempt's code (`postCodes`, in order); when it does, each is
+      // named. `postCode` remains the fallback for a caller that only has the
+      // last one, and it says so ("on the LAST attempt") instead of implying it
+      // covers all of them.
+      const codes = String(postCodes ?? '')
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      let edge;
+      if (codes.length > 1) edge = ` (HTTP ${codes.join(' then ')}, one per attempt, no application body)`;
+      else if (codes.length === 1) edge = ` (HTTP ${codes[0]}, no application body)`;
+      else if (postCode) edge = ` (HTTP ${postCode} on the LAST attempt, no application body)`;
+      else edge = ' (no application body)';
+      // ── SAY WHICH POLLS. THE COUNT USED TO BE THE WRONG ONE (#4373 review §2).
+      // This clause asserts that the polls it names read `freshness=stale
+      // job=idle` with an unchanged chunk count. The shell establishes that for
+      // the TRAILING streak only — `POLL_ATTEMPTS` is every poll the loop made,
+      // including any that were unreachable, unparseable, or reported a
+      // different state before the streak began. Printing the total therefore
+      // claimed a reading for polls that never produced it: measured by the
+      // reviewer at 10 claimed / 8 observed. The streak is now plumbed through
+      // as `idleStreak` and the sentence names it explicitly; with no streak
+      // handed over it says "the TRAILING" and no number, per the same rule that
+      // forbids inventing the attempt count.
+      const streak = Number(idleStreak);
+      const total = Number(attempts);
+      const haveStreak = Number.isFinite(streak) && streak > 0;
+      const haveTotal = Number.isFinite(total) && total > 0;
+      let polls;
+      if (haveStreak && haveTotal) polls = `Of the ${total} poll(s) over ${waited} that followed, the LAST ${streak}`;
+      else if (haveStreak) polls = `Over ${waited} of polling, the LAST ${streak} poll(s)`;
+      else if (haveTotal) polls = `Of the ${total} poll(s) over ${waited} that followed, the TRAILING ones`;
+      else polls = `Over ${waited} of polling, the TRAILING poll(s)`;
+      return {
+        verdict: 'fail',
+        level: 'error',
+        message:
+          `loom-docs reindex TRIGGER REFUSED — ${detail}. ${tries} POST attempt(s) were answered by ` +
+          `the EDGE${edge}. ${polls} read freshness=stale ` +
+          'job=idle with the indexed chunk count unchanged. So the rebuild was never OBSERVED to be ' +
+          'accepted or running, and the evals would measure the same STALE index they started with. ' +
+          'This is a REQUEST-PATH problem, not a slow rebuild: look at the origin response timeout on ' +
+          'POST /api/help-copilot/reindex (front-door.bicep originResponseTimeoutSeconds) and at whether ' +
+          'the POST reached a replica at all — not at how long a corpus rebuild takes. ' +
+          'CAVEATS, because this verdict is stated from what was seen and nothing more: `job.state` is ' +
+          "only the ANSWERING replica's view and the console runs several replicas, so `idle` does not " +
+          'prove no job started anywhere; and the corpus manifest is written only at the END of a ' +
+          'rebuild, so an unchanged chunk count is not evidence that no work progressed. Failing loud. ' +
+          'This verdict is a RENAME, not a shortcut: the wait ran to the same ceiling a `timeout` would ' +
+          'have, and the exit code is identical — only the diagnosis differs.',
+      };
+    }
     default:
       return {
         verdict: 'fail',
@@ -358,6 +459,28 @@ function firstLine(s) {
   return String(s || '').split(/\r?\n/)[0].slice(0, 300);
 }
 
+/**
+ * Whitelist an HTTP-status-code env value to digits and commas.
+ *
+ * `POST_CODE` is one `curl -w '%{http_code}'` value (or the literal `000` curl
+ * fallback); `POST_CODES` is those joined by commas, one per attempt. Both are
+ * interpolated into a message this script writes to stdout, which CodeQL flags
+ * as `js/clear-text-logging` (alerts 1034/1035) because the value is read from
+ * the environment and reaches a log sink.
+ *
+ * A status code carries nothing sensitive, so the alert is a false positive on
+ * the values this script actually receives — but that is an argument about the
+ * producer, and the producer is not visible from here. Enforcing the SHAPE at
+ * the boundary makes it true rather than merely likely: anything that is not a
+ * status code is dropped instead of echoed, and the flow stops being a
+ * clear-text-logging path at all. Real values (`504`, `000`, `504,502`) pass
+ * through untouched, so this is a no-op for every input the caller produces.
+ */
+function statusCodesOnly(value) {
+  const s = String(value ?? '');
+  return /^[0-9,]*$/.test(s) ? s : '';
+}
+
 function main() {
   const mode = process.env.MODE ?? 'post';
   const { verdict, level, message } =
@@ -367,6 +490,10 @@ function main() {
           body: process.env.POLL_BODY ?? '',
           waitedSeconds: process.env.POLL_WAITED_S ?? '',
           attempts: process.env.POLL_ATTEMPTS ?? '',
+          idleStreak: process.env.POLL_IDLE_STREAK ?? '',
+          postCode: statusCodesOnly(process.env.POST_CODE),
+          postCodes: statusCodesOnly(process.env.POST_CODES),
+          postAttempts: process.env.POST_ATTEMPTS ?? '',
         })
       : classifyReindexResult({
           code: process.env.HTTP_CODE ?? process.argv[2] ?? '',

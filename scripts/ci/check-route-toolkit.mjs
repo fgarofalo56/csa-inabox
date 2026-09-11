@@ -59,6 +59,45 @@ const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\
 // exactly: a control passing on prose rather than code.
 const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
 
+/**
+ * Drop comment lines, so PROSE cannot decide membership in this population.
+ *
+ * The comment at :53-59 already records one version of this bug — a route that
+ * matched only via its header comment — and the fix taken then was to widen the
+ * regex so the real CALL matched. That left the other half untouched: the regex
+ * was still applied to RAW SOURCE, so a comment could still satisfy it, and the
+ * exclusion arm is where that is dangerous. `TOOLKIT_RE` is an EXCLUDE: a hit
+ * removes the file from the ratchet entirely.
+ *
+ * Measured before the fix, at da91bd5, across all 1692 route files: exactly ONE
+ * file was cloaked — `app/api/copilot/orchestrate/route.ts`, which imports
+ * `getSession` from '@/lib/auth/session', calls it, and hand-rolls its own 401,
+ * and whose ONLY toolkit-wrapper occurrence is the sentence "Unlike almost every
+ * sibling route this one is a bare handler, not `withSession(...)`". The
+ * counterfactual, run against the real guard and restored byte-identically:
+ *
+ *   AS-IS            : 1010 keys, orchestrate present = false
+ *   COMMENT REWORDED : 1011 keys, orchestrate present = true  (prose only)
+ *
+ * So a purely editorial change moved the population. That is the same defect
+ * class as the one this PR fixes in the UAT classifier: a rule keyed on a string
+ * that the thing under test does not actually have to MEAN.
+ *
+ * Same shape and same reason as the `isComment` filter in the sibling guard
+ * `check-owner-only-workspace-guard.mjs`. `\r?\n` is load-bearing: the working
+ * tree is CRLF, and a line filter split on `\n` alone leaves a trailing `\r` on
+ * every line, which silently defeats `trim()`-free matching elsewhere.
+ */
+const isCommentLine = (l) => {
+  const t = l.trim();
+  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+};
+
+/** The file with comment LINES removed — what every regex above is applied to. */
+function codeOnly(src) {
+  return src.split(/\r?\n/).filter((l) => !isCommentLine(l)).join('\n');
+}
+
 // ── Touched-file escape hatch ───────────────────────────────────────────────
 // Paths (repo-relative) a PR may modify WITHOUT migrating, each with a one-line
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
@@ -648,6 +687,116 @@ const TOUCH_EXEMPT = new Map([
   //                     add a route-level 401/403 contract test.
   ['apps/fiab-console/app/api/admin/workspaces/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; 401 AND 403 both pinned by app/api/admin/__tests__/admin-routes.test.ts'],
   ['apps/fiab-console/app/api/admin/dspm-ai/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; NO route-level auth test exists for this route (pre-existing gap, follow-up owed)'],
+  // #4432 follow-up touched this route for ONE reason: its AOAI gate was a
+  // CODELESS 503/502. A gate is honest only when it is DOCUMENTED
+  // (no-vaporware.md) — the `code` is what lets a consumer tell "not
+  // configured" from "the server broke", and without it the Copilot UAT
+  // classifier scored a real outage as an honest gate. Two `code:` fields were
+  // added to existing NextResponse.json bodies. THE AUTH PROLOGUE IS UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES IT, measured not assumed — and RE-MEASURED on
+  // 2026-09-11 by a reviewer who was told not to take the sentence on trust,
+  // because a false justification for stepping around a required guard is the
+  // whole failure mode this hatch can produce. Verbatim, rc=0:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/help-copilot/chat/route.ts
+  //   → app/api/help-copilot/chat/route.ts: SKIPPED (POST: streaming/SSE handler)
+  //   DRY-RUN: 0 handlers across 0 files; 1 skipped
+  // Same structural cause as /api/copilot/orchestrate: the handler returns a
+  // raw SSE `Response`, not the JSON envelope `withSession` wraps. This is the
+  // codemod limitation the hatch exists for, not an opt-out of the boy-scout
+  // rule — and the count arm is unaffected (no new hand-rolled route).
+  //
+  // THE CONTRAST IS THE POINT: the SAME change also had to add a gate `code` to
+  // six Copilot Studio routes, and the codemod migrates every one of them
+  // (MIGRATED 2/2/2/2/1/1 handlers, 0 skipped). Those are NOT listed here —
+  // they were migrated, per the rule. An entry in this map is only ever for a
+  // route the codemod itself refuses.
+  //
+  // COMPENSATING CONTROL (added with this entry, not assumed): the 401
+  // prologue, BOTH gate codes, and the 400 empty-prompt path are now pinned by
+  // app/api/help-copilot/__tests__/chat-gate-codes.test.ts. The 401 case also
+  // asserts that nothing downstream is reached, so deleting the prologue fails
+  // a merge-blocking test rather than passing quietly. That suite is exercised
+  // by scripts/ci/mutate-copilot-verdict.py, which fails if deleting either
+  // code leaves the tests green.
+  ['apps/fiab-console/app/api/help-copilot/chat/route.ts',
+   "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod reports 'POST: streaming/SSE handler' (raw SSE Response, same as /api/copilot/orchestrate). 401 + both codes pinned by app/api/help-copilot/__tests__/chat-gate-codes.test.ts"],
+  // The route the comment cloak was HIDING. Until `codeOnly()` above, this file
+  // was excluded from the population by a single sentence of prose at :196 —
+  // "Unlike almost every sibling route this one is a bare handler, not
+  // `withSession(...)`" — so the boy-scout TOUCH arm could never fire on it and
+  // this PR edited it with no auditable entry, while its structural twin
+  // help-copilot/chat correctly required one. With the guard un-cloaked the
+  // route is visible (1010 -> 1011 keys) and needs the same treatment its twin
+  // gets.
+  //
+  // THE CODEMOD REFUSES IT, re-measured 2026-09-11 rather than assumed, rc=0:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/copilot/orchestrate/route.ts
+  //   → app/api/copilot/orchestrate/route.ts: SKIPPED (POST: no hand-rolled getSession() prologue)
+  //   DRY-RUN: 0 handlers across 0 files; 1 skipped
+  // The cause is structural and visible in the file: the exported `POST` (:207)
+  // is a thin error boundary, and the session check lives inside `handlePost`
+  // (:46-49), so there is no prologue in the exported handler for the codemod to
+  // rewrite. `withSession` could not take it anyway — `handlePost` returns a raw
+  // SSE `Response` (:182-184), not the JSON envelope the wrapper wraps.
+  //
+  // COMPENSATING CONTROL: the 401 is pinned by
+  // app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts:116-121,
+  // which this PR strengthened (it now also pins BOTH gate codes), and
+  // scripts/ci/mutate-copilot-verdict.py M9/M10 fail if either code is deleted.
+  ['apps/fiab-console/app/api/copilot/orchestrate/route.ts',
+   "#4432: added `code:'no_aoai'` / `code:'aoai_unreachable'` to two existing gate responses; auth prologue untouched; codemod SKIPS (POST: no hand-rolled getSession() prologue — the check is inside handlePost) and withSession cannot wrap a raw SSE Response. 401 + both codes pinned by app/api/copilot/__tests__/orchestrate-error-envelope-4432.test.ts"],
+  // #3941 touched these four polymorphic `[type]/[id]` routes for ONE reason:
+  // their local `loadItem` authorized with an OWNER-ONLY partition point read,
+  // `workspacesContainer().item(item.workspaceId, callerOid)`. `workspaces` is
+  // partitioned on `/tenantId`, which holds the workspace CREATOR's oid — so
+  // that read could only ever answer "did YOU create this workspace?" and
+  // refused tenant admins and shared-ACL members on every item type without a
+  // dedicated route (the #2941/#2942 defect). Each now calls the canonical
+  // `authorizeItemWorkspace` ladder, read-scoped for GET and write-scoped for
+  // the mutations. The admitted set strictly GROWS; the `getSession()` → 401
+  // prologues are UNTOUCHED.
+  //
+  // THE CODEMOD REFUSES ALL SEVEN HANDLERS, which is what this hatch is for.
+  // Falsifiable one command per file, verbatim output re-measured 2026-09-06:
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=app/api/items/[type]/[id]/export-check/route.ts
+  //   →   app/api/items/[type]/[id]/export-check/route.ts: SKIPPED (POST: getSession() without the exact 401 guard)
+  //       DRY-RUN: 0 handlers across 0 files; 1 skipped
+  //   … impact → SKIPPED (GET: …), lineage → SKIPPED (GET: …), and
+  //   sensitivity-label → 4 skipped (GET, PUT, PATCH, DELETE), same cause: the
+  //   401 is `apiError('Unauthorized', 401)` rather than the literal shape
+  //   withSession replaces.
+  //
+  // AND `withWorkspaceOwner` CANNOT EXPRESS THESE ROUTES ANYWAY — two structural
+  // reasons, both read off route-toolkit.ts:120-147 rather than assumed:
+  //   1. It binds `itemType` as a call-site STRING constant. These are `[type]`
+  //      routes: the item type arrives in the URL and is only known per-request.
+  //   2. Every refusal returns `apiNotFound()`. #3941's whole point is that the
+  //      409 `tenant_unconfirmed` refusal must NOT be flattened into "item not
+  //      found" — saying the item does not exist when the workspace document
+  //      WAS read and the admin rights ARE real is a deploy-integrity R7 false
+  //      assertion. Migrating onto the wrapper would REVERT the fix this PR is.
+  //
+  // COMPENSATING CONTROL — verified per file, not assumed:
+  //   export-check      NEW in this PR. It was the one route of the four with no
+  //                     __tests__ directory at all; an exemption with no control
+  //                     is an unwatched hole, so
+  //                     export-check/__tests__/auth-prologue.test.ts now pins
+  //                     the 401 AND asserts the item container was never reached
+  //                     (nothing leaks before the caller is identified), with a
+  //                     CONTROL case proving an authenticated caller gets past.
+  //                     Mutation-checked: deleting the guard → RC=1, 2 failed.
+  //   impact            __tests__/impact-route.test.ts:63-66 '401 when unauthenticated'
+  //   lineage           lineage/__tests__/route.test.ts:105-108 'returns 401 when no session'
+  //   sensitivity-label sensitivity-label/__tests__/route.test.ts:106-110 '401 when unauthenticated'
+  ['apps/fiab-console/app/api/items/[type]/[id]/export-check/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (POST: 401 not the exact guard shape) and withWorkspaceOwner cannot take a per-request [type] nor preserve the 409. 401 + no-leak pinned by export-check/__tests__/auth-prologue.test.ts'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/impact/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by app/api/items/[type]/[id]/__tests__/impact-route.test.ts:66'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/lineage/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, 401 prologue untouched; codemod SKIPS (GET: 401 not the exact guard shape). 401 pinned by lineage/__tests__/route.test.ts:108'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity-label/route.ts',
+   '#3941: owner-only → authorizeItemWorkspace WIDENING only, all four 401 prologues untouched; codemod SKIPS every handler (401 not the exact guard shape). 401 pinned by sensitivity-label/__tests__/route.test.ts:110'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
@@ -666,12 +815,17 @@ export function scanHandRolled() {
   const current = {};
   for (const rel of listRouteFiles()) {
     const abs = path.join(REPO_ROOT, rel);
-    let src;
+    let raw;
     try {
-      src = fs.readFileSync(abs, 'utf8');
+      raw = fs.readFileSync(abs, 'utf8');
     } catch {
       continue;
     }
+    // EVERY predicate below reads code, never comments. Applied to all four and
+    // not only to TOOLKIT_RE on purpose: an include arm satisfied by prose would
+    // put a file INTO the ratchet that has no data surface, which is the same
+    // error pointed the other way.
+    const src = codeOnly(raw);
     if (!MUTATING_EXPORT_RE.test(src) && !GET_EXPORT_RE.test(src)) continue; // no data surface
     if (!AUTH_SESSION_IMPORT_RE.test(src)) continue; // not session-based (or session via toolkit only)
     if (TOOLKIT_RE.test(src)) continue; // migrated / composing the toolkit

@@ -36,6 +36,7 @@ import {
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { AdlsPathPicker } from '@/lib/components/storage/adls-path-picker';
 import { PipelineEditorCore } from './pipeline-editor-core';
 import { useSharedEditorStyles } from './shared-styles';
 
@@ -160,7 +161,10 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 
   // submit-batch form
   const [jobName, setJobName] = useState('loom-smoke');
-  const [jobFile, setJobFile] = useState('abfss://jobs@<storage>.dfs.core.windows.net/smoke.py');
+  // Empty, not a template: the old default was a literal
+  // `abfss://jobs@<storage>.dfs.core.windows.net/smoke.py`, a real-shaped value
+  // no estate resolves that Submit would have sent to Livy (`no-vaporware.md`).
+  const [jobFile, setJobFile] = useState('');
   const [jobClass, setJobClass] = useState('');
   const [jobArgs, setJobArgs] = useState('');
 
@@ -538,12 +542,16 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
           {tab === 'submit' && (
             <div className={s.form}>
               <div className={s.field}><Caption1>Job name</Caption1><Input value={jobName} onChange={(_, d) => setJobName(d.value)} /></div>
-              <div className={s.field}><Caption1>File (abfss:// or wasbs:// URI to .py / .jar)</Caption1><Input value={jobFile} onChange={(_, d) => setJobFile(d.value)} /></div>
+              <div className={s.field}>
+                <AdlsPathPicker label="File (.py / .jar to run)" mode="file" value={jobFile}
+                  onChange={(loc) => setJobFile(loc?.uri || '')}
+                  hint="Browse the lake for the job's main definition file — the Console identity lists containers and paths on your behalf." />
+              </div>
               <div className={s.row}>
                 <div className={s.field}><Caption1>Main class (JAR only)</Caption1><Input value={jobClass} onChange={(_, d) => setJobClass(d.value)} placeholder="com.example.Main" /></div>
                 <div className={s.field}><Caption1>Args (space-separated)</Caption1><Input value={jobArgs} onChange={(_, d) => setJobArgs(d.value)} /></div>
               </div>
-              <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected} onClick={submit}>
+              <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || !jobFile} onClick={submit}>
                 {busy ? 'Submitting…' : 'Submit batch'}
               </Button>
             </div>

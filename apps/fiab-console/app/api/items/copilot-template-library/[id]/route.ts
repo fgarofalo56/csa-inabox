@@ -12,11 +12,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Container } from '@azure/cosmos';
 import { CosmosClient } from '@azure/cosmos';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { getSession } from '@/lib/auth/session';
 import {
-  createAgent, addKnowledgeSource, upsertTopic, CopilotStudioError,
+  createAgent, addKnowledgeSource, upsertTopic,
   type KnowledgeSourceType,
 } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,27 +46,23 @@ async function getContainer(): Promise<Container> {
   return container;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     const container = await getContainer();
-    const { resource } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
+    const { resource } = await container.item(params.id, TENANT_PK).read<any>();
     if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, template: resource });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
     const container = await getContainer();
-    const { resource: tmpl } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
+    const { resource: tmpl } = await container.item(params.id, TENANT_PK).read<any>();
     if (!tmpl) return NextResponse.json({ ok: false, error: 'template not found' }, { status: 404 });
     const agent = await createAgent(String(body.envId), {
       name: tmpl.name,
@@ -102,22 +99,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return NextResponse.json({ ok: true, agent, knowledge: knowledgeResults, topics: topicResults });
   } catch (e: any) {
-    const status = e instanceof CopilotStudioError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+    const { status, body: envelope } = copilotStudioErrorEnvelope(e);
+    return NextResponse.json(envelope, { status });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { params }) => {
   try {
     const container = await getContainer();
-    const { resource } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
+    const { resource } = await container.item(params.id, TENANT_PK).read<any>();
     if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     if (resource.builtin) return NextResponse.json({ ok: false, error: 'built-in templates cannot be deleted' }, { status: 403 });
-    await container.item((await ctx.params).id, TENANT_PK).delete();
+    await container.item(params.id, TENANT_PK).delete();
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

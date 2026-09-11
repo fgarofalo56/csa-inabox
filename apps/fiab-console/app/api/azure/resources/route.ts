@@ -1,5 +1,5 @@
 /**
- * GET /api/azure/resources?type=<armResourceType>[&kind=<kind>][&select=properties.<path>]
+ * GET /api/azure/resources?type=<armResourceType>[&kind=<kind>][&kindMatch=equals|contains][&select=properties.<path>]
  * ---------------------------------------------------------------------------
  * Cross-subscription, user-RBAC Azure resource lister. Returns every resource
  * of the requested ARM type (optionally narrowed by `kind`) across ALL
@@ -15,6 +15,17 @@
  *                            subscriptionId[,value=tostring(<path>)]
  *                  | order by name asc",
  *          options: { resultFormat: 'objectArray', $top, $skipToken } }
+ *
+ * `kindMatch=contains` swaps that `=~` for KQL `contains`. It exists because
+ * ARM `kind` is a COMMA LIST for several types, not an enum: an Azure Function
+ * App is `functionapp` on Windows and `functionapp,linux` on Linux, and Loom's
+ * own bicep declares 15 function-app `Microsoft.Web/sites` and 14 of them carry
+ * a comma list (`functionapp,linux`) — only `scc-labels-function.bicep` is bare
+ * `functionapp`. (Re-counted repo-wide 2026-09-07 after the first version of
+ * this comment said "8 of its 11", which was a `platform/fiab/bicep`-shaped
+ * count stated as a repo-wide one and was wrong either way.)
+ * `=~` is case-insensitive EQUALITY, so `kind=functionapp` alone matches none
+ * of them. See the `kindMatch` block on `buildQuery` below.
  *
  * `subscriptions` is intentionally omitted so ARG scopes the query to every
  * subscription the token's identity has access to (per-identity RBAC).
@@ -203,6 +214,19 @@ export function unsupportedReason(type: string): string | null {
 }
 
 /**
+ * How a `kind` filter is compared. ARM `kind` is a comma-separated LIST for
+ * several types, so equality is the wrong predicate for some callers and the
+ * right one for others; the caller says which it means rather than the route
+ * guessing.
+ */
+export type KindMatch = 'equals' | 'contains';
+
+/** `kindMatch` is a closed set, so it is validated by membership, not by regex. */
+export function isKindMatch(v: string): v is KindMatch {
+  return v === 'equals' || v === 'contains';
+}
+
+/**
  * Build the ARG query.
  *
  * Three shapes, because three different things are being asked for:
@@ -213,7 +237,13 @@ export function unsupportedReason(type: string): string | null {
  *   - subnets               mv-expand over the VNet's properties.subnets, with
  *     the select path re-based onto the expanded element.
  */
-export function buildQuery(type: string, kind: string | undefined, select?: string, name?: string): string {
+export function buildQuery(
+  type: string,
+  kind: string | undefined,
+  select?: string,
+  name?: string,
+  kindMatch: KindMatch = 'equals',
+): string {
   const isSubnet = type.toLowerCase() === SUBNET_TYPE;
   if (isSubnet) {
     // The select path is read RELATIVE TO THE SUBNET, e.g.
@@ -235,7 +265,18 @@ export function buildQuery(type: string, kind: string | undefined, select?: stri
   const table = tableForType(type);
   const valueExpr = select ? `, value=tostring(${select})` : '';
   let q = `${table} | where type =~ '${type}'`;
-  if (kind) q += ` | where kind =~ '${kind}'`;
+  // KIND NARROWING. `=~` is case-insensitive EQUALITY, not containment, and ARM
+  // `kind` is a COMMA LIST for several types — a Linux Function App is
+  // `functionapp,linux`, a container one `functionapp,linux,container`, a Logic
+  // App Standard `functionapp,workflowapp`. A caller that means "the kind list
+  // INCLUDES this token" therefore asks for `contains`, which is KQL's
+  // case-insensitive substring operator and the exact predicate
+  // `/api/azure/function-apps` applies in JS
+  // (`s.kind.toLowerCase().includes('functionapp')`). Both branches interpolate
+  // the SAME `isSafeArgLiteral`-validated literal; only the operator differs,
+  // and `kindMatch` itself is a closed set checked by `isKindMatch`, so neither
+  // shape widens what can reach the query.
+  if (kind) q += kindMatch === 'contains' ? ` | where kind contains '${kind}'` : ` | where kind =~ '${kind}'`;
   // NAME NARROWING. Some ARM types are far too broad to offer whole: every Loom
   // deployment's Container Apps environment holds the console, the runner, the
   // DuckDB app and the catalog, so an unfiltered `Microsoft.App/containerApps`
@@ -358,6 +399,7 @@ function countUnresolved(rows: AzureResourceRow[]): number {
 export const GET = withSession(async (req: NextRequest, { session }) => {
   const type = (req.nextUrl.searchParams.get('type') || '').trim();
   const kind = (req.nextUrl.searchParams.get('kind') || '').trim() || undefined;
+  const kindMatchRaw = (req.nextUrl.searchParams.get('kindMatch') || '').trim() || undefined;
   const name = (req.nextUrl.searchParams.get('name') || '').trim() || undefined;
   const select = (req.nextUrl.searchParams.get('select') || '').trim() || undefined;
   if (!type) {
@@ -370,6 +412,17 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   if (!isSafeArgLiteral(type) || (kind && !isSafeArgLiteral(kind)) || (name && !isSafeArgLiteral(name))) {
     return apiError('Invalid characters in `type`, `kind` or `name`.', 400, { code: 'bad_request' });
   }
+  // Rejected rather than defaulted: silently treating an unrecognized value as
+  // `equals` would return a DIFFERENT list than the caller asked for and give
+  // no sign of it, which is the wrong-answer-reported-confidently shape.
+  if (kindMatchRaw !== undefined && !isKindMatch(kindMatchRaw)) {
+    return apiError(
+      'Invalid `kindMatch` — it must be `equals` (case-insensitive equality) or `contains` (case-insensitive substring).',
+      400,
+      { code: 'bad_request' },
+    );
+  }
+  const kindMatch: KindMatch = kindMatchRaw ?? 'equals';
   if (select && !isSafeSelectPath(select)) {
     return apiError(
       'Invalid `select` — it must be a Resource Graph property path of the form `properties.<field>[.<field>…]`.',
@@ -384,7 +437,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     return apiError(unsupported, 400, { code: 'unsupported_type', type });
   }
 
-  const query = buildQuery(type, kind, select, name);
+  const query = buildQuery(type, kind, select, name, kindMatch);
 
   // ---- (a) User ARM token (per-user RBAC) -------------------------------
   let userArgError: { status: number; error: string } | null = null;

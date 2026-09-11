@@ -19,22 +19,21 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { publishToChannel, CopilotStudioError } from '@/lib/azure/copilot-studio-client';
+import { publishToChannel } from '@/lib/azure/copilot-studio-client';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   if (!body?.channelType) return NextResponse.json({ ok: false, error: 'channelType is required' }, { status: 400 });
   try {
     const channel = await publishToChannel(
       String(body.envId),
-      (await ctx.params).id,
+      params.id,
       String(body.channelType),
       body.config || {},
     );
@@ -45,7 +44,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     //    'custom' channel) → ChannelsPanel shows a per-channel warning gate.
     //  • any other CopilotStudioError status (e.g. 503 enablement, 502 schema)
     //    → surfaced as the real cause; non-CopilotStudioError → 502 (bad gateway).
-    const status = e instanceof CopilotStudioError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+    // `code` rides along for the same reason the status does: a consumer must be
+    // able to tell "the add-on is off" from "the server broke" WITHOUT parsing
+    // prose (no-vaporware.md / deploy-integrity.md R7).
+    const { status, body: envelope } = copilotStudioErrorEnvelope(e);
+    return NextResponse.json(envelope, { status });
   }
-}
+});
