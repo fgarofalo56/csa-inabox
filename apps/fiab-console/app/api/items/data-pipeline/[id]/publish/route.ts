@@ -22,7 +22,7 @@ import { getSession } from '@/lib/auth/session';
 import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertPipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
-import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
+import { pipelineDefinitionFromContent, toAdfWireShape } from '@/lib/azure/pipeline-binding';
 import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
@@ -124,7 +124,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     try {
       await upsertPipeline(
         adfName,
-        { name: adfName, properties: definition.properties },
+        // #3700 — THE WRITE BOUNDARY. Branch 1 (`body.definition`, the canvas
+        // spec the editor's Publish button sends) and branch 2
+        // (`state.definition`, which branch 1 persisted) both carry the CANVAS
+        // shape: each activity's config spread onto the activity ROOT, where
+        // `extractActivities()` reads it and where ADF does not look. PUT raw,
+        // they produced a 200 and an inert pipeline. Branch 3 already asked for
+        // `target: 'adf'`; running every branch through the translator here is
+        // what makes the guarantee hold for ALL THREE rather than the one that
+        // remembered. Idempotent, so branch 3 is unchanged by it.
+        { name: adfName, properties: toAdfWireShape(definition.properties) },
         { subscriptionId: target.subscriptionId, resourceGroup: target.resourceGroup },
       );
     } catch (e: any) {
