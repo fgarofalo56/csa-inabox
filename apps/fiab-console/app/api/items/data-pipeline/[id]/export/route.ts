@@ -19,7 +19,7 @@ import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
-import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
+import { pipelineDefinitionFromContent, toAdfWireShape } from '@/lib/azure/pipeline-binding';
 import { writeZip } from '@/lib/azure/zip';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -65,7 +65,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       if (state?.definition?.properties) {
         definition = state.definition as AdfPipeline;
       } else {
-        const fromContent = pipelineDefinitionFromContent(state?.content, adfName);
+        // #3700 — `target: 'adf'` because the docblock above promises this
+        // archive is "importable … directly into ADF Studio". The default
+        // 'canvas' target spreads activity config onto the activity ROOT, which
+        // ADF ignores, so the export was importable only back into Loom.
+        const fromContent = pipelineDefinitionFromContent(state?.content, adfName, { target: 'adf' });
         if (fromContent) definition = fromContent as AdfPipeline;
       }
     }
@@ -86,8 +90,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       itemId: resource.id,
     };
 
+    // #3700 — the SERIALIZE boundary. `target: 'adf'` above fixes branch 3 only;
+    // branch 2 (`state.definition`) is whatever the editor last saved, i.e. the
+    // CANVAS shape, and it is the branch most exports actually take. Normalizing
+    // here covers every branch.
+    //
+    // Branch 1 is a definition read LIVE FROM ADF, and it round-trips because
+    // `normalizeActivity` treats an activity that already carries a
+    // `typeProperties` object as wire-shaped and preserves EVERY root key on it,
+    // including ones this repo does not enumerate (`state`, `onInactiveMarkAs`,
+    // and whatever ADF adds next). An earlier cut of this decided root-vs-body
+    // from a closed allowlist alone and MOVED a deactivated activity's `state`
+    // into `typeProperties`, so this comment asserted a round-trip that did not
+    // hold; `pipeline-binding.test.ts` now pins it with a live-ADF fixture.
+    const wireDefinition = toAdfWireShape(definition);
+
     const zipBuf = writeZip([
-      { name: 'pipeline-content.json', data: Buffer.from(JSON.stringify(definition, null, 2), 'utf-8') },
+      { name: 'pipeline-content.json', data: Buffer.from(JSON.stringify(wireDefinition, null, 2), 'utf-8') },
       { name: 'manifest.json',         data: Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8') },
     ]);
 

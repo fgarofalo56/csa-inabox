@@ -276,6 +276,280 @@ export function clampTop(top: number | undefined, def = 100): number {
 
 /** A SQL object reference: bracketed or bare `schema.table` / `db.schema.table`. */
 const SQL_REF_RE = /^[A-Za-z0-9_.$#[\]]+$/;
+
+/**
+ * ── #4219 — SHAPE IS NOT AUTHORIZATION ──────────────────────────────────────
+ *
+ * `SQL_REF_RE` above is the ONLY thing that stood between an ontology binding's
+ * `source.ref` and `SELECT TOP 100 * FROM <ref>` on the Synapse Serverless /
+ * Dedicated endpoints. It is an INJECTION guard and it is a good one: it proves
+ * the string cannot break out of the FROM clause. It proves nothing whatever
+ * about WHICH object the string names, and `master.sys.sql_logins` satisfies it
+ * completely — every character is in `[A-Za-z0-9_.$#[\]]`.
+ *
+ * That matters because the Console UAMI is a Synapse SQL admin, so the engine
+ * will happily serve `sys` catalog views and cross-database refs to it. #3959
+ * closed exactly this on the `shortcut` sink (`isMintedEngineObject`, the
+ * resolver's `case 'shortcut'`); `lakehouse-table` and `warehouse-table` reach
+ * the same `buildSqlSelect` sink and were never given the equivalent.
+ *
+ * These two helpers are the SHAPE half of the answer, kept pure and here beside
+ * the regex they qualify so the next reader cannot mistake the regex for the
+ * whole policy. The AUTHORIZATION half — "is this ref actually one of the
+ * objects the binding's item exposes?" — needs live catalog enumeration and is
+ * DEFERRED, for the reason recorded in `ontology-resolver.ts`.
+ *
+ * THE RULE IS A SHAPE, NOT A LIST OF NAMES. A schema this function can READ it
+ * can judge; a schema it CANNOT read — because the ref is unqualified and the
+ * server picks the schema at resolution time — it cannot judge, so it refuses.
+ * That is deliberately not "refuse names beginning with `sys`": a name list is
+ * an enumeration and every enumeration is one spelling short. Measured through
+ * the real `resolveBindingInstances` (only `synapse-sql-client` stubbed) before
+ * this rule existed, TEN one-part refs reached `buildSqlSelect` with
+ * `gated=false` and one `synapseExecute` call each, against `db = master`:
+ * `syslogins`, `sysobjects`, `sysdatabases`, `sysusers`, `sysaltfiles`,
+ * `spt_values`, `MSreplication_options`, `[syslogins]`, `[[sysobjects]]` and a
+ * bare `sys`. Two of those ten do not begin with `sys` at all, so a
+ * `startsWith('sys')` refusal would have closed eight of ten while reading, in
+ * the PR body, as if it had closed the class.
+ *
+ * So be precise about the residual. CLOSED: no ref reaches `buildSqlSelect`
+ * without an explicit schema that is not engine metadata or a fixed-role
+ * schema, on either SQL sink. NOT CLOSED: a ref naming a real user table in the
+ * binding's own database that the caller was never meant to read still
+ * resolves, and on the `lakehouse-table` sink the binding's "own database" is
+ * itself caller-supplied — see the `ownDatabase` note on
+ * `ontologySqlRefViolation`.
+ */
+
+/** SQL schemas that are ENGINE METADATA or a fixed-role schema, never user data.
+ *  Refused on every ontology SQL binding regardless of what the enumerator says,
+ *  because a Serverless/Dedicated catalog scan does not list them and their
+ *  absence would otherwise read as "not found yet" rather than "not allowed".
+ *
+ *  COMPLETE, not a sample. Review flagged the first cut for listing 2 of the 9
+ *  fixed database-role schemas (`db_owner`, `db_accessadmin`) — a half-done
+ *  enumeration that reads as complete is worse than none, because the next
+ *  reader assumes the list was thought through. SQL Server creates a schema per
+ *  fixed database role in every database, so the set is closed and all nine are
+ *  here, alongside `sys`, `INFORMATION_SCHEMA` and `guest`. */
+const FORBIDDEN_SQL_SCHEMAS: ReadonlySet<string> = new Set([
+  'sys', 'information_schema', 'guest',
+  'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+  'db_backupoperator', 'db_datareader', 'db_datawriter',
+  'db_denydatareader', 'db_denydatawriter',
+]);
+
+/** Split a SQL ref into its dotted parts with brackets stripped.
+ *
+ *  NAIVE, AND THE PREMISE THAT USED TO JUSTIFY IT WAS WRONG. This docblock said
+ *  "`SQL_REF_RE` admits no quote or escape character, so a dot here is always a
+ *  separator". `SQL_REF_RE` admits `[` and `]` — the paragraph below says so
+ *  itself — and in T-SQL a dot INSIDE a delimited identifier is part of the name,
+ *  not a separator. So a dot here is NOT always a separator, and on a bracketed
+ *  ref this splitter and the engine can disagree about which part is the schema.
+ *  Measured through the real resolver: `sys.[a.b]` with `database:'sys'` split to
+ *  db=`sys` / schema=`a` / table=`b`, cleared the schema test and reached
+ *  `buildSqlSelect` (`SELECT TOP 100 * FROM sys.[a.b]`), where T-SQL reads schema
+ *  `sys`, object `a.b` — `FORBIDDEN_SQL_SCHEMAS` never saw the token the engine
+ *  would use.
+ *
+ *  THE SPLIT IS STILL NAIVE; THE DIVERGENCE IS REFUSED INSTEAD. Rather than
+ *  re-implementing T-SQL's delimited-identifier lexer here (and owning its
+ *  `]]`-escape and unterminated-bracket corners on a security path),
+ *  `sqlRefBracketDivergence` detects the ONLY structures on which the two parses
+ *  can differ and `ontologySqlRefViolation` refuses them — same "unjudgeable ⇒
+ *  fail closed" rule the one-part case uses. That check runs LAST, so every
+ *  refusal this function already produced keeps its own message.
+ *
+ *  Note the ORDER, since an earlier revision of this line
+ *  said "has already excluded": `SQL_REF_RE` runs DOWNSTREAM, inside
+ *  `buildSqlSelect`, so this splitter sees the raw ref and cannot lean on it.
+ *
+ *  EVERY BRACKET PER PART, NOT THE OUTERMOST PAIR. This was
+ *  `p.replace(/^\[|\]$/g, '')`, which strips one leading `[` and one trailing
+ *  `]` — so `[[sys]]` normalised to `[sys]`, missed `FORBIDDEN_SQL_SCHEMAS`, and
+ *  `[[sys]].[sql_logins]` reached `buildSqlSelect` ungated (measured through
+ *  `resolveBindingInstances`: `gated=false`, one `synapseExecute` call). Whether
+ *  T-SQL then resolves that token as `sys` was NOT established — it does not
+ *  look like a terminating delimited identifier and no Synapse endpoint was
+ *  reached — so this is "the guard was silent there", not "there was a hole".
+ *  Stripping every bracket costs nothing and removes the question: `SQL_REF_RE`
+ *  already admits `[` and `]` anywhere in the string, so any bracket count is
+ *  reachable and an outermost-pair rule can always be spelled around.
+ *
+ *  AND EACH PART IS TRIMMED, for the same reason. `sys .t` splits to `'sys '`,
+ *  which lower-cases to `'sys '` and is not `'sys'`, so the schema test would
+ *  miss it. That string does die one call later — `SQL_REF_RE` has no space in
+ *  its character class, so `buildSqlSelect` throws before the engine is reached
+ *  — but that makes this guard's silence an accident of a DIFFERENT guard's
+ *  character set, and a security check should not rest on another check's
+ *  alphabet. Trimming here costs nothing and makes the schema test true on its
+ *  own terms. */
+function sqlRefParts(ref: string): string[] {
+  return (ref || '').trim().split('.').map((p) => p.replace(/[[\]]/g, '').trim());
+}
+
+/**
+ * The ONLY two bracket structures on which `sqlRefParts` and T-SQL can disagree
+ * about where the name parts are, or null when they provably cannot.
+ *
+ * KEYED TO THE SHAPE, NOT TO A LIST OF REFS. Scanning is exactly T-SQL's
+ * delimited-identifier rule: `[` opens, a single `]` closes, `]]` inside is an
+ * escaped literal `]`, and any other character — INCLUDING `[` — is literal
+ * content. Two outcomes make the naive dot-split unsafe:
+ *
+ *   - `dot-inside`   a `.` sits inside a delimited identifier, so the engine
+ *                    reads it as part of the NAME while `sqlRefParts` reads it as
+ *                    a SEPARATOR. Every part index shifts, and the schema test
+ *                    then judges a token the engine will never resolve.
+ *   - `unterminated` a `[` is never closed, so there is no parse to compare
+ *                    against: how the engine tokenises the rest is not knowable
+ *                    from the string.
+ *
+ * A bare `]` with no open `[` is NOT reported. It is malformed, but it cannot
+ * move a separator — `sqlRefParts` strips it and the part boundaries are
+ * unchanged — so reporting it would refuse refs on a difference that does not
+ * exist. If the engine rejects such a ref, that is the engine's answer.
+ *
+ * WHY REFUSE RATHER THAN ARGUE UNREACHABILITY. Review measured the divergence
+ * and could not turn it into a live read of a real `sys` object, because no stock
+ * `sys` object has a dot in its name and the 3-part rule pins `parts[0]` to the
+ * declared database. That is a SILENCE, not a proof of safety — the same verdict
+ * this file already accepted twice, for `[[sys]]` (an outermost-pair rule "can
+ * always be spelled around") and for `sys .t` ("a security check should not rest
+ * on another check's alphabet"). Refusing costs one honest message.
+ */
+function sqlRefBracketDivergence(ref: string): 'dot-inside' | 'unterminated' | null {
+  const s = (ref || '').trim();
+  let inside = false;
+  let dotInside = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (!inside) {
+      if (c === '[') inside = true;
+      continue;
+    }
+    if (c === ']') {
+      // `]]` is T-SQL's escape for a literal `]`; consume both and stay inside.
+      if (s[i + 1] === ']') { i++; continue; }
+      inside = false;
+      continue;
+    }
+    if (c === '.') dotInside = true;
+  }
+  if (inside) return 'unterminated';
+  return dotInside ? 'dot-inside' : null;
+}
+
+/**
+ * Why this ontology SQL ref is REFUSED before it reaches the query engine, or
+ * null when the shape policy has no objection.
+ *
+ * `ownDatabase` is the binding's own `source.database` (the Serverless database
+ * the resolver is about to target, or the Dedicated pool name). A 3-part ref
+ * naming anything else is a cross-database read the binding did not declare.
+ *
+ * STATES ONLY WHAT IT ESTABLISHED (R7). "Outside the name-space this binding may
+ * address" — not "does not exist", not "you lack permission", neither of which
+ * is knowable from a string.
+ *
+ * UNQUALIFIED IS UNJUDGEABLE, SO IT FAILS CLOSED. A ONE-PART ref (`syslogins`,
+ * `spt_values`, `[[sysobjects]]`) carries no schema, so the schema it resolves
+ * in is chosen by the SERVER and this pure function cannot see it. It therefore
+ * cannot establish the ref is not engine metadata — and an unjudgeable ref is
+ * REFUSED rather than waved through. This used to be a disclosed silence: the
+ * schema test sat behind `parts.length >= 2` and ten one-part spellings were
+ * measured reaching `buildSqlSelect` ungated (see the block comment above the
+ * `FORBIDDEN_SQL_SCHEMAS` set for the full list and the measurement).
+ *
+ * WHAT A QUALIFIED REF BUYS, AND WHAT ESTABLISHES IT. T-SQL resolves an
+ * explicitly schema-qualified name in that schema; it does not fall back to
+ * another one. So for a two- or three-part ref the schema IN THE STRING is the
+ * schema the engine uses, which is what makes testing the string meaningful. No
+ * Synapse endpoint was reached by this change, so that is the documented T-SQL
+ * name-resolution rule being relied on, not a measurement of ours.
+ *
+ * AND THE SPLIT ITSELF IS JUDGED, NOT ASSUMED. Every rule here reads
+ * `sqlRefParts`' output, so it is only meaningful while that split agrees with
+ * the engine's. `sqlRefBracketDivergence` (above) names the two bracket
+ * structures on which it provably might not, and those refs are refused last —
+ * see that function for the measurement and for why "review could not reach a
+ * real `sys` object through it" is a silence rather than a safety proof.
+ *
+ * WHAT IS STILL NOT CLOSED, IN THE SAME BREATH. On the `lakehouse-table` sink
+ * `ownDatabase` is `binding.source.database` — a caller-supplied string, and the
+ * SAME value the resolver hands to `serverlessTarget()`. So there the 3-part
+ * test enforces INTERNAL CONSISTENCY between `ref` and `database`, not
+ * isolation: a caller who wants another database simply declares it and makes
+ * the ref agree. Only `warehouse-table` gets a real database restriction,
+ * because `dedicatedTarget()` ignores the binding and reads
+ * `LOOM_SYNAPSE_DEDICATED_POOL`. Constraining WHICH databases a binding may
+ * declare is the deferred AUTHORIZATION half — it needs the item's real catalog
+ * — and no string test can stand in for it.
+ */
+export function ontologySqlRefViolation(ref: string, ownDatabase?: string): string | null {
+  const parts = sqlRefParts(ref);
+  if (parts.length === 0 || parts.some((p) => p === '')) {
+    return `"${ref}" is not a usable SQL object reference — use \`schema.table\`.`;
+  }
+  if (parts.length > 3) {
+    return `"${ref}" has more than three name parts, so it is not a \`db.schema.table\` reference.`;
+  }
+  // UNQUALIFIED ⇒ UNJUDGEABLE ⇒ REFUSED. Keyed to the SHAPE (no schema in the
+  // string) and not to the NAME, so it covers every one-part spelling at once
+  // instead of the handful anybody thought to list.
+  if (parts.length === 1) {
+    return `"${ref}" names no schema, so which schema the SQL engine resolves it in is decided by the `
+      + 'server and cannot be established from the reference — including the engine-metadata schemas an '
+      + 'ontology binding may never read. Qualify it as `schema.table`.';
+  }
+  const schema = parts[parts.length - 2].toLowerCase();
+  if (FORBIDDEN_SQL_SCHEMAS.has(schema)) {
+    return `"${ref}" addresses the \`${parts[parts.length - 2]}\` schema, which is SQL engine metadata `
+      + 'rather than data an ontology object type can be bound to. Bind a user table or view.';
+  }
+  if (parts.length === 3) {
+    const db = parts[0].toLowerCase();
+    const own = (ownDatabase || '').trim().toLowerCase();
+    if (!own || db !== own) {
+      return `"${ref}" names database \`${parts[0]}\`, which is not the database this binding declares`
+        + `${ownDatabase ? ` (\`${ownDatabase}\`)` : ''}. A binding may only address objects in its own database.`;
+    }
+  }
+  // LAST, AND ONLY OVER REFS THE RULES ABOVE WOULD PERMIT. Everything up to here
+  // judged `sqlRefParts`' split; this asks whether T-SQL would split the same ref
+  // the same way, and refuses when it provably might not. Running it last is
+  // deliberate: it is STRICTLY ADDITIVE, so no ref that already had a specific
+  // refusal (wrong schema, foreign database, no schema at all) trades that
+  // message for this vaguer one.
+  const divergence = sqlRefBracketDivergence(ref);
+  if (divergence === 'dot-inside') {
+    return `"${ref}" puts a dot inside a bracketed name part, so which part is the schema depends on `
+      + 'how the SQL engine tokenises the brackets and cannot be established from the reference. '
+      + 'Reference the object without a dot in a delimited name part.';
+  }
+  if (divergence === 'unterminated') {
+    return `"${ref}" opens a bracketed name part it never closes, so it has no name parts this code `
+      + 'can establish. Use `schema.table`, with each part either bare or wrapped in one `[...]` pair.';
+  }
+  return null;
+}
+
+/**
+ * Typed refusal for an ontology SQL ref, mirroring
+ * `EngineObjectNamespaceError` (lib/azure/shortcut-engines.ts) so the three SQL
+ * sinks in the resolver refuse in one recognisable shape.
+ */
+export class OntologySqlRefError extends Error {
+  status = 400;
+  code = 'ontology_sql_ref_namespace';
+  constructor(public readonly ref: string, reason: string) {
+    super(reason);
+    this.name = 'OntologySqlRefError';
+  }
+}
+
 /** A KQL / DAX table identifier (bare or single-token). */
 const KQL_IDENT_RE = /^[A-Za-z_][\w]{0,127}$/;
 /** A DAX table/measure identifier (letters, digits, spaces, underscore). */
