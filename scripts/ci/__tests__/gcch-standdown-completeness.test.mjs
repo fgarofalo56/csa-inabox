@@ -751,7 +751,18 @@ export function destructiveHandoffAt(lines, from, skipFrom, skipTo) {
     if (/(?:^|[\s;&|(])(?:bash|sh|source|\.)\s+(?:-\S+\s+)*['"]?[^\s;&|'"]*\.sh\b/.test(l)) return i;
     if (/(?:^|[\s;&|(])(?:bash|sh)\s+(?:-\S+\s+)*['"][^'"]*\.sh\b/.test(l)) return i;
     // A bare exec at a command position: `./x.sh`, `.github/scripts/x.sh`.
-    if (/(?:^|[;&|(])\s*['"]?[\w./-]*\.sh\b/.test(l)) return i;
+    //
+    // ROUND 10, on a review finding. The path class used to be `[\w./-]`, which
+    // cannot cross `$` or `{` — so the ORDINARY way a workflow writes this path,
+    // `${GITHUB_WORKSPACE}/.github/scripts/fiab-teardown.sh`, walked straight
+    // past. MEASURED at the round-9 head: that bare line placed above the
+    // refusal was +64 B and left this suite at RC=0, 56 pass / 0 fail, while the
+    // SAME line prefixed with `bash ` (+69 B) was caught 34/22 by the two
+    // alternatives above — which already tolerate `$` because their class is a
+    // negation. Round 8 widened this arm for the bare form and closed one
+    // spelling of it; the variable-expanded spelling is the one a real workflow
+    // uses. `$`, `{` and `}` are literals inside a character class.
+    if (/(?:^|[;&|(])\s*['"]?[\w${}./-]*\.sh\b/.test(l)) return i;
     if (estateMutatingAz(l)) return i;
   }
   return -1;
@@ -1041,6 +1052,127 @@ export function judgeVerdictReferences(steps) {
   return problems;
 }
 
+/**
+ * Does every `exit 0` in this shell body have the verdict WRITTEN on the path
+ * that reaches it?
+ *
+ * A tiny dataflow over the only shell construct in play — `if` / `elif` / `else`
+ * / `fi` — because "written on every path" is what matters and a line-order
+ * scan cannot see it. Each arm inherits its parent's flag, a write sets the
+ * current arm's flag, and an `if` contributes a guaranteed write to its parent
+ * ONLY when it has an `else` and every arm wrote (an `if` with no `else` has a
+ * fall-through path that wrote nothing).
+ *
+ * `exit 1` is deliberately NOT in frame: a non-zero exit FAILS the step, so the
+ * job fails and no consumer of the verdict runs on the empty value. It is the
+ * SUCCESSFUL early return that publishes nothing and lets thirteen `!= 'true'`
+ * consumers open.
+ *
+ * KNOWN LIMIT, stated rather than implied: `case`, `while`, `for` and functions
+ * are not modelled. None appears in this producer, and an unmodelled construct
+ * neither sets nor clears a flag — so it can only make this check MORE
+ * conservative, never less.
+ *
+ * @param {string} body the step's `run:` shell, or the whole step block
+ * @param {string} output the output key that must be written
+ * @returns {{line:string, at:number}[]} the offending `exit 0` lines; empty means total
+ */
+export function unwrittenEarlyExits(body, output = VERDICT_OUTPUT) {
+  const lines = String(body || '').split('\n');
+  const write = new RegExp(`${output}=[^\\n]*GITHUB_OUTPUT`);
+  const stack = [];
+  let wrote = false;
+  const bad = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const t = lines[i].trim();
+    if (/^if\b.*;\s*then$/.test(t) || /^then$/.test(t)) {
+      stack.push({ parent: wrote, sawElse: false, armsWrote: [] });
+      continue;
+    }
+    if (/^elif\b.*;\s*then$/.test(t) || /^else$/.test(t)) {
+      const f = stack[stack.length - 1];
+      if (f) {
+        f.armsWrote.push(wrote);
+        if (/^else$/.test(t)) f.sawElse = true;
+        wrote = f.parent;
+      }
+      continue;
+    }
+    if (/^fi$/.test(t)) {
+      const f = stack.pop();
+      if (f) {
+        f.armsWrote.push(wrote);
+        wrote = f.parent || (f.sawElse && f.armsWrote.every(Boolean));
+      }
+      continue;
+    }
+    if (write.test(t)) wrote = true;
+    if (/^exit\s+0\s*$/.test(t) && !wrote) bad.push({ line: t, at: i });
+  }
+  return bad;
+}
+
+/**
+ * The STEP-level verdict must be TOTAL: written on every successful path its
+ * producer can take.
+ *
+ * ROUND 10, on a review finding, and it is the `steps.*` half of what round 8
+ * built for `needs.*`. `judgeUnconditionalVerdict` proved the TEARDOWN refusal
+ * reads a verdict from a job that cannot decline to produce — and fixed exactly
+ * that one consumer. The other thirteen readers of
+ * `steps.adx_preflight.outputs.estate_paused` (twelve step-level `if:` gates,
+ * the `deploy-validate` job output, and through it the chained
+ * `post-deploy-bootstrap` gate) still read a value the producing step returned
+ * WITHOUT writing on `topology=dlz-attach`:
+ *
+ *   if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then … exit 0; fi
+ *
+ * `dlz-attach` is one of four `workflow_dispatch` topology choices and the
+ * producer's own `if:` is satisfied by `run_mode=full`, so the producer RAN,
+ * produced nothing, and `'' != 'true'` opened every gate — including
+ * `Image preflight — Gov ACR must already hold every referenced tag`, which
+ * takes the sovereign ACR firewall lease, and `Publish DLZ template + wire
+ * deploy env (Gov)`, which `az containerapp update --set-env-vars`s the hub
+ * Console. Round 8 named this mechanism and closed one consumer of it; closing
+ * it at the PRODUCER closes the class.
+ *
+ * WHAT THIS DOES **NOT** ASSERT, said plainly so it is not read as more than it
+ * is. This is totality over the paths the producer takes WHEN IT RUNS. The step
+ * carries its own `if: github.event_name == 'schedule' || inputs.run_mode ==
+ * 'full'`, so a `run_mode=whatif-only` dispatch skips it entirely and the
+ * verdict is empty there too. That is deliberate and predates round 10 — the
+ * preflight STARTS a cluster, and a dry run must not mutate — and on that
+ * trigger every gate carrying the `schedule || full` clause is already closed.
+ * The steps that are NOT (`Resolve the program budget's IMMUTABLE start date`,
+ * `Bicep what-if`, the evidence receipt and its upload) still run on a
+ * whatif-only dispatch against a declared-paused estate. Named, not closed.
+ *
+ * @param {{name:string, id:string, body:string}[]} steps
+ * @returns {string[]}
+ */
+export function judgeVerdictProducerTotality(steps) {
+  const producers = steps.filter((s) => s.id && String(s.body || '').includes(VERDICT_SCRIPT));
+  if (producers.length === 0) {
+    return [
+      `no step of ${STEP_JOB} invokes ${VERDICT_SCRIPT}, so nothing computes \`${VERDICT_OUTPUT}\`. ` +
+        'Every consumer would read the EMPTY STRING, which is not `true`, so every stand-down opens.',
+    ];
+  }
+  const problems = [];
+  for (const p of producers) {
+    for (const { line } of unwrittenEarlyExits(p.body)) {
+      problems.push(
+        `step '${p.name}' is the producer of \`${VERDICT_OUTPUT}\`, and it can reach \`${line}\` without ` +
+          `writing that output. A successful early return publishes the EMPTY STRING, \`'' != 'true'\` is ` +
+          'TRUE, and every step gate, the job output and the chained bootstrap all open on a DECLARED-PAUSED ' +
+          'estate. Publish a verdict before the return — and say in the notice what it was derived from, ' +
+          'because on a path that observed nothing the conjunction has no observed term (deploy-integrity R7).',
+      );
+    }
+  }
+  return problems;
+}
+
 /** The one script in this repo that flips `publicNetworkAccess` on an ACR. */
 const LEASE_SCRIPT = 'acr-firewall-lease.sh';
 
@@ -1281,6 +1413,92 @@ export function judgeJobs(jobs) {
 }
 
 /**
+ * The lines of the step in `job.body` that carries `id: <id>`, or null.
+ *
+ * Same hand-rolled shape as parseSteps/parseJobs and for the same reason: the
+ * `node --test` lane runs on a bare node with no YAML parser. Steps inside a job
+ * are `      - ` at 6-space indent; a step block runs to the next one.
+ *
+ * @param {string} jobBody
+ * @param {string} id
+ * @returns {string[]|null}
+ */
+export function jobStepBlock(jobBody, id) {
+  const lines = String(jobBody || '').split('\n');
+  const starts = [];
+  for (let i = 0; i < lines.length; i += 1) if (/^ {6}- /.test(lines[i])) starts.push(i);
+  for (let k = 0; k < starts.length; k += 1) {
+    const to = k + 1 < starts.length ? starts[k + 1] : lines.length;
+    const block = lines.slice(starts[k], to);
+    if (block.some((l) => new RegExp(`^ {6,8}(?:- )?id: ${id}\\s*$`).test(l))) return block;
+  }
+  return null;
+}
+
+/**
+ * A producing STEP that can decline to run publishes the EMPTY STRING, which is
+ * the same disarm as a producing JOB that can decline to run.
+ *
+ * ROUND 10, on a review finding. `judgeGuardProducer` (round 4) and
+ * `judgeUnconditionalVerdict` (round 8) between them assert that the producer
+ * JOB exists, carries no `if:`, publishes THAT key, reads it from a step id that
+ * exists, and invokes the script. Every one of those held while the PRODUCING
+ * STEP was disarmed. MEASURED at the round-9 head, through the
+ * `LOOM_GCCH_WORKFLOW_PATH` seam, on the real workflow:
+ *
+ *   producing step given `if: github.event_name == 'workflow_dispatch'`  +54 B
+ *     -> RC=0, 56 pass / 0 fail
+ *   producing step given `continue-on-error: true`                       +33 B
+ *     -> RC=0, 56 pass / 0 fail
+ *   the JOB given the same `if:`                                         +50 B
+ *     -> RC=1, 33 pass / 23 fail   (round 8's arm, doing its job)
+ *
+ * On the first mutant `pause-declaration` SUCCEEDS on the daily cron with an
+ * EMPTY `declared`, `build-gov-images`'s `!= 'true'` reads true, and the image
+ * phase takes the sovereign ACR firewall lease and `az acr build`s loom-migrate
+ * + loom-risingwave into the GCC-High registry on a declared pause — the round-2
+ * defect, restored in one line, with the whole ratchet green.
+ *
+ * `continue-on-error` is in the same frame because a step that fails and is
+ * forgiven writes nothing either, and its job still reports success.
+ *
+ * @param {{name:string, body:string}} producer the producing JOB
+ * @param {string} id the producing STEP's id
+ * @param {string} clause the guard clause whose value chain is being asserted
+ * @returns {string[]}
+ */
+export function judgeProducingStepUnconditional(producer, id, clause) {
+  const block = jobStepBlock(String(producer.body), id);
+  if (!block) {
+    return [
+      `job '${producer.name}' was expected to carry a step with \`id: ${id}\` producing \`${clause}\`, ` +
+        'but its step block could not be isolated. An unreadable producer is an UNKNOWN, and an unknown ' +
+        'must not be recorded as a no.',
+    ];
+  }
+  const problems = [];
+  const cond = block.find((l) => /^ {8}if:\s*\S/.test(l));
+  if (cond) {
+    problems.push(
+      `job '${producer.name}' produces \`${clause}\` from the step \`id: ${id}\`, and that STEP carries ` +
+        `\`${cond.trim()}\`. A step that can decline to run publishes nothing, the expression evaluates to ` +
+        "the EMPTY STRING, `'' != 'true'` is TRUE, and every consumer of this clause opens on a declared " +
+        'pause — with the job itself still green. The producer job carrying no `if:` is necessary and not ' +
+        'sufficient; the producing step must carry none either.',
+    );
+  }
+  const forgiven = block.find((l) => /^ {8}continue-on-error:\s*true\s*$/.test(l));
+  if (forgiven) {
+    problems.push(
+      `job '${producer.name}' produces \`${clause}\` from the step \`id: ${id}\`, and that STEP carries ` +
+        '`continue-on-error: true`. A forgiven failure writes no output and leaves the job green, which is ' +
+        'the same EMPTY verdict as a step that never ran.',
+    );
+  }
+  return problems;
+}
+
+/**
  * The guard clause is only worth its words if the value it reads is actually
  * PUBLISHED.
  *
@@ -1335,6 +1553,19 @@ export function judgeGuardProducer(jobs, clause = JOB_GUARD, script = PRODUCER_S
         `job '${producerJob}' publishes \`${producerOutput}\` from \`steps.${ref[1]}.outputs.${ref[2]}\`, but ` +
           `no step in that job carries \`id: ${ref[1]}\` — the output is empty and the guard never suppresses.`,
       );
+    } else if (String(producer.if || '').trim().length === 0) {
+      // ROUND 10, and SCOPED deliberately. This arm asserts the "cannot decline
+      // to produce" contract, which belongs to a producer job that carries no
+      // `if:` — `pause-declaration`, whose whole reason to exist is that it is
+      // populated on every topology and every trigger. The OTHER chain this
+      // function serves, `needs.deploy-validate.outputs.estate_paused`, is
+      // produced by a step that carries a deliberate `if:` (a whatif-only
+      // dispatch must not start a cluster), and its emptiness is covered
+      // instead by judgeVerdictProducerTotality at the step level plus the
+      // residual named on the producer. A conditioned producer JOB is already
+      // caught one level up by judgeUnconditionalVerdict, so nothing is lost by
+      // not descending into it here.
+      problems.push(...judgeProducingStepUnconditional(producer, ref[1], clause));
     }
   }
   if (!String(producer.body).includes(script)) {
@@ -1660,6 +1891,9 @@ export function judge(steps, jobs = parseJobs(workflowText())) {
   // ROUND 6. Before any disposition is read: every reader of the verdict, in an
   // `if:` or an `env:`, must resolve to a step that exists and computes it.
   problems.push(...judgeVerdictReferences(steps));
+  // ROUND 10: …and the producer of that verdict must write it on every path it
+  // can successfully return from, or every reference above resolves to EMPTY.
+  problems.push(...judgeVerdictProducerTotality(steps));
   for (const step of steps.slice(0, at)) problems.push(...judgePreVerdict(step));
   for (const step of steps.slice(at + 1)) {
     const d = DISPOSITIONS.get(step.name);
@@ -2584,6 +2818,16 @@ test('the destructive-handoff scan is keyed to the SHAPE of the call, not to fia
   // on writing the word rather than a scan for the call.
   assert.equal(destructiveHandoffAt(['          echo "run .github/scripts/fiab-teardown.sh to remove it"'], 0, -1, -1), -1);
   assert.equal(destructiveHandoffAt(['          RG_NAME=rg-csa-loom-admin-usgovvirginia'], 0, -1, -1), -1);
+  // ROUND 10, on a review finding: the bare form's path could not cross a `$` or
+  // a `{`, so the ORDINARY workflow spelling of that path walked past — while
+  // the same line with `bash ` in front was caught, because those alternatives
+  // use a negated class. Measured at the round-9 head: +64 B green vs +69 B red.
+  assert.equal(destructiveHandoffAt(['  ${GITHUB_WORKSPACE}/.github/scripts/fiab-teardown.sh'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  $GITHUB_WORKSPACE/.github/scripts/fiab-teardown.sh --yes'], 0, -1, -1), 0);
+  assert.equal(destructiveHandoffAt(['  echo hi && ${HOME}/x.sh'], 0, -1, -1), 0);
+  // …and widening the class must not turn a MENTION into a call.
+  assert.equal(destructiveHandoffAt(['          echo "run ${GITHUB_WORKSPACE}/scripts/x.sh"'], 0, -1, -1), -1);
+  assert.equal(destructiveHandoffAt(['          TEARDOWN=${GITHUB_WORKSPACE}/scripts/x.sh'], 0, -1, -1), -1);
 });
 
 test('MUTATION R8: a BARE exec above the refusal is caught', () => {
@@ -2668,6 +2912,46 @@ test('MUTATION R8: conditioning the producer JOB disarms the same refusal', () =
   assert.match(problems[0], /binds no verdict to a `needs\.<job>\.outputs\.<key>` of a job that carries NO `if:`/);
 });
 
+test('MUTATION R10: conditioning the producing STEP disarms the same guard, and stays green without this arm', () => {
+  // The narrower bypass on round 8's arm: keep the JOB unconditional — which is
+  // all rounds 4 and 8 ever asked — and condition the STEP that writes the
+  // output. `pause-declaration` then SUCCEEDS on the daily cron publishing an
+  // EMPTY `declared`, and `build-gov-images` opens the sovereign ACR on a
+  // declared pause. Measured at the round-9 head: +54 B, RC=0, 56 pass / 0 fail.
+  const jobs = parseJobs(workflowText()).map((j) =>
+    j.name === 'pause-declaration'
+      ? {
+          ...j,
+          body: j.body
+            .split('\n')
+            .flatMap((l) => (/^ {6}- id: read\s*$/.test(l) ? [l, "        if: github.event_name == 'workflow_dispatch'"] : [l]))
+            .join('\n'),
+        }
+      : j,
+  );
+  const problems = judge(parseSteps(workflowText()), jobs);
+  assert.ok(
+    problems.some((p) => /that STEP carries `if: github\.event_name == 'workflow_dispatch'`/.test(p)),
+    `the producing-step arm must fire: ${problems.join(' | ') || '(none)'}`,
+  );
+  // …and the forgiven-failure spelling of the same disarm.
+  const forgiven = parseJobs(workflowText()).map((j) =>
+    j.name === 'pause-declaration'
+      ? {
+          ...j,
+          body: j.body
+            .split('\n')
+            .flatMap((l) => (/^ {6}- id: read\s*$/.test(l) ? [l, '        continue-on-error: true'] : [l]))
+            .join('\n'),
+        }
+      : j,
+  );
+  assert.ok(
+    judge(parseSteps(workflowText()), forgiven).some((p) => /carries\s+`continue-on-error: true`/.test(p)),
+    'a forgiven producing step writes no output and leaves the job green',
+  );
+});
+
 test('MUTATION R8: dropping the producer from deploy-validate needs: is caught', () => {
   // The third way the same expression goes empty: `needs.<job>.outputs.<key>`
   // evaluates to nothing at all when the job is not declared as a need, so the
@@ -2705,6 +2989,88 @@ test('refusalBlock anchors on the SHAPE of the conditional, not on the variable 
     decoyProblems.some((p) => /contains no non-zero exit/.test(p)),
     `a decoy conditional above the refusal must go red, got: ${decoyProblems.join(' | ') || '(none)'}`,
   );
+});
+
+const VERDICT_PRODUCER = 'ADX preflight — a stopped cluster cannot take its principal assignments';
+
+function mutateProducer(rewrite) {
+  return parseSteps(workflowText()).map((s) =>
+    s.name === VERDICT_PRODUCER ? { ...s, body: rewrite(s.body) } : s,
+  );
+}
+
+test('MUTATION R10: the producer returning WITHOUT writing the verdict is caught', () => {
+  // The round-8 mechanism, at the producer instead of at one consumer. Delete
+  // the verdict write from the dlz-attach return and the step still runs, still
+  // exits 0, still invokes the script on the other branch — and publishes the
+  // EMPTY STRING on `topology=dlz-attach`, which opens all twelve step gates,
+  // the job output, and the chained bootstrap on a DECLARED-PAUSED estate.
+  const problems = judge(
+    mutateProducer((b) => b.split('\n').filter((l) => !/estate_paused=[^\n]*GITHUB_OUTPUT/.test(l)).join('\n')),
+  );
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ') || '(none)'}`);
+  assert.match(problems[0], /can reach `exit 0` without\s+writing that output/);
+});
+
+test('MUTATION R10: a NEW early return with no verdict write is caught', () => {
+  // The class, not the instance: any future early return has to publish too.
+  const problems = judge(
+    mutateProducer((b) =>
+      b.replace(
+        /^(\s+)set -euo pipefail$/m,
+        '$1set -euo pipefail\n$1if [ "${CSA_LOOM_SKIP:-}" = "1" ]; then\n$1  echo "::notice::skipping"\n$1  exit 0\n$1fi',
+      ),
+    ),
+  );
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ') || '(none)'}`);
+  assert.match(problems[0], /can reach `exit 0` without\s+writing that output/);
+});
+
+test('the totality check is per-PATH, so losing ONE arm of the branch is caught', () => {
+  // The narrow bypass a line-order scan cannot see: leave a write in the file,
+  // above the return, but only on one arm. The other arm reaches `exit 0`
+  // having written nothing — and a "is there a write above this line" scan
+  // reads green.
+  let dropped = false;
+  const problems = judge(
+    mutateProducer((b) =>
+      b
+        .split('\n')
+        .filter((l) => {
+          if (!dropped && /estate_paused=[^\n]*GITHUB_OUTPUT/.test(l)) {
+            dropped = true;
+            return false;
+          }
+          return true;
+        })
+        .join('\n'),
+    ),
+  );
+  assert.ok(dropped, 'the mutation must have removed exactly one write');
+  assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ') || '(none)'}`);
+  assert.match(problems[0], /can reach `exit 0` without\s+writing that output/);
+});
+
+test('unwrittenEarlyExits models the branch, and says nothing about exit 1', () => {
+  const W = 'echo "estate_paused=true" >> "$GITHUB_OUTPUT"';
+  // An `if` with no `else` guarantees nothing on the fall-through path.
+  assert.equal(unwrittenEarlyExits(['if [ x ]; then', W, 'fi', 'exit 0'].join('\n')).length, 1);
+  // …with an `else` that also writes, it does.
+  assert.equal(
+    unwrittenEarlyExits(['if [ x ]; then', W, 'else', W, 'fi', 'exit 0'].join('\n')).length,
+    0,
+  );
+  // …with an `else` that does NOT, it does not.
+  assert.equal(
+    unwrittenEarlyExits(['if [ x ]; then', W, 'else', 'echo no', 'fi', 'exit 0'].join('\n')).length,
+    1,
+  );
+  // A write inherited from the parent arm covers a nested exit.
+  assert.equal(unwrittenEarlyExits([W, 'if [ x ]; then', 'exit 0', 'fi'].join('\n')).length, 0);
+  // `exit 1` FAILS the step, so no consumer runs on the empty verdict.
+  assert.equal(unwrittenEarlyExits(['if [ x ]; then', 'exit 1', 'fi'].join('\n')).length, 0);
+  // A write that does not reach $GITHUB_OUTPUT publishes nothing.
+  assert.equal(unwrittenEarlyExits(['estate_paused=true', 'exit 0'].join('\n')).length, 1);
 });
 
 test('MUTATION: deleting the deploy-validate job OUTPUT unbinds the chained bootstrap', () => {

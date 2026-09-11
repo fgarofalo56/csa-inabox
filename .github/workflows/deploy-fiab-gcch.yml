@@ -244,9 +244,11 @@ jobs:
 
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC-High
-    # `pause-declaration` is in `needs:` for the TEARDOWN REFUSAL, not for the
-    # deploy: `steps.adx_preflight.outputs.estate_paused` is the ONLY verdict the
-    # refusal used to read, and its producer returns early on
+    # `pause-declaration` is in `needs:` for the TEARDOWN REFUSAL *and*, since
+    # round 10, for the ADX preflight's `ESTATE_DECLARED` binding — the two
+    # readers of the half of the verdict that survives `topology=dlz-attach`.
+    # `steps.adx_preflight.outputs.estate_paused` is the ONLY verdict the
+    # refusal used to read, and its producer returned early on
     # `topology=dlz-attach` (see the ADX preflight below) — so on a
     # `topology=dlz-attach` + `run_mode=full` + `keep_resources=false` dispatch
     # that output is the EMPTY STRING, `[ "" = "true" ]` is false, and
@@ -265,9 +267,15 @@ jobs:
       admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
-      # 'true' ONLY when scripts/ci/estate-pause-declaration.json carries an
-      # owned, unexpired entry for CSA_LOOM_BOUNDARY *and* the preflight observed
-      # a stopped cluster. Published as a job output so the chained bootstrap can
+      # 'true' when scripts/ci/estate-pause-declaration.json carries an owned,
+      # unexpired entry for CSA_LOOM_BOUNDARY *and* the preflight observed a
+      # stopped cluster — on every topology that HAS a cluster to observe. On
+      # `topology=dlz-attach` there is no admin-plane cluster in scope, so the
+      # observed term has no referent and the verdict is the declaration alone;
+      # the preflight says so in its own notice (#4233 round 10). What it is
+      # NEVER is EMPTY on a path this job can take, which is the property every
+      # consumer of `!= 'true'` depends on.
+      # Published as a job output so the chained bootstrap can
       # stand down too — it wires Synapse SQL, Purview and Databricks SCIM, and
       # the Synapse dedicated SQL pool is paused alongside the ADX cluster, so
       # bootstrapping a paused estate would put this lane straight back to red.
@@ -795,17 +803,72 @@ jobs:
       # is deliberately NOT changed here: it is the only working infra-deploy
       # path in the repo and destabilising it to pre-empt a latent fault would
       # trade one P0 for a worse one. Tracked in #3786.
+      # ── THE VERDICT IS TOTAL, OR IT IS NOT A VERDICT (#4233 round 10) ───────
+      # This step is the SOLE producer of `estate_paused`, and twelve step-level
+      # stand-downs plus the `deploy-validate` job output plus the chained
+      # `post-deploy-bootstrap` gate all read it as `!= 'true'`. So every path
+      # through this body that does NOT write the output publishes the EMPTY
+      # STRING, `'' != 'true'` is TRUE, and all fourteen of those consumers open.
+      #
+      # Round 8 found that exact shape on the Teardown refusal and fixed it THERE,
+      # by giving the refusal a second verdict from a job that cannot decline to
+      # run. It fixed one consumer. The other thirteen were left reading the same
+      # empty, which is the "a complete enumeration of the wrong set reads exactly
+      # like a complete enumeration" lesson turned on the round-8 fix itself.
+      #
+      # Fixed at the PRODUCER instead, once, so the class is closed rather than
+      # thirteen instances of it: the `dlz-attach` return below now publishes a
+      # verdict before it exits.
+      #
+      # WHAT VALUE, AND WHY IT IS HONEST. `estate_paused` is elsewhere the
+      # CONJUNCTION of "declared" and "observed stopped". On `topology=dlz-attach`
+      # there is no admin-plane ADX cluster in scope at all — that is the very
+      # reason this branch exists — so the observed term is not merely unmeasured,
+      # it has no referent. The evidence that remains is the DECLARATION, computed
+      # with no Azure by the `pause-declaration` job, and that is what is published
+      # here, said in the notice in those words (deploy-integrity R7). It is
+      # FAIL-CLOSED on anything but a literal `false`: an EMPTY `ESTATE_DECLARED`
+      # means the declaration job published nothing, which is an unknown, and an
+      # unknown is not a no — the same asymmetry the Teardown refusal uses.
+      #
+      # CONSEQUENCE, DELIBERATE AND DISCLOSED. A `dlz-attach` dispatch against a
+      # DECLARED boundary now stands the WHOLE job down, including `Provision`,
+      # which targets the DLZ subscription rather than the paused hub. That is
+      # broader than the minimum — but three steps on this path
+      # (`Image preflight — Gov ACR …`, `Approve the Front Door …`,
+      # `Publish DLZ template …`) mutate the HUB, which IS the declared estate, and
+      # a declaration says this lane does not touch this boundary. The safe
+      # direction is the declared direction. To deploy a landing zone while the hub
+      # is paused: delete the boundary's entry from
+      # scripts/ci/estate-pause-declaration.json and dispatch again.
+      #
+      # RESIDUAL, NAMED. A `run_mode=whatif-only` dispatch SKIPS this step entirely
+      # (see its `if:`), so `estate_paused` is empty there too and `Bicep what-if`,
+      # the evidence receipt and its upload run. That is deliberate and predates
+      # this change — see the note on `Bicep what-if` — and it applies nothing; it
+      # is not closed here.
       - name: ADX preflight — a stopped cluster cannot take its principal assignments
         id: adx_preflight
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          # The DECLARATION half, computed with NO Azure by the `pause-declaration`
+          # job, which carries no `if:` and so publishes on every trigger and every
+          # topology. Bound here so the dlz-attach return below can publish a
+          # verdict at all.
+          ESTATE_DECLARED: ${{ needs.pause-declaration.outputs.declared }}
         run: |
           set -euo pipefail
           # dlz-attach deploys no admin plane, so it declares no principal
           # assignments on the hub cluster and has nothing to start.
           if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            if [ "${ESTATE_DECLARED:-}" = "false" ]; then
+              echo "estate_paused=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start. NOTHING WAS OBSERVED on this topology, so the verdict is the DECLARATION alone: ${CSA_LOOM_BOUNDARY} is NOT declared paused in scripts/ci/estate-pause-declaration.json, so estate_paused=false and this run proceeds."
+            else
+              echo "estate_paused=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start. NOTHING WAS OBSERVED on this topology, so the verdict is the DECLARATION alone, which is '${ESTATE_DECLARED:-}' — 'true' means an owned, unexpired entry names ${CSA_LOOM_BOUNDARY}, and EMPTY means the 'Is the GCC-High estate DECLARED paused?' job published no verdict at all, which is an unknown and not a no. estate_paused=true, so this run stands down."
+            fi
             exit 0
           fi
           DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
@@ -835,8 +898,17 @@ jobs:
             echo "## GCC-High: STOOD DOWN — the estate is declared paused"
             echo ""
             echo "\`${CSA_LOOM_BOUNDARY}\` has an owned, unexpired entry in"
-            echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
-            echo "its cluster stopped."
+            echo "\`scripts/ci/estate-pause-declaration.json\`."
+            if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+              # R7: on this topology the preflight observed NOTHING, so the
+              # sentence that says it did must not be printed. #4233 round 10.
+              echo "This run is \`topology=dlz-attach\`, which deploys no admin-plane ADX"
+              echo "cluster, so the preflight observed NOTHING and the verdict is that"
+              echo "DECLARATION alone. An unobserved estate is an unknown, and an unknown is"
+              echo "not a no."
+            else
+              echo "The ADX preflight also observed its cluster stopped."
+            fi
             echo ""
             echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
             echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
@@ -863,9 +935,16 @@ jobs:
             echo "them is reachable on a stood-down run, so this sentence is checked rather"
             echo "than asserted (deploy-integrity R7)."
             echo ""
-            echo "A stopped Kusto engine refuses \`principalAssignments\`, so none"
-            echo "of them could have produced a real answer, and none of them should touch an"
-            echo "estate this run has declared it will not measure. A teardown dispatched"
+            if [ "${CSA_LOOM_TOPOLOGY:-}" != "dlz-attach" ]; then
+              echo "A stopped Kusto engine refuses \`principalAssignments\`, so none"
+              echo "of them could have produced a real answer, and none of them should touch an"
+              echo "estate this run has declared it will not measure."
+            else
+              echo "None of them should touch an estate this run has declared it will not"
+              echo "measure. Whether they COULD have produced a real answer is not established"
+              echo "on this topology — nothing about the cluster was read."
+            fi
+            echo "A teardown dispatched"
             echo "against a declared-paused estate REFUSES rather than skipping, so it can"
             echo "never happen silently behind this notice."
             echo ""
