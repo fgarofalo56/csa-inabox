@@ -49655,8 +49655,8 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-11T11:37:28.813Z",
-      "commit": "098a7681900c00d5fe8be656399b34e69dda378d",
+      "generatedAt": "2026-09-11T12:33:03.536Z",
+      "commit": "e0cd9a1ff7feea0c9303ef83d4a55abc9793bec1",
       "inputsDigest": "84d5f69e0fef0241",
       "filesScanned": 2101,
       "scanScopes": [
@@ -50734,7 +50734,7 @@
         },
         {
           "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "187 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "188 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",
