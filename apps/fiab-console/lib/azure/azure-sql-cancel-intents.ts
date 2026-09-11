@@ -226,15 +226,32 @@ async function cancelIntentStore(): Promise<CancelIntentStore | null> {
     });
     // WHY LAZY-CREATE HERE, AND WHAT THAT DOES **NOT** ESTABLISH (#4406).
     //
-    // Every other container this app opens lazily also has an ARM row in
-    // `landing-zone/cosmos.bicep`'s `loomContainers`, so for those
-    // `createIfNotExists` settles on the read and the CREATE branch never runs
-    // on a deployed estate. `sql-cancel-intents` has no ARM row yet — it is
-    // deferred to #4406 — so on a live estate this call is the first one in the
-    // app that genuinely issues a container create over the data plane with
-    // `aadCredentials`. That is a real difference and it is stated here rather
-    // than hidden behind "no-vaporware.md bicep-sync #4 permits lazy-create",
-    // which is true but was doing more work than it should.
+    // Lazy-create without an ARM row is the ESTABLISHED shape here, not a novel
+    // step this container takes first. Measured at this head, per container, so
+    // the claim is falsifiable rather than arithmetical:
+    //
+    //   `user-prefs`      created only at `cosmos-client.ts:862`; searching
+    //                     `platform/**`, `scripts/**`, `.github/**` for it
+    //                     returns ZERO files.
+    //   `tabs-state`, `rate-limits`, `notifications`   same: zero files.
+    //   `loom-workspaces` POSITIVE CONTROL — the same search returns 4 files,
+    //                     so the query is demonstrably able to find an ARM row.
+    //
+    // The account sets `disableLocalAuth=true` and `cosmos-client.ts:779` passes
+    // `aadCredentials` only, so those creates ALREADY go over the data plane
+    // with exactly the credential this call uses.
+    //
+    // An earlier revision of this comment asserted the opposite — that every
+    // other lazily-opened container carries an ARM row, making this call "the
+    // first" such create in the app. That was reasoned, not measured, and it is
+    // false. It is corrected in place rather than deleted because this file's
+    // subject IS `deploy-integrity.md` R7: a message must not state as fact
+    // something the code did not establish, and a source comment is held to the
+    // same bar as an error string.
+    //
+    // `sql-cancel-intents` still has no ARM row — deferred to #4406 — and that
+    // is worth recording. It is simply not unprecedented, and nothing about the
+    // credential path is new.
     //
     // WHAT IS MEASURED: the deploy grants the Console UAMI BOTH tiers on this
     // account — `Cosmos DB Built-in Data Contributor` (data-plane
