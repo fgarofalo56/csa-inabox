@@ -34,11 +34,35 @@
  * ENUMERATION than the class. A hand-maintained list of offenders has the same
  * defect one level up: the file you forget to add is the file that ships the
  * bug. So the population is derived from the filesystem on every run, over the
- * WHOLE REPOSITORY, and a site is in scope the moment it lands.
+ * WHOLE REPOSITORY, and no file is out of scope because it is new.
+ *
+ * ── WHAT THAT CLAIM IS AND IS NOT (round 2) ───────────────────────────────
+ * An earlier revision of this header said "a site is in scope the moment it
+ * lands", flat. Independent review of #4454 planted three ordinary credentialed
+ * clients under `lib/azure/` and the guard stayed green on all three — two were
+ * not in the population at all. An overstated control is worse than a narrow
+ * one, because the next author reads the claim and not the regex, so the claim
+ * is now stated to the reach that can be demonstrated:
+ *
+ *   IN SCOPE, automatically, for any file anywhere in the repo: an absolute-URL
+ *   test written in one of the SIX spellings in `ABS_TEST_SPELLINGS`, whose
+ *   subject is yielded by ternary, by return (whole or through a transform that
+ *   keeps it a URL), or by assign-then-return — and it is GUARDED only when a
+ *   boundary primitive is applied to that subject, or to a value carrying it.
+ *
+ *   NOT IN SCOPE, and not claimed to be: a passthrough written in a SEVENTH
+ *   spelling of "is this absolute?". The detector cannot see one, and neither
+ *   could the reviewer's independent instrument, for the same reason. That is a
+ *   known ceiling, not a solved problem. If you add a new way to ask the
+ *   question, add it to `ABS_TEST_SPELLINGS` in the same commit.
+ *
+ * The three planted shapes are now permanent controls below, one row each, and
+ * mutations N1/N2/N3 in `scripts/ci/ghsa-4gvx-mutation-receipts.mjs` revert each
+ * widening and prove the row goes RED.
  *
  * ── THE TWO SHAPES, AND THE TWO CHANNELS ───────────────────────────────────
  *   S1  ABSOLUTE PASSTHROUGH — an absolute-URL TEST whose SUBJECT is what the
- *       expression then yields, inside a file that attaches a credential. Seven
+ *       expression then yields, inside a file that attaches a credential. Six
  *       spellings are recognised (`isAbsoluteHttpUrl(x)`, `startsWith`, a
  *       caret-anchored regex `.test` / `.exec`, `.match(/^http…/)`,
  *       `.indexOf(…) === 0`, `new RegExp('^http…')`) and the match runs over the
@@ -48,11 +72,13 @@
  *       Channel A is the BODY (`nextLink` / `@odata.nextLink`); channel B is a
  *       response HEADER (`Location`, `Operation-Location`,
  *       `Azure-AsyncOperation`, `Content-Location`). Channel A is asserted at
- *       file level; channel B is per-site.
+ *       file level; channel B is per-site, and its per-site count is REGEX
+ *       MATCHES — a line with two header reads contributes two.
  *
  * ── HOW A SITE BECOMES COMPLIANT ───────────────────────────────────────────
- * Either (a) its enclosing top-level block calls one of the shared boundary
- * primitives, or (b) the line DECLARES its input channel with
+ * Either (a) its enclosing top-level block applies one of the shared boundary
+ * primitives TO THE SITE'S SUBJECT (presence of the primitive is not enough —
+ * see `guardBindsSubject`), or (b) the line DECLARES its input channel with
  * `SAME-ORIGIN-EXEMPT(<channel>): <reason>`. (b) exists because some of these
  * sites resolve the DEPLOY'S OWN endpoint — `LOOM_TRINO_URL`, `LOOM_AAS_SERVER`
  * — and an origin check of the boundary against itself is a tautology, not a
@@ -117,24 +143,38 @@ const SKIP_DIRS = new Set([
   '__tests__', // tests QUOTE the banned construction on purpose (this file does)
 ]);
 
-/** Floors. MEASURED at this head, not guessed. See "NOT-RUN IS NOT A PASS". */
-const MIN_FILES_SCANNED = 4100; // measured 4570 repo-wide
-const MIN_BEARER_FILES = 240; // measured 270
+/**
+ * Floors. MEASURED at this head, not guessed. See "NOT-RUN IS NOT A PASS".
+ *
+ * THE FIRST TWO ARE APPROXIMATE BY CONSTRUCTION and the header count is a MATCH
+ * count, both stated because a reviewer reproduced them and got different
+ * numbers for good reasons:
+ *   - the walk reads the FILESYSTEM, not the git index, so any untracked file
+ *     counts. A clean worktree gives ~4574 / ~268 where this comment once said
+ *     4570 / 270. Both pass; the delta is the instrument, not a disagreement.
+ *   - `HEADER_CONTINUATION` is matched GLOBALLY, so a line with two header reads
+ *     contributes two. 43 is regex matches, not distinct lines.
+ */
+const MIN_FILES_SCANNED = 4100; // measured ~4574 repo-wide
+const MIN_BEARER_FILES = 240; // measured ~268
 /** Files that attach a credential AND read a body continuation. Measured: 20. */
 const MIN_BODY_CONTINUATION_FILES = 18;
-/** Per-site response-header continuations in credentialed files. Measured: 43. */
+/** Response-header continuation MATCHES in credentialed files. Measured: 43. */
 const MIN_HEADER_CONTINUATION_SITES = 38;
-/** Absolute-URL passthrough sites in credentialed files. Measured: 8. */
-const MIN_S1_SITES = 7;
+/** Absolute-URL passthrough sites in credentialed files. Measured: 10. */
+const MIN_S1_SITES = 9;
 
-/** The shared boundary primitives. A site satisfies the guard by calling one. */
+/**
+ * The shared boundary primitives, as CALLS. A site satisfies the guard by
+ * calling one — and, for an S1 site, by calling one on the value it passes
+ * through (see {@link guardBindsSubject}).
+ */
 const GUARD_MARKERS = [
   'resolveSameOriginUrl(',
   'sameOriginUrlOrNull(',
   'assertSameOrigin(',
   'isSameOrigin(',
   'isContinuationAllowed(',
-  'sameOriginAs:',
   'ppRequestUrl(', // power-platform-auth's wrapper around resolveSameOriginUrl
   // host-match.ts — the sibling primitive, for suffix-scoped boundaries (a Key
   // Vault in THIS cloud) rather than a single fixed origin.
@@ -144,7 +184,34 @@ const GUARD_MARKERS = [
 ];
 
 /**
- * True when `text` CALLS a shared boundary primitive.
+ * `sameOriginAs` is an OPTION passed to the paging walker, not a call, so it
+ * needs its own shape — and the shape has to exclude the TYPE that declares it.
+ *
+ * `paging-budget.ts` declares both `sameOriginAs?: string;` (the options
+ * interface) and `sameOriginAs?: string,` (a parameter). The plain
+ * `'sameOriginAs:'` substring this replaces therefore made a NON-optional
+ * interface field — `interface Opts { sameOriginAs: string; }` — mark a file
+ * compliant; the optional form escaped only by accident, because the `?` broke
+ * the substring. Independent review of #4454 measured both and found them
+ * latent (0 of the 20 S2 members were compliant by that route). Closed here
+ * rather than left to become live: the VALUE must not be a bare TS type.
+ */
+// The lookahead sits IMMEDIATELY after the `:` on purpose. Written as
+// `:\s*(?!…)` the `\s*` backtracks to zero width and the lookahead is then
+// evaluated against the SPACE, which no type name matches — so the exclusion
+// silently never fires. Measured while writing the control below.
+const SAME_ORIGIN_OPTION =
+  /\bsameOriginAs\s*:(?!\s*(?:string|number|boolean|any|unknown|null|undefined)\s*[;,}\n])\s*/g;
+
+/**
+ * Offsets of every real boundary-primitive USE in `structural`.
+ *
+ * GIVE THIS THE `structural` MASK, NOT `code`. `lexSource` deliberately
+ * PRESERVES string bodies in `code` — both of the detector's own needles live
+ * inside literals — which means a marker inside a LITERAL scored as a boundary
+ * decision: `throw new Error('call resolveSameOriginUrl(x, base) first')` marked
+ * a file compliant. `structural` blanks literal bodies, so only a marker in real
+ * code counts. Also measured latent by the #4454 review, and closed here.
  *
  * A DEFINITION is not a use. `power-platform-auth.ts` exports `ppRequestUrl`,
  * which is itself a marker, so the very function that performs the boundary
@@ -153,16 +220,25 @@ const GUARD_MARKERS = [
  * `scripts/ci/ghsa-4gvx-mutation-receipts.mjs` survived exactly this way on the
  * first run of the harness, which is why the harness exists.
  */
-export function callsBoundaryPrimitive(text: string): boolean {
+export function boundaryPrimitiveSites(structural: string): number[] {
+  const out: number[] = [];
   for (const m of GUARD_MARKERS) {
-    let i = text.indexOf(m);
+    let i = structural.indexOf(m);
     while (i !== -1) {
-      const before = text.slice(Math.max(0, i - 30), i);
-      if (!/\b(?:function|class|interface|type)\s+$/.test(before)) return true;
-      i = text.indexOf(m, i + m.length);
+      const before = structural.slice(Math.max(0, i - 30), i);
+      if (!/\b(?:function|class|interface|type)\s+$/.test(before)) out.push(i);
+      i = structural.indexOf(m, i + m.length);
     }
   }
-  return false;
+  SAME_ORIGIN_OPTION.lastIndex = 0;
+  let m2: RegExpExecArray | null;
+  while ((m2 = SAME_ORIGIN_OPTION.exec(structural))) out.push(m2.index);
+  return out.sort((a, b) => a - b);
+}
+
+/** True when `structural` CALLS a shared boundary primitive — anywhere in it. */
+export function callsBoundaryPrimitive(structural: string): boolean {
+  return boundaryPrimitiveSites(structural).length > 0;
 }
 
 /**
@@ -174,8 +250,19 @@ const EXEMPT_DECLARATION = /SAME-ORIGIN-EXEMPT\(([a-z-]+)\)\s*:\s*(\S[^\n]*)/;
 /**
  * How many declared exemptions exist. A CEILING, not a target: raising it is an
  * edit to this file and therefore a reviewed act.
+ *
+ * 5 -> 6 in round 2. Independent review of #4454 walked all 18 absolute-URL
+ * tests the detector DISCARDED and found one wrong discard:
+ * `cloud-endpoints.aasServerBase` passes the tested value through as
+ * `trimmed.replace(/\/+$/, '')`, which the old bare-identifier `return S` shape
+ * could not see. It is the same `LOOM_AAS_SERVER` deploy-config class as
+ * `aasXmlaUrl` 58 lines below — so benign, but undeclared because the DETECTOR
+ * was blind, not because anyone decided it was exempt. The ceiling was therefore
+ * a bound on the passthroughs the detector happened to spell-match, not on how
+ * many exist. Widening `yieldsAfter` made the site visible; this is the reviewed
+ * act of declaring it.
  */
-const MAX_DECLARED_EXEMPTIONS = 5;
+const MAX_DECLARED_EXEMPTIONS = 6;
 
 /**
  * S2 channel B DEBT — files that read a server-chosen continuation HEADER and
@@ -201,8 +288,18 @@ const MAX_DECLARED_EXEMPTIONS = 5;
  *
  * These are LRO pollers (`Location` / `Azure-AsyncOperation`), the same class as
  * the two fixed in #4454, and each needs its own service base chosen correctly —
- * a per-client judgement, not a sweep. Tracked in the follow-up issue named in
- * the PR body; this guard is what stops the debt growing meanwhile.
+ * a per-client judgement, not a sweep.
+ *
+ * WHERE THIS DEBT IS TRACKED. In THIS LIST, and nowhere else yet. An earlier
+ * revision of this comment said "tracked in the follow-up issue named in the PR
+ * body"; the body named no such issue and no such issue existed — the same
+ * defect class this branch already shipped once (a `TOUCH_EXEMPT` comment citing
+ * a harness that did not cover the suite), and a comment asserting a fact it did
+ * not establish is a `deploy-integrity.md` R7 violation. No issue is opened
+ * while GHSA-4gvx-9p49-p43g is an unpublished draft advisory, because a public
+ * issue is a disclosure channel. The list is a real tracking artifact rather
+ * than a promise: the two rows below make it shrink-only — a file NOT in it
+ * fails, and a file that CLOSES and is left in it also fails.
  */
 const HEADER_CHANNEL_RESIDUAL = [
   'apps/fiab-console/lib/azure/aas-client.ts',
@@ -392,26 +489,232 @@ function escapeRe(x: string): string {
   return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** `name` appears in `text` as a whole identifier, not as a property of another. */
+function mentionsIdentifier(text: string, name: string): boolean {
+  return new RegExp(`(?<![\\w$.])${escapeRe(name)}(?![\\w$])`).test(text);
+}
+
+/**
+ * `[start, end)` of the STATEMENT containing `index`.
+ *
+ * Read off the `structural` mask, so a `;` or a brace inside a string, a
+ * template or a regex cannot end a statement early.
+ *
+ * WHY THIS EXISTS AT ALL — IT REPLACES A CHARACTER BUDGET. The previous draft
+ * reached for the ternary's `?` with `[\s\S]{0,40}` and for a `return` with
+ * `{0,120}`. Independent review of #4454 planted a client that pushed the `?`
+ * past forty characters with an inline comment; the site vanished from the
+ * population entirely. A number in a detector is a hiding place, and "DISTANCE
+ * is not a hiding place" was true at line scale and false at character scale. A
+ * syntactic span has no budget to exceed.
+ */
+export function statementBounds(
+  structural: string,
+  index: number,
+  lo = 0,
+  hi = structural.length,
+): [number, number] {
+  let start = lo;
+  let d = 0;
+  for (let i = index; i >= lo; i--) {
+    const c = structural[i];
+    if (c === ')' || c === ']' || c === '}') d++;
+    else if (c === '(' || c === '[' || c === '{') { if (d === 0) { start = i + 1; break; } d--; }
+    else if (c === ';' && d === 0) { start = i + 1; break; }
+  }
+  let end = hi;
+  d = 0;
+  for (let i = index; i < hi; i++) {
+    const c = structural[i];
+    if (c === '(' || c === '[' || c === '{') d++;
+    else if (c === ')' || c === ']' || c === '}') { if (d === 0) { end = i; break; } d--; }
+    else if (c === ';' && d === 0) { end = i; break; }
+  }
+  return [start, end];
+}
+
+/**
+ * The CONSEQUENT of the `if` whose CONDITION contains `index`, as `[start, end)`
+ * — or null when the site is not inside an `if (…)` at all.
+ *
+ * Walking to the opening paren rather than matching `if\s*\(\s*!?\s*$` right
+ * before the site also means a compound condition (`if (ready && isAbs(x))`)
+ * is recognised, which the fixed-prefix match was not.
+ */
+export function ifConsequent(structural: string, index: number, hi: number): [number, number] | null {
+  let d = 0;
+  let open = -1;
+  for (let i = index - 1; i >= 0; i--) {
+    const c = structural[i];
+    if (c === ')') d++;
+    else if (c === '(') { if (d === 0) { open = i; break; } d--; }
+    else if (c === ';' || c === '{' || c === '}') break;
+  }
+  if (open < 0) return null;
+  if (!/\bif\s*$/.test(structural.slice(Math.max(0, open - 8), open))) return null;
+  d = 0;
+  let close = -1;
+  for (let i = open; i < hi; i++) {
+    const c = structural[i];
+    if (c === '(') d++;
+    else if (c === ')') { d--; if (d === 0) { close = i; break; } }
+  }
+  if (close < 0) return null;
+  let s = close + 1;
+  while (s < hi && /\s/.test(structural[s])) s++;
+  if (structural[s] === '{') {
+    d = 0;
+    for (let i = s; i < hi; i++) {
+      const c = structural[i];
+      if (c === '{') d++;
+      else if (c === '}') { d--; if (d === 0) return [s, i + 1]; }
+    }
+    return [s, hi];
+  }
+  for (let i = s; i < hi; i++) if (structural[i] === ';') return [s, i + 1];
+  return [s, hi];
+}
+
+/**
+ * Methods that take a URL APART rather than pass it along.
+ * `return v.match(/^https:\/\/([^.]+)\./)` is a parser, not a passthrough, and
+ * flagging it would put a URL parser in a security guard it has nothing to do
+ * with — which is how a guard earns the ignore-it reflex.
+ *
+ * DELIBERATELY AN EXCLUSION, SO THE DEFAULT IS FLAGGED. `aasServerBase` yielded
+ * `trimmed.replace(/\/+$/, '')` and was invisible to the previous draft for no
+ * better reason than that spelling — the narrower-enumeration failure this whole
+ * file exists to avoid, one level down. An enumeration that fails CLOSED makes
+ * the next unrecognised spelling visible instead of silent.
+ */
+const URL_DESTRUCTURING_METHODS =
+  /^(?:match|exec|test|split|indexOf|lastIndexOf|search|charAt|charCodeAt|codePointAt|startsWith|endsWith|includes|localeCompare|length)$/;
+
+/**
+ * True when `text` yields `name` — whole, or through a transform that keeps it a
+ * URL — immediately after `lead` (`?` for a ternary, `return`/`=>` for a return).
+ *
+ * The transform arm is not decoration: `kv-secrets-client` yields
+ * `ov.replace(/\/$/, '')` and `cloud-endpoints.aasXmlaUrl` yields
+ * `s.endsWith('/xmla') ? s : …`. A bare-identifier-only match drops both.
+ */
+function yieldsAfter(text: string, name: string, lead: string): boolean {
+  const re = new RegExp(
+    `${lead}\\s*${escapeRe(name)}(?![\\w$])\\s*(?:\\.\\s*([A-Za-z_$][\\w$]*))?`,
+    'g',
+  );
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (!m[1] || !URL_DESTRUCTURING_METHODS.test(m[1])) return true;
+  }
+  return false;
+}
+
 /**
  * True when the tested value is what the expression YIELDS — i.e. the absolute
  * URL is passed through rather than taken apart.
  *
- * Two shapes, and the NEGATION matters in both. `x.match(/^https:\/\/([^.]+)\./)`
- * extracts a capture group and never yields `x`, and
- * `if (!isAbs(ref)) return ref;` yields the value in the branch where it is NOT
- * absolute. Treating either as a passthrough would put a URL PARSER in a
- * security guard it has nothing to do with, which is how a guard earns the
- * ignore-it reflex.
+ * THREE SHAPES, EACH SCOPED SYNTACTICALLY, NEVER BY A CHARACTER BUDGET:
+ *   1. TERNARY — `isAbs(p) ? p : …`, searched over the enclosing STATEMENT.
+ *   2. EARLY RETURN — `if (isAbs(p)) return p;`, searched over that `if`'s
+ *      CONSEQUENT, and allowing an identity-preserving transform on the way out.
+ *   3. ASSIGN-THEN-RETURN — `if (isAbs(p)) u = p;` … `return u;`. The most
+ *      natural refactor of the very construction being guarded, and the previous
+ *      draft did not recognise it as a yield at all: review planted it as a real
+ *      client and the site never entered the population.
+ *
+ * The NEGATION matters in all three: `if (!isAbs(ref)) return ref;` yields the
+ * value in the branch where it is NOT absolute.
+ *
+ * `structural` defaults to `code` so a literal-free fixture can call this with
+ * one argument; real scanning always passes the mask and the enclosing block.
  */
-export function yieldsTestedValue(code: string, site: AbsTestSite): boolean {
+export function yieldsTestedValue(
+  code: string,
+  site: AbsTestSite,
+  structural: string = code,
+  block: [number, number] = [0, code.length],
+): boolean {
   const S = escapeRe(site.subject);
-  const after = code.slice(site.end, site.end + 400);
+  const be = block[1];
   const before = code.slice(Math.max(0, site.index - 60), site.index);
   const negated = /[!]\s*$/.test(before);
-  if (new RegExp(`^[\\s\\S]{0,40}?\\?\\s*${S}\\b`).test(after)) return !negated;
-  const guardedIf = /\bif\s*\(\s*!?\s*$/.test(before);
-  const yieldsIt = new RegExp(`^[\\s\\S]{0,120}?(?:return|=>)\\s*${S}\\s*[;,)\\n]`).test(after);
-  if (guardedIf && yieldsIt) return !negated;
+
+  const [, stmtEnd] = statementBounds(structural, site.end, 0, be);
+  if (yieldsAfter(code.slice(site.end, stmtEnd), site.subject, '\\?')) return !negated;
+
+  const cons = ifConsequent(structural, site.index, be);
+  if (!cons) return false;
+  const consText = code.slice(cons[0], cons[1]);
+  // The ternary can live INSIDE the consequent too — `if (isAbs(s)) return
+  // s.endsWith('/xmla') ? s : …` is `aasXmlaUrl`, a real declared site.
+  if (yieldsAfter(consText, site.subject, '\\?')) return !negated;
+  if (yieldsAfter(consText, site.subject, '(?:return|=>)')) return !negated;
+
+  const assign = new RegExp(`\\b([A-Za-z_$][\\w$]*)\\s*=(?![=>])\\s*${S}\\s*[;\\n]`).exec(consText);
+  if (assign && yieldsAfter(code.slice(cons[1], be), assign[1], '(?:return|=>)')) return !negated;
+  return false;
+}
+
+/**
+ * The names in `structural` that CARRY the site's subject — the subject itself
+ * plus anything assigned from an expression mentioning it, transitively.
+ *
+ * This exists because the canonical fix introduces exactly one hop:
+ *
+ *     const rel = isAbsoluteHttpUrl(path) || path.startsWith('/') ? path : `/${path}`;
+ *     return resolveSameOriginUrl(rel, armBase(), 'the ARM token');
+ *
+ * Demanding `path` itself as the primitive's argument would fail the very shape
+ * this change adopts, so the alias closure is what makes the subject
+ * requirement usable rather than merely strict.
+ */
+function subjectAliases(structural: string, subject: string): Set<string> {
+  const aliases = new Set<string>([subject]);
+  const head = /^[A-Za-z_$][\w$]*/.exec(subject)?.[0];
+  if (head) aliases.add(head);
+  const ASSIGN = /(?:\b(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(?::[^=;\n]+)?=(?![=>])/g;
+  for (let pass = 0; pass < 4; pass++) {
+    let grew = false;
+    ASSIGN.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = ASSIGN.exec(structural))) {
+      const name = m[1];
+      if (aliases.has(name)) continue;
+      const from = m.index + m[0].length;
+      const [, to] = statementBounds(structural, from);
+      const rhs = structural.slice(from, to);
+      for (const a of aliases) {
+        if (mentionsIdentifier(rhs, a)) { aliases.add(name); grew = true; break; }
+      }
+    }
+    if (!grew) break;
+  }
+  return aliases;
+}
+
+/**
+ * True when a boundary primitive is applied TO THE SITE'S SUBJECT (or to a value
+ * carrying it) somewhere in `structuralBlock`.
+ *
+ * WHY PRESENCE IS NOT ENOUGH — THIS IS M3, ONE LEVEL DEEPER. M3 taught the guard
+ * that a DEFINITION is not a use. But `callsBoundaryPrimitive` was still only a
+ * PRESENCE test over the enclosing block: it never asked whether the value that
+ * is passed through is the value that went through the primitive. Independent
+ * review of #4454 planted a client whose block called
+ * `resolveSameOriginUrl(somethingElse, base)` and then returned the tested value
+ * verbatim, and the guard scored it GUARDED. That is the same tautology M3 was —
+ * the marker satisfies the check without the check being performed on the
+ * subject — and it is the second time in one change that a fix turned out to be
+ * a NARROWER ENUMERATION than the class it claimed to close.
+ */
+export function guardBindsSubject(structuralBlock: string, subject: string): boolean {
+  const aliases = subjectAliases(structuralBlock, subject);
+  for (const at of boundaryPrimitiveSites(structuralBlock)) {
+    const [s, e] = statementBounds(structuralBlock, at);
+    const stmt = structuralBlock.slice(s, e);
+    for (const a of aliases) if (mentionsIdentifier(stmt, a)) return true;
+  }
   return false;
 }
 
@@ -551,7 +854,17 @@ interface Finding {
   rel: string;
   line: number;
   text: string;
-  /** A shared boundary primitive is called in the site's enclosing block. */
+  /**
+   * A boundary decision covering this site is made in its enclosing block.
+   *
+   * For an S1 site that means the primitive is applied to the site's SUBJECT
+   * ({@link guardBindsSubject}). For a header site there is no extractable
+   * subject — the value is whatever `headers.get(…)` returned, and the capture
+   * and the decision are routinely in different functions by design — so it
+   * stays a PRESENCE test. Channel B's assertion is `fileGuarded` anyway; this
+   * flag is the dump's annotation, and the difference is stated rather than
+   * left for a reader to assume.
+   */
   guarded: boolean;
   /** A shared boundary primitive is called ANYWHERE in the file. */
   fileGuarded: boolean;
@@ -563,16 +876,15 @@ function s1Findings(): Finding[] {
   for (const f of CREDENTIALED_FILES) {
     const rawLines = RAW_LINES_BY_REL.get(f.rel) as string[];
     for (const site of absoluteUrlTests(f.code)) {
-      if (!yieldsTestedValue(f.code, site)) continue;
       const [bs, be] = enclosingTopLevelBlock(f.structural, site.index);
-      const block = f.code.slice(bs, be);
+      if (!yieldsTestedValue(f.code, site, f.structural, [bs, be])) continue;
       const { no } = lineAt(f, site.index);
       out.push({
         rel: f.rel,
         line: no,
         text: site.text.trim(),
-        guarded: callsBoundaryPrimitive(block),
-        fileGuarded: callsBoundaryPrimitive(f.code),
+        guarded: guardBindsSubject(f.structural.slice(bs, be), site.subject),
+        fileGuarded: callsBoundaryPrimitive(f.structural),
         declared: declaredExemption(rawLines, no),
       });
     }
@@ -588,14 +900,13 @@ function headerFindings(): Finding[] {
     let m: RegExpExecArray | null;
     while ((m = HEADER_CONTINUATION.exec(f.code))) {
       const [bs, be] = enclosingTopLevelBlock(f.structural, m.index);
-      const block = f.code.slice(bs, be);
       const { no } = lineAt(f, m.index);
       out.push({
         rel: f.rel,
         line: no,
         text: m[0],
-        guarded: callsBoundaryPrimitive(block),
-        fileGuarded: callsBoundaryPrimitive(f.code),
+        guarded: callsBoundaryPrimitive(f.structural.slice(bs, be)),
+        fileGuarded: callsBoundaryPrimitive(f.structural),
         declared: declaredExemption(rawLines, no),
       });
     }
@@ -740,8 +1051,122 @@ describe('S1 — no absolute-URL passthrough in a credentialed context', () => {
   it('at least one REAL site is compliant by GUARD, not by declaration', () => {
     // Without this, a tree where every site had talked its way out with a
     // declaration would look identical to a tree where the fix landed. Measured
-    // at this head: arm-client, mcp-client, power-platform-auth.
+    // at this head: arm-client, mcp-client, postgres-flex-client,
+    // power-platform-auth.
     expect(S1.filter((f) => f.guarded).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('THE PRIMITIVE MUST BE APPLIED TO THE SUBJECT — naming it in the block is not enough', () => {
+    // N2 from the #4454 round-2 review, planted there as a real client under
+    // lib/azure and scored GUARDED by the previous draft. It is M3's tautology
+    // one level deeper: `callsBoundaryPrimitive` asked whether a primitive was
+    // NAMED in the block, never whether the value passed through is the value
+    // that went through it.
+    const evasive = [
+      'function n2Url(p: string) {',
+      "  const probe = resolveSameOriginUrl('/ping', BASE, 'the ARM token');",
+      '  void probe;',
+      "  if (/^https?:\\/\\//i.test(p)) return p;",
+      '  return `${BASE}${p}`;',
+      '}',
+    ].join('\n');
+    const { code, structural } = lexSource(evasive);
+    const site = absoluteUrlTests(code).filter((s) => yieldsTestedValue(code, s, structural))[0];
+    expect(site).toBeDefined();
+    // The marker IS present in the block — the old check passed on exactly this.
+    expect(callsBoundaryPrimitive(structural)).toBe(true);
+    // …but it is not applied to `p`, nor to anything carrying `p`.
+    expect(guardBindsSubject(structural, site.subject)).toBe(false);
+
+    // …and the one-hop alias the real fix uses still counts, or the requirement
+    // would reject the canonical shape this change adopts everywhere.
+    const real = [
+      'function armUrl(path: string) {',
+      "  const rel = isAbsoluteHttpUrl(path) || path.startsWith('/') ? path : `/${path}`;",
+      "  return resolveSameOriginUrl(rel, armBase(), 'the ARM token');",
+      '}',
+    ].join('\n');
+    const lx = lexSource(real);
+    const realSite = absoluteUrlTests(lx.code).filter((s) => yieldsTestedValue(lx.code, s, lx.structural))[0];
+    expect(realSite).toBeDefined();
+    expect(guardBindsSubject(lx.structural, realSite.subject)).toBe(true);
+  });
+
+  it('ASSIGN-THEN-RETURN is a yield — the most natural refactor of the guarded construction', () => {
+    // N1 from the #4454 round-2 review. `yieldsTestedValue` recognised only
+    // `return`/`=>`, so a client that assigned the absolute value to a local and
+    // returned the local never entered the population AT ALL — it was not
+    // scored wrongly, it was invisible.
+    const src = [
+      'function n1Url(p: string) {',
+      '  let u = `${BASE}${p}`;',
+      "  if (/^https?:\\/\\//i.test(p)) u = p;",
+      '  return u;',
+      '}',
+    ].join('\n');
+    const { code, structural } = lexSource(src);
+    expect(absoluteUrlTests(code).filter((s) => yieldsTestedValue(code, s, structural))).toHaveLength(1);
+
+    // …and the local has to actually be YIELDED. An assignment that goes
+    // nowhere is not a passthrough.
+    const inert = [
+      'function logOnly(p: string) {',
+      '  let seen = "";',
+      "  if (/^https?:\\/\\//i.test(p)) seen = p;",
+      '  return `${BASE}${p}` + seen.length;',
+      '}',
+    ].join('\n');
+    const lx = lexSource(inert);
+    expect(absoluteUrlTests(lx.code).filter((s) => yieldsTestedValue(lx.code, s, lx.structural))).toHaveLength(0);
+  });
+
+  it('a CHARACTER BUDGET is a hiding place — the `?` may sit any distance from the test', () => {
+    // N3 from the #4454 round-2 review: an inline comment pushed the ternary's
+    // `?` past the old `[\s\S]{0,40}` window and the site vanished. Comments are
+    // blanked to SPACES (offsets are preserved), so the distance survives the
+    // mask — which is precisely why a character budget could be defeated with a
+    // comment. The span is now the enclosing STATEMENT.
+    const pad = ' '.repeat(300);
+    const src = [
+      'function n3Url(p: string) {',
+      `  const u = /^https?:\\/\\//i.test(p) /*${pad}*/ ? p : \`\${BASE}\${p}\`;`,
+      '  return u;',
+      '}',
+    ].join('\n');
+    const { code, structural } = lexSource(src);
+    expect(absoluteUrlTests(code).filter((s) => yieldsTestedValue(code, s, structural))).toHaveLength(1);
+
+    // …and the statement really is the bound: a `? p` in the NEXT statement is
+    // not this site's ternary.
+    const next = [
+      'function unrelated(p: string, q: boolean) {',
+      "  const abs = /^https?:\\/\\//i.test(p);",
+      '  const pick = q ? p : BASE;',
+      '  return abs ? BASE : pick.length;',
+      '}',
+    ].join('\n');
+    const lx = lexSource(next);
+    expect(absoluteUrlTests(lx.code).filter((s) => yieldsTestedValue(lx.code, s, lx.structural))).toHaveLength(0);
+  });
+
+  it('a marker inside a STRING LITERAL is not a boundary decision', () => {
+    // `lexSource` must PRESERVE string bodies in `code` (the detector's own
+    // needles live in literals), so scoring compliance off `code` let an error
+    // MESSAGE that merely names the primitive mark a file compliant. Review of
+    // #4454 measured this latent — 0 of the 20 S2 members were compliant by a
+    // literal-only marker — and latent is the moment to close it.
+    const lie = "function f(u) {\n  throw new Error('call resolveSameOriginUrl(u, base) first');\n}";
+    const lx = lexSource(lie);
+    expect(lx.code).toContain('resolveSameOriginUrl(');   // still visible in `code`
+    expect(callsBoundaryPrimitive(lx.structural)).toBe(false);
+
+    // The TYPE that declares the paging option is not a use of it either —
+    // optional or not. The old `'sameOriginAs:'` substring caught the
+    // non-optional form; the optional form escaped only because of the `?`.
+    expect(callsBoundaryPrimitive(lexSource('interface O { sameOriginAs: string; }').structural)).toBe(false);
+    expect(callsBoundaryPrimitive(lexSource('interface O { sameOriginAs?: string; }').structural)).toBe(false);
+    expect(callsBoundaryPrimitive(lexSource('walk(cb, { sameOriginAs: armBase() });').structural)).toBe(true);
+    expect(callsBoundaryPrimitive(lexSource('walk(cb, { sameOriginAs: base });').structural)).toBe(true);
   });
 
   it('every declaration names a channel AND gives a reason', () => {
@@ -857,6 +1282,74 @@ describe('S1 — no absolute-URL passthrough in a credentialed context', () => {
   });
 });
 
+describe('the two resolver copies cannot silently diverge', () => {
+  /**
+   * `azure-functions/report-subscriptions` is a separate npm package with its
+   * own build, so it cannot import the console module — it carries a faithful
+   * SUBSET copy instead.
+   *
+   * WHOLE-REPO SCANNING DOES NOT ANSWER THE DRIFT RISK, and the PR body said it
+   * did. Scanning detects a NEW passthrough in that package; it cannot detect
+   * the two IMPLEMENTATIONS diverging, because the copy IS a definition of the
+   * marker — weaken the copy's body and `insights-engine.ts` still calls
+   * `resolveSameOriginUrl(` and still scores compliant. What actually guards
+   * divergence is this row: the shared function bodies must agree, modulo
+   * comments and whitespace.
+   */
+  const CONSOLE_RESOLVER = 'apps/fiab-console/lib/util/same-origin-url.ts';
+  const COPY_RESOLVER = 'azure-functions/report-subscriptions/src/same-origin-url.ts';
+  /** The four the copy defines. It omits `sameOriginUrlOrNull` / `assertSameOrigin`. */
+  const SHARED = ['isAbsoluteHttpUrl', 'originOf', 'isSameOrigin', 'resolveSameOriginUrl'];
+
+  /** A named top-level function's BODY, comments blanked and whitespace collapsed. */
+  function bodyOf(source: string, name: string): string | null {
+    const { code, structural } = lexSource(source.replace(/\r/g, ''));
+    const at = structural.indexOf(`function ${name}(`);
+    if (at === -1) return null;
+    let d = 0;
+    let open = -1;
+    for (let i = at; i < structural.length; i++) {
+      if (structural[i] === '(') d++;
+      else if (structural[i] === ')') { d--; if (d === 0) { open = i + 1; break; } }
+    }
+    if (open === -1) return null;
+    while (open < structural.length && structural[open] !== '{') open++;
+    d = 0;
+    for (let i = open; i < structural.length; i++) {
+      if (structural[i] === '{') d++;
+      else if (structural[i] === '}') { d--; if (d === 0) return code.slice(open, i + 1).replace(/\s+/g, ' ').trim(); }
+    }
+    return null;
+  }
+
+  it('every function the copy defines has the SAME body as the console module', () => {
+    const consoleSrc = readFileSync(path.join(REPO_ROOT, CONSOLE_RESOLVER), 'utf8');
+    const copySrc = readFileSync(path.join(REPO_ROOT, COPY_RESOLVER), 'utf8');
+    const differing: string[] = [];
+    for (const fn of SHARED) {
+      const a = bodyOf(consoleSrc, fn);
+      const b = bodyOf(copySrc, fn);
+      // A function that cannot be FOUND is a divergence too, not a skip — that
+      // is how an equivalence check quietly stops checking.
+      if (a === null || b === null || a !== b) differing.push(`${fn} (console=${a === null ? 'ABSENT' : 'present'}, copy=${b === null ? 'ABSENT' : 'present'})`);
+    }
+    expect(differing).toEqual([]);
+  });
+
+  it('the check is not vacuous — a one-character weakening of the copy IS reported', () => {
+    const consoleSrc = readFileSync(path.join(REPO_ROOT, CONSOLE_RESOLVER), 'utf8');
+    const copySrc = readFileSync(path.join(REPO_ROOT, COPY_RESOLVER), 'utf8');
+    // The exact weakening R1 applies to the console module: compare by PREFIX
+    // instead of by ORIGIN. Applied to the COPY here, in memory only.
+    const weakened = copySrc.replace(
+      'if (target.origin !== baseOrigin) throw new OffOriginUrlError(\'off-origin\', credentialLabel);',
+      'if (!raw.startsWith(base)) throw new OffOriginUrlError(\'off-origin\', credentialLabel);',
+    );
+    expect(weakened).not.toBe(copySrc); // the find string must still exist
+    expect(bodyOf(weakened, 'resolveSameOriginUrl')).not.toBe(bodyOf(consoleSrc, 'resolveSameOriginUrl'));
+  });
+});
+
 describe('S2 channel A — a credentialed nextLink walker makes a boundary decision', () => {
   const population = SCANNED.filter((f) => CREDENTIALED.test(f.code) && BODY_CONTINUATION.test(f.code));
 
@@ -883,7 +1376,7 @@ describe('S2 channel A — a credentialed nextLink walker makes a boundary decis
     expect(callsBoundaryPrimitive(call)).toBe(true);
     // …and the real module still counts, because it CALLS resolveSameOriginUrl.
     const real = SCANNED.find((f) => f.rel === 'apps/fiab-console/lib/azure/power-platform-auth.ts');
-    expect(real && callsBoundaryPrimitive(real.code)).toBe(true);
+    expect(real && callsBoundaryPrimitive(real.structural)).toBe(true);
   });
 
   it('the marker check is not vacuous — a file with no marker IS reported', () => {

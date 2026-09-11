@@ -192,8 +192,8 @@ const MUTATIONS = [
     id: 'G3',
     desc: 'guard — score the passthrough on ONE line at a time (a multiline ternary walks through)',
     file: `${GUARD}`,
-    find: '  const after = code.slice(site.end, site.end + 400);',
-    replace: '  const after = code.slice(site.end, site.end + 400).split(\'\\n\')[0];',
+    find: "  if (yieldsAfter(code.slice(site.end, stmtEnd), site.subject, '\\\\?')) return !negated;",
+    replace: "  if (yieldsAfter(code.slice(site.end, stmtEnd).split('\\n')[0], site.subject, '\\\\?')) return !negated;",
     suites: [GUARD],
     expect: 'RED',
   },
@@ -264,8 +264,8 @@ const MUTATIONS = [
     id: 'E1',
     desc: 'EVASION — self-satisfying marker: a function whose NAME is a guard marker (M3\'s mechanism, generalised)',
     file: `${GUARD}`,
-    find: '      if (!/\\b(?:function|class|interface|type)\\s+$/.test(before)) return true;',
-    replace: '      return true;',
+    find: '      if (!/\\b(?:function|class|interface|type)\\s+$/.test(before)) out.push(i);',
+    replace: '      out.push(i);',
     suites: [GUARD],
     expect: 'RED',
   },
@@ -288,11 +288,70 @@ const MUTATIONS = [
     expect: 'RED',
   },
   {
+    // Also the control for the round-2 nit "a marker inside a STRING LITERAL is
+    // not a boundary decision": compliance is scored off `structural`, so
+    // leaving literal bodies in it makes an error MESSAGE that merely names the
+    // primitive mark a file compliant. One mutation, two rows it must kill.
     id: 'E4',
     desc: 'EVASION — hide the passthrough inside a template literal so the STRUCTURAL mask skews brace depth',
     file: `${GUARD}`,
     find: '      blankStructural(i + 1, Math.max(i + 1, end - 1));',
     replace: '      /* mutated: string bodies are left in the structural mask */',
+    suites: [GUARD],
+    expect: 'RED',
+  },
+
+  // ── The three shapes the ROUND-2 review planted, one row each ────────────
+  //
+  // Independent re-review of #4454 wrote three ORDINARY credentialed clients
+  // under lib/azure — absolute-URL passthrough, `credential.getToken(…)`,
+  // `` authorization: `Bearer ${tok}` `` — and ran the guard unmodified:
+  // `GUARD_RC_WITH_EVASIVE_CLIENTS=0`, 29/29 passed. Two were not in the
+  // population at all and the third was scored GUARDED. Each row below reverts
+  // exactly one of the three widenings that closed them, so the claim "the
+  // guard now catches these" is a receipt rather than an assertion.
+  {
+    id: 'N1',
+    desc: 'ROUND-2 EVASION — assign-then-return is no longer a yield (`if (isAbs(p)) u = p; return u;` vanishes)',
+    file: `${GUARD}`,
+    find: "  if (assign && yieldsAfter(code.slice(cons[1], be), assign[1], '(?:return|=>)')) return !negated;",
+    replace: '  if (false) return !negated;',
+    suites: [GUARD],
+    expect: 'RED',
+  },
+  {
+    id: 'N2',
+    desc: 'ROUND-2 EVASION — `guarded` goes back to PRESENCE (a primitive called on a DIFFERENT value scores compliant)',
+    file: `${GUARD}`,
+    find: '    for (const a of aliases) if (mentionsIdentifier(stmt, a)) return true;',
+    replace: '    void stmt; void aliases; return true;',
+    suites: [GUARD],
+    expect: 'RED',
+  },
+  {
+    id: 'N3',
+    desc: 'ROUND-2 EVASION — restore the {0,40} character budget (an inline comment pushes the `?` out of reach)',
+    file: `${GUARD}`,
+    find: '  const [, stmtEnd] = statementBounds(structural, site.end, 0, be);',
+    replace: '  const stmtEnd = site.end + 40;',
+    suites: [GUARD],
+    expect: 'RED',
+  },
+  {
+    id: 'X5',
+    desc: 'ROUND-2 NIT — `sameOriginAs:` back to a bare substring (an interface FIELD marks a file compliant)',
+    file: `${GUARD}`,
+    find: "  /\\bsameOriginAs\\s*:(?!\\s*(?:string|number|boolean|any|unknown|null|undefined)\\s*[;,}\\n])\\s*/g;",
+    replace: '  /\\bsameOriginAs\\s*:/g;',
+    suites: [GUARD],
+    expect: 'RED',
+  },
+  {
+    id: 'X6',
+    desc: 'ROUND-2 NIT — DIVERGE the console resolver from its azure-functions copy (the equivalence row must see it)',
+    file: 'lib/util/same-origin-url.ts',
+    find: "  return /^https?:\\/\\//i.test((raw || '').trim());",
+    replace: "  return /^https?:\\/\\//i.test(String(raw ?? '').trim());",
     suites: [GUARD],
     expect: 'RED',
   },

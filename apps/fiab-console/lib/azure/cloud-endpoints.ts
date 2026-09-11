@@ -927,6 +927,16 @@ export function aasServerBase(server: string): string {
   if (!server) return '';
   const trimmed = server.trim();
   // Already an HTTPS base URL — strip any trailing slash and pass through.
+  // SAME-ORIGIN-EXEMPT(deploy-config): `server` is the deploy's own Analysis
+  // Services URI (`LOOM_AAS_SERVER` / a semantic model's `state.aasServer`).
+  // Like `aasXmlaUrl` below, this CONSTRUCTS the AAS base — it is the boundary,
+  // not a candidate to be checked against one, so an origin check here would be
+  // a tautology. Measured at this head: it has no production call site at all
+  // (only `__tests__/cloud-matrix.test.ts`), so no response body or header
+  // reaches it today either. Declared rather than left undeclared because the
+  // detector could not SEE it — `yieldsTestedValue` discards it only because the
+  // returned expression is `trimmed.replace(…)` rather than `trimmed`, which is
+  // a spelling accident and not a decision anyone made.
   if (/^https:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '');
   // asazure:// connection string form.
   const m = trimmed.match(/^asazure:\/\/([^/]+)\/(.+)$/i);
