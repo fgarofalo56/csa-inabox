@@ -62,6 +62,83 @@ permissions:
   contents: read
   issues: write
 
+# ── STOP THE DAILY CRON STACKING AT THE APPROVAL GATE (#4233) ───────────────
+# `environment: gcc-high-deploy` on deploy-validate below requires a manual
+# approval, and this workflow had NO `concurrency:` block at all. Measured
+# 2026-09-07 (`gh run list --workflow deploy-fiab-gcch --limit 12`): ELEVEN
+# scheduled runs sat in `waiting` — 33111419147, 33210760783, 33258539150,
+# 33317217630, 33418795086, 33638903756, 33764198346, 33880466694, 33967908574,
+# 34035634353, 34138038567 — one per day since 2026-08-27, each holding its own
+# approval request. Only 33519232492 (2026-09-01) was ever approved, and it is
+# the failure this issue is about.
+#
+# `cancel-in-progress` is FALSE, DELIBERATELY, and that is the whole design
+# decision here. GitHub keeps only ONE PENDING run per concurrency group and
+# cancels the previously pending one *even when cancel-in-progress is false*
+# (the behaviour deploy-fiab-commercial.yml:2197 records), so `false` already
+# collapses the pile — while `true` would additionally cancel a run that is
+# genuinely EXECUTING. On this lane that is not a saved minute, it is a hazard
+# with a measured blast radius: the image-preflight step below holds an ACR
+# FIREWALL LEASE (`publicNetworkAccess=Enabled` on the sovereign registry) for
+# the duration of its probe, and a cancel inside that window kills the holder
+# before `release_lease` re-locks it. The estate then relies on the lease TTL
+# (75 min) plus acr-firewall-sweeper.yml to re-lock — and the sweeper's OBSERVED
+# cadence is ~5h, not the 15-minute cron it declares (see its own header note).
+# So a blanket `true` trades a stacked queue for hours of a publicly reachable
+# GCC-High registry, and for a `az deployment sub create` killed mid-apply.
+# loom-roll-and-validate.yml:156 made the same call for the same reason.
+#
+# The group is keyed by `github.event_name` so the two trigger paths never
+# queue behind each other. Without that key an operator's `workflow_dispatch`
+# — the path used to actually FIX a sovereign estate — would sit pending behind
+# a twelve-day-old cron run that is waiting for an approval nobody intends to
+# give, which is a worse failure than the one being fixed.
+#
+# THE PRECEDENT REACHES THE OPPOSITE DECISION, AND THAT IS QUOTED HERE RATHER
+# THAN ELIDED. deploy-fiab-commercial.yml:2197 uses the same mechanism to
+# DECLINE a concurrency group: "GitHub keeps only ONE pending run per group and
+# CANCELS the previously pending one, even with cancel-in-progress: false. That
+# converts a visible, ~6-minute, self-healing revert into a SILENTLY DROPPED
+# roll at a specific SHA — strictly worse than the bug." The same cancellation
+# is what collapses the pile here, so the divergence is in what is being
+# cancelled, not in how GitHub behaves: there, a pending ROLL that would have
+# healed the estate on its own; here, a pending run whose only next act is to
+# ask for an approval that is already outstanding eleven times over.
+#
+# The analogous exposure on THIS lane is real and is not dismissed: a silently
+# cancelled pending run never reaches `Notify on failure`, so the lane can go
+# DARK rather than red — deploy-integrity R3, a lane silently trailing `main`.
+# What bounds it here is that the newest scheduled run is the one that survives,
+# so the lane's position is never older than one cron interval, and the
+# staleness surface (check-deploy-staleness.mjs) reports the estate's drift
+# independently of whether any run reported it. On the commercial lane neither
+# of those holds, which is why the same mechanism gets the opposite answer.
+#
+# RESIDUAL, stated rather than implied, and NOT asserted as fact — whether an
+# environment-`waiting` run counts as PENDING (cancellable) or IN-PROGRESS
+# (not) for the group is UNOBSERVED, and it decides the shape:
+#   - if `waiting` is PENDING: the pile caps at one and no hand-cancel is
+#     needed; each new cron run replaces the previous waiting one.
+#   - if `waiting` is IN-PROGRESS: the group's occupant is the oldest waiting
+#     scheduled run, the pile caps at two, and the stale occupant has to be
+#     cancelled by hand EACH cycle — not once — because the promoted run hits
+#     the same `gcc-high-deploy` gate and re-occupies the group. Every
+#     intervening scheduled run is then silently cancelled.
+# Either way this is strictly better than eleven, and either way approving a
+# stale occupant deploys the SHA it was triggered on, not head. The measurement
+# that settles it is tracked in #4233.
+#
+# THE ELEVEN EXISTING `waiting` RUNS DO NOT OCCUPY THIS GROUP. A run executes
+# the workflow definition it was CREATED from, and all eleven were created from
+# a SHA that has no `concurrency:` block, so the first occupant will be the
+# first NEW scheduled run — not the oldest of the eleven. (Derived from how a
+# run is created, not observed on this lane.) Those eleven still need
+# cancelling by hand once, as a one-off cleanup of the backlog this block
+# prevents recurring.
+concurrency:
+  group: deploy-fiab-gcch-${{ github.event_name }}
+  cancel-in-progress: false
+
 env:
   AZURE_CLOUD: AzureUSGovernment
   AZURE_LOCATION: usgovvirginia
@@ -93,6 +170,52 @@ jobs:
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
 
+  # The DECLARATION half of the estate-pause verdict, computed with NO Azure.
+  #
+  # `deploy-validate`'s `estate_paused` output is declaration AND observed-
+  # stopped, and reading the second half costs a Gov login inside a job that sits
+  # behind the `gcc-high-deploy` approval gate. The image phase below runs BEFORE
+  # all of that and still MUTATES the sovereign estate — it acquires the ACR
+  # firewall lease (publicNetworkAccess=Enabled) and `az acr build`s two images
+  # into the GCC-High registry. Measured on the declared-paused schedule, runs
+  # 34138038567 (2026-09-07) and 33111419147 (2026-08-27): `Build both images on
+  # the Gov ACR` = success, `Release the ACR firewall lease (always)` = success.
+  #
+  # So this job exists to give the image phase a verdict it can compute from a
+  # checked-in file alone. scripts/ci/_estate-pause-declaration.mjs is pure — no
+  # az, no fetch, no child_process.
+  #
+  # WHAT IS FAIL-CLOSED HERE, AND WHAT IS NOT. Precisely, because an earlier
+  # revision of this comment said "an unknown verdict does NOT open a sovereign
+  # registry" and the script it describes says the opposite.
+  #   FAIL-CLOSED: this JOB. If it fails — checkout, node, an unhandled throw —
+  #     `build-gov-images` is skipped, being an un-`always()` dependant of a
+  #     failed need. A job that could not RUN never opens the registry.
+  #   FAIL-OPEN, DELIBERATELY: the SCRIPT. An absent register, an unreadable
+  #     file (EACCES), unparseable JSON, a boundary that is not named, and an
+  #     expired `reviewBy` ALL resolve to `declared_paused=false` with a
+  #     warning — the pre-register behaviour, in which the image phase runs
+  #     (scripts/ci/estate-pause-declared.mjs:58-69, "NEVER THROWS, AND ALWAYS
+  #     WRITES A VALUE"; codified by
+  #     scripts/ci/__tests__/gcch-standdown-completeness.test.mjs). Suppression
+  #     needs POSITIVE evidence: a JSON parse error must not be able to stand a
+  #     P0 sovereign deploy lane down silently.
+  # `deploy-validate` runs on `always()`, so a FAILURE of this job cannot stop
+  # the deploy — but it DOES need this job, and has since round 8: the Teardown
+  # refusal below reads `needs.pause-declaration.outputs.declared` as the half
+  # of its verdict that survives `topology=dlz-attach`. Conditioning or deleting
+  # this job therefore empties that half and disarms the refusal; it does not
+  # merely change what the image phase does.
+  pause-declaration:
+    name: Is the GCC-High estate DECLARED paused?
+    runs-on: ubuntu-latest
+    outputs:
+      declared: ${{ steps.read.outputs.declared_paused }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: read
+        run: node scripts/ci/estate-pause-declared.mjs --boundary "$CSA_LOOM_BOUNDARY"
+
   # IMAGE PHASE (no-vaporware.md two-phase contract). admin-plane/main.bicep
   # deploys loom-migrate + loom-risingwave DEFAULT-ON in every Container Apps
   # boundary, GCC-High included, and params/gcc-high.bicepparam sets
@@ -105,8 +228,13 @@ jobs:
   # why deploy-validate below runs with `always()` rather than on success.
   build-gov-images:
     name: Build the DEFAULT-ON data-plane images (GCC-High ACR)
-    needs: precheck
-    if: needs.precheck.outputs.configured == 'true' && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+    needs: [precheck, pause-declaration]
+    # STAND DOWN on a DECLARED-paused estate (#4233 round 2). Without the middle
+    # clause this job opened the sovereign ACR's firewall and pushed two images
+    # on every scheduled run, INCLUDING the runs whose own step summary says the
+    # estate was not touched. The clause reads the declaration only — see the
+    # `pause-declaration` job above for why the broader predicate is the safe one.
+    if: needs.precheck.outputs.configured == 'true' && needs.pause-declaration.outputs.declared != 'true' && (github.event_name == 'schedule' || inputs.run_mode == 'full')
     uses: ./.github/workflows/gov-provision-streaming-migrate.yml
     secrets: inherit
     with:
@@ -116,7 +244,20 @@ jobs:
 
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC-High
-    needs: [precheck, build-gov-images]
+    # `pause-declaration` is in `needs:` for the TEARDOWN REFUSAL *and*, since
+    # round 10, for the ADX preflight's `ESTATE_DECLARED` binding — the two
+    # readers of the half of the verdict that survives `topology=dlz-attach`.
+    # `steps.adx_preflight.outputs.estate_paused` is the ONLY verdict the
+    # refusal used to read, and its producer returned early on
+    # `topology=dlz-attach` (see the ADX preflight below) — so on a
+    # `topology=dlz-attach` + `run_mode=full` + `keep_resources=false` dispatch
+    # that output is the EMPTY STRING, `[ "" = "true" ]` is false, and
+    # `.github/scripts/fiab-teardown.sh` (which enumerates every
+    # `rg-csa-loom-*` group and deletes each) ran against a DECLARED-PAUSED
+    # sovereign estate with no refusal at all. The declaration verdict costs no
+    # Azure read, so it is populated on EVERY topology and every trigger; the
+    # Teardown step below refuses on either half.
+    needs: [precheck, pause-declaration, build-gov-images]
     if: always() && needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -126,9 +267,15 @@ jobs:
       admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
       dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
       region: ${{ steps.bootstrap_coords.outputs.region }}
-      # 'true' ONLY when scripts/ci/estate-pause-declaration.json carries an
-      # owned, unexpired entry for CSA_LOOM_BOUNDARY *and* the preflight observed
-      # a stopped cluster. Published as a job output so the chained bootstrap can
+      # 'true' when scripts/ci/estate-pause-declaration.json carries an owned,
+      # unexpired entry for CSA_LOOM_BOUNDARY *and* the preflight observed a
+      # stopped cluster — on every topology that HAS a cluster to observe. On
+      # `topology=dlz-attach` there is no admin-plane cluster in scope, so the
+      # observed term has no referent and the verdict is the declaration alone;
+      # the preflight says so in its own notice (#4233 round 10). What it is
+      # NEVER is EMPTY on a path this job can take, which is the property every
+      # consumer of `!= 'true'` depends on.
+      # Published as a job output so the chained bootstrap can
       # stand down too — it wires Synapse SQL, Purview and Databricks SCIM, and
       # the Synapse dedicated SQL pool is paused alongside the ADX cluster, so
       # bootstrapping a paused estate would put this lane straight back to red.
@@ -402,38 +549,6 @@ jobs:
             --param-file platform/fiab/bicep/params/gcc-high.bicepparam \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}"
 
-      # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
-      # already running in rg-csa-loom-admin-<loc> and rewrites their image
-      # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
-      # is not in the registry SUCCEEDS, and the new revision then fails its image
-      # pull — i.e. the deploy takes a live federal app down. Verify first.
-      # Greenfield (no such Container App yet) passes: a missing tag is the
-      # expected state of the documented two-phase image path.
-      #
-      # `loom-unity` IS in the require list as of #2681: admin-plane/main.bicep
-      # now deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
-      # every boundary, so this deploy ADOPTS the live GCC-High `loom-unity`
-      # Container App and rewrites its image reference. That app is the sovereign
-      # catalog — Databricks Unity Catalog has no Gov endpoint — so repointing it
-      # at a tag the Gov ACR does not hold takes the catalog down. The producer
-      # is .github/workflows/gov-build-images.yml (apps=loom-unity), which pushes
-      # `:v0.1` by default; export LOOM_UNITY_TAG to pin something else and this
-      # check follows it.
-      - name: Image preflight — never adopt a live app onto a missing tag
-        run: |
-          set -euo pipefail
-          # dlz-attach deploys only a landing zone into a DIFFERENT subscription
-          # and never touches the hub's admin-plane apps, so nothing is adopted —
-          # checking the hub's registry would be a false stop.
-          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
-            exit 0
-          fi
-          bash scripts/csa-loom/preflight-image-tags.sh \
-            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
-            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}"
-
       # #3056 — adopt the estate's LIVE internal trust token instead of letting
       # bicep re-mint it (`loomGeneratedSecretSeed` defaults to `newGuid()`, so
       # every deploy rotated it and stranded every holder outside the
@@ -688,17 +803,72 @@ jobs:
       # is deliberately NOT changed here: it is the only working infra-deploy
       # path in the repo and destabilising it to pre-empt a latent fault would
       # trade one P0 for a worse one. Tracked in #3786.
+      # ── THE VERDICT IS TOTAL, OR IT IS NOT A VERDICT (#4233 round 10) ───────
+      # This step is the SOLE producer of `estate_paused`, and twelve step-level
+      # stand-downs plus the `deploy-validate` job output plus the chained
+      # `post-deploy-bootstrap` gate all read it as `!= 'true'`. So every path
+      # through this body that does NOT write the output publishes the EMPTY
+      # STRING, `'' != 'true'` is TRUE, and all fourteen of those consumers open.
+      #
+      # Round 8 found that exact shape on the Teardown refusal and fixed it THERE,
+      # by giving the refusal a second verdict from a job that cannot decline to
+      # run. It fixed one consumer. The other thirteen were left reading the same
+      # empty, which is the "a complete enumeration of the wrong set reads exactly
+      # like a complete enumeration" lesson turned on the round-8 fix itself.
+      #
+      # Fixed at the PRODUCER instead, once, so the class is closed rather than
+      # thirteen instances of it: the `dlz-attach` return below now publishes a
+      # verdict before it exits.
+      #
+      # WHAT VALUE, AND WHY IT IS HONEST. `estate_paused` is elsewhere the
+      # CONJUNCTION of "declared" and "observed stopped". On `topology=dlz-attach`
+      # there is no admin-plane ADX cluster in scope at all — that is the very
+      # reason this branch exists — so the observed term is not merely unmeasured,
+      # it has no referent. The evidence that remains is the DECLARATION, computed
+      # with no Azure by the `pause-declaration` job, and that is what is published
+      # here, said in the notice in those words (deploy-integrity R7). It is
+      # FAIL-CLOSED on anything but a literal `false`: an EMPTY `ESTATE_DECLARED`
+      # means the declaration job published nothing, which is an unknown, and an
+      # unknown is not a no — the same asymmetry the Teardown refusal uses.
+      #
+      # CONSEQUENCE, DELIBERATE AND DISCLOSED. A `dlz-attach` dispatch against a
+      # DECLARED boundary now stands the WHOLE job down, including `Provision`,
+      # which targets the DLZ subscription rather than the paused hub. That is
+      # broader than the minimum — but three steps on this path
+      # (`Image preflight — Gov ACR …`, `Approve the Front Door …`,
+      # `Publish DLZ template …`) mutate the HUB, which IS the declared estate, and
+      # a declaration says this lane does not touch this boundary. The safe
+      # direction is the declared direction. To deploy a landing zone while the hub
+      # is paused: delete the boundary's entry from
+      # scripts/ci/estate-pause-declaration.json and dispatch again.
+      #
+      # RESIDUAL, NAMED. A `run_mode=whatif-only` dispatch SKIPS this step entirely
+      # (see its `if:`), so `estate_paused` is empty there too and `Bicep what-if`,
+      # the evidence receipt and its upload run. That is deliberate and predates
+      # this change — see the note on `Bicep what-if` — and it applies nothing; it
+      # is not closed here.
       - name: ADX preflight — a stopped cluster cannot take its principal assignments
         id: adx_preflight
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          # The DECLARATION half, computed with NO Azure by the `pause-declaration`
+          # job, which carries no `if:` and so publishes on every trigger and every
+          # topology. Bound here so the dlz-attach return below can publish a
+          # verdict at all.
+          ESTATE_DECLARED: ${{ needs.pause-declaration.outputs.declared }}
         run: |
           set -euo pipefail
           # dlz-attach deploys no admin plane, so it declares no principal
           # assignments on the hub cluster and has nothing to start.
           if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
-            echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start."
+            if [ "${ESTATE_DECLARED:-}" = "false" ]; then
+              echo "estate_paused=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start. NOTHING WAS OBSERVED on this topology, so the verdict is the DECLARATION alone: ${CSA_LOOM_BOUNDARY} is NOT declared paused in scripts/ci/estate-pause-declaration.json, so estate_paused=false and this run proceeds."
+            else
+              echo "estate_paused=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::topology=dlz-attach deploys no admin-plane ADX cluster; nothing to start. NOTHING WAS OBSERVED on this topology, so the verdict is the DECLARATION alone, which is '${ESTATE_DECLARED:-}' — 'true' means an owned, unexpired entry names ${CSA_LOOM_BOUNDARY}, and EMPTY means the 'Is the GCC-High estate DECLARED paused?' job published no verdict at all, which is an unknown and not a no. estate_paused=true, so this run stands down."
+            fi
             exit 0
           fi
           DEPLOY_SUB="${CSA_LOOM_TARGET_SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
@@ -728,10 +898,55 @@ jobs:
             echo "## GCC-High: STOOD DOWN — the estate is declared paused"
             echo ""
             echo "\`${CSA_LOOM_BOUNDARY}\` has an owned, unexpired entry in"
-            echo "\`scripts/ci/estate-pause-declaration.json\`, and the ADX preflight observed"
-            echo "its cluster stopped. The what-if, the apply and the post-deploy bootstrap were"
-            echo "SKIPPED — a stopped Kusto engine refuses \`principalAssignments\`, so none of"
-            echo "them could have produced a real answer."
+            echo "\`scripts/ci/estate-pause-declaration.json\`."
+            if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+              # R7: on this topology the preflight observed NOTHING, so the
+              # sentence that says it did must not be printed. #4233 round 10.
+              echo "This run is \`topology=dlz-attach\`, which deploys no admin-plane ADX"
+              echo "cluster, so the preflight observed NOTHING and the verdict is that"
+              echo "DECLARATION alone. An unobserved estate is an unknown, and an unknown is"
+              echo "not a no."
+            else
+              echo "The ADX preflight also observed its cluster stopped."
+            fi
+            echo ""
+            echo "SKIPPED IN THIS JOB: the program budget's immutable start-date resolve"
+            echo "(#4253), the what-if, the deploy-verification evidence receipt and its"
+            echo "artifact upload, BOTH image preflights — the adoption preflight"
+            echo "(\`preflight-image-tags.sh\`) and the Gov ACR tag assertion"
+            echo "(\`assert-acr-image-tags.sh\`) — the image-tag revert gate, the re-pin,"
+            echo "the apply, the ACR compliance-tag patch, the Front Door private-endpoint"
+            echo "approval, the DLZ template publish, and the Gov smoke test."
+            echo "SKIPPED ELSEWHERE IN THIS RUN: the \`build-gov-images\` image phase and the"
+            echo "chained post-deploy bootstrap. That list is DERIVED, not written: every"
+            echo "step this job dispositions as guarded or transitively guarded carries the"
+            echo "phrase it must be named by, and"
+            echo "\`scripts/ci/__tests__/gcch-standdown-completeness.test.mjs\` fails if one"
+            echo "of them is missing here — an enumeration one short reads exactly like a"
+            echo "complete one."
+            echo ""
+            echo "THE SOVEREIGN ACR FIREWALL WAS NOT OPENED BY THIS RUN. Four things on this"
+            echo "lane take the owned ACR firewall lease (\`publicNetworkAccess=Enabled\`):"
+            echo "\`build-gov-images\`, the two image preflights and the revert gate. All four"
+            echo "are named above and all four stood down — the job on the declaration, the"
+            echo "three steps on this same verdict. The suite"
+            echo "\`scripts/ci/__tests__/gcch-standdown-completeness.test.mjs\` derives that set"
+            echo "of lease takers from the scripts each step invokes, and fails if any one of"
+            echo "them is reachable on a stood-down run, so this sentence is checked rather"
+            echo "than asserted (deploy-integrity R7)."
+            echo ""
+            if [ "${CSA_LOOM_TOPOLOGY:-}" != "dlz-attach" ]; then
+              echo "A stopped Kusto engine refuses \`principalAssignments\`, so none"
+              echo "of them could have produced a real answer, and none of them should touch an"
+              echo "estate this run has declared it will not measure."
+            else
+              echo "None of them should touch an estate this run has declared it will not"
+              echo "measure. Whether they COULD have produced a real answer is not established"
+              echo "on this topology — nothing about the cluster was read."
+            fi
+            echo "A teardown dispatched"
+            echo "against a declared-paused estate REFUSES rather than skipping, so it can"
+            echo "never happen silently behind this notice."
             echo ""
             echo "**This run is UNMEASURED, not clean.** It is not evidence the template applies,"
             echo "and it does not refresh this estate's drift position against \`main\`."
@@ -821,6 +1036,16 @@ jobs:
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
       - name: Deploy-verification evidence receipt (§7)
+        # STAND DOWN on a DECLARED-paused estate (#4233). This runs a LIVE
+        # what-if against the Gov subscription and uploads the result as the
+        # "deploy-verification acceptance receipt". On a paused estate that
+        # what-if hits the same ClusterNotValidForPrincipals refusal the step
+        # above stood down from, `|| true` swallows it, and the run still
+        # publishes an artifact whose NAME asserts a verification that did not
+        # happen — the summary two steps up says "This run is UNMEASURED", and
+        # an artifact contradicting it is deploy-integrity R7 applied to the
+        # thing people actually download.
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         # Captures the GCC-High deploy-verification acceptance receipt as an
         # artifact: deterministic ARM tests + sovereign-endpoint sweep + the §4
         # host matrix, plus a live what-if line (already on the Gov sub + bicep).
@@ -832,11 +1057,79 @@ jobs:
             --out "$RUNNER_TEMP/gov-verify-receipt-gcch-${{ github.run_id }}.txt" || true
 
       - name: Upload GCC-High verification receipt
+        # Paired with the step above: no receipt was produced on a stood-down
+        # run, so there is nothing to upload and `if-no-files-found: warn` would
+        # otherwise print a warning about an absence that is expected (#4233).
+        if: steps.adx_preflight.outputs.estate_paused != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: gov-verify-receipt-gcch-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt
           if-no-files-found: warn
+
+      # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
+      # already running in rg-csa-loom-admin-<loc> and rewrites their image
+      # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
+      # is not in the registry SUCCEEDS, and the new revision then fails its image
+      # pull — i.e. the deploy takes a live federal app down. Verify first.
+      # Greenfield (no such Container App yet) passes: a missing tag is the
+      # expected state of the documented two-phase image path.
+      #
+      # `loom-unity` IS in the require list as of #2681: admin-plane/main.bicep
+      # now deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
+      # every boundary, so this deploy ADOPTS the live GCC-High `loom-unity`
+      # Container App and rewrites its image reference. That app is the sovereign
+      # catalog — Databricks Unity Catalog has no Gov endpoint — so repointing it
+      # at a tag the Gov ACR does not hold takes the catalog down. The producer
+      # is .github/workflows/gov-build-images.yml (apps=loom-unity), which pushes
+      # `:v0.1` by default; export LOOM_UNITY_TAG to pin something else and this
+      # check follows it.
+      - name: Image preflight — never adopt a live app onto a missing tag
+        # STAND DOWN on a DECLARED-paused estate (#4233 round 5). This step is
+        # a MUTATION of the sovereign estate, not a read: preflight-image-tags.sh
+        # takes the OWNED ACR firewall lease whenever it intends to read tags
+        # ("Leasing unconditionally costs an ACR firewall update on the happy
+        # path. That is the correct trade…", scripts/csa-loom/preflight-image-
+        # tags.sh:168 and :222-242), which sets publicNetworkAccess=Enabled on
+        # the GCC-High registry and re-locks it. This workflow passes no
+        # --no-lease, and --no-lease against a firewalled data plane REFUSES
+        # rather than reading, so skipping the lease is not an option here.
+        # MEASURED on run 33519232492, job 99896393942, while this step still sat
+        # BEFORE the declaration with no if: at all:
+        #   [acr-lease] HELD the ACR firewall lease on 'acrloomdcmt6cqoezlgs' ... 75m
+        #   [acr-lease] opening ACR ... (publicNetworkAccess=Enabled, defaultAction=Allow)
+        #   [acr-lease] ACR ... VERIFIED locked            (~64s later)
+        # So the run that printed "this run measures nothing" had already opened
+        # the sovereign registry, before the sentence that said it had not.
+        #
+        # THE FIX IS THE MOVE, not only the clause. The verdict this reads is
+        # produced by `adx_preflight`, so the step had to come AFTER it to be
+        # gateable at all. It sits next to the sibling Gov ACR preflight and still
+        # ahead of the only step that rewrites an image reference (`Provision`),
+        # which is the whole reason it exists. Nothing between its old position
+        # and this one consumes it: it publishes no output and refuses in place.
+        #
+        # WHY NOT the job-level declaration clause instead. `declared` is BROADER
+        # than `estate_paused`: declared-but-Running resolves to declared=true and
+        # estate_paused=false, and on that run `Provision` DOES apply. Gating this
+        # step on the declaration alone would have skipped the adoption preflight
+        # while the apply proceeded — trading an open firewall for a live federal
+        # app adopted onto a tag nobody proved exists. It carries the SAME verdict
+        # as `Provision`, so the two can never diverge.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys only a landing zone into a DIFFERENT subscription
+          # and never touches the hub's admin-plane apps, so nothing is adopted —
+          # checking the hub's registry would be a false stop.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
+            exit 0
+          fi
+          bash scripts/csa-loom/preflight-image-tags.sh \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
+            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}"
 
       # ── IMAGE PREFLIGHT (round-3, PR #2640) ───────────────────────────────
       # This deploy is subscription-scoped and ADOPTS every app already running
@@ -853,7 +1146,18 @@ jobs:
       # no ACR yet means nothing live to adopt, and the two-phase image path
       # (no-vaporware.md) builds the registry contents in the next phase.
       - name: Image preflight — Gov ACR must already hold every referenced tag
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). Two independent
+        # reasons, either sufficient:
+        #   1. This step MUTATES the estate. `assert-acr-image-tags.sh --lease`
+        #      opens the sovereign registry's firewall
+        #      (publicNetworkAccess=Enabled, defaultAction=Allow) and re-locks
+        #      it. Run 33519232492 did exactly that on an estate the run had
+        #      already declared it would not measure:
+        #        [acr-lease] HELD the ACR firewall lease on 'acrloomdcmt6cqoezlgs'
+        #        [acr-lease] opening ACR ... (publicNetworkAccess=Enabled)
+        #   2. Its whole purpose is to prove the tags the APPLY is about to
+        #      write already exist, and on a stood-down run there is no apply.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         # The two LOOM_*_TAG values this step reads come from `Adopt the image
         # tags…` (#3449) — the same $GITHUB_ENV the what-if and the apply read.
         # They were once declared here, on this step only, so a pinned repo
@@ -967,7 +1271,26 @@ jobs:
       # life of this lane because nothing ever stated which tags a deploy was
       # about to write.
       - name: Image-tag revert gate — never flatten a pinned app to the default
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). THIS IS THE STEP THAT
+        # TURNED THE STAND-DOWN RED. Run 33519232492: ADX preflight succeeded,
+        # `Estate is DECLARED paused` printed "This run is UNMEASURED, not
+        # clean", `Bicep what-if` and `Provision` skipped — and then this gate
+        # failed the job on LOOM_UNITY_TAG (loom-unity runs digest
+        # sha256:2aac7d64…, 'v0.1' resolves to sha256:db7a7cb5…).
+        #
+        # THE GATE IS NOT WRONG AND IS NOT BEING WEAKENED. It refuses a write
+        # this deploy would genuinely have made — but only when the deploy
+        # HAPPENS. `Provision` above already carries the same clause, so on a
+        # declared-paused run there is no write for the gate to guard, and its
+        # verdict is about a deploy that will not occur. A guard that fails a
+        # run which applies nothing is not protecting the estate; it is turning
+        # a deliberate stand-down into an alert nobody can act on.
+        #
+        # The underlying defect it found is REAL and is NOT fixed here: adoption
+        # does not resolve LOOM_UNITY_TAG for the digest-pinned loom-unity on
+        # Gov (the #4064 class). It is filed separately; the moment the
+        # declaration is deleted this gate runs again and refuses again.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           set -euo pipefail
           # dlz-attach provisions a landing zone into a DIFFERENT subscription
@@ -1040,7 +1363,15 @@ jobs:
       # own. Tracked as the remaining half of #3683.
       - name: Re-pin appImageTags to the RUNNING images (narrows the roll race — #3683)
         id: repin
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        # STAND DOWN on a DECLARED-paused estate (#4233). This pin exists only
+        # to keep the value the APPLY writes fresh, and the apply below carries
+        # the same clause — so on a stood-down run it re-measures an estate
+        # nobody is about to deploy to, and `pin-refresh --read-error` can
+        # REFUSE (exit non-zero) on a control plane a paused estate is entitled
+        # to answer oddly for. The adjacency invariant in the note above is
+        # preserved: this is still the last step before `Provision`, and both
+        # now skip together.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && steps.adx_preflight.outputs.estate_paused != 'true'
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
         run: |
@@ -1367,7 +1698,15 @@ jobs:
       # publish-dlz-template job for the rationale). Sovereign endpoints are
       # resolved from the account (primaryEndpoints.blob). Idempotent + best-effort.
       - name: Publish DLZ template + wire deploy env (Gov)
-        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && inputs.keep_resources
+        # STAND DOWN on a DECLARED-paused estate (#4233). Not covered by the
+        # `inputs.keep_resources` clause: a `schedule` event carries no inputs
+        # so this is already skipped on the cron, but a
+        # `workflow_dispatch run_mode=full keep_resources=true` against a
+        # declared-paused estate would reach it — and it MUTATES, twice
+        # (`az storage blob upload` and `az containerapp update --set-env-vars`
+        # on loom-console). A run that has declared it measures nothing must
+        # not write env vars onto the estate's Console.
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && inputs.keep_resources && steps.adx_preflight.outputs.estate_paused != 'true'
         run: |
           set -e
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -1422,11 +1761,63 @@ jobs:
       # blocked capabilities are merged fixes waiting on this lane to run, so
       # "just re-enable it" was a genuinely tempting and genuinely destructive
       # move. Fixed here FIRST, so enabling the lane is a safe act.
+      # THE DECLARED PAUSE REACHES THIS STEP AS A REFUSAL, NOT AS A SKIP (#4233).
+      # Every other stand-down on this lane is an `if:` that skips. This one is
+      # not, and the difference is deliberate. A declared-paused estate reaching
+      # here means an operator dispatched `run_mode=full` with
+      # `keep_resources=false` — i.e. asked, explicitly, for a TEARDOWN. Two
+      # things are unacceptable and skipping only avoids one of them:
+      #   - DESTROYING an estate whose own run summary, printed minutes earlier,
+      #     says "This run is UNMEASURED, not clean". The stand-down notice is an
+      #     assertion about what the run did, and it is written BEFORE this step,
+      #     so it cannot retract itself (deploy-integrity R7).
+      #   - SILENTLY not tearing down when a teardown was explicitly requested,
+      #     leaving the operator believing a sovereign estate is gone when it is
+      #     not. That is the failure a bare `if:` would introduce here.
+      # So it fails loudly and names the one-line, reviewable action that
+      # authorises the destruction: delete the boundary's entry from
+      # scripts/ci/estate-pause-declaration.json and dispatch again.
+      #
+      # TWO VERDICTS, BECAUSE ONE OF THEM IS EMPTY ON A REACHABLE PATH (review
+      # round 8). The refusal used to branch on `ESTATE_PAUSED` alone, bound to
+      # `steps.adx_preflight.outputs.estate_paused`. That producer returns at the
+      # top of its body on `topology=dlz-attach` (line ~791) WITHOUT writing the
+      # output, and `dlz-attach` is one of the four `workflow_dispatch` topology
+      # choices. Teardown's own condition needs `run_mode == 'full'`, which also
+      # satisfies the preflight's `if:` — so the producer step RUNS, returns
+      # early, and publishes nothing. `[ "" = "true" ]` is false, the refusal
+      # was never taken, and `.github/scripts/fiab-teardown.sh` — which
+      # enumerates every `rg-csa-loom-*` resource group (`:40`) and deletes each
+      # (`:150`) — ran against a DECLARED-PAUSED sovereign estate. Every static
+      # chain assertion in gcch-standdown-completeness.test.mjs held while the
+      # verdict was empty at runtime.
+      #
+      # `ESTATE_DECLARED` is the declaration half, computed by the
+      # `pause-declaration` job from a checked-in file with no Azure read and no
+      # condition of its own, so it is populated on EVERY topology and EVERY
+      # trigger. The refusal fires on either half.
+      #
+      # AND ON NEITHER. `estate-pause-declared.mjs` always writes `true` or
+      # `false`, so an EMPTY `ESTATE_DECLARED` means the declaration job did not
+      # produce a verdict at all — `deploy-validate` runs on `always()`, so a
+      # failed `pause-declaration` does not stop it. An unknown must not be
+      # recorded as a no on the one step in this lane that destroys a sovereign
+      # estate, so unknown refuses too. That is fail-CLOSED here and deliberately
+      # the opposite of the script's own fail-OPEN default, which governs whether
+      # the image phase RUNS — a different question with a different safe answer.
       - name: Teardown
         if: success() && github.event_name != 'schedule' && inputs.run_mode == 'full' && !inputs.keep_resources
-        run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+          ESTATE_PAUSED: ${{ steps.adx_preflight.outputs.estate_paused }}
+          ESTATE_DECLARED: ${{ needs.pause-declaration.outputs.declared }}
+        run: |
+          set -euo pipefail
+          if [ "${ESTATE_PAUSED:-}" = "true" ] || [ "${ESTATE_DECLARED:-}" != "false" ]; then
+            echo "::error::REFUSING to tear down the GCC-High estate: this step did not establish that it is safe to destroy. Declaration verdict (scripts/ci/estate-pause-declaration.json, no Azure read) = '${ESTATE_DECLARED:-}' — 'true' means an owned, unexpired entry names this boundary, and EMPTY means the 'Is the GCC-High estate DECLARED paused?' job published no verdict at all, which is an unknown and not a no. ADX observed-stopped verdict = '${ESTATE_PAUSED:-}' — EMPTY means the preflight returned before measuring, which is what it does on topology=dlz-attach. Tearing down an estate this run has not established as measured, or has declared UNMEASURED, is not something this lane will do implicitly. To proceed on a DECLARED estate: delete the GCC-High entry from that file, merge, and dispatch again with keep_resources=false. To proceed on an UNKNOWN verdict: re-run the failed 'Is the GCC-High estate DECLARED paused?' job first."
+            exit 1
+          fi
+          bash .github/scripts/fiab-teardown.sh
 
       - name: Note dry-run completion
         if: success() && inputs.run_mode == 'whatif-only'
