@@ -54,6 +54,28 @@ RUN rm -rf /etc/trino/catalog && \
     chown -R trino:trino /etc/trino /data/trino && \
     chmod +x /usr/local/bin/loom-trino-entrypoint.sh
 
+# ── SC1 supply-chain gate — Java layer (#4429) ────────────────────────────────
+# CVE-2026-75595 (CRITICAL) in io.netty:netty-handler 4.2.16.Final, which this
+# base ships in FIFTEEN plugin directories — Trivy de-duplicates the finding and
+# prints only one of them, so the fix is driven off the image's own file list,
+# not off the scanner's representative path. Every justification, digest and
+# assertion lives in scripts/sc1-netty.sh; scripts/NettyLinkCheck.java re-proves
+# the swapped jar's class-level references against the REAL plugin classpath at
+# BUILD time, so a bad change fails the build rather than production.
+#
+# A base bump was checked FIRST and is not available: trinodb/trino:483 is
+# :latest (same digest), and it predates netty 4.2.17.Final.
+#
+# The script lives in a FILE rather than an inline heredoc on purpose: ACR Tasks'
+# classic builder cannot parse Dockerfile heredocs (they need BuildKit). A
+# heredoc here builds fine under a local `docker build` and then dies in CI after
+# ~3s with `failed to run step ID: build: failed to scan dependencies: exit
+# status 1`, before any layer runs. Keep this Dockerfile BuildKit-feature-free.
+COPY scripts/ /opt/loom-sc1/
+RUN chmod 0755 /opt/loom-sc1/sc1-netty.sh \
+    && /opt/loom-sc1/sc1-netty.sh \
+    && rm -rf /opt/loom-sc1
+
 USER trino:trino
 
 EXPOSE 8080
