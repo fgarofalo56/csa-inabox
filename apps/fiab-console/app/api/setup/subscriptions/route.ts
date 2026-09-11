@@ -24,7 +24,8 @@
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { PagingBudget, PAGE_DEADLINE, type PagingTruncation } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed, type PagingTruncation } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
 import { swrAwait } from '@/lib/azure/cross-sub-cache';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -64,7 +65,11 @@ async function listSubscriptions(
   while (budget.claimPage()) {
     const r = await budget.runPage((timeoutMs) =>
       fetchWithTimeout(
-        url,
+        // SECURITY (GHSA-4gvx-9p49-p43g): after the first page `url` is an
+        // absolute URL read out of a RESPONSE BODY and an ARM bearer token — a
+        // user OBO token here — rides on the request. Pin it to `armBase()` and
+        // fail closed rather than fetching.
+        resolveSameOriginUrl(url, arm(), 'the ARM token'),
         { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
         timeoutMs,
       ),
@@ -89,6 +94,7 @@ async function listSubscriptions(
       });
     }
     if (!j.nextLink) break;
+    if (!isContinuationAllowed(budget.label, j.nextLink, arm())) break;
     url = j.nextLink;
   }
   budget.warnIfTruncated(subscriptions.length);

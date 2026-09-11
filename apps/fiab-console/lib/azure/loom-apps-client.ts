@@ -35,6 +35,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import {
   getLoomAppTemplate,
   assembleBuildContext,
@@ -183,7 +184,11 @@ async function armFetch(
   body?: unknown,
 ): Promise<{ status: number; json: any }> {
   const tk = await token();
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  // SECURITY (GHSA-4gvx-9p49-p43g): `path` may be an ABSOLUTE URL — ARM
+  // paginates with a `nextLink` read out of a response body — and an ARM bearer
+  // token is attached below. Pin the target to `armBase()` (boundary-correct in
+  // every sovereign cloud) and fail closed instead of fetching.
+  const url = resolveSameOriginUrl(path, ARM, 'the ARM token');
   const res = await fetchWithTimeout(url, {
     method,
     headers: {

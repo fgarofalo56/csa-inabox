@@ -48,6 +48,7 @@ import { kvScope, kvSuffix, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
+import { sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -216,8 +217,18 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     // `resolveVaultBase`, never a request AUTHORITY, so the 0.0.0.0:3000 defect
     // it guards cannot arise here — but the cheap fix is to not write the shape
     // at all rather than to baseline an exception.
+    //
+    // BOTH checks now run (advisory GHSA-4gvx-9p49-p43g): the shared
+    // `sameOriginUrlOrNull` is what every sibling walker in the console uses, so
+    // the class is enforceable by one filesystem-derived guard instead of by
+    // hoping each client wrote its own; the prefix pin stays because it is
+    // STRICTLY STRONGER here (it pins the path root, not just the authority) and
+    // dropping it would be a regression. The `.origin` read lives inside the
+    // shared leaf helper, so this file still does not write the construction
+    // `check-external-origin-urls` polices.
     const prefix = `${base}/`;
-    if (!j.nextLink.toLowerCase().startsWith(prefix.toLowerCase())) {
+    if (sameOriginUrlOrNull(j.nextLink, base) === null
+      || !j.nextLink.toLowerCase().startsWith(prefix.toLowerCase())) {
       return apiError(
         `Key Vault returned a paging link outside the vault being listed; refusing to send the vault token to it. `
           + `Expected a link under ${base}/.`,

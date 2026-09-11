@@ -37,6 +37,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
 import { walkPagedList } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 import { extractPackages, buildCondaYaml, type AmlPackage, type PackageSource } from './aml-environment-conda';
 
 export { extractPackages, buildCondaYaml };
@@ -205,10 +206,17 @@ function shapeVersion(name: string, raw: any): AmlEnvironment {
 async function pagedList(path: string): Promise<any[]> {
   return walkPagedList(`aml-environments ${path}`, async (next, timeoutMs) => {
     const res = next
-      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      // SECURITY (GHSA-4gvx-9p49-p43g) — `next` is an absolute URL read out of a
+      // RESPONSE BODY and this expression mints an ARM token for it. Pin it to
+      // `armBase()` and fail closed rather than fetching.
+      ? await fetchWithTimeout(
+          resolveSameOriginUrl(next, armBase(), 'the ARM token'),
+          { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } },
+          timeoutMs,
+        )
       : await armFetch(path, { timeoutMs });
     return readJson<{ value?: any[]; nextLink?: string }>(res);
-  });
+  }, { sameOriginAs: armBase() });
 }
 
 // ---------------- Public API ----------------

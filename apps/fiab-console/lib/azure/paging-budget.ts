@@ -52,6 +52,7 @@
 
 import { FetchTimeoutError } from './fetch-with-timeout';
 import { logSafe } from '@/lib/util/log-safe';
+import { isAbsoluteHttpUrl, sameOriginUrlOrNull } from '@/lib/util/same-origin-url';
 
 /** Why a paged walk stopped short of its final page. */
 export type PagingTruncation = 'pages' | 'time';
@@ -111,6 +112,22 @@ export interface PagingBudgetOptions {
   maxPages?: number;
   /** Hard wall-clock ceiling for the WHOLE walk. Default {@link defaultPagingBudgetMs}. */
   budgetMs?: number;
+  /**
+   * The service endpoint every `nextLink` in this walk must share an ORIGIN
+   * with — `armBase()`, `graphBase()`, a Key Vault URL. Pass it whenever the
+   * walk is credentialed.
+   *
+   * SECURITY (advisory GHSA-4gvx-9p49-p43g): `nextLink` is an absolute URL read
+   * out of a RESPONSE BODY and handed straight back to `fetchPage`, which
+   * attaches a bearer token. Whatever influences that body therefore chooses
+   * where the token goes unless the origin is pinned. Supplying this makes
+   * {@link walkPagedListResult} STOP the walk (rows kept, one honest warn line)
+   * rather than hand an off-origin link to the caller's fetch.
+   *
+   * Boundary-correct by construction: the value is passed in per call, never
+   * hardcoded, so sovereign clouds compare against their own endpoint.
+   */
+  sameOriginAs?: string;
 }
 
 /**
@@ -336,6 +353,23 @@ export interface PagedWalkResult<T> {
  * A deadline that lands inside `fetchPage` is absorbed as a `time` truncation
  * (see {@link PagingBudget.runPage}) — this function never rejects because the
  * walk ran out of wall clock, only because the backend genuinely failed.
+ *
+ * THE CONTINUATION LINK IS UNTRUSTED INPUT. `nextLink` arrives in a response
+ * BODY and is handed to `fetchPage`, which attaches a credential — so this
+ * function decides where that credential is allowed to go. Three checks, all
+ * fail-closed, all of which END the walk rather than fetching (advisory
+ * GHSA-4gvx-9p49-p43g):
+ *   1. an absolute link that does not PARSE is refused (no guessing that a
+ *      malformed URL was "probably a path");
+ *   2. with {@link PagingBudgetOptions.sameOriginAs} set, a link whose ORIGIN
+ *      is not the configured service endpoint is refused — origin, not a string
+ *      prefix, because both `<armhost>.evil.test` and `<armhost>@evil.test`
+ *      pass a prefix test and both resolve to `evil.test`;
+ *   3. a REPEATED link is a cycle, not progress. The page cap already bounded
+ *      the damage, but a cycle burnt the whole budget re-fetching one page.
+ *
+ * Stopping keeps the rows already collected, exactly like a budget breach. The
+ * warn line never echoes the rejected value — it is attacker-chosen.
  */
 export async function walkPagedListResult<T = any>(
   label: string,
@@ -344,6 +378,8 @@ export async function walkPagedListResult<T = any>(
 ): Promise<PagedWalkResult<T>> {
   const out: T[] = [];
   const budget = new PagingBudget(label, opts);
+  const sameOriginAs = opts?.sameOriginAs;
+  const seen = new Set<string>();
   let next: string | null = null;
   while (budget.claimPage()) {
     const page = await budget.runPage((timeoutMs) => fetchPage(next, timeoutMs));
@@ -351,10 +387,55 @@ export async function walkPagedListResult<T = any>(
     if (!page) break;
     if (Array.isArray(page.value)) out.push(...page.value);
     if (!page.nextLink) break; // finished cleanly — NOT a truncation
+    if (!isContinuationAllowed(budget.label, page.nextLink, sameOriginAs)) break;
+    if (seen.has(page.nextLink)) {
+      console.warn(`[paging-budget] ${budget.label}: nextLink repeated a page already fetched — stopping the walk (cycle).`);
+      break;
+    }
+    seen.add(page.nextLink);
     next = page.nextLink;
   }
   budget.warnIfTruncated(out.length);
   return { rows: out, truncatedBy: budget.truncatedBy, pagesFetched: budget.pagesFetched, budget };
+}
+
+/**
+ * Whether `nextLink` may be handed back to a credentialed `fetchPage`.
+ *
+ * Exported for the guard test, and because the hand-rolled `PagingBudget` loops
+ * (the ones with a ROW cap, which cannot use {@link walkPagedListResult}) need
+ * the identical decision rather than a second, subtly different copy of it.
+ */
+export function isContinuationAllowed(
+  label: string,
+  nextLink: string,
+  sameOriginAs?: string,
+): boolean {
+  if (sameOriginAs) {
+    if (sameOriginUrlOrNull(nextLink, sameOriginAs) === null) {
+      console.warn(
+        `[paging-budget] ${logSafe(label, 120)}: refusing a nextLink that is not on the configured ` +
+          'service origin (or does not parse) — stopping the walk rather than sending the credential there.',
+      );
+      return false;
+    }
+    return true;
+  }
+  // No origin configured for this walk: an absolute link must at least PARSE.
+  // A relative continuation is re-rooted by the caller and is not this
+  // function's to judge.
+  if (isAbsoluteHttpUrl(nextLink)) {
+    try {
+      // eslint-disable-next-line no-new
+      new URL(nextLink);
+    } catch {
+      console.warn(
+        `[paging-budget] ${logSafe(label, 120)}: refusing an unparseable absolute nextLink — stopping the walk.`,
+      );
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

@@ -44,7 +44,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE, isContinuationAllowed } from './paging-budget';
+import { resolveSameOriginUrl } from '@/lib/util/same-origin-url';
 
 /** Control-plane (ARM) api-version covering topics + eventSubscriptions. */
 const EG_ARM_API = '2024-06-01-preview';
@@ -133,9 +134,15 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
+/**
+ * SECURITY (GHSA-4gvx-9p49-p43g) — both page walks below hand this function a
+ * `nextLink` read out of a RESPONSE BODY, and it attaches an ARM bearer token.
+ * Pin the target to `armBase()` (boundary-correct in every sovereign cloud) and
+ * fail closed rather than fetching.
+ */
 async function arm<T = any>(url: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const res = await fetchWithTimeout(url, {
+  const res = await fetchWithTimeout(resolveSameOriginUrl(url, armBase(), 'the ARM token'), {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -196,6 +203,7 @@ export async function listEventGridTopics(): Promise<EventGridTopic[]> {
     if (body === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (Array.isArray(body?.value)) out.push(...body.value.map(shapeTopic));
     if (!body?.nextLink) break;
+    if (!isContinuationAllowed(budget.label, body.nextLink, armBase())) break;
     next = body.nextLink;
   }
   budget.warnIfTruncated(out.length);
@@ -303,6 +311,7 @@ export async function listTopicEventSubscriptions(topic: string): Promise<TopicE
       });
     }
     if (!body?.nextLink) break;
+    if (!isContinuationAllowed(budget.label, body.nextLink, armBase())) break;
     next = body.nextLink;
   }
   budget.warnIfTruncated(out.length);

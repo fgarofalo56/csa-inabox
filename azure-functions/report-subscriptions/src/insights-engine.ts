@@ -42,6 +42,7 @@ import {
   loomDb,
 } from './clients';
 import type { RunLogger } from './run-logger';
+import { resolveSameOriginUrl } from './same-origin-url';
 import {
   buildDigestPrompt,
   computeMetricDeltas,
@@ -74,9 +75,25 @@ interface ArmResource {
   type: string;
 }
 
+/**
+ * GET an ARM resource, PINNED to this cloud's ARM origin (GHSA-4gvx-9p49-p43g).
+ *
+ * `path` is not always one this process composed. `listDigestResources()` copies
+ * `id` straight out of an ARM list RESPONSE BODY (`:106`), `runDigests()` hands
+ * that id to `fetchMetricSeries()`, and it is interpolated as the head of the
+ * path here. The construction this replaced —
+ * `path.startsWith('http') ? path : ...` — returned an absolute value verbatim
+ * and the line below attaches the management-plane token to it, so a response
+ * body could choose the address that token travelled to.
+ *
+ * `resolveSameOriginUrl` keeps the absolute branch (an ARM `nextLink` needs it)
+ * and requires the ORIGIN to be `ARM_BASE`'s. `ARM_BASE` is `LOOM_ARM_ENDPOINT`
+ * when the deploy sets one, so this is correct in every sovereign boundary and
+ * compares against no literal.
+ */
 async function armGet(path: string): Promise<any> {
   const tok = await acquireToken(ARM_SCOPE);
-  const url = path.startsWith('http') ? path : `${ARM_BASE}${path}`;
+  const url = resolveSameOriginUrl(path, ARM_BASE, 'the ARM token');
   const res = await fetch(url, {
     headers: { authorization: `Bearer ${tok}`, accept: 'application/json' },
     cache: 'no-store',

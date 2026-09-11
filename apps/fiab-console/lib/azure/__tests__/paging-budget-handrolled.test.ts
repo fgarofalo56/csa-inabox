@@ -43,7 +43,11 @@ function stubHangAfterFirstPage(firstPageValue: any[]) {
       if (calls.length === 1) {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ value: firstPageValue, nextLink: 'https://arm.example.com/next?p=2' }),
+            // Same ORIGIN as page 1: since GHSA-4gvx-9p49-p43g a credentialed
+            // walker refuses an off-origin nextLink and stops, so a synthetic
+            // host would end the walk at page 1 and page 2 (the hang this suite
+            // exists to exercise) would never be issued.
+            JSON.stringify({ value: firstPageValue, nextLink: 'https://management.azure.com/next?p=2' }),
             { status: 200, headers: { 'content-type': 'application/json' } },
           ),
         );

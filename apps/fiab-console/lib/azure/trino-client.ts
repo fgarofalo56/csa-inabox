@@ -170,6 +170,9 @@ export function trinoImpersonationEnabled(): boolean {
 export function trinoBase(): string {
   const raw = (process.env.LOOM_TRINO_URL || '').trim().replace(/\/+$/, '');
   if (!raw) return '';
+  // SAME-ORIGIN-EXEMPT(deploy-config): `raw` is LOOM_TRINO_URL, produced by the
+  // deploy. This function ANSWERS "what is the Trino origin?" — it is the base
+  // other calls are checked against, so it has none of its own to check.
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
 }
 
