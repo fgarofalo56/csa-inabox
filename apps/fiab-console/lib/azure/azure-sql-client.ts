@@ -343,42 +343,52 @@ async function defaultServerScopePath(serverName: string, suffix: string): Promi
 
 const pools: Map<string, sql.ConnectionPool> = new Map();
 
-/**
- * Registry of live mssql `Request` objects, keyed by a caller-supplied request
- * id. The cancel route (`/query/cancel`) looks the request up and calls
- * `.cancel()`, which makes tedious send a TDS ATTENTION packet on the same
- * connection — SQL Server acknowledges (error 3617 / SYS_ATTN) and the in-flight
- * `.query()` promise rejects with `RequestError('Canceled.', 'ECANCEL')`.
- *
- * This is in-process Node.js state scoped to ONE Container App replica, so a
- * cancel POST only lands when it reaches the replica that started the query.
- *
- * #3400/#3399 — DO NOT "FIX" THIS WITH SESSION AFFINITY. This comment used to
- * instruct the reader to set `ingress.stickySessions.affinity: 'sticky'` or run
- * a single replica. Both are false for this estate and one of them is actively
- * forbidden:
- *
- *   - `loom-console` is declared `multiRevision: true` with `minReplicas: 2`
- *     (admin-plane/main.bicep), and ACA REQUIRES `affinity:'none'` in
- *     multiple-revision mode. app-deployments.bicep now asserts that value on
- *     every deploy precisely so a sticky value set out-of-band cannot wedge
- *     blue-green rolls again — so a reader who followed this advice would have
- *     it reverted by the next deploy, after breaking the roll.
- *   - `lib/auth/msal.ts` documents the console as deliberately scaled out with
- *     affinity OFF: the MSAL token cache is Cosmos-persisted so a round-robin
- *     request finds a warm cache.
- *
- * The correct fix is a CROSS-REPLICA cancel signal — a TTL'd cancel-intent
- * record keyed by requestId that each replica polls for its own live keys —
- * NOT affinity. That store is not implemented yet: it needs a Cosmos container
- * (`lib/azure/cosmos-client.ts` + the cosmos bicep `loomContainers` list). Until
- * it lands, a cancel that reaches the wrong replica is a NO-OP, and the cancel
- * route reports exactly that rather than claiming a cancellation.
- *
- * Entries are removed on completion, error, or explicit cancel (in the `finally`
- * of `executeQuery` and in the cancel route after `.cancel()`).
- */
-export const liveRequests: Map<string, sql.Request> = new Map();
+// ============================================================
+// Cross-replica cancel intents (#3400)
+// ============================================================
+//
+// Moved WHOLESALE to ./azure-sql-cancel-intents — a bounded context of its own,
+// and keeping it here took this module past the 1500-LOC monolith-creep warn
+// line. Re-exported so every existing import of these symbols from
+// `@/lib/azure/azure-sql-client` keeps resolving, to the SAME module instance:
+// `liveRequests` is shared mutable state between the query path below and the
+// watcher, so there must be exactly one of it.
+//
+// #3400/#3399 — DO NOT "FIX" THIS WITH SESSION AFFINITY. `liveRequests` is
+// in-process state scoped to ONE Container App replica, so a cancel POST
+// routinely lands on a replica that never started the query. This module used to
+// tell the reader to set `ingress.stickySessions.affinity: 'sticky'` or run a
+// single replica. Both are wrong for this estate and one is forbidden:
+// `loom-console` is declared `multiRevision: true` with `minReplicas: 2`
+// (admin-plane/main.bicep), ACA REQUIRES `affinity:'none'` in multiple-revision
+// mode, and app-deployments.bicep asserts that value on every deploy — so a
+// reader who followed the old advice would have it reverted by the next deploy,
+// after breaking the roll. `lib/auth/msal.ts` documents the same intent from the
+// other side: the console is deliberately scaled out with affinity OFF because
+// the MSAL token cache is Cosmos-persisted.
+//
+// The answer is the CROSS-REPLICA CANCEL SIGNAL implemented in the module this
+// block re-exports — a TTL'd intent keyed by requestId that each replica polls
+// for its OWN live keys. The full rationale, and the record of what was wrong
+// before, live there beside the code; this note exists so a reader who only ever
+// opens azure-sql-client.ts still finds it. `cancel.test.ts`'s
+// `cancel route honesty (#3400)` block asserts all three files carry it.
+
+export {
+  liveRequests,
+  CANCEL_INTENT_CONTAINER,
+  CANCEL_INTENT_TTL_SECONDS,
+  cancelIntentStoreConfigured,
+  cancelIntentUnavailableReason,
+  recordCancelIntent,
+  registerLiveRequest,
+  unregisterLiveRequest,
+  _setCancelIntentStore,
+  _pollCancelIntentsOnce,
+} from './azure-sql-cancel-intents';
+export type { CancelIntentStore } from './azure-sql-cancel-intents';
+
+import { liveRequests, registerLiveRequest, unregisterLiveRequest } from './azure-sql-cancel-intents';
 
 export interface QueryResult {
   columns: string[];
@@ -426,8 +436,10 @@ export async function executeQuery(
   const request = pool.request();
   // Register the live Request so the cancel route can send a TDS ATTENTION
   // packet for this exact in-flight query. Registered BEFORE .query() so a
-  // cancel that races the start still lands on the right Request.
-  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  // cancel that races the start still lands on the right Request. Registering
+  // also starts this replica's cancel-intent watcher (#3400), so a cancel that
+  // landed on a DIFFERENT replica still reaches this Request.
+  if (opts?.requestId) registerLiveRequest(opts.requestId, request);
   try {
     const result = await request.query(sqlText);
     const recordset = result.recordset || [];
@@ -441,7 +453,7 @@ export async function executeQuery(
       truncated: recordset.length > MAX_ROWS,
     };
   } finally {
-    if (opts?.requestId) liveRequests.delete(opts.requestId);
+    if (opts?.requestId) unregisterLiveRequest(opts.requestId);
   }
 }
 
@@ -503,8 +515,10 @@ export async function executeQueryBatch(
   const request = pool.request();
   // Register the live Request so the cancel route can send a TDS ATTENTION
   // packet for this exact in-flight query. Registered BEFORE .query() so a
-  // cancel that races the start still lands on the right Request.
-  if (opts?.requestId) liveRequests.set(opts.requestId, request);
+  // cancel that races the start still lands on the right Request. Registering
+  // also starts this replica's cancel-intent watcher (#3400), so a cancel that
+  // landed on a DIFFERENT replica still reaches this Request.
+  if (opts?.requestId) registerLiveRequest(opts.requestId, request);
   const messages: InfoMessage[] = [];
   // Attach the info listener BEFORE .query() — tedious emits 'info' events
   // during result-set processing, before the Promise resolves.
@@ -522,7 +536,7 @@ export async function executeQueryBatch(
   try {
     result = await request.query(sqlText);
   } finally {
-    if (opts?.requestId) liveRequests.delete(opts.requestId);
+    if (opts?.requestId) unregisterLiveRequest(opts.requestId);
   }
   // result.recordsets is an array of arrays: one element per SELECT in the batch.
   const rawSets: any[][] = Array.isArray(result.recordsets) && result.recordsets.length
