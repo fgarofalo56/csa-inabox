@@ -709,9 +709,15 @@ describe('upsertActionGroup', () => {
       webhookReceivers: [{ serviceUri: 'https://webhook.site/test' }],
       logicAppReceivers: [{ resourceId: '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf1', callbackUrl: 'https://prod-x.logic.azure.com/cb' }],
     });
-    expect(calls[0].init?.method).toBe('PUT');
-    expect(calls[0].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1?api-version=2023-01-01');
-    const body = JSON.parse(String(calls[0].init?.body));
+    // #4113 made this a READ-modify-write: call 0 is the preserving GET, and
+    // the PUT is call 1. Asserting the GET explicitly is what keeps the index
+    // shift below from being a silent re-point at whatever call happens to be
+    // second — if the read is ever dropped, this line fails first.
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
+    expect(calls).toHaveLength(2);
+    expect(calls[1].init?.method).toBe('PUT');
+    expect(calls[1].url).toContain('/resourceGroups/rg-alerts/providers/Microsoft.Insights/actionGroups/ag1?api-version=2023-01-01');
+    const body = JSON.parse(String(calls[1].init?.body));
     expect(body.properties.groupShortName).toBe('ag1short'.slice(0, 12));
     expect(body.properties.emailReceivers).toHaveLength(1);
     expect(body.properties.smsReceivers[0]).toMatchObject({ countryCode: '1', phoneNumber: '5551234567' });
@@ -720,12 +726,19 @@ describe('upsertActionGroup', () => {
     expect(id).toContain('/actionGroups/ag1');
   });
 
-  it('PUTs empty receiver arrays when none supplied (still creates the group)', async () => {
+  it('PUTs empty receiver arrays when the group exists with none (still creates the group)', async () => {
     process.env.LOOM_ALERT_RG = 'rg-alerts';
     const calls = captureFetch(() => ({ body: { id: '/x/ag2' } }));
     const { upsertActionGroup } = await import('../monitor-client');
     await upsertActionGroup({ name: 'ag2', shortName: 'ag2' });
-    const body = JSON.parse(String(calls[0].init?.body));
+    // The GET is call 0 and answers "group exists, no receivers of any kind";
+    // an unsupplied kind therefore preserves an empty array rather than
+    // clearing a populated one. The non-empty-read cases live in
+    // lib/install/provisioners/__tests__/activator-receiver-reachability.test.ts
+    // ('PRESERVES an armRoleReceiver the platform put on the group' and
+    // 'preserves a managed kind the caller did not supply, and clears one
+    // supplied EMPTY').
+    const body = JSON.parse(String(calls[1].init?.body));
     expect(body.properties.emailReceivers).toEqual([]);
     expect(body.properties.smsReceivers).toEqual([]);
     expect(body.properties.webhookReceivers).toEqual([]);

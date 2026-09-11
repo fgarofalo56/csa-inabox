@@ -27,24 +27,87 @@
  *   host  — Databricks workspace hostname override (UC)
  *   key   — explicit lineage key override (UC full_name or Atlas/Purview GUID)
  */
-import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextRequest, NextResponse } from 'next/server';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { detectLoomCloud, type LoomCloud } from '@/lib/azure/cloud-endpoints';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
 import { buildImpactResult } from '@/lib/azure/impact-analysis';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { apiOk, apiServerError, apiUnauthorized } from '@/lib/api/respond';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Load an item by id (cross-partition) and verify the caller's tenant owns it. */
+/**
+ * #3941 review - A ROUTE CEILING ABOVE THE GROUP WALK.
+ *
+ * This route's authorization moved from an owner-only point read to
+ * `authorizeItemWorkspace`. The owner fast path short-circuits, so a caller who
+ * created the workspace pays nothing new - but the population this migration
+ * newly ADMITS (non-owner ACL members and tenant admins) is exactly the one
+ * that falls through to `resolveEffectiveRole`, which walks group assignments
+ * SEQUENTIALLY with no walk-wide ceiling (#3834). 71 other console routes
+ * declare a bound; not one of these ten did, so the widening landed on the
+ * routes with no ceiling at all.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it DECLARES a
+ * bound - it does not, on this deployment, enforce one, and the earlier wording
+ * here ("it bounds the REQUEST") asserted an effect that was not established
+ * (#4357 review item 3). `maxDuration` is a build-time segment config: measured
+ * in next@15.5.21, every reference under `node_modules/next/dist` sits in
+ * `build/` (segment-config collection, the build manifest, the types plugin) or
+ * in typegen - nothing under `next/dist/server` reads it on the request path, so
+ * the standalone server this console ships as does not cut the request off at
+ * 60s. Enforcement belongs to the hosting platform, and that the console's
+ * Container Apps runtime performs it was NOT established. What the line does buy
+ * is the declared bound the house convention expects - 71 other console routes
+ * carry one and not one of these ten did - so any platform that does read it
+ * bounds these routes like the rest. It does not bound the group walk either
+ * way: #3834 is still open.
+ */
+export const maxDuration = 60;
+
+/**
+ * Find an item by id (cross-partition) + AUTHORIZE the caller against its parent
+ * workspace through the canonical ladder (#3941). Read-scoped for GET, write-
+ * scoped for every mutating verb. This REPLACES an owner-only partition point
+ * read that admitted only the workspace CREATOR, so for any item row carrying a
+ * workspaceId the admitted set GROWS: tenant admins and shared-ACL members with
+ * the right role now pass.
+ *
+ * THE ONE NON-MONOTONE DIRECTION IS CLOSED IN THIS FILE (#4357 review item 4;
+ * disclosed as an accepted widening in review item 2, now fixed rather than
+ * disclosed). When an item row's `workspaceId` is FALSY,
+ * `authorizeItemWorkspace` resolves no workspace and returns null — an ALLOW the
+ * role resolver never sees (workspace-guard.ts, the `if (!workspaceId) return
+ * null` prologue), and one intended for an id that names NO item anywhere. The
+ * owner-only point read this replaced did
+ * `ws.item(item.workspaceId, tenantId).read()`, which on a falsy id 404s or
+ * throws, so the helper REFUSED. That row shape would therefore have moved from
+ * refuse to proceed, so `loadItem` below refuses it EXPLICITLY before the ladder
+ * runs and this route's access change is a widening in one direction only.
+ * `items` is partitioned on `/workspaceId` (cosmos-client.ts) so such a row is
+ * close to unreachable — but that is a durability argument, not an
+ * authorization one, which is why it is fixed here rather than argued away.
+ * The shared helper's ALLOW is UNCHANGED and still applies to its other
+ * importers; only these ten routes are covered. Pinned by
+ * `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`, which reds if
+ * the line is removed.
+ */
 async function loadItem(
   itemId: string,
   type: string,
-  tenantId: string,
-): Promise<WorkspaceItem | null> {
+  session: SessionPayload,
+  // #3941 review - NAMED, not a bare positional boolean. This argument
+  // selects the AUTHORIZATION scope: `true` admits read-only workspace
+  // roles, `false` restricts to the write-capable ones. As a positional
+  // `boolean` a transposed argument would silently widen a mutation with no
+  // compiler complaint, and every call site read `..., session, { allowReadRoles: false })` with
+  // nothing on screen saying which way `false` pointed.
+  { allowReadRoles }: { allowReadRoles: boolean },
+): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
@@ -56,16 +119,36 @@ async function loadItem(
     })
     .fetchAll();
   const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
+  if (!item) return { item: null, denied: null };
+  // #4357 review 4 — the item EXISTS but names no workspace, so there is nothing
+  // to authorize against. Refuse here: handing it to `authorizeItemWorkspace`
+  // would hit that helper's `if (!workspaceId) return null` prologue, and `null`
+  // is the ALLOW. Collapsing to the route's own not-found keeps the wording its
+  // clients already render, and matches what the replaced owner-only point read
+  // did on a falsy partition key. See the docblock above.
+  if (!item.workspaceId) return { item: null, denied: null };
+  // #3941 - the canonical ladder, replacing the owner-only partition point read
+  // this helper used to do. `workspaces` is partitioned on `/tenantId`, which
+  // holds the workspace CREATOR's oid, so `ws.item(workspaceId, callerOid)`
+  // could only answer "did YOU create this workspace?" - it refused tenant
+  // admins and shared-ACL members on every item type with no dedicated route
+  // (the #2941/#2942 defect). `authorizeItemWorkspace` answers "may you ACCESS
+  // it?", scoped: read roles for GET, write-capable only for the mutations.
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: item.workspaceId,
+    itemId,
+    itemType: type,
+    allowReadRoles,
+    notFound: 'Item not found',
+  });
+  // An ORDINARY refusal (404) collapses to `null` so the route keeps its own
+  // not-found wording, which is what its clients already render. The 409
+  // `tenant_unconfirmed` refusal does NOT: flattening it into "item not found"
+  // would state that the item does not exist, which the code did not establish
+  // - the workspace document WAS read and the admin rights ARE real
+  // (deploy-integrity.md R7). It is handed back for the route to return.
+  if (denied) return { item: null, denied: denied.status === 404 ? null : denied };
+  return { item, denied: null };
 }
 
 /** Resolve the Unity Catalog `catalog.schema.table` lineage key from item state. */
@@ -113,7 +196,19 @@ export async function GET(
   // Atlas GUID) has no Cosmos row.
   let item: WorkspaceItem | null = null;
   try {
-    item = await loadItem(id, type, session.claims.oid);
+    // Best-effort, and DELIBERATELY dropping the authorization refusal. What
+    // makes that safe is LOCAL and traced: on a refusal `loadItem` returns
+    // `item: null`, which is byte-for-byte the "no Cosmos row" outcome this
+    // lookup already handles, so no item state the caller may not see reaches
+    // the response through THIS call.
+    //
+    // #4357 review 7 — the earlier wording justified it instead by asserting
+    // "the lineage answer below is tenant-scoped inside `getUnifiedLineage`
+    // regardless". That states more than was established:
+    // `listThreadEdges(input.session)` IS session-scoped, but the Purview /
+    // Unity Catalog portion of the same answer is not. The claim is withdrawn;
+    // it was never the reason this is safe, and the outcome is unchanged.
+    item = (await loadItem(id, type, session, { allowReadRoles: true })).item;
   } catch {
     item = null;
   }

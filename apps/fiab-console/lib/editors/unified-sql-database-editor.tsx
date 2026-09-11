@@ -1328,7 +1328,6 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [pgRg, setPgRg] = useState('');
   const [pgLocation, setPgLocation] = useState('eastus2');
   const [pgAdmin, setPgAdmin] = useState('');
-  const [pgPassword, setPgPassword] = useState('');
   const [pgSku, setPgSku] = useState('Standard_B1ms');
   const [pgTier, setPgTier] = useState('Burstable');
   const [pgVersion, setPgVersion] = useState('16');
@@ -1382,20 +1381,25 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
 
   const provisionPg = useCallback(async () => {
     setProvBusy(true); setProvMsg(null);
+    // No password in this body: the route mints one and Key-Vaults it
+    // (auto-bind-by-default.md §5), answering with the secret NAME only.
     const j = await fetchJson('/api/items/postgres-flexible-server', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         name: pgName, resourceGroup: pgRg, location: pgLocation,
-        administratorLogin: pgAdmin, administratorLoginPassword: pgPassword,
-        skuName: pgSku, tier: pgTier, version: pgVersion,
+        administratorLogin: pgAdmin, skuName: pgSku, tier: pgTier, version: pgVersion,
       }),
     });
     setProvMsg(j.ok
-      ? { ok: true, text: `PostgreSQL flexible server '${pgName}' provisioning in ${pgRg} (${j.provisioningState || 'accepted'}). ARM continues async.` }
+      ? {
+        ok: true,
+        text: `PostgreSQL flexible server '${pgName}' provisioning in ${pgRg} (${j.provisioningState || 'accepted'}). `
+          + `Admin password minted and stored in Key Vault as '${j.adminSecretName}'. ARM continues async.`,
+      }
       : { ok: false, text: j.error || 'create failed' });
     if (j.ok) loadInventory();
     setProvBusy(false);
-  }, [pgName, pgRg, pgLocation, pgAdmin, pgPassword, pgSku, pgTier, pgVersion, loadInventory]);
+  }, [pgName, pgRg, pgLocation, pgAdmin, pgSku, pgTier, pgVersion, loadInventory]);
 
   // ---- catalog register ----
   const [catBusy, setCatBusy] = useState(false);
@@ -1759,7 +1763,6 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       </Dropdown>
                     </Field>
                     <Field label="Admin login" required><Input value={pgAdmin} onChange={(_, d) => setPgAdmin(d.value)} placeholder="pgadmin" /></Field>
-                    <Field label="Admin password" required><Input type="password" value={pgPassword} onChange={(_, d) => setPgPassword(d.value)} /></Field>
                     <Field label="Tier">
                       <Dropdown className={s.fullWidth} selectedOptions={[pgTier]} value={pgTier} onOptionSelect={(_, d) => setPgTier(d.optionValue || pgTier)} aria-label="Compute tier">
                         {PG_TIERS.map((t) => <Option key={t} value={t}>{t}</Option>)}
@@ -1771,7 +1774,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       </Dropdown>
                     </Field>
                   </div>
-                  <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !pgName || !pgRg || !pgAdmin || !pgPassword} onClick={provisionPg}>
+                  <Caption1>
+                    The admin password is minted by Loom and written to the admin-plane Key Vault — never typed here,
+                    shown here, or returned to the browser. The receipt names the secret it landed in.
+                  </Caption1>
+                  <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !pgName || !pgRg || !pgAdmin} onClick={provisionPg}>
                     {provBusy ? 'Creating…' : 'Create PostgreSQL flexible server'}
                   </Button>
                 </div>

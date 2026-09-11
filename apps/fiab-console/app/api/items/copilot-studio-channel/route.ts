@@ -3,15 +3,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { listChannels, CopilotStudioError } from '@/lib/azure/copilot-studio-client';
+import { listChannels } from '@/lib/azure/copilot-studio-client';
+import { withSession } from '@/lib/api/route-toolkit';
+import { copilotStudioErrorEnvelope } from '@/lib/azure/copilot-studio-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const { searchParams } = new URL(req.url);
   const envId = searchParams.get('envId');
   const agentId = searchParams.get('agentId');
@@ -20,7 +19,7 @@ export async function GET(req: NextRequest) {
     const channels = await listChannels(envId, agentId);
     return NextResponse.json({ ok: true, channels });
   } catch (e: any) {
-    const status = e instanceof CopilotStudioError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
+    const { status, body: envelope } = copilotStudioErrorEnvelope(e);
+    return NextResponse.json(envelope, { status });
   }
-}
+});

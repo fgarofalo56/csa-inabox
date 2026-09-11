@@ -52,6 +52,74 @@ param privateEndpointsEnabled bool = false
 
 var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
 
+@description('Hub private-endpoint subnet. When supplied together with privateDnsZoneCognitiveServicesId a private endpoint is created for this account and registered in privatelink.cognitiveservices.*, so the account resolves to a VNet-internal address from the Console. Empty (default) = no private endpoint.')
+param privateEndpointSubnetId string = ''
+
+@description('Resource id of the privatelink.cognitiveservices.azure.{com|us} private DNS zone the private endpoint registers its A record in. Empty = no private endpoint.')
+param privateDnsZoneCognitiveServicesId string = ''
+
+var deployPrivateEndpoint = !empty(privateEndpointSubnetId) && !empty(privateDnsZoneCognitiveServicesId)
+
+// ---------------------------------------------------------------------------
+// Private endpoint — #4432.
+//
+// A Cognitive Services account with publicNetworkAccess=Enabled is reachable
+// from the INTERNET, which is not the same thing as reachable from the Loom
+// VNet. Measured on the live Commercial estate 2026-09-10, from inside the
+// loom-console container:
+//
+//   cog-contentsafety-*.cognitiveservices.azure.com   => ENOTFOUND
+//   hzd9c4bdb9e4fng6.ai-gateway.dm1-02.azure-api.net  => ENOTFOUND
+//   apim-csa-loom-centralus.azure-api.net             => 10.0.4.4
+//   www.microsoft.com                                 => 173.223.1.196
+//
+// Azure fronts these regional Cognitive Services endpoints with a public CNAME
+// chain that traverses `*.azure-api.net`. Loom links a PRIVATE DNS zone named
+// `azure-api.net` to the hub VNet for the Loom APIM private endpoint, and a
+// linked private zone is AUTHORITATIVE for its entire namespace — so every
+// `*.azure-api.net` name that is not in the zone answers NXDOMAIN inside the
+// VNet instead of falling through to public DNS. The CNAME chain dies at that
+// first hop and the account's hostname does not resolve at all.
+//
+// Consequence: LOOM_CONTENT_SAFETY_ENDPOINT was wired, `isSafetyConfigured()`
+// was true, and every Copilot turn tried to screen its prompt against a host
+// that could not be resolved. Chat 500'd until the client was taught to fail
+// open — and once it fails open, moderation is silently OFF.
+//
+// Per .claude/rules/auto-bind-by-default.md §5 the platform must DEPLOY the
+// binding rather than ask for it: give the account a private endpoint and an A
+// record in privatelink.cognitiveservices.*, exactly as the AOAI / AI Foundry
+// accounts already have, so the name resolves to a VNet address and never
+// touches the shadowed `azure-api.net` namespace.
+// ---------------------------------------------------------------------------
+resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (deployPrivateEndpoint) {
+  name: 'pe-${accountName}'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'plsc-${accountName}'
+        properties: {
+          privateLinkServiceId: account.id
+          groupIds: ['account']
+        }
+      }
+    ]
+  }
+}
+
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (deployPrivateEndpoint) {
+  parent: pe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      { name: 'cognitiveservices', properties: { privateDnsZoneId: privateDnsZoneCognitiveServicesId } }
+    ]
+  }
+}
+
 resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: accountName
   location: location

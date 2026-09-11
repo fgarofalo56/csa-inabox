@@ -592,6 +592,32 @@ jobs:
           TRIAGE
           node "$tmp/brain-spec-triage.mjs" "$tmp/brain-spec-tsc.txt"
 
+      - name: Type-check the Copilot UAT scoring decision (#4432 — same gap, different files)
+        if: steps.changed.outputs.console == 'true'
+        working-directory: .
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        # SAME GAP AS THE STEP ABOVE, one directory over. `tsconfig.build.json`
+        # excludes `e2e/**`, `**/__tests__/**` and `*.test.ts`, and vitest
+        # transpiles with esbuild and type-checks nothing — so the headline
+        # `tsc -p tsconfig.build.json` receipt reads the routes and the client
+        # and NONE of the files holding the Copilot UAT scoring decision.
+        #
+        # The brain-spec step above is deliberately NOT widened to cover them:
+        # its control 1 is a population floor stated as "the brain specs", and
+        # quietly changing what that population means would make the number it
+        # refuses below stop describing the thing it names.
+        #
+        # NOT THEORETICAL — on the commit that added this it found THREE errors
+        # no compiler in CI had ever read: a `NetworkFailure[]` assigned to
+        # `string[]` twice (newly introduced), and a Playwright `Response` passed
+        # to a parameter typed `APIResponse` (pre-existing TS2345).
+        #
+        # The three controls (population floor, known-red BY FILE, the list must
+        # shrink) plus the did-it-actually-run guard live in the script, with the
+        # reasoning, so they are runnable locally in one command.
+        run: node scripts/ci/check-copilot-decision-types.mjs
+
       - name: Run vitest (with istanbul coverage floor)
         if: steps.changed.outputs.console == 'true'
         env:

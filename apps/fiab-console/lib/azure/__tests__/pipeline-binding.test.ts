@@ -259,3 +259,208 @@ describe('bindingErrorResponse', () => {
     expect(r.body.error).toContain('ARM 500');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3700 — toAdfWireShape: the WRITE-BOUNDARY translator.
+//
+// The canvas shape (activity config spread onto the activity ROOT) is what the
+// designer reads and what ADF IGNORES. Three write paths PUT it verbatim, so a
+// publish returned 200 and authored a pipeline that did nothing. These pin the
+// translation AND the idempotence the write boundaries rely on — a definition
+// read back FROM ADF must survive it unchanged, or export/round-trip corrupts.
+// ---------------------------------------------------------------------------
+describe('toAdfWireShape (#3700)', () => {
+  const load = () => import('../pipeline-binding');
+
+  it('moves a non-root activity key under typeProperties and leaves nothing at the root', async () => {
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({
+      properties: { activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/x' }] },
+    });
+    const act = out.properties.activities[0];
+    expect(act.typeProperties.notebookPath).toBe('/x');
+    expect(act.notebookPath).toBeUndefined();
+    expect(act.name).toBe('a');
+    expect(act.type).toBe('DatabricksNotebook');
+  });
+
+  it('keeps the well-known ADF activity-root siblings AT the root', async () => {
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({
+      activities: [{
+        name: 'copy', type: 'Copy',
+        description: 'd',
+        policy: { timeout: '7.00:00:00' },
+        linkedServiceName: { referenceName: 'ls', type: 'LinkedServiceReference' },
+        inputs: [{ referenceName: 'in' }],
+        outputs: [{ referenceName: 'out' }],
+        userProperties: [{ name: 'u', value: 'v' }],
+        dependsOn: [{ activity: 'prev', dependencyConditions: ['Succeeded'] }],
+        source: { type: 'DelimitedTextSource' },
+      }],
+    });
+    const act = out.activities[0];
+    for (const k of ['description', 'policy', 'linkedServiceName', 'inputs', 'outputs', 'userProperties', 'dependsOn']) {
+      expect(act[k]).toBeDefined();
+    }
+    // …and only the type body moved.
+    expect(act.typeProperties).toEqual({ source: { type: 'DelimitedTextSource' } });
+  });
+
+  it('IS IDEMPOTENT — wire-shaped input comes back byte-identical', async () => {
+    // The write boundaries call this unconditionally, including on branch 3
+    // (which already asked for target:'adf') and on a definition read live FROM
+    // ADF in the export route. A non-idempotent translator would corrupt both.
+    const { toAdfWireShape } = await load();
+    const wire = {
+      name: 'p',
+      properties: {
+        activities: [{
+          name: 'a', type: 'DatabricksNotebook',
+          policy: { timeout: '7.00:00:00' },
+          typeProperties: { notebookPath: '/x', baseParameters: { k: 'v' } },
+        }],
+        parameters: { p1: { type: 'String' } },
+      },
+    };
+    const once = toAdfWireShape(wire);
+    const twice = toAdfWireShape(once);
+    expect(once).toEqual(wire);
+    expect(twice).toEqual(once);
+  });
+
+  it('an EXISTING typeProperties wins over a stray root key of the same name', async () => {
+    // A half-migrated document must not silently DOWNGRADE to the stale root
+    // value; the wire side is already authoritative for that key.
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({
+      activities: [{ name: 'a', type: 'X', notebookPath: '/stale', typeProperties: { notebookPath: '/live' } }],
+    });
+    expect(out.activities[0].typeProperties.notebookPath).toBe('/live');
+  });
+
+  it('recurses into control-flow children (ForEach / If / Switch)', async () => {
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({
+      activities: [
+        {
+          name: 'each', type: 'ForEach',
+          items: { value: '@pipeline().parameters.list', type: 'Expression' },
+          activities: [{ name: 'inner', type: 'DatabricksNotebook', notebookPath: '/deep' }],
+        },
+        {
+          name: 'sw', type: 'Switch',
+          on: { value: '@x', type: 'Expression' },
+          cases: [{ value: 'a', activities: [{ name: 'c1', type: 'Wait', waitTimeInSeconds: 3 }] }],
+        },
+      ],
+    });
+    const each = out.activities[0];
+    expect(each.items).toBeUndefined();
+    expect(each.typeProperties.items.value).toBe('@pipeline().parameters.list');
+    expect(each.typeProperties.activities[0].typeProperties.notebookPath).toBe('/deep');
+    expect(each.typeProperties.activities[0].notebookPath).toBeUndefined();
+    const sw = out.activities[1];
+    expect(sw.typeProperties.cases[0].activities[0].typeProperties.waitTimeInSeconds).toBe(3);
+  });
+
+  it('does not invent an empty typeProperties on an activity that had none', async () => {
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({ activities: [{ name: 'a', type: 'Wait' }] });
+    expect(out.activities[0]).toEqual({ name: 'a', type: 'Wait' });
+    expect('typeProperties' in out.activities[0]).toBe(false);
+  });
+
+  it('passes through anything that is not activity-shaped', async () => {
+    const { toAdfWireShape } = await load();
+    expect(toAdfWireShape(null as any)).toBeNull();
+    expect(toAdfWireShape({ properties: { parameters: {} } } as any)).toEqual({ properties: { parameters: {} } });
+  });
+
+  // -------------------------------------------------------------------------
+  // REVIEW REGRESSION — the closed allowlist ATE a real root key.
+  //
+  // The first cut of this change decided "root vs typeProperties" purely from
+  // ADF_ACTIVITY_ROOT_KEYS, so any root key not enumerated there was MOVED.
+  // Review falsified it with a Copy activity deactivated in ADF Studio, which
+  // is a shape the export route reads LIVE from ADF (branch 1) and the detail
+  // GET hands to the editor, which PUTs it straight back. The allowlist moved
+  // `state` under `typeProperties`, so the deactivated activity silently
+  // RE-ACTIVATED on re-import and ADF got two keys it does not read there.
+  //
+  // These assert the OUTCOME (the key is still at the root and NOT in the
+  // body), not the allowlist's membership — an allowlist-membership assertion
+  // would pass again the moment the next unknown ADF root field appears, which
+  // is the failure mode being fixed.
+  // -------------------------------------------------------------------------
+  it('preserves a root key it does not know, on a definition read live FROM ADF', async () => {
+    const { toAdfWireShape } = await load();
+    const fromAdf = {
+      name: 'p1',
+      properties: {
+        activities: [{
+          name: 'copy1', type: 'Copy',
+          state: 'Inactive', onInactiveMarkAs: 'Skipped',
+          policy: { timeout: '7.00:00:00' },
+          typeProperties: { source: { type: 'DelimitedTextSource' }, sink: { type: 'ParquetSink' } },
+        }],
+      },
+    };
+    const out: any = toAdfWireShape(fromAdf);
+    const act = out.properties.activities[0];
+    // The deactivation survives where ADF reads it…
+    expect(act.state).toBe('Inactive');
+    expect(act.onInactiveMarkAs).toBe('Skipped');
+    // …and did NOT get smuggled into the type body.
+    expect(act.typeProperties.state).toBeUndefined();
+    expect(act.typeProperties.onInactiveMarkAs).toBeUndefined();
+    expect(act.typeProperties).toEqual({
+      source: { type: 'DelimitedTextSource' }, sink: { type: 'ParquetSink' },
+    });
+    // The whole document round-trips, which is what the export route's comment
+    // promises for a branch-1 (live ADF) definition.
+    expect(out).toEqual(fromAdf);
+    expect(toAdfWireShape(out)).toEqual(fromAdf);
+  });
+
+  it('preserves an unknown root key on a wire-shaped CONTROL-FLOW activity and its children', async () => {
+    // The recursion must not re-introduce the destructive default one level
+    // down: a deactivated child inside a ForEach is the same defect.
+    const { toAdfWireShape } = await load();
+    const fromAdf = {
+      activities: [{
+        name: 'each', type: 'ForEach',
+        state: 'Inactive',
+        typeProperties: {
+          items: { value: '@pipeline().parameters.list', type: 'Expression' },
+          activities: [{
+            name: 'inner', type: 'DatabricksNotebook',
+            state: 'Inactive', onInactiveMarkAs: 'Succeeded',
+            typeProperties: { notebookPath: '/deep' },
+          }],
+        },
+      }],
+    };
+    const out: any = toAdfWireShape(fromAdf);
+    expect(out.activities[0].state).toBe('Inactive');
+    const inner = out.activities[0].typeProperties.activities[0];
+    expect(inner.state).toBe('Inactive');
+    expect(inner.onInactiveMarkAs).toBe('Succeeded');
+    expect(inner.typeProperties).toEqual({ notebookPath: '/deep' });
+    expect(out).toEqual(fromAdf);
+  });
+
+  it('STILL collects the body on the CANVAS shape — the discriminator is typeProperties, not the key name', async () => {
+    // The counterfactual for the fix above: preserving unknown root keys must
+    // NOT become "preserve everything", or #3700's original defect returns.
+    // An activity with NO typeProperties is the canvas shape and still folds.
+    const { toAdfWireShape } = await load();
+    const out: any = toAdfWireShape({
+      activities: [{ name: 'a', type: 'DatabricksNotebook', notebookPath: '/x', baseParameters: { k: 'v' } }],
+    });
+    const act = out.activities[0];
+    expect(act.notebookPath).toBeUndefined();
+    expect(act.baseParameters).toBeUndefined();
+    expect(act.typeProperties).toEqual({ notebookPath: '/x', baseParameters: { k: 'v' } });
+  });
+});

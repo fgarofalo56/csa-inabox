@@ -30,8 +30,15 @@ const executeQuery = vi.fn();
 const tenantRead = vi.fn();
 /** Which tenant's DQ-rule document was opened. */
 const tenantDocIds: string[] = [];
-/** The tenant that owns the workspace — deliberately NOT the session oid below. */
+/** The tenant that owns the workspace — deliberately NOT the session oid below.
+ *  This is `Workspace.tenantId`, i.e. the CREATOR's Entra oid. */
 const OWNER_TENANT = 'owner-tenant';
+/** `Workspace.tid` — the ENTRA TENANT of the owning workspace, a different field
+ *  from `tenantId` above and the one #3580's discovery rule compares against. */
+const OWNER_TID = 'tid-owner-entra';
+/** Explicit workspace-role rows for the ACL step of `resolveWorkspaceAccessByOid`.
+ *  Empty unless a test says the caller is a member. */
+let wsRoles: any[] = [];
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/kusto-client', () => ({
@@ -53,6 +60,13 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
     },
   })),
   tenantSettingsContainer: vi.fn(),
+  // The ACL step of `resolveWorkspaceAccessByOid`, reached now that
+  // `GET /[id]` is discovery-gated (#3580). Un-stubbed it threw a bare
+  // TypeError that the route reported as a 500 — a leaf that decides
+  // authorization must not be the one leaf nobody wired.
+  workspaceRolesContainer: vi.fn(async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: wsRoles }) }) },
+  })),
 }));
 vi.mock('@/app/api/items/_lib/item-crud', async () => {
   const { NextResponse } = await import('next/server');
@@ -143,8 +157,8 @@ function wireCosmos(item: any) {
     items: { query: () => ({ fetchAll: async () => ({ resources: item ? [item] : [] }) }) },
   });
   (workspacesContainer as any).mockResolvedValue({
-    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: OWNER_TENANT }] }) }) },
-    item: () => ({ read: async () => ({ resource: { tenantId: OWNER_TENANT } }) }),
+    items: { query: () => ({ fetchAll: async () => ({ resources: [{ id: 'ws-1', tenantId: OWNER_TENANT, tid: OWNER_TID }] }) }) },
+    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: OWNER_TENANT, tid: OWNER_TID } }) }),
   });
   (accessRequestsContainer as any).mockResolvedValue({
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
@@ -161,10 +175,14 @@ beforeEach(() => {
   executeQuery.mockResolvedValue(oneRow({ pct: 100 }));
   tenantRead.mockReset();
   tenantDocIds.length = 0;
+  wsRoles = [];
   process.env.LOOM_KUSTO_CLUSTER_URI = 'https://adx-test.eastus2.kusto.windows.net';
   // The caller is a shared-workspace COLLABORATOR, not the owner: `loadOwnedItem`
   // gates on workspace WRITE access, so this session reaches every write below.
-  (getSession as any).mockReturnValue({ claims: { oid: 'collaborator-oid', upn: 'collab@contoso.com' } });
+  // The `tid` is the OWNING workspace's Entra tenant — a collaborator on a shared
+  // workspace signs in from the same tenant, and #3580's discovery rule is a
+  // POSITIVE tenant match, so a fixture without it confirms no tenancy at all.
+  (getSession as any).mockReturnValue({ claims: { oid: 'collaborator-oid', upn: 'collab@contoso.com', tid: OWNER_TID } });
 });
 
 describe('GET /api/data-products/[id]/certification issues no per-rule ADX query', () => {
@@ -250,8 +268,22 @@ describe('GET /api/data-products/[id]/certification issues no per-rule ADX query
   });
 });
 
+/**
+ * `GET /api/data-products/[id]` is now DISCOVERY-GATED (#3580), so each case has
+ * to say which population the caller is in. The query-count claim — the whole
+ * point of this file — is asserted on all three, including the refusal: a route
+ * that 404s after running 200 KQL queries would be a worse defect than the one
+ * this file was written for, and only the count can tell the difference.
+ */
 describe('GET /api/data-products/[id] issues no per-rule ADX query', () => {
-  it('projects the persisted measurement — 0 ADX queries, 0 rule-store reads', async () => {
+  /** A workspace-role row: what makes the collaborator an ACL MEMBER. */
+  const VIEWER_ROW = {
+    id: 'r-collab', workspaceId: 'ws-1', principalId: 'collaborator-oid',
+    principalType: 'User', role: 'Viewer', addedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('a workspace MEMBER projects the persisted measurement — 0 ADX queries, 0 rule-store reads', async () => {
+    wsRoles = [VIEWER_ROW];
     wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT }));
 
     const res = await detailGET({} as any, props('dp-1'));
@@ -266,18 +298,41 @@ describe('GET /api/data-products/[id] issues no per-rule ADX query', () => {
     expect(j.dqMeasuredAt).toBe(MEASUREMENT.measuredAt);
   });
 
-  it('a non-owner view of another tenant\'s product runs nothing', async () => {
+  it('a non-member view of another tenant\'s product is REFUSED — and still runs nothing', async () => {
     // viewer-tenant ≠ owner-tenant: the old code scored the VIEWER's rules
-    // against the OWNER's tables. It now executes no rule for either tenant.
-    wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT }));
+    // against the OWNER's tables, and before #3580 it also handed them the raw
+    // record. It now answers 404 — and executes no rule for either tenant, which
+    // is what this file measures.
+    (getSession as any).mockReturnValue({ claims: { oid: 'outsider-oid', tid: 'tid-some-other-entra' } });
+    wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT, lifecycleState: 'published' }));
 
-    const j = await (await detailGET({} as any, props('dp-1'))).json();
+    const res = await detailGET({} as any, props('dp-1'));
+    const j = await res.json();
 
     expect(executeQuery).toHaveBeenCalledTimes(0);
     expect(tenantRead).toHaveBeenCalledTimes(0);
+    expect(res.status).toBe(404);
+    expect(j.ok).toBe(false);
+    expect(j.dqScore).toBeUndefined();
+  });
+
+  it('a non-member in the SAME tenant gets the catalog projection — still 0 queries, and no dq internals', async () => {
+    // The population #3580 deliberately keeps: a catalog reader on a PUBLISHED
+    // in-tenant product. They are admitted, so this is not the refusal above
+    // wearing a different hat — and the measurement is owner-side state they do
+    // not receive, which is why `dqScore` is absent rather than null.
+    wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT, lifecycleState: 'published' }));
+
+    const res = await detailGET({} as any, props('dp-1'));
+    const j = await res.json();
+
+    expect(executeQuery).toHaveBeenCalledTimes(0);
+    expect(tenantRead).toHaveBeenCalledTimes(0);
+    expect(res.status).toBe(200);
     expect(j.isOwner).toBe(false);
     expect(j.ownerTenantId).toBe(OWNER_TENANT);
-    expect(j.dqScore).toBe(75);
+    expect(j.dqScore).toBeUndefined();
+    expect(j.doc).toBeUndefined();
   });
 });
 

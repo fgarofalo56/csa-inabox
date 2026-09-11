@@ -37,11 +37,11 @@
  *                        Cosmos-only; purviewStatus 'skipped:purview_not_configured'.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import {
   itemsContainer,
-  workspacesContainer,
   auditLogContainer,
   tenantSettingsContainer,
 } from '@/lib/azure/cosmos-client';
@@ -52,10 +52,39 @@ import {
 } from '@/lib/azure/purview-client';
 import { loomClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * #3941 review - A ROUTE CEILING ABOVE THE GROUP WALK.
+ *
+ * This route's authorization moved from an owner-only point read to
+ * `authorizeItemWorkspace`. The owner fast path short-circuits, so a caller who
+ * created the workspace pays nothing new - but the population this migration
+ * newly ADMITS (non-owner ACL members and tenant admins) is exactly the one
+ * that falls through to `resolveEffectiveRole`, which walks group assignments
+ * SEQUENTIALLY with no walk-wide ceiling (#3834). 71 other console routes
+ * declare a bound; not one of these ten did, so the widening landed on the
+ * routes with no ceiling at all.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH (deploy-integrity.md R7): it DECLARES a
+ * bound - it does not, on this deployment, enforce one, and the earlier wording
+ * here ("it bounds the REQUEST") asserted an effect that was not established
+ * (#4357 review item 3). `maxDuration` is a build-time segment config: measured
+ * in next@15.5.21, every reference under `node_modules/next/dist` sits in
+ * `build/` (segment-config collection, the build manifest, the types plugin) or
+ * in typegen - nothing under `next/dist/server` reads it on the request path, so
+ * the standalone server this console ships as does not cut the request off at
+ * 60s. Enforcement belongs to the hosting platform, and that the console's
+ * Container Apps runtime performs it was NOT established. What the line does buy
+ * is the declared bound the house convention expects - 71 other console routes
+ * carry one and not one of these ten did - so any platform that does read it
+ * bounds these routes like the rest. It does not bound the group walk either
+ * way: #3834 is still open.
+ */
+export const maxDuration = 60;
 
 /**
  * Atlas classification typedef name for a Loom taxonomy label.
@@ -75,8 +104,45 @@ function err(error: string, status: number, code?: string, extra?: Record<string
   return NextResponse.json({ ok: false, error, code, ...(extra || {}) }, { status });
 }
 
-/** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
+/**
+ * Find an item by id (cross-partition) + AUTHORIZE the caller against its parent
+ * workspace through the canonical ladder (#3941). Read-scoped for GET, write-
+ * scoped for every mutating verb. This REPLACES an owner-only partition point
+ * read that admitted only the workspace CREATOR, so for any item row carrying a
+ * workspaceId the admitted set GROWS: tenant admins and shared-ACL members with
+ * the right role now pass.
+ *
+ * THE ONE NON-MONOTONE DIRECTION IS CLOSED IN THIS FILE (#4357 review item 4;
+ * disclosed as an accepted widening in review item 2, now fixed rather than
+ * disclosed). When an item row's `workspaceId` is FALSY,
+ * `authorizeItemWorkspace` resolves no workspace and returns null — an ALLOW the
+ * role resolver never sees (workspace-guard.ts, the `if (!workspaceId) return
+ * null` prologue), and one intended for an id that names NO item anywhere. The
+ * owner-only point read this replaced did
+ * `ws.item(item.workspaceId, tenantId).read()`, which on a falsy id 404s or
+ * throws, so the helper REFUSED. That row shape would therefore have moved from
+ * refuse to proceed, so `loadItem` below refuses it EXPLICITLY before the ladder
+ * runs and this route's access change is a widening in one direction only.
+ * `items` is partitioned on `/workspaceId` (cosmos-client.ts) so such a row is
+ * close to unreachable — but that is a durability argument, not an
+ * authorization one, which is why it is fixed here rather than argued away.
+ * The shared helper's ALLOW is UNCHANGED and still applies to its other
+ * importers; only these ten routes are covered. Pinned by
+ * `app/api/items/[type]/[id]/__tests__/workspace-authz.test.ts`, which reds if
+ * the line is removed.
+ */
+async function loadItem(
+  itemId: string,
+  type: string,
+  session: SessionPayload,
+  // #3941 review - NAMED, not a bare positional boolean. This argument
+  // selects the AUTHORIZATION scope: `true` admits read-only workspace
+  // roles, `false` restricts to the write-capable ones. As a positional
+  // `boolean` a transposed argument would silently widen a mutation with no
+  // compiler complaint, and every call site read `..., session, { allowReadRoles: false })` with
+  // nothing on screen saying which way `false` pointed.
+  { allowReadRoles }: { allowReadRoles: boolean },
+): Promise<{ item: WorkspaceItem | null; denied: NextResponse | null }> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<WorkspaceItem>({
@@ -88,16 +154,36 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
     })
     .fetchAll();
   const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
+  if (!item) return { item: null, denied: null };
+  // #4357 review 4 — the item EXISTS but names no workspace, so there is nothing
+  // to authorize against. Refuse here: handing it to `authorizeItemWorkspace`
+  // would hit that helper's `if (!workspaceId) return null` prologue, and `null`
+  // is the ALLOW. Collapsing to the route's own not-found keeps the wording its
+  // clients already render, and matches what the replaced owner-only point read
+  // did on a falsy partition key. See the docblock above.
+  if (!item.workspaceId) return { item: null, denied: null };
+  // #3941 - the canonical ladder, replacing the owner-only partition point read
+  // this helper used to do. `workspaces` is partitioned on `/tenantId`, which
+  // holds the workspace CREATOR's oid, so `ws.item(workspaceId, callerOid)`
+  // could only answer "did YOU create this workspace?" - it refused tenant
+  // admins and shared-ACL members on every item type with no dedicated route
+  // (the #2941/#2942 defect). `authorizeItemWorkspace` answers "may you ACCESS
+  // it?", scoped: read roles for GET, write-capable only for the mutations.
+  const denied = await authorizeItemWorkspace(session, {
+    workspaceId: item.workspaceId,
+    itemId,
+    itemType: type,
+    allowReadRoles,
+    notFound: 'Item not found',
+  });
+  // An ORDINARY refusal (404) collapses to `null` so the route keeps its own
+  // not-found wording, which is what its clients already render. The 409
+  // `tenant_unconfirmed` refusal does NOT: flattening it into "item not found"
+  // would state that the item does not exist, which the code did not establish
+  // - the workspace document WAS read and the admin rights ARE real
+  // (deploy-integrity.md R7). It is handed back for the route to return.
+  if (denied) return { item: null, denied: denied.status === 404 ? null : denied };
+  return { item, denied: null };
 }
 
 /**
@@ -128,7 +214,8 @@ export async function GET(
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: true });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     const taxonomy = await loadTaxonomy(session.claims.oid);
@@ -168,7 +255,8 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
   ];
 
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
+    const { item, denied } = await loadItem(params.id, params.type, session, { allowReadRoles: false });
+    if (denied) return denied;
     if (!item) return err('Item not found', 404, 'not_found');
 
     // --- Enforce "not free-text": every value must be in the tenant taxonomy.
