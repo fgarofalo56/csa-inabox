@@ -2080,6 +2080,392 @@ export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes 
 }
 
 // ===========================================================================
+// THE ESTATE IMAGE-WRITE LEASE — #3676 acceptance bullet 1 (MUTUAL EXCLUSION)
+// ===========================================================================
+//
+// WHAT WAS STILL OPEN. #4318 made the post-apply estate gate estate-wide, so a
+// roll that lands inside the apply window is now SEEN and HEALED. It is still
+// OVERWRITTEN. The issue's own acceptance opens with "the two writers cannot
+// both win", and the 2026-09-07 re-measurement scored that bullet NOT DONE:
+//
+//   grep -c '^concurrency:' deploy-fiab-{commercial,gcc,gcch,il5}.yml  ->  0 0 0 0
+//
+// WHY NOT A `concurrency:` GROUP. deploy-fiab-commercial.yml states the reason
+// where the gate lives, and it is not a style preference: GitHub keeps exactly
+// ONE pending run per group and CANCELS the previously pending one, even with
+// `cancel-in-progress: false`. Serialising the lanes that way converts a
+// visible, self-healing revert into a SILENTLY DROPPED roll at a specific SHA —
+// strictly worse than the bug. That comment ends "Elimination needs a LEASE,
+// which does not cancel; detection + heal is what ships here." This is the
+// lease it deferred.
+//
+// WHAT THE LEASE ARBITRATES. Exactly one field:
+// `properties.template.containers[0].image` on the admin-plane Container Apps.
+// Two writers take it: `az deployment sub create` (the deploy lane's apply,
+// which re-renders every app from appImageTags) and `az containerapp update`
+// (loom-roll-and-validate's image write). Between those two the orders are the
+// only two outcomes: deploy-then-roll, or roll-then-deploy-that-re-pins-to-the-
+// rolled-image.
+//
+// THAT IS THE INCIDENT PAIR, NOT THE POPULATION. An earlier revision of this
+// header said the field "has precisely two writers". That was FALSE, and the
+// design conclusion drawn from it — that the two orders are the only two
+// outcomes, full stop — did not hold. Measured over `.github/workflows/*.yml`
+// on 2026-09-08, these Commercial admin-plane image writers do NOT take this
+// lease:
+//
+//   loom-dataplane-roll.yml            roll + rollback, over loom-unity /
+//                                      iceberg-catalog / loom-trino. UNCOVERED
+//                                      AND AUTOMATIC: it is triggered by the
+//                                      SAME `workflow_run:` completion of
+//                                      build-fiab-images-acr-tasks that fires
+//                                      the leased roll lane, and the scheduled
+//                                      apply re-renders those apps from
+//                                      appImageTags. ESTATE_ROLL_LANES above is
+//                                      this file's own authoritative roll
+//                                      population and it names that lane for
+//                                      three of the four apps.
+//   full-app-deploy-commercial.yml     workflow_dispatch, loops every app.
+//   console-bluegreen-roll.yml         workflow_dispatch, loom-console — the
+//                                      same app the leased roll lane writes.
+//   loom-roll-and-validate.yml         its `Rollback on validation failure`
+//                                      write, disclosed at that step.
+//
+// So the #3676 shape SURVIVES on the data-plane trio and on the two dispatch
+// lanes. #3676 stays open for them; nothing here closes it.
+//
+// AND THAT LIST IS THE CLI MECHANISM ONLY. The field has a SECOND writer
+// mechanism — an ARM template deploy of anything that declares
+// `Microsoft.App/containerApps` — and this apply is itself one of them. The
+// tree holds an AUTOMATIC, COMMERCIAL, UNLEASED instance:
+// `csa-loom-post-deploy-bootstrap.yml` deploys
+// `platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep` with the
+// image inside `catalogConfig`, and deploy-fiab-commercial chains that whole
+// workflow as `needs: deploy-validate` — i.e. AFTER this lane releases the
+// lease — so it can write the field concurrently with a roll, with no mutex.
+// `iceberg-catalog` is in ESTATE_ROLL_LANES above, so it is inside the
+// population this lease is about. #3676 stays open for it too.
+//
+// THE POPULATION IS MEASURED, NOT LEFT AS PROSE, AND FOR BOTH MECHANISMS.
+// roll-race.test.mjs reads the workflow directory and runs two scanners over
+// it: `imageWriteSites` counts each file's `az containerapp (update|create|up|
+// revision copy)` image-write sites, and `armImageWriteSites` counts each
+// file's `az deployment <scope> create` sites whose template — transitively
+// through its module chain — declares `Microsoft.App/containerApps`. Every file
+// either takes this lease or carries a dated, reasoned, exactly-counted
+// allowlist entry, in whichever list applies. A third scanner outcome is kept
+// distinct on purpose: a deploy whose template cannot be resolved statically
+// (`-f "$BICEP_PATH"`, a template-uri, flags hidden in a shell array) is
+// recorded as UNRESOLVED and must be disclosed too, because "I could not
+// resolve it" is not "it does not write" — that collapse is R7.
+//
+// WHAT IS STILL NOT MEASURED, stated rather than implied: a writer reached
+// through a script this scan does not open (no shell under `scripts/` writes
+// the image field today — `deploy-v2-synapse.sh:128` and
+// `openlineage-pool-setup.sh` are `--set-env-vars` — so the indirection hole is
+// currently theoretical), and anything an UNRESOLVED site turns out to deploy.
+//
+// WHY ITS OWN TAG KEYS AND NOT THE #2603 ACR FIREWALL LEASE. That mutex is held
+// by PUSHERS — `az acr build` holds it for up to 120 minutes — and a push does
+// not write a Container App's image field. Reusing it would block every roll
+// behind every build for no safety gain, and a roll that fails after a 20-minute
+// wait is a new outage introduced by a fix. Distinct keys, distinct mutex; the
+// two never interact.
+//
+// WHERE THE RECORD LIVES, AND WHY THAT IS SAFE ONLY SINCE #3681. The lease is
+// four ARM tags on the admin-plane ACR, merge-patched with
+// `az tag update --operation Merge` so the write never rewrites the registry
+// body. ARM tags were already the repo's chosen store for a cross-lane mutex
+// (acr-firewall-lease.sh) because the CONTROL plane is reachable from both
+// lanes with no data-plane dependency and no eventual-consistency index in the
+// way — the property whose absence made the Actions-API population come back
+// empty three minutes fifty after the roll it was missing.
+//
+// The precondition is that an apply must not DELETE them. It used to: an ARM
+// resource PUT replaces a resource's top-level `tags`, which is how the
+// firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:` from
+// the ACR resource in registry.bicep for exactly that reason, and compliance
+// tags now arrive out-of-band through the same Merge patch. That is a
+// PRECONDITION OF THIS MUTEX, not a coincidence, so roll-race.test.mjs asserts
+// it directly against registry.bicep — if that `tags:` ever comes back, this
+// lease degrades to nothing and the guard goes red instead.
+//
+// WHAT THIS DOES NOT ESTABLISH. Nothing here has been observed arbitrating two
+// live runs; a genuine two-writer race cannot be manufactured off the estate.
+// The decisions below are unit-tested, the shell that drives them is EXECUTED
+// against a stubbed `az` in roll-race.test.mjs, and the live receipt is a
+// scheduled Commercial run — which had not happened when this shipped.
+
+/**
+ * The four ARM tags that ARE the lease. Deliberately NOT the `loomAcrFw*` set:
+ * see the header above for why the firewall mutex is the wrong axis.
+ */
+export const ESTATE_IMAGE_LEASE_TAGS = Object.freeze({
+  owner: 'loomEstateImgOwner',
+  expires: 'loomEstateImgExpiresEpoch',
+  since: 'loomEstateImgSinceUtc',
+  holder: 'loomEstateImgHolderUrl',
+});
+
+/**
+ * A holder id this file is willing to WRITE.
+ *
+ * `az tag update --tags k=v` splits on the first '=', so an owner carrying one
+ * would be stored truncated and then never match itself on read-back — a lease
+ * that can never be released, held by a name nobody can spell. The character
+ * class is acr-firewall-lease.sh's `_lease_sanitize` set, so the two mutexes
+ * agree on what a holder id may contain, and the shell that derives the id
+ * sanitises with the same set before it gets here.
+ */
+const LEASE_OWNER_RE = /^[A-Za-z0-9._:@/-]{3,240}$/;
+
+/** The value that means "free". Written on release rather than deleting keys. */
+const LEASE_OWNER_NONE = 'none';
+
+/**
+ * Parse `az tag list --resource-id <acr> -o json` into the lease it records.
+ *
+ * AN UNEXPECTED SHAPE IS `shape`, NEVER "no lease". If the az projection ever
+ * changes, reading a missing `properties.tags` as an empty tag bag would report
+ * the mutex FREE to every lane simultaneously — a guard that fails open at the
+ * exact moment it stopped working. `properties` must be present; `tags` may be
+ * absent, because ARM genuinely omits it for an untagged resource.
+ *
+ * @param {unknown} doc
+ * @returns {{status:'read', owner:string, expiresRaw:string, expiresEpoch:number|null,
+ *            holderUrl:string, since:string} | {status:'shape', reason:string}}
+ */
+export function readEstateImageLease(doc) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    return {
+      status: 'shape',
+      reason: `the tag read did not parse as a JSON object (got ${Array.isArray(doc) ? 'an array' : typeof doc}), so the lease state was NOT established. This is unknown, not free.`,
+    };
+  }
+  const props = /** @type {Record<string, unknown>} */ (doc).properties;
+  if (!props || typeof props !== 'object' || Array.isArray(props)) {
+    return {
+      status: 'shape',
+      reason: "the tag read carried no 'properties' object, so it is not the shape `az tag list --resource-id` returns. Treating that as an untagged resource would report the lease FREE to every lane at once; it is unknown.",
+    };
+  }
+  const rawTags = /** @type {Record<string, unknown>} */ (props).tags;
+  if (rawTags != null && (typeof rawTags !== 'object' || Array.isArray(rawTags))) {
+    return {
+      status: 'shape',
+      reason: `'properties.tags' was present but is ${Array.isArray(rawTags) ? 'an array' : typeof rawTags}, not an object. The lease state was NOT established.`,
+    };
+  }
+  const t = /** @type {Record<string, unknown>} */ (rawTags || {});
+  const str = (k) => String(t[k] ?? '').trim();
+  const expiresRaw = str(ESTATE_IMAGE_LEASE_TAGS.expires);
+  return {
+    status: 'read',
+    owner: str(ESTATE_IMAGE_LEASE_TAGS.owner),
+    expiresRaw,
+    expiresEpoch: /^\d+$/.test(expiresRaw) ? Number(expiresRaw) : null,
+    holderUrl: str(ESTATE_IMAGE_LEASE_TAGS.holder),
+    since: str(ESTATE_IMAGE_LEASE_TAGS.since),
+  };
+}
+
+/**
+ * Should this run CLAIM the image-write lease, WAIT for it, or give up?
+ *
+ * Pure: the caller owns the `az tag list` and the clock. Every "cannot look"
+ * lands on `unknown` and NONE of them lands on `claim` — an unreadable mutex
+ * that reads as free is the same collapse deploy-integrity R7 forbids, and it
+ * is how this whole issue's gate passed across a revert once already.
+ *
+ * @param {{doc?:unknown, readError?:string, me?:string, nowEpoch?:number,
+ *          ttlSeconds?:number, waitDeadlineEpoch?:number}} [input]
+ * @returns {{action:'claim'|'reentrant'|'wait'|'refuse'|'unknown'|'usage',
+ *            reason:string, expiresEpoch:number|null, holder:string,
+ *            holderUrl:string, remainingSeconds:number|null}}
+ */
+export function decideEstateImageLeaseAcquire({
+  doc = null,
+  readError = '',
+  me = '',
+  nowEpoch = 0,
+  ttlSeconds = 0,
+  waitDeadlineEpoch = 0,
+} = {}) {
+  const base = { expiresEpoch: null, holder: '', holderUrl: '', remainingSeconds: null };
+  const owner = String(me || '').trim();
+  if (!LEASE_OWNER_RE.test(owner)) {
+    return {
+      ...base,
+      action: 'usage',
+      reason: `--me ${JSON.stringify(owner)} is not a holder id this lease may record. It must be 3-240 characters of [A-Za-z0-9._:@/-] — '=' in particular is what 'az tag update --tags k=v' splits on, so an id carrying one would be stored truncated and could never match itself on read-back.`,
+    };
+  }
+  if (!Number.isFinite(nowEpoch) || nowEpoch <= 0) {
+    return { ...base, action: 'usage', reason: `--now ${JSON.stringify(String(nowEpoch))} is not a unix timestamp.` };
+  }
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+    return { ...base, action: 'usage', reason: `--ttl-seconds ${JSON.stringify(String(ttlSeconds))} must be a positive number of seconds; a lease with no expiry can never be taken over from a crashed holder.` };
+  }
+  const mine = { ...base, expiresEpoch: nowEpoch + ttlSeconds, holder: owner };
+
+  if (readError) {
+    return {
+      ...base,
+      action: 'unknown',
+      reason: `the lease tags could NOT be read, so it is NOT established whether another lane is mid-write: ${String(readError).slice(0, 400)}`,
+    };
+  }
+  const state = readEstateImageLease(doc);
+  if (state.status !== 'read') {
+    return { ...base, action: 'unknown', reason: state.reason };
+  }
+  const held = state.owner && state.owner !== LEASE_OWNER_NONE;
+
+  if (held && state.owner === owner) {
+    return {
+      ...mine,
+      action: 'reentrant',
+      reason: `this run ('${owner}') already holds the estate image-write lease; refreshing its expiry to ${nowEpoch + ttlSeconds} rather than deadlocking against itself.`,
+    };
+  }
+  if (!held) {
+    return {
+      ...mine,
+      action: 'claim',
+      reason: `the estate image-write lease is FREE (recorded owner: '${state.owner || '(unset)'}'). Claiming it for ${ttlSeconds}s as '${owner}'.`,
+    };
+  }
+  if (state.expiresEpoch === null) {
+    // A recorded owner whose expiry is unreadable cannot be established as
+    // expired, and treating it as expired would let two writers in. It also
+    // must not deadlock the estate forever, so it is UNKNOWN with an exact
+    // clearing command rather than an unbounded wait.
+    return {
+      ...base,
+      action: 'unknown',
+      holder: state.owner,
+      holderUrl: state.holderUrl,
+      reason: `the lease records owner '${state.owner}' (${state.holderUrl || 'no holder url'}) but ${ESTATE_IMAGE_LEASE_TAGS.expires}=${JSON.stringify(state.expiresRaw)} is not a unix timestamp, so it CANNOT be established whether that holder is still live. Clear it once you have confirmed that run is finished: az tag update --resource-id <acr-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
+    };
+  }
+  if (state.expiresEpoch <= nowEpoch) {
+    return {
+      ...mine,
+      action: 'claim',
+      holderUrl: state.holderUrl,
+      reason: `taking over a STALE estate image-write lease held by '${state.owner}' (${state.holderUrl || 'no holder url'}) — it expired ${nowEpoch - state.expiresEpoch}s ago without releasing. If that run is somehow still writing images, this is the window in which #3676 could recur; raise the TTL if legitimate work exceeds it.`,
+    };
+  }
+
+  const remaining = state.expiresEpoch - nowEpoch;
+  if (nowEpoch >= waitDeadlineEpoch) {
+    return {
+      ...base,
+      action: 'refuse',
+      holder: state.owner,
+      holderUrl: state.holderUrl,
+      remainingSeconds: remaining,
+      reason: `TIMED OUT waiting for the estate image-write lease. It is held by '${state.owner}' (${state.holderUrl || 'no holder url'}) for another ${remaining}s, and that run is writing the same Container App image field this one is about to write. Refusing rather than repeating #3676 — this run wrote NOTHING. Wait for the holder to finish and re-run.`,
+    };
+  }
+  return {
+    ...base,
+    action: 'wait',
+    holder: state.owner,
+    holderUrl: state.holderUrl,
+    remainingSeconds: remaining,
+    reason: `the estate image-write lease is held by '${state.owner}' (${state.holderUrl || 'no holder url'}) for another ${remaining}s — waiting (bounded, ${Math.max(0, waitDeadlineEpoch - nowEpoch)}s of this run's budget left).`,
+  };
+}
+
+/**
+ * What should a releasing run do with the lease it believes it holds?
+ *
+ * `stolen` and `erased` are separated on purpose. "Someone else's id is in the
+ * tag" and "the tag is empty" have different causes and different remediations,
+ * and collapsing them into one message is how the 2026-08-17 firewall-lease
+ * erasure read as an ordinary release for the life of that script. Neither
+ * message asserts WHO did it: this code cannot establish that, and R7 says it
+ * therefore may not claim it.
+ *
+ * THREE INPUT STATES, NOT TWO. `held` is "the read-back CONFIRMED this run as
+ * the holder". `claimed` is "the claim write returned 0 and the confirmation
+ * could not be taken" — the registry may therefore still carry this run's owner
+ * id even though the run holds nothing. That state MUST reach this function: a
+ * claim that lands and is never cleared strands the mutex for a full TTL and
+ * every write on the other lane queues behind a run that has already exited,
+ * which is the outage this lease exists to prevent. The two states differ in
+ * what may be ASSERTED, not in whether the tags get cleaned up — a `claimed`
+ * run never established exclusivity, so losing the tag to another run is the
+ * ORDINARY outcome of a lost claim race and is not the `stolen` incident.
+ *
+ * @param {{doc?:unknown, readError?:string, me?:string, state?:string}} [input]
+ * @returns {{action:'clear'|'noop'|'erased'|'stolen'|'unknown'|'usage', reason:string, holder:string}}
+ */
+export function decideEstateImageLeaseRelease({ doc = null, readError = '', me = '', state = '' } = {}) {
+  const owner = String(me || '').trim();
+  const heldState = String(state || '').trim();
+  if (heldState !== 'held' && heldState !== 'claimed' && heldState !== 'none') {
+    return { action: 'usage', holder: '', reason: `--state ${JSON.stringify(heldState)} must be 'held', 'claimed' or 'none' — what this run believes about its own lease is an INPUT, not something this file may guess.` };
+  }
+  if (heldState === 'none') {
+    return { action: 'noop', holder: '', reason: 'this run never took the estate image-write lease, so it has nothing to release.' };
+  }
+  if (!LEASE_OWNER_RE.test(owner)) {
+    return { action: 'usage', holder: '', reason: `--me ${JSON.stringify(owner)} is not a holder id this lease may record (see the acquire path for the character class).` };
+  }
+  const confirmed = heldState === 'held';
+  if (readError) {
+    return {
+      action: 'unknown',
+      holder: '',
+      reason: confirmed
+        ? `this run holds the estate image-write lease and the tags could NOT be read back, so it is NOT established whether it still holds it: ${String(readError).slice(0, 400)}`
+        : `this run's claim write LANDED but it was never confirmed as the holder, and now the tags could NOT be read back either, so whether this run's owner id is still stranded in the registry is NOT established: ${String(readError).slice(0, 400)}. If it is, the other image writer queues behind a run that has already exited until the lease expires. Clear it once this run is finished: az tag update --resource-id <acr-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
+    };
+  }
+  const parsed = readEstateImageLease(doc);
+  if (parsed.status !== 'read') {
+    return { action: 'unknown', holder: '', reason: parsed.reason };
+  }
+  if (parsed.owner === owner) {
+    return {
+      action: 'clear',
+      holder: owner,
+      reason: confirmed
+        ? `this run ('${owner}') is the recorded holder — clearing the estate image-write lease.`
+        : `this run ('${owner}') never CONFIRMED the estate image-write lease, but its claim write is what the registry still records — clearing it, because leaving it would block the other image writer behind a run that has already exited. Nothing is asserted here about whether this run's write (if it made one) was exclusive; it was not established either way.`,
+    };
+  }
+  if (!parsed.owner || parsed.owner === LEASE_OWNER_NONE) {
+    if (!confirmed) {
+      return {
+        action: 'noop',
+        holder: '',
+        reason: `this run ('${owner}') wrote a claim it never confirmed, and the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' — nothing of this run's is left stranded, so there is nothing to clear. This is NOT the erasure case: this run never established that it held the mutex, so no exclusivity was lost.`,
+      };
+    }
+    return {
+      action: 'erased',
+      holder: '',
+      reason: `THE ESTATE IMAGE-WRITE LEASE WAS ERASED WHILE THIS RUN ('${owner}') HELD IT: the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' and no other holder took over. The mutex did NOT hold for this write, so another lane may have written the same image field concurrently. What removed the tags is NOT established here; the shapes to check are a template that PUTs the ACR resource (an ARM PUT replaces a resource's tags — this is why registry.bicep carries no 'tags:' since #3681) and a manual 'az tag' write.`,
+    };
+  }
+  if (!confirmed) {
+    return {
+      action: 'noop',
+      holder: parsed.owner,
+      reason: `this run ('${owner}') wrote a claim it never confirmed and the registry now records '${parsed.owner}' (${parsed.holderUrl || 'no holder url'}) — that is what LOSING the claim race looks like, and those tags belong to that run. NOT clearing them. This run holds nothing to release and asserted no exclusivity.`,
+    };
+  }
+  return {
+    action: 'stolen',
+    holder: parsed.owner,
+    reason: `THE ESTATE IMAGE-WRITE LEASE THIS RUN ('${owner}') HELD IS NOW RECORDED TO '${parsed.owner}' (${parsed.holderUrl || 'no holder url'}). Two lanes believed they held the same mutex, so this run's image write was NOT exclusive. NOT clearing the tags — they name the current holder, and clearing them would strand that run. Re-check the estate against the last successful roll before trusting the running image.`,
+  };
+}
+
+// ===========================================================================
 // CLI — file-fed, so every verdict above stays unit-testable
 // ===========================================================================
 //
@@ -2139,7 +2525,39 @@ export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes 
 //        recovery with the same logic the gate used to detect the regression,
 //        rather than a second jq re-implementation of it.
 //
+//   node scripts/ci/reconcile-policy.mjs estate-image-lease-acquire
+//        (--tags <file> | --tags-error <text>)
+//        --me <holder-id> --now <unix> --ttl-seconds <n> --wait-deadline <unix>
+//        --unknown-policy refuse|degrade
+//        Decides whether this run may CLAIM the image-write mutex (#3676
+//        bullet 1). Exit 0 = claim (the caller writes the tags and confirms),
+//        3 = WAIT and ask again, 1 = refuse, 4 = degraded-proceed, 2 = usage.
+//        `--unknown-policy` has NO default: the two lanes differ (the deploy
+//        refuses a night, the roll must not be blocked by ARM tag flakiness)
+//        and a default would let a lane inherit the other lane's risk appetite
+//        by omission.
+//   node scripts/ci/reconcile-policy.mjs estate-image-lease-confirm
+//        (--tags <file> | --tags-error <text>) --me <holder-id> --now <unix>
+//        The read-back after the claim write. ARM tags have no
+//        compare-and-swap, so two claimants can both write; each re-reads and
+//        at most one sees itself. Exit 0 = confirmed holder, 1 = not.
+//   node scripts/ci/reconcile-policy.mjs estate-image-lease-release
+//        (--tags <file> | --tags-error <text>) --me <holder-id>
+//        --state held|claimed|none
+//        Exit 0 = CLEAR the tags (this run is what the registry records),
+//        5 = nothing to clear and that is correct (this run never claimed, or
+//        it claimed without confirming and lost the race — the tags belong to
+//        another run and clearing them would strand IT), 1 = erased / stolen /
+//        unreadable, each of which means the mutex did not hold for a run that
+//        had CONFIRMED it held.
+//        `--state` has no default: `held` (confirmed) and `claimed` (the write
+//        landed, the read-back did not) differ in what may be asserted, and
+//        guessing between them is how a stranded mutex reads as a clean release.
+//
 // Exit 0 = proceed / ok, 1 = refuse / regression / unknown, 2 = usage error.
+// 3 and 4 are used ONLY by estate-image-lease-acquire, and mean "ask again"
+// and "proceed unleased, loudly" respectively. 5 is used ONLY by
+// estate-image-lease-release and means "ok, and do NOT write the clearing tags".
 
 /** `--name value`, or '' when absent. Last occurrence wins. */
 function cliArg(argv, name) {
@@ -2633,7 +3051,170 @@ export function cliMain(argv, io) {
     return 0;
   }
 
-  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh', 'assert-estate-not-behind-roll', 'assert-estate-not-behind-roll-all', 'applied-tags', 'watched-apps' or 'serving-tag'.`);
+  if (cmd === 'estate-image-lease-acquire' || cmd === 'estate-image-lease-confirm' || cmd === 'estate-image-lease-release') {
+    // ONE reader for all three, because "how did the tag read go" is the input
+    // every one of them can get wrong in the same way. Exactly one of --tags /
+    // --tags-error is required and there is no default: defaulting either way
+    // invents a fact about a mutex, and the fact it would invent ("free") is
+    // the one that lets both writers in.
+    const tagsFile = cliArg(argv, 'tags');
+    const tagsErrorGiven = cliHas(argv, 'tags-error');
+    if ((!tagsFile && !tagsErrorGiven) || (tagsFile && tagsErrorGiven)) {
+      log(`::error::reconcile-policy ${cmd}: exactly one of --tags <file> or --tags-error <text> is required. Neither state may be inferred — an unreadable mutex that defaults to FREE lets both writers in, which is the defect (#3676).`);
+      return 2;
+    }
+    let readError = cliArg(argv, 'tags-error');
+    let doc = null;
+    if (tagsFile) {
+      try {
+        doc = readJson(tagsFile);
+      } catch (e) {
+        // A file that will not parse is an UNREADABLE lease, handled by the
+        // same `unknown` path as an az failure — never a lease-free estate.
+        readError = `--tags ${tagsFile} could not be read or parsed (${String(e?.message || e).slice(0, 200)})`;
+        doc = null;
+      }
+    }
+    const me = cliArg(argv, 'me');
+
+    if (cmd === 'estate-image-lease-release') {
+      const v = decideEstateImageLeaseRelease({ doc, readError, me, state: cliArg(argv, 'state') });
+      writeOutput(`lease_release=${v.action}`);
+      if (v.action === 'usage') {
+        log(`::error::estate-image-lease: ${v.reason}`);
+        return 2;
+      }
+      // `clear` and `noop` are BOTH fine outcomes and they are NOT the same
+      // instruction. The caller writes `owner=none` on 0 and must not write it
+      // on 5: on a lost claim race the tags name the OTHER run, and clearing
+      // them would strand it — the erasure this lease exists to make impossible,
+      // performed by the release path. A step output cannot carry that decision
+      // (it is collected at step end, and the shell needs it on the next line),
+      // so it is an exit code, like the acquire loop's.
+      if (v.action === 'clear') {
+        log(`::notice::estate-image-lease: ${v.reason}`);
+        return 0;
+      }
+      if (v.action === 'noop') {
+        log(`::notice::estate-image-lease: ${v.reason}`);
+        return 5;
+      }
+      log(`::error::estate-image-lease: ${v.reason}`);
+      return 1;
+    }
+
+    const now = Number(cliArg(argv, 'now'));
+    if (cmd === 'estate-image-lease-confirm') {
+      // The read-back. A confirmation is a CLAIM decision taken again against
+      // fresh tags: if this run is still the recorded owner the acquire path
+      // returns `reentrant`, and anything else means it lost the race or the
+      // state stopped being readable. Reusing the decision rather than writing
+      // a second comparison is deliberate — two implementations of "am I the
+      // holder" is how they drift apart.
+      const v = decideEstateImageLeaseAcquire({
+        doc,
+        readError,
+        me,
+        nowEpoch: now,
+        // The confirmation asks only WHO owns the tag; the TTL it would write
+        // is irrelevant here, so a fixed positive value keeps the shared usage
+        // check satisfied without pretending this call renews anything.
+        ttlSeconds: 1,
+        waitDeadlineEpoch: 0,
+      });
+      if (v.action === 'usage') {
+        log(`::error::estate-image-lease: ${v.reason}`);
+        return 2;
+      }
+      if (v.action === 'reentrant') {
+        log(`::notice::estate-image-lease: CONFIRMED — the registry records '${me}' as the estate image-write lease holder. This run may write Container App images.`);
+        return 0;
+      }
+      // R7: the acquire path's `reason` MAY NOT be forwarded from here. It is
+      // written for a run that has not claimed yet, and on the ORDINARY
+      // lost-claim race — the exact event the settle-and-read-back exists to
+      // detect — it asserts three things THIS call did not establish:
+      //   * "TIMED OUT waiting" — no wait happens here. `waitDeadlineEpoch` is
+      //     hard-coded to 0 above, so the acquire path's timeout branch is
+      //     taken unconditionally; nothing was waited for.
+      //   * "this run wrote NOTHING" — false, and false in the same sentence as
+      //     "after the claim write". The four claim tags WERE written; reading
+      //     them back is the whole purpose of this call, and the `claimed`
+      //     output exists precisely to record that they may still be there.
+      //   * a remaining-TTL figure — the other run's hold, carried into a
+      //     sentence where it means nothing.
+      // So the confirmation states its own facts. What is true on every one of
+      // these branches, and is the operator-actionable part, is factored out.
+      const claimTagNote = 'This run has written NO Container App image. It HAS written its own claim tags, so the registry may still record this run — the release step clears them (its `if:` reads `claimed`).';
+      if (v.action === 'unknown') {
+        log(`::warning::estate-image-lease: NOT confirmed — the claim read-back did not establish an owner: ${v.reason} — ${claimTagNote}`);
+        return 1;
+      }
+      if (v.action === 'refuse' || v.action === 'wait') {
+        // The tags name a LIVE holder that is not this run. That is all that is
+        // established: this run is not the recorded holder. Who overwrote whom,
+        // and in what order, is not readable from a single read-back.
+        log(`::warning::estate-image-lease: NOT confirmed — the claim read-back names another run, '${v.holder}' (${v.holderUrl || 'no holder url'}), as the estate image-write lease holder, not '${me}'. This run did not win the claim. ${claimTagNote}`);
+        return 1;
+      }
+      // `claim`: the read SUCCEEDED and records no live holder — neither this
+      // run nor another. Why is not establishable from one read-back (the claim
+      // write may not have landed, or the tag may have been cleared or expired
+      // between that write and this read), so this says what it saw and stops.
+      log(`::warning::estate-image-lease: NOT confirmed — the claim read-back succeeded and records no LIVE holder, so '${me}' is not recorded as the estate image-write lease holder. WHY is UNKNOWN from here: the claim write may not have landed, or the tag may have been cleared or expired between that write and this read. ${claimTagNote}`);
+      return 1;
+    }
+
+    const unknownPolicy = cliArg(argv, 'unknown-policy');
+    if (unknownPolicy !== 'refuse' && unknownPolicy !== 'degrade') {
+      log("::error::reconcile-policy estate-image-lease-acquire: --unknown-policy must be given explicitly as 'refuse' or 'degrade'. It has no default on purpose: the deploy lane refuses a night rather than race, the roll lane must not be blocked by ARM tag flakiness, and a lane that inherited the other's risk appetite by omission would do so silently.");
+      return 2;
+    }
+    const v = decideEstateImageLeaseAcquire({
+      doc,
+      readError,
+      me,
+      nowEpoch: now,
+      ttlSeconds: Number(cliArg(argv, 'ttl-seconds')),
+      waitDeadlineEpoch: Number(cliArg(argv, 'wait-deadline') || 0),
+    });
+    writeOutput(`lease_action=${v.action}`);
+    if (v.action === 'usage') {
+      log(`::error::estate-image-lease: ${v.reason}`);
+      return 2;
+    }
+    if (v.action === 'claim' || v.action === 'reentrant') {
+      writeOutput(`lease_expires=${v.expiresEpoch}`);
+      const expiresOut = cliArg(argv, 'expires-out');
+      // The expiry goes to a FILE as well as a step output, for the same reason
+      // the heal request does (#3799): this command is called from inside a
+      // shell loop in one step, and a value the loop needs on the very next
+      // line cannot come from a step output that is collected at step end.
+      if (expiresOut) writeFile(expiresOut, `${v.expiresEpoch}\n`);
+      log(`::notice::estate-image-lease: ${v.reason}`);
+      return 0;
+    }
+    if (v.action === 'wait') {
+      log(`[estate-image-lease] ${v.reason}`);
+      return 3;
+    }
+    if (v.action === 'refuse') {
+      log(`::error::estate-image-lease: ${v.reason}`);
+      return 1;
+    }
+    // UNKNOWN. Both outcomes are LOUD; they differ only in whether this lane
+    // stops. `degrade` is not a pass — it says, in the run log, that this
+    // write was NOT exclusive, and leaves the post-apply estate gate (#4318)
+    // and its auto-heal (#3799) as the backstop that catches the overwrite.
+    if (unknownPolicy === 'refuse') {
+      log(`::error::estate-image-lease: ${v.reason} REFUSING: this lane does not write Container App images on an unestablished mutex — a skipped nightly reconcile costs a night, an unarbitrated write costs a rolled fix (#3676).`);
+      return 1;
+    }
+    log(`::warning::estate-image-lease: ${v.reason} PROCEEDING UNLEASED: an emergency roll must not be blocked by an ARM tag read, so this run will write the image ANYWAY and its write is NOT mutually exclusive with a concurrent apply. If it is overwritten, the post-apply estate gate on deploy-fiab-commercial detects it and the auto-heal (#3799) re-rolls it.`);
+    return 4;
+  }
+
+  log(`::error::reconcile-policy: unknown subcommand ${JSON.stringify(cmd)}. Expected 'pin-refresh', 'assert-estate-not-behind-roll', 'assert-estate-not-behind-roll-all', 'applied-tags', 'watched-apps', 'serving-tag', 'estate-image-lease-acquire', 'estate-image-lease-confirm' or 'estate-image-lease-release'.`);
   return 2;
 }
 

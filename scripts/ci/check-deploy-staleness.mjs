@@ -680,6 +680,17 @@ export const WATCHED = [
       // so a commit touching it without a subsequent successful run IS drift,
       // for exactly the reason the two above are watched.
       'scripts/ci/_estate-pause-declaration.mjs',
+      // #4233 round 2 — the JOB-level half of that same register read. The ADX
+      // preflight's `estate_paused` is only reachable inside `deploy-validate`,
+      // behind the gcc-high-deploy approval gate; `build-gov-images` runs BEFORE
+      // it and MUTATES the estate (it acquires the sovereign ACR's firewall
+      // lease at publicNetworkAccess=Enabled and `az acr build`s loom-migrate +
+      // loom-risingwave into the GCC-High registry — measured on runs
+      // 34138038567 and 33111419147). This script is what lets that job stand
+      // down with no Azure credential, so editing it decides whether two images
+      // reach the sovereign registry: a deploy source by the same argument as
+      // the four above, not merely a gate on one.
+      'scripts/ci/estate-pause-declared.mjs',
       // #3203 — Front Door answers 504 while the ACA private-endpoint connection
       // is Pending, so this decides whether the deployed sovereign estate is
       // reachable at all.
