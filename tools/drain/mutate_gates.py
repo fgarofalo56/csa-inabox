@@ -1109,6 +1109,18 @@ def _reports_a_failure(stdout: str) -> bool:
     return any(marker in stdout for marker in _FAILURE_MARKERS)
 
 
+def _write_lf(path: Path, text: str) -> None:
+    """Write with LF endings on every Python this project supports.
+
+    `Path.write_text(newline="")` is **3.13**, and `pyproject.toml` declares
+    `>=3.10`. Writing bytes is the version-independent way to say "these exact
+    characters, no translation" -- and the translation is what matters here:
+    every multi-line anchor below is written with LF, and `core.autocrlf=true`
+    on the author's machine checks these files out CRLF.
+    """
+    path.write_bytes(text.encode("utf-8"))
+
+
 _PASSED_RE = re.compile(r"(\d+) passed")
 
 
@@ -1148,10 +1160,15 @@ def main() -> int:
         # weaken the POLICY FILE and see the suite go red -- that is what proves
         # the authority has a blast radius rather than being prose. Restricted
         # to `.py`, the first such arm died with `KeyError: 'policy.json'`.
+        # BYTES, not `read_text(newline=...)`. That keyword is Python **3.13**;
+        # `pyproject.toml` declares >=3.10 and CI runs 3.10/3.11/3.12, so the
+        # first version of this ran green on three 3.13 workstations -- mine and
+        # both reviewers' -- and was RED on every CI Python. A local green says
+        # nothing about the floor the project declares.
         originals = {}
         for name in SOURCES:
-            text = (sandbox / name).read_text(encoding="utf-8", newline="").replace("\r\n", "\n")
-            (sandbox / name).write_text(text, encoding="utf-8", newline="")
+            text = (sandbox / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
+            _write_lf(sandbox / name, text)
             originals[name] = text
         # THE ANCHOR META-TEST CANNOT BE IN THE SANDBOX'S DECISION PATH.
         #
@@ -1238,10 +1255,9 @@ def main() -> int:
                       f"in {filename} - AMBIGUOUS, would mutate the first")
                 skipped += 1
                 continue
-            (sandbox / filename).write_text(source.replace(old, new, 1),
-                                            encoding="utf-8", newline="")
+            _write_lf(sandbox / filename, source.replace(old, new, 1))
             run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
-            (sandbox / filename).write_text(source, encoding="utf-8", newline="")
+            _write_lf(sandbox / filename, source)
             # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
             # comment records the consequence: a mutation that was a
             # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106

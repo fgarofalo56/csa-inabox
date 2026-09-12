@@ -84,13 +84,18 @@ def test_every_arm_anchor_is_present_and_unique_in_the_current_source():
     broke four anchors and made a fifth ambiguous in a single commit here.
 
     This reads the same sources the runner copies, so it catches both in under
-    a second, and it names the arm."""
+    a second, and it names the arm.
+
+    READ BYTES AND DECODE, rather than `Path.read_text(newline=...)`. That
+    keyword landed in Python **3.13**; `pyproject.toml` declares `>=3.10` and CI
+    runs 3.10/3.11/3.12, so the first version passed for me and for both
+    independent reviewers -- all three of us on 3.13 -- and was RED on every CI
+    Python. A local green says nothing about the floor the project declares."""
     import pathlib
 
     here = pathlib.Path(mutate_gates.HERE)
     sources = {
-        name: here.joinpath(name).read_text(encoding="utf-8", newline="")
-        .replace("\r\n", "\n")
+        name: here.joinpath(name).read_bytes().decode("utf-8").replace("\r\n", "\n")
         for name in mutate_gates.SOURCES
     }
     broken = []
