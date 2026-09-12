@@ -587,6 +587,18 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
+        "R10 W6-ci drops out of the escalating streams (the GUARD stream)",
+        "policy.json",
+        '      "W6-ci",\n      "W7-bicep"',
+        '      "W7-bicep"',
+    ),
+    (
+        "R11 an EMPTY changed-file list is treated as a known footprint",
+        "merge_gate.py",
+        "        policy, changed_paths=changed, footprint_known=bool(changed)",
+        "        policy, changed_paths=changed, footprint_known=True",
+    ),
+    (
         "R7 the reviewer COUNT stops being enforced at the merge gate",
         "merge_gate.py",
         "        len(approvals) >= needed,",
@@ -595,7 +607,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "R8 the merge gate counts reviewers from a LANE GUESS, not the real diff",
         "merge_gate.py",
-        '        policy, changed_paths=data.get("changed_files") or [], footprint_known=True',
+        "        policy, changed_paths=changed, footprint_known=bool(changed)",
         "        policy, changed_paths=[], footprint_known=True",
     ),
     (
@@ -633,10 +645,17 @@ ARMS: list[tuple[str, str, str, str]] = [
         # `policy`, so the arm was a no-op and survived on that alone. Skip the
         # bare-key branch entirely, which is the hole as it actually was.
         "P9 the allow-list scan skips BARE keys again, so `repo` can be moved out",
+        # The anchor carries the NEXT line's comment, because the bare
+        # `partition(".")` + `if sub:` shape now occurs TWICE in this file and
+        # `replace(old, new, 1)` took the first -- so the arm mutated a
+        # different function and SURVIVED. An ambiguous anchor is a mutation
+        # aimed somewhere other than where it reads.
         "gates.py",
-        "        section, _, sub = dotted.partition(\".\")\n        if sub:",
-        ("        section, _, sub = dotted.partition(\".\")\n        if not sub:\n"
-         "            continue\n        if sub:"),
+        ('        section, _, sub = dotted.partition(".")\n        if sub:\n'
+         "            # A SECTIONED key is read as"),
+        ('        section, _, sub = dotted.partition(".")\n        if not sub:\n'
+         "            continue\n        if sub:\n"
+         "            # A SECTIONED key is read as"),
     ),
     (
         "G10 a blocking token below the window is dropped in silence again",
@@ -731,10 +750,13 @@ def main() -> int:
         # "anchor not found" reads as tooling breakage rather than as the
         # guard it is. The sandbox is a copy, so rewriting its line endings
         # costs nothing.
+        # EVERY source, not only the `.py` ones. `policy.json` is now the
+        # authority that `escalation_paths()` reads, so an arm must be able to
+        # weaken the POLICY FILE and see the suite go red -- that is what proves
+        # the authority has a blast radius rather than being prose. Restricted
+        # to `.py`, the first such arm died with `KeyError: 'policy.json'`.
         originals = {}
         for name in SOURCES:
-            if not name.endswith(".py"):
-                continue
             text = (sandbox / name).read_text(encoding="utf-8", newline="").replace("\r\n", "\n")
             (sandbox / name).write_text(text, encoding="utf-8", newline="")
             originals[name] = text
@@ -756,6 +778,17 @@ def main() -> int:
             source = originals[filename]
             if old not in source:
                 print(f"  SKIP     {name:<72} anchor not found in {filename}")
+                skipped += 1
+                continue
+            # AN AMBIGUOUS ANCHOR IS A MUTATION AIMED SOMEWHERE ELSE.
+            # `replace(old, new, 1)` takes the FIRST occurrence, so when a
+            # refactor made one arm's needle match twice, the arm silently
+            # mutated a different function and reported SURVIVED -- a blind spot
+            # that was really a misfire. A reviewer audits for this by hand
+            # every round; the runner should not need one.
+            if source.count(old) > 1:
+                print(f"  SKIP     {name:<72} anchor matches {source.count(old)}x "
+                      f"in {filename} - AMBIGUOUS, would mutate the first")
                 skipped += 1
                 continue
             (sandbox / filename).write_text(source.replace(old, new, 1),

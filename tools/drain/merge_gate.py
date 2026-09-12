@@ -1,4 +1,4 @@
-"""GO / NO-GO for one pull request. The seven gates of PRP §6, composed.
+"""GO / NO-GO for one pull request. PRP §6's gates, composed, plus 3b.
 
     python tools/drain/merge_gate.py 4483
     python tools/drain/merge_gate.py 4483 --json
@@ -270,13 +270,28 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
     # written to end: "the briefs restated the gates as instructions to an
     # agent, so at run time GO/NO-GO was still a judgement".
     approvals = [v for v in live if v.token == "APPROVE"]
+    # `footprint_known` is derived, not asserted. A failing `gh pr diff` raises
+    # in `collect`, but an EMPTY list would otherwise be indistinguishable from
+    # "an ordinary diff touching nothing that escalates" -- same boundary, other
+    # side, which is the shape this repo names most often.
+    changed = data.get("changed_files") or []
     needed, why_needed = gates.review_requirement(
-        policy, changed_paths=data.get("changed_files") or [], footprint_known=True
+        policy, changed_paths=changed, footprint_known=bool(changed)
     )
+    # NAMED "approval count", not "independent reviewers". The gate counts
+    # APPROVE comments; it cannot tell two reviewers from one reviewer posting
+    # twice -- `collect` projects comments to {id, body, created_at} and drops
+    # `user.login` before `parse_verdicts` sees it, and on this repo every agent
+    # verdict posts under the operator's login anyway, which is the recorded
+    # reason the parser keys on position rather than identity. Independence is
+    # enforced by TOOL ACCESS (the reviewer agent is read-only), not measured
+    # here. A gate named for a property it does not establish is an R7 error in
+    # the gate's own label.
     record(
-        "3b independent reviewers",
+        "3b approval count",
         len(approvals) >= needed,
         f"{len(approvals)} live APPROVE of {needed} required - {why_needed}"
+         " (COUNT only: independence is enforced by tool access, not measured here)"
         + ("" if len(approvals) >= needed else
            ". A second reviewer must be independently briefed and their verdict POSTED "
            "to the PR - a verdict returned to the coordinator is not a verdict."),

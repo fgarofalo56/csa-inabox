@@ -12,7 +12,7 @@ refuse. A gate never observed failing is not known to watch anything (#4451:
 `pass=4 fail=4` printed "UAT-verified roll" across four measurements, with no
 observed input for which it returned anything else).
 
-The seven gates of PRP §6 live here, and `merge_gate.py` is the caller that
+PRP §6's gates live here, and `merge_gate.py` is the caller that
 composes them from live GitHub data. A gate with no caller is prose: before the
 first independent review of this module, four of the seven were named in the
 spec and implemented nowhere, and five `policy.json` keys were read by nothing.
@@ -265,6 +265,29 @@ def assert_policy_matches_code(policy: dict) -> None:
             raise ValueError(
                 f"{section}: implemented but not declared in policy.json: {undeclared}"
             )
+
+    # The SAME direction for the third mapping, which this loop never covered.
+    # Each of its keys is read as `x.get(k, <default>)` where the default equals
+    # the shipped value, so DELETING one from policy.json was unobservable --
+    # flipping it to false was caught, removing it was not. Three of the five
+    # new `review.*` keys could be deleted with the suite fully green: the
+    # mapping claimed an implementation for a key the authority no longer
+    # contained. "Undeclared behaviour is as bad as undelivered behaviour" is
+    # asserted for the other two sections and was missing here.
+    absent = []
+    for dotted in OTHER_IMPLEMENTED_BY:
+        section, _, sub = dotted.partition(".")
+        if sub:
+            if sub not in policy.get(section, {}):
+                absent.append(dotted)
+        elif section not in policy:
+            absent.append(dotted)
+    if absent:
+        raise ValueError(
+            f"implemented but not declared in policy.json: {sorted(absent)} - "
+            "a mapping that names a key the authority does not contain is a claim "
+            "about a control that is not there"
+        )
     # ALL THREE mappings, not only the two sectioned ones -- `OTHER_IMPLEMENTED_BY`
     # was exempt from resolution and carries dotted attribute paths
     # (`ledger.Ledger.receipt_ok`) that the first version of `_unresolved` could
@@ -1180,17 +1203,20 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                        footprint_known: bool = True) -> tuple[int, str]:
     """How many independent reviewers this change needs, and why.
 
-    Operator decision 2026-09-12. W0 -- the merge gate itself -- took nine
-    rounds with two reviewers, and that was right for the program that decides
-    every merge. It is NOT the default for ordinary lanes: at ~296 issues it
+    Operator decision 2026-09-12. W0 -- the merge gate itself -- took EIGHT
+    POSTED rounds with two reviewers, and that was right for the program that
+    decides every merge. It is NOT the default for ordinary lanes: at ~296 it
     would dominate the run.
 
     FAILS CLOSED on an unknown footprint. The decision is usually taken at brief
     time, from a LANE, before the diff exists -- so the path set is a guess. An
     item with no lane produced `changed_paths=[""]`, matched nothing, and got
-    one reviewer: 28 of 299 live items, including all four W0-harness ones and
-    nine W1-deploy ones, i.e. precisely the diffs the policy says need two.
-    Every sibling control in this module fails closed; this one fell open.
+    one reviewer: **119 of 299** live items, including all four W0-harness ones
+    and nine W1-deploy ones, i.e. precisely the diffs the policy says need two.
+    (An earlier draft of this comment said 28, which is 119 minus the 91 in
+    W9-rest -- a sub-population quoted without saying so, in a module that
+    polices exactly that.) Every sibling control here fails closed; this one
+    fell open.
 
     Returns (reviewers, reason) so a brief can state the requirement rather than
     leave the lane to infer it.

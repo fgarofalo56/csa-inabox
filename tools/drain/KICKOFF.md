@@ -24,10 +24,13 @@ Scope and autonomy are already decided — do not re-ask them:
   - ALL open issues. Done = every issue closed / parked / declined.
   - You may merge on gate GO, close on a receipt, re-run and APPROVE parked CI,
     dispatch deploys and rolls, and RESUME/PAUSE the estate on demand.
-  - ONE independent reviewer per PR; escalate to two when the first returns
-    REQUEST-CHANGES or CANNOT-ASSESS, or when the diff touches a guard, a deploy
-    path, bicep or a console surface. gates.review_requirement() decides, and
-    every brief states it.
+  - ONE independent reviewer is the DEFAULT; in practice most items escalate to
+    two, and the brief tells you which and why. Escalation is not only "the diff
+    touches a guard": it also fires on a blocking first verdict, on the item's
+    STREAM (W0/W1/W2/W3/W5/W6/W7), and whenever the file footprint is NOT YET
+    KNOWN — which is every unlaned item, because at brief time the diff does not
+    exist and an unknown footprint fails CLOSED. merge_gate gate 3b re-decides
+    on the REAL changed files and will refuse the merge if the count is short.
   - G1 receipts come from Playwright against the live console; park the item
     only if auth fails.
   - policy.json is the authority for what you may not do. It fails closed.
@@ -67,8 +70,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 234 pass
-python tools/drain/mutate_gates.py       # 101 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 239 pass
+python tools/drain/mutate_gates.py       # 103 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

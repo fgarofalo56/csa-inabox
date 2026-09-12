@@ -201,6 +201,13 @@ class Ledger:
             existing.title = title
             existing.lane = lane
             existing.size = size
+            # STREAM is authoritative too, and was silently dropped. It decides
+            # the receipt CLASS and the selection order, and `build_inventory`'s
+            # pinned sets are how a misclassification gets corrected -- so a
+            # re-pin that never reaches an item already in the ledger is a fix
+            # that lands one layer above where the value is stored. Measured:
+            # #4485 was pinned to W0-harness and stayed W6-ci.
+            existing.stream = stream
             for key, value in kwargs.items():
                 if value is not None:
                     setattr(existing, key, value)

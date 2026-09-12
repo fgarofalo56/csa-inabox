@@ -220,6 +220,19 @@ def test_negative_control_a_key_read_via_a_local_alias_is_caught():
         gates.OPERATOR_DOCUMENTATION.update(original_doc)
 
 
+def test_negative_control_deleting_a_key_from_the_authority_is_caught():
+    """Flipping a boolean to false was caught; DELETING it was not. Each of
+    these is read as `x.get(k, <default>)` where the default equals the shipped
+    value, so removal was unobservable -- three of the five new `review.*` keys
+    could be deleted with the suite fully green. The "implemented but not
+    declared" direction existed for two sections and not for the third."""
+    for key in ("escalate_on_blocking_first_verdict", "escalate_when_footprint_unknown",
+                "independent_reviewers_default"):
+        trimmed = {k: v for k, v in POLICY["review"].items() if k != key}
+        with pytest.raises(ValueError, match="implemented but not declared"):
+            gates.assert_policy_matches_code({**POLICY, "review": trimmed})
+
+
 def test_negative_control_the_other_mapping_is_resolution_checked_too():
     """`OTHER_IMPLEMENTED_BY` was exempt from resolution, so a bogus target was
     accepted there while the same trick was refused in the two gate sections."""
@@ -282,6 +295,18 @@ def test_the_default_is_read_from_the_authority():
     raised = {**POLICY, "review": {**POLICY["review"], "independent_reviewers_default": 3}}
     n, _ = gates.review_requirement(raised, changed_paths=["docs/x.md"])
     assert n == 3
+
+
+def test_negative_control_the_guard_stream_escalates_on_its_own():
+    """W6-ci IS the guard stream and the policy's own sentence says "or any
+    guard". It was covered only INCIDENTALLY -- `stream_for` assigns W6-ci
+    BECAUSE the item carries `lane:ci`, which maps to `scripts/ci`, which
+    escalates by path. But `stream` is pinned from the inventory snapshot while
+    `lane` is refreshed from live labels every tick, so a relabel decouples
+    them. Measured before the fix: W6-ci with `lane:dataplane` got ONE."""
+    for lane_path in ("domains/", "docs/"):
+        n, why = gates.review_requirement(POLICY, changed_paths=[lane_path], stream="W6-ci")
+        assert n == 2, f"W6-ci via {lane_path}: {why}"
 
 
 def test_the_stream_escalates_whatever_the_diff_touches():

@@ -300,6 +300,20 @@ def test_upsert_preserves_progress(tmp_path):
     assert led.items[1].title == "new title"
 
 
+def test_negative_control_a_repinned_stream_reaches_an_item_already_in_the_ledger(tmp_path):
+    """`upsert` wrote title, lane and size and silently DROPPED stream -- so a
+    correction to `build_inventory`'s pinned sets, which is how a
+    misclassification gets fixed, never reached an item already in the ledger.
+    The stream decides the receipt CLASS: #4485 was pinned to W0-harness and
+    stayed W6-ci. A fix that lands one layer above where the value is stored is
+    not a fix."""
+    led = _led(tmp_path)
+    led.upsert(4485, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W6-ci"
+    led.upsert(4485, "x", "W0-harness", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W0-harness"
+
+
 def test_negative_control_a_removed_lane_label_clears_the_lane(tmp_path):
     """A label removed on GitHub must clear the ledger's copy, or the item stays
     schedulable on a lane it no longer claims -- and lanes partition by FILE, so

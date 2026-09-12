@@ -150,6 +150,27 @@ def test_negative_control_a_guard_diff_needs_two_approvals():
     assert two["verdict"] == "GO", two["blocking"]
 
 
+def test_negative_control_an_empty_changed_file_list_fails_closed():
+    """A failing `gh pr diff` raises in `collect`, but an EMPTY list would
+    otherwise be indistinguishable from "an ordinary diff touching nothing that
+    escalates" -- same boundary, other side."""
+    result = _run(changed_files=[])
+    assert result["verdict"] == "NO-GO"
+    assert "not known" in _gate(result, "3b")["detail"]
+
+
+def test_the_approval_gate_does_not_claim_to_measure_independence():
+    """It counts APPROVE comments and cannot tell two reviewers from one
+    reviewer posting twice: `collect` drops `user.login` before the parser sees
+    it, and on this repo every agent verdict posts under one login anyway. A
+    gate NAMED for a property it does not establish is an R7 error in its own
+    label -- so it is named for what it measures, and says so."""
+    result = _run()
+    gate = _gate(result, "3b")
+    assert gate["gate"] == "3b approval count"
+    assert "independence is enforced by tool access, not measured here" in gate["detail"]
+
+
 def test_an_ordinary_diff_merges_on_one_approval():
     """The control. Without it the rule above could simply be "always two", and
     at ~296 issues that dominates the run."""
