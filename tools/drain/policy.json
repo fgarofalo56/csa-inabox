@@ -28,8 +28,49 @@
     "approve-parked-ci-run",
     "dispatch-deploy-workflow",
     "dispatch-roll",
-    "playwright-walk-live-console"
+    "playwright-walk-live-console",
+    "resume-estate",
+    "pause-estate"
   ],
+  "_estate": "Operator decision 2026-09-12: RESUME ON DEMAND, PER DEPLOY ITEM. The estate stays paused; resume only when a W1 item is ready for its deploy-run receipt, take the receipt, re-pause. Both verbs are permitted unattended because a resume the harness cannot pause again is worse than one it can. Before this they were absent, so action_is_permitted() failed closed on them and every deploy-path receipt was unreachable.",
+
+  "review": {
+    "_": "Operator decision 2026-09-12, after W0 took EIGHT POSTED rounds with two reviewers (count them: gh pr view 4483 --json comments). That intensity was right for the merge gate ITSELF and is not the default for ordinary lanes. Read by tick.write_brief so every lane is told its own review requirement, and re-decided by merge_gate gate 3b on the REAL changed files.",
+    "independent_reviewers_default": 1,
+    "_escalate": "MACHINE-READABLE ON PURPOSE. The first version of this key was four English sentences while a hardcoded ESCALATION_PATHS tuple did the work -- so the list could be emptied, inverted or deleted and every decision stayed identical. That is the marker_any_of defect this module found and fixed two rounds ago, reintroduced one release later. That constant is now DELETED: gates.escalation_paths(policy) and gates.escalation_streams(policy) READ these lists, and eight mutation arms that edit ONLY this file are killed by the suite -- which is what gives the authority a blast radius.",
+    "escalate_to_two_when_path_contains": [
+      "tools/drain",
+      "scripts/ci",
+      "dev-loop/gates",
+      ".github/workflows",
+      ".github/CODEOWNERS",
+      ".gitignore",
+      "Makefile",
+      "pyproject.toml",
+      "platform/fiab/bicep",
+      "deploy/",
+      "apps/fiab-console",
+      "portal/"
+    ],
+    "_paths": "The last five were missing and each decides something this list exists to protect. .gitignore is #4468's ENTIRE THESIS -- an entry in it is what hid the merge gate. CODEOWNERS decides who must review. Makefile is the `make validate` entry point and pyproject.toml is the ruff/mypy config every guard runs under. portal/ is the OTHER web front-end, and ux-baseline.md scopes 'every CSA Loom front-end surface', not only apps/fiab-console.",
+    "_streams": "W6-ci is here because the policy's own sentence says 'or any guard' and W6-ci IS the guard stream. It was covered only incidentally -- stream_for assigns W6-ci BECAUSE the item carries lane:ci, which maps to scripts/ci, which escalates by path. But `stream` is pinned from the inventory snapshot while `lane` is refreshed from live labels every tick, so a relabel decouples them: measured, W6-ci with lane:dataplane got ONE reviewer. W4/W8/W9 are deliberately absent.",
+    "escalate_to_two_when_stream_is": [
+      "W0-harness",
+      "W1-deploy",
+      "W2-security",
+      "W3-gov",
+      "W5-console",
+      "W6-ci",
+      "W7-bicep"
+    ],
+    "escalate_on_blocking_first_verdict": true,
+    "escalate_when_footprint_unknown": true,
+    "escalate_when_stream_unknown": true,
+    "_stream_unknown": "FAILS CLOSED, and it is the merge-gate half of escalate_when_footprint_unknown. At BRIEF time the stream is a fact and the paths are a guess; at MERGE time the paths are a fact and the stream has to be resolved from the ledger via the issues the PR references. All three ways that fails - the PR references no issue, there is no ledger, or the issue is not in it - mean the harness cannot place the work, so it escalates rather than falling through to the default. Measured 2026-09-12: with only the path set passed, a csa_platform/security/auth.py diff on a W2-security item and an azure-functions/ diff on a W1-deploy item BOTH returned GO on one approval - and W1-deploy is the stream R1 says preempts everything. MEASURED CONSEQUENCE, recorded rather than discovered later: the one-reviewer path needs a DECLARED close (Closes #N + --allow-close N) of an item the harness has IN FLIGHT - a MENTION only escalates, because a stale copy-pasted number must never buy a weaker gate - and --allow-close is itself refused until the item holds its receipt, which 0 of 299 do today. So the MERGE-GATE operating point is 100% two-reviewer (python tools/drain/operating_point.py --merge-gate). That is a DIFFERENT MEASUREMENT POINT from the 93% in _operating_point below, which is taken at BRIEF time from a lane before the diff exists and whose largest driver - footprint not known - cannot exist at merge time. They are not comparable and neither is 'up from' the other. It does NOT relax on its own: an item earns a receipt only through record_receipt(), which has no production caller, so today that is a hand edit to state.json or a wired caller (#4489). RE-MEASURE with tools/drain/operating_point.py --merge-gate once receipts exist; if it has not moved, bring the number back to the operator, because WIP is capped at 4 lanes and the ceiling is review capacity.",
+    "_unknown": "FAILS CLOSED. The escalation decision is taken from a LANE at brief time, before the diff exists, so the footprint is a guess. An unmapped lane, an item with no lane at all (119 of 299 live, including every W0-harness item), or a lane whose mapping is missing must escalate rather than fall through to the default. Every sibling control in this file fails closed; this one fell open.",
+    "_operating_point": "MEASURED 2026-09-12 over the live 299: 279 escalate (93%), 20 do not. THE 100 BELOW IS NOT THE UNLANED TOTAL - 119 items carry no lane, and 100 is what REMAINS attributed to 'footprint not known' after the stream trigger has already taken the other 19. Three numbers float around this package for the same idea (118 of 297 at open, 119 of 299 now, 100 attributed) and each is over a different population; say which one every time. Drivers: 100 'footprint not known' (91 of them W9-rest), then W5-console 84, W1-deploy 26, W6-ci 22, W2-security 20, W7-bicep 18, W0-harness 4, plus 3 console-path and 2 bicep-path (those last two are items whose STREAM does not escalate but whose lane path does -- the stream drivers alone sum to 274, not 279, and this is the file a reader checks arithmetic in). The operator was shown this and chose to LEAVE IT: most of the 93% is W9-rest, which is the TRIAGE stream and not schedulable until laned and sized anyway, so the steady-state figure is ~170 once triage runs. RE-MEASURE AFTER TRIAGE (python tools/drain/operating_point.py - TRACKED; it used to say temp/w0/, which is gitignored and therefore unrunnable on a fresh clone) rather than tuning the list on a pre-triage snapshot -- and if it is still near 93% with W9 laned, that is the number to bring back, because WIP is capped at 4 lanes and the ceiling is review capacity.",
+    "writer_is_never_the_reviewer": "enforced by TOOL ACCESS, not by instruction: the reviewer agent is read-only"
+  },
 
   "stop_and_ask": {
     "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",

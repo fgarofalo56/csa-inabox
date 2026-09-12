@@ -445,6 +445,52 @@ def test_negative_control_an_estate_item_demands_an_estate_receipt(tmp_path):
     assert "ci-green" not in brief
 
 
+def test_the_brief_states_the_review_requirement(tmp_path):
+    """The lane is TOLD how many reviewers it needs, not left to infer it."""
+    led = _led(tmp_path)
+    console = led.upsert(9, "an editor", "W5-console", lane="lane:console", size=5)
+    assert "2 reviewer(s)" in tick.write_brief(console, POLICY)
+    ordinary = led.upsert(10, "a dbt model", "W8-dataplane", lane="lane:dataplane", size=3)
+    assert "1 reviewer(s)" in tick.write_brief(ordinary, POLICY)
+
+
+def test_negative_control_an_unlaned_item_escalates_rather_than_defaulting(tmp_path):
+    """28 of 299 live items carry NO lane, so the brief passed `[""]`, matched
+    nothing and asked for ONE reviewer -- including all four W0-harness items
+    (every one a `tools/drain` diff by construction) and nine W1-deploy ones.
+    Precisely the diffs the policy says need two. An unknown footprint is now
+    the closed direction, like every sibling control in this module."""
+    led = _led(tmp_path)
+    for stream in ("W0-harness", "W1-deploy", "W2-security", "W9-rest"):
+        item = led.upsert(900 + hash(stream) % 90, "x", stream, lane=None, size=3)
+        brief = tick.write_brief(item, POLICY)
+        assert "2 reviewer(s)" in brief, f"{stream} unlaned: {brief[:400]}"
+
+
+def test_negative_control_every_lane_gets_the_count_its_stream_deserves(tmp_path):
+    """Two arms that deleted the bicep and ci rows from LANE_PATHS both SURVIVED
+    a full suite: 31 and 33 laned items would silently drop to one reviewer over
+    a green matrix. Each lane is pinned individually."""
+    led = _led(tmp_path)
+    cases = [("lane:console", "W9-rest", 2), ("lane:bicep", "W9-rest", 2),
+             ("lane:ci", "W9-rest", 2), ("lane:dataplane", "W9-rest", 1),
+             ("lane:docs", "W9-rest", 1), ("lane:dataplane", "W1-deploy", 2)]
+    for i, (lane, stream, expected) in enumerate(cases):
+        item = led.upsert(800 + i, "x", stream, lane=lane, size=1)
+        assert f"{expected} reviewer(s)" in tick.write_brief(item, POLICY), (
+            f"{lane} in {stream} should be {expected}"
+        )
+
+
+def test_the_brief_says_a_returned_verdict_is_not_a_posted_one(tmp_path):
+    """The gate reads PR COMMENTS. On 2026-09-12 the harness's own merge was
+    NO-GO because two approvals had been returned to the coordinator and never
+    posted -- the gate was right and the lane had to be told."""
+    led = _led(tmp_path)
+    item = led.upsert(9, "x", "W6-ci", lane="lane:ci", size=1)
+    assert "not a verdict POSTED" in tick.write_brief(item, POLICY)
+
+
 def test_the_brief_names_the_gate_as_a_command(tmp_path):
     """A gate restated as prose is an agent's judgement. The brief must name the
     program, or `gates.py` has no production caller at run time either."""

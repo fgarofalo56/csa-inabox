@@ -336,6 +336,21 @@ def write_brief(item, policy: dict) -> str:
     receipt = policy["receipts"].get(receipt_class, "UNCLASSIFIED - do not close")
     stop = ", ".join(gates.stop_and_ask_actions(policy))
     never = ", ".join(policy.get("never", []))
+    # The lane is TOLD its review requirement rather than left to infer it.
+    # W0 ran eight posted rounds with two reviewers because it was the merge gate; an
+    # ordinary lane gets one, escalating on a finding or on a guard/deploy/
+    # console path.
+    # The STREAM is authoritative here and the lane is only a hint: at brief
+    # time the diff does not exist, so the path set is a guess. `footprint_known`
+    # is False whenever the lane is missing or unmapped, which makes the guess
+    # fail CLOSED instead of quietly returning the default.
+    lane_path = gates.LANE_PATHS.get(item.lane or "")
+    reviewers, why_reviewers = gates.review_requirement(
+        policy,
+        changed_paths=[lane_path] if lane_path else [],
+        stream=item.stream,
+        footprint_known=bool(lane_path),
+    )
     return f"""### Lane {item.lane} - issue #{item.number} ({item.stream}, {item.size}pt)
 
 {item.title}
@@ -360,6 +375,12 @@ defect of the last drain was a correct fix applied to one side of a symmetry -
 consumer but not producer, one predicate of four, one call site of two - and
 every one shipped with a green mutation matrix, because authors mutate the thing
 they just fixed.
+
+**Independent review: {reviewers} reviewer(s)** - {why_reviewers}. The reviewer is
+read-only, so writer != verifier is enforced by TOOL ACCESS, not by instruction.
+Escalate to a second reviewer if the first returns REQUEST-CHANGES or
+CANNOT-ASSESS. A verdict RETURNED to you is not a verdict POSTED - `gh pr comment`
+it, or the gate cannot see it and will say so.
 
 **Gates are a PROGRAM, not a judgement. Run it and paste the output:**
 

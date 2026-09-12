@@ -33,7 +33,19 @@ POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
 
 # Issues pinned to a stream by number because no label distinguishes "blocks the
 # deploy path" from "is a feature". Everything else falls through to its lane.
-HARNESS = {4466, 4467, 4468, 4469}
+# #4487 MUST be pinned: the W4 fall-through matches `"receipt" in title.lower()`
+# and its title is *about* receipts ("the ci-green RECEIPT names a measurement
+# the CI topology cannot produce"). Unpinned it landed in W4-receipts, whose
+# class is `estate-behaviour` -- so the ledger would have demanded a LIVE ESTATE
+# receipt for a path-filter fix in a workflow file and refused every other kind,
+# and the cold-start KICKOFF names #4487 as the FIRST TASK. A title-substring
+# heuristic classifies an issue by what it MENTIONS, not by what it IS.
+#
+# #4485 is pinned for ORDERING, not for that reason -- measured, it falls to
+# W6-ci, whose class is already `guard-or-test-only`, so the pin changes its
+# stream and not its receipt. Recorded because a comment that gives one reason
+# for two entries invites the next reader to trust it for both.
+HARNESS = {4466, 4467, 4468, 4469, 4485, 4487}
 DEPLOY = {4451, 4461, 4464, 4471, 4472, 4473, 3676, 2958}
 SECURITY = {4456, 4457, 4458, 4460, 3941, 3338}
 RECEIPTS = {4470, 4432, 3720, 2626, 2583, 2581, 4361, 4183, 4405, 4406, 4387, 4442}

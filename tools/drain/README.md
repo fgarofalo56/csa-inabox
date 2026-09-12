@@ -136,6 +136,38 @@ detects a required context that concluded SKIPPED, and says so in those words.
 Detecting green-over-nothing needs a population source this API does not have,
 and is an owed capability, not a claim.
 
+**How a receipt actually gets recorded, and the gap in it.** `record_receipt()`
+and `transition(CLOSED)` have **no production caller**. `tick.py` writes only
+what a refresh writes; `merge_gate.py` only *reads*, through `receipt_ok()`.
+Recording a receipt today is a hand edit to `state.json` — which is gitignored —
+or a call from a lane's own script. Nothing in this file used to say that, and
+it is the operational gap behind the whole "a stale ledger evaluates against a
+weaker class" family: the write path is outside the instrumented code.
+
+That is also why the R2 check is an **invariant**, not an event observer.
+`record_receipt` stamps the class the receipt was taken under, and
+`_refuse_unless_receipted` compares it at the decision. It therefore does not
+care *how* the class moved, or whether anything watched it move — including the
+two routes `upsert` structurally cannot see, since `RECEIPT_CLASS_BY_STREAM` and
+`LANE_RECEIPT_CLASS` are module constants rather than fields. A reviewer closed
+a `ui-surface` item on a `ci-green` that had been refused moments earlier, by
+editing one line of a map.
+
+`receipt_class` likewise has no production writer, so the `human-only` class is
+currently reachable only by hand. Stated here rather than implied, because by
+this package's own standard an unreachable path is prose.
+
+**If you hand-edit a receipt, set `receipt_taken_under` too.** A ledger written
+before that field existed — or a hand edit that sets `receipt_kind` and
+`receipt_ref` and stops — produces an item that **cannot close**, with its own
+message naming the remedy. That is deliberate and it is not backfilled on load:
+inferring the stamp from the item's *current* class would manufacture the exact
+evidence the check exists to demand, which is "invent a receipt to get past the
+receipt gate" wearing a migration's clothes. Re-take the receipt (or set the
+field by hand to the item's `effective_receipt_class`). Nothing is stuck today —
+the live ledger holds zero receipts — and `tick.py --status` will show any item
+this affects as non-terminal rather than silently closable.
+
 ---
 
 ## Autonomy
@@ -153,6 +185,75 @@ weakening or baselining a guard · `.trivyignore` additions · any skip valve.
 `gates.action_is_permitted()` **fails closed**: an action in neither list is
 refused, so adding a capability is a deliberate edit to `policy.json`. Matching
 is EXACT — `merge-without-review` is not a prefix of a permission.
+
+**Fails closed is not a figure of speech.** `resume-estate` and `pause-estate`
+were absent until 2026-09-12, so the check refused them — which made every
+`deploy-run` receipt unreachable, and W1 is the stream R1 says preempts
+everything. A capability the operator has granted and the file does not list is
+a capability the harness does not have.
+
+**Independent review: one reviewer, escalating.** W0 took eight posted rounds with two
+reviewers because it *was* the merge gate; at ~296 issues that is not the
+default. `gates.review_requirement()` returns 2 on **four** independent
+triggers, and it is worth reading all four because the two obvious ones account
+for the smaller share of the live population:
+
+1. **The first verdict blocks** — REQUEST-CHANGES or CANNOT-ASSESS, matched by
+   shape, so a spelling cannot reduce a block. This asks about the review's
+   HISTORY and deliberately does not pin to the head: after a push the earlier
+   block is correctly no longer *live*, but it is still true that the first
+   reviewer blocked, and that is what raises the count.
+2. **The item's STREAM is listed** — W0/W1/W2/W3/W5/W6/W7. A lane is a guess
+   about the footprint; a stream is a fact about the work, and a relabel
+   decouples the two.
+3. **The diff touches a listed PATH** — twelve fragments in `policy.json`, read
+   from the file, not hardcoded. Guards, deploy, bicep, both front-ends, and the
+   files that decide the rules themselves: `.gitignore`, `CODEOWNERS`,
+   `Makefile`, `pyproject.toml`.
+4. **The footprint or the stream could not be resolved** — both **fail closed**.
+   At brief time the stream is a fact and the paths are a guess (every unlaned
+   item — **119** of the live 299 carry no lane); at merge time the paths are a
+   fact and the stream has to come from the ledger via the issues the PR
+   references.
+
+   **A mention may only escalate; a declared close may also explain.** `Closes
+   #N` is an assertion about what the PR *is*, and gate 6 refuses it unless it
+   is also declared with `--allow-close`, so it is corroborated. `Refs #N` is an
+   aside: enough to raise the count when it names an escalating item, not enough
+   to lower it. Without that split, referencing a stale issue number bought a
+   *weaker* gate than referencing nothing at all — measured, one reviewer versus
+   two, on the same diff. Both reviewers found it independently, in the feature
+   that had just been added.
+
+   From a worktree the ledger is resolved against the primary checkout via
+   git's common dir, because `state.json` is gitignored and exists in exactly
+   one of this machine's 371 worktrees. Without that fallback the stream never
+   resolved anywhere a lane actually works, and *every* PR escalated.
+
+Listed in the order `review_requirement` checks them, which is also roughly
+their strength. They are independent ORs, so the order has no effect on the
+answer — but the doc reads as a walkthrough of the function and should not
+disagree with it.
+
+Measured over the live 299: **279 escalate**. The stream drivers are W5-console
+84, W1-deploy 26, W6-ci 22, W2-security 20, W7-bicep 18, W0-harness 4; then 100
+items attributed to *footprint not known* (that is the count remaining AFTER the
+stream trigger takes precedence, not the 119 unlaned — quote which population
+you mean), then 3 console-path and 2 bicep-path. Most of it is W9-rest, the
+triage stream, which is not schedulable until laned anyway. See
+`_operating_point` in `policy.json` for the arithmetic and the standing
+instruction to re-measure after triage rather than tune the list on a
+pre-triage snapshot.
+
+Every brief states its own requirement rather than leaving the lane to infer
+it, and **`merge_gate` gate 3b re-decides on real evidence and can raise the
+count as well as confirm it** — the real changed files, the first posted
+verdict, and the stream resolved from the ledger. For three rounds it passed
+only the path set, so two of the four triggers were live in `gates.py`,
+described in the brief, and enforced by nothing: a `csa_platform/security/`
+diff on a W2-security item and an `azure-functions/` diff on a W1-deploy item
+both returned GO on one approval. An unconsulted *argument* is the same defect
+as an unconsulted policy key.
 
 **How to write a verdict that registers — POSITION, not idiom.**
 
@@ -216,7 +317,7 @@ printed "UAT-verified roll", four separate measurements, no observed input for
 which it returned anything else.
 
 **Run the gate; do not re-derive it.** `merge_gate.py` is the caller that
-composes all seven of PRP §6 from live GitHub data:
+composes PRP §6's gates from live GitHub data:
 
 ```bash
 python tools/drain/merge_gate.py <PR>            # GO / NO-GO with the evidence
@@ -224,14 +325,14 @@ python tools/drain/merge_gate.py --audit-close <PR> --before <n> --intended <n,n
 ```
 
 Promoting `gates.py` out of `temp/` was necessary and not sufficient: at its
-first review it had **no production caller**, four of the seven gates were named
+first review it had **no production caller**, four of them were named
 in the spec and implemented nowhere, and five `policy.json` keys were read by
 nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 212 tests across every module
-python tools/drain/mutate_gates.py           # 89 arms, must be 89 KILLED
+python -m pytest tools/drain/__tests__ -q    # 300 tests across every module
+python tools/drain/mutate_gates.py           # 155 arms, must be 155 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -257,7 +358,12 @@ to four lanes share.
 
 ## Triage gates the parallelism
 
-At open: **118 of 297** issues carried no lane and **153** no size.
+At open: **118 of 297** issues carried no lane and **153** no size. Re-measured
+2026-09-12 over 299: **119** carry no lane. Two different populations a week
+apart — say which one a number is over, every time. (The `_operating_point`
+figure of *100* is a third thing again: the count still attributed to
+"footprint not known" **after** the stream trigger has already taken those
+items, not the unlaned total.)
 
 Lanes partition by **FILE**. A shared-file conflict must serialize, never
 parallelize — so an unlaned item is not merely unsized, it is *unsafe to
@@ -309,12 +415,12 @@ answer is triage, not a bigger WIP cap.
 |---|---|
 | `policy.json` | the autonomy contract — the authority, and the repo it governs |
 | `ledger.py` | durable state; enforces receipt-of-the-right-KIND-before-close |
-| `gates.py` | the seven gates (promoted, tracked, tested) |
-| `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
+| `gates.py` | the merge gates (promoted, tracked, tested) |
+| `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 89 mutation arms against a sandbox copy; must be 89 KILLED |
+| `mutate_gates.py` | 155 mutation arms against a sandbox copy; must be 155 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 212 tests; a negative control for every decision function |
+| `__tests__/` | 300 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

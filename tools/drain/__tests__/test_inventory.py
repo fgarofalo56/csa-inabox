@@ -96,5 +96,27 @@ def test_the_deploy_stream_wins_over_a_lane():
     assert build_inventory.stream_for(9999, "x", {"lane:bicep"}) == "W7-bicep"
 
 
+def test_negative_control_the_harness_own_issues_are_pinned_not_title_matched():
+    """#4487's title is *about* receipts -- "the ci-green RECEIPT names a
+    measurement the CI topology cannot produce" -- so the W4 fall-through
+    (`"receipt" in title.lower()`) claimed it, giving it the `estate-behaviour`
+    class. The ledger would then have demanded a LIVE ESTATE receipt for a
+    path-filter fix in a workflow file and refused every other kind, and the
+    cold-start KICKOFF names #4487 as the FIRST TASK. A title-substring
+    heuristic classifies an issue by what it MENTIONS, not by what it IS."""
+    import ledger
+
+    for number, title in (
+        (4487, ("drain harness: the ci-green receipt names a measurement the CI "
+                "topology cannot produce")),
+        (4485, "drain harness: five residual review findings, owed rather than forgotten"),
+        (4468, "ci: the merge gate that decides GO/NO-GO is gitignored"),
+    ):
+        stream = build_inventory.stream_for(number, title, {"lane:ci"})
+        assert stream == "W0-harness", f"#{number} -> {stream}"
+        item = ledger.Item(number=number, title=title, stream=stream, lane="lane:ci")
+        assert item.effective_receipt_class == "guard-or-test-only"
+
+
 def test_an_unlabelled_issue_lands_in_the_triage_stream():
     assert build_inventory.stream_for(9999, "x", set()) == "W9-rest"

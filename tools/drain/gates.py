@@ -12,9 +12,9 @@ refuse. A gate never observed failing is not known to watch anything (#4451:
 `pass=4 fail=4` printed "UAT-verified roll" across four measurements, with no
 observed input for which it returned anything else).
 
-The seven gates of PRP §6 live here, and `merge_gate.py` is the caller that
+PRP §6's gates live here, and `merge_gate.py` is the caller that
 composes them from live GitHub data. A gate with no caller is prose: before the
-first independent review of this module, four of the seven were named in the
+first independent review of this module, four of them were named in the
 spec and implemented nowhere, and five `policy.json` keys were read by nothing.
 """
 from __future__ import annotations
@@ -115,6 +115,77 @@ def scan_closing_keywords(text: str) -> ClosingScan:
     return ClosingScan(hard=hard, near=near)
 
 
+#: Any issue reference at all, with NO closing verb required.
+#:
+#: NARROWER than `_REF` on purpose, and the narrowing is the whole design. A
+#: verb-anchored scan can afford a loose reference alphabet, because the verb
+#: does the discriminating. Without a verb, `#\d+` alone matched a hex colour
+#: (`#1f2937` -> 1), a Markdown heading anchor (`[x](#42-the-section)` -> 42),
+#: and a foreign repo's issue (`astral-sh/ruff#12345`), all measured. So:
+#:
+#: - `#N` must not be preceded by a word character or `-` (kills `#1f2937`'s
+#:   tail, `GH-1` double-matching) and must not be followed by `-` or a letter
+#:   (kills the heading anchor).
+#: - `owner/repo#N` and the issue URL are handled SEPARATELY, because they must
+#:   be checked against `policy["repo"]` -- another repo's numbers are a
+#:   different population, and resolving them against this ledger is the
+#:   wrong-population defect `guard_refresh` spends a hundred lines policing,
+#:   reached through a different door.
+#:
+#: IGNORECASE, like `CLOSING_RE`. It was not, so `GH-4487` matched and
+#: `gh-4487` did not -- while the docstring claimed "the same reference shapes
+#: as CLOSING_RE ... one alphabet, two questions". `CLOSING_RE.flags` is 34 and
+#: this was 32; a reviewer read the flags rather than the sentence.
+#: The boundaries exclude alphanumerics and `-`, NOT `_`. `\w` includes
+#: underscore, so `_#4488_` -- ordinary Markdown emphasis -- resolved to
+#: nothing, and a missed mention can only LOSE an escalation, which is the
+#: wrong direction for a control that fails closed everywhere else. `*#4487*`
+#: already worked, which is what made the gap easy to miss.
+BARE_REF_RE = re.compile(
+    r"(?<![0-9A-Za-z-])(?:\#|GH-)(?P<num>\d+)(?![0-9A-Za-z-])", re.IGNORECASE
+)
+_QUALIFIED_REF_RE = re.compile(
+    r"(?P<slug>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)"
+    r"(?:\#|/issues/)(?P<num>\d+)(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def referenced_issues(body: str, commit_messages: list[str],
+                      repo: str | None = None) -> list[int]:
+    """Every issue this PR mentions, closing or not.
+
+    A DIFFERENT question from `merge_is_close_safe`, and it has to be, because
+    that scan is verb-anchored: `hard` needs a closing verb adjacent to the
+    reference and `near` needs one within 80 characters. `Refs #4487` carries no
+    verb, so it appears in NEITHER -- and `Refs #N` is how nearly every PR in
+    this repo names the item it is work on, including the PR that added this
+    function.
+
+    Used by gate 3b to resolve the item's STREAM. Reusing the closing scan for
+    that would have read "this PR references no issue" on most PRs and, since
+    an unresolvable stream fails closed, escalated all of them for the wrong
+    reason -- a control that fires on everything teaches the reader to skim it.
+
+    OVER-MATCHING IS NOT HARMLESS HERE, which is why the pattern is narrow.
+    `ledger_stream` prefers any escalating stream, so a stray reference usually
+    only RAISES the count -- but one shape lowers it: a W1-deploy fix whose body
+    cites only a non-escalating item and whose diff touches no listed path
+    resolves `stream_known=True` and gets ONE reviewer, where no reference at
+    all would have failed closed to two. A false reference can therefore buy a
+    weaker gate, so the scan must not invent one.
+
+    `repo` gates the qualified forms. Passing None accepts none of them, which
+    fails closed: an unqualified caller cannot tell whose #123 it is looking at.
+    """
+    text = "\n".join([body, *commit_messages])
+    found = {int(m.group("num")) for m in BARE_REF_RE.finditer(text)}
+    for match in _QUALIFIED_REF_RE.finditer(text):
+        if repo and match.group("slug").lower() == repo.lower():
+            found.add(int(match.group("num")))
+    return sorted(found)
+
+
 def merge_is_close_safe(body: str, commit_messages: list[str]) -> ClosingScan:
     """Scan BOTH surfaces a squash merge publishes.
 
@@ -188,12 +259,19 @@ OTHER_IMPLEMENTED_BY = {
     "permitted_unattended": "gates.action_is_permitted",
     "never": "gates.action_is_permitted",
     "stop_and_ask": "gates.action_is_permitted",
+    "review.independent_reviewers_default": "gates.review_requirement",
+    "review.escalate_to_two_when_path_contains": "gates.escalation_paths",
+    "review.escalate_to_two_when_stream_is": "gates.escalation_streams",
+    "review.escalate_on_blocking_first_verdict": "gates.review_requirement",
+    "review.escalate_when_footprint_unknown": "gates.review_requirement",
+    "review.escalate_when_stream_unknown": "gates.review_requirement",
 }
 # Keys that are DELIBERATELY prose: they address the operator, not the program.
 # Listing them is the point -- an undeclared unconsulted key is indistinguishable
 # from a control that stopped working.
 OPERATOR_DOCUMENTATION = {
     "schema",
+    "review.writer_is_never_the_reviewer",
     "scope.target", "scope.definition_of_done",
     "wip.serialize_on_shared_checkout",
     "ordering.W9_runs_continuously", "ordering.W9_reason",
@@ -259,6 +337,29 @@ def assert_policy_matches_code(policy: dict) -> None:
             raise ValueError(
                 f"{section}: implemented but not declared in policy.json: {undeclared}"
             )
+
+    # The SAME direction for the third mapping, which this loop never covered.
+    # Each of its keys is read as `x.get(k, <default>)` where the default equals
+    # the shipped value, so DELETING one from policy.json was unobservable --
+    # flipping it to false was caught, removing it was not. Three of the five
+    # new `review.*` keys could be deleted with the suite fully green: the
+    # mapping claimed an implementation for a key the authority no longer
+    # contained. "Undeclared behaviour is as bad as undelivered behaviour" is
+    # asserted for the other two sections and was missing here.
+    absent = []
+    for dotted in OTHER_IMPLEMENTED_BY:
+        section, _, sub = dotted.partition(".")
+        if sub:
+            if sub not in policy.get(section, {}):
+                absent.append(dotted)
+        elif section not in policy:
+            absent.append(dotted)
+    if absent:
+        raise ValueError(
+            f"implemented but not declared in policy.json: {sorted(absent)} - "
+            "a mapping that names a key the authority does not contain is a claim "
+            "about a control that is not there"
+        )
     # ALL THREE mappings, not only the two sectioned ones -- `OTHER_IMPLEMENTED_BY`
     # was exempt from resolution and carries dotted attribute paths
     # (`ledger.Ledger.receipt_ok`) that the first version of `_unresolved` could
@@ -334,6 +435,20 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
             # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
             # chain, so the sub-key's own spelling cannot collide with anything.
             #
+            # ...but a read split ACROSS TWO STATEMENTS is not a chain: bind the
+            # section to a local first, then subscript the local on the next
+            # line. The bridge cannot span that, so `review.*` keys could be moved
+            # onto the operator-documentation allow-list undetected while
+            # `review_requirement` still read them. The local-alias form is
+            # matched separately, keyed to the SECTION NAME as a receiver --
+            # which is the spelling that makes an alias readable in the first
+            # place.
+            alias = (r"\b" + re.escape(section) + r"\s*(?:\[|\.get\()\s*[\"']"
+                     + re.escape(sub) + r"[\"']")
+            if re.search(alias, sources):
+                found.append(dotted)
+                continue
+            #
             # BOTH halves accept `.get(`, not just the sub half. The asymmetry
             # missed `policy.get("wip", {})["max_lanes"]` -- and `.get(` is this
             # package's dominant spelling (seven occurrences, including the
@@ -385,6 +500,16 @@ def _unresolved(where: str) -> str | None:
 # Near-miss kinds. `blocks` is decided at parse time, not by the reducer.
 NEAR_NO_MARKER = "no-marker"
 NEAR_NO_TOKEN = "no-token"
+
+#: What `worst_verdict_in_history` returns when the block it found was a
+#: NEAR-MISS -- a blocking token somewhere in the review history with no line
+#: announcing a verdict. It still escalates (formatting never reduces a block),
+#: but it is NOT attributable to a reviewer's decision, and saying "a reviewer
+#: returned REQUEST-CHANGES" about ordinary status prose is an R7 error. It
+#: carries a blocking token by construction so every shape-match downstream
+#: still fires.
+UNANNOUNCED_BLOCK = "REQUEST-CHANGES unannounced"
+
 NEAR_PREDATES_HEAD = "predates-head"
 NEAR_TEMPLATE = "template-line"
 NEAR_UNPINNABLE = "head-date-unknown"
@@ -394,6 +519,56 @@ NEAR_CITED = "cited-not-decided"
 # "below-the-window" and was wrong for the second case, which is an R7 error in
 # a message: it asserted a cause the code had not established.
 NEAR_NOT_FIRST = "not-the-first-line"
+
+#: ONE SENTENCE PER KIND, because three kinds can block here and they are not
+#: the same fact. The first version wrote the `no-marker` sentence for all
+#: three, so "a blocking token appears with no line announcing a verdict" was
+#: FALSE for the other two -- `no-token` is a comment that DOES announce and
+#: carries no token at all, `template-line` announces on its first line. A
+#: reviewer measured both through the real composition. That is the R7 defect
+#: the same round was written to repair, landed on one side of its own
+#: boundary, which this package names as its dominant failure mode.
+UNANNOUNCED_REASON_BY_KIND = {
+    NEAR_NO_MARKER: (
+        "a blocking token appears in this PR's review history with no line "
+        "announcing a verdict"
+    ),
+    NEAR_NO_TOKEN: (
+        "a comment in this PR's review history announces a verdict and carries "
+        "no token on that line, so what it decided is unreadable"
+    ),
+    # NOT "carries the verdict TEMPLATE line". `_saw_template` establishes only
+    # that a line LISTS ALL THREE TOKENS -- its own docstring says so -- and a
+    # sentence describing the policy does that without pasting anything:
+    #
+    #   "This module's policy allows APPROVE, REQUEST-CHANGES, or
+    #    CANNOT-ASSESS as outcomes."
+    #
+    # A reviewer ran exactly that and got told it "carries the verdict TEMPLATE
+    # line". Worse, it was a REGRESSION: the blanket sentence this replaced
+    # ("no line announcing a verdict") happened to be TRUE of that shape, so
+    # the per-kind fix made one sub-case worse while fixing two others.
+    #
+    # The remedy is the wording, not a narrower `_saw_template`: narrowing it
+    # would REDUCE what blocks, and this package does not move that direction
+    # to make a message read better.
+    NEAR_TEMPLATE: (
+        "a comment in this PR's review history carries a line naming EVERY "
+        "verdict token, so it lists the outcomes rather than choosing one"
+    ),
+}
+#: Whatever a FUTURE kind turns out to be, the reason must not claim to know.
+#: A `.get()` onto a confident sentence is how the defect above happened.
+UNANNOUNCED_REASON_UNKNOWN = (
+    "a comment in this PR's review history blocks for a reason this message "
+    "has no wording for - read the comment"
+)
+
+
+def _unannounced_kind(prior_verdict: str) -> str:
+    """The near-miss kind `worst_verdict_in_history` tagged into the string."""
+    inside = prior_verdict[len(UNANNOUNCED_BLOCK):].strip(" ()")
+    return inside.split(",")[0].strip()
 
 
 @dataclass
@@ -428,6 +603,152 @@ class NearMiss:
     reason: str
     kind: str = NEAR_NO_TOKEN
     blocks: bool = False
+
+
+def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | None:
+    """The WORST verdict ever posted to this PR, ignoring the head.
+
+    `escalate_on_blocking_first_verdict` asks a question about the review's
+    HISTORY, not about its current state, so this deliberately does NOT pin to
+    the head. `parse_verdicts` does pin, and correctly: a block from before a
+    push is no longer a live verdict. But it is still true that a reviewer
+    blocked, and that fact is what raises the count to two. Without it the
+    trigger was inert at the only place the count is enforced, and the
+    block-push-reapprove rhythm -- the ordinary shape of a round here -- merged
+    on one approval what a reviewer had just rejected.
+
+    WORST-FIRST, NOT FIRST-BY-TIMESTAMP. The previous version returned the
+    EARLIEST verdict-bearing comment and stopped, which a reviewer broke by
+    swapping two comments. On THIS repo the two verdicts of a round are posted
+    within a second of each other -- measured on PR #4488's own round 5:
+    `5644049925` at 06:01:07Z (REQUEST-CHANGES) and `5644050042` at 06:01:08Z
+    (APPROVE). The drain launches its reviewers in parallel, so which one lands
+    first is a race, and an APPROVE winning it disarmed the trigger entirely.
+    Half of all parallel double-reviews. The property wanted is "a block
+    occurred", so the reduction is the same conjunction `reduce_verdicts` uses.
+
+    POSITION, NOT IDIOM -- and the two reviewers disagreed about this, so the
+    module's own principle decides it.
+
+    Round 6, reviewer A: the docstring claimed a blocking token ANYWHERE in the
+    window wins, and `_token_of` reads the announcing line only, so the claim
+    described code that did not exist. They offered two remedies -- narrow the
+    sentence, or add a flat scan. I added the flat scan.
+
+    Round 7, reviewer B measured what that costs:
+
+        "## Independent review - APPROVE
+
+         Addresses the prior REQUEST-CHANGES cleanly; retested end to end."
+                                        -> REQUEST-CHANGES
+
+    A clean approval read as a block because its prose NAMED one. That is
+    verbatim the hazard `_token_of`'s own docstring records as deliberately
+    avoided: "an approving review whose prose mentioned the other spellings
+    registered as a block". The two reviewers' inputs are the same SHAPE -- a
+    token in prose below an announcing line -- so no rule can satisfy both, and
+    the one that matches the rest of this module is the announcing line.
+
+    ONE POPULATION, NOT TWO. This delegates to `parse_verdicts` rather than
+    re-parsing, and that is the whole design. The hand-rolled version was
+    STRICTER than the gate it feeds: it required a well-formed marker line, so
+    four shapes that gate 2+3 blocks on went unseen, and each one merged on a
+    single approval after a push. A reviewer measured all four end to end:
+
+        "Re-review - REQUEST-CHANGES"                  (marker misspelled)
+        a block below a one-line preamble              (marker not first)
+        "Independent re-review - CHANGES REQUIRED"     (block spelled wrong)
+        a fenced relay of the header                   (marker cited)
+
+    The third is the sharpest. `review_requirement` carries a dedicated
+    `"CHANGES REQUIRED"` branch, with an arm and a direct unit test -- and the
+    only production producer of `prior_verdict` could never emit a string
+    containing it. That is verbatim the defect this round claimed to repair one
+    function over: a trigger proved against the FUNCTION and never against the
+    CALLER feeding it.
+
+    `parse_verdicts` already answers "did anything blocking happen here", across
+    every marker shape, every token spelling, and quoted/fenced/collapsed text,
+    with the near-miss machinery three reviews built. A block is a blocking live
+    verdict OR a blocking near-miss. Sharing it also removes the over-firing the
+    OTHER reviewer measured: a comment whose FIRST line announces APPROVE is a
+    live APPROVE, so prose beneath it -- citing a prior round, linking one,
+    quoting one -- reports nothing. Both complaints, one answer.
+
+    THE COST, MEASURED BY THE OTHER REVIEWER AND TAKEN DELIBERATELY. Sharing
+    the population means inheriting `NEAR_NO_MARKER`, which blocks on a blocking
+    token in a comment that announces nothing. In gate 2+3 that is safe because
+    a push discharges it; here nothing pins, so it is PERMANENT. Their input:
+
+        "Status: the round-3 REQUEST-CHANGES finding about the anchor
+         meta-test has since been fixed and re-verified end to end."
+
+    Ordinary status prose -- the house style on this very PR -- locks it to two
+    reviewers for the rest of its life.
+
+    I could not find a rule that separates that from the first reviewer's
+
+        "Re-review - REQUEST-CHANGES"          (marker misspelled)
+
+    They are the same shape: a token on a line that is not a recognised marker.
+    Every candidate discriminator was an idiom, and "three rounds running, the
+    rule was 'a marker line that is not <the idioms I have thought of>'" is the
+    recorded history of the function next door. So the tie is broken on the
+    rule this package already states in both directions: formatting may refuse
+    to GRANT an approval and must never REDUCE a block, and every sibling
+    control fails closed. An over-escalation costs a reviewer; an
+    under-escalation merges a PR a reviewer rejected.
+
+    What is NOT acceptable is the reason string lying about it. "a reviewer
+    returned REQUEST-CHANGES" is false for status prose -- no reviewer returned
+    anything. So an unannounced block comes back tagged and carrying its comment
+    id, and `review_requirement` words it as what it is.
+
+    The head_date passed is the earliest NON-EMPTY timestamp, so nothing is
+    pinned out -- and a comment with no timestamp at all is treated as
+    unpinnable rather than as predating, because `"" >= "0000-..."` is False and
+    that silently DROPPED its verdict. Measured as a regression against the
+    hand-rolled version, in the losing direction.
+    """
+    if not comments:
+        return None
+    stamped = [c.get("created_at") or "" for c in comments]
+    earliest = min((s for s in stamped if s), default="") or "0000-01-01T00:00:00Z"
+    # NORMALISE THE MISSING TIMESTAMPS IN, rather than special-casing them out.
+    # `min()` over the raw values returned `""` whenever ANY comment lacked one,
+    # the fallback kicked in, and that comment then failed
+    # `"" >= "0000-01-01T00:00:00Z"` -- so `parse_verdicts` called it
+    # PREDATES-HEAD, `blocks=False`, and dropped its verdict. Measured as a
+    # regression against the hand-rolled version, in the losing direction.
+    #
+    # A comment with no timestamp is not OLD, it is UNDATED. Pinning is not the
+    # question this function asks, so an undated comment is pinned in at the
+    # earliest and parsed like any other -- which keeps a well-formed
+    # `REQUEST-CHANGES` a live block rather than demoting it to unpinnable.
+    pinned_in = [
+        c if s else {**c, "created_at": earliest}
+        for c, s in zip(comments, stamped, strict=False)
+    ]
+    live, near = parse_verdicts(pinned_in, earliest, window)
+    blocking = next((v.token for v in live if v.token in BLOCKING_TOKENS), None)
+    if blocking:
+        return blocking
+    blocked = next((n for n in near if n.blocks), None)
+    if blocked:
+        # A near-miss has no token by construction -- that is what makes it a
+        # near-miss -- so it cannot be reported as one reviewer's decision. It
+        # is TAGGED, and it names the comment, because a permanent escalation
+        # nobody can locate is worse than one they can argue with.
+        #
+        # It also carries the KIND. Three kinds can block here and the first
+        # version worded the reason for ONE of them, so the sentence "a
+        # blocking token appears ... with no line announcing a verdict" was
+        # FALSE for the other two: `no-token` is a comment that DOES announce
+        # and carries no token at all, and `template-line` announces on its
+        # first line. A reviewer measured both. Fixed on one side of a boundary
+        # and not the other, in the round whose whole subject was that.
+        return f"{UNANNOUNCED_BLOCK} ({blocked.kind}, comment {blocked.comment_id})"
+    return next((v.token for v in live), None)
 
 
 def parse_verdicts(
@@ -1115,6 +1436,129 @@ def action_is_permitted(action: str, policy: dict) -> tuple[bool, str]:
     if action in policy.get("permitted_unattended", []):
         return True, "permitted unattended"
     return False, "not in permitted_unattended - fails closed, add it to policy.json deliberately"
+
+
+def escalation_paths(policy: dict) -> tuple[str, ...]:
+    """Path fragments that escalate, READ FROM THE AUTHORITY.
+
+    This was a hardcoded tuple while `policy.json` carried four English
+    sentences declared as its implementation. The list could be emptied,
+    inverted or deleted and every decision stayed identical -- the
+    `marker_any_of` defect (a policy value duplicating a constant, so editing
+    the authority changes nothing) reintroduced one release after it was fixed.
+    Two independent reviewers found it in the same round.
+    """
+    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))
+
+
+def escalation_streams(policy: dict) -> tuple[str, ...]:
+    """Workstreams that escalate whatever the diff turns out to touch."""
+    return tuple(policy.get("review", {}).get("escalate_to_two_when_stream_is", ()))
+
+
+# What each lane OWNS. A lane name is not a path -- `lane:console` contains no
+# substring of `apps/fiab-console` -- so a brief that passed the lane string
+# straight to the path test silently never escalated. Measured: the console
+# lane, which is the one `ux-baseline` G1 cares most about, asked for one
+# reviewer.
+#
+# This map is a GUESS and is treated as one. A `lane:dataplane` fix can land in
+# bicep, a workflow or a console surface, and `domains/` matches none of them --
+# which is why an item's STREAM is consulted too, and why an unmapped lane
+# escalates instead of falling through.
+LANE_PATHS = {
+    "lane:console": "apps/fiab-console",
+    "lane:bicep": "platform/fiab/bicep",
+    "lane:ci": "scripts/ci",
+    "lane:dataplane": "domains/",
+    "lane:docs": "docs/",
+}
+
+
+def review_requirement(policy: dict, changed_paths: list[str] | None = None,
+                       prior_verdict: str | None = None,
+                       stream: str | None = None,
+                       footprint_known: bool = True,
+                       stream_known: bool = True) -> tuple[int, str]:
+    """How many independent reviewers this change needs, and why.
+
+    Operator decision 2026-09-12. W0 -- the merge gate itself -- took EIGHT
+    POSTED rounds with two reviewers, and that was right for the program that
+    decides every merge. It is NOT the default for ordinary lanes: at ~296 it
+    would dominate the run.
+
+    FAILS CLOSED on an unknown footprint. The decision is usually taken at brief
+    time, from a LANE, before the diff exists -- so the path set is a guess. An
+    item with no lane produced `changed_paths=[""]`, matched nothing, and got
+    one reviewer: **119 of 299** live items, including all four W0-harness ones
+    and nine W1-deploy ones, i.e. precisely the diffs the policy says need two.
+    (An earlier draft of this comment said 28, which is 119 minus the 91 in
+    W9-rest -- a sub-population quoted without saying so, in a module that
+    polices exactly that.) Every sibling control here fails closed; this one
+    fell open.
+
+    Returns (reviewers, reason) so a brief can state the requirement rather than
+    leave the lane to infer it.
+    """
+    review = policy.get("review", {})
+    default = int(review.get("independent_reviewers_default", 1))
+
+    # `prior_verdict`, not `first_verdict`. The policy key is still named for
+    # the FIRST reviewer because that is the operator's rule in their words, but
+    # "first" cannot be the implementation: the drain posts its reviewers'
+    # verdicts in parallel, one second apart, so which is first is a race. The
+    # faithful reading is "a reviewer blocked", and `worst_verdict_in_history`
+    # reduces worst-first to produce it.
+    if review.get("escalate_on_blocking_first_verdict", True) and prior_verdict:
+        # Shape, not spelling: `parse_verdicts` spends a whole apparatus on the
+        # fact that "CHANGES REQUIRED" is a block written the wrong way. A
+        # reviewer count that only recognised the exact token would let
+        # formatting reduce a block to "one reviewer was enough".
+        upper = prior_verdict.upper()
+        # `"CHANGES REQUIRED"` is kept although no PRODUCTION caller can emit
+        # it: `worst_verdict_in_history` returns a `VERDICT_TOKENS` member or
+        # `UNANNOUNCED_BLOCK`, and a `CHANGES REQUIRED` header now arrives
+        # through the near-miss path as the latter. The behaviour IS covered;
+        # this branch is a second net for any future caller that passes a raw
+        # header, and it is named here as such rather than left looking like a
+        # live control -- a reviewer counted it as the same
+        # proved-against-the-function-never-the-caller shape twice running.
+        if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:
+            # SAY WHICH IT IS. An unannounced block escalates on the same rule
+            # -- formatting never reduces a block -- but attributing it to a
+            # reviewer's decision is false: a comment that announces nothing
+            # decided nothing. A reviewer measured ordinary status prose being
+            # reported as "a reviewer returned REQUEST-CHANGES".
+            if prior_verdict.startswith(UNANNOUNCED_BLOCK):
+                return 2, (
+                    f"{UNANNOUNCED_REASON_BY_KIND.get(_unannounced_kind(prior_verdict), UNANNOUNCED_REASON_UNKNOWN)}"
+                    f" ({prior_verdict.strip()}) - not attributable to a "
+                    "reviewer's decision, and it fails closed because "
+                    "formatting never reduces a block"
+                )
+            return 2, f"a reviewer returned {prior_verdict.strip()!r}"
+
+    if stream and stream in escalation_streams(policy):
+        return 2, f"{stream} escalates whatever the diff turns out to touch"
+
+    for path in changed_paths or []:
+        normalized = path.replace("\\", "/")
+        hit = next((p for p in escalation_paths(policy)
+                    if normalized.startswith(p) or f"/{p}" in normalized), None)
+        if hit:
+            return 2, f"the diff touches {hit} - a guard, deploy or console surface"
+
+    if not footprint_known and review.get("escalate_when_footprint_unknown", True):
+        return 2, "the change's file footprint is not known yet - failing closed"
+    # The merge-gate half of the same idea. At BRIEF time the stream is a fact
+    # and the paths are a guess; at MERGE time the paths are a fact and the
+    # stream must be resolved from the ledger through the issues the PR
+    # references. `stream_known=False` says that resolution failed -- no issue
+    # referenced, no ledger, or an issue the ledger has never seen -- and the
+    # harness cannot place work it cannot classify.
+    if not stream_known and review.get("escalate_when_stream_unknown", True):
+        return 2, "the item's stream could not be resolved - failing closed"
+    return default, "default for an ordinary lane"
 
 
 def stop_and_ask_actions(policy: dict) -> list[str]:
