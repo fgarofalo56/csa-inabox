@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.107.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.106.0...csa-inabox-v0.107.0) (2026-09-12)
+
+
+### Features
+
+* **drain:** a tracked, tested harness to drain all 297 open issues — and the gate that decides every merge is no longer gitignored ([#4483](https://github.com/fgarofalo56/csa-inabox/issues/4483)) ([a02cd41](https://github.com/fgarofalo56/csa-inabox/commit/a02cd41e6d42cf99a5a122ceeab6b3ecdda519ae))
+* **drain:** record the four operator decisions in the authority — resume-estate was failing closed, and KICKOFF pointed at a merged PR ([#4488](https://github.com/fgarofalo56/csa-inabox/issues/4488)) ([b1d4a68](https://github.com/fgarofalo56/csa-inabox/commit/b1d4a68ccfde88bfbe1546751dcbdfbe8bf9eeb6))
+
 ## [0.106.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.4...csa-inabox-v0.106.0) (2026-09-11)
 
 
