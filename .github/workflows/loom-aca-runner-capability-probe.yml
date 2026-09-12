@@ -1,0 +1,168 @@
+name: loom-aca runner capability probe
+
+# MEASURES what the in-VNet scale-to-zero runner (gh-aca-runner ACA Job) can
+# actually do, so a migration off GitHub-hosted runners is planned on facts
+# rather than on the Dockerfile's comments.
+#
+# The two questions that decide the whole migration:
+#
+#   1. WHICH TOOLCHAINS are baked in? The image carries azure-cli + bicep, gh,
+#      git, Node 20 + pnpm and a Playwright chromium. It does NOT obviously
+#      carry Python 3.11/3.12, pwsh, dbt, Go or Docker -- and 25 workflows use
+#      actions/setup-python, 34 actions/setup-node, 2 actions/setup-go, and 12
+#      need a Docker daemon that Container Apps jobs structurally cannot give.
+#
+#   2. WHAT EGRESS does it have? The runner sits in the console's
+#      VNet-integrated Container Apps environment. `actions/setup-python` and
+#      `actions/setup-node` DOWNLOAD their toolchains, `pnpm install` reaches
+#      the npm registry, and `pip` reaches PyPI. The Dockerfile already records
+#      one measurement in this direction -- Playwright browsers are baked in
+#      precisely because "the in-VNet runner's egress is firewall-restricted, so
+#      the runtime CDN download fails". If that is still true, every workflow
+#      that installs anything at job time has to have it baked into the image
+#      instead.
+#
+# NOTHING HERE GATES ANYTHING. It is a measurement, and it reports what it found
+# including the failures -- an egress probe that hid a refusal would be worse
+# than no probe. Each probe captures its own rc explicitly rather than
+# discarding it, so a non-zero result is PRINTED, not swallowed.
+#
+# Trigger: push to a chore/runner-probe** branch, or manual dispatch.
+
+on:
+  push:
+    branches:
+      - 'chore/runner-probe**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: in-VNet runner capability probe
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 20
+    steps:
+      - name: Who and where am I
+        run: |
+          echo "## identity + host"
+          echo "whoami        : $(whoami)"
+          echo "hostname      : $(hostname)"
+          echo "uname         : $(uname -a)"
+          echo "os-release    : $(grep PRETTY_NAME /etc/os-release || echo unknown)"
+          echo "cpus          : $(nproc)"
+          echo "memory        : $(free -h | awk '/^Mem:/{print $2}')"
+          echo "disk /        : $(df -h / | awk 'NR==2{print $4" free of "$2}')"
+          echo "workdir       : $PWD"
+          echo "RUNNER_TOOL_CACHE : ${RUNNER_TOOL_CACHE:-<unset>}"
+          echo "RUNNER_TEMP       : ${RUNNER_TEMP:-<unset>}"
+          if [ -n "${RUNNER_TOOL_CACHE:-}" ] && [ -d "${RUNNER_TOOL_CACHE}" ]; then
+            echo "tool cache contents:"
+            ls -1 "${RUNNER_TOOL_CACHE}" || echo "  (unreadable)"
+          else
+            echo "tool cache: ABSENT - actions/setup-* will have to DOWNLOAD"
+          fi
+
+      - name: What toolchains are baked in
+        run: |
+          echo "## toolchains"
+          probe() {
+            name="$1"; shift
+            set +e
+            out="$("$@" 2>&1 | head -1)"
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ]; then
+              printf '  %-12s PRESENT  %s\n' "$name" "$out"
+            else
+              printf '  %-12s ABSENT   (rc=%s) %s\n' "$name" "$rc" "$out"
+            fi
+          }
+          probe bash      bash --version
+          probe git       git --version
+          probe curl      curl --version
+          probe jq        jq --version
+          probe gh        gh --version
+          probe az        az version
+          probe bicep     az bicep version
+          probe node      node --version
+          probe npm       npm --version
+          probe pnpm      pnpm --version
+          probe npx       npx --version
+          probe python3   python3 --version
+          probe python3.11 python3.11 --version
+          probe python3.12 python3.12 --version
+          probe pip3      pip3 --version
+          probe uv        uv --version
+          probe pwsh      pwsh --version
+          probe dotnet    dotnet --version
+          probe go        go version
+          probe dbt       dbt --version
+          probe docker    docker --version
+          probe make      make --version
+          probe unzip     unzip -v
+          probe tar       tar --version
+          probe playwright ls /ms-playwright
+
+      - name: Can this runner reach the internet, and which parts of it
+        run: |
+          echo "## egress"
+          echo "The migration's whole shape depends on this block. A 000 is a"
+          echo "connect/DNS failure, not an HTTP status."
+          reach() {
+            host="$1"; url="$2"
+            set +e
+            code="$(curl -sS -o /dev/null -m 12 -w '%{http_code}' "$url" 2>/tmp/curl.err)"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf '  %-34s HTTP %s\n' "$host" "$code"
+            else
+              printf '  %-34s FAILED rc=%s  %s\n' "$host" "$rc" "$(head -c 140 /tmp/curl.err | tr '\n' ' ')"
+            fi
+          }
+          reach "github.com"                  https://github.com
+          reach "api.github.com"              https://api.github.com
+          reach "objects.githubusercontent.com" https://objects.githubusercontent.com
+          reach "raw.githubusercontent.com"   https://raw.githubusercontent.com
+          reach "registry.npmjs.org"          https://registry.npmjs.org
+          reach "nodejs.org"                  https://nodejs.org/dist/index.json
+          reach "pypi.org"                    https://pypi.org/simple/
+          reach "files.pythonhosted.org"      https://files.pythonhosted.org
+          reach "packages.microsoft.com"      https://packages.microsoft.com
+          reach "mcr.microsoft.com"           https://mcr.microsoft.com/v2/
+          reach "management.azure.com"        https://management.azure.com
+          reach "login.microsoftonline.com"   https://login.microsoftonline.com
+          reach "proxy.golang.org"            https://proxy.golang.org
+          echo ""
+          echo "  egress IP (if reachable):"
+          set +e
+          curl -sS -m 12 https://api.ipify.org 2>&1 | head -1
+          set -e
+          echo ""
+          echo "  DNS:"
+          getent hosts registry.npmjs.org || echo "    registry.npmjs.org does not resolve"
+          getent hosts management.azure.com || echo "    management.azure.com does not resolve"
+
+      - name: Does the managed identity work from here
+        run: |
+          echo "## azure identity"
+          set +e
+          az login --identity --allow-no-subscriptions -o none 2>/tmp/az.err
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "  az login --identity: OK"
+            az account show --query "{name:name, id:id, tenant:tenantId}" -o json || true
+          else
+            echo "  az login --identity: FAILED rc=$rc"
+            head -c 400 /tmp/az.err
+          fi
+
+      - name: Summary
+        run: |
+          echo "## what this decides"
+          echo "  * toolchain ABSENT + egress OPEN  -> actions/setup-* works, no image change"
+          echo "  * toolchain ABSENT + egress SHUT  -> it MUST be baked into the runner image"
+          echo "  * docker ABSENT                   -> those 12 workflows cannot move here at all"
