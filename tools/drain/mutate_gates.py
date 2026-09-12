@@ -532,6 +532,22 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
+        "G11 the below-window scan takes a PREFIX CUT, losing a straddling token",
+        "gates.py",
+        "                for ln in body.splitlines()",
+        "                for ln in body[window:].splitlines()",
+    ),
+    (
+        # NOT a `(?!x)` prefix on the regex -- that always succeeds against
+        # `policy`, so the arm was a no-op and survived on that alone. Skip the
+        # bare-key branch entirely, which is the hole as it actually was.
+        "P9 the allow-list scan skips BARE keys again, so `repo` can be moved out",
+        "gates.py",
+        "        section, _, sub = dotted.partition(\".\")\n        if sub:",
+        ("        section, _, sub = dotted.partition(\".\")\n        if not sub:\n"
+         "            continue\n        if sub:"),
+    ),
+    (
         "G10 a blocking token below the window is dropped in silence again",
         "gates.py",
         "            elif blocking_below:",

@@ -71,8 +71,8 @@ parallelized until it does.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 208 pass
-python tools/drain/mutate_gates.py       # 86 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 211 pass
+python tools/drain/mutate_gates.py       # 88 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

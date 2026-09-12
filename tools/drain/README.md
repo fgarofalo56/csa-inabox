@@ -171,11 +171,18 @@ load-bearing: each version is one idiom away from being wrong, and the failure
 is silent. Position cannot be forged by formatting.
 
 **The two directions are NOT symmetric.** Formatting may refuse to *grant* an
-approval; it must never *reduce* a block. A blocking token anywhere in the
-window — quoted, fenced, indented, collapsed — blocks, even with no announcing
-line. Once citations became merely advisory, a reviewer who pasted a failing log
-in a fence, forgot to close it, then wrote their header had their block silently
-demoted to advisory. An unclosed fence is an ordinary typo.
+approval; it must never *reduce* a block. **In a comment whose first line
+announces no verdict**, a blocking token anywhere in the window — quoted,
+fenced, indented, collapsed — blocks. Once citations became merely advisory, a
+reviewer who pasted a failing log in a fence, forgot to close it, then wrote
+their header had their block silently demoted to advisory. An unclosed fence is
+an ordinary typo.
+
+The qualifier is load-bearing and is stated because the unqualified sentence was
+wrong: when the first line **does** announce a token, that verdict decides and
+the rest of the comment is not re-scanned. Without that, a reviewer approving
+with the words *"nothing that warrants REQUEST-CHANGES"* would block their own
+approval — the round-2 defect, rebuilt.
 
 Within the announcing line the tokens are read worst-first, so a hedged header
 resolves to the block. Anything that *mentions* a verdict without announcing one
@@ -223,8 +230,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 208 tests across every module
-python tools/drain/mutate_gates.py           # 86 arms, must be 86 KILLED
+python -m pytest tools/drain/__tests__ -q    # 211 tests across every module
+python tools/drain/mutate_gates.py           # 88 arms, must be 88 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -306,8 +313,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 86 mutation arms against a sandbox copy; must be 86 KILLED |
+| `mutate_gates.py` | 88 mutation arms against a sandbox copy; must be 88 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 208 tests; a negative control for every decision function |
+| `__tests__/` | 211 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

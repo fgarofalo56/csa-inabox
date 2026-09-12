@@ -380,8 +380,8 @@ line, at indent zero, BEGINNING with `Independent review` or
 `Independent re-review` and carrying the token. Position, not formatting -- a
 header in a quote, a fence, an indent or a `<details>` is a CITATION and never a
 decision. Tokens on that line are read worst-first, so a hedged header resolves
-to the block. A blocking token anywhere in the window blocks even with no
-announcing line: formatting never reduces a block.
+to the block. In a comment whose first line announces NOTHING, a blocking token
+anywhere in the window blocks anyway: formatting never reduces a block.
 
 **Stop and ask for**: {stop}.
 **Never, regardless**: {never}.

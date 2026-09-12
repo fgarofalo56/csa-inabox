@@ -141,6 +141,35 @@ def test_negative_control_moving_a_control_onto_the_allow_list_is_caught():
         gates.OPERATOR_DOCUMENTATION.update(original_doc)
 
 
+def test_negative_control_moving_a_bare_key_onto_the_allow_list_is_caught_too():
+    """`repo` is read by three modules and is a TOP-LEVEL key. A scan that
+    skipped bare names -- which the first version had to, to avoid colliding
+    with the ledger's own `"schema"` literal -- left exactly this hole. Keying
+    to the SUBSCRIPT rather than the bare literal covers it: `policy["repo"]`
+    matches, `raw.get("schema")` does not, because it is keyed to `raw`."""
+    original_map = dict(gates.OTHER_IMPLEMENTED_BY)
+    original_doc = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OTHER_IMPLEMENTED_BY.pop("repo")
+    gates.OPERATOR_DOCUMENTATION.add("repo")
+    try:
+        with pytest.raises(ValueError, match="READ by the code"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OTHER_IMPLEMENTED_BY.clear()
+        gates.OTHER_IMPLEMENTED_BY.update(original_map)
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original_doc)
+
+
+def test_an_unrelated_literal_does_not_cry_wolf():
+    """The other edge, and the reason this is keyed to the subscript: a bare
+    scan failed the contract on any unrelated string, blaming a policy key that
+    nothing read. `schema` is the live example -- the ledger has one of its own
+    and it must stay quiet."""
+    assert "schema" not in gates._documentation_keys_that_are_actually_read()
+    assert "scope.target" not in gates._documentation_keys_that_are_actually_read()
+
+
 def test_negative_control_the_other_mapping_is_resolution_checked_too():
     """`OTHER_IMPLEMENTED_BY` was exempt from resolution, so a bogus target was
     accepted there while the same trick was refused in the two gate sections."""

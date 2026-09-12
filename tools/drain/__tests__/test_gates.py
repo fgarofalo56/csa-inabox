@@ -472,6 +472,19 @@ def test_a_blocking_token_below_the_window_is_recorded_not_dropped():
     assert "BELOW" in near[0].reason
 
 
+def test_negative_control_a_token_straddling_the_window_cut_is_not_lost():
+    """A prefix cut at 200 SPLITS a token that straddles it: `body[:200]` ends
+    `...REQUEST-CH` and `body[200:]` begins `ANGES...`, so a token starting at
+    offsets 186-199 was a complete substring of neither and left no trace at
+    all -- the very silence this branch exists to end, surviving in a 15-char
+    band of offsets."""
+    for pad in range(184, 201):
+        body = "Relaying.\n" + ("x" * pad) + "REQUEST-CHANGES on the old head"
+        _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert near, f"pad={pad}: a blocking token vanished"
+        assert not near[0].blocks, f"pad={pad}: the window still bounds blocking"
+
+
 def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():
     """`not-the-first-line`, not `below-the-window`. The message must name the
     cause it established: a header three lines down, inside the window, is

@@ -301,26 +301,48 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
     be.
 
     So the property is checked directly rather than by bookkeeping: a key
-    declared to be prose must not appear as a string literal in any of this
-    package's sources. Only the DOTTED (sectioned) entries are checked -- a bare
-    top-level name like `schema` collides with unrelated literals (the ledger
-    has a `schema` of its own) and the check would cry wolf until someone
-    deleted it.
+    declared to be prose must not be SUBSCRIPTED out of a policy dict anywhere
+    in this package.
+
+    Keyed to the SUBSCRIPT (`policy["x"]` / `.get("x"` / `["x"]`), not to the
+    bare literal. A bare-literal scan had both edges: it cried wolf on any
+    unrelated string (`ANNOTATION_KIND = "target"` in an unrelated module failed
+    the contract and blamed `scope.target` -- an R7 message aimed at a
+    maintainer), and it had to skip top-level names entirely to avoid the
+    `schema` collision, which left `repo` -- genuinely read by three modules --
+    able to be moved onto the allow-list undetected. The subscript form covers
+    top-level keys too, because `raw.get("schema")` in the ledger is about the
+    LEDGER's schema and is keyed to `raw`, not to a policy dict.
+
+    A read assembled from variables still passes. That is inherent to a source
+    scan and is stated rather than implied; it catches the naive move, which is
+    the one that happened.
     """
     import pathlib
+    import re
 
     here = pathlib.Path(__file__).resolve().parent
     sources = "\n".join(
         p.read_text(encoding="utf-8")
         for p in sorted(here.glob("*.py"))
-        if p.name not in ("mutate_gates.py",)
+        if p.name != "mutate_gates.py"
     )
     found = []
     for dotted in OPERATOR_DOCUMENTATION:
-        if "." not in dotted:
-            continue
-        _, _, sub = dotted.partition(".")
-        if f'"{sub}"' in sources or f"'{sub}'" in sources:
+        section, _, sub = dotted.partition(".")
+        if sub:
+            # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
+            # chain, so the sub-key's own spelling cannot collide with anything.
+            pattern = (r"\[\s*[\"']" + re.escape(section) + r"[\"']\s*\]\s*"
+                       r"(?:\[|\.get\()\s*[\"']" + re.escape(sub) + r"[\"']")
+        else:
+            # A TOP-LEVEL key must be rooted at a policy dict. `repo` is read by
+            # three modules as `policy["repo"]`; the ledger's `raw.get("schema")`
+            # is keyed to `raw` and so does not match, which is what lets bare
+            # names be covered at all.
+            pattern = (r"(?:policy|POLICY|cfg)\s*(?:\[|\.get\()\s*[\"']"
+                       + re.escape(section) + r"[\"']")
+        if re.search(pattern, sources):
             found.append(dotted)
     return found
 
@@ -476,12 +498,20 @@ def parse_verdicts(
         # the one direction the code says must never be reduced. It does not
         # BLOCK (the window is the contract on both sides, or any long comment
         # quoting an old round freezes the PR), but it is no longer silent.
+        #
+        # Scanned over the WHOLE body, not `body[window:]`. A prefix cut at 200
+        # splits a token that STRADDLES it -- `body[:200]` ends "...REQUEST-CH"
+        # and `body[200:]` begins "ANGES..." -- so a token starting at offsets
+        # 186-199 was a complete substring of neither and left no trace at all,
+        # the very silence this branch exists to end, surviving in a 15-char
+        # band. The branch is gated on `not blocking_mention`, so scanning the
+        # whole body cannot double-report and cannot block.
         blocking_below = (
             not blocking_mention
             and any(
                 any(t in ln for t in BLOCKING_TOKENS)
                 and not all(t in ln for t in VERDICT_TOKENS)
-                for ln in body[window:].splitlines()
+                for ln in body.splitlines()
             )
         )
 
