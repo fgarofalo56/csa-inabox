@@ -84,24 +84,36 @@ RUN set -euo pipefail; \
     apt-get install -y --no-install-recommends azure-cli; \
     rm -rf /var/lib/apt/lists/*
 
-# --- az bicep, installed where the NON-ROOT runner can actually see it -------
-# `az bicep install` as root writes the binary under $AZURE_CONFIG_DIR, which
-# defaults to /root/.azure — a directory the `runner` user cannot read. The
-# image therefore SHIPPED a bicep the runner could not execute, and the live
-# capability probe returned, on a step labelled PRESENT:
+# --- bicep, on the PATH, not inside somebody's home -------------------------
+# `az bicep install` writes the binary under $AZURE_CONFIG_DIR, which defaults
+# to the invoking user's ~/.azure. Installed as root during the build it lands
+# in /root/.azure, which the non-root `runner` user cannot read — so the image
+# SHIPPED a bicep the runner could not execute, and the live capability probe
+# returned, on a step it nonetheless labelled PRESENT:
 #
 #     bicep  ERROR: Bicep CLI not found. Install it now by running "az bicep install".
 #
-# Exactly the Playwright/PLAYWRIGHT_BROWSERS_PATH mistake one tool along: install
-# as root, land it in root's home, watch it vanish at job time. Pinning
-# AZURE_CONFIG_DIR to a world-readable path fixes both the install and every
-# later `az` invocation, which reads the same variable.
-ENV AZURE_CONFIG_DIR=/opt/azure
+# That is the Playwright/PLAYWRIGHT_BROWSERS_PATH mistake one tool along.
+#
+# THE OBVIOUS FIX IS A TRAP, AND IT WAS MEASURED, NOT REASONED ABOUT. Pinning
+# `ENV AZURE_CONFIG_DIR=/opt/azure` + `chmod -R a+rX` makes the directory
+# READABLE but not WRITABLE, and `az` WRITES there on every invocation
+# (telemetry, command index, logs). The next probe run came back with `az`
+# itself broken — "The command failed with an unexpected error" — i.e. the
+# remedy was strictly worse than the defect: bicep missing became the whole
+# Azure CLI missing.
+#
+# So the binary goes somewhere a PATH lookup finds it and nobody needs write
+# access to, and AZURE_CONFIG_DIR is left alone at its per-user default.
+# AZURE_BICEP_USE_BINARY_FROM_PATH is the documented switch for exactly this.
+ENV AZURE_BICEP_USE_BINARY_FROM_PATH=true
 RUN set -euo pipefail; \
-    mkdir -p "$AZURE_CONFIG_DIR"; \
-    az bicep install; \
-    az bicep version; \
-    chmod -R a+rX "$AZURE_CONFIG_DIR"
+    BICEP_VER="$(curl -fsSL https://api.github.com/repos/Azure/bicep/releases/latest | jq -r .tag_name)"; \
+    test -n "$BICEP_VER" -a "$BICEP_VER" != "null"; \
+    curl -fsSL -o /usr/local/bin/bicep \
+        "https://github.com/Azure/bicep/releases/download/${BICEP_VER}/bicep-linux-x64"; \
+    chmod a+rx /usr/local/bin/bicep; \
+    bicep --version
 
 # --- PowerShell (pwsh) ------------------------------------------------------
 # `PowerShell Lint` is one of the 15 REQUIRED status contexts, and
