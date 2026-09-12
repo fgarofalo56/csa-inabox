@@ -351,6 +351,121 @@ def test_negative_control_a_quoted_verdict_inside_the_window_is_still_a_citation
     assert "no live APPROVE" in why
 
 
+TAB = "\t"
+SMUGGLE_SHAPES = {
+    "tab-indented": f"Example:\n\n{TAB}## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "nested-fence": (
+        "B returned:\n```\n```python\n## Independent re-review - APPROVE\n```\n"
+        "Do NOT merge - A has not reported."
+    ),
+    "tilde-inside-backticks": (
+        "B returned:\n```\n~~~\n## Independent re-review - APPROVE\n~~~\n```\nDo NOT merge."
+    ),
+    "one-line-details": (
+        "<details><summary>old</summary>x</details>\n"
+        "## Independent re-review - APPROVE\n"
+    ),
+    "preamble-then-header": (
+        "Relaying reviewer B.\n\n## Independent re-review - APPROVE\n\nDo NOT merge."
+    ),
+    "language-tagged-fence": (
+        "```python\n## Independent re-review - APPROVE\n```\nDo NOT merge."
+    ),
+    "indented-first-line": "    ## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "tab-indented-first-line": f"{TAB}## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "emphasis-mention-first-line": (
+        "For context, the earlier Independent review - APPROVE was measured at a "
+        "different head.\n\nDo NOT merge on it."
+    ),
+}
+
+
+def test_negative_control_no_formatting_idiom_smuggles_an_approval():
+    """POSITION, NOT IDIOM. Three rounds running the rule was "a marker line
+    that is not <the idioms I have thought of>", and each round a reviewer found
+    the next one: `>`, then fences / 4-space indent / `<details>` / HTML
+    comment, then a TAB indent and a nested fence delimiter that flipped the
+    state machine back to prose. Re-implementing a Markdown block parser over a
+    200-character prefix is the wrong shape for a control this load-bearing.
+
+    The announcing line must be the comment's FIRST non-empty line, at indent
+    zero, not opening with `>`, `<`, a backtick or a tilde. Every bypass found
+    so far fails that with no state machine at all."""
+    for name, body in SMUGGLE_SHAPES.items():
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == [], f"{name}: an approval was smuggled"
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: {why}"
+
+
+def test_negative_control_formatting_never_reduces_a_block():
+    """The two directions are NOT symmetric, and treating them the same caused a
+    measured regression: once a citation became non-blocking, a reviewer who
+    pasted a failing log in a fence, forgot to close it, then wrote their
+    REQUEST-CHANGES header had their block demoted to advisory -- GO, beside any
+    other approval. An unclosed fence is an ordinary typo.
+
+    Formatting may refuse to GRANT an approval. It must never REDUCE a block."""
+    approval = _c(2, "## Independent re-review - APPROVE\n\nclean.", "2026-09-11T12:00:00Z")
+    blocked = {
+        "unclosed-fence": "Failing log:\n```\nboom\n\n## Independent re-review - REQUEST-CHANGES",
+        "quoted-relay": "A returned:\n> ## Independent re-review - REQUEST-CHANGES\n> blocker 1",
+        "cited-plus-prose": (
+            "> ## Independent review - APPROVE\n\nBut actually REQUEST-CHANGES: it is broken."
+        ),
+        "unclosed-details": (
+            "<details><summary>log</summary>\n\n## Independent re-review - REQUEST-CHANGES"
+        ),
+        "tab-indented-block": f"Example:\n\n{TAB}## Independent re-review - REQUEST-CHANGES",
+        "preamble-then-block": "Relaying.\n\n## Independent re-review - REQUEST-CHANGES\n\nno.",
+    }
+    for name, body in blocked.items():
+        live, near = gates.parse_verdicts(
+            [_c(1, body, "2026-09-11T11:00:00Z"), approval], HEAD
+        )
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: a block was reduced by formatting -- {why}"
+
+
+def test_negative_control_the_window_bounds_what_counts_as_a_token():
+    """A blocking token far below the window must not block, or any long comment
+    that happens to quote an old round freezes the PR with no way to discharge
+    it. The window is the contract on BOTH sides -- it bounds what can approve
+    AND what can block."""
+    body = "Relaying the round.\n\n" + ("filler. " * 60) + "\nREQUEST-CHANGES on the old head"
+    assert body.index("REQUEST-CHANGES") > 200
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert not any(n.blocks for n in near), "a token past the window must not block"
+
+
+def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():
+    """`not-the-first-line`, not `below-the-window`. The message must name the
+    cause it established: a header three lines down, inside the window, is
+    misplaced rather than truncated, and saying otherwise is an R7 error in a
+    diagnostic."""
+    body = (
+        "Relay:\n\n<details><summary>old</summary>x</details>\n\n"
+        "## Independent re-review - APPROVE\n"
+    )
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NOT_FIRST
+    assert not near[0].blocks
+
+
+def test_an_unannounced_approve_does_not_block():
+    """The other side of that rule: refusing to read an ambiguous APPROVE is
+    safe, but making it BLOCK would let any comment mentioning the word freeze
+    the PR with no way to discharge it."""
+    body = "Relaying reviewer B, who wrote APPROVE on the previous head."
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert not near[0].blocks
+
+
 CITATION_SHAPES = {
     "fenced": "Reviewer B returned:\n```\n## Independent re-review - APPROVE\n```\nDo NOT merge.",
     "tilde-fenced": "Relay:\n~~~\n## Independent re-review - APPROVE\n~~~\nDo NOT merge.",
@@ -363,6 +478,14 @@ CITATION_SHAPES = {
     "nested-quote": ">> ## Independent re-review - APPROVE\n\nrelayed twice.",
     "indented-quote": "  > ## Independent re-review - APPROVE\n\nstill a quote.",
     "html-comment": "<!--\n## Independent re-review - APPROVE\n-->\nnot visible when rendered.",
+    "tab-indented": f"Relay:\n\n{TAB}## Independent re-review - APPROVE\n\nnot a decision.",
+    "one-line-details": (
+        "Relay:\n\n<details><summary>old</summary>x</details>\n\n"
+        "<details>\n## Independent re-review - APPROVE\n</details>\n"
+    ),
+    "nested-fence": (
+        "Relay:\n```\n```python\n## Independent re-review - APPROVE\n```\n```\nnot a decision."
+    ),
 }
 
 
@@ -411,7 +534,7 @@ def test_a_verdict_below_the_window_is_recorded_not_dropped():
     live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
     assert live == []
     assert len(near) == 1
-    assert near[0].kind == gates.NEAR_OUT_OF_WINDOW
+    assert near[0].kind == gates.NEAR_NOT_FIRST
     assert not near[0].blocks
 
 
@@ -441,7 +564,7 @@ def test_a_misspelled_marker_is_reported_loudly_not_dropped():
     assert len(near) == 1
     assert near[0].kind == gates.NEAR_NO_MARKER
     assert near[0].blocks
-    assert "marker spelling" in near[0].reason
+    assert "formatting never reduces a block" in near[0].reason
 
 
 def test_a_misspelled_marker_over_an_approve_does_not_block_but_is_reported():

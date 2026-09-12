@@ -106,6 +106,42 @@ def test_negative_control_a_new_key_anywhere_in_the_file_is_caught():
     assert "brand_new_section.a" in gates.policy_keys_without_implementation(fake2)
 
 
+def test_negative_control_the_allow_list_cannot_silence_a_real_control():
+    """The allow-list's own edge, and the answer is yes-it-could: moving
+    `wip.max_lanes` into `OPERATOR_DOCUMENTATION` used to be ACCEPTED while
+    `select_cycle` still read it -- the allow-list becoming an off switch. A key
+    cannot be both prose and a control."""
+    original = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OPERATOR_DOCUMENTATION.add("wip.max_lanes")
+    try:
+        with pytest.raises(ValueError, match="cannot be both prose and a control"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original)
+
+
+def test_negative_control_the_other_mapping_is_resolution_checked_too():
+    """`OTHER_IMPLEMENTED_BY` was exempt from resolution, so a bogus target was
+    accepted there while the same trick was refused in the two gate sections."""
+    original = dict(gates.OTHER_IMPLEMENTED_BY)
+    gates.OTHER_IMPLEMENTED_BY["repo"] = "gates.no_such_thing"
+    try:
+        with pytest.raises(ValueError, match="not a callable"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OTHER_IMPLEMENTED_BY.clear()
+        gates.OTHER_IMPLEMENTED_BY.update(original)
+
+
+def test_a_dotted_attribute_path_resolves():
+    """`ledger.Ledger.receipt_ok` is a method on a class. A resolver that only
+    walked `module.attr` would reject a TRUE entry, which is the failure that
+    makes people delete the check."""
+    assert gates._unresolved("ledger.Ledger.receipt_ok") is None
+    assert gates._unresolved("ledger.Ledger.no_such_method") is not None
+
+
 def test_the_hard_ceiling_is_a_control_not_a_comment():
     import tick
 

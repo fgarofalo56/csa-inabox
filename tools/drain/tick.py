@@ -345,11 +345,13 @@ pre-merge open-issue NUMBERS for the post-merge set audit. Clear any conflict
 BEFORE pushing - a push into a CONFLICTING window gets zero check-runs,
 permanently.
 
-**Writing the review verdict so it REGISTERS**: a line that BEGINS with
-`Independent review` or `Independent re-review`, inside the first 200 characters,
-not quoted / fenced / indented / inside `<details>`. Tokens are read in the order
-REQUEST-CHANGES, APPROVE, CANNOT-ASSESS, so a hedged header resolves to the
-block. A verdict that only MENTIONS those words is a near-miss, never a decision.
+**Writing the review verdict so it REGISTERS**: the comment's FIRST non-empty
+line, at indent zero, BEGINNING with `Independent review` or
+`Independent re-review` and carrying the token. Position, not formatting -- a
+header in a quote, a fence, an indent or a `<details>` is a CITATION and never a
+decision. Tokens on that line are read worst-first, so a hedged header resolves
+to the block. A blocking token anywhere in the window blocks even with no
+announcing line: formatting never reduces a block.
 
 **Stop and ask for**: {stop}.
 **Never, regardless**: {never}.

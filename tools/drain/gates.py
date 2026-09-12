@@ -259,13 +259,30 @@ def assert_policy_matches_code(policy: dict) -> None:
             raise ValueError(
                 f"{section}: implemented but not declared in policy.json: {undeclared}"
             )
+    # ALL THREE mappings, not only the two sectioned ones -- `OTHER_IMPLEMENTED_BY`
+    # was exempt from resolution and carries dotted attribute paths
+    # (`ledger.Ledger.receipt_ok`) that the first version of `_unresolved` could
+    # not walk, so it would have rejected true entries and accepted false ones.
+    for label, mapping in (
+        ("merge_gate", MERGE_GATE_IMPLEMENTED_BY),
+        ("verdict_parsing", VERDICT_PARSING_IMPLEMENTED_BY),
+        ("other", OTHER_IMPLEMENTED_BY),
+    ):
         for key, where in mapping.items():
             unresolved = _unresolved(where)
             if unresolved:
                 raise ValueError(
-                    f"{section}.{key} names {unresolved!r}, which is not a callable in "
+                    f"{label}.{key} names {unresolved!r}, which is not a callable in "
                     "this package - the mapping is a spelling, not an implementation"
                 )
+    # A key in BOTH lists is silenced by the allow-list while a real function
+    # still reads it, which is the allow-list becoming an off switch.
+    both = sorted(set(OTHER_IMPLEMENTED_BY) & OPERATOR_DOCUMENTATION)
+    if both:
+        raise ValueError(
+            f"declared as operator documentation AND as implemented: {both} - "
+            "a key cannot be both prose and a control"
+        )
 
 
 def _unresolved(where: str) -> str | None:
@@ -281,13 +298,17 @@ def _unresolved(where: str) -> str | None:
     token = next((t for t in where.replace("(", " ").split() if "." in t), None)
     if token is None:
         return None if where.startswith("prose") else where
-    module_name, _, attr = token.partition(".")
-    attr = attr.split("(")[0].rstrip(",.")
+    parts = token.split("(")[0].rstrip(",.").split(".")
     try:
-        module = importlib.import_module(module_name)
+        target = importlib.import_module(parts[0])
     except ImportError:
         return token
-    target = getattr(module, attr, None)
+    # WALK the dotted path. `ledger.Ledger.receipt_ok` is a method on a class,
+    # and a resolver that only did module.attr would reject a true entry.
+    for part in parts[1:]:
+        target = getattr(target, part, None)
+        if target is None:
+            return token
     return None if callable(target) or isinstance(target, (tuple, list, frozenset)) else token
 
 # Near-miss kinds. `blocks` is decided at parse time, not by the reducer.
@@ -297,7 +318,11 @@ NEAR_PREDATES_HEAD = "predates-head"
 NEAR_TEMPLATE = "template-line"
 NEAR_UNPINNABLE = "head-date-unknown"
 NEAR_CITED = "cited-not-decided"
-NEAR_OUT_OF_WINDOW = "below-the-window"
+# A verdict header that IS in prose, but is not the comment's first line -- it
+# may be below the window, or merely below a preamble. The old name said
+# "below-the-window" and was wrong for the second case, which is an R7 error in
+# a message: it asserted a cause the code had not established.
+NEAR_NOT_FIRST = "not-the-first-line"
 
 
 @dataclass
@@ -375,10 +400,29 @@ def parse_verdicts(
         # the recorded miss: a sound verdict headed "Re-review" instead of
         # "Independent re-review" was discarded, and the gate said only "no live
         # APPROVE" -- three runs to diagnose.
+        # A BLOCKING token anywhere in the window, in ANY context -- quoted,
+        # fenced, indented, collapsed. Formatting may refuse to grant an
+        # approval; it must NEVER reduce a block.
+        #
+        # Measured regression, round 4 -> round 5: once a citation became
+        # non-blocking, two inputs that had been NO-GO went GO. A reviewer who
+        # pasted a failing log in a fence, forgot to close it, then wrote their
+        # REQUEST-CHANGES header had their block demoted to advisory; and a
+        # citation anywhere in the window suppressed the blocking report for a
+        # real token in prose below it. An unclosed fence is an ordinary typo,
+        # and the consequence was that a genuine block silently stopped
+        # blocking. The two directions are NOT symmetric and are no longer
+        # decided by the same test.
+        lines = head.splitlines()
+        blocking_mention = any(
+            any(t in ln for t in BLOCKING_TOKENS)
+            and not all(t in ln for t in VERDICT_TOKENS)  # not the template line
+            for ln in lines
+        )
         mentions_token = any(
-            prose and any(t in ln for t in VERDICT_TOKENS)
+            any(t in ln for t in VERDICT_TOKENS)
             and not all(t in ln for t in VERDICT_TOKENS)
-            for ln, prose in classify_lines(head)
+            for ln in lines
         )
         # A marker line that is CITED, or one that sits past the window. Neither
         # is a decision, and both used to vanish without a trace -- `live=[]`,
@@ -413,6 +457,19 @@ def parse_verdicts(
                     NearMiss(cid, when, f"marker line, but no token on it in body[:{window}]",
                              NEAR_NO_TOKEN, blocks=postdates)
                 )
+            elif blocking_mention:
+                # FIRST, before any citation reporting. Tested before `cited`
+                # on purpose: a citation anywhere in the window used to
+                # suppress the blocking report for a real token in prose below
+                # it, which is formatting reducing a block.
+                near.append(
+                    NearMiss(cid, when,
+                             f"a BLOCKING token appears in body[:{window}] with no line "
+                             "announcing a verdict - formatting never reduces a block, so "
+                             "this blocks. Announce it on the comment's FIRST line, or "
+                             "reference the token instead of writing it",
+                             NEAR_NO_MARKER, blocks=postdates)
+                )
             elif cited:
                 near.append(
                     NearMiss(cid, when,
@@ -424,23 +481,23 @@ def parse_verdicts(
             elif out_of_window:
                 near.append(
                     NearMiss(cid, when,
-                             f"a verdict header appears BELOW body[:{window}] - a verdict is "
-                             "announced in the window or it does not register",
-                             NEAR_OUT_OF_WINDOW, blocks=False)
+                             "a verdict header appears in prose but is NOT the comment's "
+                             f"first line (it may also be below body[:{window}]) - a verdict "
+                             "is announced first or it does not register",
+                             NEAR_NOT_FIRST, blocks=False)
                 )
             elif mentions_token:
-                # A token in the window with no line ANNOUNCING it. Blocking
-                # only when the token itself blocks: a reviewer who misspells
-                # the marker over a REQUEST-CHANGES has still blocked, and one
-                # who misspells it over an APPROVE has not approved.
-                blocking = any(
-                    t in head for t in BLOCKING_TOKENS
-                )
+                # A NON-blocking token with no line announcing it. Reported --
+                # the recorded miss is a sound verdict headed "Re-review" being
+                # dropped in silence -- but it does not block, because the one
+                # thing an unannounced APPROVE is not is a block. The blocking
+                # case was handled above, before any citation reporting.
                 near.append(
                     NearMiss(cid, when,
                              f"a verdict token appears in body[:{window}] but no line announces "
-                             f"it - check the marker spelling, it must be one of {MARKERS}",
-                             NEAR_NO_MARKER, blocks=postdates and blocking)
+                             f"it - the announcing line must be the comment's FIRST line and "
+                             f"begin with one of {MARKERS}",
+                             NEAR_NO_MARKER, blocks=False)
                 )
             continue
         if not postdates:
@@ -485,32 +542,55 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
     exactly what the verdict gate needs to record GO.
     """
     out: list[tuple[str, bool]] = []
-    in_fence = False
+    fence: str | None = None      # the OPENING delimiter, not a boolean
     details = 0
     in_comment = False
     for line in head.splitlines():
         bare = line.strip()
-        opens_comment = "<!--" in bare and "-->" not in bare
-        if any(bare.startswith(f) for f in FENCES):
-            in_fence = not in_fence
+        lowered = bare.lower()
+        opens_comment = bare.startswith("<!--") and "-->" not in bare
+
+        if fence is not None:
+            # Only a run of the SAME character, at least as long and carrying no
+            # info string, closes a fence. A boolean toggled by "any line that
+            # looks like a fence" was flipped back to prose by a nested ```` ```python ````
+            # or a `~~~` inside a ``` block -- and relayed agent output routinely
+            # carries its own fences.
+            char = fence[0]
+            closes = bare and set(bare) == {char} and len(bare) >= len(fence)
+            out.append((line, False))
+            if closes:
+                fence = None
+            continue
+        opener = next((f for f in FENCES if bare.startswith(f)), None)
+        if opener:
+            fence = bare[: len(bare) - len(bare.lstrip(opener[0]))]
             out.append((line, False))
             continue
-        lowered = bare.lower()
+
         if lowered.startswith("<details"):
-            details += 1
+            # A ONE-LINE <details>...</details> is balanced. Counting only the
+            # opener left the depth at 1 for the rest of the window on a
+            # construct that renders perfectly on GitHub.
+            if "</details" not in lowered:
+                details += 1
             out.append((line, False))
             continue
         if lowered.startswith("</details"):
             details = max(0, details - 1)
             out.append((line, False))
             continue
+
+        # INDENT IS MEASURED IN TABS TOO. `len(line) - len(line.lstrip(" "))`
+        # counts spaces only, while `_announces` strips "#*_ \t" -- so the tab
+        # that MAKES a line a code block was removed by the matcher and never
+        # seen by the classifier. Same citation, spelled the other way.
+        indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip(" "))
         prose = (
-            not in_fence
-            and not in_comment
+            not in_comment
             and details == 0
             and not _is_quoted(line)
-            and len(line) - len(line.lstrip(" ")) < 4
-            and not bare.startswith("<!--")
+            and indent < 4
         )
         out.append((line, prose))
         if opens_comment:
@@ -525,16 +605,49 @@ def _announces(line: str) -> bool:
 
     "For context, the earlier Independent review - APPROVE was measured at a
     different head" mentions one; it is a sentence ABOUT a verdict, and reading
-    it as one inverted a block into an approval. `>` is deliberately NOT in the
-    strip set -- quoting is handled by `classify_lines`, and stripping it here
-    would let a quote through if that check were ever narrowed.
+    it as one inverted a block into an approval.
     """
     return any(line.lstrip("#*_ \t").startswith(m) for m in MARKERS)
 
 
 def _marker_lines(head: str) -> list[str]:
-    """Lines in the window that ANNOUNCE a verdict, in prose."""
-    return [ln for ln, prose in classify_lines(head) if prose and _announces(ln)]
+    """The ONE line that may announce a verdict: the comment's first, if it does.
+
+    POSITION, NOT IDIOM -- and this is the point of the whole function.
+
+    Three rounds running, the rule was "a marker line that is not <the idioms I
+    have thought of>", and each round an independent reviewer found the next
+    idiom: first a blockquote, then fenced / indented / `<details>` / HTML
+    comment, then a TAB indent and a nested fence delimiter that flipped the
+    state machine back to prose. Re-implementing a Markdown block parser over a
+    200-character prefix is the wrong shape for a control this load-bearing:
+    every version is one idiom from being wrong, and the failure is silent.
+
+    So the approval direction is decided by POSITION instead, which no idiom can
+    forge: the announcing line must be the FIRST NON-EMPTY LINE of the comment,
+    at indent zero. Every bypass found so far fails that test with no state
+    machine at all -- a fenced relay's first line is the fence, a tab-indented
+    one is indented, a collapsed one starts with `<details>`.
+
+    A line opening a blockquote, an HTML block or a code fence needs no separate
+    test: `>`, `<`, a backtick and a tilde are deliberately NOT in `_announces`'
+    strip set, so such a line can never begin with a marker. An explicit prefix
+    check here was redundant -- there was no input for which it changed the
+    answer, and an arm removing it could not be killed, which is the tell.
+
+    It is deliberately strict. A reviewer who writes a preamble before their
+    header does not register, and is TOLD so (`NEAR_NO_MARKER`). Refusing to
+    read an ambiguous approval is the safe direction; refusing to read an
+    ambiguous BLOCK is not, which is why `parse_verdicts` tests for a blocking
+    token BEFORE it considers any of this.
+    """
+    for line in head.splitlines():
+        if not line.strip():
+            continue
+        if line[:1] in (" ", "\t"):
+            return []          # an indented first line is a code block
+        return [line] if _announces(line) else []
+    return []
 
 
 def _cited_marker_lines(head: str) -> list[str]:

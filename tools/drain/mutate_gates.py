@@ -332,10 +332,10 @@ ARMS: list[tuple[str, str, str, str]] = [
         # NameError, and a mutant killed by a NameError proves only that the
         # tests run Python. Pass the WHOLE body where the window belongs --
         # in scope, valid, and exactly the defect.
-        "G4 the verdict is parsed over the WHOLE body again (a quoted verdict decides)",
+        "G4 the WINDOW stops bounding what counts as a verdict token",
         "gates.py",
-        "        token, saw_template = _token_of(head)",
-        "        token, saw_template = _token_of(body)",
+        "        head = body[:window]",
+        "        head = body",
     ),
     (
         "G5 a QUOTED verdict counts as a decision",
@@ -412,16 +412,46 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     # -- round 4: every idiom that marks text as NOT PROSE -------------------
     (
-        "C1 a FENCED verdict header counts as a decision",
+        "C1 the announcing line no longer has to be the comment's FIRST line",
         "gates.py",
-        "        if any(bare.startswith(f) for f in FENCES):\n            in_fence = not in_fence",
-        "        if any(bare.startswith(f) for f in FENCES):\n            in_fence = False",
+        "        return [line] if _announces(line) else []",
+        "        if _announces(line):\n            return [line]",
     ),
     (
         "C2 an INDENTED (code-block) verdict header counts as a decision",
         "gates.py",
-        '            and len(line) - len(line.lstrip(" ")) < 4',
-        "            and True",
+        '        if line[:1] in (" ", "\\t"):',
+        "        if False:",
+    ),
+    (
+        "C2b the indent is measured in SPACES only, so a TAB smuggles a citation",
+        "gates.py",
+        '        indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip(" "))',
+        '        indent = len(line) - len(line.lstrip(" "))',
+    ),
+    (
+        "C2c a nested fence delimiter flips the state back to prose",
+        "gates.py",
+        "            closes = bare and set(bare) == {char} and len(bare) >= len(fence)",
+        "            closes = any(bare.startswith(f) for f in FENCES)",
+    ),
+    (
+        "C2d a one-line <details>...</details> leaves the depth counter open",
+        "gates.py",
+        '            if "</details" not in lowered:\n                details += 1',
+        "            details += 1",
+    ),
+    (
+        "C2e a BLOCKING token is only counted in prose, so formatting reduces a block",
+        "gates.py",
+        "        blocking_mention = any(\n            any(t in ln for t in BLOCKING_TOKENS)",
+        "        blocking_mention = any(\n            False and any(t in ln for t in BLOCKING_TOKENS)",
+    ),
+    (
+        "C2f the blocking mention is reported AFTER the citation, so a citation suppresses it",
+        "gates.py",
+        "            elif blocking_mention:",
+        "            elif blocking_mention and not cited:",
     ),
     (
         "C3 a verdict header inside <details> counts as a decision",
@@ -432,8 +462,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "C4 a verdict header inside an HTML comment counts as a decision",
         "gates.py",
-        "            and not in_comment",
-        "            and True",
+        "            not in_comment\n            and details == 0",
+        "            details == 0",
     ),
     (
         "C5 a cited verdict vanishes without a trace again",
@@ -488,6 +518,24 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         '        if before.get("pr") != args.audit_close:',
         "        if False:",
+    ),
+    (
+        "P5 the operator-documentation allow-list becomes an OFF SWITCH",
+        "gates.py",
+        "    both = sorted(set(OTHER_IMPLEMENTED_BY) & OPERATOR_DOCUMENTATION)",
+        "    both = []",
+    ),
+    (
+        "P6 the third mapping is exempt from resolution again",
+        "gates.py",
+        '        ("other", OTHER_IMPLEMENTED_BY),',
+        "",
+    ),
+    (
+        "P7 the resolver stops walking dotted attribute paths",
+        "gates.py",
+        "    for part in parts[1:]:\n        target = getattr(target, part, None)",
+        "    for part in parts[1:2]:\n        target = getattr(target, part, None)",
     ),
     (
         "P3 the WIP hard ceiling stops being enforced",

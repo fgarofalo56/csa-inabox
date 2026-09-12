@@ -154,17 +154,35 @@ weakening or baselining a guard · `.trivyignore` additions · any skip valve.
 refused, so adding a capability is a deliberate edit to `policy.json`. Matching
 is EXACT — `merge-without-review` is not a prefix of a permission.
 
-**How to write a verdict that registers.** A verdict is announced by a LINE
-that **begins with** `Independent review` or `Independent re-review` (heading
-marks and emphasis are stripped), **inside the first 200 characters**, and **not
-cited** — not quoted, not fenced, not indented four spaces, not inside
-`<details>` or an HTML comment. Within that line the tokens are read in the
-order `REQUEST-CHANGES`, `APPROVE`, `CANNOT-ASSESS`, so a hedged header resolves
-to the block. Anything that *mentions* a verdict without announcing one is
-reported as a near-miss and never acted on — including a relayed verdict, which
-is recorded so it is visible rather than absent. Writing the contract down is
-part of the fix: a silently-dropped verdict is the incident that cost three
-rounds.
+**How to write a verdict that registers — POSITION, not idiom.**
+
+> The verdict is announced on the comment's **FIRST non-empty line**, at indent
+> zero, and that line **begins with** `Independent review` or
+> `Independent re-review` (heading marks and emphasis are stripped first).
+
+That is the whole rule for granting an approval, and it is deliberately strict.
+It replaced three rounds of "a marker line that is not *«the idioms I have
+thought of»*" — first a blockquote, then fences / four-space indents /
+`<details>` / HTML comments, then a **tab** indent and a nested fence delimiter
+that flipped the state machine back to prose. Every one of those manufactured a
+live APPROVE from a comment that said *do not merge*. Re-implementing a Markdown
+block parser over a 200-character prefix is the wrong shape for a control this
+load-bearing: each version is one idiom away from being wrong, and the failure
+is silent. Position cannot be forged by formatting.
+
+**The two directions are NOT symmetric.** Formatting may refuse to *grant* an
+approval; it must never *reduce* a block. A blocking token anywhere in the
+window — quoted, fenced, indented, collapsed — blocks, even with no announcing
+line. Once citations became merely advisory, a reviewer who pasted a failing log
+in a fence, forgot to close it, then wrote their header had their block silently
+demoted to advisory. An unclosed fence is an ordinary typo.
+
+Within the announcing line the tokens are read worst-first, so a hedged header
+resolves to the block. Anything that *mentions* a verdict without announcing one
+is reported as a near-miss — `cited-not-decided` for a relay, `not-the-first-line`
+for a misplaced header — so it is visible rather than absent. Writing the
+contract down is part of the fix: a silently-dropped verdict is the incident that
+cost three rounds.
 
 **The authority is checked against the code, mechanically.** Ten keys under
 `merge_gate` and four under `verdict_parsing` were once read by no code at all —
@@ -205,8 +223,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 196 tests across every module
-python tools/drain/mutate_gates.py           # 74 arms, must be 74 KILLED
+python -m pytest tools/drain/__tests__ -q    # 204 tests across every module
+python tools/drain/mutate_gates.py           # 82 arms, must be 82 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -288,8 +306,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 74 mutation arms against a sandbox copy; must be 74 KILLED |
+| `mutate_gates.py` | 82 mutation arms against a sandbox copy; must be 82 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 196 tests; a negative control for every decision function |
+| `__tests__/` | 204 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.
