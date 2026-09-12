@@ -39,7 +39,7 @@ permissions:
 jobs:
   lint:
     name: helm lint --strict
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     env:
       CHART_DIR: portal/kubernetes/helm/csa-portal

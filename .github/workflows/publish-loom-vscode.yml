@@ -62,7 +62,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     # contents:write is needed ONLY to attach the .vsix to the GitHub Release on a
     # version tag (below). Every write path in this job is tag-gated, so a PR/fork

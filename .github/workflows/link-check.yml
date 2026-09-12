@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Backstop only, NOT the operating budget. The PR path is bounded by the
     # diff; only the full sweep can approach this. The classifier below re-reads
     # this exact line rather than restating the number, so the two cannot drift.

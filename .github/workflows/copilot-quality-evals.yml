@@ -161,7 +161,7 @@ env:
 jobs:
   evals:
     name: Run + gate Copilot quality evals
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 90
     # #3083 — ESTATE-WIDE serialization, on top of the per-ref supersede above.
     #
@@ -935,7 +935,7 @@ jobs:
     name: Eval outcome (verdict / no verdict)
     needs: [evals]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     # `checks: write` is granted to THIS job only, for the one step that
     # publishes the neutral "Copilot quality: not measured" check-run. No other

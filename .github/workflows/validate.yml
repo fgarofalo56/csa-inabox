@@ -106,7 +106,7 @@ jobs:
   # -------------------------------------------------------------------------
   changes:
     name: Detect changed paths
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 2
     outputs:
       bicep: ${{ steps.filter.outputs.bicep }}
@@ -125,7 +125,7 @@ jobs:
     name: Bicep Lint
     needs: changes
     if: needs.changes.outputs.bicep == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # This job HIT its 30-minute ceiling and was killed on PR #2641 — a
     # bicep-heavy PR, i.e. exactly the PR it exists to guard. A timed-out gate
     # reports `failure` without having checked anything, and because the job is
@@ -582,7 +582,7 @@ jobs:
   # -------------------------------------------------------------------------
   secret-scan:
     name: Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -603,7 +603,7 @@ jobs:
   # -------------------------------------------------------------------------
   security-scan:
     name: IaC Security Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -636,7 +636,7 @@ jobs:
   # -------------------------------------------------------------------------
   powershell-lint:
     name: PowerShell Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -671,7 +671,7 @@ jobs:
   # -------------------------------------------------------------------------
   python-lint:
     name: Python Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -703,7 +703,7 @@ jobs:
   # -------------------------------------------------------------------------
   hygiene:
     name: Repo Hygiene
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4

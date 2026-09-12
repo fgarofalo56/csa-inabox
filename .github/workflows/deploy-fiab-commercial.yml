@@ -153,7 +153,7 @@ env:
 jobs:
   deploy-validate:
     name: Deploy + validate CSA Loom in Commercial
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 90
     # JOB-SCOPED, so the widening stops here (#3799). A job-level block REPLACES
     # the workflow-level one, so the two the workflow already grants are

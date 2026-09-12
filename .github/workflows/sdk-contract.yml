@@ -44,7 +44,7 @@ concurrency:
 jobs:
   openapi-snapshot:
     name: OpenAPI snapshot is current
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,7 +67,7 @@ jobs:
 
   python-sdk:
     name: csa-loom (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     needs: openapi-snapshot
     defaults:
@@ -114,7 +114,7 @@ jobs:
 
   terraform-provider:
     name: terraform-provider-loom
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     needs: openapi-snapshot
     defaults:
@@ -162,7 +162,7 @@ jobs:
 
   license-inventory:
     name: LIC0 license inventory
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

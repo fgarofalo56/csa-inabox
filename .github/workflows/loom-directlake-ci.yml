@@ -50,7 +50,7 @@ concurrency:
 jobs:
   build-and-test:
     name: cargo build + test (${{ matrix.features }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -114,7 +114,7 @@ jobs:
   # failure costs a whole deploy — so it is proven here first.
   release-build:
     name: cargo build --release (the profile the image ships)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 90
     defaults:
       run:

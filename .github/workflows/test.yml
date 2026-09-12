@@ -126,7 +126,7 @@ permissions:
 jobs:
   python-tests:
     name: Python Tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # 15 WAS NOT ENOUGH, AND IT RAN OUT SILENTLY. A job that exceeds
     # `timeout-minutes` is reported as `cancelled`, not `failure`, so a REQUIRED
     # context died against the clock and read as a flake. Measured on #4491's
@@ -735,7 +735,7 @@ jobs:
   # block above for the cost/risk tradeoff and why this fails open.
   drain-mutation-detect:
     name: Detect drain-relevant changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
@@ -830,7 +830,7 @@ jobs:
     #     parens, `!cancelled() && A || B` parses as `(!cancelled() && A) ||
     #     B`, which would run on EVERY non-cancelled run regardless of B.
     if: ${{ !cancelled() && (needs.drain-mutation-detect.result != 'success' || needs.drain-mutation-detect.outputs.relevant == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # ~3.5x the ~7 min projected above. NOT fitted, for the reason the old
     # block gave and that still holds now that the advisory is known to block:
     # tightness costs another round of this, and generosity costs runner
@@ -934,7 +934,7 @@ jobs:
     name: Drain Mutation Matrix (3.10)
     needs: drain-mutation-shard
     if: ${{ !cancelled() && needs.drain-mutation-shard.result != 'skipped' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # This job downloads six small JSON files and evaluates a pure function, so
     # its own wall time says NOTHING about whether the suite ran -- which is
     # exactly the #4679 trap. It is not a witness; it is an adjudicator, and the
@@ -1012,7 +1012,7 @@ jobs:
   #     boundaries, it will not carry this defect.
   app-fresh-resolve:
     name: App Fresh-Resolve (setup-orchestrator)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -1051,7 +1051,7 @@ jobs:
 
   dbt-compile:
     name: dbt Compile (${{ matrix.domain }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -1090,7 +1090,7 @@ jobs:
 
   dbt-integration:
     name: dbt Integration (${{ matrix.domain }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -1152,7 +1152,7 @@ jobs:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
     needs: [python-tests, drain-mutation-shard, drain-mutation-matrix, app-fresh-resolve, dbt-compile, dbt-integration]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     permissions:
       pull-requests: write

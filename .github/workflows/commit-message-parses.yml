@@ -106,7 +106,7 @@ jobs:
       || github.event_name == 'push'
       && 'changelog parser can read what landed on main'
       || 'guard health only — no PR range scanned (dispatch)' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       # fetch-depth: 0 — the check needs BASE..HEAD to resolve, and a shallow clone

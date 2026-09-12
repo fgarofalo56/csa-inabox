@@ -234,7 +234,7 @@ env:
 jobs:
   resolve:
     name: Resolve Gov RG + ACR (no running app required)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       rg: ${{ steps.r.outputs.rg }}
       acr: ${{ steps.r.outputs.acr }}
@@ -330,7 +330,7 @@ jobs:
   build:
     name: Build ${{ matrix.app }} on the Gov ACR
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Serialized: each build takes the ACR firewall lease, and the lease is
     # per-registry. max-parallel 1 keeps the open/close window minimal.
     strategy:
@@ -584,7 +584,7 @@ jobs:
     name: Image summary
     needs: [resolve, build]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - name: Report
         run: |

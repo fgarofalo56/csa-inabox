@@ -61,7 +61,7 @@ concurrency:
 jobs:
   synthetic-journeys:
     name: Run + gate the six synthetic journeys
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       # This job never checked out the repo — it only called `az` to start an ACA
       # job. The edge-health step below runs a SCRIPT from the tree, so it needs

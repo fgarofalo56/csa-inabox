@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   idle-stop:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - name: Configured? (skip cleanly on placeholder SUB or a fork without creds)

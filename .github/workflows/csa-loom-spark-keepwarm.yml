@@ -62,7 +62,7 @@ permissions:
 jobs:
   keepwarm:
     name: 'Spark keep-warm probe'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - name: Ping keep-warm

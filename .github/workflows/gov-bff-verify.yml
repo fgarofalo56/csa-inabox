@@ -46,7 +46,7 @@ env:
 jobs:
   verify:
     name: Minted-session BFF probes (Gov)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     # Only verify a roll that actually shipped — a failed roll has already
     # reported itself, and probing after it would grade the PREVIOUS image while

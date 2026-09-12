@@ -32,7 +32,7 @@ env:
 jobs:
   detect-changes:
     name: Detect Changed Landing Zones
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     outputs:
       alz_changed: ${{ steps.changes.outputs.alz }}
@@ -62,7 +62,7 @@ jobs:
 
   bicep-build:
     name: Validate Bicep (${{ matrix.zone }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     needs: detect-changes
     strategy:
@@ -101,7 +101,7 @@ jobs:
 
   whatif:
     name: What-If (${{ matrix.zone }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     needs: [detect-changes, bicep-build]
     # Skip when OIDC credentials are not configured (e.g. community forks / PRs from forks).
@@ -253,7 +253,7 @@ jobs:
   # ------------------------------------------------------------------
   estate-probe:
     name: Probe live estate (paused?)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     needs: [detect-changes]
     if: needs.detect-changes.outputs.fiab_changed == 'true'
@@ -335,7 +335,7 @@ jobs:
 
   whatif-fiab:
     name: What-If (FIAB vs live Commercial estate)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     needs: [detect-changes, bicep-build, estate-probe]
     # `always()` is load-bearing, and the two conditions it forces us to
@@ -517,7 +517,7 @@ jobs:
 
   cost-estimate:
     name: Cost Estimate (${{ matrix.zone }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     needs: [detect-changes, whatif]
     if: always() && !cancelled() && vars.AZURE_CREDENTIALS_CONFIGURED == 'true'

@@ -17,7 +17,7 @@ env:
   FILES_READ: 01d4889c-1287-42c6-ac1f-5d1e02578ef6
 jobs:
   grant:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - name: Azure Gov Login
         uses: Azure/login@v2

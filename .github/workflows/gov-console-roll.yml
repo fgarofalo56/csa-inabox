@@ -175,7 +175,7 @@ env:
 jobs:
   roll:
     name: Build + roll Gov console
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # #2706 — this job inherited the 6-hour default. Two consecutive runs spent
     # 4h25m and 3h29m+ in `az acr build` (Commercial builds the same commit in
     # ~30min) and burned most of a day before anyone could learn anything. A

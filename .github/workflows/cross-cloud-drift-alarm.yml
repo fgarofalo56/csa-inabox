@@ -93,7 +93,7 @@ concurrency:
 jobs:
   drift:
     name: Live estates vs main (both clouds)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       # fetch-depth 0 is LOAD-BEARING, not hygiene. The check asks git how many

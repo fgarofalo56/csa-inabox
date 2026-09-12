@@ -114,7 +114,7 @@ env:
 jobs:
   precheck:
     name: Verify GCC secrets are configured
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -150,7 +150,7 @@ jobs:
     name: Deploy + validate CSA Loom in GCC
     needs: precheck
     if: needs.precheck.outputs.configured == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 90
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).
     outputs:

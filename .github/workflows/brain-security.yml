@@ -82,7 +82,7 @@ permissions:
 jobs:
   mutation-arms:
     name: brain security detectors — 25 mutation arms
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # The arms run the security specs twice each (mutated, then restored), so
     # the budget is well above a single suite run. Bounded so a hang is a red
     # result rather than a stuck lane.

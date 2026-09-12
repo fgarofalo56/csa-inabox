@@ -92,7 +92,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       inputs.cloud == 'both' || inputs.cloud == 'commercial' || inputs.cloud == ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     env:
       ESTATE: commercial
@@ -176,7 +176,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       inputs.cloud == 'both' || inputs.cloud == 'gov'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     env:
       ESTATE: gov
