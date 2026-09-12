@@ -135,7 +135,7 @@ jobs:
     if: >-
       github.event_name != 'workflow_run'
       || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # No image build — this only renders a YAML and applies it.
     timeout-minutes: 30
     steps:

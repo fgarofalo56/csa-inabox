@@ -47,7 +47,7 @@ permissions:
 jobs:
   check-secret:
     name: Gate on COPILOT_AZURE_OPENAI_ENDPOINT
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       has_secret: ${{ steps.check.outputs.has_secret }}
     steps:
@@ -68,7 +68,7 @@ jobs:
     name: Ingest docs into Copilot RAG
     needs: check-secret
     if: needs.check-secret.outputs.has_secret == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     env:
       # Surface the endpoint to the CLI. The pipeline honors these per
@@ -140,7 +140,7 @@ jobs:
     name: Skipped — secret missing
     needs: check-secret
     if: needs.check-secret.outputs.has_secret != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - name: Log skip reason
         run: |

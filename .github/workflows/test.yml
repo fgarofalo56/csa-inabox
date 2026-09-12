@@ -126,7 +126,7 @@ permissions:
 jobs:
   python-tests:
     name: Python Tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     env:
       # This job builds ONE environment out of ~22 INDEPENDENT pip resolutions
@@ -512,7 +512,7 @@ jobs:
   #     boundaries, it will not carry this defect.
   app-fresh-resolve:
     name: App Fresh-Resolve (setup-orchestrator)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -551,7 +551,7 @@ jobs:
 
   dbt-compile:
     name: dbt Compile (${{ matrix.domain }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -590,7 +590,7 @@ jobs:
 
   dbt-integration:
     name: dbt Integration (${{ matrix.domain }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -652,7 +652,7 @@ jobs:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
     needs: [python-tests, app-fresh-resolve, dbt-compile, dbt-integration]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     permissions:
       pull-requests: write

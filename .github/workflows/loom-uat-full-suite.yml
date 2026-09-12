@@ -100,7 +100,7 @@ env:
 jobs:
   full-suite:
     name: Full-suite UAT (in-VNet loom-uat job)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Above the 125m poll deadline so the poll owns the timeout decision, not
     # the runner. A runner-level kill would leave no verdict and no issue.
     timeout-minutes: 150

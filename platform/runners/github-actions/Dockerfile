@@ -54,12 +54,21 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # while loading shared libraries" until it's installed explicitly (observed
 # live 2026-08-15: every job on this image that shells to pnpm, including the
 # base loom-ui-verify smoke suite, failed within seconds of Setup pnpm).
+#
+# The second group (make .. python3-dev) was added 2026-09-12 when the repo's CI
+# started moving onto this runner. MEASURED by
+# .github/workflows/loom-aca-runner-capability-probe.yml on the live job, not
+# guessed: `make`, `pip3`, `pwsh`, `dotnet`, `go`, `dbt` and `docker` were all
+# absent, and `make` alone breaks every gate in the repo, because `make validate`
+# IS the entry point (CLAUDE.md: "make validate runs dev-loop/gates/validate-all.ps1").
 RUN set -euo pipefail; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl jq git unzip gnupg lsb-release apt-transport-https \
         sudo libicu70 liblttng-ust1 libssl3 zlib1g libatomic1 acl \
-        software-properties-common; \
+        software-properties-common \
+        make build-essential python3-pip python3-venv python3-dev \
+        zip rsync openssh-client; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Azure CLI (Microsoft apt repo) + az bicep ----------------------------
@@ -73,10 +82,53 @@ RUN set -euo pipefail; \
         > /etc/apt/sources.list.d/azure-cli.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends azure-cli; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- bicep, on the PATH, not inside somebody's home -------------------------
+# `az bicep install` writes the binary under $AZURE_CONFIG_DIR, which defaults
+# to the invoking user's ~/.azure. Installed as root during the build it lands
+# in /root/.azure, which the non-root `runner` user cannot read — so the image
+# SHIPPED a bicep the runner could not execute, and the live capability probe
+# returned, on a step it nonetheless labelled PRESENT:
+#
+#     bicep  ERROR: Bicep CLI not found. Install it now by running "az bicep install".
+#
+# That is the Playwright/PLAYWRIGHT_BROWSERS_PATH mistake one tool along.
+#
+# THE OBVIOUS FIX IS A TRAP, AND IT WAS MEASURED, NOT REASONED ABOUT. Pinning
+# `ENV AZURE_CONFIG_DIR=/opt/azure` + `chmod -R a+rX` makes the directory
+# READABLE but not WRITABLE, and `az` WRITES there on every invocation
+# (telemetry, command index, logs). The next probe run came back with `az`
+# itself broken — "The command failed with an unexpected error" — i.e. the
+# remedy was strictly worse than the defect: bicep missing became the whole
+# Azure CLI missing.
+#
+# So the binary goes somewhere a PATH lookup finds it and nobody needs write
+# access to, and AZURE_CONFIG_DIR is left alone at its per-user default.
+# AZURE_BICEP_USE_BINARY_FROM_PATH is the documented switch for exactly this.
+ENV AZURE_BICEP_USE_BINARY_FROM_PATH=true
+RUN set -euo pipefail; \
+    BICEP_VER="$(curl -fsSL https://api.github.com/repos/Azure/bicep/releases/latest | jq -r .tag_name)"; \
+    test -n "$BICEP_VER" -a "$BICEP_VER" != "null"; \
+    curl -fsSL -o /usr/local/bin/bicep \
+        "https://github.com/Azure/bicep/releases/download/${BICEP_VER}/bicep-linux-x64"; \
+    chmod a+rx /usr/local/bin/bicep; \
+    bicep --version
+
+# --- PowerShell (pwsh) ------------------------------------------------------
+# `PowerShell Lint` is one of the 15 REQUIRED status contexts, and
+# dev-loop/gates/validate-all.ps1 — the program behind `make validate` — is
+# PowerShell. A runner without pwsh cannot carry either.
+RUN set -euo pipefail; \
+    AZ_DIST="$(lsb_release -cs)"; \
+    curl -fsSL -o /tmp/pmc.deb \
+        "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"; \
+    dpkg -i /tmp/pmc.deb; \
+    rm -f /tmp/pmc.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends powershell; \
     rm -rf /var/lib/apt/lists/*; \
-    # Pre-install the bicep CLI into the image so `az bicep build` works offline.
-    az bicep install; \
-    az bicep version
+    pwsh --version
 
 # --- gh CLI (GitHub apt repo) ---------------------------------------------
 RUN set -euo pipefail; \
@@ -99,10 +151,32 @@ RUN set -euo pipefail; \
     node --version; pnpm --version
 
 # --- non-root runner user --------------------------------------------------
+#
+# PARITY WITH ubuntu-latest, and it is not cosmetic. A GitHub-hosted runner's
+# `runner` user has PASSWORDLESS SUDO and a WRITABLE /usr/local/bin, and
+# workflows across this repo assume both. Measured on the first migrated CI run:
+#
+#     Secret Scan / Install gitleaks -> failure
+#     curl ... | tar -xz -C /usr/local/bin gitleaks
+#
+# `Secret Scan` is one of the fifteen REQUIRED contexts, so without this the
+# migration blocks every PR in the repo. The alternative -- editing ~100
+# workflows to install into $HOME -- is the same fix written a hundred times and
+# would diverge from the hosted runner the moment anyone adds a step.
+#
+# This is not a privilege escalation worth worrying about: the job's own code
+# already runs as `runner` inside an EPHEMERAL container that is destroyed after
+# one job, so root inside it reaches nothing `runner` could not already reach.
+# The real boundary is the container and the fork-PR approval policy, not this.
 RUN set -euo pipefail; \
     useradd -m -d /home/runner -s /bin/bash runner; \
     mkdir -p /home/runner/actions-runner; \
-    chown -R runner:runner /home/runner
+    chown -R runner:runner /home/runner; \
+    echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner; \
+    chmod 0440 /etc/sudoers.d/runner; \
+    visudo -c; \
+    chown root:runner /usr/local/bin /usr/local/lib; \
+    chmod 0775 /usr/local/bin /usr/local/lib
 
 WORKDIR /home/runner/actions-runner
 

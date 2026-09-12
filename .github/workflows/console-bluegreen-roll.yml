@@ -48,7 +48,7 @@ permissions:
 jobs:
   bluegreen:
     name: Blue-green roll (${{ inputs.cloud }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # #2706 — bound the run. Without this the job inherits the 6-hour default,
     # and a wedged ACR agent pool burned 4h25m in `az acr build` before anyone
     # could act (Commercial builds the same commit in ~15min, Gov ~17-23min on a

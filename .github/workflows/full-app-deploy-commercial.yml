@@ -81,7 +81,7 @@ env:
 jobs:
   resolve:
     name: Resolve ACR + admin RG
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
@@ -258,7 +258,7 @@ jobs:
     name: Temporarily open ACR public access + grant AcrPush
     needs: resolve
     if: ${{ !inputs.skip_build }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
       - uses: actions/checkout@v7.0.1
@@ -389,7 +389,7 @@ jobs:
     name: Build ${{ matrix.app }} via Docker push
     needs: [resolve, open-acr]
     if: ${{ !inputs.skip_build }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -721,7 +721,7 @@ jobs:
     name: Verify image signatures (cosign)
     needs: [resolve, build]
     if: ${{ !cancelled() && !inputs.skip_build && needs.resolve.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       # Needed for scripts/ci/deploy-classify.mjs and
       # scripts/ci/assert-acr-image-tags.sh — the gates below distinguish
@@ -947,7 +947,7 @@ jobs:
     # is nothing open and nothing to close — releasing a lease for an empty
     # registry name just adds a confusing red job to an already-failed run.
     if: always() && !inputs.skip_build && needs.resolve.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
       - uses: actions/checkout@v7.0.1
@@ -1012,7 +1012,7 @@ jobs:
     # where the guards above allow it (the lenient partial-build path), but a
     # cancelled run now actually stops.
     if: ${{ !cancelled() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
@@ -1119,7 +1119,7 @@ jobs:
     name: Publish DLZ template + wire deploy env
     needs: [resolve, redeploy-with-apps]
     if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Azure login
@@ -1238,7 +1238,7 @@ jobs:
     name: Post-deploy Copilot quality evals (fire-and-forget)
     needs: [resolve, redeploy-with-apps]
     if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
@@ -1283,7 +1283,7 @@ jobs:
     name: Notify final state
     needs: [resolve, build, close-acr, redeploy-with-apps]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
       # Was: a comment on `issue_number: 279` - a CLOSED roadmap issue with 289

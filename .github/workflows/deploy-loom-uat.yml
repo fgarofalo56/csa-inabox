@@ -255,7 +255,7 @@ env:
 jobs:
   deploy:
     name: Build UAT image + create/refresh the loom-uat job
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # The UAT image carries the console build plus Playwright browsers; it is the
     # heaviest of the four job images.
     timeout-minutes: 90
