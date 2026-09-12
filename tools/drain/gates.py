@@ -136,7 +136,14 @@ def scan_closing_keywords(text: str) -> ClosingScan:
 #: `gh-4487` did not -- while the docstring claimed "the same reference shapes
 #: as CLOSING_RE ... one alphabet, two questions". `CLOSING_RE.flags` is 34 and
 #: this was 32; a reviewer read the flags rather than the sentence.
-BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)
+#: The boundaries exclude alphanumerics and `-`, NOT `_`. `\w` includes
+#: underscore, so `_#4488_` -- ordinary Markdown emphasis -- resolved to
+#: nothing, and a missed mention can only LOSE an escalation, which is the
+#: wrong direction for a control that fails closed everywhere else. `*#4487*`
+#: already worked, which is what made the gap easy to miss.
+BARE_REF_RE = re.compile(
+    r"(?<![0-9A-Za-z-])(?:\#|GH-)(?P<num>\d+)(?![0-9A-Za-z-])", re.IGNORECASE
+)
 _QUALIFIED_REF_RE = re.compile(
     r"(?P<slug>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)"
     r"(?:\#|/issues/)(?P<num>\d+)(?![\w-])",
@@ -560,28 +567,72 @@ def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | N
     Half of all parallel double-reviews. The property wanted is "a block
     occurred", so the reduction is the same conjunction `reduce_verdicts` uses.
 
-    A blocking token ANYWHERE in a verdict-bearing window wins, not only on the
-    announcing line -- `_token_of` reads marker lines only, so the docstring
-    that claimed this asymmetry before did not have it. Formatting may refuse to
-    GRANT an approval; it must never REDUCE a block.
+    POSITION, NOT IDIOM -- and the two reviewers disagreed about this, so the
+    module's own principle decides it.
+
+    Round 6, reviewer A: the docstring claimed a blocking token ANYWHERE in the
+    window wins, and `_token_of` reads the announcing line only, so the claim
+    described code that did not exist. They offered two remedies -- narrow the
+    sentence, or add a flat scan. I added the flat scan.
+
+    Round 7, reviewer B measured what that costs:
+
+        "## Independent review - APPROVE
+
+         Addresses the prior REQUEST-CHANGES cleanly; retested end to end."
+                                        -> REQUEST-CHANGES
+
+    A clean approval read as a block because its prose NAMED one. That is
+    verbatim the hazard `_token_of`'s own docstring records as deliberately
+    avoided: "an approving review whose prose mentioned the other spellings
+    registered as a block". The two reviewers' inputs are the same SHAPE -- a
+    token in prose below an announcing line -- so no rule can satisfy both, and
+    the one that matches the rest of this module is the announcing line.
+
+    ONE POPULATION, NOT TWO. This delegates to `parse_verdicts` rather than
+    re-parsing, and that is the whole design. The hand-rolled version was
+    STRICTER than the gate it feeds: it required a well-formed marker line, so
+    four shapes that gate 2+3 blocks on went unseen, and each one merged on a
+    single approval after a push. A reviewer measured all four end to end:
+
+        "Re-review - REQUEST-CHANGES"                  (marker misspelled)
+        a block below a one-line preamble              (marker not first)
+        "Independent re-review - CHANGES REQUIRED"     (block spelled wrong)
+        a fenced relay of the header                   (marker cited)
+
+    The third is the sharpest. `review_requirement` carries a dedicated
+    `"CHANGES REQUIRED"` branch, with an arm and a direct unit test -- and the
+    only production producer of `prior_verdict` could never emit a string
+    containing it. That is verbatim the defect this round claimed to repair one
+    function over: a trigger proved against the FUNCTION and never against the
+    CALLER feeding it.
+
+    `parse_verdicts` already answers "did anything blocking happen here", across
+    every marker shape, every token spelling, and quoted/fenced/collapsed text,
+    with the near-miss machinery three reviews built. A block is a blocking live
+    verdict OR a blocking near-miss. Sharing it also removes the over-firing the
+    OTHER reviewer measured: a comment whose FIRST line announces APPROVE is a
+    live APPROVE, so prose beneath it -- citing a prior round, linking one,
+    quoting one -- reports nothing. Both complaints, one answer.
+
+    The head_date passed is the earliest comment's, so nothing is pinned out:
+    this asks about the whole history on purpose.
     """
-    approving: str | None = None
-    for comment in comments:
-        head = (comment.get("body") or "")[:window]
-        if not _marker_lines(head):
-            continue
-        for line in head.splitlines():
-            blocking = next(
-                (t for t in BLOCKING_TOKENS
-                 if t in line and not all(v in line for v in VERDICT_TOKENS)),
-                None,
-            )
-            if blocking:
-                return blocking
-        token, _ = _token_of(head)
-        if token and approving is None:
-            approving = token
-    return approving
+    if not comments:
+        return None
+    earliest = min(
+        (c.get("created_at") or "" for c in comments), default=""
+    ) or "0000-01-01T00:00:00Z"
+    live, near = parse_verdicts(comments, earliest, window)
+    blocking = next((v.token for v in live if v.token in BLOCKING_TOKENS), None)
+    if blocking:
+        return blocking
+    if any(n.blocks for n in near):
+        # A near-miss has no token by construction -- that is what makes it a
+        # near-miss. It is reported as the canonical block because what
+        # `review_requirement` asks is whether one occurred, not which spelling.
+        return "REQUEST-CHANGES"
+    return next((v.token for v in live), None)
 
 
 def parse_verdicts(

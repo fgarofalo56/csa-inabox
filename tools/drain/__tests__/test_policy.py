@@ -422,18 +422,96 @@ def test_negative_control_the_verdict_history_reduces_worst_first_not_by_time():
     assert gates.worst_verdict_in_history([]) is None
 
 
-def test_negative_control_a_block_below_the_announcing_line_still_counts():
-    """`_token_of` reads MARKER LINES only, so a worst-first rule applied to its
-    output covers the announcing line and nothing else -- while an earlier
-    docstring claimed the token won "ANYWHERE in a verdict-bearing window". That
-    was a claim the code did not support. Formatting may refuse to GRANT an
-    approval; it must never REDUCE a block. Kills MG17."""
-    hedged = [_verdict(
+def test_the_verdict_is_read_from_the_announcing_line_and_not_from_prose():
+    """THE ONE PLACE THE TWO REVIEWERS DISAGREED, resolved by this module's own
+    principle rather than by recency.
+
+    Round 6, reviewer A: the docstring claimed a blocking token ANYWHERE in the
+    window wins, while `_token_of` reads the announcing line only -- a claim
+    about code that did not exist. They offered two remedies: narrow the
+    sentence, or add a flat scan. I added the flat scan.
+
+    Round 7, reviewer B measured what it cost: a clean approval whose prose
+    NAMED a prior block read as a block. That is verbatim the hazard
+    `_token_of`'s docstring records as deliberately avoided -- "an approving
+    review whose prose mentioned the other spellings registered as a block".
+
+    Their two inputs are the SAME SHAPE, a token in prose below an announcing
+    line, so no rule satisfies both. POSITION, not idiom, is the rule the rest
+    of this module is built on, so it wins here too. Kills MG17."""
+    # Reviewer B's input: an approval that cites a block must stay an approval.
+    cites_a_block = [_verdict(
         1, "2026-09-12T06:00:00Z",
-        "## Independent review - APPROVE\n\nbut on reflection: REQUEST-CHANGES, "
-        "the lane route is still open.",
+        "## Independent review - APPROVE\n\nAddresses the prior REQUEST-CHANGES "
+        "cleanly; retested end to end.",
     )]
-    assert gates.worst_verdict_in_history(hedged) == "REQUEST-CHANGES"
+    assert gates.worst_verdict_in_history(cites_a_block) == "APPROVE"
+
+    # ...and the asymmetry that DOES exist, and is enough: within the announcing
+    # line, tokens are read in VERDICT_TOKENS order, so a hedged header resolves
+    # to the block. Formatting cannot REDUCE a block; it just has to be on the
+    # line that announces.
+    hedged_header = [_verdict(
+        1, "2026-09-12T06:00:00Z",
+        "## Independent review - APPROVE / REQUEST-CHANGES on the lane route",
+    )]
+    assert gates.worst_verdict_in_history(hedged_header) == "REQUEST-CHANGES"
+
+
+def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_blocks_on():
+    """ONE POPULATION, NOT TWO. The hand-rolled scan was STRICTER than the gate
+    it feeds -- it required a well-formed marker line -- so four shapes gate 2+3
+    blocks on raised no count at all, and each merged on a single approval after
+    a push. A reviewer measured all four end to end through the composed gate.
+
+    The third is the sharpest: `review_requirement` carries a dedicated
+    `"CHANGES REQUIRED"` branch with an arm and a direct unit test, and the only
+    production producer of `prior_verdict` could never emit a string containing
+    it. A trigger proved against the FUNCTION and never against the CALLER --
+    verbatim the defect the same round claimed to repair one function over.
+
+    Kills MG17, MG27."""
+    shapes = {
+        "misspelled marker": "Re-review - REQUEST-CHANGES\n\nthe lane route is open.",
+        "marker not first": "Quick note before the verdict.\n\n"
+                            "Independent review - REQUEST-CHANGES",
+        "block spelled wrong": "## Independent re-review - CHANGES REQUIRED\n\nno.",
+        "marker relayed in a fence": "```\nIndependent review - REQUEST-CHANGES\n```",
+    }
+    for label, body in shapes.items():
+        assert gates.worst_verdict_in_history(
+            [_verdict(1, "2026-09-12T06:00:00Z", body)]
+        ) == "REQUEST-CHANGES", label
+        # ...and gate 2+3 agrees, which is the point of sharing the population.
+        live, near = gates.parse_verdicts(
+            [_verdict(1, "2026-09-12T06:00:00Z", body)], "2026-09-12T05:00:00Z"
+        )
+        blocked, _why = gates.reduce_verdicts(live, near)
+        assert not blocked, label
+
+
+def test_negative_control_prose_under_an_approve_header_reports_nothing():
+    """The other reviewer's complaint, and the same fix answers it. A comment
+    whose FIRST line announces APPROVE is a LIVE APPROVE, so `parse_verdicts`
+    emits no near-miss and the prose beneath it -- citing a prior round, linking
+    one, quoting one, showing one in a fence -- cannot turn it into a block.
+
+    All five of these read as blocks under the hand-rolled flat scan, including
+    the first, which is the ordinary opening sentence of a re-review."""
+    approvals = [
+        ("## Independent re-review - APPROVE\n\nRound 6's REQUEST-CHANGES findings "
+        "are all discharged."),
+        ("## Independent re-review - APPROVE\n\nSee .../pull/1#issuecomment-1 "
+        "(REQUEST-CHANGES, round 5)."),
+        ("## Independent re-review - APPROVE\n\n- fix(drain): stop emitting "
+        "REQUEST-CHANGES on a template line"),
+        "## Independent re-review - APPROVE\n\n> Independent review - REQUEST-CHANGES",
+        "## Independent re-review - APPROVE\n\n```\nREQUEST-CHANGES\n```",
+    ]
+    for body in approvals:
+        assert gates.worst_verdict_in_history(
+            [_verdict(1, "2026-09-12T06:00:00Z", body)]
+        ) == "APPROVE", body[:60]
 
 
 def test_negative_control_the_history_scan_does_not_pin_to_the_head():
@@ -477,6 +555,18 @@ def test_negative_control_a_bare_reference_scan_does_not_invent_references():
     must_match = [
         ("Refs #4487 - stays open", [4487]),
         ("see GH-4468 for context", [4468]),
+        # LOWERCASE, which is the regression MG24 names and which the first
+        # version of this list did not carry: `GH-` matches the literal with or
+        # without the flag, so the uppercase case cannot tell the two apart.
+        # MG24 SURVIVED on that. The example in an arm's name has to be IN a
+        # fixture, or the arm is pinned by its own prose.
+        ("see gh-4468 for context", [4468]),
+        # Markdown emphasis, both spellings. `_` is a `\w` character, so an
+        # underscore-emphasised reference resolved to nothing while the asterisk
+        # form worked -- and a MISSED mention can only lose an escalation, the
+        # wrong direction for a control that fails closed everywhere else.
+        ("_#4488_ is the harness PR", [4488]),
+        ("*#4487* is the receipt issue", [4487]),
         (f"tracked at {repo}#4485", [4485]),
         (f"https://github.com/{repo}/issues/4485", [4485]),
     ]

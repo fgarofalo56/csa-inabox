@@ -32,13 +32,18 @@ Scope and autonomy are already decided — do not re-ask them:
     resolved, which FAILS CLOSED. merge_gate gate 3b re-decides on real evidence
     — the actual changed files, the first posted verdict, and the stream read
     from the ledger via the issues your PR references — and it can RAISE the
-    count, not only confirm it. DECLARE your close (`Closes #N` in the body,
-    plus `--allow-close N`) or the stream cannot be resolved and you owe two
-    reviewers: a bare `Refs #N` is an aside, good enough to raise the count when
-    it names an escalating item and not good enough to lower it, because a
-    stale copy-pasted number must never buy a weaker gate. Run the gate from
-    the PRIMARY checkout if you can; from a worktree it falls back to the
-    primary's ledger via git's common dir, and if that fails it escalates.
+    count, not only confirm it.
+  - EXPECT TWO REVIEWERS ON EVERYTHING, for now. The one-reviewer path needs a
+    DECLARED close (`Closes #N` + `--allow-close N`) of an item the harness has
+    IN FLIGHT — and `--allow-close` is itself refused until that item holds its
+    receipt, which none of the 299 do yet. So `Refs #N` plus two reviewers is
+    the normal path today, and it always works. This is a measured consequence,
+    not an oversight: a bare `Refs #N` is an aside, good enough to raise the
+    count and not good enough to lower it, because a stale copy-pasted number
+    must never buy a weaker gate. It relaxes on its own as items earn receipts.
+    Run the gate from the PRIMARY checkout if you can; from a worktree it falls
+    back to the primary's ledger via git's common dir, and if that fails it
+    escalates.
   - G1 receipts come from Playwright against the live console; park the item
     only if auth fails.
   - policy.json is the authority for what you may not do. It fails closed.
@@ -78,8 +83,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 290 pass
-python tools/drain/mutate_gates.py       # 139 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 294 pass
+python tools/drain/mutate_gates.py       # 144 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

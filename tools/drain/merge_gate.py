@@ -27,7 +27,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from ledger import Ledger
+from ledger import AWAITING_RECEIPT, IN_FLIGHT, IN_REVIEW, Ledger
+from ledger import _now as _ledger_now
 
 import gates
 
@@ -132,13 +133,31 @@ def ledger_candidates(state_path: str | None = None) -> list[str]:
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
             capture_output=True, text=True, cwd=REPO_ROOT, timeout=20, check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"WARNING: cannot ask git for the primary checkout ({exc}) - "
+              "no worktree fallback, so an unresolvable stream will escalate",
+              file=sys.stderr)
         return found
-    if common.returncode == 0 and common.stdout.strip():
-        primary = os.path.dirname(common.stdout.strip().rstrip("/"))
-        candidate = os.path.join(primary, "tools", "drain", "state.json")
-        if os.path.abspath(candidate) != os.path.abspath(found[0]):
-            found.append(candidate)
+    if common.returncode != 0 or not common.stdout.strip():
+        # NEVER SILENT. `--path-format` needs git >= 2.31, so on an older host
+        # the fallback simply vanishes and every PR escalates with nothing
+        # saying why -- MG21's symptom, undiagnosable. `sh()` three functions up
+        # states this file's standard: never discard stderr (R7).
+        print(f"WARNING: git could not resolve the common dir (rc="
+              f"{common.returncode}): {(common.stderr or '').strip()[:200]} - "
+              "no worktree fallback", file=sys.stderr)
+        return found
+    primary = os.path.dirname(common.stdout.strip().rstrip("/"))
+    candidate = os.path.join(primary, "tools", "drain", "state.json")
+    # The primary must look like THIS package, not merely like a repo that
+    # happens to carry `tools/drain/state.json`. A reviewer could not construct
+    # a realistic path to a foreign ledger -- a linked worktree's `.git` always
+    # points at its owner -- but a `GIT_COMMON_DIR` override or a vendored copy
+    # would, and reading another repo's ledger is the wrong-population defect
+    # `guard_refresh` spends a hundred lines on.
+    if (os.path.abspath(candidate) != os.path.abspath(found[0])
+            and os.path.exists(os.path.join(primary, "tools", "drain", "policy.json"))):
+        found.append(candidate)
     return found
 
 
@@ -163,13 +182,85 @@ def load_ledger(policy: dict, state_path: str | None = None
             return Ledger(path, receipts=policy["receipts"]).load(), path
         except SystemExit as exc:          # schema mismatch: deliberate refusal
             return None, f"ledger at {path} refused to load: {exc}"
-        except (OSError, ValueError) as exc:   # JSONDecodeError is a ValueError
+        except Exception as exc:
+            # ENUMERATING THE TYPES WAS THE NARROWER-ENUMERATION SHAPE AGAIN.
+            # `OSError, ValueError` covered `JSONDecodeError` and missed four
+            # ordinary hand-edit shapes a reviewer measured: a top-level array
+            # or string (`AttributeError` from `raw.get`), an item missing
+            # `number` (`TypeError` from `Item(**...)`), and `items` as a dict
+            # (`AttributeError`). `state.json` is hand-edited today -- the
+            # README says so in this same round -- so a dropped key is the
+            # ordinary case, and it ended the program that decides every merge
+            # on a traceback (R6). A function whose contract is "never raises"
+            # cannot have an exception allow-list.
             return None, f"ledger at {path} is unreadable: {type(exc).__name__}: {exc}"
     return None, f"no ledger at any of {tried}"
 
 
+#: States `select_cycle` puts an item into and that nothing has closed out.
+#: Membership here is HARNESS-generated evidence that an item is live work --
+#: the only kind of corroboration a merge gate can trust, since everything else
+#: on a PR is typed by its author.
+SCHEDULED_STATES = (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT)
+
+
+def poached_closes(closing: list[int], policy: dict, state_path: str | None = None,
+                   pr: int | None = None) -> list[str]:
+    """Declared closes the ledger has bound to a DIFFERENT PR.
+
+    Read-only, and SILENT when it cannot tell: no ledger, or no binding, is not
+    evidence of a conflict. It reports only the case where the harness's own
+    record disagrees with the declaration -- which is the one thing on a PR that
+    was not typed by its author.
+    """
+    if not closing or pr is None:
+        return []
+    led, _why = load_ledger(policy, state_path)
+    if led is None:
+        return []
+    return [
+        f"#{n} is bound to PR {led.items[n].pr}"
+        for n in closing
+        if n in led.items and led.items[n].pr not in (None, pr)
+    ]
+
+
+def bind_pr(numbers: list[int], pr: int, policy: dict,
+            state_path: str | None = None) -> list[str]:
+    """Record that `pr` is the PR claiming these items. First writer wins.
+
+    The ONLY write this module makes, and it is made from `main()` under
+    `--allow-close`, never from `run_gates` -- a gate that mutates the thing it
+    is measuring is a different kind of program.
+
+    `Item.pr` has existed since the ledger was written and had no writer, so the
+    correlation a reviewer asked for could not be checked. This accrues it: the
+    first PR to declare a close binds the item, and `poached_closes` refuses the
+    second. It does not prove the FIRST claim was right -- nothing available to
+    a merge gate can -- but it makes a repeat loud, and a repeat is the failure
+    mode that was actually named.
+    """
+    led, why = load_ledger(policy, state_path)
+    if led is None:
+        return [f"binding not recorded: {why}"]
+    bound = []
+    for number in numbers:
+        item = led.items.get(number)
+        if item is None or item.pr == pr:
+            continue
+        if item.pr is not None:
+            continue                      # poached_closes already blocked this
+        item.pr = pr
+        item.history.append(f"{_ledger_now()} bound to PR {pr} (declared close)")
+        bound.append(f"#{number} -> PR {pr}")
+    if bound:
+        led.save()
+    return bound
+
+
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
-                  state_path: str | None = None) -> tuple[str | None, str]:
+                  state_path: str | None = None,
+                  pr: int | None = None) -> tuple[str | None, str]:
     """Which STREAM this PR's work belongs to, for the escalation decision.
 
     Returns `(stream, why)`, and `stream is None` means UNKNOWN -- which the
@@ -192,12 +283,35 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     the ordinary case, and `KICKOFF.md` reuses `#4468` as an example number
     throughout its own text.
 
-    The epistemics are the fix. `Closes #N` is an ASSERTION about what this PR
-    IS, made deliberately, and gate 6 refuses it unless it is also declared with
-    `--allow-close` -- so it is corroborated. `Refs #N` is an ASIDE. An aside is
-    good enough to raise the requirement (it can only cost a second reviewer)
-    and not good enough to lower it. So a mention in an escalating stream
-    escalates; otherwise the stream is known only from a closing reference.
+    `Refs #N` is an ASIDE. An aside is good enough to RAISE the requirement --
+    it can only cost a second reviewer -- and not good enough to LOWER it.
+
+    A DECLARED CLOSE IS NOT CORROBORATION EITHER, and round 6 said it was.
+
+    That round's fix leant on `Closes #N` + `--allow-close` being deliberate,
+    and reviewer B reproduced the same inversion straight through it: a PR
+    citing an unrelated, already-receipted `W9-rest` item got ONE reviewer where
+    no reference at all forced two. `--allow-close` is an author DECLARATION.
+    It establishes that the author said so. It does not establish that the
+    issue is what the diff is about, and asserting it did was an R7 error in
+    prose -- in a round whose whole subject was an R7 error in prose.
+
+    So the corroboration has to be evidence the HARNESS produced, not evidence
+    the author typed. Two kinds exist:
+
+    - `item.pr == pr` -- the ledger already binds that item to THIS PR.
+    - the item is MID-FLIGHT (`in-flight` / `in-review` / `awaiting-receipt`) --
+      `select_cycle` put it in a lane and nothing has closed it out. A `ready`
+      item was never scheduled; a TERMINAL one is finished. Neither is evidence
+      that a PR opened now is work on it, and reviewer B's exploit used exactly
+      that shape: an item whose work was already done.
+
+    Without one of those, a declared close is treated like a mention: it may
+    escalate, it may not explain. `Item.pr` has no production writer yet, which
+    is why the mid-flight test carries the weight today; `main()` now writes the
+    binding when it honours `--allow-close`, so it accrues, and gate 6 refuses a
+    close of an item already bound to a DIFFERENT PR -- which is the
+    copy-paste-across-invocations case B named, made loud.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
     `reduce_verdicts` uses. A PR touching a W9-rest item and a W1-deploy item is
@@ -210,24 +324,66 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     if led is None:
         return None, f"{why}, so the stream cannot be resolved"
     escalating = gates.escalation_streams(policy)
+    # NAME THE LEDGER. With the worktree fallback live, a lane can now be
+    # deciding on a ledger from a checkout it does not control, at a freshness
+    # it cannot see -- and this module's own R2 machinery names stale-ledger
+    # reads as a live hazard. `why` carries the resolved path on success.
+    source = f" [ledger: {why}]"
 
     hit = next((led.items[n].stream for n in every
                 if n in led.items and led.items[n].stream in escalating), None)
     if hit:
-        return hit, f"#{every} sits in {hit}"
+        return hit, f"#{every} sits in {hit}{source}"
 
-    declared = [n for n in closing if n in led.items]
-    if declared:
-        stream = led.items[declared[0]].stream
-        return stream, f"#{declared} is declared closed and sits in {stream}"
+    # The BINDING dominates the state test. An item already bound to another PR
+    # is that PR's work, and being mid-flight is evidence FOR THAT PR, not for
+    # this one -- which is precisely the case gate 6 refuses two lines later.
+    corroborated = [
+        n for n in closing
+        if n in led.items and (
+            led.items[n].pr == pr if led.items[n].pr is not None
+            else led.items[n].state in SCHEDULED_STATES
+        )
+    ]
+    if corroborated:
+        # The STRONGEST, not the lowest-numbered. `corroborated[0]` reported
+        # whichever issue number sorted first, which is the answer-depends-on-
+        # ordering shape MG13 exists to forbid -- cosmetic while every
+        # escalating stream is already taken by `hit` above, and cosmetic is
+        # still a message that can be wrong.
+        streams = sorted({led.items[n].stream for n in corroborated})
+        return streams[0], (
+            f"#{corroborated} is declared closed, is work the harness has in "
+            f"flight, and sits in {'/'.join(streams)}{source}"
+        )
 
+    stale = [n for n in closing if n in led.items]
+    if stale:
+        return None, (
+            f"#{stale} is declared closed but the ledger has it in "
+            f"{led.items[stale[0]].state!r} and bound to PR {led.items[stale[0]].pr} "
+            "- the harness never scheduled this as work in flight, so the "
+            f"declaration is the author's word alone and the stream is unknown{source}"
+        )
+    # NUMBERS DECLARED CLOSED BUT ABSENT FROM THE LEDGER GET THEIR OWN SENTENCE.
+    # Folding them into "only MENTIONED" asserted something the code did not
+    # establish -- it established that they are not in the ledger (R7). Same
+    # class as the "was taken under None" message this round repairs in
+    # `ledger.py`, and the remedy is different: re-seed, or the number is stale.
+    unknown_closes = sorted(set(closing) - set(led.items))
+    if unknown_closes:
+        return None, (
+            f"#{unknown_closes} is declared closed but is not in the ledger at "
+            "all - either the ledger needs re-seeding (tick.py --bootstrap) or "
+            f"the number is stale, so the stream is unknown{source}"
+        )
     if any(n in led.items for n in every):
         return None, (
-            f"#{every} is only MENTIONED, not declared closed, and sits in no "
-            "escalating stream - a mention is not evidence of what this PR is, "
-            "so the stream is unknown"
+            f"#{sorted(set(mentioned) & set(led.items))} is only MENTIONED, not "
+            "declared closed, and sits in no escalating stream - a mention is "
+            f"not evidence of what this PR is, so the stream is unknown{source}"
         )
-    return None, f"none of {every} is in the ledger, so the stream is unknown"
+    return None, f"none of {every} is in the ledger, so the stream is unknown{source}"
 
 
 def required_contexts(repo: str) -> list[str]:
@@ -456,7 +612,8 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     prior_verdict = gates.worst_verdict_in_history(
         data["comments"], policy["verdict_parsing"]["token_window_chars"]
     )
-    stream, why_stream = ledger_stream(will_close, mentioned, policy, state_path)
+    stream, why_stream = ledger_stream(will_close, mentioned, policy, state_path,
+                                       pr=pr.get("number"))
     needed, why_needed = gates.review_requirement(
         policy,
         changed_paths=changed,
@@ -539,13 +696,24 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # squash commit closed an issue. The UNION is the answer, never the
     # intersection.
     undeclared = sorted(set(will_close) - set(allow_close))
+    # AN ITEM ALREADY BOUND TO A DIFFERENT PR IS NOT THIS PR'S TO CLOSE.
+    #
+    # `--allow-close N` is an author DECLARATION, not corroboration -- round 6
+    # claimed otherwise and a reviewer walked straight through it. The ledger's
+    # own binding is the one piece of evidence the harness produced itself, so
+    # a second PR citing a number the first already claimed is refused rather
+    # than silently believed. That is precisely the copy-paste-across-
+    # invocations case the reviewer named: the drain runs this command hundreds
+    # of times across one backlog.
+    poached = poached_closes(will_close, policy, state_path, pr=pr.get("number"))
     record(
         "6 closing-keyword scan (body + commit trail)",
-        not undeclared,
+        not undeclared and not poached,
         (f"UNDECLARED auto-close of {undeclared} - an auto-close bypasses the ledger, so the "
          f"item never gets the receipt its class requires. Remove the keyword, or declare it "
          f"with --allow-close {','.join(str(n) for n in undeclared)}. "
          if undeclared else "nothing in this merge closes an issue. ")
+        + (f"POACHED: {poached} - the ledger binds those to another PR. " if poached else "")
         + f"will close {will_close} | near-miss {sorted(set(scan.near))} | "
         f"closingIssuesReferences says {api_says} "
         "(that field is NOT a complete oracle - it read empty while a squash commit "
@@ -626,6 +794,17 @@ def main() -> int:
         if not ok:
             print(f"refusing --allow-close {number}: {why}", file=sys.stderr)
             return 2
+    # ...and REFUSE one the ledger already binds to another PR, before binding
+    # anything. A receipt of the right kind says the WORK is done; it says
+    # nothing about whether THIS PR is the work. The binding is the only
+    # correlation available, so the conflict check runs first and the write
+    # second -- first writer wins, and the second is loud.
+    poached = poached_closes(allow_close, policy, pr=args.pr)
+    if poached:
+        print(f"refusing --allow-close: {'; '.join(poached)}", file=sys.stderr)
+        return 2
+    for line in bind_pr(allow_close, args.pr, policy):
+        print(f"ledger: {line}")
 
     data = collect(repo, args.pr)
     result = run_gates(data, policy, allow_close)

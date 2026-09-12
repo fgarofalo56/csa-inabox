@@ -29,6 +29,7 @@ matrix is exactly what they looked like:
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -281,7 +282,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "MG4 gate 6 is informational again - an undeclared auto-close stops blocking",
         "merge_gate.py",
-        "        not undeclared,",
+        "        not undeclared and not poached,",
         "        True,",
     ),
     (
@@ -759,23 +760,39 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("MG16 the verdict history reduces by TIME again, so whichever of two "
          "parallel reviewers posts first decides the count"),
         "gates.py",
-        "    approving: str | None = None",
-        ("    approving: str | None = None\n"
-         "    comments = sorted(comments, key=lambda c: c.get('created_at', ''))[:1]"),
+        "    live, near = parse_verdicts(comments, earliest, window)",
+        ("    comments = sorted(comments, key=lambda c: c.get('created_at', ''))[:1]\n"
+         "    live, near = parse_verdicts(comments, earliest, window)"),
     ),
     (
-        ("MG17 the worst-first rule is applied to the ANNOUNCING LINE only, so a "
-         "block below a hedged header is reduced to an approval"),
+        ("MG17 the verdict history re-parses the comments ITSELF, stricter than "
+         "the gate it feeds, so four block shapes go unseen"),
         "gates.py",
-        "        for line in head.splitlines():",
-        "        for line in head.splitlines()[:1]:",
+        "    if any(n.blocks for n in near):",
+        "    if False:",
+    ),
+    (
+        ("MG27 the history scan requires a well-formed MARKER, so a misspelled "
+         "header or a block below a preamble stops raising the count"),
+        "gates.py",
+        "    live, near = parse_verdicts(comments, earliest, window)",
+        ("    comments = [c for c in comments\n"
+         "                if _marker_lines((c.get('body') or '')[:window])]\n"
+         "    live, near = parse_verdicts(comments, earliest, window)"),
+    ),
+    (
+        ("MG28 the history scan PINS to the latest comment instead of the "
+         "earliest, so a push voids the escalation after all"),
+        "gates.py",
+        '    ) or "0000-01-01T00:00:00Z"',
+        '    ) and max((c.get("created_at") or "" for c in comments), default="z")',
     ),
     (
         ("MG18 the bare-reference scan loosens back to `#\\d+`, so a hex colour "
          "and a heading anchor resolve as issue numbers"),
         "gates.py",
-        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)',
-        r'BARE_REF_RE = re.compile(r"(?:\#|GH-)(?P<num>\d+)", re.IGNORECASE)',
+        r'    r"(?<![0-9A-Za-z-])(?:\#|GH-)(?P<num>\d+)(?![0-9A-Za-z-])", re.IGNORECASE',
+        r'    r"(?:\#|GH-)(?P<num>\d+)", re.IGNORECASE',
     ),
     (
         ("MG19 a QUALIFIED reference is accepted whatever repo it names, so "
@@ -788,22 +805,47 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("MG20 the ledger load stops being caught, so a corrupt per-machine "
          "scratch file ends the program that decides every merge on a traceback"),
         "merge_gate.py",
-        "        except (OSError, ValueError) as exc:   # JSONDecodeError is a ValueError",
-        "        except KeyboardInterrupt as exc:",
+        ("        except Exception as exc:\n"
+        "            # ENUMERATING THE TYPES WAS THE NARROWER-ENUMERATION SHAPE AGAIN."),
+        ("        except json.JSONDecodeError as exc:\n"
+        "            # narrowed"),
     ),
     (
         ("MG21 a worktree stops falling back to the primary checkout, so the "
          "stream never resolves and EVERY PR escalates"),
         "merge_gate.py",
-        "            found.append(candidate)",
-        "            pass",
+        "        found.append(candidate)",
+        "        pass",
+    ),
+    (
+        ("MG29 the fallback accepts ANY directory carrying a state.json, so a "
+         "foreign repo's ledger resolves this repo's issue numbers"),
+        "merge_gate.py",
+        ('            and os.path.exists(os.path.join(primary, "tools", "drain", '
+        '"policy.json"))'),
+        "            and True",
     ),
     (
         ("MG22 a bare MENTION explains a non-escalating stream again, so a stale "
          "copy-pasted `#N` buys a WEAKER gate than referencing nothing"),
         "merge_gate.py",
-        "    declared = [n for n in closing if n in led.items]",
-        "    declared = [n for n in every if n in led.items]",
+        "        n for n in closing\n        if n in led.items and (",
+        "        n for n in every\n        if n in led.items and (",
+    ),
+    (
+        ("MG25 a DECLARED close corroborates on the author's word alone, so an "
+         "unrelated already-finished item resolves the stream"),
+        "merge_gate.py",
+        ("            led.items[n].pr == pr if led.items[n].pr is not None\n"
+         "            else led.items[n].state in SCHEDULED_STATES"),
+        "            True",
+    ),
+    (
+        ("MG26 a close of an item bound to ANOTHER PR stops being refused, so "
+         "the copy-paste across invocations is silent again"),
+        "merge_gate.py",
+        "        if n in led.items and led.items[n].pr not in (None, pr)",
+        "        if False",
     ),
     (
         ("MG23 a mention of an ESCALATING item stops escalating, which is the "
@@ -818,8 +860,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("MG24 the reference alphabet loses IGNORECASE, so `gh-4487` resolves "
          "nothing while `GH-4487` resolves"),
         "gates.py",
-        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)',
-        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])")',
+        r'r"(?<![0-9A-Za-z-])(?:\#|GH-)(?P<num>\d+)(?![0-9A-Za-z-])", re.IGNORECASE',
+        r'r"(?<![0-9A-Za-z-])(?:\#|GH-)(?P<num>\d+)(?![0-9A-Za-z-])"',
     ),
     (
         ("L25 a receipt with NO stamp is reported as a reclassification, sending "
@@ -1022,6 +1064,19 @@ def _reports_a_failure(stdout: str) -> bool:
     return any(marker in stdout for marker in _FAILURE_MARKERS)
 
 
+_PASSED_RE = re.compile(r"(\d+) passed")
+
+
+def _passed_count(stdout: str) -> int:
+    """How many tests pytest reported passing. -1 when it did not say.
+
+    Used only to prove the `--deselect` took effect. -1 rather than 0 so a
+    missing summary can never satisfy an equality check by accident.
+    """
+    match = _PASSED_RE.search(stdout)
+    return int(match.group(1)) if match else -1
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -1053,8 +1108,29 @@ def main() -> int:
             text = (sandbox / name).read_text(encoding="utf-8", newline="").replace("\r\n", "\n")
             (sandbox / name).write_text(text, encoding="utf-8", newline="")
             originals[name] = text
+        # THE ANCHOR META-TEST CANNOT BE IN THE SANDBOX'S DECISION PATH.
+        #
+        # It asserts every arm's needle appears exactly once in the CURRENT
+        # sources -- and inside the sandbox, "current" means the MUTATED copy,
+        # where the running arm has just removed its own needle. So it failed on
+        # every arm, `_reports_a_failure` saw FAILED, and every arm scored
+        # KILLED whether or not any behavioural test noticed. "141 KILLED / 0
+        # survived" became a tautology: the one instrument this package offers
+        # as evidence its suite is not blind could no longer report a survivor,
+        # and it was already hiding one (MG24). Measured by a reviewer who
+        # disabled the test and re-ran: 138 killed, 1 SURVIVED.
+        #
+        # Deselected by NODEID rather than skipped by an env flag: a flag read
+        # inside the suite is itself a control nobody can point an arm at, and
+        # this file exists because of exactly that. The CONTROL step below
+        # asserts the deselect actually removed a test, because a mistyped
+        # nodeid is silently accepted by pytest and would restore the defect.
+        deselect = (
+            "__tests__/test_mutate_gates.py::"
+            "test_every_arm_anchor_is_present_and_unique_in_the_current_source"
+        )
         cmd = [sys.executable, "-m", "pytest", str(sandbox / "__tests__"), "-q",
-               "-p", "no:cacheprovider"]
+               "-p", "no:cacheprovider", "--deselect", deselect]
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
         # every red below is noise and the run proves nothing.
@@ -1064,6 +1140,25 @@ def main() -> int:
         if control.returncode != 0:
             print("REFUSING -- control is not green; nothing below would mean anything")
             print(control.stdout[-3000:])
+            return 2
+        # ...and the DESELECT must have removed exactly one test. pytest accepts
+        # a nodeid that matches nothing in silence, so a typo here would put the
+        # meta-test back in the decision path and every arm would score KILLED
+        # on it -- which is the defect this deselect exists to repair, restored
+        # by a spelling. Compared against a run WITHOUT the deselect, because a
+        # count parsed out of `-q` output is a number this file would be
+        # trusting rather than measuring.
+        with_meta = subprocess.run(
+            [c for c in cmd if c not in ("--deselect", deselect)],
+            capture_output=True, text=True, cwd=sandbox,
+        )
+        selected_with = _passed_count(with_meta.stdout)
+        selected_without = _passed_count(control.stdout)
+        print(f"DESELECT  {selected_with} -> {selected_without} tests "
+              f"(the anchor meta-test must not decide an arm)")
+        if with_meta.returncode != 0 or selected_with != selected_without + 1:
+            print("REFUSING -- the deselect did not remove exactly one passing test, "
+                  f"so the nodeid is wrong: {deselect}")
             return 2
 
         killed = survived = skipped = errored = 0

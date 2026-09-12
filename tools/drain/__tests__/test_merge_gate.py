@@ -105,7 +105,14 @@ def _ledger_path() -> str:
         # #4468 is the number every closing-scan fixture uses. W9-rest does NOT
         # escalate by stream, so the control PRs stay one-reviewer and the
         # escalation tests below have to name their own stream.
+        #
+        # IN-FLIGHT, not `ready`: a declared close only corroborates the stream
+        # when the HARNESS put the item in a lane. A `ready` item was never
+        # scheduled and a terminal one is finished, so neither is evidence that
+        # a PR opened now is work on it -- which is the exploit a reviewer used.
+        # The canonical drain PR is one a lane is holding, so the fixture is one.
         led.upsert(4468, "a fixture item", "W9-rest", lane="lane:docs", size=1)
+        led.transition(4468, "in-flight", "selected by a lane")
         led.save()
         _LEDGER["path"] = path
     return _LEDGER["path"]
@@ -440,6 +447,33 @@ def test_negative_control_a_corrupt_ledger_fails_closed_instead_of_raising(tmp_p
     assert "refused to load" in _gate(result, "3b")["detail"]
 
 
+def test_negative_control_every_malformed_ledger_shape_fails_closed(tmp_path):
+    """`except (OSError, ValueError)` was the NARROWER-ENUMERATION shape again.
+    It covered `JSONDecodeError` and missed four ordinary hand-edit shapes a
+    reviewer measured -- and `state.json` is hand-edited today, which the README
+    says out loud in this same round, so a dropped key is the ordinary case.
+
+    A function whose contract is "NEVER raises" cannot have an exception
+    allow-list. Kills MG20."""
+    shapes = {
+        "top-level array": "[]",
+        "top-level string": '"nope"',
+        "item missing `number`": json.dumps(
+            {"schema": 2, "items": [{"title": "x", "stream": "W9-rest"}]}
+        ),
+        "items is a dict": json.dumps({"schema": 2, "items": {"1": "x"}}),
+        "truncated": "{not json",
+    }
+    for label, text in shapes.items():
+        path = tmp_path / f"{abs(hash(label))}.json"
+        path.write_text(text, encoding="utf-8")
+        led, why = merge_gate.load_ledger(POLICY, str(path))   # must not RAISE
+        assert led is None, label
+        assert "unreadable" in why or "refused to load" in why, f"{label}: {why}"
+        result = _run(state_path=str(path))
+        assert result["verdict"] == "NO-GO", label
+
+
 def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_path):
     """`state.json` is gitignored, so it exists in the primary checkout and in
     NO worktree -- measured 371 worktrees on this machine, 1 with a ledger. A
@@ -451,6 +485,11 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
     `referenced_issues` exists to avoid. Kills MG21."""
     primary = tmp_path / "primary"
     (primary / "tools" / "drain").mkdir(parents=True)
+    # `policy.json` is what makes the candidate THIS package rather than any
+    # directory that happens to carry a `tools/drain/state.json` -- the cheap
+    # hardening against a `GIT_COMMON_DIR` override or a vendored copy pointing
+    # at a foreign repo's ledger. Kills MG29.
+    (primary / "tools" / "drain" / "policy.json").write_text("{}", encoding="utf-8")
     (primary / ".git").mkdir()
     worktree_drain = tmp_path / "wt" / "tools" / "drain"
     worktree_drain.mkdir(parents=True)
@@ -470,6 +509,10 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
     # An explicit path short-circuits it -- otherwise every test would depend on
     # whatever git says about the machine it runs on.
     assert merge_gate.ledger_candidates("/x/state.json") == ["/x/state.json"]
+
+    # A directory that carries a state.json but is NOT this package is refused.
+    (primary / "tools" / "drain" / "policy.json").unlink()
+    assert len(merge_gate.ledger_candidates()) == 1
 
 
 def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
@@ -522,11 +565,76 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
                   state_path=path)
     assert not _gate(no_ref, "3b")["ok"]
 
-    # A DECLARED close does resolve it -- otherwise every PR escalates and the
-    # control fires on everything.
+    # A DECLARED close of an item the harness NEVER SCHEDULED does not resolve
+    # it either -- reviewer B walked straight through round 6's fix with exactly
+    # this, using an unrelated item that already held a valid receipt. Round 6
+    # called `--allow-close` corroboration; it is an author DECLARATION, and
+    # saying otherwise was an R7 error in a round whose subject was an R7 error.
+    still_unknown = _run(body="Closes #10", commits=[], allow_close=[10],
+                         state_path=path)
+    assert not _gate(still_unknown, "3b")["ok"]
+    assert "the author's word alone" in _gate(still_unknown, "3b")["detail"]
+
+    # NOW put it in flight. Everything below turns on that, because the
+    # corroboration test is `state in SCHEDULED_STATES`.
+    led.transition(10, "in-flight", "selected by a lane")
+    led.save()
+
+    # THE DISCRIMINATING CASE for the mention/close split, and the one the first
+    # version of this test was missing. A MENTION of a MID-FLIGHT item must
+    # still not resolve the stream -- with #10 in `ready` above, `closing` and
+    # `every` give the same answer, so MG22 SURVIVED a matrix that had just been
+    # repaired enough to report it. A negative control has to differ under the
+    # mutation it is named for.
+    still_a_mention = _run(body="Related to #10 in passing.", commits=[],
+                           state_path=path)
+    assert not _gate(still_a_mention, "3b")["ok"]
+    assert "only MENTIONED" in _gate(still_a_mention, "3b")["detail"]
+
+    # It resolves ONLY when the item is both DECLARED closed and in flight. That
+    # is evidence the harness produced, not evidence the author typed -- the
+    # only kind a merge gate can trust. Otherwise every PR escalates and the
+    # control fires on everything, which is the other reviewer's objection.
     declared = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
     assert _gate(declared, "3b")["ok"], _gate(declared, "3b")["detail"]
-    assert "declared closed" in _gate(declared, "3b")["detail"]
+    assert "in flight" in _gate(declared, "3b")["detail"]
+
+
+def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_path):
+    """The copy-paste-across-invocations case, made loud. `Item.pr` had existed
+    since the ledger was written and had NO writer, so the correlation a
+    reviewer asked for could not be checked at all. `main()` binds it when it
+    honours `--allow-close`, first writer wins, and the second PR to claim the
+    same number is refused rather than silently believed.
+
+    It does not prove the FIRST claim was right -- nothing available to a merge
+    gate can -- but the repeat is the failure mode that was actually named: the
+    drain runs this command hundreds of times across one backlog.
+
+    Kills MG25, MG26."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "x", "W9-rest", lane="lane:docs", size=1)
+    led.transition(10, "in-flight", "selected")
+    led.save()
+
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    assert merge_gate.bind_pr([10], 99, POLICY, path) == ["#10 -> PR 99"]
+    # The SAME PR may re-run the gate as often as it likes.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    # A DIFFERENT PR may not claim it. The fixture PR is #1.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=1) == ["#10 is bound to PR 99"]
+    result = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert not _gate(result, "6 ")["ok"]
+    assert "POACHED" in _gate(result, "6 ")["detail"]
+    # ...and it no longer resolves the stream either: the ledger says that item
+    # is another PR's work, so this PR is again unplaceable.
+    assert not _gate(result, "3b")["ok"]
+    # Silent when it cannot tell: no ledger, or no binding, is not a conflict.
+    assert merge_gate.poached_closes([10], POLICY, str(tmp_path / "none.json"), pr=2) == []
+    assert merge_gate.poached_closes([], POLICY, path, pr=2) == []
 
 
 def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
