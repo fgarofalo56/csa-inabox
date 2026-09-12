@@ -537,9 +537,24 @@ UNANNOUNCED_REASON_BY_KIND = {
         "a comment in this PR's review history announces a verdict and carries "
         "no token on that line, so what it decided is unreadable"
     ),
+    # NOT "carries the verdict TEMPLATE line". `_saw_template` establishes only
+    # that a line LISTS ALL THREE TOKENS -- its own docstring says so -- and a
+    # sentence describing the policy does that without pasting anything:
+    #
+    #   "This module's policy allows APPROVE, REQUEST-CHANGES, or
+    #    CANNOT-ASSESS as outcomes."
+    #
+    # A reviewer ran exactly that and got told it "carries the verdict TEMPLATE
+    # line". Worse, it was a REGRESSION: the blanket sentence this replaced
+    # ("no line announcing a verdict") happened to be TRUE of that shape, so
+    # the per-kind fix made one sub-case worse while fixing two others.
+    #
+    # The remedy is the wording, not a narrower `_saw_template`: narrowing it
+    # would REDUCE what blocks, and this package does not move that direction
+    # to make a message read better.
     NEAR_TEMPLATE: (
-        "a comment in this PR's review history carries the verdict TEMPLATE "
-        "line rather than a decision"
+        "a comment in this PR's review history carries a line naming EVERY "
+        "verdict token, so it lists the outcomes rather than choosing one"
     ),
 }
 #: Whatever a FUTURE kind turns out to be, the reason must not claim to know.

@@ -507,6 +507,20 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
             "(paste your verdict above)"),
             gates.NEAR_TEMPLATE,
         ),
+        # NO MARKER AND NO TEMPLATE -- ordinary prose that happens to name all
+        # three outcomes, which is how this repo's own review threads talk. A
+        # reviewer measured it being told it "carries the verdict TEMPLATE
+        # line", and that was a REGRESSION: the blanket sentence it replaced was
+        # accidentally TRUE of this shape, so the per-kind fix made one sub-case
+        # worse while fixing two others. The KIND is right -- `_saw_template`
+        # only ever established "a line lists all three tokens" -- so the
+        # remedy was the wording, and this fixture asserts the SENTENCE.
+        "prose naming all three outcomes": (
+            ("This module's policy allows APPROVE, REQUEST-CHANGES, or "
+             "CANNOT-ASSESS as outcomes.\nI think this should get APPROVE "
+             "overall, nice work."),
+            gates.NEAR_TEMPLATE,
+        ),
     }
     for label, (body, kind) in shapes.items():
         got = gates.worst_verdict_in_history([_verdict(1, "2026-09-12T06:00:00Z", body)])
@@ -533,6 +547,28 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
         )
         blocked, _why = gates.reduce_verdicts(live, near)
         assert not blocked, label
+
+
+def test_negative_control_an_unrecognised_kind_gets_no_confident_sentence():
+    """`UNANNOUNCED_REASON_UNKNOWN` is the safety net for the defect round 9
+    blocked on, and it had no fixture and no arm.
+
+    A reviewer mutated ONLY the `.get` default -- leaving the three known kinds
+    alone, which is all the other fixtures exercise -- and the suite stayed
+    green while an unknown kind was handed the `no-marker` sentence verbatim.
+    That is round 9's blocker, reachable again, over a 150/150 matrix. A
+    fallback nobody drives is a control nobody has.
+
+    Kills MG36."""
+    tagged = f"{gates.UNANNOUNCED_BLOCK} (brand-new-kind, comment 7)"
+    n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                      prior_verdict=tagged)
+    assert n == 2, "an unrecognised kind still fails closed"
+    assert gates.UNANNOUNCED_REASON_UNKNOWN in why, why
+    # ...and it must not borrow any KNOWN kind's sentence, which is exactly what
+    # the surviving mutation did.
+    for sentence in gates.UNANNOUNCED_REASON_BY_KIND.values():
+        assert sentence not in why, f"borrowed a known kind's sentence: {why}"
 
 
 def test_negative_control_prose_under_an_approve_header_reports_nothing():

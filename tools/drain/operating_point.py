@@ -33,6 +33,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import merge_gate
 from ledger import Ledger
 
 import gates
@@ -59,10 +60,13 @@ def brief_time(policy: dict, led: Ledger) -> tuple[Counter, Counter, dict]:
     return counts, by_reason, per_stream
 
 
-def merge_time(policy: dict, led: Ledger) -> tuple[Counter, int, int]:
+def merge_time(policy: dict, led: Ledger, pr: int | None = None
+               ) -> tuple[Counter, int, int]:
     """What GATE 3b will say for a PR that DECLARES a close of each item.
 
-    Returns `(counts, one_reviewer, receipted_of_those)`.
+    Returns `(counts, one_reviewer, receipted_of_those)`. `pr` is the PR the
+    hypothetical is about; `None` models the ordinary case where no binding
+    names it.
 
     TWO GATES, MEASURED SEPARATELY. The first version ANDed `receipt_ok` into
     `stream_known` and called the result "what gate 3b will say" -- but 3b's
@@ -84,9 +88,20 @@ def merge_time(policy: dict, led: Ledger) -> tuple[Counter, int, int]:
     counts: Counter = Counter()
     one_reviewer = receipted = 0
     for item in led.items.values():
-        # Exactly `ledger_stream`'s corroboration test, and nothing else.
-        stream_known = item.pr is not None or item.state in (
-            "in-flight", "in-review", "awaiting-receipt"
+        # `ledger_stream`'s corroboration test, IMPORTED rather than restated.
+        #
+        # The first version said "exactly ... and nothing else" and was not: it
+        # read `item.pr is not None` where the real test is `item.pr == pr`, so
+        # an item bound to ANOTHER PR modelled as one-reviewer where the gate
+        # says two. Both reviewers found it. Latent (nothing writes `Item.pr`)
+        # and it arms on #4489 -- the same condition under which the wording
+        # fixes in `merge_gate` were made, applied one file over this time.
+        #
+        # `SCHEDULED_STATES` is imported for the same reason: the states were
+        # hardcoded here, so a fourth one would diverge the model in silence.
+        stream_known = (
+            item.pr == pr if item.pr is not None
+            else item.state in merge_gate.SCHEDULED_STATES
         )
         needed, _why = gates.review_requirement(
             policy,

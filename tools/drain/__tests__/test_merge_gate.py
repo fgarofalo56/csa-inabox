@@ -635,6 +635,17 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     assert "binds [10] to this PR" in detail, detail
     assert "in flight" not in detail, detail
 
+    # MG34's TRUE arm. The stale branch's binding clause was asserted only by
+    # ABSENCE, so dropping it whenever a binding DOES exist left the suite
+    # green -- one-sided, which is the shape this package names most often.
+    # Bind #10 to a DIFFERENT PR and it becomes stale-and-bound at once.
+    led.items[10].pr = 99
+    led.transition(10, "ready", "handed back")
+    led.save()
+    stale = merge_gate.ledger_stream([10], [], POLICY, path, pr=1)[1]
+    assert "bound to PR 99" in stale, stale
+    assert "'ready'" in stale, stale
+
 
 def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_path):
     """The copy-paste-across-invocations case, made loud. `Item.pr` had existed

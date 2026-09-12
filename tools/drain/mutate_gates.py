@@ -44,7 +44,7 @@ ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "policy.json"]
+           "operating_point.py", "policy.json"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -795,6 +795,47 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        c",
     ),
     (
+        ("MG36 the UNKNOWN fallback borrows a KNOWN kind's sentence, so round "
+         "9's blocker returns for any kind added later"),
+        "gates.py",
+        "_unannounced_kind(prior_verdict), UNANNOUNCED_REASON_UNKNOWN)}\"",
+        ("_unannounced_kind(prior_verdict), "
+         "UNANNOUNCED_REASON_BY_KIND[NEAR_NO_MARKER])}\""),
+    ),
+    # -- the measurement script MODELS the gates. A wrong model is worse than
+    # none, and it shipped with ZERO arms and ZERO tests -- which is how both
+    # reviewers came to find the same defect in it in the same round.
+    (
+        ("OP1 the model ANDs the RECEIPT into the stream test again, so it "
+         "reports gate 6's answer under gate 3b's name"),
+        "operating_point.py",
+        "        stream_known = (\n            item.pr == pr if item.pr is not None",
+        ("        stream_known = led.receipt_ok(item)[0] and (\n"
+         "            item.pr == pr if item.pr is not None"),
+    ),
+    (
+        ("OP2 the model accepts an item bound to ANY PR rather than THIS one, "
+         "over-reporting the permissive population in the unsafe direction"),
+        "operating_point.py",
+        "            item.pr == pr if item.pr is not None",
+        "            item.pr is not None if item.pr is not None",
+    ),
+    (
+        ("OP3 the model hardcodes the scheduled states instead of importing "
+         "them, so a fourth state diverges it in silence"),
+        "operating_point.py",
+        "            else item.state in merge_gate.SCHEDULED_STATES",
+        '            else item.state in ("in-flight", "in-review")',
+    ),
+    (
+        ("OP4 the receipt count is folded back into the 3b number, so the two "
+         "gates are reported as one again"),
+        "operating_point.py",
+        "        if needed == 1:\n            one_reviewer += 1",
+        ("        if needed == 1 and led.receipt_ok(item)[0]:\n"
+         "            one_reviewer += 1"),
+    ),
+    (
         ("MG32 every unannounced block gets the no-marker sentence, so the two "
          "kinds it is untrue for are reported as something they are not"),
         "gates.py",
@@ -1112,11 +1153,19 @@ def _reports_a_failure(stdout: str) -> bool:
 def _write_lf(path: Path, text: str) -> None:
     """Write with LF endings on every Python this project supports.
 
-    `Path.write_text(newline="")` is **3.13**, and `pyproject.toml` declares
-    `>=3.10`. Writing bytes is the version-independent way to say "these exact
-    characters, no translation" -- and the translation is what matters here:
-    every multi-line anchor below is written with LF, and `core.autocrlf=true`
-    on the author's machine checks these files out CRLF.
+    ONLY `read_text`'s `newline` was the portability bug. Measured, not assumed:
+
+        3.11.15   read_text : (self, encoding=None, errors=None)
+                  write_text: (self, data, encoding=None, errors=None, newline=None)
+        3.13.14   read_text : (self, encoding=None, errors=None, newline=None)
+
+    `write_text(newline=...)` has been there since 3.10 and was never broken --
+    a reviewer caught the first draft of this comment claiming otherwise, which
+    is a wrong version number inside the comment that exists to record a version
+    lesson. Bytes are used on both sides anyway: it is the version-independent
+    way to say "these exact characters, no translation", and translation is the
+    whole point, because every multi-line anchor below is written with LF while
+    `core.autocrlf=true` checks these files out CRLF.
     """
     path.write_bytes(text.encode("utf-8"))
 
@@ -1160,11 +1209,15 @@ def main() -> int:
         # weaken the POLICY FILE and see the suite go red -- that is what proves
         # the authority has a blast radius rather than being prose. Restricted
         # to `.py`, the first such arm died with `KeyError: 'policy.json'`.
-        # BYTES, not `read_text(newline=...)`. That keyword is Python **3.13**;
+        # BYTES, not `read_text(newline=...)`. THAT keyword is Python **3.13**
+        # (`write_text`'s is 3.10 and was fine -- see `_write_lf`).
         # `pyproject.toml` declares >=3.10 and CI runs 3.10/3.11/3.12, so the
         # first version of this ran green on three 3.13 workstations -- mine and
         # both reviewers' -- and was RED on every CI Python. A local green says
-        # nothing about the floor the project declares.
+        # nothing about the floor the project declares. Worse, this loop runs
+        # BEFORE the arm loop, so on the floor the matrix aborted having scored
+        # zero arms: the control that certifies the suite is not blind was
+        # itself unobtainable there.
         originals = {}
         for name in SOURCES:
             text = (sandbox / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
