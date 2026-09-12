@@ -95,21 +95,81 @@ def ledger_receipt_ready(number: int, policy: dict, state_path: str | None = Non
     (passing on a missing ledger, skipping the KIND check, unwiring the caller)
     survived the whole suite.
     """
-    path = state_path or os.path.join(HERE, "state.json")
-    if not os.path.exists(path):
+    led, why = load_ledger(policy, state_path)
+    if led is None:
         return False, (
-            f"no ledger at {path}, so the receipt for #{number} cannot be shown. "
+            f"{why}, so the receipt for #{number} cannot be shown. "
             "Seed it with `python tools/drain/tick.py --bootstrap`."
         )
-    led = Ledger(path, receipts=policy["receipts"]).load()
     item = led.items.get(number)
     if item is None:
         return False, f"#{number} is not in the ledger at all"
     return led.receipt_ok(item)
 
 
-def ledger_stream(numbers: list[int], policy: dict, state_path: str | None = None
-                  ) -> tuple[str | None, str]:
+def ledger_candidates(state_path: str | None = None) -> list[str]:
+    """Where `state.json` might be, in order, from wherever we were invoked.
+
+    `state.json` is gitignored, so it exists in the PRIMARY checkout and in no
+    worktree. Measured 2026-09-12: **371** worktrees on this machine, **1**
+    carrying a ledger. A lane runs `merge_gate.py` from its own worktree --
+    that is what the brief instructs and what file-partitioned parallelism
+    requires -- so resolving only against `HERE` meant the stream never resolved
+    and, since that fails closed, EVERY PR asked for two reviewers. The control
+    that exists because "a control that fires on everything teaches the reader
+    to skim it" would have fired on everything.
+
+    So a worktree falls back to the primary checkout via git's COMMON DIR:
+    `.git` in a worktree is a file pointing at `<primary>/.git/worktrees/<name>`,
+    and `--git-common-dir` resolves to `<primary>/.git`. Its parent is the
+    primary working tree. Purely a read; nothing is written outside `HERE`.
+    """
+    if state_path:
+        return [state_path]
+    found = [os.path.join(HERE, "state.json")]
+    try:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=20, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return found
+    if common.returncode == 0 and common.stdout.strip():
+        primary = os.path.dirname(common.stdout.strip().rstrip("/"))
+        candidate = os.path.join(primary, "tools", "drain", "state.json")
+        if os.path.abspath(candidate) != os.path.abspath(found[0]):
+            found.append(candidate)
+    return found
+
+
+def load_ledger(policy: dict, state_path: str | None = None
+                ) -> tuple[Ledger | None, str]:
+    """Load the ledger, or say why not. NEVER raises.
+
+    `run_gates` reads this on every call, which is new I/O on the merge path
+    over an untracked, per-machine scratch file. A reviewer measured both ways
+    it used to end the program: a corrupt `state.json` raised `JSONDecodeError`
+    and a schema mismatch raised `SystemExit`, neither caught, so the program
+    that decides every merge exited on a raw traceback -- deploy-integrity R6,
+    "a failure whose only output is a stack trace".
+
+    Every caller here already has a fail-closed shape to route a `None` into.
+    """
+    tried = ledger_candidates(state_path)
+    for path in tried:
+        if not os.path.exists(path):
+            continue
+        try:
+            return Ledger(path, receipts=policy["receipts"]).load(), path
+        except SystemExit as exc:          # schema mismatch: deliberate refusal
+            return None, f"ledger at {path} refused to load: {exc}"
+        except (OSError, ValueError) as exc:   # JSONDecodeError is a ValueError
+            return None, f"ledger at {path} is unreadable: {type(exc).__name__}: {exc}"
+    return None, f"no ledger at any of {tried}"
+
+
+def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
+                  state_path: str | None = None) -> tuple[str | None, str]:
     """Which STREAM this PR's work belongs to, for the escalation decision.
 
     Returns `(stream, why)`, and `stream is None` means UNKNOWN -- which the
@@ -118,24 +178,56 @@ def ledger_stream(numbers: list[int], policy: dict, state_path: str | None = Non
     are all unknown: in each case the harness cannot place the work, and every
     sibling control in this package fails closed.
 
-    When a PR references several items the STRONGEST requirement wins, the same
-    conjunction `reduce_verdicts` uses. A PR touching a W9-rest item and a
-    W1-deploy item is a W1-deploy change.
+    A MENTION MAY ONLY ESCALATE. A CLOSING REFERENCE MAY ALSO EXPLAIN.
+
+    Both reviewers converged on the inversion this split repairs, and it was in
+    the feature this very round added. Measured at ba62873:
+
+        body "Related to #10 in passing."  (#10 is W9-rest)  -> 1 reviewer
+        the SAME diff with NO reference at all               -> 2 reviewers
+
+    Referencing an issue bought a WEAKER gate than referencing nothing, which
+    inverts the fail-closed design the round claimed to deliver. The trigger is
+    not malice: an agent-written PR body copy-pasting a stale issue number is
+    the ordinary case, and `KICKOFF.md` reuses `#4468` as an example number
+    throughout its own text.
+
+    The epistemics are the fix. `Closes #N` is an ASSERTION about what this PR
+    IS, made deliberately, and gate 6 refuses it unless it is also declared with
+    `--allow-close` -- so it is corroborated. `Refs #N` is an ASIDE. An aside is
+    good enough to raise the requirement (it can only cost a second reviewer)
+    and not good enough to lower it. So a mention in an escalating stream
+    escalates; otherwise the stream is known only from a closing reference.
+
+    When several items resolve, the STRONGEST wins -- the same conjunction
+    `reduce_verdicts` uses. A PR touching a W9-rest item and a W1-deploy item is
+    a W1-deploy change.
     """
-    if not numbers:
+    every = sorted(set(closing) | set(mentioned))
+    if not every:
         return None, "the PR references no issue, so its stream is unknown"
-    path = state_path or os.path.join(HERE, "state.json")
-    if not os.path.exists(path):
-        return None, f"no ledger at {path}, so the stream cannot be resolved"
-    led = Ledger(path, receipts=policy["receipts"]).load()
+    led, why = load_ledger(policy, state_path)
+    if led is None:
+        return None, f"{why}, so the stream cannot be resolved"
     escalating = gates.escalation_streams(policy)
-    found = [led.items[n].stream for n in numbers if n in led.items]
-    if not found:
-        return None, f"none of {numbers} is in the ledger, so the stream is unknown"
-    hit = next((s for s in found if s in escalating), None)
+
+    hit = next((led.items[n].stream for n in every
+                if n in led.items and led.items[n].stream in escalating), None)
     if hit:
-        return hit, f"#{numbers} sits in {hit}"
-    return found[0], f"#{numbers} sits in {found[0]}"
+        return hit, f"#{every} sits in {hit}"
+
+    declared = [n for n in closing if n in led.items]
+    if declared:
+        stream = led.items[declared[0]].stream
+        return stream, f"#{declared} is declared closed and sits in {stream}"
+
+    if any(n in led.items for n in every):
+        return None, (
+            f"#{every} is only MENTIONED, not declared closed, and sits in no "
+            "escalating stream - a mention is not evidence of what this PR is, "
+            "so the stream is unknown"
+        )
+    return None, f"none of {every} is in the ledger, so the stream is unknown"
 
 
 def required_contexts(repo: str) -> list[str]:
@@ -247,11 +339,19 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
               state_path: str | None = None) -> dict:
     """Run every gate over an already-collected `data` dict.
 
-    PURE over its inputs, and it computes the verdict itself. `main()` used to
-    reduce the findings -- so `blocking = []` there was a one-token edit that
-    turned the program deciding every merge into a rubber stamp, invisible to
-    106 tests and a 26-arm mutation matrix that never touched this file. The
-    reduction lives here, where `test_merge_gate.py` drives it over fixtures.
+    No NETWORK reads -- `data` is already collected -- and it computes the
+    verdict itself. `main()` used to reduce the findings, so `blocking = []`
+    there was a one-token edit that turned the program deciding every merge into
+    a rubber stamp, invisible to 106 tests and a 26-arm mutation matrix that
+    never touched this file. The reduction lives here, where
+    `test_merge_gate.py` drives it over fixtures.
+
+    NOT PURE, and the docstring used to say it was. Gate 3b reads the LEDGER to
+    resolve the item's stream, so there is one filesystem read on this path.
+    `state_path` injects it; every test must pass it, or a tracked test's
+    outcome depends on an untracked per-machine file. `load_ledger` never
+    raises, so a corrupt or schema-mismatched ledger fails CLOSED with a
+    sentence rather than ending the program on a traceback (R6).
     """
     pr = data["pr"]
     allow_close = allow_close or []
@@ -312,9 +412,13 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # since an unresolvable stream fails closed, escalated all of them for the
     # wrong reason: a control that fires on everything teaches the reader to
     # skim it.
-    referenced = sorted(
-        set(will_close) | set(gates.referenced_issues(pr.get("body") or "", messages))
-    )
+    #
+    # Kept SEPARATE from `will_close`, not unioned into it. `ledger_stream` uses
+    # the two differently: a mention may only ESCALATE, while a declared close
+    # may also explain a non-escalating stream. Merging them here is what let a
+    # stale copy-pasted `#N` buy a weaker gate than no reference at all.
+    mentioned = gates.referenced_issues(pr.get("body") or "", messages,
+                                        repo=policy.get("repo"))
 
     # 3b -- HOW MANY independent reviewers, enforced here rather than described
     # in a brief. `review_requirement` is computed from the PR's REAL changed
@@ -344,15 +448,19 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
     # R6/R9 kill their mutations through `test_policy.py` calling
     # `review_requirement` DIRECTLY, so the matrix proved the function honours
     # the triggers and proved nothing about the caller feeding them. Same
-    # boundary, other side. MG8/MG9 are pointed at this call.
-    first_verdict = gates.first_verdict_token(
+    # boundary, other side. MG14/MG15/MG10/MG11/MG12/MG13/MGE are pointed at
+    # this call. (An earlier draft of this line said MG8/MG9 -- those are gate
+    # 6's union and gate 0's allow-list, which touch nothing here. A reviewer
+    # auditing the matrix follows these labels to decide whether an arm is
+    # covered, so a wrong one is a claim about a control, not a typo.)
+    prior_verdict = gates.worst_verdict_in_history(
         data["comments"], policy["verdict_parsing"]["token_window_chars"]
     )
-    stream, why_stream = ledger_stream(referenced, policy, state_path)
+    stream, why_stream = ledger_stream(will_close, mentioned, policy, state_path)
     needed, why_needed = gates.review_requirement(
         policy,
         changed_paths=changed,
-        first_verdict=first_verdict,
+        prior_verdict=prior_verdict,
         stream=stream,
         footprint_known=bool(changed),
         stream_known=stream is not None,
@@ -370,7 +478,7 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         "3b approval count",
         len(approvals) >= needed,
         f"{len(approvals)} live APPROVE of {needed} required - {why_needed}"
-        f" [first verdict: {first_verdict or 'none'} | {why_stream}]"
+        f" [worst verdict posted: {prior_verdict or 'none'} | {why_stream}]"
         " (COUNT only: independence is enforced by tool access, not measured here)"
         + ("" if len(approvals) >= needed else
            ". A second reviewer must be independently briefed and their verdict POSTED "

@@ -157,6 +157,17 @@ editing one line of a map.
 currently reachable only by hand. Stated here rather than implied, because by
 this package's own standard an unreachable path is prose.
 
+**If you hand-edit a receipt, set `receipt_taken_under` too.** A ledger written
+before that field existed — or a hand edit that sets `receipt_kind` and
+`receipt_ref` and stops — produces an item that **cannot close**, with its own
+message naming the remedy. That is deliberate and it is not backfilled on load:
+inferring the stamp from the item's *current* class would manufacture the exact
+evidence the check exists to demand, which is "invent a receipt to get past the
+receipt gate" wearing a migration's clothes. Re-take the receipt (or set the
+field by hand to the item's `effective_receipt_class`). Nothing is stuck today —
+the live ledger holds zero receipts — and `tick.py --status` will show any item
+this affects as non-terminal rather than silently closable.
+
 ---
 
 ## Autonomy
@@ -204,6 +215,20 @@ for the smaller share of the live population:
    item — **119** of the live 299 carry no lane); at merge time the paths are a
    fact and the stream has to come from the ledger via the issues the PR
    references.
+
+   **A mention may only escalate; a declared close may also explain.** `Closes
+   #N` is an assertion about what the PR *is*, and gate 6 refuses it unless it
+   is also declared with `--allow-close`, so it is corroborated. `Refs #N` is an
+   aside: enough to raise the count when it names an escalating item, not enough
+   to lower it. Without that split, referencing a stale issue number bought a
+   *weaker* gate than referencing nothing at all — measured, one reviewer versus
+   two, on the same diff. Both reviewers found it independently, in the feature
+   that had just been added.
+
+   From a worktree the ledger is resolved against the primary checkout via
+   git's common dir, because `state.json` is gitignored and exists in exactly
+   one of this machine's 371 worktrees. Without that fallback the stream never
+   resolved anywhere a lane actually works, and *every* PR escalated.
 
 Listed in the order `review_requirement` checks them, which is also roughly
 their strength. They are independent ORs, so the order has no effect on the
@@ -306,8 +331,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 279 tests across every module
-python tools/drain/mutate_gates.py           # 129 arms, must be 129 KILLED
+python -m pytest tools/drain/__tests__ -q    # 290 tests across every module
+python tools/drain/mutate_gates.py           # 139 arms, must be 139 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -394,8 +419,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 129 mutation arms against a sandbox copy; must be 129 KILLED |
+| `mutate_gates.py` | 139 mutation arms against a sandbox copy; must be 139 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 279 tests; a negative control for every decision function |
+| `__tests__/` | 290 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

@@ -73,6 +73,34 @@ def test_every_arm_actually_changes_the_source():
         assert old != new, name
 
 
+def test_every_arm_anchor_is_present_and_unique_in_the_current_source():
+    """The cheap version of what a full matrix run discovers in ~90 seconds.
+
+    An anchor that no longer matches SKIPs -- which fails the run, but only
+    after every other arm has been executed. An anchor that matches TWICE is
+    worse: `replace(old, new, 1)` takes the first, so the arm silently mutates
+    a different function and reports SURVIVED, a misfire wearing a blind spot's
+    clothes. Both happen on ordinary refactors: renaming one local variable
+    broke four anchors and made a fifth ambiguous in a single commit here.
+
+    This reads the same sources the runner copies, so it catches both in under
+    a second, and it names the arm."""
+    import pathlib
+
+    here = pathlib.Path(mutate_gates.HERE)
+    sources = {
+        name: here.joinpath(name).read_text(encoding="utf-8", newline="")
+        .replace("\r\n", "\n")
+        for name in mutate_gates.SOURCES
+    }
+    broken = []
+    for name, filename, old, _new in mutate_gates.ARMS:
+        count = sources[filename].count(old)
+        if count != 1:
+            broken.append(f"{name.split()[0]} -> {count} matches in {filename}")
+    assert broken == []
+
+
 def test_arm_names_are_unique():
     """The name is how a survivor is looked up and how a reviewer audits the
     matrix. Two arms sharing one prefix sent a reader to the wrong one."""

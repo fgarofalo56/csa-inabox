@@ -111,8 +111,12 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "N1 parse only the NEWEST comment (recency, reinstated upstream of the reducer)",
         "gates.py",
-        "    for comment in comments:",
-        "    for comment in sorted(comments, key=lambda c: c.get('created_at', ''))[-1:]:",
+        # The next line comes along: `for comment in comments:` now appears in
+        # BOTH `parse_verdicts` and `worst_verdict_in_history`, and an ambiguous
+        # anchor is a mutation aimed at whichever function is higher in the file.
+        '    for comment in comments:\n        body = comment.get("body") or ""',
+        ("    for comment in sorted(comments, key=lambda c: c.get('created_at', ''))[-1:]:"
+         '\n        body = comment.get("body") or ""'),
     ),
     (
         "N2 scan only the LAST commit message of the trail",
@@ -613,14 +617,14 @@ ARMS: list[tuple[str, str, str, str]] = [
         # `if not os.path.exists(path):` and the ambiguity guard correctly
         # refused to pick one. A short needle is a mutation aimed at whichever
         # function happens to come first in the file.
-        "    if not os.path.exists(path):\n        return False, (",
+        "    if led is None:\n        return False, (",
         "    if False:\n        return False, (",
     ),
     (
         ("MGE the STREAM lookup passes on a missing ledger, so a PR it cannot "
         "classify falls through to one reviewer"),
         "merge_gate.py",
-        '        return None, f"no ledger at {path}, so the stream cannot be resolved"',
+        '        return None, f"{why}, so the stream cannot be resolved"',
         '        return "W9-rest", "no ledger"',
     ),
     (
@@ -668,7 +672,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "R2 a REQUEST-CHANGES from the first reviewer stops escalating",
         "gates.py",
-        '    if review.get("escalate_on_blocking_first_verdict", True) and first_verdict:',
+        '    if review.get("escalate_on_blocking_first_verdict", True) and prior_verdict:',
         "    if False:",
     ),
     (
@@ -749,14 +753,87 @@ ARMS: list[tuple[str, str, str, str]] = [
     # R6 and R9 mutate `gates.py` and die on `test_policy.py` calling
     # `review_requirement` DIRECTLY -- so they prove the FUNCTION honours the
     # triggers and prove nothing about the caller feeding them. Both were inert
-    # at the enforcement point for three rounds under a green matrix. These four
-    # are pointed at the call in `merge_gate`. Same boundary, other side.
+    # at the enforcement point for three rounds under a green matrix. These are
+    # pointed at the call in `merge_gate`. Same boundary, other side.
+    (
+        ("MG16 the verdict history reduces by TIME again, so whichever of two "
+         "parallel reviewers posts first decides the count"),
+        "gates.py",
+        "    approving: str | None = None",
+        ("    approving: str | None = None\n"
+         "    comments = sorted(comments, key=lambda c: c.get('created_at', ''))[:1]"),
+    ),
+    (
+        ("MG17 the worst-first rule is applied to the ANNOUNCING LINE only, so a "
+         "block below a hedged header is reduced to an approval"),
+        "gates.py",
+        "        for line in head.splitlines():",
+        "        for line in head.splitlines()[:1]:",
+    ),
+    (
+        ("MG18 the bare-reference scan loosens back to `#\\d+`, so a hex colour "
+         "and a heading anchor resolve as issue numbers"),
+        "gates.py",
+        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)',
+        r'BARE_REF_RE = re.compile(r"(?:\#|GH-)(?P<num>\d+)", re.IGNORECASE)',
+    ),
+    (
+        ("MG19 a QUALIFIED reference is accepted whatever repo it names, so "
+         "another repo's numbers are resolved against THIS ledger"),
+        "gates.py",
+        '        if repo and match.group("slug").lower() == repo.lower():',
+        "        if True:",
+    ),
+    (
+        ("MG20 the ledger load stops being caught, so a corrupt per-machine "
+         "scratch file ends the program that decides every merge on a traceback"),
+        "merge_gate.py",
+        "        except (OSError, ValueError) as exc:   # JSONDecodeError is a ValueError",
+        "        except KeyboardInterrupt as exc:",
+    ),
+    (
+        ("MG21 a worktree stops falling back to the primary checkout, so the "
+         "stream never resolves and EVERY PR escalates"),
+        "merge_gate.py",
+        "            found.append(candidate)",
+        "            pass",
+    ),
+    (
+        ("MG22 a bare MENTION explains a non-escalating stream again, so a stale "
+         "copy-pasted `#N` buys a WEAKER gate than referencing nothing"),
+        "merge_gate.py",
+        "    declared = [n for n in closing if n in led.items]",
+        "    declared = [n for n in every if n in led.items]",
+    ),
+    (
+        ("MG23 a mention of an ESCALATING item stops escalating, which is the "
+         "hole the whole stream trigger was added to close"),
+        "merge_gate.py",
+        ("    hit = next((led.items[n].stream for n in every\n"
+        "                if n in led.items and led.items[n].stream in escalating), None)"),
+        ("    hit = next((led.items[n].stream for n in closing\n"
+        "                if n in led.items and led.items[n].stream in escalating), None)"),
+    ),
+    (
+        ("MG24 the reference alphabet loses IGNORECASE, so `gh-4487` resolves "
+         "nothing while `GH-4487` resolves"),
+        "gates.py",
+        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)',
+        r'BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])")',
+    ),
+    (
+        ("L25 a receipt with NO stamp is reported as a reclassification, sending "
+         "the reader after a class change that never happened"),
+        "ledger.py",
+        "        if not item.receipt_taken_under:",
+        "        if False:",
+    ),
     (
         ("MG14 the merge gate stops passing the FIRST verdict, so a block before "
         "a push no longer raises the count"),
         "merge_gate.py",
-        "        first_verdict=first_verdict,",
-        "        first_verdict=None,",
+        "        prior_verdict=prior_verdict,",
+        "        prior_verdict=None,",
     ),
     (
         ("MG15 the merge gate stops passing the STREAM, so a W1-deploy PR outside "
@@ -775,25 +852,28 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("MG11 the stream lookup reuses the VERB-ANCHORED closing scan, so a bare "
         "`Refs #N` resolves nothing and every such PR escalates for the wrong reason"),
         "merge_gate.py",
-        ("    referenced = sorted(\n"
-         "        set(will_close) | set(gates.referenced_issues(pr.get(\"body\") or \"\", "
-         "messages))\n"
-         "    )"),
-        "    referenced = sorted(set(will_close) | set(scan.near))",
+        ("    mentioned = gates.referenced_issues(pr.get(\"body\") or \"\", messages,\n"
+         "                                        repo=policy.get(\"repo\"))"),
+        "    mentioned = list(scan.near)",
     ),
     (
-        ("MG12 the first-verdict scan pins to the head after all, so the push that "
+        ("MG12 the CALLER pins the verdict history to the head, so the push that "
         "voids the block also voids the escalation"),
-        "gates.py",
-        ("    ordered = sorted(comments, key=lambda c: (c.get(\"created_at\", \"\"), "
-        "c.get(\"id\", 0)))"),
-        "    ordered = []",
+        "merge_gate.py",
+        # Pointed at the CALLER now. The function itself no longer has a line
+        # that could be mutated into pinning -- it simply does not pin -- and
+        # the defect this arm names is the head filter arriving from anywhere.
+        "        data[\"comments\"], policy[\"verdict_parsing\"][\"token_window_chars\"]",
+        ("        [c for c in data[\"comments\"]\n"
+         "         if c.get(\"created_at\", \"\") >= data[\"head_date\"]],\n"
+         "        policy[\"verdict_parsing\"][\"token_window_chars\"]"),
     ),
     (
         ("MG13 the strongest stream stops winning, so the answer depends on "
         "issue-number order"),
         "merge_gate.py",
-        "    hit = next((s for s in found if s in escalating), None)",
+        ("    hit = next((led.items[n].stream for n in every\n"
+         "                if n in led.items and led.items[n].stream in escalating), None)"),
         "    hit = None",
     ),
     (
@@ -818,7 +898,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         "R9 a blocking first verdict is matched by EXACT TOKEN, so a spelling reduces it",
         "gates.py",
         '        if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:',
-        "        if first_verdict in BLOCKING_TOKENS:",
+        "        if prior_verdict in BLOCKING_TOKENS:",
     ),
     (
         "B1 #4487 falls through to W4-receipts on its TITLE, demanding an estate receipt",
@@ -1029,9 +1109,15 @@ def main() -> int:
                 print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
                 survived += 1
             else:
+                # "NOT A KILL" is all this branch knows. It does NOT know the
+                # suite failed to run: rc=2 is a collection error, where that is
+                # true, but rc=1 with `1 error` and no `failed` is a fixture
+                # raising at RUNTIME, where the suite did run. Asserting the
+                # stronger claim would be the R7 error this package spends its
+                # budget on.
                 tail = (run.stdout.strip().splitlines() or [""])[-1]
-                print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL, "
-                      f"the suite did not run: {tail[:60]}")
+                print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL: "
+                      f"exited non-zero with no pytest failure line: {tail[:60]}")
                 errored += 1
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)

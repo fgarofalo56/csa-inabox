@@ -99,6 +99,13 @@ class Item:
     #: stamped by `record_receipt` and re-checked by `_refuse_unless_receipted`.
     #: An item with no receipt carries None, and None == None, so the invariant
     #: is inert until there is something to be invariant about.
+    #:
+    #: **REQUIRED whenever `receipt_kind` is set.** Recording a receipt is a
+    #: hand edit to `state.json` today -- `record_receipt` has no production
+    #: caller -- so a hand edit that writes `receipt_kind` and `receipt_ref`
+    #: without this one produces an item that can never close. That is refused
+    #: with its own message rather than reported as a reclassification, because
+    #: an absent stamp and a stale stamp are different diagnoses.
     receipt_taken_under: str | None = None
     receipt_class: str | None = None
     audit_reason: str | None = None
@@ -457,6 +464,23 @@ class Ledger:
                 f"#{item.number}: receipt {item.receipt_kind!r} does not close a "
                 f"{item.effective_receipt_class!r} item - that needs {want!r} "
                 "(deploy-integrity R2)"
+            )
+        # AN ABSENT STAMP AND A DIFFERENT STAMP ARE DIFFERENT DIAGNOSES, and
+        # they were one message. "was taken under None" reads as "taken under a
+        # class literally named None" -- it asserts a cause the code did not
+        # establish (R7), and it sends the reader looking for a reclassification
+        # that never happened. The real cause is almost always the one the
+        # README documents: a receipt written BY HAND into `state.json`, which
+        # is the only way one gets recorded today, since `record_receipt` has no
+        # production caller. The remedy is different too.
+        if not item.receipt_taken_under:
+            raise ValueError(
+                f"#{item.number}: receipt {item.receipt_kind!r} ({item.receipt_ref}) "
+                "carries no `receipt_taken_under`, so the class it was taken "
+                "against is unknown and cannot be re-checked. A receipt written by "
+                "hand into state.json must set it (to the item's "
+                f"`effective_receipt_class`, {item.effective_receipt_class!r}); "
+                "`record_receipt()` sets it for you (deploy-integrity R2)"
             )
         # A receipt whose kind happens to match the CURRENT class but was taken
         # under a different one is the downgrade case, and it is precisely where

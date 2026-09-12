@@ -115,12 +115,37 @@ def scan_closing_keywords(text: str) -> ClosingScan:
     return ClosingScan(hard=hard, near=near)
 
 
-#: Any issue reference at all, with NO closing verb required. Same reference
-#: shapes as `CLOSING_RE`, which is the point: one alphabet, two questions.
-BARE_REF_RE = re.compile(_REF + r"(?P<num>\d+)")
+#: Any issue reference at all, with NO closing verb required.
+#:
+#: NARROWER than `_REF` on purpose, and the narrowing is the whole design. A
+#: verb-anchored scan can afford a loose reference alphabet, because the verb
+#: does the discriminating. Without a verb, `#\d+` alone matched a hex colour
+#: (`#1f2937` -> 1), a Markdown heading anchor (`[x](#42-the-section)` -> 42),
+#: and a foreign repo's issue (`astral-sh/ruff#12345`), all measured. So:
+#:
+#: - `#N` must not be preceded by a word character or `-` (kills `#1f2937`'s
+#:   tail, `GH-1` double-matching) and must not be followed by `-` or a letter
+#:   (kills the heading anchor).
+#: - `owner/repo#N` and the issue URL are handled SEPARATELY, because they must
+#:   be checked against `policy["repo"]` -- another repo's numbers are a
+#:   different population, and resolving them against this ledger is the
+#:   wrong-population defect `guard_refresh` spends a hundred lines policing,
+#:   reached through a different door.
+#:
+#: IGNORECASE, like `CLOSING_RE`. It was not, so `GH-4487` matched and
+#: `gh-4487` did not -- while the docstring claimed "the same reference shapes
+#: as CLOSING_RE ... one alphabet, two questions". `CLOSING_RE.flags` is 34 and
+#: this was 32; a reviewer read the flags rather than the sentence.
+BARE_REF_RE = re.compile(r"(?<![\w-])(?:\#|GH-)(?P<num>\d+)(?![\w-])", re.IGNORECASE)
+_QUALIFIED_REF_RE = re.compile(
+    r"(?P<slug>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)"
+    r"(?:\#|/issues/)(?P<num>\d+)(?![\w-])",
+    re.IGNORECASE,
+)
 
 
-def referenced_issues(body: str, commit_messages: list[str]) -> list[int]:
+def referenced_issues(body: str, commit_messages: list[str],
+                      repo: str | None = None) -> list[int]:
     """Every issue this PR mentions, closing or not.
 
     A DIFFERENT question from `merge_is_close_safe`, and it has to be, because
@@ -134,9 +159,24 @@ def referenced_issues(body: str, commit_messages: list[str]) -> list[int]:
     that would have read "this PR references no issue" on most PRs and, since
     an unresolvable stream fails closed, escalated all of them for the wrong
     reason -- a control that fires on everything teaches the reader to skim it.
+
+    OVER-MATCHING IS NOT HARMLESS HERE, which is why the pattern is narrow.
+    `ledger_stream` prefers any escalating stream, so a stray reference usually
+    only RAISES the count -- but one shape lowers it: a W1-deploy fix whose body
+    cites only a non-escalating item and whose diff touches no listed path
+    resolves `stream_known=True` and gets ONE reviewer, where no reference at
+    all would have failed closed to two. A false reference can therefore buy a
+    weaker gate, so the scan must not invent one.
+
+    `repo` gates the qualified forms. Passing None accepts none of them, which
+    fails closed: an unqualified caller cannot tell whose #123 it is looking at.
     """
     text = "\n".join([body, *commit_messages])
-    return sorted({int(m.group("num")) for m in BARE_REF_RE.finditer(text)})
+    found = {int(m.group("num")) for m in BARE_REF_RE.finditer(text)}
+    for match in _QUALIFIED_REF_RE.finditer(text):
+        if repo and match.group("slug").lower() == repo.lower():
+            found.add(int(match.group("num")))
+    return sorted(found)
 
 
 def merge_is_close_safe(body: str, commit_messages: list[str]) -> ClosingScan:
@@ -498,33 +538,50 @@ class NearMiss:
     blocks: bool = False
 
 
-def first_verdict_token(comments: list[dict], window: int = 200) -> str | None:
-    """The token of the EARLIEST verdict-bearing comment, ignoring the head.
+def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | None:
+    """The WORST verdict ever posted to this PR, ignoring the head.
 
     `escalate_on_blocking_first_verdict` asks a question about the review's
     HISTORY, not about its current state, so this deliberately does NOT pin to
     the head. `parse_verdicts` does pin, and correctly: a block from before a
-    push is no longer a live verdict. But it is still true that the first
-    reviewer blocked, and that fact is what raises the count to two.
+    push is no longer a live verdict. But it is still true that a reviewer
+    blocked, and that fact is what raises the count to two. Without it the
+    trigger was inert at the only place the count is enforced, and the
+    block-push-reapprove rhythm -- the ordinary shape of a round here -- merged
+    on one approval what a reviewer had just rejected.
 
-    Without this the trigger was inert at the only place the count is enforced.
-    The block-push-reapprove rhythm is the ordinary shape of a review round on
-    this repo: after the push the earlier block is not live, nothing raises the
-    count, and one approval merges what a reviewer had just rejected.
+    WORST-FIRST, NOT FIRST-BY-TIMESTAMP. The previous version returned the
+    EARLIEST verdict-bearing comment and stopped, which a reviewer broke by
+    swapping two comments. On THIS repo the two verdicts of a round are posted
+    within a second of each other -- measured on PR #4488's own round 5:
+    `5644049925` at 06:01:07Z (REQUEST-CHANGES) and `5644050042` at 06:01:08Z
+    (APPROVE). The drain launches its reviewers in parallel, so which one lands
+    first is a race, and an APPROVE winning it disarmed the trigger entirely.
+    Half of all parallel double-reviews. The property wanted is "a block
+    occurred", so the reduction is the same conjunction `reduce_verdicts` uses.
 
-    A blocking token ANYWHERE in a verdict-bearing window wins over an approving
-    one from the same comment, because a hedged header must not reduce a block
-    -- the same asymmetry `parse_verdicts` enforces.
+    A blocking token ANYWHERE in a verdict-bearing window wins, not only on the
+    announcing line -- `_token_of` reads marker lines only, so the docstring
+    that claimed this asymmetry before did not have it. Formatting may refuse to
+    GRANT an approval; it must never REDUCE a block.
     """
-    ordered = sorted(comments, key=lambda c: (c.get("created_at", ""), c.get("id", 0)))
-    for comment in ordered:
+    approving: str | None = None
+    for comment in comments:
         head = (comment.get("body") or "")[:window]
         if not _marker_lines(head):
             continue
+        for line in head.splitlines():
+            blocking = next(
+                (t for t in BLOCKING_TOKENS
+                 if t in line and not all(v in line for v in VERDICT_TOKENS)),
+                None,
+            )
+            if blocking:
+                return blocking
         token, _ = _token_of(head)
-        if token:
-            return token
-    return None
+        if token and approving is None:
+            approving = token
+    return approving
 
 
 def parse_verdicts(
@@ -1252,7 +1309,7 @@ LANE_PATHS = {
 
 
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
-                       first_verdict: str | None = None,
+                       prior_verdict: str | None = None,
                        stream: str | None = None,
                        footprint_known: bool = True,
                        stream_known: bool = True) -> tuple[int, str]:
@@ -1279,14 +1336,20 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
     review = policy.get("review", {})
     default = int(review.get("independent_reviewers_default", 1))
 
-    if review.get("escalate_on_blocking_first_verdict", True) and first_verdict:
+    # `prior_verdict`, not `first_verdict`. The policy key is still named for
+    # the FIRST reviewer because that is the operator's rule in their words, but
+    # "first" cannot be the implementation: the drain posts its reviewers'
+    # verdicts in parallel, one second apart, so which is first is a race. The
+    # faithful reading is "a reviewer blocked", and `worst_verdict_in_history`
+    # reduces worst-first to produce it.
+    if review.get("escalate_on_blocking_first_verdict", True) and prior_verdict:
         # Shape, not spelling: `parse_verdicts` spends a whole apparatus on the
         # fact that "CHANGES REQUIRED" is a block written the wrong way. A
         # reviewer count that only recognised the exact token would let
         # formatting reduce a block to "one reviewer was enough".
-        upper = first_verdict.upper()
+        upper = prior_verdict.upper()
         if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:
-            return 2, f"the first reviewer returned {first_verdict.strip()!r}"
+            return 2, f"a reviewer returned {prior_verdict.strip()!r}"
 
     if stream and stream in escalation_streams(policy):
         return 2, f"{stream} escalates whatever the diff turns out to touch"

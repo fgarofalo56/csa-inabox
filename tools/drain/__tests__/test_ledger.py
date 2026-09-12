@@ -583,6 +583,53 @@ def test_negative_control_a_stale_ledger_cannot_close_against_the_weaker_class(
     assert not ok, why
 
 
+def test_negative_control_an_old_ledger_with_an_unstamped_receipt_cannot_close(
+    tmp_path,
+):
+    """THE SERIALIZATION BOUNDARY. `receipt_taken_under` is new on a dataclass
+    that round-trips through JSON, so a ledger written before it existed -- or
+    a hand edit that sets `receipt_kind` and `receipt_ref` and stops, which is
+    the ONLY way a receipt gets recorded today, since `record_receipt` has no
+    production caller -- loads with the stamp absent.
+
+    It refuses, and that is deliberate. It is NOT backfilled on load: inferring
+    the stamp from the item's CURRENT class would manufacture exactly the
+    evidence the check exists to demand, which is "invent a receipt to get past
+    the receipt gate" wearing a migration's clothes.
+
+    The message is its own, because an absent stamp and a stale stamp have
+    different causes and different remedies -- and reporting the absent case as
+    "taken under None" asserted a class named None that never existed (R7)."""
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({
+        "schema": led_mod.SCHEMA,
+        "items": [{
+            "number": 4400, "title": "a console surface", "stream": "W5-console",
+            "state": "awaiting-receipt", "lane": "lane:console", "size": 3,
+            "receipt_kind": "g1-browser", "receipt_ref": "playwright trace 77",
+            "history": [],
+        }],
+    }), encoding="utf-8")
+    led = Ledger(str(path), receipts=RECEIPTS).load()
+    item = led.items[4400]
+    assert item.receipt_taken_under is None
+
+    ok, why = led.receipt_ok(item)
+    assert not ok
+    assert "carries no `receipt_taken_under`" in why
+    assert "ui-surface" in why, "the message must name what to set it TO"
+    assert "None" not in why.split("carries no")[1][:80], \
+        "an absent stamp must not be reported as a class named None"
+
+    # An ordinary refresh does NOT repair it -- nothing about the class moved,
+    # so there is nothing for `upsert` to observe. Only re-taking the receipt
+    # does, which is the point.
+    led.upsert(4400, "a console surface", "W5-console", lane="lane:console", size=3)
+    assert not led.receipt_ok(led.items[4400])[0]
+    led.record_receipt(4400, "g1-browser", "playwright trace 78")
+    assert led.receipt_ok(led.items[4400])[0]
+
+
 def test_a_receipt_re_taken_under_the_current_class_closes(tmp_path):
     """The control. The invariant must not make a reclassified item permanently
     unclosable -- re-taking the receipt under the new class is the whole

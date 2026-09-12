@@ -391,6 +391,129 @@ def test_negative_control_the_pinned_paths_are_the_whole_authority():
     assert {f for f, _ in ESCALATING_PATHS} == set(gates.escalation_paths(POLICY))
 
 
+def _verdict(cid, when, body):
+    return {"id": cid, "created_at": when, "body": body}
+
+
+def test_negative_control_the_verdict_history_reduces_worst_first_not_by_time():
+    """THE race. `gates.py` used to return the EARLIEST verdict-bearing comment
+    and stop, which a reviewer broke by swapping two comments.
+
+    On this repo the two verdicts of a round land within a second of each other
+    -- measured on PR #4488's own round 5: `5644049925` at 06:01:07Z
+    (REQUEST-CHANGES) and `5644050042` at 06:01:08Z (APPROVE). The drain launches
+    its reviewers in parallel and both post under the operator's login, so which
+    lands first is arbitrary; an APPROVE winning that race disarmed the trigger
+    on half of all parallel double-reviews. The property wanted is "a block
+    occurred", so the reduction is conjunction, not recency.
+
+    Kills MG16."""
+    approve_first = [
+        _verdict(1, "2026-09-12T06:01:07Z", "## Independent review - APPROVE\n\nfine."),
+        _verdict(2, "2026-09-12T06:01:08Z",
+                 "## Independent review - REQUEST-CHANGES\n\nthe guard is open."),
+    ]
+    assert gates.worst_verdict_in_history(approve_first) == "REQUEST-CHANGES"
+    # ...and the order genuinely does not matter.
+    assert gates.worst_verdict_in_history(list(reversed(approve_first))) \
+        == "REQUEST-CHANGES"
+    # The control: all-approving history reports an approval, not a phantom block.
+    assert gates.worst_verdict_in_history(approve_first[:1]) == "APPROVE"
+    assert gates.worst_verdict_in_history([]) is None
+
+
+def test_negative_control_a_block_below_the_announcing_line_still_counts():
+    """`_token_of` reads MARKER LINES only, so a worst-first rule applied to its
+    output covers the announcing line and nothing else -- while an earlier
+    docstring claimed the token won "ANYWHERE in a verdict-bearing window". That
+    was a claim the code did not support. Formatting may refuse to GRANT an
+    approval; it must never REDUCE a block. Kills MG17."""
+    hedged = [_verdict(
+        1, "2026-09-12T06:00:00Z",
+        "## Independent review - APPROVE\n\nbut on reflection: REQUEST-CHANGES, "
+        "the lane route is still open.",
+    )]
+    assert gates.worst_verdict_in_history(hedged) == "REQUEST-CHANGES"
+
+
+def test_negative_control_the_history_scan_does_not_pin_to_the_head():
+    """Deliberate, and the opposite of `parse_verdicts`. A block from before a
+    push is no longer a LIVE verdict -- correctly -- but it is still true that a
+    reviewer blocked, and that is the fact this trigger asks about. Pinning here
+    would make the push that voids the block also void the escalation, which is
+    the block-push-reapprove hole in the first place."""
+    history = [
+        _verdict(1, "2026-01-01T00:00:00Z",
+                 "## Independent review - REQUEST-CHANGES\n\nno."),
+        _verdict(2, "2026-12-31T00:00:00Z", "## Independent re-review - APPROVE\n\nok."),
+    ]
+    assert gates.worst_verdict_in_history(history) == "REQUEST-CHANGES"
+    # `parse_verdicts` pinned to a head after the block reports it NOT live --
+    # the two functions disagreeing is the point, so assert it here too.
+    live, _near = gates.parse_verdicts(history, "2026-06-01T00:00:00Z")
+    assert [v.token for v in live] == ["APPROVE"]
+
+
+def test_negative_control_a_bare_reference_scan_does_not_invent_references():
+    """A verb-anchored scan can afford a loose reference alphabet; the verb does
+    the discriminating. Without one, `#\\d+` matched a hex colour, a Markdown
+    heading anchor and a foreign repo's issue -- all measured by a reviewer.
+
+    Over-matching is not harmless here. `ledger_stream` prefers any escalating
+    stream, so a stray reference usually only RAISES the count -- but a
+    W1-deploy fix citing only a non-escalating item resolves `stream_known=True`
+    and gets ONE reviewer, where no reference at all would have failed closed to
+    two. A false reference buys a weaker gate. Kills MG18, MG19."""
+    repo = "fgarofalo56/csa-inabox"
+    must_not_match = [
+        "colour #1f2937 in the theme",
+        "[link](#42-the-section)",
+        "upstream astral-sh/ruff#12345",
+        "https://github.com/astral-sh/ruff/issues/12345",
+    ]
+    for text in must_not_match:
+        assert gates.referenced_issues(text, [], repo=repo) == [], text
+
+    must_match = [
+        ("Refs #4487 - stays open", [4487]),
+        ("see GH-4468 for context", [4468]),
+        (f"tracked at {repo}#4485", [4485]),
+        (f"https://github.com/{repo}/issues/4485", [4485]),
+    ]
+    for text, expected in must_match:
+        assert gates.referenced_issues(text, [], repo=repo) == expected, text
+
+    # The commit trail is scanned too -- a squash publishes the whole thing.
+    assert gates.referenced_issues("", ["feat: x\n\nRefs #4487"], repo=repo) == [4487]
+    # No repo means the qualified forms cannot be attributed, so they are not
+    # accepted: an unqualified caller cannot tell whose #123 it is looking at.
+    assert gates.referenced_issues(f"{repo}#4485", [], repo=None) == []
+
+
+def test_negative_control_an_unresolvable_stream_fails_closed():
+    """The merge-gate half of `escalate_when_footprint_unknown`. At brief time
+    the stream is the fact and the paths are the guess; at merge time it is the
+    other way round, and the stream must be resolved from the ledger. All three
+    ways that fails mean the harness cannot place the work."""
+    n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                      stream_known=False)
+    assert n == 2
+    assert "stream could not be resolved" in why
+
+    # The control: a resolvable non-escalating stream stays at one.
+    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                    stream="W9-rest", stream_known=True)
+    assert n == 1
+
+    # ...and the authority can switch it off, which is what makes it a control
+    # rather than a constant.
+    opened = {**POLICY, "review": {**POLICY["review"],
+                                   "escalate_when_stream_unknown": False}}
+    n, _ = gates.review_requirement(opened, changed_paths=["docs/x.md"],
+                                    stream_known=False)
+    assert n == 1
+
+
 def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
     """`parse_verdicts` spends a whole apparatus on the fact that
     "CHANGES REQUIRED" is a block written the wrong way. A reviewer count that
@@ -400,10 +523,10 @@ def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
                      "## Independent review - REQUEST-CHANGES", "CHANGES REQUIRED",
                      "CANNOT-ASSESS"):
         n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
-                                          first_verdict=spelling)
+                                          prior_verdict=spelling)
         assert n == 2, f"{spelling!r}: {why}"
     n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
-                                    first_verdict="APPROVE")
+                                    prior_verdict="APPROVE")
     assert n == 1
 
 
@@ -437,10 +560,10 @@ def test_negative_control_a_guard_or_deploy_or_console_diff_escalates():
 def test_negative_control_a_finding_escalates_whatever_the_path():
     for verdict in ("REQUEST-CHANGES", "CANNOT-ASSESS"):
         n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
-                                          first_verdict=verdict)
+                                          prior_verdict=verdict)
         assert n == 2, why
     n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
-                                    first_verdict="APPROVE")
+                                    prior_verdict="APPROVE")
     assert n == 1
 
 

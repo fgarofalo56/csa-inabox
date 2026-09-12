@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -50,8 +51,15 @@ def _data(**over) -> dict:
             "headRefOid": HEAD,
             "mergeable": "MERGEABLE",
             "mergeStateStatus": "BLOCKED",
-            "body": "Refs #4468 - stays open pending its receipt.",
-            "commits": [{"messageHeadline": "feat: a change", "messageBody": "Refs #4468"}],
+            # A DECLARED close, because that is the canonical drain PR: it
+            # closes the issue it was scheduled for and says so. It also has to
+            # be, for gate 3b -- a bare `Refs #N` is an ASIDE and no longer
+            # resolves the stream, so a mention-only fixture is a
+            # stream-unknown PR and escalates. The clean-PR control has to be a
+            # PR that is genuinely clean.
+            "body": "Closes #4468",
+            "commits": [{"messageHeadline": "feat: a change",
+                         "messageBody": "Closes #4468"}],
             "statusCheckRollup": [
                 {"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED
             ],
@@ -105,8 +113,14 @@ def _ledger_path() -> str:
 
 def _run(**over):
     state_path = over.pop("state_path", None) or _ledger_path()
+    # The default fixture DECLARES its close, so the default `allow_close`
+    # declares it too -- otherwise every test would be measuring gate 6's
+    # undeclared-close refusal instead of the thing it names.
+    allow_close = over.pop("allow_close", None)
+    if allow_close is None:
+        allow_close = [4468]
     return merge_gate.run_gates(
-        _data(**over), POLICY, over.pop("allow_close", None), state_path=state_path
+        _data(**over), POLICY, allow_close, state_path=state_path
     )
 
 
@@ -139,7 +153,12 @@ def test_negative_control_a_conflicting_pr_blocks():
 
 
 def test_negative_control_a_stale_base_blocks():
-    result = merge_gate.run_gates(_data(base_sha="c" * 40), POLICY)
+    # `state_path` is NOT optional here. This was the one `run_gates` call in
+    # the file that skipped it, so a tracked test's outcome depended on the
+    # developer's untracked `state.json` -- pointed at a truncated one, it died
+    # with `JSONDecodeError` instead of asserting anything about a stale base.
+    result = merge_gate.run_gates(_data(base_sha="c" * 40), POLICY,
+                                  state_path=_ledger_path())
     assert result["verdict"] == "NO-GO"
     assert not _gate(result, "1 ")["ok"]
 
@@ -228,6 +247,11 @@ def test_negative_control_the_count_is_taken_from_the_real_changed_files():
                  "dev-loop/gates/validate-all.ps1", "deploy/main.bicep"):
         result = _run(changed_files=[path])
         assert result["verdict"] == "NO-GO", f"{path} merged on one approval"
+        # ...on 3b's own `ok`, not on the composed verdict. It discriminates
+        # today -- 3b is the only failing gate on these fixtures -- but the
+        # composed verdict is the form that let MG3 go from KILLED to SURVIVED
+        # once two gates started blocking on the same input.
+        assert not _gate(result, "3b")["ok"], path
 
 
 def test_negative_control_a_red_required_context_blocks():
@@ -277,7 +301,7 @@ def test_negative_control_an_undeclared_auto_close_blocks():
     """An auto-close bypasses the ledger: the item never gets the receipt its
     class requires. This gate recorded `True` unconditionally -- a gate that
     could not fail, inside the composed caller."""
-    result = _run(body="Closes #4468")
+    result = _run(body="Closes #4468", allow_close=[])
     assert result["verdict"] == "NO-GO"
     assert not _gate(result, "6 ")["ok"]
     assert result["will_close"] == [4468]
@@ -288,7 +312,7 @@ def test_negative_control_the_api_field_never_narrows_the_scan():
     from it. Using the API field to filter the population re-introduces the
     exact silent close this gate exists for: it read EMPTY while a squash commit
     closed an issue. The UNION is the answer, never the intersection."""
-    result = _run(body="Closes #4468", closingIssuesReferences=[])
+    result = _run(body="Closes #4468", closingIssuesReferences=[], allow_close=[])
     assert result["verdict"] == "NO-GO"
     assert result["will_close"] == [4468]
 
@@ -296,7 +320,8 @@ def test_negative_control_the_api_field_never_narrows_the_scan():
 def test_the_api_field_adds_to_the_scan_when_the_text_is_clean():
     """And the other direction: a linked issue with no keyword in the text still
     counts. Neither oracle is complete, so both are consulted."""
-    result = _run(body="no keywords here", closingIssuesReferences=[{"number": 4469}])
+    result = _run(body="no keywords here", commits=[], allow_close=[],
+                  closingIssuesReferences=[{"number": 4469}])
     assert result["verdict"] == "NO-GO"
     assert result["will_close"] == [4469]
 
@@ -314,7 +339,7 @@ def test_negative_control_an_unknown_mergeability_is_not_a_pass():
 def test_negative_control_the_commit_trail_blocks_too():
     """A squash publishes the whole trail, and `closingIssuesReferences` read
     EMPTY while a squash commit closed an issue."""
-    result = _run(commits=[
+    result = _run(body="a change", allow_close=[], commits=[
         {"messageHeadline": "feat: a change", "messageBody": "fixed: #4361"},
         {"messageHeadline": "test: cover it", "messageBody": ""},
     ])
@@ -337,7 +362,9 @@ def test_negative_control_3b_escalates_on_a_blocking_first_verdict():
     HISTORY question and the CURRENT-STATE question are different questions,
     and `first_verdict_token` deliberately does not pin.
 
-    Kills MG8."""
+    Kills MG14 and MG12. (Not MG8, as an earlier draft claimed: under MG8 this
+    fixture has api_says=[] and scan.hard=[], so will_close is [] either way and
+    gate 6 stays green -- the test would have passed on 3b alone.)"""
     blocked_then_approved = [
         {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nthe guard is open.",
          "created_at": "2026-09-11T09:00:00Z"},           # before the push
@@ -360,7 +387,8 @@ def test_negative_control_3b_fails_closed_when_the_stream_cannot_be_resolved(tmp
     gate's half of `escalate_when_footprint_unknown` -- at brief time the stream
     is the fact and the paths are the guess; here it is the other way round.
 
-    Kills MG9."""
+    Kills MGE and MG10. (Not MG9, as an earlier draft claimed: this fixture
+    leaves mergeable=MERGEABLE, so gate 0 passes under MG9 too.)"""
     empty = str(tmp_path / "nothing.json")
     no_ref = _run(body="a change with no issue reference", commits=[])
     assert not _gate(no_ref, "3b")["ok"]
@@ -382,11 +410,66 @@ def test_negative_control_a_bare_refs_resolves_the_stream(tmp_path):
     PRs and escalated all of them for the wrong reason. A control that fires on
     everything teaches the reader to skim it."""
     w1 = _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs")
-    result = _run(body="Refs #4468 - stays open pending its receipt.", state_path=w1)
+    result = _run(body="Refs #4468 - stays open pending its receipt.",
+                  commits=[], allow_close=[], state_path=w1)
     gate = _gate(result, "3b")
     assert not gate["ok"]
     assert "W1-deploy" in gate["detail"]
     assert result["will_close"] == [], "a bare Refs must NOT read as a close"
+
+
+def test_negative_control_a_corrupt_ledger_fails_closed_instead_of_raising(tmp_path):
+    """Gate 3b put new filesystem I/O on the merge path, over an UNTRACKED,
+    per-machine scratch file. A reviewer measured both ways it ended the
+    program: a corrupt `state.json` raised `JSONDecodeError` and a schema
+    mismatch raised `SystemExit`, neither caught. deploy-integrity R6 -- "a
+    failure whose only output is a stack trace" -- in the program that decides
+    every merge. Kills MG20."""
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not json", encoding="utf-8")
+    result = _run(state_path=str(corrupt))
+    assert result["verdict"] == "NO-GO"
+    detail = _gate(result, "3b")["detail"]
+    assert "unreadable" in detail
+    assert "JSONDecodeError" in detail
+
+    wrong_schema = tmp_path / "schema.json"
+    wrong_schema.write_text(json.dumps({"schema": 99, "items": {}}), encoding="utf-8")
+    result = _run(state_path=str(wrong_schema))
+    assert result["verdict"] == "NO-GO"
+    assert "refused to load" in _gate(result, "3b")["detail"]
+
+
+def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_path):
+    """`state.json` is gitignored, so it exists in the primary checkout and in
+    NO worktree -- measured 371 worktrees on this machine, 1 with a ledger. A
+    lane runs the gate from its own worktree, which is what the brief instructs
+    and what file-partitioned parallelism requires. Resolving only against
+    `HERE` meant the stream never resolved, and since that fails closed, EVERY
+    PR asked for two reviewers -- reinstating wholesale the "a control that
+    fires on everything teaches the reader to skim it" defect that
+    `referenced_issues` exists to avoid. Kills MG21."""
+    primary = tmp_path / "primary"
+    (primary / "tools" / "drain").mkdir(parents=True)
+    (primary / ".git").mkdir()
+    worktree_drain = tmp_path / "wt" / "tools" / "drain"
+    worktree_drain.mkdir(parents=True)
+
+    monkeypatch.setattr(merge_gate, "HERE", str(worktree_drain))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(tmp_path / "wt"))
+    def fake_git(*_a, **_k):
+        return SimpleNamespace(returncode=0, stdout=str(primary / ".git") + "\n",
+                               stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake_git)
+    found = merge_gate.ledger_candidates()
+    assert len(found) == 2, found
+    assert os.path.abspath(found[1]) == os.path.abspath(
+        str(primary / "tools" / "drain" / "state.json")
+    )
+    # An explicit path short-circuits it -- otherwise every test would depend on
+    # whatever git says about the machine it runs on.
+    assert merge_gate.ledger_candidates("/x/state.json") == ["/x/state.json"]
 
 
 def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
@@ -400,8 +483,68 @@ def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
     led.upsert(4468, "x", "W9-rest", lane="lane:docs", size=1)
     led.upsert(4487, "x", "W1-deploy", lane="lane:docs", size=1)
     led.save()
-    stream, why = merge_gate.ledger_stream([4468, 4487], POLICY, path)
+    stream, why = merge_gate.ledger_stream([], [4468, 4487], POLICY, path)
     assert stream == "W1-deploy", why
+
+
+def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
+    """THE INVERSION, found independently by both reviewers, in the feature the
+    same round had just added. Measured at ba62873:
+
+        body "Related to #10 in passing."  (#10 is W9-rest)  -> 1 reviewer
+        the SAME diff with NO reference at all               -> 2 reviewers
+
+    Referencing an issue bought a WEAKER gate than referencing nothing, which
+    inverts the fail-closed design. Not a malice case: an agent-written PR body
+    copy-pasting a stale number is ordinary, and `KICKOFF.md` reuses `#4468` as
+    an example number throughout its own text.
+
+    `Closes #N` is an ASSERTION about what this PR is -- and gate 6 refuses it
+    unless it is also declared with `--allow-close`, so it is corroborated.
+    `Refs #N` is an ASIDE: good enough to raise the requirement, not good enough
+    to lower it. Kills MG22, MG23."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "an unrelated triage item", "W9-rest", lane="lane:docs", size=1)
+    led.save()
+
+    mention_only = _run(body="Related to #10 in passing.", commits=[],
+                        state_path=path)
+    gate = _gate(mention_only, "3b")
+    assert not gate["ok"], gate["detail"]
+    assert "only MENTIONED" in gate["detail"]
+
+    # The floor: no reference at all is ALSO unknown. The two must not disagree,
+    # because the whole defect was that one was weaker than the other.
+    no_ref = _run(body="a change with no issue reference", commits=[],
+                  state_path=path)
+    assert not _gate(no_ref, "3b")["ok"]
+
+    # A DECLARED close does resolve it -- otherwise every PR escalates and the
+    # control fires on everything.
+    declared = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert _gate(declared, "3b")["ok"], _gate(declared, "3b")["detail"]
+    assert "declared closed" in _gate(declared, "3b")["detail"]
+
+
+def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
+    """The half that must NOT be lost to the fix above. A mention may only
+    raise the requirement -- but it must still raise it, or `Refs #N` on a
+    W1-deploy item goes back to one reviewer, which is the hole the whole
+    trigger was added to close."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(4487, "a deploy fix", "W1-deploy", lane="lane:docs", size=1)
+    led.save()
+    result = _run(body="Refs #4487 - the deploy path.", commits=[], state_path=path)
+    gate = _gate(result, "3b")
+    assert not gate["ok"]
+    assert "W1-deploy" in gate["detail"]
+    assert result["will_close"] == [], "a bare Refs must not read as a close"
 
 
 def test_negative_control_declaring_one_does_not_allow_another():
