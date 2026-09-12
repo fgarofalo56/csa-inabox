@@ -97,7 +97,14 @@
     "estate-behaviour": "estate",
     "ui-surface": "g1-browser",
     "human-only": "operator",
-    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt."
+    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt.",
+    "ci_green_rule": {
+      "_": "#4487. The OLD definition - 'every required context green AT THE MERGED SHA' - names a measurement this CI topology cannot produce, and that was found by trying to take the receipt for the first time. At a02cd41e6d42 (the merge of #4483): 15 required, 10 green, 5 absent, 0 red. Four of the five are published by validate.yml, whose push: trigger is path-filtered to bicep/deploy/workflow paths that merge did not touch; the fifth is commit-message-parses.yml publishing the PUSH spelling of a conditionally-named job. A definition the topology cannot satisfy leaves two outcomes - every guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as green and the receipt stops meaning what it says.",
+      "definition": "every required context that CAN run at the merged sha is green; every one that CANNOT is NAMED, with the reason it could not and its result on the PR head over an IDENTICAL TREE",
+      "absence_is_excused_only_when": "the producing workflow - traced by workflow IDENTITY from the PR head, never by an alias table - either RAN at the merged sha and concluded SUCCESS under a different job name (the per-event rename case), or was NEVER CREATED there because its own on.push trigger, read AT that sha, could not have admitted the commit (the path-filter case)",
+      "fails_closed_on": "an untraceable producer, an unreadable on.push trigger, a workflow that SHOULD have run and did not, a merged sha carrying zero check-runs at all, an empty required set, and a deferral to a PR head whose tree differs from the merged tree",
+      "not_proven_by_this_receipt": "that any required context measured a non-empty POPULATION. statusCheckRollup publishes none, so green-over-zero-items (the #4451 shape) stays invisible here and remains an owed capability, not a claim."
+    }
   },
 
   "merge_gate": {

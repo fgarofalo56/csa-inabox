@@ -114,7 +114,7 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 | kind | closes | how it is obtained |
 |---|---|---|
-| `ci-green` | guard/test-only | every required context green at the merged sha, and none of them SKIPPED |
+| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green; every one that cannot is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
 | `deploy-run` | deploy-path | a run whose deploy job **executed steps** against a live subscription |
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
@@ -126,6 +126,52 @@ fills its streaming placeholder with the error text on any non-ok response. The
 corrected assertion keyed on `copilot-agent-badge`, a testid set *only* by an SSE
 `agent` step — unreachable from an error path. **Every `g1-browser` receipt must
 name why its assertion cannot be satisfied by a failure.**
+
+**`ci-green` was redefined because the first attempt to take it failed (#4487).**
+The original text said *every required context green **at the merged sha***. That
+measurement is **unobtainable for most PRs in this repo**, and nobody noticed
+until the receipt was taken for the first time — on the harness's own merge,
+`a02cd41e6d42`:
+
+```
+15 required contexts (branch protection)
+10 green at the merged sha
+ 5 absent at the merged sha
+ 0 RED
+```
+
+None of the five is a failure or a flake. Four (`Python Lint`, `PowerShell
+Lint`, `Secret Scan`, `Repo Hygiene`) come from `validate.yml`, whose `push:`
+trigger is **path-filtered** to bicep/deploy/workflow paths that merge did not
+touch — so they are NEVER-CREATED there, not pending and not failing. The fifth
+is a **rename**: `commit-message-parses.yml` gives its job a conditional
+`name:`, so on `push` it publishes `changelog parser can read what landed on
+main` while branch protection requires the `pull_request` spelling. It ran, and
+it was green.
+
+A definition the topology cannot satisfy leaves two outcomes: every
+guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as
+"green" and the receipt stops meaning what it says. The second is the failure
+mode this whole toolchain exists to prevent.
+
+So the receipt now reads: **every required context that CAN run at the merged
+sha is green; every one that cannot is NAMED, with the reason it could not and
+its result on the PR head over an IDENTICAL TREE.** The load-bearing word is
+*named* — an absence is excused only when the harness can say why, from
+evidence, and every branch that cannot say why **fails closed**: an untraceable
+producer, an unreadable `on.push`, a workflow that *should* have run and did
+not, a merged sha carrying zero check-runs at all, an empty required set, and a
+deferral to a head whose tree differs from the merged tree.
+
+Nothing in it is keyed to a context's **spelling**. The producer of each context
+is measured at the PR head (where it ran) through `check_suite_id`, and the
+rename case is resolved by **workflow identity** at the merged sha. An alias
+table would be one conditional `name:` expression away from being wrong,
+silently.
+
+```bash
+python tools/drain/merge_gate.py --ci-green-receipt <PR>   # GREEN / NOT GREEN, per context
+```
 
 **What `ci-green` does NOT prove, stated rather than implied.**
 `statusCheckRollup` publishes no per-check population — its entries carry
@@ -331,8 +377,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 300 tests across every module
-python tools/drain/mutate_gates.py           # 155 arms, must be 155 KILLED
+python -m pytest tools/drain/__tests__ -q    # 325 tests across every module
+python tools/drain/mutate_gates.py           # 168 arms, must be 168 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -419,8 +465,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 155 mutation arms against a sandbox copy; must be 155 KILLED |
+| `mutate_gates.py` | 168 mutation arms against a sandbox copy; must be 168 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 300 tests; a negative control for every decision function |
+| `__tests__/` | 325 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

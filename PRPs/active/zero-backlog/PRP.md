@@ -138,11 +138,28 @@ commit a secret · report a merge as a fix.
 
 | receipt | satisfies | how the harness gets it |
 |---|---|---|
-| `ci-green` | guard/test-only change | every required context green at the merged sha, none SKIPPED. **Not** proof that any of them measured a non-empty population: `statusCheckRollup` publishes none, so green-over-zero-items is invisible to this gate and remains an owed capability |
+| `ci-green` | guard/test-only change | every required context **that can run** at the merged sha is green; every one that cannot is **named**, with its reason and its PR-head result over an identical tree (#4487 — see below). **Not** proof that any of them measured a non-empty population: `statusCheckRollup` publishes none, so green-over-zero-items is invisible to this gate and remains an owed capability |
 | `deploy-run` | deploy-path item | a workflow run whose deploy job **executed steps** against a live subscription |
 | `estate` | behaviour on the estate | live `build-marker.txt` contains the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
+
+**`ci-green` names a measurement the CI topology CAN produce — it did not, until
+#4487.** The original text (*every required context green at the merged sha*)
+was unobtainable for most PRs here, and that was found by taking the receipt for
+the first time, on this harness's own merge: at `a02cd41e6d42`, 15 required, 10
+green, 5 absent, 0 red. Four of the five come from `validate.yml`, whose `push:`
+trigger is path-filtered to paths that merge did not touch; the fifth is
+`commit-message-parses.yml` publishing the `push` spelling of a conditionally
+named job. An unsatisfiable definition leaves two outcomes — nothing closes, or
+someone quietly accepts 10-of-15 — and the second is the failure mode this PRP
+exists to prevent. The corrected receipt is implemented in
+`gates.ci_green_receipt`, called by `merge_gate.py --ci-green-receipt <PR>`, and
+excuses an absence **only** on measured evidence: the producing workflow (traced
+by *workflow identity* from the PR head, never by an alias table) either ran at
+the merged sha and concluded SUCCESS under a different job name, or was never
+created there because its own `on.push`, read at that sha, could not have
+admitted the commit. Every other branch fails closed.
 
 **The G1 trap, recorded because it already happened:** an assertion advertised as
 "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -215,5 +232,9 @@ caller is prose; so is a `policy.json` key nothing reads.
 - [ ] All 153 unsized issues carry a size; all 118 unlaned carry a lane.
 - [ ] Every one of the 297 reaches `closed` / `parked` / `declined`.
 - [ ] No issue closed without a receipt of the kind §5 requires for its class.
+- [x] Every receipt kind names a measurement that can actually be TAKEN — the
+      first attempt at `ci-green` proved its own definition unobtainable (#4487),
+      and an unobtainable receipt is indistinguishable from a receipt nobody
+      checks. Re-test this the first time any other kind is taken.
 - [ ] A cold start on `README.md` alone can advance the queue with no transcript.
 - [ ] The before/after issue audit ran on **every** merge, with deltas explained.
