@@ -333,8 +333,17 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
         if sub:
             # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
             # chain, so the sub-key's own spelling cannot collide with anything.
-            pattern = (r"\[\s*[\"']" + re.escape(section) + r"[\"']\s*\]\s*"
-                       r"(?:\[|\.get\()\s*[\"']" + re.escape(sub) + r"[\"']")
+            #
+            # BOTH halves accept `.get(`, not just the sub half. The asymmetry
+            # missed `policy.get("wip", {})["max_lanes"]` -- and `.get(` is this
+            # package's dominant spelling (seven occurrences, including the
+            # two-level `policy.get("receipts", {}).get(...)`), so a future read
+            # written in the file's own house style would let a sectioned
+            # control be moved onto the allow-list undetected. The hole these
+            # checks exist to close, reopened by a refactor that looks like its
+            # neighbours.
+            pattern = (r"(?:\[|\.get\()\s*[\"']" + re.escape(section) + r"[\"']"
+                       r"[^\n]{0,20}?(?:\[|\.get\()\s*[\"']" + re.escape(sub) + r"[\"']")
         else:
             # A TOP-LEVEL key must be rooted at a policy dict. `repo` is read by
             # three modules as `policy["repo"]`; the ledger's `raw.get("schema")`

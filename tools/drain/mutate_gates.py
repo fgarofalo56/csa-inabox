@@ -532,6 +532,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
+        "P10 the section half of the policy-read scan rejects `.get(` again",
+        "gates.py",
+        '            pattern = (r"(?:\\[|\\.get\\()\\s*[\\"\']" + re.escape(section)',
+        '            pattern = (r"\\[\\s*[\\"\']" + re.escape(section)',
+    ),
+    (
         "G11 the below-window scan takes a PREFIX CUT, losing a straddling token",
         "gates.py",
         "                for ln in body.splitlines()",

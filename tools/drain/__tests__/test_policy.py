@@ -161,6 +161,35 @@ def test_negative_control_moving_a_bare_key_onto_the_allow_list_is_caught_too():
         gates.OPERATOR_DOCUMENTATION.update(original_doc)
 
 
+def test_negative_control_every_spelling_of_a_policy_read_is_covered(tmp_path, monkeypatch):
+    """The section half accepted only `["wip"]`, so
+    `policy.get("wip", {})["max_lanes"]` was missed -- and `.get(` is this
+    package's DOMINANT spelling. The hole these checks exist to close, reopened
+    by a refactor that looks like its neighbours."""
+    spellings = [
+        'policy["wip"]["max_lanes"]',
+        "policy['wip']['max_lanes']",
+        'policy.get("wip", {})["max_lanes"]',
+        'policy.get("wip")["max_lanes"]',
+        'policy["wip"].get("max_lanes")',
+        'policy.get("wip", {}).get("max_lanes")',
+        'POLICY["wip"]["max_lanes"]',
+    ]
+    original = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OPERATOR_DOCUMENTATION.add("wip.max_lanes")
+    try:
+        for spelling in spellings:
+            probe = tmp_path / "probe.py"
+            probe.write_text(f"cap = {spelling}\n", encoding="utf-8")
+            monkeypatch.setattr(gates, "__file__", str(tmp_path / "gates.py"))
+            (tmp_path / "gates.py").write_text("", encoding="utf-8")
+            found = gates._documentation_keys_that_are_actually_read()
+            assert "wip.max_lanes" in found, f"missed: {spelling}"
+    finally:
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original)
+
+
 def test_an_unrelated_literal_does_not_cry_wolf():
     """The other edge, and the reason this is keyed to the subscript: a bare
     scan failed the contract on any unrelated string, blaming a policy key that
