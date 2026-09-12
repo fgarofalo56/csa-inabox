@@ -28,7 +28,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ledger import AWAITING_RECEIPT, IN_FLIGHT, IN_REVIEW, Ledger
-from ledger import _now as _ledger_now
 
 import gates
 
@@ -108,7 +107,8 @@ def ledger_receipt_ready(number: int, policy: dict, state_path: str | None = Non
     return led.receipt_ok(item)
 
 
-def ledger_candidates(state_path: str | None = None) -> list[str]:
+def ledger_candidates(state_path: str | None = None,
+                      policy_repo: str | None = None) -> list[str]:
     """Where `state.json` might be, in order, from wherever we were invoked.
 
     `state.json` is gitignored, so it exists in the PRIMARY checkout and in no
@@ -123,7 +123,15 @@ def ledger_candidates(state_path: str | None = None) -> list[str]:
     So a worktree falls back to the primary checkout via git's COMMON DIR:
     `.git` in a worktree is a file pointing at `<primary>/.git/worktrees/<name>`,
     and `--git-common-dir` resolves to `<primary>/.git`. Its parent is the
-    primary working tree. Purely a read; nothing is written outside `HERE`.
+    primary working tree.
+
+    PURELY A READ; NOTHING IS WRITTEN OUTSIDE `HERE` -- and that sentence was
+    FALSE for one round. `bind_pr` loaded through this resolver and saved, so
+    from a worktree it rewrote the PRIMARY checkout's ledger, unlocked, while
+    up to four lanes were doing the same. Both reviewers reproduced the lost
+    update independently. The write is deleted, so the sentence is true again;
+    it is spelled out here because a resolver that hands out paths in other
+    people's checkouts has to be read-only by construction, not by habit.
     """
     if state_path:
         return [state_path]
@@ -149,16 +157,29 @@ def ledger_candidates(state_path: str | None = None) -> list[str]:
         return found
     primary = os.path.dirname(common.stdout.strip().rstrip("/"))
     candidate = os.path.join(primary, "tools", "drain", "state.json")
-    # The primary must look like THIS package, not merely like a repo that
-    # happens to carry `tools/drain/state.json`. A reviewer could not construct
-    # a realistic path to a foreign ledger -- a linked worktree's `.git` always
-    # points at its owner -- but a `GIT_COMMON_DIR` override or a vendored copy
-    # would, and reading another repo's ledger is the wrong-population defect
-    # `guard_refresh` spends a hundred lines on.
-    if (os.path.abspath(candidate) != os.path.abspath(found[0])
-            and os.path.exists(os.path.join(primary, "tools", "drain", "policy.json"))):
+    # IDENTITY, NOT PRESENCE. The first version of this required only that
+    # `policy.json` EXIST there -- which a vendored copy carries by definition,
+    # so it did not discriminate the case its own comment named. A reviewer
+    # pointed `GIT_COMMON_DIR` at a repo whose `policy.json` said
+    # `someone-else/other-repo` and resolved THIS repo's #1483 out of the
+    # foreign ledger: the wrong-population defect `guard_refresh` spends a
+    # hundred lines on, through the back door. The `repo` key must MATCH.
+    if os.path.abspath(candidate) != os.path.abspath(found[0]) and _same_repo(
+        os.path.join(primary, "tools", "drain", "policy.json"), policy_repo
+    ):
         found.append(candidate)
     return found
+
+
+def _same_repo(candidate_policy_path: str, repo: str | None) -> bool:
+    """Does that checkout's policy name the same repo as ours? Never raises."""
+    if not repo:
+        return False
+    try:
+        with open(candidate_policy_path, encoding="utf-8") as handle:
+            return json.load(handle).get("repo") == repo
+    except Exception:
+        return False
 
 
 def load_ledger(policy: dict, state_path: str | None = None
@@ -174,7 +195,7 @@ def load_ledger(policy: dict, state_path: str | None = None
 
     Every caller here already has a fail-closed shape to route a `None` into.
     """
-    tried = ledger_candidates(state_path)
+    tried = ledger_candidates(state_path, policy.get("repo"))
     for path in tried:
         if not os.path.exists(path):
             continue
@@ -212,6 +233,15 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     evidence of a conflict. It reports only the case where the harness's own
     record disagrees with the declaration -- which is the one thing on a PR that
     was not typed by its author.
+
+    **INERT TODAY, AND SAID SO RATHER THAN IMPLIED.** `Item.pr` has no writer:
+    0 of 299 live items carry one, so this returns `[]` for every real input.
+    It is kept, not deleted, because the check is right and the missing half is
+    a writer in `tick.py` -- which owns the ledger and is its single writer by
+    design. The previous round wrote the binding from HERE instead, and both
+    reviewers reproduced a lost update on the drain's only durable record. A
+    merge gate does not get to mutate the thing it measures. Tracked in #4489;
+    until then this is a declared-inert control, not a working one.
     """
     if not closing or pr is None:
         return []
@@ -225,37 +255,26 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     ]
 
 
-def bind_pr(numbers: list[int], pr: int, policy: dict,
-            state_path: str | None = None) -> list[str]:
-    """Record that `pr` is the PR claiming these items. First writer wins.
-
-    The ONLY write this module makes, and it is made from `main()` under
-    `--allow-close`, never from `run_gates` -- a gate that mutates the thing it
-    is measuring is a different kind of program.
-
-    `Item.pr` has existed since the ledger was written and had no writer, so the
-    correlation a reviewer asked for could not be checked. This accrues it: the
-    first PR to declare a close binds the item, and `poached_closes` refuses the
-    second. It does not prove the FIRST claim was right -- nothing available to
-    a merge gate can -- but it makes a repeat loud, and a repeat is the failure
-    mode that was actually named.
-    """
-    led, why = load_ledger(policy, state_path)
-    if led is None:
-        return [f"binding not recorded: {why}"]
-    bound = []
-    for number in numbers:
-        item = led.items.get(number)
-        if item is None or item.pr == pr:
-            continue
-        if item.pr is not None:
-            continue                      # poached_closes already blocked this
-        item.pr = pr
-        item.history.append(f"{_ledger_now()} bound to PR {pr} (declared close)")
-        bound.append(f"#{number} -> PR {pr}")
-    if bound:
-        led.save()
-    return bound
+# `bind_pr` WAS HERE, AND IS DELETED. Both reviewers blocked on it
+# independently, and they were right.
+#
+# It wrote `Item.pr` from `main()` so `poached_closes` would have something to
+# read. That made this module a WRITER of the ledger -- and via the worktree
+# fallback, a writer of a ledger in a checkout this process does not own, which
+# the resolver's own docstring said could not happen. Worse, it was an unlocked
+# read-modify-write on the drain's only durable record, in a harness whose
+# premise is up to four parallel lanes. Both reviewers reproduced the lost
+# update: `Ledger.save()` serialises the whole document from memory, so the
+# loser's cycle, state transitions and history do not merge -- they vanish.
+#
+# It was latent (no item holds a receipt, so `--allow-close` never reached it)
+# and it armed on the first receipt, which the docs say to expect.
+#
+# Locking a merge gate was the wrong answer to the wrong question. `tick.py`
+# owns the ledger and is the single writer by design; the binding belongs there,
+# written when a lane opens a PR for an item, not inferred by the gate from what
+# the PR says about itself. `poached_closes` stays as a READ and is DECLARED
+# INERT until that writer exists -- see its docstring. Tracked in #4489.
 
 
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
@@ -314,8 +333,15 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     copy-paste-across-invocations case B named, made loud.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
-    `reduce_verdicts` uses. A PR touching a W9-rest item and a W1-deploy item is
-    a W1-deploy change.
+    `reduce_verdicts` uses. That is the `hit` branch's job: a PR touching a
+    W9-rest item and a W1-deploy item is a W1-deploy change, and it never
+    reaches the corroborated branch below, because every escalating stream is
+    taken above. The example used to sit here, attached to a branch it cannot
+    occur in. What the corroborated branch actually sees is W4/W8/W9 only, and
+    `sorted()[0]` there is alphabetical -- it picks the lower W-number by
+    coincidence of naming, not by a declared priority, and a stream named
+    `Wx-audit` would reorder it silently. Cosmetic while none of the three
+    changes the count; recorded so it is not mistaken for a rule.
     """
     every = sorted(set(closing) | set(mentioned))
     if not every:
@@ -333,7 +359,20 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     hit = next((led.items[n].stream for n in every
                 if n in led.items and led.items[n].stream in escalating), None)
     if hit:
-        return hit, f"#{every} sits in {hit}{source}"
+        # NAME THE ONES THAT PRODUCED THE HIT, not the whole reference set. The
+        # first version said "#[1483, 999999] sits in W5-console" when #999999
+        # was not in the ledger at all -- established one thing, asserted
+        # another (R7). Fixed two branches down and left here: the same
+        # one-side-of-a-boundary shape this package names as its dominant
+        # failure mode.
+        because = [n for n in every
+                   if n in led.items and led.items[n].stream == hit]
+        rest = [n for n in every if n not in because]
+        return hit, (
+            f"#{because} sits in {hit}"
+            + (f" (also referenced: {rest})" if rest else "")
+            + source
+        )
 
     # The BINDING dominates the state test. An item already bound to another PR
     # is that PR's work, and being mid-flight is evidence FOR THAT PR, not for
@@ -794,17 +833,15 @@ def main() -> int:
         if not ok:
             print(f"refusing --allow-close {number}: {why}", file=sys.stderr)
             return 2
-    # ...and REFUSE one the ledger already binds to another PR, before binding
-    # anything. A receipt of the right kind says the WORK is done; it says
-    # nothing about whether THIS PR is the work. The binding is the only
-    # correlation available, so the conflict check runs first and the write
-    # second -- first writer wins, and the second is loud.
+    # ...and REFUSE one the ledger binds to another PR. A receipt of the right
+    # kind says the WORK is done; it says nothing about whether THIS PR is the
+    # work. INERT until something writes `Item.pr` -- which is `tick.py`'s job,
+    # not this module's; writing it from here made a merge gate a writer of a
+    # ledger it does not own and lost updates. #4489.
     poached = poached_closes(allow_close, policy, pr=args.pr)
     if poached:
         print(f"refusing --allow-close: {'; '.join(poached)}", file=sys.stderr)
         return 2
-    for line in bind_pr(allow_close, args.pr, policy):
-        print(f"ledger: {line}")
 
     data = collect(repo, args.pr)
     result = run_gates(data, policy, allow_close)

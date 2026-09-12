@@ -500,6 +500,15 @@ def _unresolved(where: str) -> str | None:
 # Near-miss kinds. `blocks` is decided at parse time, not by the reducer.
 NEAR_NO_MARKER = "no-marker"
 NEAR_NO_TOKEN = "no-token"
+
+#: What `worst_verdict_in_history` returns when the block it found was a
+#: NEAR-MISS -- a blocking token somewhere in the review history with no line
+#: announcing a verdict. It still escalates (formatting never reduces a block),
+#: but it is NOT attributable to a reviewer's decision, and saying "a reviewer
+#: returned REQUEST-CHANGES" about ordinary status prose is an R7 error. It
+#: carries a blocking token by construction so every shape-match downstream
+#: still fires.
+UNANNOUNCED_BLOCK = "REQUEST-CHANGES unannounced"
 NEAR_PREDATES_HEAD = "predates-head"
 NEAR_TEMPLATE = "template-line"
 NEAR_UNPINNABLE = "head-date-unknown"
@@ -615,23 +624,71 @@ def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | N
     live APPROVE, so prose beneath it -- citing a prior round, linking one,
     quoting one -- reports nothing. Both complaints, one answer.
 
-    The head_date passed is the earliest comment's, so nothing is pinned out:
-    this asks about the whole history on purpose.
+    THE COST, MEASURED BY THE OTHER REVIEWER AND TAKEN DELIBERATELY. Sharing
+    the population means inheriting `NEAR_NO_MARKER`, which blocks on a blocking
+    token in a comment that announces nothing. In gate 2+3 that is safe because
+    a push discharges it; here nothing pins, so it is PERMANENT. Their input:
+
+        "Status: the round-3 REQUEST-CHANGES finding about the anchor
+         meta-test has since been fixed and re-verified end to end."
+
+    Ordinary status prose -- the house style on this very PR -- locks it to two
+    reviewers for the rest of its life.
+
+    I could not find a rule that separates that from the first reviewer's
+
+        "Re-review - REQUEST-CHANGES"          (marker misspelled)
+
+    They are the same shape: a token on a line that is not a recognised marker.
+    Every candidate discriminator was an idiom, and "three rounds running, the
+    rule was 'a marker line that is not <the idioms I have thought of>'" is the
+    recorded history of the function next door. So the tie is broken on the
+    rule this package already states in both directions: formatting may refuse
+    to GRANT an approval and must never REDUCE a block, and every sibling
+    control fails closed. An over-escalation costs a reviewer; an
+    under-escalation merges a PR a reviewer rejected.
+
+    What is NOT acceptable is the reason string lying about it. "a reviewer
+    returned REQUEST-CHANGES" is false for status prose -- no reviewer returned
+    anything. So an unannounced block comes back tagged and carrying its comment
+    id, and `review_requirement` words it as what it is.
+
+    The head_date passed is the earliest NON-EMPTY timestamp, so nothing is
+    pinned out -- and a comment with no timestamp at all is treated as
+    unpinnable rather than as predating, because `"" >= "0000-..."` is False and
+    that silently DROPPED its verdict. Measured as a regression against the
+    hand-rolled version, in the losing direction.
     """
     if not comments:
         return None
-    earliest = min(
-        (c.get("created_at") or "" for c in comments), default=""
-    ) or "0000-01-01T00:00:00Z"
-    live, near = parse_verdicts(comments, earliest, window)
+    stamped = [c.get("created_at") or "" for c in comments]
+    earliest = min((s for s in stamped if s), default="") or "0000-01-01T00:00:00Z"
+    # NORMALISE THE MISSING TIMESTAMPS IN, rather than special-casing them out.
+    # `min()` over the raw values returned `""` whenever ANY comment lacked one,
+    # the fallback kicked in, and that comment then failed
+    # `"" >= "0000-01-01T00:00:00Z"` -- so `parse_verdicts` called it
+    # PREDATES-HEAD, `blocks=False`, and dropped its verdict. Measured as a
+    # regression against the hand-rolled version, in the losing direction.
+    #
+    # A comment with no timestamp is not OLD, it is UNDATED. Pinning is not the
+    # question this function asks, so an undated comment is pinned in at the
+    # earliest and parsed like any other -- which keeps a well-formed
+    # `REQUEST-CHANGES` a live block rather than demoting it to unpinnable.
+    pinned_in = [
+        c if s else {**c, "created_at": earliest}
+        for c, s in zip(comments, stamped, strict=False)
+    ]
+    live, near = parse_verdicts(pinned_in, earliest, window)
     blocking = next((v.token for v in live if v.token in BLOCKING_TOKENS), None)
     if blocking:
         return blocking
-    if any(n.blocks for n in near):
+    blocked = next((n for n in near if n.blocks), None)
+    if blocked:
         # A near-miss has no token by construction -- that is what makes it a
-        # near-miss. It is reported as the canonical block because what
-        # `review_requirement` asks is whether one occurred, not which spelling.
-        return "REQUEST-CHANGES"
+        # near-miss -- so it cannot be reported as one reviewer's decision. It
+        # is TAGGED, and it names the comment, because a permanent escalation
+        # nobody can locate is worse than one they can argue with.
+        return f"{UNANNOUNCED_BLOCK} (comment {blocked.comment_id})"
     return next((v.token for v in live), None)
 
 
@@ -1399,7 +1456,27 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
         # reviewer count that only recognised the exact token would let
         # formatting reduce a block to "one reviewer was enough".
         upper = prior_verdict.upper()
+        # `"CHANGES REQUIRED"` is kept although no PRODUCTION caller can emit
+        # it: `worst_verdict_in_history` returns a `VERDICT_TOKENS` member or
+        # `UNANNOUNCED_BLOCK`, and a `CHANGES REQUIRED` header now arrives
+        # through the near-miss path as the latter. The behaviour IS covered;
+        # this branch is a second net for any future caller that passes a raw
+        # header, and it is named here as such rather than left looking like a
+        # live control -- a reviewer counted it as the same
+        # proved-against-the-function-never-the-caller shape twice running.
         if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:
+            # SAY WHICH IT IS. An unannounced block escalates on the same rule
+            # -- formatting never reduces a block -- but attributing it to a
+            # reviewer's decision is false: a comment that announces nothing
+            # decided nothing. A reviewer measured ordinary status prose being
+            # reported as "a reviewer returned REQUEST-CHANGES".
+            if prior_verdict.startswith(UNANNOUNCED_BLOCK):
+                return 2, (
+                    f"a blocking token appears in this PR's review history with "
+                    f"no line announcing a verdict ({prior_verdict.strip()}) - "
+                    "not attributable to a reviewer's decision, and it fails "
+                    "closed because formatting never reduces a block"
+                )
             return 2, f"a reviewer returned {prior_verdict.strip()!r}"
 
     if stream and stream in escalation_streams(policy):

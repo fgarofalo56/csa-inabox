@@ -485,11 +485,15 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
     `referenced_issues` exists to avoid. Kills MG21."""
     primary = tmp_path / "primary"
     (primary / "tools" / "drain").mkdir(parents=True)
-    # `policy.json` is what makes the candidate THIS package rather than any
-    # directory that happens to carry a `tools/drain/state.json` -- the cheap
-    # hardening against a `GIT_COMMON_DIR` override or a vendored copy pointing
-    # at a foreign repo's ledger. Kills MG29.
-    (primary / "tools" / "drain" / "policy.json").write_text("{}", encoding="utf-8")
+    # The candidate's `policy.json` must name the SAME REPO. Requiring only that
+    # the file EXIST did not discriminate the case its own comment named -- a
+    # vendored copy carries one by definition -- and a reviewer pointed
+    # `GIT_COMMON_DIR` at a foreign repo and resolved this repo's #1483 out of
+    # its ledger. `"{}"` was the tell: the guard was satisfied by a token.
+    # Kills MG29.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": POLICY["repo"]}), encoding="utf-8"
+    )
     (primary / ".git").mkdir()
     worktree_drain = tmp_path / "wt" / "tools" / "drain"
     worktree_drain.mkdir(parents=True)
@@ -501,7 +505,7 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
                                stderr="")
 
     monkeypatch.setattr(merge_gate.subprocess, "run", fake_git)
-    found = merge_gate.ledger_candidates()
+    found = merge_gate.ledger_candidates(policy_repo=POLICY["repo"])
     assert len(found) == 2, found
     assert os.path.abspath(found[1]) == os.path.abspath(
         str(primary / "tools" / "drain" / "state.json")
@@ -510,9 +514,23 @@ def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_
     # whatever git says about the machine it runs on.
     assert merge_gate.ledger_candidates("/x/state.json") == ["/x/state.json"]
 
-    # A directory that carries a state.json but is NOT this package is refused.
+    # A checkout of a DIFFERENT repo is refused, even though it carries every
+    # file this package has. Presence was not identity.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": "someone-else/other-repo"}), encoding="utf-8"
+    )
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
+    # ...and so is one with no policy at all, or an unreadable one.
+    (primary / "tools" / "drain" / "policy.json").write_text("{not json",
+                                                             encoding="utf-8")
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
     (primary / "tools" / "drain" / "policy.json").unlink()
-    assert len(merge_gate.ledger_candidates()) == 1
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
+    # A caller that cannot say which repo it is gets no fallback: fail closed.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": POLICY["repo"]}), encoding="utf-8"
+    )
+    assert len(merge_gate.ledger_candidates(policy_repo=None)) == 1
 
 
 def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
@@ -621,7 +639,17 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     led.save()
 
     assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
-    assert merge_gate.bind_pr([10], 99, POLICY, path) == ["#10 -> PR 99"]
+    # The binding is set DIRECTLY here, because nothing writes it in production
+    # and this module no longer tries to. `bind_pr` used to, from `main()` --
+    # and both reviewers reproduced a lost update: an unlocked read-modify-write
+    # on the drain's only durable record, reaching (via the worktree fallback) a
+    # checkout this process does not own. `Ledger.save()` serialises the whole
+    # document from memory, so the loser's cycle, state transitions and history
+    # do not merge, they vanish. A merge gate does not write the thing it
+    # measures; `tick.py` owns the ledger. The writer is tracked in #4489, and
+    # until it exists this control is DECLARED INERT rather than claimed.
+    led.items[10].pr = 99
+    led.save()
     # The SAME PR may re-run the gate as often as it likes.
     assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
     # A DIFFERENT PR may not claim it. The fixture PR is #1.
@@ -685,11 +713,21 @@ def test_every_gate_of_the_spec_is_present():
 # ---------------------------------------------------------------------------
 
 
-def _ledger_with(tmp_path, number, stream="W6-ci", lane="lane:ci", receipt=None):
+def _ledger_with(tmp_path, number, stream="W6-ci", lane="lane:ci", receipt=None,
+                 state="in-flight"):
+    """A ledger holding one item, IN FLIGHT by default.
+
+    In flight because that is the only state a declared close corroborates: a
+    `ready` item was never scheduled and a terminal one is finished, so neither
+    is evidence that a PR opened now is work on it. The canonical PR these
+    fixtures stand for is one a lane is holding.
+    """
     from ledger import Ledger
 
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     led.upsert(number, "x", stream, lane=lane, size=1)
+    if state:
+        led.transition(number, state, "selected by a lane")
     if receipt:
         led.record_receipt(number, receipt, "evidence")
     led.save()

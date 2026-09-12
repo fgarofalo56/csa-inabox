@@ -760,32 +760,46 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("MG16 the verdict history reduces by TIME again, so whichever of two "
          "parallel reviewers posts first decides the count"),
         "gates.py",
-        "    live, near = parse_verdicts(comments, earliest, window)",
-        ("    comments = sorted(comments, key=lambda c: c.get('created_at', ''))[:1]\n"
-         "    live, near = parse_verdicts(comments, earliest, window)"),
+        "    live, near = parse_verdicts(pinned_in, earliest, window)",
+        ("    pinned_in = sorted(pinned_in, key=lambda c: c.get('created_at', ''))[:1]\n"
+         "    live, near = parse_verdicts(pinned_in, earliest, window)"),
     ),
     (
         ("MG17 the verdict history re-parses the comments ITSELF, stricter than "
          "the gate it feeds, so four block shapes go unseen"),
         "gates.py",
-        "    if any(n.blocks for n in near):",
-        "    if False:",
+        "    blocked = next((n for n in near if n.blocks), None)",
+        "    blocked = None",
     ),
     (
         ("MG27 the history scan requires a well-formed MARKER, so a misspelled "
          "header or a block below a preamble stops raising the count"),
         "gates.py",
-        "    live, near = parse_verdicts(comments, earliest, window)",
-        ("    comments = [c for c in comments\n"
-         "                if _marker_lines((c.get('body') or '')[:window])]\n"
-         "    live, near = parse_verdicts(comments, earliest, window)"),
+        "    live, near = parse_verdicts(pinned_in, earliest, window)",
+        ("    pinned_in = [c for c in pinned_in\n"
+         "                 if _marker_lines((c.get('body') or '')[:window])]\n"
+         "    live, near = parse_verdicts(pinned_in, earliest, window)"),
     ),
     (
         ("MG28 the history scan PINS to the latest comment instead of the "
          "earliest, so a push voids the escalation after all"),
         "gates.py",
-        '    ) or "0000-01-01T00:00:00Z"',
-        '    ) and max((c.get("created_at") or "" for c in comments), default="z")',
+        '    earliest = min((s for s in stamped if s), default="") or "0000-01-01T00:00:00Z"',
+        '    earliest = max((s for s in stamped if s), default="") or "9999-01-01T00:00:00Z"',
+    ),
+    (
+        ("MG30 a comment with NO timestamp is treated as PREDATING rather than "
+         "unpinnable, so its block is silently dropped"),
+        "gates.py",
+        '        c if s else {**c, "created_at": earliest}',
+        "        c",
+    ),
+    (
+        ("MG31 an UNANNOUNCED block is reported as a reviewer's decision, which "
+         "is false about a comment that announces nothing"),
+        "gates.py",
+        "            if prior_verdict.startswith(UNANNOUNCED_BLOCK):",
+        "            if False:",
     ),
     (
         ("MG18 the bare-reference scan loosens back to `#\\d+`, so a hex colour "
@@ -818,12 +832,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        pass",
     ),
     (
-        ("MG29 the fallback accepts ANY directory carrying a state.json, so a "
-         "foreign repo's ledger resolves this repo's issue numbers"),
+        ("MG29 the fallback checks that a policy.json is PRESENT rather than "
+         "that it names the SAME REPO, so a vendored copy resolves foreign "
+         "issue numbers"),
         "merge_gate.py",
-        ('            and os.path.exists(os.path.join(primary, "tools", "drain", '
-        '"policy.json"))'),
-        "            and True",
+        "            return json.load(handle).get(\"repo\") == repo",
+        "            return bool(json.load(handle))",
     ),
     (
         ("MG22 a bare MENTION explains a non-escalating stream again, so a stale "
@@ -1156,7 +1170,21 @@ def main() -> int:
         selected_without = _passed_count(control.stdout)
         print(f"DESELECT  {selected_with} -> {selected_without} tests "
               f"(the anchor meta-test must not decide an arm)")
-        if with_meta.returncode != 0 or selected_with != selected_without + 1:
+        # TWO CONDITIONS, TWO DIAGNOSES. They were one message, and it named
+        # the WRONG cause for the commoner of the two: a BROKEN ANCHOR -- the
+        # ordinary event on a refactor, which this package records happening
+        # four times in one commit -- makes the with-meta run RED, and the run
+        # then announced "the nodeid is wrong" about a nodeid that was correct,
+        # while discarding the one output carrying the real answer. R7, in the
+        # file whose sibling declares "never discarding stderr".
+        if with_meta.returncode != 0:
+            print("REFUSING -- the unmutated suite is RED with the anchor "
+                  "meta-test SELECTED. An arm's needle no longer matches the "
+                  "source; the nodeid is not implicated. The failure names the "
+                  "arm:")
+            print(with_meta.stdout[-2000:])
+            return 2
+        if selected_with != selected_without + 1:
             print("REFUSING -- the deselect did not remove exactly one passing test, "
                   f"so the nodeid is wrong: {deselect}")
             return 2

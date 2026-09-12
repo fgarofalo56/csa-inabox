@@ -40,7 +40,11 @@ Scope and autonomy are already decided — do not re-ask them:
     the normal path today, and it always works. This is a measured consequence,
     not an oversight: a bare `Refs #N` is an aside, good enough to raise the
     count and not good enough to lower it, because a stale copy-pasted number
-    must never buy a weaker gate. It relaxes on its own as items earn receipts.
+    must never buy a weaker gate. It relaxes as items start carrying receipts —
+    and note that NOTHING records one automatically today: `record_receipt` has
+    no production caller (#4489), so a receipt is a deliberate hand edit to
+    `state.json`. Measure it with
+    `python tools/drain/operating_point.py --merge-gate`.
     Run the gate from the PRIMARY checkout if you can; from a worktree it falls
     back to the primary's ledger via git's common dir, and if that fails it
     escalates.
@@ -83,8 +87,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 294 pass
-python tools/drain/mutate_gates.py       # 144 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 295 pass
+python tools/drain/mutate_gates.py       # 146 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

@@ -331,8 +331,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 294 tests across every module
-python tools/drain/mutate_gates.py           # 144 arms, must be 144 KILLED
+python -m pytest tools/drain/__tests__ -q    # 295 tests across every module
+python tools/drain/mutate_gates.py           # 146 arms, must be 146 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -419,8 +419,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 144 mutation arms against a sandbox copy; must be 144 KILLED |
+| `mutate_gates.py` | 146 mutation arms against a sandbox copy; must be 146 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 294 tests; a negative control for every decision function |
+| `__tests__/` | 295 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

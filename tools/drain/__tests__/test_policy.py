@@ -479,9 +479,22 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
         "marker relayed in a fence": "```\nIndependent review - REQUEST-CHANGES\n```",
     }
     for label, body in shapes.items():
-        assert gates.worst_verdict_in_history(
-            [_verdict(1, "2026-09-12T06:00:00Z", body)]
-        ) == "REQUEST-CHANGES", label
+        got = gates.worst_verdict_in_history([_verdict(1, "2026-09-12T06:00:00Z", body)])
+        # Every one carries a blocking token, so `review_requirement`'s
+        # shape-match fires -- but only the one with a real MARKER is
+        # attributable to a reviewer's decision. The rest come back TAGGED and
+        # naming the comment, because "a reviewer returned REQUEST-CHANGES" is
+        # false about a comment that announces nothing, and a permanent
+        # escalation nobody can locate is worse than one they can argue with.
+        assert "REQUEST-CHANGES" in got, label
+        if label == "block spelled wrong":
+            assert got.startswith(gates.UNANNOUNCED_BLOCK), label
+        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                          prior_verdict=got)
+        assert n == 2, label
+        assert ("no line announcing a verdict" in why) == got.startswith(
+            gates.UNANNOUNCED_BLOCK
+        ), f"{label}: the reason must match what was established - {why}"
         # ...and gate 2+3 agrees, which is the point of sharing the population.
         live, near = gates.parse_verdicts(
             [_verdict(1, "2026-09-12T06:00:00Z", body)], "2026-09-12T05:00:00Z"
@@ -512,6 +525,40 @@ def test_negative_control_prose_under_an_approve_header_reports_nothing():
         assert gates.worst_verdict_in_history(
             [_verdict(1, "2026-09-12T06:00:00Z", body)]
         ) == "APPROVE", body[:60]
+
+
+def test_negative_control_a_comment_with_no_timestamp_still_blocks():
+    """`min()` over the timestamps returned `""` when ANY comment lacked one,
+    the fallback kicked in, and that comment then failed `"" >= "0000-..."` --
+    so `parse_verdicts` classified it PREDATES-HEAD, `blocks=False`, and its
+    verdict was silently dropped. A reviewer measured all three shapes as a
+    REGRESSION against the hand-rolled version, in the losing direction: an
+    escalation lost, which is the direction this package never accepts.
+
+    A comment with no timestamp cannot be PINNED. That is not the same as
+    predating, and `parse_verdicts` already has the right answer for it --
+    unpinnable, and it blocks. Kills MG28, MG30."""
+    block = "## Independent review - REQUEST-CHANGES\n\nno."
+    approve = "## Independent re-review - APPROVE\n\nfixed."
+
+    # Every comment unstamped.
+    assert gates.worst_verdict_in_history(
+        [{"id": 1, "body": block}]
+    ) == "REQUEST-CHANGES"
+    # The BLOCK unstamped, an approval stamped -- the shape that returned
+    # APPROVE, i.e. a real block erased by a sibling that happened to have a
+    # timestamp.
+    assert gates.worst_verdict_in_history([
+        {"id": 1, "body": block},
+        _verdict(2, "2026-09-12T06:00:00Z", approve),
+    ]) == "REQUEST-CHANGES"
+    # Present but empty is the same case.
+    assert gates.worst_verdict_in_history(
+        [_verdict(1, "", block)]
+    ) == "REQUEST-CHANGES"
+    # The control: unstamped approvals stay approvals, so this is not simply
+    # "anything unpinnable blocks".
+    assert gates.worst_verdict_in_history([{"id": 1, "body": approve}]) == "APPROVE"
 
 
 def test_negative_control_the_history_scan_does_not_pin_to_the_head():
