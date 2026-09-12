@@ -343,6 +343,121 @@ def test_negative_control_a_stream_downgrade_cannot_make_a_held_receipt_sufficie
     assert any("VOID" in h for h in led.items[1].history), "and it must be RECORDED"
 
 
+def test_negative_control_a_lane_removal_alone_cannot_make_a_receipt_sufficient(
+    tmp_path,
+):
+    """The door the previous fix left open, and the one its own comment had
+    named as the attack. `effective_receipt_class` reads THREE inputs --
+    `receipt_class`, then `lane`, then `stream` -- and `lane` OUTRANKS `stream`.
+    Keying the guard on `stream` therefore defended the route the reviewers
+    demonstrated and left the stronger one untouched.
+
+    Here the stream is PINNED at W2-security throughout: nothing about it moves.
+    Only `lane:console` is removed, which is an ordinary relabel, and the class
+    falls `ui-surface` -> `guard-or-test-only`. Eleven live items sat on a
+    lane-derived class when this was measured, 8 of them W2-security whose
+    required receipt would have dropped from a live browser walk to CI green.
+
+    Kills L15."""
+    led = _led(tmp_path)
+    led.upsert(1, "a security surface", "W2-security", lane="lane:console", size=3)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "ci-green", "run/123")
+    assert led.items[1].effective_receipt_class == "ui-surface"
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    led.upsert(1, "a security surface", "W2-security", lane=None, size=3)
+    assert led.items[1].stream == "W2-security", "the stream must NOT have moved"
+    assert led.items[1].effective_receipt_class == "guard-or-test-only"
+    assert led.items[1].receipt_kind is None, "the receipt must be VOID"
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    # The lane move is recorded in its own right (kills L17), and the VOID line
+    # names the REF -- a receipt destroyed without saying which one it was
+    # leaves nothing to re-take or to dispute.
+    assert any("lane lane:console -> None" in h for h in led.items[1].history)
+    assert any("VOID" in h and "run/123" in h for h in led.items[1].history)
+
+
+def test_negative_control_an_explicit_receipt_class_escapes_a_label_keyed_guard(
+    tmp_path,
+):
+    """The third input, and the one that outranks both labels. A guard re-gated
+    on "did a LABEL move?" reads clean here: neither `lane` nor `stream`
+    changes, and the class still drops because `receipt_class` was written
+    through the kwargs loop.
+
+    This is why the comparison is taken over the CLASS -- the OUTCOME -- rather
+    than over any list of its causes. The two previous versions of this guard
+    were each a narrower enumeration of causes, and each was breached by the
+    input it did not enumerate. Kills L18."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1)
+    led.record_receipt(1, "ci-green", "r/1")
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1,
+               receipt_class="guard-or-test-only")
+    assert led.items[1].lane == "lane:bicep"
+    assert led.items[1].stream == "W1-deploy"
+    assert led.items[1].receipt_kind is None
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_kwargs_cannot_restore_a_receipt_the_same_call_voided(
+    tmp_path,
+):
+    """Order matters. The kwargs loop writes arbitrary fields, `receipt_kind`
+    among them, so a refresh that reclassifies AND supplies a receipt in one
+    call must not have the write land after the void. Kills L16 -- if
+    `now_class` is read before the writes it can never differ and every route
+    here is open at once."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/1")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1,
+               receipt_kind="ci-green", receipt_ref="r/2")
+    assert led.items[1].receipt_kind is None
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_a_mid_work_reclassification_is_flagged_even_with_no_receipt_yet(tmp_path):
+    """A lane holding this item is building toward a target that just moved --
+    a `g1-browser` walk it no longer needs, or a `ci-green` that is no longer
+    enough. It is told whether or not a receipt happened to have been taken
+    first. My own probe caught this one: the earlier shape only routed to
+    `needs-audit` inside the void branch, so an item reclassified BEFORE its
+    receipt existed kept working to the old spec in silence. Kills L19."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.transition(1, "in-flight", "selected")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    assert any("receipt class ui-surface -> guard-or-test-only" in h
+               for h in led.items[1].history)
+
+
+def test_a_ready_item_is_not_routed_to_needs_audit_by_a_reclassification(tmp_path):
+    """The control for the one above, and the stranding this fix repaired.
+    `audit_reason` is a SCALAR: routing every reclassification to `needs-audit`
+    overwrote a `departed` reason, which made the departure rescue's `elif`
+    unmatchable and left the item unable to return to the queue ever -- the
+    one-way `needs-audit` that rescue exists to prevent. A `ready` item has
+    nothing to audit; its receipt is void, that is recorded, and what it needs
+    is re-work, which is what `ready` means."""
+    led = _led(tmp_path)
+    it = led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    it.audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(1, NEEDS_AUDIT, "gone from GitHub")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)   # returns AND reclassifies
+    assert led.items[1].state == READY
+    assert led.items[1].audit_reason is None
+
+
 def test_negative_control_the_upgrade_direction_voids_the_receipt_too(tmp_path):
     """Either direction. A receipt is evidence about a QUESTION -- change the
     class and it is evidence about a different one, so `ci-green` taken while an

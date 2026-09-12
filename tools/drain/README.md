@@ -162,11 +162,29 @@ a capability the harness does not have.
 
 **Independent review: one reviewer, escalating.** W0 took eight posted rounds with two
 reviewers because it *was* the merge gate; at ~296 issues that is not the
-default. `gates.review_requirement()` returns 2 when the first reviewer returns
-REQUEST-CHANGES or CANNOT-ASSESS, or when the diff touches a guard, a deploy
-path, bicep or a console surface — the failure modes a single reviewer was
-observed to miss in most of those rounds. Every brief states its own
-requirement rather than leaving the lane to infer it.
+default. `gates.review_requirement()` returns 2 on **four** independent
+triggers, and it is worth reading all four because the two obvious ones account
+for the smaller share of the live population:
+
+1. **The first verdict blocks** — REQUEST-CHANGES or CANNOT-ASSESS, matched by
+   shape, so a spelling cannot reduce a block.
+2. **The diff touches a listed PATH** — twelve fragments in `policy.json`, read
+   from the file, not hardcoded. Guards, deploy, bicep, both front-ends, and the
+   files that decide the rules themselves: `.gitignore`, `CODEOWNERS`,
+   `Makefile`, `pyproject.toml`.
+3. **The item's STREAM is listed** — W0/W1/W2/W3/W5/W6/W7. A lane is a guess
+   about the footprint; a stream is a fact about the work, and a relabel
+   decouples the two.
+4. **The footprint is NOT YET KNOWN** — which is every unlaned item, because at
+   brief time the diff does not exist. This one **fails closed**, and it is the
+   single largest driver: 100 of the live 299.
+
+Measured over the live 299: 279 escalate. Most of that is W9-rest, the triage
+stream, which is not schedulable until laned anyway — see `_operating_point` in
+`policy.json` for the full breakdown and the standing instruction to re-measure
+after triage rather than tune the list on a pre-triage snapshot. Every brief
+states its own requirement rather than leaving the lane to infer it, and
+`merge_gate` gate 3b re-decides on the REAL changed files.
 
 **How to write a verdict that registers — POSITION, not idiom.**
 
@@ -244,8 +262,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 244 tests across every module
-python tools/drain/mutate_gates.py           # 107 arms, must be 107 KILLED
+python -m pytest tools/drain/__tests__ -q    # 262 tests across every module
+python tools/drain/mutate_gates.py           # 117 arms, must be 117 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -327,8 +345,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 107 mutation arms against a sandbox copy; must be 107 KILLED |
+| `mutate_gates.py` | 117 mutation arms against a sandbox copy; must be 117 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 244 tests; a negative control for every decision function |
+| `__tests__/` | 262 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

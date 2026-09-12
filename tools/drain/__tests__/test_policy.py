@@ -348,6 +348,49 @@ def test_negative_control_each_escalating_lane_is_pinned_individually():
         assert n == expected, f"{lane} -> {n}, expected {expected}: {why}"
 
 
+#: Every fragment in `escalate_to_two_when_path_contains`, with a real file
+#: that lands on it. The fragment itself is NOT the test input -- a test that
+#: fed the list back into itself would pass over an empty list and prove
+#: nothing. These paths are written out by hand so that deleting a row from the
+#: authority makes a NAMED case fail.
+ESCALATING_PATHS = [
+    ("tools/drain", "tools/drain/gates.py"),
+    ("scripts/ci", "scripts/ci/check-deploy-staleness.mjs"),
+    ("dev-loop/gates", "dev-loop/gates/validate-all.ps1"),
+    (".github/workflows", ".github/workflows/deploy-fiab-commercial.yml"),
+    (".github/CODEOWNERS", ".github/CODEOWNERS"),
+    (".gitignore", ".gitignore"),
+    ("Makefile", "Makefile"),
+    ("pyproject.toml", "pyproject.toml"),
+    ("platform/fiab/bicep", "platform/fiab/bicep/main.bicep"),
+    ("deploy/", "deploy/main.bicep"),
+    ("apps/fiab-console", "apps/fiab-console/app/page.tsx"),
+    ("portal/", "portal/src/index.tsx"),
+]
+
+
+@pytest.mark.parametrize(("fragment", "path"), ESCALATING_PATHS)
+def test_negative_control_each_escalating_path_fragment_is_pinned(fragment, path):
+    """Both reviewers flagged the same asymmetry: the fragments reachable
+    through a LANE were pinned individually and the rest were covered only in
+    aggregate, so five rows could be deleted from the authority over a green
+    matrix. The five newest were the unpinned ones, and `.gitignore` is the
+    worst of them -- an entry in it is what hid the merge gate from every
+    reader for the length of this program, which is #4468's entire thesis.
+
+    Parametrized rather than looped so a deletion names the row it lost."""
+    n, why = gates.review_requirement(POLICY, changed_paths=[path], stream="W9-rest")
+    assert n == 2, f"{fragment!r} via {path}: {why}"
+
+
+def test_negative_control_the_pinned_paths_are_the_whole_authority():
+    """The list above is a hand-written MIRROR, so it can fall behind the file
+    it mirrors: add a thirteenth fragment and every case still passes while the
+    new row goes unpinned -- which is exactly the state this test was written to
+    end. Compares SETS, not counts: a swap reads clean against a length."""
+    assert {f for f, _ in ESCALATING_PATHS} == set(gates.escalation_paths(POLICY))
+
+
 def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
     """`parse_verdicts` spends a whole apparatus on the fact that
     "CHANGES REQUIRED" is a block written the wrong way. A reviewer count that

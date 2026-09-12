@@ -289,29 +289,66 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     # -- the ledger's third terminal state ---------------------------------
     (
-        "L11 a stream DOWNGRADE carries the held receipt over (R2 by a label edit)",
+        "L11 a class DOWNGRADE carries the held receipt over (R2 by a label edit)",
         "ledger.py",
-        "                if now_class != was_class and existing.receipt_kind:",
-        "                if False:",
+        "            if now_class != was_class:",
+        "            if False:",
     ),
     (
         "L12 the reclassification guard only fires when the receipt becomes INVALID",
         "ledger.py",
-        "                if now_class != was_class and existing.receipt_kind:",
-        ("                if (now_class != was_class and existing.receipt_kind\n"
-         "                        and self.receipts.get(now_class) != existing.receipt_kind):"),
+        "            if now_class != was_class:",
+        ("            if (now_class != was_class\n"
+         "                    and self.receipts.get(now_class) != existing.receipt_kind):"),
     ),
     (
         "L13 a FALSY stream wipes the class to the weakest",
         "ledger.py",
-        "            if stream and stream != existing.stream:",
-        "            if stream != existing.stream:",
+        "            if stream:\n                existing.stream = stream",
+        "            existing.stream = stream",
     ),
     (
         "L14 the stream change is made but never RECORDED",
         "ledger.py",
-        '                existing.history.append(f"{_now()} stream {was} -> {stream}")',
+        ('                existing.history.append(\n'
+         '                    f"{_now()} stream {was_stream} -> {existing.stream}"\n'
+         '                )'),
         "                pass",
+    ),
+    (
+        ("L15 the class is re-gated on STREAM, so a LANE removal escapes -- the "
+         "door the comment it replaced named as the attack"),
+        "ledger.py",
+        "            if now_class != was_class:",
+        "            if now_class != was_class and existing.stream != was_stream:",
+    ),
+    (
+        "L16 `now_class` is read BEFORE the writes, so it can never differ",
+        "ledger.py",
+        "            now_class = existing.effective_receipt_class",
+        "            now_class = was_class",
+    ),
+    (
+        "L17 the LANE change is made but never RECORDED",
+        "ledger.py",
+        ('                existing.history.append('
+         'f"{_now()} lane {was_lane} -> {existing.lane}")'),
+        "                pass",
+    ),
+    (
+        ("L18 the class is re-gated on the two LABEL inputs, so the kwargs route "
+         "-- an explicit receipt_class, which outranks both -- escapes"),
+        "ledger.py",
+        "            if now_class != was_class:",
+        ("            if now_class != was_class and (\n"
+         "                existing.lane != was_lane or existing.stream != was_stream\n"
+         "            ):"),
+    ),
+    (
+        "L19 a MID-WORK reclassification is logged but the lane is never told",
+        "ledger.py",
+        "                if existing.state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):",
+        "                if False:",
     ),
     (
         "L6 `declined` needs no recorded decision (a backlog declines itself drained)",
@@ -616,6 +653,38 @@ ARMS: list[tuple[str, str, str, str]] = [
         "policy.json",
         '      "W6-ci",\n      "W7-bicep"',
         '      "W7-bicep"',
+    ),
+    (
+        ("R12 `.gitignore` drops out of the escalating paths -- #4468's ENTIRE "
+         "THESIS, since an entry in it is what hid the merge gate"),
+        "policy.json",
+        '      ".gitignore",\n',
+        "",
+    ),
+    (
+        "R13 `.github/CODEOWNERS` drops out -- the file that decides who reviews",
+        "policy.json",
+        '      ".github/CODEOWNERS",\n',
+        "",
+    ),
+    (
+        "R14 `Makefile` drops out -- the `make validate` entry point",
+        "policy.json",
+        '      "Makefile",\n',
+        "",
+    ),
+    (
+        "R15 `pyproject.toml` drops out -- the ruff/mypy config every guard runs under",
+        "policy.json",
+        '      "pyproject.toml",\n',
+        "",
+    ),
+    (
+        ("R16 `portal/` drops out -- the OTHER front-end, and ux-baseline scopes "
+         "EVERY Loom surface, not only apps/fiab-console"),
+        "policy.json",
+        '      "portal/"\n',
+        '      "apps/fiab-console"\n',
     ),
     (
         "R11 an EMPTY changed-file list is treated as a known footprint",
