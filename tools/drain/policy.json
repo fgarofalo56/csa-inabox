@@ -28,8 +28,23 @@
     "approve-parked-ci-run",
     "dispatch-deploy-workflow",
     "dispatch-roll",
-    "playwright-walk-live-console"
+    "playwright-walk-live-console",
+    "resume-estate",
+    "pause-estate"
   ],
+  "_estate": "Operator decision 2026-09-12: RESUME ON DEMAND, PER DEPLOY ITEM. The estate stays paused; resume only when a W1 item is ready for its deploy-run receipt, take the receipt, re-pause. Both verbs are permitted unattended because a resume the harness cannot pause again is worse than one it can. Before this they were absent, so action_is_permitted() failed closed on them and every deploy-path receipt was unreachable.",
+
+  "review": {
+    "_": "Operator decision 2026-09-12, after W0 took NINE rounds with two reviewers. That intensity was right for the merge gate ITSELF and is not the default for ordinary lanes. Read by tick.write_brief so every lane is told its own review requirement.",
+    "independent_reviewers_default": 1,
+    "escalate_to_two_when": [
+      "the first reviewer returns REQUEST-CHANGES or CANNOT-ASSESS",
+      "the diff touches tools/drain, scripts/ci, or any guard",
+      "the diff touches a deploy path, a workflow, or bicep",
+      "the diff touches a console surface"
+    ],
+    "writer_is_never_the_reviewer": "enforced by TOOL ACCESS, not by instruction: the reviewer agent is read-only"
+  },
 
   "stop_and_ask": {
     "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",

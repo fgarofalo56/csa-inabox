@@ -532,6 +532,30 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
+        "R1 a guard/deploy/console diff stops escalating to a second reviewer",
+        "gates.py",
+        "    for path in changed_paths or []:",
+        "    for path in []:",
+    ),
+    (
+        "R1b the brief passes the LANE NAME where a PATH belongs, so nothing escalates",
+        "tick.py",
+        "        policy, changed_paths=[gates.LANE_PATHS.get(item.lane or \"\", item.lane or \"\")]",
+        '        policy, changed_paths=[item.lane or ""]',
+    ),
+    (
+        "R2 a REQUEST-CHANGES from the first reviewer stops escalating",
+        "gates.py",
+        "    if first_verdict in BLOCKING_TOKENS:",
+        "    if False:",
+    ),
+    (
+        "R3 the brief stops telling the lane its review requirement",
+        "tick.py",
+        "    reviewers, why_reviewers = gates.review_requirement(",
+        "    reviewers, why_reviewers = (1, 'unstated')\n    _ = (gates.review_requirement, ",
+    ),
+    (
         "P10 the section half of the policy-read scan rejects `.get(` again",
         "gates.py",
         '            pattern = (r"(?:\\[|\\.get\\()\\s*[\\"\']" + re.escape(section)',

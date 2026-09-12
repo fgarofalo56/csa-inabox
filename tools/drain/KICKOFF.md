@@ -21,68 +21,80 @@ Then execute the lanes it prints, return results into the ledger, and tick again
 Repeat until `--status` reports drained: true.
 
 Scope and autonomy are already decided — do not re-ask them:
-  - ALL 297 open issues. Done = every issue closed / parked / declined.
+  - ALL open issues. Done = every issue closed / parked / declined.
   - You may merge on gate GO, close on a receipt, re-run and APPROVE parked CI,
-    and dispatch deploys and rolls against the live estate.
+    dispatch deploys and rolls, and RESUME/PAUSE the estate on demand.
+  - ONE independent reviewer per PR; escalate to two when the first returns
+    REQUEST-CHANGES or CANNOT-ASSESS, or when the diff touches a guard, a deploy
+    path, bicep or a console surface. gates.review_requirement() decides, and
+    every brief states it.
   - G1 receipts come from Playwright against the live console; park the item
     only if auth fails.
   - policy.json is the authority for what you may not do. It fails closed.
 
-FIRST TASK, before anything else: PR #4483 is the harness itself and is open and
-unreviewed. Get it independently reviewed and merged under its own gates. The
-harness earning its own merge is W0, and nothing else should land until the gate
-that decides merges is auditable on main.
+FIRST TASK, before draining anything else: #4487 — the `ci-green` receipt names a
+measurement the CI topology cannot produce, so NO guard/test-only issue can reach
+a terminal state until it is fixed. Then #4468's remainder: port `unblock-git.py`
+and `preflight-casedrop.py` out of temp/ into tools/drain with tests, and close
+#4468 on its own checklist. Both are W0 — finish the gate before trusting it.
 ```
 
 ---
 
-## Before you fire
+## Where this stands
 
-**Nothing is required.** The harness runs from the current branch. But two facts
-are worth knowing:
+**The harness is on main.** PR #4483 merged at `a02cd41e6d42` after nine
+independent review rounds. `tools/drain/` is tracked, tested and CI-enforced;
+`merge_gate.py` is the production caller that decides GO/NO-GO, and it refused
+its own PR twice before letting it through.
 
-1. **The repo is on `feat/zero-backlog-drain-harness`**, not `main`. That is
-   fine — the harness lives on that branch and `state.json` is gitignored, so it
-   survives a branch switch either way. The first cycle merges #4483, after
-   which `main` carries it.
+**W0 is not finished.** Three things are owed, and the first two are what the
+kickoff block names:
 
-2. **`state.json` is gitignored**, so what it holds depends on the machine —
-   ask it (`tick.py --status`) rather than trusting a number written here. If
-   it does not exist, `--status` exits 2 and tells you to seed. To start over:
-   `python tools/drain/tick.py --bootstrap` — which now genuinely discards the
-   ledger and reseeds, rather than being a flag that was parsed and never read.
+| # | what | why it matters |
+|---|---|---|
+| **#4487** | `ci-green` names an unobtainable measurement | 10 of 15 required contexts can run at a merged sha; `validate.yml`'s `push:` trigger is path-filtered and one job is renamed on push. Until this is fixed no guard/test-only issue can close. |
+| **#4468** | `unblock-git.py` (502 lines) and `preflight-casedrop.py` still untracked | the drain leans on the first across every merge, and it is one `rm -rf` from gone — the issue's own thesis |
+| **#4485** | five residual review findings | all non-blocking, all measured, none a live defect today |
 
-   Starting over is not free: the ledger is the only record of what has already
-   been verified, and GitHub does not carry it. `--status` exits 2 on a missing
-   ledger rather than printing an empty queue, because `all([])` is `True` and
-   `drained: true` is this run's exit condition.
-
-## What the first cycle will do
-
-`tick.py` selects from `W1-deploy` before `W0-harness`, because **every W0 item
-is still unsized** and an unsized item is not schedulable. That is the design
-working, not a bug: triage gates the parallelism.
-
-So expect the run to spend its early cycles on triage — sizing and laning the
-**153 unsized / 118 unlaned** items — because nothing else can be safely
-parallelized until it does.
+**Then W1-deploy**, because `deploy-integrity.md` R1 makes a broken deploy path
+preempt all feature work.
 
 ## How to tell it is working
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 212 pass
-python tools/drain/mutate_gates.py       # 89 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 219 pass
+python tools/drain/mutate_gates.py       # 93 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 
 **If `mutate_gates.py` ever reports a SURVIVOR, stop** — but read the arm first.
 A survivor means the suite is blind **or** the mutation was a no-op, and those
-are different problems. One arm here "removed" three regex branches while
-leaving them in place and survived on that alone.
+are different problems. Three arms here have already turned out to be the second
+kind, and one of those was dead code that deserved deleting.
+
+## Two things that cost a whole cycle each
+
+1. **A verdict RETURNED is not a verdict POSTED.** The harness's own merge came
+   back NO-GO because two approvals had been handed to the coordinator and never
+   posted to the PR. The gate reads PR comments. `gh pr comment` it.
+2. **A verdict is pinned to the head it measured.** Any push voids every
+   approval on the PR. That is deliberate; budget for it rather than pushing a
+   "tiny" fix after an approval lands.
+
+## The ledger
+
+`state.json` is gitignored, so what it holds depends on the machine — ask it
+(`tick.py --status`) rather than trusting a number written here. If it does not
+exist, `--status` exits 2 and tells you to seed:
+`python tools/drain/tick.py --bootstrap`, which backs the old one up first.
+
+Starting over is not free: the ledger is the only record of what has already
+been verified, and GitHub does not carry it.
 
 ## How to stop it
 
-Interrupt. The ledger is a transaction log — the run resumes from
-`tick.py` with at most the in-flight cycle lost. Nothing is held in an agent's
-context, which is the whole point.
+Interrupt. The ledger is a transaction log — the run resumes from `tick.py` with
+at most the in-flight cycle lost, and `--reap` returns stranded lanes to `ready`.
+Nothing is held in an agent's context, which is the whole point.

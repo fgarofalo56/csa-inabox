@@ -445,6 +445,25 @@ def test_negative_control_an_estate_item_demands_an_estate_receipt(tmp_path):
     assert "ci-green" not in brief
 
 
+def test_the_brief_states_the_review_requirement(tmp_path):
+    """The lane is TOLD how many reviewers it needs, not left to infer it. A
+    console lane escalates to two; an ordinary one does not."""
+    led = _led(tmp_path)
+    console = led.upsert(9, "an editor", "W5-console", lane="lane:console", size=5)
+    assert "2 reviewer(s)" in tick.write_brief(console, POLICY)
+    ordinary = led.upsert(10, "a dbt model", "W8-dataplane", lane="lane:dataplane", size=3)
+    assert "1 reviewer(s)" in tick.write_brief(ordinary, POLICY)
+
+
+def test_the_brief_says_a_returned_verdict_is_not_a_posted_one(tmp_path):
+    """The gate reads PR COMMENTS. On 2026-09-12 the harness's own merge was
+    NO-GO because two approvals had been returned to the coordinator and never
+    posted -- the gate was right and the lane had to be told."""
+    led = _led(tmp_path)
+    item = led.upsert(9, "x", "W6-ci", lane="lane:ci", size=1)
+    assert "not a verdict POSTED" in tick.write_brief(item, POLICY)
+
+
 def test_the_brief_names_the_gate_as_a_command(tmp_path):
     """A gate restated as prose is an agent's judgement. The brief must name the
     program, or `gates.py` has no production caller at run time either."""

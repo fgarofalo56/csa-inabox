@@ -188,12 +188,15 @@ OTHER_IMPLEMENTED_BY = {
     "permitted_unattended": "gates.action_is_permitted",
     "never": "gates.action_is_permitted",
     "stop_and_ask": "gates.action_is_permitted",
+    "review.independent_reviewers_default": "gates.review_requirement",
+    "review.escalate_to_two_when": "gates.review_requirement",
 }
 # Keys that are DELIBERATELY prose: they address the operator, not the program.
 # Listing them is the point -- an undeclared unconsulted key is indistinguishable
 # from a control that stopped working.
 OPERATOR_DOCUMENTATION = {
     "schema",
+    "review.writer_is_never_the_reviewer",
     "scope.target", "scope.definition_of_done",
     "wip.serialize_on_shared_checkout",
     "ordering.W9_runs_continuously", "ordering.W9_reason",
@@ -1115,6 +1118,51 @@ def action_is_permitted(action: str, policy: dict) -> tuple[bool, str]:
     if action in policy.get("permitted_unattended", []):
         return True, "permitted unattended"
     return False, "not in permitted_unattended - fails closed, add it to policy.json deliberately"
+
+
+# Paths whose diffs escalate to a second independent reviewer regardless of the
+# first verdict. Keyed to what the path DECIDES, not to a file list: a guard, a
+# deploy path and a console surface each have a failure mode that one reviewer
+# demonstrably missed during W0 -- in six of nine rounds the second reviewer
+# found something the first did not.
+ESCALATION_PATHS = ("tools/drain", "scripts/ci", ".github/workflows",
+                    "platform/fiab/bicep", "apps/fiab-console", "deploy/")
+
+# What each lane OWNS. A lane name is not a path -- `lane:console` contains no
+# substring of `apps/fiab-console` -- so a brief that passed the lane string
+# straight to the path test silently never escalated. Measured: the console
+# lane, which is the one `ux-baseline` G1 cares most about, asked for one
+# reviewer.
+LANE_PATHS = {
+    "lane:console": "apps/fiab-console",
+    "lane:bicep": "platform/fiab/bicep",
+    "lane:ci": "scripts/ci",
+    "lane:dataplane": "domains/",
+}
+
+
+def review_requirement(policy: dict, changed_paths: list[str] | None = None,
+                       first_verdict: str | None = None) -> tuple[int, str]:
+    """How many independent reviewers this diff needs, and why.
+
+    Operator decision 2026-09-12. W0 -- the merge gate itself -- took nine
+    rounds with two reviewers, and that was right for the program that decides
+    every merge. It is NOT the default for ordinary lanes: at ~296 issues it
+    would dominate the run. One reviewer, escalating on a finding or on a
+    path whose failure mode one reviewer has been observed to miss.
+
+    Returns (reviewers, reason) so a brief can state the requirement rather
+    than leave the lane to infer it.
+    """
+    review = policy.get("review", {})
+    default = int(review.get("independent_reviewers_default", 1))
+    if first_verdict in BLOCKING_TOKENS:
+        return 2, f"the first reviewer returned {first_verdict}"
+    for path in changed_paths or []:
+        hit = next((p for p in ESCALATION_PATHS if p in path.replace("\\", "/")), None)
+        if hit:
+            return 2, f"the diff touches {hit} - a guard, deploy or console surface"
+    return default, "default for an ordinary lane"
 
 
 def stop_and_ask_actions(policy: dict) -> list[str]:

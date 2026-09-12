@@ -220,6 +220,52 @@ def test_a_dotted_attribute_path_resolves():
     assert gates._unresolved("ledger.Ledger.no_such_method") is not None
 
 
+def test_the_estate_verbs_are_permitted_so_a_deploy_receipt_is_reachable():
+    """Operator decision 2026-09-12: resume on demand, per deploy item. Before
+    they were listed, `action_is_permitted` FAILED CLOSED on both, which made
+    every `deploy-run` receipt unreachable -- W1 is the stream R1 says preempts
+    everything, so the run would have ended entirely parked."""
+    for action in ("resume-estate", "pause-estate"):
+        ok, why = gates.action_is_permitted(action, POLICY)
+        assert ok, f"{action}: {why}"
+
+
+def test_negative_control_a_pause_the_harness_cannot_undo_is_not_shipped():
+    """Both verbs or neither. A resume the harness cannot pause again leaves the
+    estate running and billing after the receipt is taken."""
+    assert ("resume-estate" in POLICY["permitted_unattended"]) == (
+        "pause-estate" in POLICY["permitted_unattended"]
+    )
+
+
+def test_an_ordinary_lane_gets_one_reviewer():
+    n, why = gates.review_requirement(POLICY, changed_paths=["domains/sales/models/x.sql"])
+    assert n == 1, why
+
+
+def test_negative_control_a_guard_or_deploy_or_console_diff_escalates():
+    """W0 took nine rounds with two reviewers because it WAS the merge gate. One
+    reviewer is the default -- but in six of those nine rounds the second
+    reviewer found something the first did not, so the paths whose failure modes
+    one reviewer has been observed to miss still get two."""
+    for path in ("tools/drain/gates.py", "scripts/ci/check-x.mjs",
+                 ".github/workflows/deploy-fiab-commercial.yml",
+                 "platform/fiab/bicep/main.bicep", "apps/fiab-console/app/page.tsx",
+                 "deploy/main.bicep"):
+        n, why = gates.review_requirement(POLICY, changed_paths=[path])
+        assert n == 2, f"{path} must escalate: {why}"
+
+
+def test_negative_control_a_finding_escalates_whatever_the_path():
+    for verdict in ("REQUEST-CHANGES", "CANNOT-ASSESS"):
+        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                          first_verdict=verdict)
+        assert n == 2, why
+    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                    first_verdict="APPROVE")
+    assert n == 1
+
+
 def test_the_hard_ceiling_is_a_control_not_a_comment():
     import tick
 
