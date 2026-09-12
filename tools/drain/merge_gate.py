@@ -326,11 +326,16 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
       that shape: an item whose work was already done.
 
     Without one of those, a declared close is treated like a mention: it may
-    escalate, it may not explain. `Item.pr` has no production writer yet, which
-    is why the mid-flight test carries the weight today; `main()` now writes the
-    binding when it honours `--allow-close`, so it accrues, and gate 6 refuses a
-    close of an item already bound to a DIFFERENT PR -- which is the
-    copy-paste-across-invocations case B named, made loud.
+    escalate, it may not explain.
+
+    `Item.pr` HAS NO WRITER, so the mid-flight test carries all of the weight
+    today and the binding arm is unreachable. A previous round wrote the binding
+    from `main()` and this docstring said so; that write is DELETED, because
+    from a worktree it rewrote the primary checkout's ledger unlocked and both
+    reviewers reproduced a lost update. Nothing accrues. The writer belongs in
+    `tick.py`, which owns the ledger -- #4489. Said here because a reader
+    auditing whether this corroboration is safe was previously told it rests on
+    an accrual that does not exist.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
     `reduce_verdicts` uses. That is the `hit` branch's job: a PR touching a
@@ -384,6 +389,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
             else led.items[n].state in SCHEDULED_STATES
         )
     ]
+    # WORD IT FROM THE ARM THAT MATCHED. "is work the harness has in flight" is
+    # false of an item corroborated by its BINDING, which bypasses the state
+    # test -- a `closed` item bound to this PR corroborates, and the docstring
+    # above says a terminal item is finished. Unreachable while `Item.pr` has no
+    # writer; it arms the moment #4489 lands one, which is when a latent wrong
+    # sentence becomes a live one.
+    bound_here = [n for n in corroborated if led.items[n].pr == pr]
     if corroborated:
         # The STRONGEST, not the lowest-numbered. `corroborated[0]` reported
         # whichever issue number sorted first, which is the answer-depends-on-
@@ -391,17 +403,27 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
         # escalating stream is already taken by `hit` above, and cosmetic is
         # still a message that can be wrong.
         streams = sorted({led.items[n].stream for n in corroborated})
+        because = (
+            f"the ledger binds {bound_here} to this PR" if bound_here
+            else "it is work the harness has in flight"
+        )
         return streams[0], (
-            f"#{corroborated} is declared closed, is work the harness has in "
-            f"flight, and sits in {'/'.join(streams)}{source}"
+            f"#{corroborated} is declared closed, {because}, and sits in "
+            f"{'/'.join(streams)}{source}"
         )
 
     stale = [n for n in closing if n in led.items]
     if stale:
+        # The binding clause ONLY when there is a binding. `Item.pr` has no
+        # writer, so "bound to PR None" was what this said about all 299 items
+        # -- a fact asserted about a system that has no bindings, the same shape
+        # as the "was taken under None" message repaired in `ledger.py`.
+        item = led.items[stale[0]]
         return None, (
             f"#{stale} is declared closed but the ledger has it in "
-            f"{led.items[stale[0]].state!r} and bound to PR {led.items[stale[0]].pr} "
-            "- the harness never scheduled this as work in flight, so the "
+            f"{item.state!r}"
+            + (f", bound to PR {item.pr}" if item.pr is not None else "")
+            + " - the harness never scheduled this as work in flight, so the "
             f"declaration is the author's word alone and the stream is unknown{source}"
         )
     # NUMBERS DECLARED CLOSED BUT ABSENT FROM THE LEDGER GET THEIR OWN SENTENCE.

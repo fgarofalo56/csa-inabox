@@ -471,30 +471,62 @@ def test_negative_control_the_history_scan_sees_every_shape_gate_two_three_block
     verbatim the defect the same round claimed to repair one function over.
 
     Kills MG17, MG27."""
+    #: label -> (body, the near-miss KIND it must be reported as, or None when
+    #: it is a real live verdict attributable to a reviewer).
+    #:
+    #: The last two are the ones the first version of this test had no fixture
+    #: for, so `review_requirement` wrote the `no-marker` sentence about them
+    #: and nothing noticed: `no-token` is a comment that DOES announce and
+    #: carries no token at all, and `template-line` announces on its first
+    #: line -- "no line announcing a verdict" is false of both. The old
+    #: assertion compared the reason to the TAG, which is a test that the code
+    #: is self-consistent, not that it is TRUE of the comment.
     shapes = {
-        "misspelled marker": "Re-review - REQUEST-CHANGES\n\nthe lane route is open.",
-        "marker not first": "Quick note before the verdict.\n\n"
-                            "Independent review - REQUEST-CHANGES",
-        "block spelled wrong": "## Independent re-review - CHANGES REQUIRED\n\nno.",
-        "marker relayed in a fence": "```\nIndependent review - REQUEST-CHANGES\n```",
+        "misspelled marker": (
+            "Re-review - REQUEST-CHANGES\n\nthe lane route is open.",
+            gates.NEAR_NO_MARKER,
+        ),
+        "marker not first": (
+            "Quick note before the verdict.\n\nIndependent review - REQUEST-CHANGES",
+            gates.NEAR_NO_MARKER,
+        ),
+        "block spelled wrong": (
+            "## Independent re-review - CHANGES REQUIRED\n\nno.",
+            gates.NEAR_NO_TOKEN,
+        ),
+        "marker relayed in a fence": (
+            "```\nIndependent review - REQUEST-CHANGES\n```",
+            gates.NEAR_NO_MARKER,
+        ),
+        "announces, token below the window": (
+            "Independent re-review of PR #4488\n\n" + "x" * 220 + "REQUEST-CHANGES",
+            gates.NEAR_NO_TOKEN,
+        ),
+        "the template line itself": (
+            ("Independent re-review - APPROVE / REQUEST-CHANGES / CANNOT-ASSESS\n\n"
+            "(paste your verdict above)"),
+            gates.NEAR_TEMPLATE,
+        ),
     }
-    for label, body in shapes.items():
+    for label, (body, kind) in shapes.items():
         got = gates.worst_verdict_in_history([_verdict(1, "2026-09-12T06:00:00Z", body)])
-        # Every one carries a blocking token, so `review_requirement`'s
-        # shape-match fires -- but only the one with a real MARKER is
-        # attributable to a reviewer's decision. The rest come back TAGGED and
-        # naming the comment, because "a reviewer returned REQUEST-CHANGES" is
-        # false about a comment that announces nothing, and a permanent
-        # escalation nobody can locate is worse than one they can argue with.
+        # Every one carries a blocking token by construction, so
+        # `review_requirement`'s shape-match fires. None is attributable to a
+        # reviewer's DECISION, so each comes back TAGGED with its kind and its
+        # comment -- a permanent escalation nobody can locate is worse than one
+        # they can argue with, and one that names the wrong cause is worse still.
         assert "REQUEST-CHANGES" in got, label
-        if label == "block spelled wrong":
-            assert got.startswith(gates.UNANNOUNCED_BLOCK), label
+        assert got.startswith(gates.UNANNOUNCED_BLOCK), label
+        assert f"({kind}," in got, f"{label}: wrong kind in {got}"
         n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
                                           prior_verdict=got)
         assert n == 2, label
-        assert ("no line announcing a verdict" in why) == got.startswith(
-            gates.UNANNOUNCED_BLOCK
-        ), f"{label}: the reason must match what was established - {why}"
+        # THE REASON MUST BE TRUE OF THE COMMENT, not merely consistent with
+        # the tag. Kills MG32.
+        assert gates.UNANNOUNCED_REASON_BY_KIND[kind] in why, f"{label}: {why}"
+        for other, sentence in gates.UNANNOUNCED_REASON_BY_KIND.items():
+            if other != kind:
+                assert sentence not in why, f"{label} got {other}'s sentence"
         # ...and gate 2+3 agrees, which is the point of sharing the population.
         live, near = gates.parse_verdicts(
             [_verdict(1, "2026-09-12T06:00:00Z", body)], "2026-09-12T05:00:00Z"

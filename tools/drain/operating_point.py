@@ -59,22 +59,34 @@ def brief_time(policy: dict, led: Ledger) -> tuple[Counter, Counter, dict]:
     return counts, by_reason, per_stream
 
 
-def merge_time(policy: dict, led: Ledger) -> Counter:
-    """What gate 3b will say for a PR that DECLARES a close of each item.
+def merge_time(policy: dict, led: Ledger) -> tuple[Counter, int, int]:
+    """What GATE 3b will say for a PR that DECLARES a close of each item.
 
-    The most favourable case for one reviewer: the PR names the item, declares
-    the close, and the diff touches nothing that escalates by path. Anything
-    less needs two. So this is an UPPER BOUND on the one-reviewer population.
+    Returns `(counts, one_reviewer, receipted_of_those)`.
+
+    TWO GATES, MEASURED SEPARATELY. The first version ANDed `receipt_ok` into
+    `stream_known` and called the result "what gate 3b will say" -- but 3b's
+    corroboration test reads `item.pr` and `item.state` and nothing else;
+    `receipt_ok` lives on `--allow-close` in `main()`, which is gate 6's
+    business. A reviewer measured the difference: over the live 299 the model
+    said `{2: 299}` and the real composition says `{2: 298, 1: 1}` -- #2626 is
+    in-flight, so 3b asks for ONE reviewer today with zero receipts anywhere.
+
+    The conflation also inverted the label: ANDing a second condition in makes
+    this UNDER-count the one-reviewer population, so it was a lower bound while
+    calling itself an upper one.
+
+    So: `counts` is gate 3b alone. `receipted_of_those` is how many of the
+    one-reviewer items could actually reach GO, because gate 6 refuses an
+    undeclared close and `--allow-close` is refused without a receipt. Those
+    are different gates and the operator should see both numbers.
     """
     counts: Counter = Counter()
+    one_reviewer = receipted = 0
     for item in led.items.values():
-        ok, _why = led.receipt_ok(item)
-        # `--allow-close` is refused without a receipt of the right kind, and
-        # gate 6 blocks an undeclared close -- so no receipt means no
-        # one-reviewer path at all, whatever the stream says.
-        stream_known = ok and (
-            item.pr is not None or item.state in ("in-flight", "in-review",
-                                                  "awaiting-receipt")
+        # Exactly `ledger_stream`'s corroboration test, and nothing else.
+        stream_known = item.pr is not None or item.state in (
+            "in-flight", "in-review", "awaiting-receipt"
         )
         needed, _why = gates.review_requirement(
             policy,
@@ -84,7 +96,10 @@ def merge_time(policy: dict, led: Ledger) -> Counter:
             stream_known=stream_known,
         )
         counts[needed] += 1
-    return counts
+        if needed == 1:
+            one_reviewer += 1
+            receipted += 1 if led.receipt_ok(item)[0] else 0
+    return counts, one_reviewer, receipted
 
 
 def main() -> int:
@@ -101,19 +116,21 @@ def main() -> int:
     led = Ledger(path, receipts=policy["receipts"]).load()
 
     if args.merge_gate:
-        counts = merge_time(policy, led)
+        counts, one_reviewer, receipted = merge_time(policy, led)
         total = sum(counts.values()) or 1
-        print(f"MERGE-GATE operating point over {total} live items")
-        print("(upper bound on one-reviewer: assumes every PR declares its "
-              "close and touches no escalating path)")
+        print(f"GATE 3b over {total} live items, assuming every PR DECLARES its "
+              "close and touches no escalating path")
         for needed in sorted(counts):
             print(f"  {needed} reviewer(s): {counts[needed]:3d}  "
                   f"({counts[needed] / total:.0%})")
-        receipted = sum(1 for i in led.items.values() if led.receipt_ok(i)[0])
-        print(f"\nitems holding a valid receipt: {receipted} of {total}")
-        print("This is the number that has to move before the merge gate can "
-              "ever ask for one reviewer. Nothing records a receipt "
-              "automatically -- `record_receipt` has no production caller.")
+        print("\nGATE 6 is a different gate, and today it is the binding one.")
+        print(f"  of the {one_reviewer} item(s) 3b would let through on one "
+              f"reviewer, {receipted} hold a receipt")
+        print("  an undeclared close is refused by gate 6, and `--allow-close` "
+              "is refused without a receipt of the item's kind - so the rest "
+              "cannot reach GO however many reviewers approve.")
+        print("  Nothing records a receipt automatically: `record_receipt` has "
+              "no production caller (#4489).")
         return 0
 
     counts, by_reason, per_stream = brief_time(policy, led)

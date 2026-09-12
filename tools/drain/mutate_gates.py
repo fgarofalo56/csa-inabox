@@ -795,6 +795,37 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        c",
     ),
     (
+        ("MG32 every unannounced block gets the no-marker sentence, so the two "
+         "kinds it is untrue for are reported as something they are not"),
+        "gates.py",
+        ("                    f\"{UNANNOUNCED_REASON_BY_KIND.get("
+         "_unannounced_kind(prior_verdict), UNANNOUNCED_REASON_UNKNOWN)}\""),
+        ("                    f\"{UNANNOUNCED_REASON_BY_KIND[NEAR_NO_MARKER]}\""),
+    ),
+    (
+        ("MG33 the near-miss KIND is dropped from the tag, so the reason cannot "
+         "be worded from it and every block reads the same"),
+        "gates.py",
+        ('        return f"{UNANNOUNCED_BLOCK} ({blocked.kind}, '
+         'comment {blocked.comment_id})"'),
+        '        return f"{UNANNOUNCED_BLOCK} (comment {blocked.comment_id})"',
+    ),
+    (
+        ("MG34 the stale branch claims a BINDING that does not exist, so every "
+         "real input reads 'bound to PR None'"),
+        "merge_gate.py",
+        '            + (f", bound to PR {item.pr}" if item.pr is not None else "")',
+        '            + f", bound to PR {item.pr}"',
+    ),
+    (
+        ("MG35 the corroborated branch says 'in flight' whichever arm matched, "
+         "so a BINDING-corroborated terminal item is described as live work"),
+        "merge_gate.py",
+        ('            f"the ledger binds {bound_here} to this PR" if bound_here\n'
+         '            else "it is work the harness has in flight"'),
+        '            "it is work the harness has in flight"',
+    ),
+    (
         ("MG31 an UNANNOUNCED block is reported as a reviewer's decision, which "
          "is false about a comment that announces nothing"),
         "gates.py",

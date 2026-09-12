@@ -509,6 +509,7 @@ NEAR_NO_TOKEN = "no-token"
 #: carries a blocking token by construction so every shape-match downstream
 #: still fires.
 UNANNOUNCED_BLOCK = "REQUEST-CHANGES unannounced"
+
 NEAR_PREDATES_HEAD = "predates-head"
 NEAR_TEMPLATE = "template-line"
 NEAR_UNPINNABLE = "head-date-unknown"
@@ -518,6 +519,41 @@ NEAR_CITED = "cited-not-decided"
 # "below-the-window" and was wrong for the second case, which is an R7 error in
 # a message: it asserted a cause the code had not established.
 NEAR_NOT_FIRST = "not-the-first-line"
+
+#: ONE SENTENCE PER KIND, because three kinds can block here and they are not
+#: the same fact. The first version wrote the `no-marker` sentence for all
+#: three, so "a blocking token appears with no line announcing a verdict" was
+#: FALSE for the other two -- `no-token` is a comment that DOES announce and
+#: carries no token at all, `template-line` announces on its first line. A
+#: reviewer measured both through the real composition. That is the R7 defect
+#: the same round was written to repair, landed on one side of its own
+#: boundary, which this package names as its dominant failure mode.
+UNANNOUNCED_REASON_BY_KIND = {
+    NEAR_NO_MARKER: (
+        "a blocking token appears in this PR's review history with no line "
+        "announcing a verdict"
+    ),
+    NEAR_NO_TOKEN: (
+        "a comment in this PR's review history announces a verdict and carries "
+        "no token on that line, so what it decided is unreadable"
+    ),
+    NEAR_TEMPLATE: (
+        "a comment in this PR's review history carries the verdict TEMPLATE "
+        "line rather than a decision"
+    ),
+}
+#: Whatever a FUTURE kind turns out to be, the reason must not claim to know.
+#: A `.get()` onto a confident sentence is how the defect above happened.
+UNANNOUNCED_REASON_UNKNOWN = (
+    "a comment in this PR's review history blocks for a reason this message "
+    "has no wording for - read the comment"
+)
+
+
+def _unannounced_kind(prior_verdict: str) -> str:
+    """The near-miss kind `worst_verdict_in_history` tagged into the string."""
+    inside = prior_verdict[len(UNANNOUNCED_BLOCK):].strip(" ()")
+    return inside.split(",")[0].strip()
 
 
 @dataclass
@@ -688,7 +724,15 @@ def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | N
         # near-miss -- so it cannot be reported as one reviewer's decision. It
         # is TAGGED, and it names the comment, because a permanent escalation
         # nobody can locate is worse than one they can argue with.
-        return f"{UNANNOUNCED_BLOCK} (comment {blocked.comment_id})"
+        #
+        # It also carries the KIND. Three kinds can block here and the first
+        # version worded the reason for ONE of them, so the sentence "a
+        # blocking token appears ... with no line announcing a verdict" was
+        # FALSE for the other two: `no-token` is a comment that DOES announce
+        # and carries no token at all, and `template-line` announces on its
+        # first line. A reviewer measured both. Fixed on one side of a boundary
+        # and not the other, in the round whose whole subject was that.
+        return f"{UNANNOUNCED_BLOCK} ({blocked.kind}, comment {blocked.comment_id})"
     return next((v.token for v in live), None)
 
 
@@ -1472,10 +1516,10 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
             # reported as "a reviewer returned REQUEST-CHANGES".
             if prior_verdict.startswith(UNANNOUNCED_BLOCK):
                 return 2, (
-                    f"a blocking token appears in this PR's review history with "
-                    f"no line announcing a verdict ({prior_verdict.strip()}) - "
-                    "not attributable to a reviewer's decision, and it fails "
-                    "closed because formatting never reduces a block"
+                    f"{UNANNOUNCED_REASON_BY_KIND.get(_unannounced_kind(prior_verdict), UNANNOUNCED_REASON_UNKNOWN)}"
+                    f" ({prior_verdict.strip()}) - not attributable to a "
+                    "reviewer's decision, and it fails closed because "
+                    "formatting never reduces a block"
                 )
             return 2, f"a reviewer returned {prior_verdict.strip()!r}"
 

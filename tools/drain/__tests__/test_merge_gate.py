@@ -592,6 +592,11 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
                          state_path=path)
     assert not _gate(still_unknown, "3b")["ok"]
     assert "the author's word alone" in _gate(still_unknown, "3b")["detail"]
+    # ...and it does NOT claim a binding that does not exist. `Item.pr` has no
+    # writer, so "bound to PR None" was what this said about all 299 items: a
+    # fact asserted about a system with no bindings, the same shape as the
+    # "was taken under None" message repaired in `ledger.py`. Kills MG34.
+    assert "bound to PR" not in _gate(still_unknown, "3b")["detail"]
 
     # NOW put it in flight. Everything below turns on that, because the
     # corroboration test is `state in SCHEDULED_STATES`.
@@ -616,6 +621,19 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     declared = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
     assert _gate(declared, "3b")["ok"], _gate(declared, "3b")["detail"]
     assert "in flight" in _gate(declared, "3b")["detail"]
+
+    # ...and when the corroboration comes from the BINDING instead, the reason
+    # says so. The binding arm bypasses the state test, so a TERMINAL item bound
+    # to this PR corroborates -- defensible, since a harness-written binding
+    # outranks a state, but "is work the harness has in flight" is then false.
+    # Unreachable until #4489 lands a writer; wording it now means the sentence
+    # does not become wrong on the day it arms. Kills MG35.
+    led.items[10].pr = 1          # the fixture PR; set by hand, nothing writes it
+    led.save()
+    bound = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    detail = _gate(bound, "3b")["detail"]
+    assert "binds [10] to this PR" in detail, detail
+    assert "in flight" not in detail, detail
 
 
 def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_path):
