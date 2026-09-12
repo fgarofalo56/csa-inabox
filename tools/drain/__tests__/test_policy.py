@@ -121,6 +121,26 @@ def test_negative_control_the_allow_list_cannot_silence_a_real_control():
         gates.OPERATOR_DOCUMENTATION.update(original)
 
 
+def test_negative_control_moving_a_control_onto_the_allow_list_is_caught():
+    """The both-lists check caught DECLARING a key twice. It did not catch
+    MOVING one -- take `wip.max_lanes` out of the implemented mapping, drop it
+    into the allow-list, and the contract passed while `select_cycle` still read
+    it. So the property is checked directly: a key declared to be prose must not
+    appear as a string literal in this package's sources."""
+    original_map = dict(gates.OTHER_IMPLEMENTED_BY)
+    original_doc = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OTHER_IMPLEMENTED_BY.pop("wip.max_lanes")
+    gates.OPERATOR_DOCUMENTATION.add("wip.max_lanes")
+    try:
+        with pytest.raises(ValueError, match="READ by the code"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OTHER_IMPLEMENTED_BY.clear()
+        gates.OTHER_IMPLEMENTED_BY.update(original_map)
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original_doc)
+
+
 def test_negative_control_the_other_mapping_is_resolution_checked_too():
     """`OTHER_IMPLEMENTED_BY` was exempt from resolution, so a bogus target was
     accepted there while the same trick was refused in the two gate sections."""

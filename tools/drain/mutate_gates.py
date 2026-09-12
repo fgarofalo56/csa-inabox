@@ -520,6 +520,30 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if False:",
     ),
     (
+        "G9 a backtick enters the strip set, so a FENCED first line announces",
+        "gates.py",
+        '    return any(line.lstrip("#*_ \\t").startswith(m) for m in MARKERS)',
+        '    return any(line.lstrip("#*_ \\t`~><").startswith(m) for m in MARKERS)',
+    ),
+    (
+        "T15 a FLOOD of arrivals is ingested (a drained ledger meets a foreign repo)",
+        "tick.py",
+        "    if len(arrivals) > max(GUARD_FLOOR, len(known)):",
+        "    if False:",
+    ),
+    (
+        "G10 a blocking token below the window is dropped in silence again",
+        "gates.py",
+        "            elif blocking_below:",
+        "            elif False:",
+    ),
+    (
+        "P8 moving a control onto the operator-documentation list stops being caught",
+        "gates.py",
+        "    read = sorted(_documentation_keys_that_are_actually_read())",
+        "    read = []",
+    ),
+    (
         "P5 the operator-documentation allow-list becomes an OFF SWITCH",
         "gates.py",
         "    both = sorted(set(OTHER_IMPLEMENTED_BY) & OPERATOR_DOCUMENTATION)",

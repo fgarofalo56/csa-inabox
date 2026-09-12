@@ -380,6 +380,25 @@ SMUGGLE_SHAPES = {
 }
 
 
+def test_negative_control_the_strip_set_excludes_every_citation_prefix():
+    """`_announces`' strip set is load-bearing in what it does NOT contain:
+    `>`, `<`, a backtick and a tilde are absent, so no line beginning with one
+    can announce a verdict. Only the `>` half was pinned -- adding a backtick to
+    the set, which would let a fenced first line announce, passed the whole
+    suite. The table is the contract."""
+    for prefix in ("", "#", "##", "###", "*", "**", "_", "__"):
+        assert gates._announces(f"{prefix}Independent review - APPROVE"), prefix
+    for prefix in (">", ">>", "<", "<!--", "```", "~~~", "-", "1.", "﻿", "\xa0"):
+        assert not gates._announces(f"{prefix}Independent review - APPROVE"), prefix
+    # Leading whitespace IS stripped by `_announces` -- it is the POSITION rule
+    # that refuses an indented first line, which is the belt to that braces.
+    # Asserting it here as well pins which layer owns which half.
+    for prefix in (" ", "\t", "    "):
+        line = f"{prefix}Independent review - APPROVE"
+        assert gates._announces(line), prefix
+        assert gates._marker_lines(line) == [], prefix
+
+
 def test_negative_control_no_formatting_idiom_smuggles_an_approval():
     """POSITION, NOT IDIOM. Three rounds running the rule was "a marker line
     that is not <the idioms I have thought of>", and each round a reviewer found
@@ -437,6 +456,20 @@ def test_negative_control_the_window_bounds_what_counts_as_a_token():
     live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
     assert live == []
     assert not any(n.blocks for n in near), "a token past the window must not block"
+
+
+def test_a_blocking_token_below_the_window_is_recorded_not_dropped():
+    """It does not BLOCK -- the window bounds both directions, or any long
+    comment quoting an old round freezes the PR. But it produced `live=[]
+    near=[]`, no trace at all, in the one direction the code says must never be
+    reduced. Visible is the minimum."""
+    body = "Relaying the round.\n\n" + ("filler. " * 60) + "\nREQUEST-CHANGES on the old head"
+    assert body.index("REQUEST-CHANGES") > 200
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert not near[0].blocks
+    assert "BELOW" in near[0].reason
 
 
 def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():

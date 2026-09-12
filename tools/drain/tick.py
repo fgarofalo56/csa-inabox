@@ -148,6 +148,18 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
     ceiling = max(known)
     arrivals = {n for n in live_numbers if n > ceiling}
     candidates = live_numbers - arrivals
+
+    # MAGNITUDE, because no ratio can separate these two. A fully terminal
+    # ledger meeting six genuine new issues and the same ledger meeting nine
+    # hundred foreign ones numbered above the ceiling are identical to every
+    # fraction here: in both, every live number is an arrival and nothing is
+    # believed open. Measured: 900 foreign issues were ingested (`added=900`,
+    # ledger 940, `drained` flipped back to false). A bound on the SIZE of the
+    # arrival set is a different instrument rather than a tuned threshold --
+    # six arrivals against a 297-item ledger never trips it, nine hundred
+    # always does.
+    # OVERLAP first: when there ARE comparable numbers it is the more specific
+    # diagnosis, and the more useful message.
     if candidates:
         overlap = len(known & candidates) / len(candidates)
         if overlap < MIN_OVERLAP:
@@ -158,6 +170,24 @@ def guard_refresh(led: Ledger, live: list[dict], allow_shrink: bool = False) -> 
                 "excluded). That is a different population - check `repo` in policy.json "
                 "and GH_REPO in the environment."
             )
+
+    # MAGNITUDE, because no RATIO can separate the remaining two cases. A fully
+    # terminal ledger meeting six genuine new issues and the same ledger meeting
+    # nine hundred foreign ones numbered above the ceiling are identical to
+    # every fraction here: in both, every live number is an arrival and nothing
+    # is believed open. Measured: 900 foreign issues were ingested (`added=900`,
+    # the ledger grew to 940, `drained` flipped back to false). A bound on the
+    # SIZE of the arrival set is a different instrument rather than a tuned
+    # threshold -- six arrivals against a 297-item ledger never trips it, nine
+    # hundred always does.
+    if len(arrivals) > max(GUARD_FLOOR, len(known)):
+        raise SystemExit(
+            f"refusing to refresh: {len(arrivals)} of the {len(live_numbers)} live issues are "
+            f"numbered above this ledger's ceiling (#{ceiling}), which is more than the "
+            f"{len(known)} issues it knows about. New arrivals do not come in floods that "
+            "size - check `repo` in policy.json. If this repo really did gain that many, "
+            "re-seed with --bootstrap rather than refreshing."
+        )
 
     if not believed_open:
         return

@@ -98,10 +98,30 @@ def test_negative_control_a_wrong_repo_above_the_ceiling_hits_the_hard_floor(tmp
     see it. The hard retention floor is what catches it -- which is why
     `--allow-shrink` must not be able to suppress that one."""
     led = _led(tmp_path)
+    # Fifteen, so the MAGNITUDE bound (arrivals > max(floor, known)) does not
+    # fire first -- this fixture is about the retention floor specifically.
     with pytest.raises(SystemExit, match="HARD floor"):
+        tick.guard_refresh(led, _live(range(90000, 90015)))
+    with pytest.raises(SystemExit, match="HARD floor"):
+        tick.guard_refresh(led, _live(range(90000, 90015)), allow_shrink=True)
+
+
+def test_negative_control_a_flood_of_arrivals_is_refused_on_magnitude(tmp_path):
+    """No RATIO can separate a drained ledger meeting six genuine new issues
+    from the same ledger meeting nine hundred foreign ones above its ceiling:
+    in both, every live number is an arrival and nothing is believed open.
+    Measured before this bound existed -- 900 foreign issues were ingested,
+    the ledger grew to 940 and `drained` flipped back to false."""
+    led = _led(tmp_path, n=40)
+    for n in range(1000, 1040):
+        led.record_receipt(n, "ci-green", "green at sha")
+        led.transition(n, CLOSED)
+    assert led.drained()
+    with pytest.raises(SystemExit, match="floods that size"):
         tick.guard_refresh(led, _live(range(90000, 90900)))
-    with pytest.raises(SystemExit, match="HARD floor"):
-        tick.guard_refresh(led, _live(range(90000, 90900)), allow_shrink=True)
+    # ...and the legitimate end-game still passes. Without this control the
+    # bound above could simply be "refuse everything".
+    tick.guard_refresh(led, _live(range(90000, 90006)))
 
 
 def test_negative_control_new_arrivals_do_not_halt_a_nearly_drained_run(tmp_path):

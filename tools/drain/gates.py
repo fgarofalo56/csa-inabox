@@ -283,6 +283,46 @@ def assert_policy_matches_code(policy: dict) -> None:
             f"declared as operator documentation AND as implemented: {both} - "
             "a key cannot be both prose and a control"
         )
+    read = sorted(_documentation_keys_that_are_actually_read())
+    if read:
+        raise ValueError(
+            f"declared as operator documentation but READ by the code: {read} - "
+            "moving a control onto the allow-list is the allow-list becoming an off switch"
+        )
+
+
+def _documentation_keys_that_are_actually_read() -> list[str]:
+    """`OPERATOR_DOCUMENTATION` entries that some module actually consults.
+
+    The both-lists check caught DECLARING a key twice. It did not catch MOVING
+    one -- take `wip.max_lanes` out of the implemented mapping, drop it into the
+    allow-list, and the contract passed while `select_cycle` still read it. That
+    is the allow-list becoming an off switch, which is the thing it must never
+    be.
+
+    So the property is checked directly rather than by bookkeeping: a key
+    declared to be prose must not appear as a string literal in any of this
+    package's sources. Only the DOTTED (sectioned) entries are checked -- a bare
+    top-level name like `schema` collides with unrelated literals (the ledger
+    has a `schema` of its own) and the check would cry wolf until someone
+    deleted it.
+    """
+    import pathlib
+
+    here = pathlib.Path(__file__).resolve().parent
+    sources = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in sorted(here.glob("*.py"))
+        if p.name not in ("mutate_gates.py",)
+    )
+    found = []
+    for dotted in OPERATOR_DOCUMENTATION:
+        if "." not in dotted:
+            continue
+        _, _, sub = dotted.partition(".")
+        if f'"{sub}"' in sources or f"'{sub}'" in sources:
+            found.append(dotted)
+    return found
 
 
 def _unresolved(where: str) -> str | None:
@@ -431,6 +471,19 @@ def parse_verdicts(
         out_of_window = bool(
             [ln for ln, prose in classify_lines(body) if prose and _announces(ln)]
         ) and not _marker_lines(head)
+        # A blocking token BELOW the window, in a comment that announces
+        # nothing, used to produce `live=[] near=[]` -- no trace whatever, in
+        # the one direction the code says must never be reduced. It does not
+        # BLOCK (the window is the contract on both sides, or any long comment
+        # quoting an old round freezes the PR), but it is no longer silent.
+        blocking_below = (
+            not blocking_mention
+            and any(
+                any(t in ln for t in BLOCKING_TOKENS)
+                and not all(t in ln for t in VERDICT_TOKENS)
+                for ln in body[window:].splitlines()
+            )
+        )
 
         if not head_date:
             if has_marker or token or saw_template or mentions_token or cited:
@@ -484,6 +537,14 @@ def parse_verdicts(
                              "a verdict header appears in prose but is NOT the comment's "
                              f"first line (it may also be below body[:{window}]) - a verdict "
                              "is announced first or it does not register",
+                             NEAR_NOT_FIRST, blocks=False)
+                )
+            elif blocking_below:
+                near.append(
+                    NearMiss(cid, when,
+                             f"a BLOCKING token appears BELOW body[:{window}] in a comment "
+                             "that announces no verdict - it does not block (the window "
+                             "bounds both directions) but it is recorded rather than dropped",
                              NEAR_NOT_FIRST, blocks=False)
                 )
             elif mentions_token:
