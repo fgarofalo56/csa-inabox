@@ -419,3 +419,22 @@ browser-walk/
 # scripts/csa-loom/stage-copilot-corpus.sh (keep the dir via .gitkeep, ignore contents).
 apps/fiab-console/copilot-corpus/*
 !apps/fiab-console/copilot-corpus/.gitkeep
+
+# The drain ledger is per-run STATE, not a control.
+# Committing it would re-create the committed-artifact serialization defect:
+# every drain cycle would conflict with every open PR on one file.
+# The GATE CODE is tracked (that is #4468); the live ledger is not.
+# A fresh clone reseeds with: python tools/drain/tick.py --bootstrap
+#
+# THE COST, stated rather than hidden: deleting this file erases every receipt
+# and every park reason with it, and the reseed brings the same issues back as
+# `ready` with empty histories. GitHub is the source of truth for WHICH issues
+# are open; it is NOT the source of truth for what was already verified. So
+# `tick.py --status` refuses outright on a missing ledger instead of reporting
+# an empty queue -- `all([])` is True, and "drained: true" is this program's
+# exit condition, so an absent file must never read as a finished run.
+tools/drain/state.json
+# inventory.json is an optional CACHE of the issue->stream pins. tick.py derives
+# the stream from each issue's own labels when it is absent, so a clean checkout
+# keeps the W0 -> W1 -> ... ordering instead of filing everything into W9-rest.
+tools/drain/inventory.json

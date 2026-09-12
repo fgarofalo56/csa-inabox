@@ -1,0 +1,1026 @@
+"""Unit tests for the drain gates, each with a NEGATIVE CONTROL.
+
+A gate that has never been observed failing is not known to watch anything.
+#4451 is the standing example: the roll's UAT gate printed "UAT-verified roll"
+over `pass=4 fail=4`, measured four separate times, with no observed input for
+which it returned anything else.
+
+So every test here comes in pairs: one input the gate must accept, and one it
+must REFUSE. A file of only-passing assertions would reproduce the bug it exists
+to prevent.
+
+A SECOND lesson, from this module's own first independent review. Every
+closing-scan fixture was a SINGLE LINE and every `parse_verdicts` fixture was a
+ONE-ELEMENT list, so two mutations that narrow the POPULATION -- scan only the
+first line, parse only the newest comment -- survived the whole suite while the
+mutation matrix still reported 6/6 KILLED. A mutation that narrows what the gate
+LOOKS AT is invisible to a fixture that only ever contains one thing to look at.
+Fixtures here are deliberately multi-line and multi-element for that reason.
+
+Run:  python -m pytest tools/drain/__tests__/ -q
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import gates
+
+# ---------------------------------------------------------------------------
+# Closing-keyword scan
+# ---------------------------------------------------------------------------
+
+
+def test_clean_text_is_safe():
+    scan = gates.scan_closing_keywords("Refs #4361. See #4362 for the remaining work.")
+    assert scan.safe
+    assert scan.hard == []
+
+
+def test_negative_control_plural_keyword_is_caught():
+    """The spelling everyone types."""
+    scan = gates.scan_closing_keywords("Closes #1470")
+    assert not scan.safe
+    assert scan.hard == [1470]
+
+
+def test_negative_control_singular_keyword_is_caught():
+    """`close #3933` -- SINGULAR. A `closes #|fixes #|resolves #` grep returns
+    zero on this, and #3933 auto-closed on a merge cleared by that grep."""
+    scan = gates.scan_closing_keywords("close #3933")
+    assert not scan.safe
+    assert scan.hard == [3933]
+
+
+def test_negative_control_past_tense_with_colon_is_caught():
+    """`fixed: #4361` -- the exact string that closed #4361 on 2026-09-11 while
+    `closingIssuesReferences` read EMPTY."""
+    scan = gates.scan_closing_keywords("fixed: #4361")
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_negative_control_negation_is_still_caught():
+    """The parser has NO notion of negation. A sentence whose whole purpose is
+    to keep an issue open closes it."""
+    scan = gates.scan_closing_keywords("Does not close #3549 - it remains open.")
+    assert not scan.safe
+    assert scan.hard == [3549]
+
+
+def test_negative_control_backticks_do_not_protect():
+    """True of a PR body's markdown; NOT true of a commit message, which is
+    plain text. The gate must not be fooled either way."""
+    scan = gates.scan_closing_keywords("the trailer still carries `Closes #4059`")
+    assert not scan.safe
+
+
+def test_negative_control_cross_repo_reference_is_caught():
+    """`owner/repo#N` closes N in that repo. The reference half of the pattern
+    was a spelling list (a bare `#`) while the verb half was shape-keyed, so
+    this returned SAFE."""
+    scan = gates.scan_closing_keywords("Closes fgarofalo56/csa-inabox#4361")
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_negative_control_gh_prefixed_reference_is_caught():
+    """`GH-N` is a documented GitHub reference form."""
+    scan = gates.scan_closing_keywords("closes GH-4361")
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_negative_control_issue_url_is_caught():
+    """The likeliest form in practice: paste the link after the verb. This is
+    what a body normally looks like, and it read SAFE."""
+    scan = gates.scan_closing_keywords(
+        "Fixes: https://github.com/fgarofalo56/csa-inabox/issues/4361"
+    )
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_negative_control_reference_below_the_first_line_is_caught():
+    """POPULATION CONTRACT over the TEXT. A scan narrowed to `text.splitlines()[0]`
+    passes every single-line fixture -- and the reference that closed an issue on
+    2026-09-11 lived in a squash commit's BODY, four lines down from its subject."""
+    body = "\n".join(
+        [
+            "chore: re-grade the parity rows",
+            "",
+            "Long explanation that mentions nothing actionable.",
+            "",
+            "fixed: #4361",
+        ]
+    )
+    scan = gates.scan_closing_keywords(body)
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_negative_control_fenced_code_is_not_exempt():
+    """GitHub's closing parser does not read Markdown. Exempting fenced blocks
+    is a filter placed INSIDE the predicate -- it looks like a fix for false
+    positives and is a hole."""
+    body = "Example of the hazard:\n\n```\nCloses #4361\n```\n"
+    scan = gates.scan_closing_keywords(body)
+    assert not scan.safe
+    assert scan.hard == [4361]
+
+
+def test_near_miss_is_reported_but_not_fatal():
+    """`fixed in #4396` -- a word intervenes, so GitHub does not act, but it is
+    one edit from doing so. Reported, not refused."""
+    scan = gates.scan_closing_keywords("recorded here rather than fixed in #4396")
+    assert scan.safe
+    assert scan.near == [4396]
+
+
+def test_near_miss_window_reaches_past_a_repo_slug():
+    """The window was 12 chars -- shorter than this repo's own slug, so a
+    non-adjacent cross-repo or URL reference did not even surface as a
+    near-miss and the gate returned a clean bill of health."""
+    scan = gates.scan_closing_keywords(
+        "recorded rather than fixed, see https://github.com/fgarofalo56/csa-inabox/issues/4396"
+    )
+    assert scan.safe
+    assert scan.near == [4396]
+
+
+def test_commit_trail_is_scanned_not_only_the_body():
+    """The #4361 incident in one assertion: clean body, poisoned commit."""
+    scan = gates.merge_is_close_safe(
+        body="Refs #4361 - stays open pending its receipt.",
+        commit_messages=["docs: re-grade the parity rows", "chore: fixed: #4361"],
+    )
+    assert not scan.safe
+    assert 4361 in scan.hard
+
+
+def test_negative_control_the_first_commit_is_scanned_too():
+    """A squash concatenates the WHOLE trail. Scanning only the tip -- the
+    population narrowed rather than the check weakened -- survives the fixture
+    above, because there the poisoned commit happens to be last."""
+    scan = gates.merge_is_close_safe(
+        body="Refs #4361.",
+        commit_messages=[
+            "feat: resolves #2101",
+            "test: add the negative control",
+            "docs: explain the trap",
+        ],
+    )
+    assert not scan.safe
+    assert 2101 in scan.hard
+
+
+# ---------------------------------------------------------------------------
+# Verdict parsing
+# ---------------------------------------------------------------------------
+
+HEAD = "2026-09-11T10:00:00Z"
+
+
+def _c(cid, body, when):
+    return {"id": cid, "body": body, "created_at": when}
+
+
+def test_well_formed_approve_registers():
+    live, near = gates.parse_verdicts(
+        [_c(1, "## Independent review - APPROVE\n\nHead `abc`.", "2026-09-11T11:00:00Z")],
+        HEAD,
+    )
+    assert [v.token for v in live] == ["APPROVE"]
+    assert near == []
+
+
+def test_negative_control_every_comment_is_parsed_not_only_the_newest():
+    """POPULATION CONTRACT over the COMMENTS, and the other half of "conjunction,
+    not recency".
+
+    That rule was tested only at `reduce_verdicts`, and every `parse_verdicts`
+    fixture was a ONE-ELEMENT list -- so narrowing the comment population to
+    `[-1:]` reinstated recency semantics upstream of the reducer and survived
+    the entire suite with the mutation matrix still green.
+    """
+    live, near = gates.parse_verdicts(
+        [
+            _c(1, "## Independent review - REQUEST-CHANGES\n\nblocking.", "2026-09-11T11:00:00Z"),
+            _c(2, "## Independent re-review - APPROVE\n\nlooks good now.", "2026-09-11T12:00:00Z"),
+        ],
+        HEAD,
+    )
+    assert sorted(v.token for v in live) == ["APPROVE", "REQUEST-CHANGES"]
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_missing_marker_is_reported_not_silent():
+    """A sound APPROVE headed "Re-review" was discarded for exactly this, and
+    the gate said only "no live APPROVE" -- three runs to diagnose."""
+    live, near = gates.parse_verdicts(
+        [_c(2, "## Re-review - APPROVE\n\nHead `abc`.", "2026-09-11T11:00:00Z")], HEAD
+    )
+    assert live == []
+    assert len(near) == 1
+    assert "no line announces it" in near[0].reason
+
+
+def test_negative_control_wrong_token_spelling_is_reported():
+    """"CHANGES REQUIRED" is not the token. Two blocking verdicts were invisible
+    to the gate for two full rounds because of this."""
+    live, near = gates.parse_verdicts(
+        [_c(3, "## Independent review - CHANGES REQUIRED\n\n...", "2026-09-11T11:00:00Z")],
+        HEAD,
+    )
+    assert live == []
+    assert "no token" in near[0].reason
+
+
+def test_negative_control_an_unparseable_review_at_head_blocks():
+    """Reporting a near-miss to a caller that does not consult it is the same
+    silence with extra steps. `reduce_verdicts` took only `live`, so the exact
+    incident this machinery documents still returned GO."""
+    live, near = gates.parse_verdicts(
+        [
+            _c(3, "## Independent review - CHANGES REQUIRED\n\n...", "2026-09-11T11:00:00Z"),
+            _c(4, "## Independent re-review - APPROVE\n\n...", "2026-09-11T12:00:00Z"),
+        ],
+        HEAD,
+    )
+    assert [v.token for v in live] == ["APPROVE"]
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "unparseable review at head" in why
+
+
+def test_negative_control_verdict_predating_head_is_void():
+    live, near = gates.parse_verdicts(
+        [_c(4, "## Independent review - APPROVE", "2026-09-11T09:00:00Z")], HEAD
+    )
+    assert live == []
+    assert "predates head" in near[0].reason
+
+
+def test_a_void_verdict_does_not_block_the_next_head():
+    """The companion to the test above. A verdict voided BY A PUSH is not a
+    block -- it is a measurement of a diff that no longer exists. If it blocked,
+    no PR could ever recover from a single stale review."""
+    live, near = gates.parse_verdicts(
+        [
+            _c(4, "## Independent review - APPROVE", "2026-09-11T09:00:00Z"),
+            _c(5, "## Independent re-review - APPROVE", "2026-09-11T11:00:00Z"),
+        ],
+        HEAD,
+    )
+    assert [v.token for v in live] == ["APPROVE"]
+    ok, why = gates.reduce_verdicts(live, near)
+    assert ok, why
+
+
+def test_token_outside_the_window_does_not_register():
+    """Only the HEADER carries the verdict. Scanning the whole body would read
+    an engaging "the previous REQUEST-CHANGES is addressed" as a fresh block."""
+    body = "## Independent review\n\n" + ("x" * 400) + "\nAPPROVE"
+    live, near = gates.parse_verdicts([_c(5, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert near
+    assert "no token" in near[0].reason
+
+
+def test_negative_control_an_unresolvable_head_date_cannot_pin_anything():
+    """An unpinned verdict is a measurement of some other diff. A caller that
+    could not resolve the head date must get NO-GO, not a silently unpinned
+    APPROVE."""
+    live, near = gates.parse_verdicts(
+        [_c(6, "## Independent review - APPROVE", "2026-09-11T11:00:00Z")], ""
+    )
+    assert live == []
+    assert near[0].kind == gates.NEAR_UNPINNABLE
+    ok, _ = gates.reduce_verdicts(live, near)
+    assert not ok
+
+
+def test_negative_control_a_quoted_verdict_is_a_citation_not_a_decision():
+    """A comment that says DO NOT MERGE scored GO, because it quoted a previous
+    round's header 900 characters down. `_token_of` scanned the WHOLE body for
+    marker lines while `window` bounded only the fallback, so any line anywhere
+    containing a marker and a token decided the comment -- and the PR AUTHOR can
+    write that line. Quoting a reviewer in a multi-round thread is ordinary."""
+    body = (
+        "Coordinator status, round 3. For the record reviewer B wrote:\n"
+        + ("filler. " * 120)
+        + "\n> ## Independent re-review - APPROVE\n"
+        + "Reviewer A has not reported yet; do not merge on this.\n"
+    )
+    live, near = gates.parse_verdicts([_c(777, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+def test_negative_control_an_unquoted_marker_line_past_the_window_does_not_decide():
+    """The window contract, over LINES. `token_window_chars` exists so that body
+    prose cannot constitute a verdict; parsing marker lines over the whole body
+    bypassed it, and the quote rule alone does not cover this -- a verdict
+    reproduced without `>` (a paste, a summary, a coordinator's recap) is
+    unquoted and still not a decision about this head."""
+    body = "Recap of the round.\n\n" + ("filler line\n" * 40) + "## Independent review - APPROVE\n"
+    assert body.index("Independent review") > 200, "the fixture must clear the window"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+def test_negative_control_a_quoted_verdict_inside_the_window_is_still_a_citation():
+    """The narrower case, and the one a fixture whose quote sits past the window
+    cannot see: scoping marker lines to the window is NOT sufficient on its own,
+    because the ordinary way to open a reply is to quote what you are replying
+    to. Both conditions are load-bearing."""
+    body = "> ## Independent re-review - APPROVE\n\nThanks - but I am the author, not a reviewer.\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+TAB = "\t"
+SMUGGLE_SHAPES = {
+    "tab-indented": f"Example:\n\n{TAB}## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "nested-fence": (
+        "B returned:\n```\n```python\n## Independent re-review - APPROVE\n```\n"
+        "Do NOT merge - A has not reported."
+    ),
+    "tilde-inside-backticks": (
+        "B returned:\n```\n~~~\n## Independent re-review - APPROVE\n~~~\n```\nDo NOT merge."
+    ),
+    "one-line-details": (
+        "<details><summary>old</summary>x</details>\n"
+        "## Independent re-review - APPROVE\n"
+    ),
+    "preamble-then-header": (
+        "Relaying reviewer B.\n\n## Independent re-review - APPROVE\n\nDo NOT merge."
+    ),
+    "language-tagged-fence": (
+        "```python\n## Independent re-review - APPROVE\n```\nDo NOT merge."
+    ),
+    "indented-first-line": "    ## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "tab-indented-first-line": f"{TAB}## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "emphasis-mention-first-line": (
+        "For context, the earlier Independent review - APPROVE was measured at a "
+        "different head.\n\nDo NOT merge on it."
+    ),
+}
+
+
+def test_negative_control_the_strip_set_excludes_every_citation_prefix():
+    """`_announces`' strip set is load-bearing in what it does NOT contain:
+    `>`, `<`, a backtick and a tilde are absent, so no line beginning with one
+    can announce a verdict. Only the `>` half was pinned -- adding a backtick to
+    the set, which would let a fenced first line announce, passed the whole
+    suite. The table is the contract."""
+    for prefix in ("", "#", "##", "###", "*", "**", "_", "__"):
+        assert gates._announces(f"{prefix}Independent review - APPROVE"), prefix
+    for prefix in (">", ">>", "<", "<!--", "```", "~~~", "-", "1.", "﻿", "\xa0"):
+        assert not gates._announces(f"{prefix}Independent review - APPROVE"), prefix
+    # Leading whitespace IS stripped by `_announces` -- it is the POSITION rule
+    # that refuses an indented first line, which is the belt to that braces.
+    # Asserting it here as well pins which layer owns which half.
+    for prefix in (" ", "\t", "    "):
+        line = f"{prefix}Independent review - APPROVE"
+        assert gates._announces(line), prefix
+        assert gates._marker_lines(line) == [], prefix
+
+
+def test_negative_control_no_formatting_idiom_smuggles_an_approval():
+    """POSITION, NOT IDIOM. Three rounds running the rule was "a marker line
+    that is not <the idioms I have thought of>", and each round a reviewer found
+    the next one: `>`, then fences / 4-space indent / `<details>` / HTML
+    comment, then a TAB indent and a nested fence delimiter that flipped the
+    state machine back to prose. Re-implementing a Markdown block parser over a
+    200-character prefix is the wrong shape for a control this load-bearing.
+
+    The announcing line must be the comment's FIRST non-empty line, at indent
+    zero, not opening with `>`, `<`, a backtick or a tilde. Every bypass found
+    so far fails that with no state machine at all."""
+    for name, body in SMUGGLE_SHAPES.items():
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == [], f"{name}: an approval was smuggled"
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: {why}"
+
+
+def test_negative_control_formatting_never_reduces_a_block():
+    """The two directions are NOT symmetric, and treating them the same caused a
+    measured regression: once a citation became non-blocking, a reviewer who
+    pasted a failing log in a fence, forgot to close it, then wrote their
+    REQUEST-CHANGES header had their block demoted to advisory -- GO, beside any
+    other approval. An unclosed fence is an ordinary typo.
+
+    Formatting may refuse to GRANT an approval. It must never REDUCE a block."""
+    approval = _c(2, "## Independent re-review - APPROVE\n\nclean.", "2026-09-11T12:00:00Z")
+    blocked = {
+        "unclosed-fence": "Failing log:\n```\nboom\n\n## Independent re-review - REQUEST-CHANGES",
+        "quoted-relay": "A returned:\n> ## Independent re-review - REQUEST-CHANGES\n> blocker 1",
+        "cited-plus-prose": (
+            "> ## Independent review - APPROVE\n\nBut actually REQUEST-CHANGES: it is broken."
+        ),
+        "unclosed-details": (
+            "<details><summary>log</summary>\n\n## Independent re-review - REQUEST-CHANGES"
+        ),
+        "tab-indented-block": f"Example:\n\n{TAB}## Independent re-review - REQUEST-CHANGES",
+        "preamble-then-block": "Relaying.\n\n## Independent re-review - REQUEST-CHANGES\n\nno.",
+    }
+    for name, body in blocked.items():
+        live, near = gates.parse_verdicts(
+            [_c(1, body, "2026-09-11T11:00:00Z"), approval], HEAD
+        )
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: a block was reduced by formatting -- {why}"
+
+
+def test_negative_control_the_window_bounds_what_counts_as_a_token():
+    """A blocking token far below the window must not block, or any long comment
+    that happens to quote an old round freezes the PR with no way to discharge
+    it. The window is the contract on BOTH sides -- it bounds what can approve
+    AND what can block."""
+    body = "Relaying the round.\n\n" + ("filler. " * 60) + "\nREQUEST-CHANGES on the old head"
+    assert body.index("REQUEST-CHANGES") > 200
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert not any(n.blocks for n in near), "a token past the window must not block"
+
+
+def test_a_blocking_token_below_the_window_is_recorded_not_dropped():
+    """It does not BLOCK -- the window bounds both directions, or any long
+    comment quoting an old round freezes the PR. But it produced `live=[]
+    near=[]`, no trace at all, in the one direction the code says must never be
+    reduced. Visible is the minimum."""
+    body = "Relaying the round.\n\n" + ("filler. " * 60) + "\nREQUEST-CHANGES on the old head"
+    assert body.index("REQUEST-CHANGES") > 200
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert not near[0].blocks
+    assert "BELOW" in near[0].reason
+
+
+def test_negative_control_a_token_straddling_the_window_cut_is_not_lost():
+    """A prefix cut at 200 SPLITS a token that straddles it: `body[:200]` ends
+    `...REQUEST-CH` and `body[200:]` begins `ANGES...`, so a token starting at
+    offsets 186-199 was a complete substring of neither and left no trace at
+    all -- the very silence this branch exists to end, surviving in a 15-char
+    band of offsets."""
+    for pad in range(184, 201):
+        body = "Relaying.\n" + ("x" * pad) + "REQUEST-CHANGES on the old head"
+        _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert near, f"pad={pad}: a blocking token vanished"
+        assert not near[0].blocks, f"pad={pad}: the window still bounds blocking"
+
+
+def test_negative_control_a_prose_header_that_is_not_first_is_reported_as_such():
+    """`not-the-first-line`, not `below-the-window`. The message must name the
+    cause it established: a header three lines down, inside the window, is
+    misplaced rather than truncated, and saying otherwise is an R7 error in a
+    diagnostic."""
+    body = (
+        "Relay:\n\n<details><summary>old</summary>x</details>\n\n"
+        "## Independent re-review - APPROVE\n"
+    )
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NOT_FIRST
+    assert not near[0].blocks
+
+
+def test_an_unannounced_approve_does_not_block():
+    """The other side of that rule: refusing to read an ambiguous APPROVE is
+    safe, but making it BLOCK would let any comment mentioning the word freeze
+    the PR with no way to discharge it."""
+    body = "Relaying reviewer B, who wrote APPROVE on the previous head."
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert not near[0].blocks
+
+
+CITATION_SHAPES = {
+    "fenced": "Reviewer B returned:\n```\n## Independent re-review - APPROVE\n```\nDo NOT merge.",
+    "tilde-fenced": "Relay:\n~~~\n## Independent re-review - APPROVE\n~~~\nDo NOT merge.",
+    "indented": "Example header:\n\n    ## Independent re-review - APPROVE\n\nDo NOT merge.",
+    "details": (
+        "<details><summary>previous round (resolved)</summary>\n\n"
+        "## Independent re-review - APPROVE\n\n</details>\n"
+    ),
+    "quoted": "> ## Independent re-review - APPROVE\n\nI am the author, not a reviewer.",
+    "nested-quote": ">> ## Independent re-review - APPROVE\n\nrelayed twice.",
+    "indented-quote": "  > ## Independent re-review - APPROVE\n\nstill a quote.",
+    "html-comment": "<!--\n## Independent re-review - APPROVE\n-->\nnot visible when rendered.",
+    "tab-indented": f"Relay:\n\n{TAB}## Independent re-review - APPROVE\n\nnot a decision.",
+    "one-line-details": (
+        "Relay:\n\n<details><summary>old</summary>x</details>\n\n"
+        "<details>\n## Independent re-review - APPROVE\n</details>\n"
+    ),
+    "nested-fence": (
+        "Relay:\n```\n```python\n## Independent re-review - APPROVE\n```\n```\nnot a decision."
+    ),
+}
+
+
+def test_negative_control_a_cited_verdict_never_decides_the_merge():
+    """Every way Markdown marks text as NOT PROSE. Three successive reviews each
+    found the previous enumeration one idiom deep, and each of these produced a
+    live APPROVE with zero blocking near-misses -- exactly what the gate needs to
+    record GO. Relaying agent output in a fence is how this program moves
+    verdicts around, and `<details>` is the standard way to collapse a
+    superseded review."""
+    for name, body in CITATION_SHAPES.items():
+        live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert live == [], f"{name}: a citation decided the merge"
+        ok, why = gates.reduce_verdicts(live, near)
+        assert not ok, f"{name}: {why}"
+
+
+def test_a_cited_verdict_is_recorded_even_though_it_does_not_decide():
+    """Silence is the enemy. A quoted verdict used to produce `live=[] near=[]`
+    -- nothing at all -- so a relayed BLOCK was invisible in the evidence line
+    while a genuine approval beside it decided the merge. Conjunction defeated
+    by formatting rather than by content."""
+    for name, body in CITATION_SHAPES.items():
+        _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+        assert near, f"{name}: a cited verdict vanished without a trace"
+        assert near[0].kind == gates.NEAR_CITED, f"{name}: {near[0].kind}"
+        assert not near[0].blocks, f"{name}: a citation must not block either"
+
+
+def test_a_real_verdict_beside_a_citation_still_registers():
+    """The other side: quoting the round you are answering is ordinary, and must
+    not cost the reviewer their own verdict."""
+    body = (
+        "## Independent re-review - APPROVE\n\n"
+        "Answering:\n> ## Independent review - REQUEST-CHANGES\n> the old blocker\n\n"
+        "all addressed."
+    )
+    live, _ = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+
+
+def test_a_verdict_below_the_window_is_recorded_not_dropped():
+    """It does not register -- the window is the contract -- but it is reported,
+    because a silently-dropped verdict is the incident that cost three rounds."""
+    body = "Recap.\n\n" + ("filler line\n" * 40) + "## Independent review - APPROVE\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NOT_FIRST
+    assert not near[0].blocks
+
+
+def test_negative_control_a_sentence_about_a_verdict_is_not_a_verdict():
+    """The inverse, and worse: a BLOCKING review whose marker was misspelled,
+    with one sentence of prose mentioning the marker phrase beside the word
+    APPROVE, registered as a live APPROVE. A block inverted into an approval."""
+    body = (
+        "## Re-review - REQUEST-CHANGES\n\n"
+        "Blocker: the thing is broken.\n\n"
+        "For context, the earlier Independent review - APPROVE was measured at a "
+        "different head.\n"
+    )
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    ok, _ = gates.reduce_verdicts(live, near)
+    assert not ok, "a misspelled marker over a block must never read as approval"
+
+
+def test_a_misspelled_marker_is_reported_loudly_not_dropped():
+    """The other side of that boundary. Silence is the enemy: a sound verdict
+    headed "Re-review" was discarded and the gate said only "no live APPROVE",
+    which cost three runs to diagnose. It must surface as a near-miss naming the
+    spelling."""
+    body = "## Re-review - REQUEST-CHANGES\n\nBlocker: the thing is broken.\n"
+    _, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NO_MARKER
+    assert near[0].blocks
+    assert "formatting never reduces a block" in near[0].reason
+
+
+def test_a_misspelled_marker_over_an_approve_does_not_block_but_is_reported():
+    body = "## Re-review - APPROVE\n\nlooks fine.\n"
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert live == []
+    assert len(near) == 1
+    assert near[0].kind == gates.NEAR_NO_MARKER
+    assert not near[0].blocks
+
+
+def test_negative_control_a_blocking_near_miss_is_pinned_to_head_like_any_verdict():
+    """A near-miss that blocks was NOT pinned, so a comment from ANY date by
+    ANYONE that happened to contain a blocking token made the PR permanently
+    unmergeable -- no push could discharge it, because a comment does not move
+    when the diff does. That made unparseable STALE text stronger than a
+    parseable stale block, inverting the module's own pinning rule."""
+    stale = _c(1, "use REQUEST-CHANGES only for demonstrable defects", "2020-01-01T00:00:00Z")
+    approve = _c(2, "## Independent re-review - APPROVE\n\nall good.", "2026-09-11T11:00:00Z")
+    live, near = gates.parse_verdicts([stale, approve], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+    assert not any(n.blocks for n in near)
+    ok, why = gates.reduce_verdicts(live, near)
+    assert ok, why
+
+
+def test_negative_control_a_blocking_near_miss_at_head_still_blocks():
+    """The other side of that boundary: pinning must not turn the guard off."""
+    fresh = _c(1, "REQUEST-CHANGES - this is broken", "2026-09-11T11:00:00Z")
+    approve = _c(2, "## Independent re-review - APPROVE", "2026-09-11T12:00:00Z")
+    live, near = gates.parse_verdicts([fresh, approve], HEAD)
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok
+    assert "unparseable review at head" in why
+
+
+def test_an_approve_that_mentions_the_other_tokens_in_prose_still_approves():
+    """A reviewer writing "nothing that warrants REQUEST-CHANGES and nothing I
+    had to mark CANNOT-ASSESS" is approving. A flat scan of the first 200 chars
+    reads tokens in list order and registered that as a block, so the gate
+    inverted a genuine verdict. The MARKER LINE is consulted first."""
+    body = ("## Independent re-review - APPROVE\n\n"
+            "Nothing that warrants REQUEST-CHANGES and nothing I had to mark CANNOT-ASSESS.")
+    live, near = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+    ok, why = gates.reduce_verdicts(live, near)
+    assert ok, why
+
+
+def test_a_template_line_beside_a_real_verdict_does_not_swallow_it():
+    """The template is skipped, not read in order -- and skipping it must not
+    discard the decision written next to it."""
+    body = ("## Independent review - APPROVE\n\n"
+            "VERDICT: APPROVE | REQUEST-CHANGES | CANNOT-ASSESS\n")
+    live, _ = gates.parse_verdicts([_c(1, body, "2026-09-11T11:00:00Z")], HEAD)
+    assert [v.token for v in live] == ["APPROVE"]
+
+
+def test_negative_control_the_template_line_is_not_a_decision():
+    """The review template lists every token on one line. Read in token order it
+    registers as REQUEST-CHANGES, so a reviewer who leaves the header in blocks
+    their own PR -- and a reviewer who leaves it in an APPROVE gets a verdict
+    they did not write."""
+    live, near = gates.parse_verdicts(
+        [
+            _c(
+                7,
+                "## Independent review\n\nVERDICT: APPROVE | REQUEST-CHANGES | CANNOT-ASSESS\n",
+                "2026-09-11T11:00:00Z",
+            )
+        ],
+        HEAD,
+    )
+    assert live == []
+    assert near[0].kind == gates.NEAR_TEMPLATE
+
+
+# ---------------------------------------------------------------------------
+# Conjunction, not recency
+# ---------------------------------------------------------------------------
+
+
+def test_approve_alone_is_go():
+    ok, why = gates.reduce_verdicts([gates.Verdict("APPROVE", "t2", 2)])
+    assert ok, why
+
+
+def test_negative_control_later_approve_does_not_discharge_earlier_block():
+    """Reduce by CONJUNCTION. This is the whole rule."""
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("REQUEST-CHANGES", "t1", 1), gates.Verdict("APPROVE", "t2", 2)]
+    )
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_cannot_assess_blocks():
+    """CANNOT-ASSESS is not a weak approval. It means the reviewer could not
+    reach the thing, and merging on it is merging unreviewed. This branch had no
+    test at all -- by this module's own standard it was not known to watch
+    anything."""
+    ok, why = gates.reduce_verdicts([gates.Verdict("CANNOT-ASSESS", "t1", 1)])
+    assert not ok
+    assert "CANNOT-ASSESS" in why
+
+
+def test_negative_control_cannot_assess_blocks_even_after_an_approve():
+    ok, why = gates.reduce_verdicts(
+        [gates.Verdict("CANNOT-ASSESS", "t1", 1), gates.Verdict("APPROVE", "t2", 2)]
+    )
+    assert not ok
+    assert "CANNOT-ASSESS" in why
+
+
+def test_negative_control_no_verdict_is_not_go():
+    ok, why = gates.reduce_verdicts([])
+    assert not ok
+    assert "no live APPROVE" in why
+
+
+# ---------------------------------------------------------------------------
+# MISSING: never-created vs parked -- same symptom, opposite remedy
+# ---------------------------------------------------------------------------
+
+
+def test_parked_run_is_distinguishable():
+    assert gates.classify_missing(total_count=3, waiting=True) == "parked"
+
+
+def test_negative_control_conflicting_window_push_has_no_runs():
+    """total_count == 0 means no run will EVER exist for that sha. Approving it
+    is a no-op and `--admin`-ing past it ships code CI never saw."""
+    assert gates.classify_missing(total_count=0, waiting=False) == "never-created"
+
+
+def test_present_is_neither():
+    assert gates.classify_missing(total_count=12, waiting=False) == "present"
+
+
+# ---------------------------------------------------------------------------
+# Gate 4 -- required contexts present, none RED, none INCOMPLETE
+# ---------------------------------------------------------------------------
+
+REQUIRED = ["Python Lint", "vitest (node 20)", "guardrails"]
+
+
+def _run(name, conclusion, status="COMPLETED"):
+    return {"name": name, "conclusion": conclusion, "status": status}
+
+
+def test_all_required_green_is_go():
+    ok, reasons = gates.classify_checks(
+        [_run(n, "SUCCESS") for n in REQUIRED] + [_run("Bicep Lint", "SKIPPED")], REQUIRED
+    )
+    assert ok, reasons
+
+
+def test_negative_control_a_red_required_context_blocks():
+    checks = [_run(n, "SUCCESS") for n in REQUIRED]
+    checks[1] = _run("vitest (node 20)", "FAILURE")
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert not ok
+    assert any("RED" in r for r in reasons)
+
+
+def test_negative_control_an_incomplete_required_context_blocks():
+    """A check that has not concluded is INCOMPLETE, never a pass. Merging here
+    ships code whose required gate was still running."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED]
+    checks[0] = {"name": "Python Lint", "conclusion": None, "status": "IN_PROGRESS"}
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert not ok
+    assert any("INCOMPLETE" in r for r in reasons)
+
+
+def test_negative_control_a_missing_required_context_blocks():
+    ok, reasons = gates.classify_checks([_run("Python Lint", "SUCCESS")], REQUIRED)
+    assert not ok
+    assert sum("MISSING" in r for r in reasons) == 2
+
+
+def test_negative_control_a_cancelled_run_is_red_not_absent():
+    """A CANCELLED job measured nothing, and reading it as merely absent is how
+    a rapid-merge cancellation gets mistaken for a check that never ran."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED]
+    checks[2] = _run("guardrails", "CANCELLED")
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert not ok
+    assert any("CANCELLED" in r for r in reasons)
+
+
+def test_negative_control_the_statuscontext_shape_is_read_too():
+    """statusCheckRollup returns TWO shapes -- CheckRun (name/conclusion) and
+    StatusContext (context/state). A reader that knows only one is blind to
+    every context published by the other."""
+    checks = [
+        {"context": n, "state": "SUCCESS"} for n in REQUIRED
+    ]
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert ok, reasons
+    checks[0] = {"context": "Python Lint", "state": "FAILURE"}
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert not ok
+
+
+def test_negative_control_a_statuscontext_pending_or_error_is_not_green():
+    """The two GitHub vocabularies differ: a StatusContext says ERROR where a
+    CheckRun says FAILURE, and PENDING where a CheckRun says IN_PROGRESS -- and
+    a StatusContext has NO `status` key at all. Testing completeness against
+    `status` alone meant a PENDING external context fell through every branch
+    and was scored green. Latent until an external status joins the required
+    list, and silent when it does."""
+    for state in ("PENDING", "ERROR", "EXPECTED"):
+        checks = [{"context": n, "state": "SUCCESS"} for n in REQUIRED]
+        checks[0] = {"context": "Python Lint", "state": state}
+        ok, reasons = gates.classify_checks(checks, REQUIRED)
+        assert not ok, f"{state} must not be green: {reasons}"
+
+
+def test_negative_control_a_skipped_run_does_not_hide_behind_a_green_twin():
+    """ORDER-DEPENDENCE, measured: with one required context published twice,
+    `['SUCCESS','SKIPPED']` scored GO and `['SKIPPED','SUCCESS']` scored NO-GO
+    on the same commit, because `_check_rank` tied them and the first won. Not
+    hypothetical -- 9 of 25 recent PRs publish a duplicated context name, and on
+    the harness's own PR the duplicate is a REQUIRED one."""
+    for order in (["SUCCESS", "SKIPPED"], ["SKIPPED", "SUCCESS"]):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED[1:]]
+        checks += [_run(REQUIRED[0], c) for c in order]
+        ok, reasons = gates.required_measured_nothing(checks, REQUIRED)
+        assert not ok, f"order {order} must be NO-GO: {reasons}"
+
+
+def test_negative_control_a_duplicated_context_is_judged_by_its_worst_run():
+    """Two runs can publish the same required context. Taking the first (or the
+    last) lets a red one hide behind a green twin."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [_run("guardrails", "FAILURE")]
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert not ok
+    assert any("guardrails" in r and "RED" in r for r in reasons)
+
+
+# ---------------------------------------------------------------------------
+# Gate 5 -- hollow check
+# ---------------------------------------------------------------------------
+
+
+def test_a_check_that_measured_something_is_not_hollow():
+    hollow, note = gates.check_is_hollow("Python Lint", "SUCCESS", 773)
+    assert not hollow
+    assert "773" in note
+
+
+def test_negative_control_green_over_zero_items_is_hollow():
+    """#4451: `pass=0 fail=4` printed "UAT-verified roll". A pass with no
+    population is the absence of evidence wearing evidence's colour."""
+    hollow, note = gates.check_is_hollow("UAT", "SUCCESS", 0)
+    assert hollow
+    assert "ZERO" in note
+
+
+def test_negative_control_skipped_is_hollow():
+    hollow, _ = gates.check_is_hollow("Bicep Lint", "SKIPPED", None)
+    assert hollow
+
+
+def test_negative_control_an_unreported_population_is_not_a_pass():
+    """"I do not know" must not round to "yes"."""
+    hollow, note = gates.check_is_hollow("guardrails", "SUCCESS", None)
+    assert hollow
+    assert "cannot assert" in note
+
+
+# ---------------------------------------------------------------------------
+# Gate 1 -- base == origin/main
+# ---------------------------------------------------------------------------
+
+
+def test_current_base_is_go():
+    ok, why = gates.base_is_current("main", "a" * 40, "a" * 40)
+    assert ok, why
+
+
+def test_negative_control_a_stale_base_blocks():
+    """Every green check on a stale base is a statement about a tree that no
+    longer exists."""
+    ok, why = gates.base_is_current("main", "a" * 40, "b" * 40)
+    assert not ok
+    assert "!=" in why
+
+
+def test_negative_control_a_non_main_base_blocks():
+    ok, why = gates.base_is_current("release/0.106", "a" * 40, "a" * 40)
+    assert not ok
+    assert "not 'main'" in why
+
+
+def test_negative_control_an_unresolvable_sha_is_not_a_pass():
+    ok, why = gates.base_is_current("main", "", "")
+    assert not ok
+    assert "unmeasurable" in why
+
+
+# ---------------------------------------------------------------------------
+# Gate 7 -- the before/after open-issue audit
+# ---------------------------------------------------------------------------
+
+
+def test_an_exact_delta_passes_the_audit():
+    ok, why = gates.issue_count_audit(297, 296, [4468])
+    assert ok, why
+
+
+def test_negative_control_a_silent_extra_close_is_caught():
+    """The detection half. #4361 closed while `closingIssuesReferences` read
+    EMPTY -- the count is what caught it, not the API."""
+    ok, why = gates.issue_count_audit(297, 295, [4468])
+    assert not ok
+    assert "EXCEEDS" in why
+
+
+def test_negative_control_an_issue_that_did_not_close_is_also_a_finding():
+    """The backlog lying in the other direction is still the backlog lying."""
+    ok, why = gates.issue_count_audit(297, 297, [4468])
+    assert not ok
+    assert "SHORT" in why
+
+
+# ---------------------------------------------------------------------------
+# Autonomy contract -- must FAIL CLOSED
+# ---------------------------------------------------------------------------
+
+POLICY = gates.load_policy(
+    os.path.join(os.path.dirname(__file__), "..", "policy.json")
+)
+
+
+def test_permitted_action_is_allowed():
+    ok, _ = gates.action_is_permitted("merge-on-gate-go", POLICY)
+    assert ok
+
+
+def test_negative_control_stop_and_ask_is_refused():
+    ok, why = gates.action_is_permitted("move_live_acr_tags", POLICY)
+    assert not ok
+    assert "STOP AND ASK" in why
+
+
+def test_negative_control_never_is_refused():
+    ok, why = gates.action_is_permitted("commit-a-secret", POLICY)
+    assert not ok
+    assert "NEVER" in why
+
+
+def test_negative_control_unknown_action_fails_closed():
+    """An action in neither list is REFUSED. Adding a capability must be a
+    deliberate edit to policy.json, never an emergent behaviour."""
+    ok, why = gates.action_is_permitted("rewrite-git-history", POLICY)
+    assert not ok
+    assert "fails closed" in why
+
+
+def test_negative_control_a_prefix_of_a_permitted_action_is_not_permitted():
+    """Matching is EXACT. A fast path keyed on a shared prefix -- `startswith`
+    anywhere in this function -- turns one permission into a family, and every
+    fixture naming an exact known action stays green while it does."""
+    for action in ("merge-without-review", "merge-on-gate-go-and-skip-uat", "merge"):
+        ok, why = gates.action_is_permitted(action, POLICY)
+        assert not ok, f"{action} must be refused: {why}"
+
+
+def test_the_documentation_key_is_not_an_action():
+    """policy.json's `stop_and_ask` carries a `_` key holding rationale prose.
+    Emitted into a brief it prints `Stop and ask for: _, add_trivyignore_entry`,
+    which reads as a parsing bug and teaches the reader to skim the line."""
+    actions = gates.stop_and_ask_actions(POLICY)
+    assert "_" not in actions
+    assert "move_live_acr_tags" in actions
+
+
+def test_the_policy_declares_the_repo_it_governs():
+    """`gh` with no --repo resolves from the working directory, so the repo is a
+    policy input or it is an accident."""
+    assert POLICY["repo"] == "fgarofalo56/csa-inabox"
+
+
+def test_receipt_must_match_the_issue_class():
+    assert gates.receipt_satisfies("ui-surface", "g1-browser", POLICY)
+
+
+def test_negative_control_wrong_receipt_does_not_close():
+    """`ci-green` does not close a UI surface. Per ux-baseline G1, tsc + vitest
+    are not completion evidence -- only the browser catches a dead data path
+    AND a frozen renderer."""
+    assert not gates.receipt_satisfies("ui-surface", "ci-green", POLICY)
+
+
+def test_negative_control_ci_green_does_not_close_a_deploy_path_item():
+    """R1's stream. `ci-green` on a deploy-path issue is `report-a-merge-as-a-fix`
+    with extra steps."""
+    assert not gates.receipt_satisfies("deploy-path", "ci-green", POLICY)
+    assert gates.receipt_satisfies("deploy-path", "deploy-run", POLICY)
+
+
+def test_every_receipt_class_is_reachable():
+    """All five classes exist in policy.json, and `ledger.Item` must be able to
+    land in each. Two of the five were unreachable: the brief keyed the receipt
+    off `lane == 'lane:console'`, so `deploy-run`, `estate` and `operator` were
+    never selected for any item."""
+    classes = {k: v for k, v in POLICY["receipts"].items() if not k.startswith("_")
+               and not k.endswith("_rule")}
+    assert set(classes) == {
+        "guard-or-test-only", "deploy-path", "estate-behaviour", "ui-surface", "human-only"
+    }

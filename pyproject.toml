@@ -598,7 +598,14 @@ indent-style = "space"
 # with ModuleNotFoundError in CI. Re-enabling it is the remaining half of WS-F2:
 # add `streaming` to that pip install line and drop this --ignore in the same PR,
 # then verify the required Python check stays green on the 3-version matrix.
-testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
+testpaths = ["tests", "portal/shared/portal_tests", "csa_platform", "tools/drain/__tests__"]
+# `tools/drain/__tests__` is the drain harness's suite — the gates that decide
+# GO/NO-GO on a merge and the ledger that enforces `deploy-integrity.md` R2. It
+# was reachable only by typing its path, so `make test` and all three required
+# `Python Tests` contexts stayed green over an edit that weakened the merge gate.
+# For the module whose whole premise is "the gate that decides every merge is
+# auditable", CI-enforced is the bar. `tools/**` is already in test.yml's path
+# filter, so tests/repo/test_python_trigger_scope.py stays satisfied.
 # `sdk/python/csa-loom/src` is on the path so `sdk/python/csa-loom/tests` can be
 # run by explicit path (`python -m pytest sdk/python/csa-loom/tests`) without
 # first `pip install -e`-ing the SDK. It is NOT in `testpaths`: the SDK keeps its

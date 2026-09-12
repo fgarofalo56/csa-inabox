@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "_": "The authority for what the drain may do unattended. tick.py refuses to emit a brief that would violate this file. Operator decision 2026-09-11.",
+
+  "repo": "fgarofalo56/csa-inabox",
+  "_repo": "Passed to every `gh` call as --repo. It is a POLICY input, never an accident of the working directory: `gh issue list` with no --repo resolves the repo from cwd, so running the harness from another checkout returned rc=0 and a valid-looking list for a DIFFERENT repository - whose numbers are disjoint from this ledger's, which would have moved all 297 items out of the queue in one save.",
+
+  "scope": {
+    "target": "all-open-issues",
+    "definition_of_done": "every open issue reaches closed | parked | declined",
+    "closed_requires_receipt": true
+  },
+
+  "wip": {
+    "_": "A policy INPUT, not a constant. The host carries ~66 GB committed before any agent starts (vmmemWSL 48 GB + llama-server ~18 GB), which is why three things were memory-killed on 2026-09-11. Lower this before blaming a command.",
+    "max_lanes": 4,
+    "max_lanes_hard_ceiling": 8,
+    "serialize_on_shared_checkout": true
+  },
+
+  "permitted_unattended": [
+    "open-pr",
+    "open-issue",
+    "comment",
+    "merge-on-gate-go",
+    "close-on-receipt",
+    "rerun-ci",
+    "approve-parked-ci-run",
+    "dispatch-deploy-workflow",
+    "dispatch-roll",
+    "playwright-walk-live-console"
+  ],
+
+  "stop_and_ask": {
+    "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",
+    "publish_security_advisory": "outward-facing and irreversible; operator decides once the fix is DEPLOYED",
+    "move_live_acr_tags": "a branch dispatch of build-fiab-images-acr-tasks hard-codes --image <name>:latest and moves :latest AND :v0.1 for all 13 images in the live Commercial ACR",
+    "delete_data_or_schema": "not reversible, and the blast radius is unknowable from inside a lane - a dropped container or column takes every downstream consumer with it",
+    "force_push_shared_branch": "a stale worktree makes --force-with-lease unsafe; sweep first",
+    "weaken_or_baseline_a_guard": "making something green by widening its allowlist is the defect, not the fix",
+    "add_trivyignore_entry": "the baseline is deliberately EMPTY; fix the image",
+    "use_skip_valve": "LOOM_BUILD_SKIP_SUPPLY_CHAIN / skip_uat / skip_signature_verify ship unverified or unsigned artifacts"
+  },
+
+  "never": [
+    "touch-security-software",
+    "read-or-echo-a-credential",
+    "commit-a-secret",
+    "report-a-merge-as-a-fix"
+  ],
+
+  "receipts": {
+    "_": "Which receipt closes which class of issue. deploy-integrity.md R2: merged is never done.",
+    "guard-or-test-only": "ci-green",
+    "deploy-path": "deploy-run",
+    "estate-behaviour": "estate",
+    "ui-surface": "g1-browser",
+    "human-only": "operator",
+    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt."
+  },
+
+  "merge_gate": {
+    "_": "Each key names a gate and maps to the function that IMPLEMENTS it. gates.MERGE_GATE_IMPLEMENTED_BY holds that mapping and tools/drain/__tests__/test_policy.py fails when a key here has no implementation, or an implementation no key. These were 10 keys READ BY NOTHING while both module docstrings described 'five policy keys read by nothing' as a repaired past defect - an unconsulted policy key is prose, not a control, including when the prose is about unconsulted policy keys.",
+    "mergeable_must_be_known": true,
+    "base_must_equal_origin_main": true,
+    "reduce_verdicts_by": "conjunction",
+    "verdict_pinned_to_head": true,
+    "require_no_red": true,
+    "require_no_incomplete": true,
+    "require_no_skipped_required_context": true,
+    "scan_closing_keywords_in": ["body", "commit-trail"],
+    "closing_keyword_scan_blocks_an_undeclared_close": true,
+    "audit_issue_numbers_around_every_merge": true,
+    "_removed_require_hollow_check_clean": "DROPPED 2026-09-11. It asserted a capability the API cannot support: statusCheckRollup publishes no per-check population, so a check that concluded SUCCESS over ZERO items is invisible to this gate. What IS detectable - a required context that concluded SKIPPED - is now require_no_skipped_required_context. Detecting green-over-nothing is an owed capability, not a claim.",
+    "_removed_clause5": "DROPPED 2026-09-11. clause5_carries_artifact_only / clause5_refuses_source_change described carrying a void APPROVE across an artifact-only re-derive. Nothing implements it, and a verdict is pinned to the head it measured; re-review after a push instead."
+  },
+
+  "verdict_parsing": {
+    "_": "merge-gate reads ISSUE COMMENTS, not review events. A verdict registers only if all three hold. Every key here is READ by gates.parse_verdicts - tools/drain/__tests__/test_policy.py fails if one stops being consulted.",
+    "marker_any_of": ["Independent review", "Independent re-review"],
+    "token_any_of": ["REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS"],
+    "token_window_chars": 200,
+    "must_postdate_head_commit": true,
+    "note": "A verdict is announced by a LINE that BEGINS with a marker, inside the window, not quoted. Within that line the tokens are read in the order listed, so a hedged header resolves to the block. Prose elsewhere in the comment is NOT a verdict: scanning the whole body let a quoted header from a previous round decide the gate, and let a sentence ABOUT an approval register as one. A token in the window with no announcing line is reported as a near-miss and blocks when the token blocks - 'CHANGES REQUIRED' was silently discarded and cost two rounds on 2026-09-11."
+  },
+
+  "ordering": {
+    "_": "Execution order of the workstreams. A later stream may depend on an earlier one, never the reverse.",
+    "streams": ["W0-harness", "W1-deploy", "W2-security", "W3-gov", "W4-receipts",
+                "W6-ci", "W7-bicep", "W8-dataplane", "W5-console", "W9-rest"],
+    "W9_runs_continuously": true,
+    "W9_reason": "118 issues carry no lane and 153 carry no size; neither can be safely scheduled, so triage gates the parallelism for every other stream"
+  },
+
+  "stop_conditions": {
+    "_": "Conditions under which the harness halts the whole run rather than continuing.",
+    "deploy_path_red": "deploy-integrity R1 - a broken deploy path preempts all feature work; fix it before selecting anything else",
+    "estate_behind_and_not_recovering": "R3 - drift is a defect with an owner, not a background condition",
+    "gate_tooling_untracked": "a gate nobody can read cannot be trusted to merge; W0 must land first",
+    "consecutive_cycle_failures": 3
+  }
+}
