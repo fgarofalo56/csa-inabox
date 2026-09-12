@@ -108,6 +108,36 @@ def ledger_receipt_ready(number: int, policy: dict, state_path: str | None = Non
     return led.receipt_ok(item)
 
 
+def ledger_stream(numbers: list[int], policy: dict, state_path: str | None = None
+                  ) -> tuple[str | None, str]:
+    """Which STREAM this PR's work belongs to, for the escalation decision.
+
+    Returns `(stream, why)`, and `stream is None` means UNKNOWN -- which the
+    caller treats as a reason to escalate, never as "no stream applies". A
+    missing ledger, an unreferenced PR and an issue the ledger has never seen
+    are all unknown: in each case the harness cannot place the work, and every
+    sibling control in this package fails closed.
+
+    When a PR references several items the STRONGEST requirement wins, the same
+    conjunction `reduce_verdicts` uses. A PR touching a W9-rest item and a
+    W1-deploy item is a W1-deploy change.
+    """
+    if not numbers:
+        return None, "the PR references no issue, so its stream is unknown"
+    path = state_path or os.path.join(HERE, "state.json")
+    if not os.path.exists(path):
+        return None, f"no ledger at {path}, so the stream cannot be resolved"
+    led = Ledger(path, receipts=policy["receipts"]).load()
+    escalating = gates.escalation_streams(policy)
+    found = [led.items[n].stream for n in numbers if n in led.items]
+    if not found:
+        return None, f"none of {numbers} is in the ledger, so the stream is unknown"
+    hit = next((s for s in found if s in escalating), None)
+    if hit:
+        return hit, f"#{numbers} sits in {hit}"
+    return found[0], f"#{numbers} sits in {found[0]}"
+
+
 def required_contexts(repo: str) -> list[str]:
     """The contexts branch protection will actually BLOCK on.
 
@@ -213,7 +243,8 @@ def collect(repo: str, number: int) -> dict:
     }
 
 
-def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) -> dict:
+def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
+              state_path: str | None = None) -> dict:
     """Run every gate over an already-collected `data` dict.
 
     PURE over its inputs, and it computes the verdict itself. `main()` used to
@@ -263,6 +294,28 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
     )
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
+    # The closing scan is computed HERE, above 3b, because 3b needs the issue
+    # numbers to resolve the item's STREAM -- and it is RECORDED as gate 6 below,
+    # in its own place, so the output still reads in gate order.
+    messages = [
+        f"{c.get('messageHeadline', '')}\n{c.get('messageBody', '')}"
+        for c in (pr.get("commits") or [])
+    ]
+    scan = gates.merge_is_close_safe(pr.get("body") or "", messages)
+    api_says = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
+    will_close = sorted(set(scan.hard) | set(api_says))
+    # For the STREAM lookup the population is wider than "what will close". The
+    # closing scan is VERB-ANCHORED -- `hard` needs a closing verb adjacent to
+    # the reference, `near` needs one within 80 chars -- so `Refs #4487` is in
+    # neither, and `Refs #N` is how nearly every PR here names its item. Reusing
+    # the closing scan would have read "references no issue" on most PRs and,
+    # since an unresolvable stream fails closed, escalated all of them for the
+    # wrong reason: a control that fires on everything teaches the reader to
+    # skim it.
+    referenced = sorted(
+        set(will_close) | set(gates.referenced_issues(pr.get("body") or "", messages))
+    )
+
     # 3b -- HOW MANY independent reviewers, enforced here rather than described
     # in a brief. `review_requirement` is computed from the PR's REAL changed
     # files, not from a lane guess, because here the diff exists. Stated in a
@@ -275,8 +328,34 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
     # "an ordinary diff touching nothing that escalates" -- same boundary, other
     # side, which is the shape this repo names most often.
     changed = data.get("changed_files") or []
+    # TWO OF THE FOUR TRIGGERS USED TO BE INERT HERE.
+    #
+    # `review_requirement` implements all four, and this caller passed only the
+    # path set -- so `escalate_on_blocking_first_verdict` and the STREAM list
+    # were live in `gates.py`, described in the brief, and enforced by nothing.
+    # An unconsulted ARGUMENT is the same defect as an unconsulted policy key,
+    # which is the one this module already found twice. Measured by a reviewer:
+    # a `csa_platform/security/auth.py` diff on a W2-security item, and an
+    # `azure-functions/` diff on a W1-deploy item -- the stream R1 says preempts
+    # everything -- both merged GO on ONE approval. And the block-push-reapprove
+    # rhythm of this very PR: after a push the earlier block is correctly no
+    # longer live, so nothing raised the count.
+    #
+    # R6/R9 kill their mutations through `test_policy.py` calling
+    # `review_requirement` DIRECTLY, so the matrix proved the function honours
+    # the triggers and proved nothing about the caller feeding them. Same
+    # boundary, other side. MG8/MG9 are pointed at this call.
+    first_verdict = gates.first_verdict_token(
+        data["comments"], policy["verdict_parsing"]["token_window_chars"]
+    )
+    stream, why_stream = ledger_stream(referenced, policy, state_path)
     needed, why_needed = gates.review_requirement(
-        policy, changed_paths=changed, footprint_known=bool(changed)
+        policy,
+        changed_paths=changed,
+        first_verdict=first_verdict,
+        stream=stream,
+        footprint_known=bool(changed),
+        stream_known=stream is not None,
     )
     # NAMED "approval count", not "independent reviewers". The gate counts
     # APPROVE comments; it cannot tell two reviewers from one reviewer posting
@@ -291,7 +370,8 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
         "3b approval count",
         len(approvals) >= needed,
         f"{len(approvals)} live APPROVE of {needed} required - {why_needed}"
-         " (COUNT only: independence is enforced by tool access, not measured here)"
+        f" [first verdict: {first_verdict or 'none'} | {why_stream}]"
+        " (COUNT only: independence is enforced by tool access, not measured here)"
         + ("" if len(approvals) >= needed else
            ". A second reviewer must be independently briefed and their verdict POSTED "
            "to the PR - a verdict returned to the coordinator is not a verdict."),
@@ -344,17 +424,12 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
     # composed caller. An auto-close bypasses the ledger entirely -- the item
     # never gets a receipt of its class -- so an unintended one is a NO-GO, and
     # an intended one is declared with --allow-close.
-    messages = [
-        f"{c.get('messageHeadline', '')}\n{c.get('messageBody', '')}"
-        for c in (pr.get("commits") or [])
-    ]
-    scan = gates.merge_is_close_safe(pr.get("body") or "", messages)
-    # `closingIssuesReferences` is reported BESIDE the scan and never subtracted
-    # from it. Trusting the API field to narrow the population re-introduces the
-    # exact defect this gate exists for: it read EMPTY while a squash commit
-    # closed an issue. The UNION is the answer, never the intersection.
-    api_says = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
-    will_close = sorted(set(scan.hard) | set(api_says))
+    # `scan`, `api_says` and `will_close` are computed above 3b, which needs the
+    # numbers. `closingIssuesReferences` is reported BESIDE the scan and never
+    # subtracted from it. Trusting the API field to narrow the population
+    # re-introduces the exact defect this gate exists for: it read EMPTY while a
+    # squash commit closed an issue. The UNION is the answer, never the
+    # intersection.
     undeclared = sorted(set(will_close) - set(allow_close))
     record(
         "6 closing-keyword scan (body + commit trail)",

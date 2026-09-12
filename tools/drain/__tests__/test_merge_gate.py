@@ -76,8 +76,38 @@ def _data(**over) -> dict:
     return data
 
 
+#: A ledger for gate 3b's STREAM lookup, written once per session.
+#:
+#: It MUST be injected. Without `state_path` these tests read the developer's
+#: real `tools/drain/state.json` -- which is gitignored, so its contents differ
+#: per machine and per hour, and the fixture body "Closes #4468" resolved to a
+#: live W6-ci item and escalated. A hermetic test that silently consults live
+#: state is the same defect class as a gate that reads a stale ledger.
+_LEDGER: dict[str, str] = {}
+
+
+def _ledger_path() -> str:
+    if "path" not in _LEDGER:
+        import tempfile
+
+        from ledger import Ledger
+
+        path = os.path.join(tempfile.mkdtemp(), "state.json")
+        led = Ledger(path, receipts=POLICY["receipts"])
+        # #4468 is the number every closing-scan fixture uses. W9-rest does NOT
+        # escalate by stream, so the control PRs stay one-reviewer and the
+        # escalation tests below have to name their own stream.
+        led.upsert(4468, "a fixture item", "W9-rest", lane="lane:docs", size=1)
+        led.save()
+        _LEDGER["path"] = path
+    return _LEDGER["path"]
+
+
 def _run(**over):
-    return merge_gate.run_gates(_data(**over), POLICY, over.pop("allow_close", None))
+    state_path = over.pop("state_path", None) or _ledger_path()
+    return merge_gate.run_gates(
+        _data(**over), POLICY, over.pop("allow_close", None), state_path=state_path
+    )
 
 
 def _gate(result, prefix):
@@ -114,9 +144,18 @@ def test_negative_control_a_stale_base_blocks():
     assert not _gate(result, "1 ")["ok"]
 
 
+# THE COMPOSED VERDICT IS NO LONGER A DISCRIMINATOR FOR GATE 2+3.
+#
+# Once a blocking verdict also RAISES the reviewer count, gate 3b blocks on the
+# same fixtures gate 2+3 does -- so `verdict == "NO-GO"` stays true even with
+# 2+3 forced to GO, and arm MG3 ("the verdict gate always records GO") went from
+# KILLED to SURVIVED on a suite that had not changed. A coupling between two
+# controls makes each one's test pass for the other's reason. The assertions
+# below are on the GATE's own `ok`, which is what MG3 actually mutates.
 def test_negative_control_no_review_blocks():
     result = _run(comments=[])
     assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "2+3")["ok"]
     assert "no live APPROVE" in _gate(result, "2+3")["detail"]
 
 
@@ -128,6 +167,7 @@ def test_negative_control_a_live_block_is_not_discharged_by_a_later_approve():
          "created_at": "2026-09-11T12:00:00Z"},
     ])
     assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "2+3")["ok"]
     assert "REQUEST-CHANGES" in _gate(result, "2+3")["detail"]
 
 
@@ -283,13 +323,91 @@ def test_negative_control_the_commit_trail_blocks_too():
 
 
 def test_a_declared_auto_close_is_allowed():
-    result = merge_gate.run_gates(_data(body="Closes #4468"), POLICY, allow_close=[4468])
+    result = _run(body="Closes #4468", allow_close=[4468])
     assert result["verdict"] == "GO", result["blocking"]
+
+
+def test_negative_control_3b_escalates_on_a_blocking_first_verdict():
+    """The block-push-reapprove rhythm, which is the ordinary shape of a review
+    round here -- this PR went through it five times.
+
+    A reviewer blocks; the author pushes; the block is correctly no longer LIVE,
+    because a verdict is pinned to the head it measured. Nothing then raised the
+    count, so one approval merged what a reviewer had just rejected. The
+    HISTORY question and the CURRENT-STATE question are different questions,
+    and `first_verdict_token` deliberately does not pin.
+
+    Kills MG8."""
+    blocked_then_approved = [
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nthe guard is open.",
+         "created_at": "2026-09-11T09:00:00Z"},           # before the push
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nfixed.",
+         "created_at": "2026-09-11T11:00:00Z"},           # after it
+    ]
+    result = _run(comments=blocked_then_approved)
+    gate = _gate(result, "3b")
+    assert not gate["ok"], gate["detail"]
+    assert "REQUEST-CHANGES" in gate["detail"]
+    # ...and the 2+3 gate still reads the block as NOT live, which is correct
+    # and is exactly why 3b has to ask the other question.
+    assert _gate(result, "2+3")["ok"]
+
+
+def test_negative_control_3b_fails_closed_when_the_stream_cannot_be_resolved(tmp_path):
+    """Three ways it fails, one meaning: the harness cannot place the work.
+
+    Every sibling control in this package fails closed. This one is the merge
+    gate's half of `escalate_when_footprint_unknown` -- at brief time the stream
+    is the fact and the paths are the guess; here it is the other way round.
+
+    Kills MG9."""
+    empty = str(tmp_path / "nothing.json")
+    no_ref = _run(body="a change with no issue reference", commits=[])
+    assert not _gate(no_ref, "3b")["ok"]
+    assert "no issue" in _gate(no_ref, "3b")["detail"]
+
+    no_ledger = _run(state_path=empty)
+    assert not _gate(no_ledger, "3b")["ok"]
+    assert "no ledger" in _gate(no_ledger, "3b")["detail"]
+
+    unknown = _ledger_with(tmp_path, 999, stream="W9-rest", lane="lane:docs")
+    assert not _gate(_run(state_path=unknown), "3b")["ok"]
+
+
+def test_negative_control_a_bare_refs_resolves_the_stream(tmp_path):
+    """`Refs #N` carries no closing verb, so the closing scan sees it in
+    NEITHER `hard` nor `near` -- and `Refs #N` is how nearly every PR in this
+    repo names the item it is work on, this one included. Reusing the closing
+    scan for the stream lookup would have read "references no issue" on most
+    PRs and escalated all of them for the wrong reason. A control that fires on
+    everything teaches the reader to skim it."""
+    w1 = _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs")
+    result = _run(body="Refs #4468 - stays open pending its receipt.", state_path=w1)
+    gate = _gate(result, "3b")
+    assert not gate["ok"]
+    assert "W1-deploy" in gate["detail"]
+    assert result["will_close"] == [], "a bare Refs must NOT read as a close"
+
+
+def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
+    """Conjunction, the same reduction `reduce_verdicts` uses. A PR touching a
+    W9-rest item and a W1-deploy item is a W1-deploy change; taking the first
+    one found would make the answer depend on issue-number order."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(4468, "x", "W9-rest", lane="lane:docs", size=1)
+    led.upsert(4487, "x", "W1-deploy", lane="lane:docs", size=1)
+    led.save()
+    stream, why = merge_gate.ledger_stream([4468, 4487], POLICY, path)
+    assert stream == "W1-deploy", why
 
 
 def test_negative_control_declaring_one_does_not_allow_another():
     result = merge_gate.run_gates(
-        _data(body="Closes #4468 and closes #4469"), POLICY, allow_close=[4468]
+        _data(body="Closes #4468 and closes #4469"), POLICY, allow_close=[4468],
+        state_path=_ledger_path(),
     )
     assert result["verdict"] == "NO-GO"
     assert "4469" in _gate(result, "6 ")["detail"]
@@ -404,10 +522,35 @@ def test_negative_control_main_cross_checks_allow_close_against_the_ledger(
 
 
 def test_main_accepts_a_declared_close_the_ledger_backs(monkeypatch, tmp_path):
-    """The control. Without it the refusal above could come from anywhere."""
-    _ledger_with(tmp_path, 4468, receipt="ci-green")
+    """The control. Without it the refusal above could come from anywhere.
+
+    W9-rest, not the helper's W6-ci default: `main()` now resolves the STREAM
+    from that same ledger for gate 3b, and W6-ci escalates to two reviewers, so
+    the old fixture made this control fail for a reason that had nothing to do
+    with what it tests. Named here because it is evidence the wiring is real --
+    a stream nobody read could not have changed this test's outcome."""
+    _ledger_with(tmp_path, 4468, stream="W9-rest", lane="lane:docs", receipt="ci-green")
     data = _data(body="Closes #4468")
     assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 0
+
+
+def test_negative_control_main_escalates_on_the_stream_of_the_issue_it_closes(
+    monkeypatch, tmp_path
+):
+    """The trigger that was inert at the enforcement point for three rounds.
+
+    Same PR, same one approval, same diff -- `domains/sales/models/x.sql`, which
+    touches no escalating path. The ONLY difference from the control above is
+    the stream the ledger has this issue in. Measured before the fix: GO.
+
+    W1-deploy is the case that matters: R1 makes a broken deploy path preempt
+    all feature work, and its fixes routinely land in `azure-functions/`,
+    `apps/fiab-*` and `csa_platform/` -- none of which is in the twelve
+    fragments, so the path trigger never fired for them either."""
+    _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs",
+                 receipt="deploy-run")
+    data = _data(body="Closes #4468")
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 1
 
 
 def test_negative_control_main_refuses_a_before_file_from_another_pr(monkeypatch, tmp_path):

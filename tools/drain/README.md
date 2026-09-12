@@ -136,6 +136,27 @@ detects a required context that concluded SKIPPED, and says so in those words.
 Detecting green-over-nothing needs a population source this API does not have,
 and is an owed capability, not a claim.
 
+**How a receipt actually gets recorded, and the gap in it.** `record_receipt()`
+and `transition(CLOSED)` have **no production caller**. `tick.py` writes only
+what a refresh writes; `merge_gate.py` only *reads*, through `receipt_ok()`.
+Recording a receipt today is a hand edit to `state.json` — which is gitignored —
+or a call from a lane's own script. Nothing in this file used to say that, and
+it is the operational gap behind the whole "a stale ledger evaluates against a
+weaker class" family: the write path is outside the instrumented code.
+
+That is also why the R2 check is an **invariant**, not an event observer.
+`record_receipt` stamps the class the receipt was taken under, and
+`_refuse_unless_receipted` compares it at the decision. It therefore does not
+care *how* the class moved, or whether anything watched it move — including the
+two routes `upsert` structurally cannot see, since `RECEIPT_CLASS_BY_STREAM` and
+`LANE_RECEIPT_CLASS` are module constants rather than fields. A reviewer closed
+a `ui-surface` item on a `ci-green` that had been refused moments earlier, by
+editing one line of a map.
+
+`receipt_class` likewise has no production writer, so the `human-only` class is
+currently reachable only by hand. Stated here rather than implied, because by
+this package's own standard an unreachable path is prose.
+
 ---
 
 ## Autonomy
@@ -167,24 +188,47 @@ triggers, and it is worth reading all four because the two obvious ones account
 for the smaller share of the live population:
 
 1. **The first verdict blocks** — REQUEST-CHANGES or CANNOT-ASSESS, matched by
-   shape, so a spelling cannot reduce a block.
-2. **The diff touches a listed PATH** — twelve fragments in `policy.json`, read
+   shape, so a spelling cannot reduce a block. This asks about the review's
+   HISTORY and deliberately does not pin to the head: after a push the earlier
+   block is correctly no longer *live*, but it is still true that the first
+   reviewer blocked, and that is what raises the count.
+2. **The item's STREAM is listed** — W0/W1/W2/W3/W5/W6/W7. A lane is a guess
+   about the footprint; a stream is a fact about the work, and a relabel
+   decouples the two.
+3. **The diff touches a listed PATH** — twelve fragments in `policy.json`, read
    from the file, not hardcoded. Guards, deploy, bicep, both front-ends, and the
    files that decide the rules themselves: `.gitignore`, `CODEOWNERS`,
    `Makefile`, `pyproject.toml`.
-3. **The item's STREAM is listed** — W0/W1/W2/W3/W5/W6/W7. A lane is a guess
-   about the footprint; a stream is a fact about the work, and a relabel
-   decouples the two.
-4. **The footprint is NOT YET KNOWN** — which is every unlaned item, because at
-   brief time the diff does not exist. This one **fails closed**, and it is the
-   single largest driver: 100 of the live 299.
+4. **The footprint or the stream could not be resolved** — both **fail closed**.
+   At brief time the stream is a fact and the paths are a guess (every unlaned
+   item — **119** of the live 299 carry no lane); at merge time the paths are a
+   fact and the stream has to come from the ledger via the issues the PR
+   references.
 
-Measured over the live 299: 279 escalate. Most of that is W9-rest, the triage
-stream, which is not schedulable until laned anyway — see `_operating_point` in
-`policy.json` for the full breakdown and the standing instruction to re-measure
-after triage rather than tune the list on a pre-triage snapshot. Every brief
-states its own requirement rather than leaving the lane to infer it, and
-`merge_gate` gate 3b re-decides on the REAL changed files.
+Listed in the order `review_requirement` checks them, which is also roughly
+their strength. They are independent ORs, so the order has no effect on the
+answer — but the doc reads as a walkthrough of the function and should not
+disagree with it.
+
+Measured over the live 299: **279 escalate**. The stream drivers are W5-console
+84, W1-deploy 26, W6-ci 22, W2-security 20, W7-bicep 18, W0-harness 4; then 100
+items attributed to *footprint not known* (that is the count remaining AFTER the
+stream trigger takes precedence, not the 119 unlaned — quote which population
+you mean), then 3 console-path and 2 bicep-path. Most of it is W9-rest, the
+triage stream, which is not schedulable until laned anyway. See
+`_operating_point` in `policy.json` for the arithmetic and the standing
+instruction to re-measure after triage rather than tune the list on a
+pre-triage snapshot.
+
+Every brief states its own requirement rather than leaving the lane to infer
+it, and **`merge_gate` gate 3b re-decides on real evidence and can raise the
+count as well as confirm it** — the real changed files, the first posted
+verdict, and the stream resolved from the ledger. For three rounds it passed
+only the path set, so two of the four triggers were live in `gates.py`,
+described in the brief, and enforced by nothing: a `csa_platform/security/`
+diff on a W2-security item and an `azure-functions/` diff on a W1-deploy item
+both returned GO on one approval. An unconsulted *argument* is the same defect
+as an unconsulted policy key.
 
 **How to write a verdict that registers — POSITION, not idiom.**
 
@@ -262,8 +306,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 262 tests across every module
-python tools/drain/mutate_gates.py           # 117 arms, must be 117 KILLED
+python -m pytest tools/drain/__tests__ -q    # 279 tests across every module
+python tools/drain/mutate_gates.py           # 129 arms, must be 129 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -289,7 +333,12 @@ to four lanes share.
 
 ## Triage gates the parallelism
 
-At open: **118 of 297** issues carried no lane and **153** no size.
+At open: **118 of 297** issues carried no lane and **153** no size. Re-measured
+2026-09-12 over 299: **119** carry no lane. Two different populations a week
+apart — say which one a number is over, every time. (The `_operating_point`
+figure of *100* is a third thing again: the count still attributed to
+"footprint not known" **after** the stream trigger has already taken those
+items, not the unlaned total.)
 
 Lanes partition by **FILE**. A shared-file conflict must serialize, never
 parallelize — so an unlaned item is not merely unsized, it is *unsafe to
@@ -345,8 +394,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 117 mutation arms against a sandbox copy; must be 117 KILLED |
+| `mutate_gates.py` | 129 mutation arms against a sandbox copy; must be 129 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 262 tests; a negative control for every decision function |
+| `__tests__/` | 279 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

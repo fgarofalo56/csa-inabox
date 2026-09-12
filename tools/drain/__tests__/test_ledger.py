@@ -442,13 +442,37 @@ def test_a_mid_work_reclassification_is_flagged_even_with_no_receipt_yet(tmp_pat
 
 
 def test_a_ready_item_is_not_routed_to_needs_audit_by_a_reclassification(tmp_path):
-    """The control for the one above, and the stranding this fix repaired.
-    `audit_reason` is a SCALAR: routing every reclassification to `needs-audit`
-    overwrote a `departed` reason, which made the departure rescue's `elif`
-    unmatchable and left the item unable to return to the queue ever -- the
-    one-way `needs-audit` that rescue exists to prevent. A `ready` item has
-    nothing to audit; its receipt is void, that is recorded, and what it needs
-    is re-work, which is what `ready` means."""
+    """The control for the one above. A `ready` item has nothing to audit; its
+    receipt is void, that is recorded, and what it needs is re-work, which is
+    what `ready` means.
+
+    THIS TEST WAS PREVIOUSLY A FRAUD, caught by a reviewer: it entered from
+    `needs-audit`, so the carve-out's tuple was never consulted and the `ready`
+    it asserted came from the departure rescue below. Widening the tuple to
+    include `READY` -- which IS the round-3 behaviour that stranded items --
+    passed 262/262 over a green 117-arm matrix. A test named for a fix that
+    does not exercise it is worse than no test: it reads as coverage.
+
+    Entered from a genuinely READY item, and it asserts the receipt half of its
+    own docstring too (the second reviewer's finding 2). Kills L20."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/5")
+    assert led.items[1].state == READY, "the premise: it must START ready"
+
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    assert led.items[1].state == READY, "a ready item has nothing to audit"
+    assert led.items[1].audit_reason is None
+    assert led.items[1].receipt_kind is None, "the receipt is still VOID"
+    assert any("VOID" in h and "trace/5" in h for h in led.items[1].history)
+
+
+def test_negative_control_the_departure_rescue_survives_a_reclassification(tmp_path):
+    """The stranding this carve-out repaired, which is a DIFFERENT case from the
+    one above and used to share its test. `audit_reason` is a SCALAR: routing
+    every reclassification to `needs-audit` overwrote a `departed` reason, which
+    made the rescue's `elif` unmatchable and left the item unable to return to
+    the queue ever -- the one-way `needs-audit` the rescue exists to prevent."""
     led = _led(tmp_path)
     it = led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
     it.audit_reason = led_mod.AUDIT_DEPARTED
@@ -456,6 +480,121 @@ def test_a_ready_item_is_not_routed_to_needs_audit_by_a_reclassification(tmp_pat
     led.upsert(1, "x", "W9-rest", lane=None, size=1)   # returns AND reclassifies
     assert led.items[1].state == READY
     assert led.items[1].audit_reason is None
+
+
+def test_negative_control_a_state_kwarg_cannot_suppress_the_mid_work_routing(tmp_path):
+    """`was_state`, not `existing.state`. The kwargs loop writes arbitrary
+    fields, `state` among them, so reading the POST-write state let one call
+    both reclassify an in-flight item and land it in `ready`, skipping the
+    checkpoint. Not reachable from either production caller today -- neither
+    passes `state=` -- but the class comparison two lines up was hardened
+    against exactly this shape and its sibling was not. Kills L21."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "g1-browser", "trace/6")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1, state=READY)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    assert led.items[1].receipt_kind is None
+
+
+def test_negative_control_a_reopen_voids_the_receipt_that_closed_it(tmp_path):
+    """The SIBLING of the class-change void, and it was missed for two rounds.
+
+    A reopen DISPUTES the receipt that closed the item, and the class has not
+    moved, so the reclassification route never touches it. Measured by a
+    reviewer: close on `ci-green`, reopen, and `receipt_ok()` -- which
+    `merge_gate.ledger_receipt_ready` calls in production -- still returned
+    True, so `--allow-close` re-closed on the very evidence in dispute with no
+    new work done. The kind check is satisfied trivially there; there is nothing
+    left to re-take. Kills L22."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)   # seen OPEN on GitHub
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+    assert led.items[1].receipt_kind is None
+    ok, why = led.receipt_ok(led.items[1])
+    assert not ok, f"the production reader must refuse too: {why}"
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    assert any("VOID" in h and "run/1" in h for h in led.items[1].history)
+
+    # ...and the audit is dischargeable without a human, per the module comment:
+    # re-take the receipt and close. The control is the KIND check, not a person.
+    led.record_receipt(1, "ci-green", "run/NEW")
+    assert led.transition(1, CLOSED).state == CLOSED
+
+
+def test_negative_control_a_receipt_is_stamped_with_the_class_it_was_taken_under(
+    tmp_path,
+):
+    """THE INVARIANT, as opposed to the event observer.
+
+    `upsert`'s comparison can only witness a class that moves across a call it
+    makes. Two of `effective_receipt_class`'s inputs are not fields at all --
+    `RECEIPT_CLASS_BY_STREAM` and `LANE_RECEIPT_CLASS` are module constants --
+    so a one-line edit to either moved every held receipt's class with NOTHING
+    in `history`, the identical symptom to the round-3 defect, through an input
+    no `upsert` guard can see. A reviewer closed a `ui-surface` item on the
+    `ci-green` that had been refused a moment earlier.
+
+    Stamping at capture and comparing at the decision does not care HOW the
+    class moved, or whether anything observed it move. Kills L23, L24."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane=None, size=1)
+    led.record_receipt(1, "ci-green", "run/2")
+    assert led.items[1].receipt_taken_under == "ui-surface"
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    saved = led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"]
+    led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"] = "guard-or-test-only"
+    try:
+        # The kind check now passes trivially -- this is the downgrade, and the
+        # downgrade is exactly where the old receipt BECOMES valid.
+        assert led.items[1].effective_receipt_class == "guard-or-test-only"
+        with pytest.raises(ValueError, match="was taken under"):
+            led.transition(1, CLOSED)
+    finally:
+        led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"] = saved
+
+
+def test_negative_control_a_stale_ledger_cannot_close_against_the_weaker_class(
+    tmp_path,
+):
+    """The milder form of the same hole, and it needs no source edit at all.
+    `merge_gate` LOADS `state.json` and never upserts, so adding `lane:console`
+    to an issue and running `--allow-close` before the next tick evaluated the
+    receipt against the stale, weaker class. `receipt_ok` is the production
+    reader, so it is what the assertion is taken against."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    led.record_receipt(1, "ci-green", "run/3")
+    ok, _ = led.receipt_ok(led.items[1])
+    assert ok
+
+    led.items[1].lane = "lane:console"     # labelled on GitHub; no tick yet
+    ok, why = led.receipt_ok(led.items[1])
+    assert not ok, why
+
+
+def test_a_receipt_re_taken_under_the_current_class_closes(tmp_path):
+    """The control. The invariant must not make a reclassified item permanently
+    unclosable -- re-taking the receipt under the new class is the whole
+    remedy, and if that did not work the guard would be a brick."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/1")
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    led.record_receipt(1, "ci-green", "run/9")
+    assert led.items[1].receipt_taken_under == "guard-or-test-only"
+    assert led.transition(1, CLOSED).state == CLOSED
 
 
 def test_negative_control_the_upgrade_direction_voids_the_receipt_too(tmp_path):

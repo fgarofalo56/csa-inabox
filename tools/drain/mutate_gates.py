@@ -40,8 +40,20 @@ if hasattr(sys.stdout, "reconfigure"):
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+#: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
+#: untouched" is asserted over exactly the files an arm could have written to.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
            "policy.json"]
+
+#: What the sandbox COPIES, which is wider. This module is copied but NOT
+#: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
+#: gate the matrix cannot point an arm at, since an arm mutates a sandbox copy
+#: and re-runs the suite, so mutating the runner would mutate the thing doing
+#: the mutating. Its scoring rule gets ordinary tests instead. Leaving it out of
+#: the copy made the CONTROL fail to collect, which is the instrument working:
+#: rc=2 before any arm ran, and the run refused rather than scoring 128 arms
+#: against a suite that was not there.
+COPIED = [*SOURCES, "mutate_gates.py"]
 
 # (name, file, needle, replacement) -- each needle is a defect that shipped, or
 # one an independent reviewer demonstrated the suite could not see.
@@ -176,7 +188,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "L5 a reopened item stays terminal (a false close can never be disputed)",
         "ledger.py",
-        "            if existing.state in TERMINAL:",
+        "            if was_state in TERMINAL:",
         "            if False:",
     ),
     # -- the cycle ---------------------------------------------------------
@@ -347,8 +359,45 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "L19 a MID-WORK reclassification is logged but the lane is never told",
         "ledger.py",
-        "                if existing.state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):",
+        "                if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):",
         "                if False:",
+    ),
+    (
+        ("L20 the READY carve-out is removed, so a reclassification strands a "
+         "departed item (the round-3 behaviour, which survived 262/262)"),
+        "ledger.py",
+        "                if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):",
+        "                if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, READY):",
+    ),
+    (
+        ("L21 the audit routing reads the POST-write state, so a `state=` kwarg "
+         "suppresses it"),
+        "ledger.py",
+        "                if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):",
+        ("                if existing.state in (IN_FLIGHT, IN_REVIEW, "
+         "AWAITING_RECEIPT):"),
+    ),
+    (
+        ("L22 a REOPEN keeps the receipt that closed it, so the disputed close "
+         "re-closes on zero new evidence"),
+        "ledger.py",
+        "                receipt_is_the_thing_in_dispute = bool(existing.receipt_kind)",
+        "                receipt_is_the_thing_in_dispute = False",
+    ),
+    (
+        ("L23 the receipt carries no stamp of the class it was taken under, so "
+         "the invariant has nothing to compare (kills in the SAFE direction -- "
+         "it over-refuses; L24 is the dangerous one)"),
+        "ledger.py",
+        "        item.receipt_taken_under = item.effective_receipt_class",
+        "        item.receipt_taken_under = None",
+    ),
+    (
+        ("L24 the stamp is recorded but never CHECKED at the decision -- an "
+         "invariant nobody evaluates is a field"),
+        "ledger.py",
+        "        if item.receipt_taken_under != item.effective_receipt_class:",
+        "        if False:",
     ),
     (
         "L6 `declined` needs no recorded decision (a backlog declines itself drained)",
@@ -359,14 +408,14 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "L7 a transient departure never returns to the queue (needs-audit is one-way)",
         "ledger.py",
-        "            elif existing.state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
+        "            elif was_state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
         "            elif False:",
     ),
     (
         "L8 a DISPUTED close is swept back to ready by the departure rescue",
         "ledger.py",
-        "            elif existing.state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
-        "            elif existing.state == NEEDS_AUDIT:",
+        "            elif was_state == NEEDS_AUDIT and existing.audit_reason == AUDIT_DEPARTED:",
+        "            elif was_state == NEEDS_AUDIT:",
     ),
     # -- the vocabularies, and the inventory -------------------------------
     (
@@ -560,8 +609,19 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "MGA --allow-close passes when there is no ledger to check",
         "merge_gate.py",
-        "    if not os.path.exists(path):",
-        "    if False:",
+        # The anchor carries the NEXT line too: `ledger_stream` added a second
+        # `if not os.path.exists(path):` and the ambiguity guard correctly
+        # refused to pick one. A short needle is a mutation aimed at whichever
+        # function happens to come first in the file.
+        "    if not os.path.exists(path):\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        ("MGE the STREAM lookup passes on a missing ledger, so a PR it cannot "
+        "classify falls through to one reviewer"),
+        "merge_gate.py",
+        '        return None, f"no ledger at {path}, so the stream cannot be resolved"',
+        '        return "W9-rest", "no ledger"',
     ),
     (
         "MGB --allow-close skips the receipt-KIND check",
@@ -686,11 +746,61 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # R6 and R9 mutate `gates.py` and die on `test_policy.py` calling
+    # `review_requirement` DIRECTLY -- so they prove the FUNCTION honours the
+    # triggers and prove nothing about the caller feeding them. Both were inert
+    # at the enforcement point for three rounds under a green matrix. These four
+    # are pointed at the call in `merge_gate`. Same boundary, other side.
+    (
+        ("MG14 the merge gate stops passing the FIRST verdict, so a block before "
+        "a push no longer raises the count"),
+        "merge_gate.py",
+        "        first_verdict=first_verdict,",
+        "        first_verdict=None,",
+    ),
+    (
+        ("MG15 the merge gate stops passing the STREAM, so a W1-deploy PR outside "
+        "the twelve paths merges on one approval"),
+        "merge_gate.py",
+        "        stream=stream,",
+        "        stream=None,",
+    ),
+    (
+        "MG10 an unresolvable stream falls OPEN to the default instead of closed",
+        "merge_gate.py",
+        "        stream_known=stream is not None,",
+        "        stream_known=True,",
+    ),
+    (
+        ("MG11 the stream lookup reuses the VERB-ANCHORED closing scan, so a bare "
+        "`Refs #N` resolves nothing and every such PR escalates for the wrong reason"),
+        "merge_gate.py",
+        ("    referenced = sorted(\n"
+         "        set(will_close) | set(gates.referenced_issues(pr.get(\"body\") or \"\", "
+         "messages))\n"
+         "    )"),
+        "    referenced = sorted(set(will_close) | set(scan.near))",
+    ),
+    (
+        ("MG12 the first-verdict scan pins to the head after all, so the push that "
+        "voids the block also voids the escalation"),
+        "gates.py",
+        ("    ordered = sorted(comments, key=lambda c: (c.get(\"created_at\", \"\"), "
+        "c.get(\"id\", 0)))"),
+        "    ordered = []",
+    ),
+    (
+        ("MG13 the strongest stream stops winning, so the answer depends on "
+        "issue-number order"),
+        "merge_gate.py",
+        "    hit = next((s for s in found if s in escalating), None)",
+        "    hit = None",
+    ),
     (
         "R11 an EMPTY changed-file list is treated as a known footprint",
         "merge_gate.py",
-        "        policy, changed_paths=changed, footprint_known=bool(changed)",
-        "        policy, changed_paths=changed, footprint_known=True",
+        "        footprint_known=bool(changed),",
+        "        footprint_known=True,",
     ),
     (
         "R7 the reviewer COUNT stops being enforced at the merge gate",
@@ -701,8 +811,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "R8 the merge gate counts reviewers from a LANE GUESS, not the real diff",
         "merge_gate.py",
-        "        policy, changed_paths=changed, footprint_known=bool(changed)",
-        "        policy, changed_paths=[], footprint_known=True",
+        "        changed_paths=changed,",
+        "        changed_paths=[],",
     ),
     (
         "R9 a blocking first verdict is matched by EXACT TOKEN, so a spelling reduces it",
@@ -823,6 +933,15 @@ def digest_tree(root: Path) -> str:
     return sha.hexdigest()
 
 
+#: pytest's own summary vocabulary. A kill must be a TEST that failed, not any
+#: non-zero exit -- see the comment at the scoring branch.
+_FAILURE_MARKERS = ("FAILED", " failed", "failed,", "AssertionError")
+
+
+def _reports_a_failure(stdout: str) -> bool:
+    return any(marker in stdout for marker in _FAILURE_MARKERS)
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -831,7 +950,7 @@ def main() -> int:
     # possible outcome for the one file whose purpose is to be trustworthy.
     sandbox = Path(tempfile.mkdtemp(prefix="drain-mutate-"))
     try:
-        for name in SOURCES:
+        for name in COPIED:
             shutil.copy2(HERE / name, sandbox / name)
         shutil.copytree(HERE / "__tests__", sandbox / "__tests__",
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -867,7 +986,7 @@ def main() -> int:
             print(control.stdout[-3000:])
             return 2
 
-        killed = survived = skipped = 0
+        killed = survived = skipped = errored = 0
         for name, filename, old, new in ARMS:
             source = originals[filename]
             if old not in source:
@@ -889,20 +1008,40 @@ def main() -> int:
                                             encoding="utf-8", newline="")
             run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
             (sandbox / filename).write_text(source, encoding="utf-8", newline="")
-            if run.returncode != 0:
+            # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
+            # comment records the consequence: a mutation that was a
+            # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106
+            # real kills. Nothing had been measured -- the suite never ran -- and
+            # the repair was made to that arm rather than to the scorer, so the
+            # next arm of that shape would have read the same way. Arms that
+            # edit `policy.json` are the likeliest to reproduce it: a malformed
+            # edit raises inside `load_policy` at import time.
+            #
+            # A kill is rc=1 AND a pytest failure line in the output. Anything
+            # else is its own bucket and fails the run for a DIFFERENT reason,
+            # because "the mutation was never evaluated" and "the suite is
+            # blind" need different fixes.
+            failed_a_test = run.returncode == 1 and _reports_a_failure(run.stdout)
+            if failed_a_test:
                 print(f"  KILLED   {name:<72} rc={run.returncode}")
                 killed += 1
-            else:
+            elif run.returncode == 0:
                 print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
                 survived += 1
+            else:
+                tail = (run.stdout.strip().splitlines() or [""])[-1]
+                print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL, "
+                      f"the suite did not run: {tail[:60]}")
+                errored += 1
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
     after = digest_tree(HERE)
     print()
     print(f"tracked tree untouched: {before == after}")
-    print(f"killed={killed} survived={survived} skipped={skipped} of {len(ARMS)} arms")
-    return 1 if (survived or skipped or before != after) else 0
+    print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
+          f"of {len(ARMS)} arms")
+    return 1 if (survived or skipped or errored or before != after) else 0
 
 
 if __name__ == "__main__":

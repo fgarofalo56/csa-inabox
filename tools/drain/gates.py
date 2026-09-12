@@ -115,6 +115,30 @@ def scan_closing_keywords(text: str) -> ClosingScan:
     return ClosingScan(hard=hard, near=near)
 
 
+#: Any issue reference at all, with NO closing verb required. Same reference
+#: shapes as `CLOSING_RE`, which is the point: one alphabet, two questions.
+BARE_REF_RE = re.compile(_REF + r"(?P<num>\d+)")
+
+
+def referenced_issues(body: str, commit_messages: list[str]) -> list[int]:
+    """Every issue this PR mentions, closing or not.
+
+    A DIFFERENT question from `merge_is_close_safe`, and it has to be, because
+    that scan is verb-anchored: `hard` needs a closing verb adjacent to the
+    reference and `near` needs one within 80 characters. `Refs #4487` carries no
+    verb, so it appears in NEITHER -- and `Refs #N` is how nearly every PR in
+    this repo names the item it is work on, including the PR that added this
+    function.
+
+    Used by gate 3b to resolve the item's STREAM. Reusing the closing scan for
+    that would have read "this PR references no issue" on most PRs and, since
+    an unresolvable stream fails closed, escalated all of them for the wrong
+    reason -- a control that fires on everything teaches the reader to skim it.
+    """
+    text = "\n".join([body, *commit_messages])
+    return sorted({int(m.group("num")) for m in BARE_REF_RE.finditer(text)})
+
+
 def merge_is_close_safe(body: str, commit_messages: list[str]) -> ClosingScan:
     """Scan BOTH surfaces a squash merge publishes.
 
@@ -193,6 +217,7 @@ OTHER_IMPLEMENTED_BY = {
     "review.escalate_to_two_when_stream_is": "gates.escalation_streams",
     "review.escalate_on_blocking_first_verdict": "gates.review_requirement",
     "review.escalate_when_footprint_unknown": "gates.review_requirement",
+    "review.escalate_when_stream_unknown": "gates.review_requirement",
 }
 # Keys that are DELIBERATELY prose: they address the operator, not the program.
 # Listing them is the point -- an undeclared unconsulted key is indistinguishable
@@ -471,6 +496,35 @@ class NearMiss:
     reason: str
     kind: str = NEAR_NO_TOKEN
     blocks: bool = False
+
+
+def first_verdict_token(comments: list[dict], window: int = 200) -> str | None:
+    """The token of the EARLIEST verdict-bearing comment, ignoring the head.
+
+    `escalate_on_blocking_first_verdict` asks a question about the review's
+    HISTORY, not about its current state, so this deliberately does NOT pin to
+    the head. `parse_verdicts` does pin, and correctly: a block from before a
+    push is no longer a live verdict. But it is still true that the first
+    reviewer blocked, and that fact is what raises the count to two.
+
+    Without this the trigger was inert at the only place the count is enforced.
+    The block-push-reapprove rhythm is the ordinary shape of a review round on
+    this repo: after the push the earlier block is not live, nothing raises the
+    count, and one approval merges what a reviewer had just rejected.
+
+    A blocking token ANYWHERE in a verdict-bearing window wins over an approving
+    one from the same comment, because a hedged header must not reduce a block
+    -- the same asymmetry `parse_verdicts` enforces.
+    """
+    ordered = sorted(comments, key=lambda c: (c.get("created_at", ""), c.get("id", 0)))
+    for comment in ordered:
+        head = (comment.get("body") or "")[:window]
+        if not _marker_lines(head):
+            continue
+        token, _ = _token_of(head)
+        if token:
+            return token
+    return None
 
 
 def parse_verdicts(
@@ -1200,7 +1254,8 @@ LANE_PATHS = {
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
                        first_verdict: str | None = None,
                        stream: str | None = None,
-                       footprint_known: bool = True) -> tuple[int, str]:
+                       footprint_known: bool = True,
+                       stream_known: bool = True) -> tuple[int, str]:
     """How many independent reviewers this change needs, and why.
 
     Operator decision 2026-09-12. W0 -- the merge gate itself -- took EIGHT
@@ -1245,6 +1300,14 @@ def review_requirement(policy: dict, changed_paths: list[str] | None = None,
 
     if not footprint_known and review.get("escalate_when_footprint_unknown", True):
         return 2, "the change's file footprint is not known yet - failing closed"
+    # The merge-gate half of the same idea. At BRIEF time the stream is a fact
+    # and the paths are a guess; at MERGE time the paths are a fact and the
+    # stream must be resolved from the ledger through the issues the PR
+    # references. `stream_known=False` says that resolution failed -- no issue
+    # referenced, no ledger, or an issue the ledger has never seen -- and the
+    # harness cannot place work it cannot classify.
+    if not stream_known and review.get("escalate_when_stream_unknown", True):
+        return 2, "the item's stream could not be resolved - failing closed"
     return default, "default for an ordinary lane"
 
 
