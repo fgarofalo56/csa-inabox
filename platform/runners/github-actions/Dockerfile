@@ -54,12 +54,21 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # while loading shared libraries" until it's installed explicitly (observed
 # live 2026-08-15: every job on this image that shells to pnpm, including the
 # base loom-ui-verify smoke suite, failed within seconds of Setup pnpm).
+#
+# The second group (make .. python3-dev) was added 2026-09-12 when the repo's CI
+# started moving onto this runner. MEASURED by
+# .github/workflows/loom-aca-runner-capability-probe.yml on the live job, not
+# guessed: `make`, `pip3`, `pwsh`, `dotnet`, `go`, `dbt` and `docker` were all
+# absent, and `make` alone breaks every gate in the repo, because `make validate`
+# IS the entry point (CLAUDE.md: "make validate runs dev-loop/gates/validate-all.ps1").
 RUN set -euo pipefail; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl jq git unzip gnupg lsb-release apt-transport-https \
         sudo libicu70 liblttng-ust1 libssl3 zlib1g libatomic1 acl \
-        software-properties-common; \
+        software-properties-common \
+        make build-essential python3-pip python3-venv python3-dev \
+        zip rsync openssh-client; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Azure CLI (Microsoft apt repo) + az bicep ----------------------------
@@ -73,10 +82,41 @@ RUN set -euo pipefail; \
         > /etc/apt/sources.list.d/azure-cli.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends azure-cli; \
-    rm -rf /var/lib/apt/lists/*; \
-    # Pre-install the bicep CLI into the image so `az bicep build` works offline.
+    rm -rf /var/lib/apt/lists/*
+
+# --- az bicep, installed where the NON-ROOT runner can actually see it -------
+# `az bicep install` as root writes the binary under $AZURE_CONFIG_DIR, which
+# defaults to /root/.azure — a directory the `runner` user cannot read. The
+# image therefore SHIPPED a bicep the runner could not execute, and the live
+# capability probe returned, on a step labelled PRESENT:
+#
+#     bicep  ERROR: Bicep CLI not found. Install it now by running "az bicep install".
+#
+# Exactly the Playwright/PLAYWRIGHT_BROWSERS_PATH mistake one tool along: install
+# as root, land it in root's home, watch it vanish at job time. Pinning
+# AZURE_CONFIG_DIR to a world-readable path fixes both the install and every
+# later `az` invocation, which reads the same variable.
+ENV AZURE_CONFIG_DIR=/opt/azure
+RUN set -euo pipefail; \
+    mkdir -p "$AZURE_CONFIG_DIR"; \
     az bicep install; \
-    az bicep version
+    az bicep version; \
+    chmod -R a+rX "$AZURE_CONFIG_DIR"
+
+# --- PowerShell (pwsh) ------------------------------------------------------
+# `PowerShell Lint` is one of the 15 REQUIRED status contexts, and
+# dev-loop/gates/validate-all.ps1 — the program behind `make validate` — is
+# PowerShell. A runner without pwsh cannot carry either.
+RUN set -euo pipefail; \
+    AZ_DIST="$(lsb_release -cs)"; \
+    curl -fsSL -o /tmp/pmc.deb \
+        "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"; \
+    dpkg -i /tmp/pmc.deb; \
+    rm -f /tmp/pmc.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends powershell; \
+    rm -rf /var/lib/apt/lists/*; \
+    pwsh --version
 
 # --- gh CLI (GitHub apt repo) ---------------------------------------------
 RUN set -euo pipefail; \
