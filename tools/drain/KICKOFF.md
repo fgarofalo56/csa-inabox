@@ -70,8 +70,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 239 pass
-python tools/drain/mutate_gates.py       # 103 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 244 pass
+python tools/drain/mutate_gates.py       # 107 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

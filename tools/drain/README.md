@@ -230,7 +230,7 @@ printed "UAT-verified roll", four separate measurements, no observed input for
 which it returned anything else.
 
 **Run the gate; do not re-derive it.** `merge_gate.py` is the caller that
-composes all seven of PRP §6 from live GitHub data:
+composes PRP §6's gates from live GitHub data:
 
 ```bash
 python tools/drain/merge_gate.py <PR>            # GO / NO-GO with the evidence
@@ -238,14 +238,14 @@ python tools/drain/merge_gate.py --audit-close <PR> --before <n> --intended <n,n
 ```
 
 Promoting `gates.py` out of `temp/` was necessary and not sufficient: at its
-first review it had **no production caller**, four of the seven gates were named
+first review it had **no production caller**, four of them were named
 in the spec and implemented nowhere, and five `policy.json` keys were read by
 nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 239 tests across every module
-python tools/drain/mutate_gates.py           # 103 arms, must be 103 KILLED
+python -m pytest tools/drain/__tests__ -q    # 244 tests across every module
+python tools/drain/mutate_gates.py           # 107 arms, must be 107 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -324,11 +324,11 @@ answer is triage, not a bigger WIP cap.
 | `policy.json` | the autonomy contract — the authority, and the repo it governs |
 | `ledger.py` | durable state; enforces receipt-of-the-right-KIND-before-close |
 | `gates.py` | the merge gates (promoted, tracked, tested) |
-| `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
+| `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 103 mutation arms against a sandbox copy; must be 103 KILLED |
+| `mutate_gates.py` | 107 mutation arms against a sandbox copy; must be 107 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 239 tests; a negative control for every decision function |
+| `__tests__/` | 244 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

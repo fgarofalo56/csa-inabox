@@ -289,6 +289,31 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     # -- the ledger's third terminal state ---------------------------------
     (
+        "L11 a stream DOWNGRADE carries the held receipt over (R2 by a label edit)",
+        "ledger.py",
+        "                if now_class != was_class and existing.receipt_kind:",
+        "                if False:",
+    ),
+    (
+        "L12 the reclassification guard only fires when the receipt becomes INVALID",
+        "ledger.py",
+        "                if now_class != was_class and existing.receipt_kind:",
+        ("                if (now_class != was_class and existing.receipt_kind\n"
+         "                        and self.receipts.get(now_class) != existing.receipt_kind):"),
+    ),
+    (
+        "L13 a FALSY stream wipes the class to the weakest",
+        "ledger.py",
+        "            if stream and stream != existing.stream:",
+        "            if stream != existing.stream:",
+    ),
+    (
+        "L14 the stream change is made but never RECORDED",
+        "ledger.py",
+        '                existing.history.append(f"{_now()} stream {was} -> {stream}")',
+        "                pass",
+    ),
+    (
         "L6 `declined` needs no recorded decision (a backlog declines itself drained)",
         "ledger.py",
         "        if state == DECLINED and not (why and why.strip()):",

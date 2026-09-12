@@ -7,7 +7,7 @@
 WHY THIS FILE EXISTS. `gates.py` was promoted out of gitignored `temp/` so the
 program deciding every merge could be read. Promoting it was necessary and not
 sufficient: for its first review the module had NO production caller -- every
-decision function was referenced only by its own tests, four of the seven gates
+decision function was referenced only by its own tests, four of the gates
 the spec named were implemented nowhere, and five `policy.json` keys were read
 by nothing. The briefs restated the gates as INSTRUCTIONS TO AN AGENT, so at run
 time GO/NO-GO was still a judgement. An unconsulted policy key is prose, not a

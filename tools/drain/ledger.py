@@ -39,6 +39,9 @@ ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMI
 # issue turns up open again, so collapsing them made the state one-way.
 AUDIT_DEPARTED = "departed"   # vanished from the live set; nobody said why
 AUDIT_REOPENED = "reopened"   # was terminal here and is open on GitHub
+# Its stream changed under it and the receipt it held no longer closes its new
+# class. Never silently re-graded: the receipt is cleared and a human decides.
+AUDIT_RECLASSIFIED = "reclassified"
 
 # Which receipt class an item falls into, derived from the stream it sits in.
 # The brief an agent reads is generated from this, so a wrong entry here tells
@@ -207,7 +210,48 @@ class Ledger:
             # re-pin that never reaches an item already in the ledger is a fix
             # that lands one layer above where the value is stored. Measured:
             # #4485 was pinned to W0-harness and stayed W6-ci.
-            existing.stream = stream
+            #
+            # BUT WRITING IT THROUGH UNGUARDED DISARMS R2. `effective_receipt_class`
+            # is evaluated lazily at close time, so once `stream` became mutable
+            # the REQUIRED RECEIPT became mutable with it -- and `stream` is
+            # derived from live GitHub labels on every tick. Both reviewers
+            # demonstrated the same end-to-end sequence independently: record a
+            # `ci-green` on a `ui-surface` item (refused, correctly), remove the
+            # `lane:console` label for an unrelated reason, and the next cycle
+            # the SAME receipt closes it. The item never left `in-flight`;
+            # nothing changed but a label. That is R2 defeated by a label edit,
+            # with no entry in `history` to show it happened.
+            #
+            # The re-pin still lands. What is refused is a SILENT DOWNGRADE: the
+            # change is recorded, and a receipt the new class does not accept is
+            # CLEARED and the item routed to `needs-audit` rather than quietly
+            # re-graded. Fails closed, like every sibling control here.
+            if stream and stream != existing.stream:
+                was, was_class = existing.stream, existing.effective_receipt_class
+                existing.stream = stream
+                existing.history.append(f"{_now()} stream {was} -> {stream}")
+                now_class = existing.effective_receipt_class
+                # ANY class change voids a held receipt. Not "the receipt is no
+                # longer valid for the new class" -- that was the first attempt
+                # and it does not fire on the dangerous case, because a
+                # DOWNGRADE is precisely where the old receipt BECOMES valid.
+                # My own probe of the reviewers' input showed the attack still
+                # succeeding through that guard.
+                #
+                # A receipt is evidence about a QUESTION. Change the class and it
+                # is evidence about a different question, whichever direction it
+                # moved, so it is void either way and a human re-takes it.
+                if now_class != was_class and existing.receipt_kind:
+                    existing.history.append(
+                        f"{_now()} receipt {existing.receipt_kind!r} VOID - it was taken "
+                        f"against {was_class}, and this item is now {now_class}. A receipt "
+                        "is evidence about a class; the class changed (R2)"
+                    )
+                    existing.receipt_kind = None
+                    existing.receipt_ref = None
+                    if existing.state not in TERMINAL:
+                        existing.audit_reason = AUDIT_RECLASSIFIED
+                        existing.state = NEEDS_AUDIT
             for key, value in kwargs.items():
                 if value is not None:
                     setattr(existing, key, value)

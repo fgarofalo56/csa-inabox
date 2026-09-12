@@ -314,6 +314,86 @@ def test_negative_control_a_repinned_stream_reaches_an_item_already_in_the_ledge
     assert led.items[4485].stream == "W0-harness"
 
 
+def test_negative_control_a_stream_downgrade_cannot_make_a_held_receipt_sufficient(tmp_path):
+    """THE regression the stream write-through introduced, found independently
+    by both reviewers. `effective_receipt_class` is evaluated lazily at close
+    time, so once `stream` became mutable the REQUIRED RECEIPT became mutable
+    with it -- and `stream` comes from live GitHub labels every tick.
+
+    Sequence: record `ci-green` on a `ui-surface` item (refused, correctly),
+    remove `lane:console` for an unrelated reason, and the SAME receipt closes
+    it. The item never left `in-flight`. R2 defeated by a label edit.
+
+    The first fix did NOT catch this: guarding "the receipt is no longer valid
+    for the new class" never fires on a downgrade, because a downgrade is
+    exactly where the old receipt BECOMES valid."""
+    led = _led(tmp_path)
+    led.upsert(1, "an editor", "W5-console", lane="lane:console", size=3)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "ci-green", "green at sha")
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    led.upsert(1, "an editor", "W9-rest", lane=None, size=3)   # label removed
+    assert led.items[1].receipt_kind is None, "the receipt must be VOID, not carried over"
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    assert any("VOID" in h for h in led.items[1].history), "and it must be RECORDED"
+
+
+def test_negative_control_the_upgrade_direction_voids_the_receipt_too(tmp_path):
+    """Either direction. A receipt is evidence about a QUESTION -- change the
+    class and it is evidence about a different one, so `ci-green` taken while an
+    item looked like a guard proves nothing once it is a deploy path."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "green")
+    led.upsert(1, "x", "W1-deploy", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+
+def test_a_re_pin_within_one_class_keeps_its_receipt(tmp_path):
+    """The control. W6-ci and W0-harness are both `guard-or-test-only`, so a
+    re-pin between them changes the stream and asks no new question -- voiding
+    the receipt there would make every pin correction cost a re-verification."""
+    led = _led(tmp_path)
+    led.upsert(4485, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(4485, "ci-green", "green at sha")
+    led.upsert(4485, "x", "W0-harness", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W0-harness"
+    assert led.items[4485].receipt_kind == "ci-green"
+    assert led.transition(4485, CLOSED).state == CLOSED
+    # ...and the move is RECORDED even when it costs the receipt nothing. The
+    # stream decides selection order and the receipt class; a silent change to
+    # it is the thing that made the downgrade invisible in the first place.
+    assert any("stream W6-ci -> W0-harness" in h for h in led.items[4485].history)
+
+
+def test_negative_control_a_falsy_stream_does_not_wipe_the_class(tmp_path):
+    """`lane` and `size` are written unconditionally with a stated reason -- a
+    label removed on GitHub must clear the ledger's copy. `stream` inherited the
+    unconditional write without the reason, and an empty stream degrades to the
+    WEAKEST class rather than refusing."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1)
+    led.upsert(1, "x", "", lane="lane:bicep", size=1)
+    assert led.items[1].stream == "W1-deploy"
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+
+def test_an_unchanged_stream_does_not_churn_the_history(tmp_path):
+    """A refresh runs every tick. A history line per tick would bury the entries
+    that matter under the ones that do not."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    for _ in range(4):
+        led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert len(led.items[1].history) == 1
+
+
 def test_negative_control_a_removed_lane_label_clears_the_lane(tmp_path):
     """A label removed on GitHub must clear the ledger's copy, or the item stays
     schedulable on a lane it no longer claims -- and lanes partition by FILE, so

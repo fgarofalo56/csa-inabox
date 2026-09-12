@@ -14,7 +14,7 @@ observed input for which it returned anything else).
 
 PRP §6's gates live here, and `merge_gate.py` is the caller that
 composes them from live GitHub data. A gate with no caller is prose: before the
-first independent review of this module, four of the seven were named in the
+first independent review of this module, four of them were named in the
 spec and implemented nowhere, and five `policy.json` keys were read by nothing.
 """
 from __future__ import annotations
