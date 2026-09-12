@@ -67,16 +67,30 @@ jobs:
       - name: What toolchains are baked in
         run: |
           echo "## toolchains"
+          # THIS FUNCTION HAD THE DEFECT IT EXISTS TO DETECT, and the first run
+          # is the evidence: every single line came back PRESENT, including
+          # `docker`, `pwsh` and `make`, whose output was `command not found`.
+          #
+          # `out="$("$@" 2>&1 | head -1)"; rc=$?` captures the exit status of the
+          # PIPELINE, which is `head`'s, and `head` succeeds on anything. So the
+          # label was a constant. Only the TEXT carried the truth, and a reader
+          # skimming the labels would have concluded the image already had
+          # everything. A probe that cannot report ABSENT is #4451's shape in
+          # miniature -- four measurements, one possible answer.
+          #
+          # Fixed by running the command FIRST, capturing ITS status, and only
+          # then trimming for display.
           probe() {
             name="$1"; shift
             set +e
-            out="$("$@" 2>&1 | head -1)"
+            out="$("$@" 2>&1)"
             rc=$?
             set -e
+            first="$(printf '%s' "$out" | head -3 | tr '\n' ' ')"
             if [ $rc -eq 0 ]; then
-              printf '  %-12s PRESENT  %s\n' "$name" "$out"
+              printf '  %-12s PRESENT  %s\n' "$name" "${first:0:200}"
             else
-              printf '  %-12s ABSENT   (rc=%s) %s\n' "$name" "$rc" "$out"
+              printf '  %-12s ABSENT   (rc=%s) %s\n' "$name" "$rc" "${first:0:400}"
             fi
           }
           probe bash      bash --version
