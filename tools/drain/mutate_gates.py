@@ -1143,15 +1143,15 @@ ARMS: list[tuple[str, str, str, str]] = [
     # they do not weaken a check, they shrink what the check looks at. Those are
     # the arms that survive an author-written matrix.
     (
-        "CG1 a never-created workflow run excuses the absence WITHOUT consulting "
-        "the push trigger (the path-filtered case becomes 'absence is fine')",
+        ("CG1 a never-created workflow run excuses the absence WITHOUT consulting "
+         "the push trigger (the path-filtered case becomes 'absence is fine')"),
         "gates.py",
         "    if runs:",
         "    if False:",
     ),
     (
-        "CG2 the renamed sibling is accepted whatever its run concluded "
-        "(the renamed-context case stops checking the run)",
+        ("CG2 the renamed sibling is accepted whatever its run concluded "
+         "(the renamed-context case stops checking the run)"),
         "gates.py",
         'if conclusion != "SUCCESS":',
         "if False:",
@@ -1175,22 +1175,22 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if False:",
     ),
     (
-        "CG6 the glob gets fnmatch semantics, so `*` crosses a `/` and a "
-        "top-level filter looks like it admitted a nested file",
+        ("CG6 the glob gets fnmatch semantics, so `*` crosses a `/` and a "
+         "top-level filter looks like it admitted a nested file"),
         "gates.py",
         'out.append("[^/]*")',
         'out.append(".*")',
     ),
     (
-        "CG7 `**/` must consume at least one segment, so `deploy/**/*.bicep` "
-        "stops matching `deploy/x.bicep`",
+        ("CG7 `**/` must consume at least one segment, so `deploy/**/*.bicep` "
+         "stops matching `deploy/x.bicep`"),
         "gates.py",
         'out.append("(?:.*/)?")',
         'out.append(".*/")',
     ),
     (
-        "CG8 the YAML 1.1 `on:`->True key is dropped, so EVERY real workflow "
-        "reads as having no push trigger and every absence is excused at once",
+        ("CG8 the YAML 1.1 `on:`->True key is dropped, so EVERY real workflow "
+         "reads as having no push trigger and every absence is excused at once"),
         "gates.py",
         'doc.get("on", doc.get(True))',
         'doc.get("on")',
@@ -1202,29 +1202,29 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    files = [f for f in changed_files if f][:1]",
     ),
     (
-        "CG10 an EMPTY required set is a green receipt (`all([])` is True, one "
-        "module along from the `drained: true` over 297 open issues)",
+        ("CG10 an EMPTY required set is a green receipt (`all([])` is True, one "
+         "module along from the `drained: true` over 297 open issues)"),
         "gates.py",
         "    if not contexts:",
         "    if False:",
     ),
     (
-        "CG11 a merged sha with ZERO check-runs stops guarding the receipt, so "
-        "every absence is excused one at a time over a commit where nothing ran",
+        ("CG11 a merged sha with ZERO check-runs stops guarding the receipt, so "
+         "every absence is excused one at a time over a commit where nothing ran"),
         "gates.py",
         '    if classify_missing(merged_total_count, waiting=False) == "never-created":',
         "    if False:",
     ),
     (
-        "CG12 an UNMEASURED changed-file set excuses a path filter, so "
-        "'it did not run' is inferred from 'I read no files'",
+        ("CG12 an UNMEASURED changed-file set excuses a path filter, so "
+         "'it did not run' is inferred from 'I read no files'"),
         "gates.py",
         '        if not files:\n            return True, "no changed files were measured',
         '        if not files:\n            return False, "no changed files were measured',
     ),
     (
-        "CG13 the shared de-duplication takes the FIRST run for a context name, "
-        "so a green re-run hides one that measured nothing",
+        ("CG13 the shared de-duplication takes the FIRST run for a context name, "
+         "so a green re-run hides one that measured nothing"),
         "gates.py",
         "        if prior is None or _check_rank(check) > _check_rank(prior):",
         "        if prior is None:",
