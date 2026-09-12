@@ -151,10 +151,32 @@ RUN set -euo pipefail; \
     node --version; pnpm --version
 
 # --- non-root runner user --------------------------------------------------
+#
+# PARITY WITH ubuntu-latest, and it is not cosmetic. A GitHub-hosted runner's
+# `runner` user has PASSWORDLESS SUDO and a WRITABLE /usr/local/bin, and
+# workflows across this repo assume both. Measured on the first migrated CI run:
+#
+#     Secret Scan / Install gitleaks -> failure
+#     curl ... | tar -xz -C /usr/local/bin gitleaks
+#
+# `Secret Scan` is one of the fifteen REQUIRED contexts, so without this the
+# migration blocks every PR in the repo. The alternative -- editing ~100
+# workflows to install into $HOME -- is the same fix written a hundred times and
+# would diverge from the hosted runner the moment anyone adds a step.
+#
+# This is not a privilege escalation worth worrying about: the job's own code
+# already runs as `runner` inside an EPHEMERAL container that is destroyed after
+# one job, so root inside it reaches nothing `runner` could not already reach.
+# The real boundary is the container and the fork-PR approval policy, not this.
 RUN set -euo pipefail; \
     useradd -m -d /home/runner -s /bin/bash runner; \
     mkdir -p /home/runner/actions-runner; \
-    chown -R runner:runner /home/runner
+    chown -R runner:runner /home/runner; \
+    echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner; \
+    chmod 0440 /etc/sudoers.d/runner; \
+    visudo -c; \
+    chown root:runner /usr/local/bin /usr/local/lib; \
+    chmod 0775 /usr/local/bin /usr/local/lib
 
 WORKDIR /home/runner/actions-runner
 
