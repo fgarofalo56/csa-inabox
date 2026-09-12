@@ -1129,6 +1129,106 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if lost or dupes or len(placed) != len(want):",
         "    if len(placed) != len(want):",
     ),
+
+    # -- the `ci-green` receipt (#4487) -------------------------------------
+    #
+    # The receipt's whole risk is that it degrades into "absence is excused".
+    # The old definition named a measurement the topology cannot produce, which
+    # left exactly two outcomes: nothing closes, or somebody quietly accepts
+    # 10-of-15. Every arm here re-creates the second one, and the two the issue
+    # asked for by name -- the path-filtered case and the renamed-context case
+    # -- are CG1 and CG2.
+    #
+    # CG3/CG9/CG13 are POPULATION-NARROWING, per this file's second lesson:
+    # they do not weaken a check, they shrink what the check looks at. Those are
+    # the arms that survive an author-written matrix.
+    (
+        "CG1 a never-created workflow run excuses the absence WITHOUT consulting "
+        "the push trigger (the path-filtered case becomes 'absence is fine')",
+        "gates.py",
+        "    if runs:",
+        "    if False:",
+    ),
+    (
+        "CG2 the renamed sibling is accepted whatever its run concluded "
+        "(the renamed-context case stops checking the run)",
+        "gates.py",
+        'if conclusion != "SUCCESS":',
+        "if False:",
+    ),
+    (
+        "CG3 the receipt judges only the FIRST required context",
+        "gates.py",
+        "    for item in evidence:",
+        "    for item in evidence[:1]:",
+    ),
+    (
+        "CG4 a PR-head result stands in for a merged sha over a DIFFERENT tree",
+        "gates.py",
+        "    if not trees_identical:",
+        "    if False:",
+    ),
+    (
+        "CG5 an untraceable producer stops failing closed",
+        "gates.py",
+        "    if not item.workflow_path:",
+        "    if False:",
+    ),
+    (
+        "CG6 the glob gets fnmatch semantics, so `*` crosses a `/` and a "
+        "top-level filter looks like it admitted a nested file",
+        "gates.py",
+        'out.append("[^/]*")',
+        'out.append(".*")',
+    ),
+    (
+        "CG7 `**/` must consume at least one segment, so `deploy/**/*.bicep` "
+        "stops matching `deploy/x.bicep`",
+        "gates.py",
+        'out.append("(?:.*/)?")',
+        'out.append(".*/")',
+    ),
+    (
+        "CG8 the YAML 1.1 `on:`->True key is dropped, so EVERY real workflow "
+        "reads as having no push trigger and every absence is excused at once",
+        "gates.py",
+        'doc.get("on", doc.get(True))',
+        'doc.get("on")',
+    ),
+    (
+        "CG9 the path filter is applied to only the FIRST changed file",
+        "gates.py",
+        "    files = [f for f in changed_files if f]",
+        "    files = [f for f in changed_files if f][:1]",
+    ),
+    (
+        "CG10 an EMPTY required set is a green receipt (`all([])` is True, one "
+        "module along from the `drained: true` over 297 open issues)",
+        "gates.py",
+        "    if not contexts:",
+        "    if False:",
+    ),
+    (
+        "CG11 a merged sha with ZERO check-runs stops guarding the receipt, so "
+        "every absence is excused one at a time over a commit where nothing ran",
+        "gates.py",
+        '    if classify_missing(merged_total_count, waiting=False) == "never-created":',
+        "    if False:",
+    ),
+    (
+        "CG12 an UNMEASURED changed-file set excuses a path filter, so "
+        "'it did not run' is inferred from 'I read no files'",
+        "gates.py",
+        '        if not files:\n            return True, "no changed files were measured',
+        '        if not files:\n            return False, "no changed files were measured',
+    ),
+    (
+        "CG13 the shared de-duplication takes the FIRST run for a context name, "
+        "so a green re-run hides one that measured nothing",
+        "gates.py",
+        "        if prior is None or _check_rank(check) > _check_rank(prior):",
+        "        if prior is None:",
+    ),
 ]
 
 

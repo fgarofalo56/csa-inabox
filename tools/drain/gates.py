@@ -255,6 +255,7 @@ OTHER_IMPLEMENTED_BY = {
     "wip.max_lanes_hard_ceiling": "tick.select_cycle",
     "ordering.streams": "tick.select_cycle",
     "receipts": "ledger.Ledger.receipt_ok",
+    "receipts.ci_green_rule": "gates.ci_green_receipt",
     "scope.closed_requires_receipt": "ledger.Ledger.receipt_ok",
     "permitted_unattended": "gates.action_is_permitted",
     "never": "gates.action_is_permitted",
@@ -1192,6 +1193,25 @@ def classify_missing(total_count: int, waiting: bool) -> str:
     return "present"
 
 
+def worst_by_name(checks) -> dict[str, dict]:
+    """Context name -> its WORST run. Shared, because two callers need it.
+
+    Two runs can publish the same context name (a re-run, or a matrix leg), and
+    the worst one has to decide: a green twin must never hide a run that
+    measured nothing. `merge_gate` reached into `_check_rank` to rebuild this,
+    which is the same de-duplication written twice and free to drift.
+    """
+    by_name: dict[str, dict] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        prior = by_name.get(name)
+        if prior is None or _check_rank(check) > _check_rank(prior):
+            by_name[name] = check
+    return by_name
+
+
 def classify_checks(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
     """PRP §6 gate 4: every required context present, none RED, none INCOMPLETE.
 
@@ -1205,15 +1225,7 @@ def classify_checks(checks: list[dict], required: list[str]) -> tuple[bool, list
     present and concluded green; the reasons list every failure, because a
     caller that stops at the first one re-runs this loop once per defect.
     """
-    by_name: dict[str, dict] = {}
-    for check in checks:
-        name = check.get("name") or check.get("context") or ""
-        if not name:
-            continue
-        # Two runs can share a context name; the worst one decides.
-        prior = by_name.get(name)
-        if prior is None or _check_rank(check) > _check_rank(prior):
-            by_name[name] = check
+    by_name = worst_by_name(checks)
 
     reasons: list[str] = []
     for name in required:
@@ -1318,6 +1330,429 @@ def check_is_hollow(name: str, conclusion: str, measured: int | None) -> tuple[b
     if measured == 0:
         return True, f"{name}: green over ZERO items - a pass with no population"
     return False, f"{name}: green over {measured} item(s)"
+
+
+# ---------------------------------------------------------------------------
+# The `ci-green` receipt (#4487)
+# ---------------------------------------------------------------------------
+#
+# The receipt used to read "every required context green AT THE MERGED SHA".
+# That measurement is UNOBTAINABLE for most PRs in this repo, and it was found
+# by trying to take the receipt for the first time -- on the harness's own
+# merge, `a02cd41e6d42` (#4483):
+#
+#     15 required contexts (branch protection)
+#     10 green at the merged sha
+#      5 absent at the merged sha
+#      0 RED
+#
+# None of the five is a failure or a flake:
+#
+#   * four (`Python Lint`, `PowerShell Lint`, `Secret Scan`, `Repo Hygiene`) are
+#     published by `validate.yml`, whose `push:` trigger is PATH-FILTERED to
+#     bicep/deploy/workflow paths. That merge touched `tools/`, `PRPs/`,
+#     `pyproject.toml` and `.gitignore`, so the workflow correctly did not run.
+#     The contexts are NEVER-CREATED at that sha -- not pending, not failing.
+#   * the fifth is a RENAME, not an absence: `commit-message-parses.yml` gives
+#     its job a conditional `name:`, so on `push` it publishes `changelog parser
+#     can read what landed on main` while branch protection requires the
+#     `pull_request` spelling. It ran at the merged sha and was green.
+#
+# A definition the topology cannot satisfy leaves exactly two outcomes: every
+# guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as
+# "green" and the receipt stops meaning what it says. The second is the failure
+# mode this whole toolchain exists to prevent.
+#
+# So the receipt is redefined to something that is both TRUE and TAKEABLE:
+#
+#     every required context that CAN run at the merged sha is green; every one
+#     that cannot is NAMED, with its reason and its result on the PR head over
+#     an IDENTICAL TREE.
+#
+# The load-bearing word is *named*. An absence is only excused when the harness
+# can say WHY, from evidence -- the producing workflow's own trigger, read at
+# the merged sha -- and every branch that cannot say why FAILS CLOSED. A version
+# that excused absence generically would be the "quietly accept 10-of-15"
+# outcome with a function wrapped around it.
+#
+# Nothing here is keyed to a context's SPELLING. The producer of each context is
+# measured at the PR head (where it ran) via the workflow-run/jobs API, and the
+# rename case is resolved by WORKFLOW IDENTITY -- the same workflow ran at the
+# merged sha and concluded green under a different job name. A hardcoded alias
+# list would be one rename away from being wrong, silently, which is the shape
+# of defect this package keeps finding.
+
+
+@dataclass(frozen=True)
+class PushTrigger:
+    """One workflow's `on.push` trigger, as it bears on a merged sha.
+
+    `present` is False when the workflow has no `push` trigger at all, which is
+    itself a complete explanation for a never-created context.
+    """
+
+    present: bool
+    branches: tuple[str, ...] | None = None
+    branches_ignore: tuple[str, ...] | None = None
+    paths: tuple[str, ...] | None = None
+    paths_ignore: tuple[str, ...] | None = None
+
+
+def _as_tuple(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(str(v) for v in value)
+    return None
+
+
+def parse_push_trigger(workflow_yaml: str) -> PushTrigger | None:
+    """Parse `on.push` out of a workflow file. None means "could not read it".
+
+    None and `PushTrigger(present=False)` are DIFFERENT answers and the caller
+    treats them differently: the first is an unanswered question (fail closed),
+    the second is a measured fact that explains an absence. Collapsing them
+    would turn every unparseable workflow into a free pass.
+
+    `on:` is the YAML 1.1 boolean `True` under PyYAML's default resolver, so a
+    reader that only looks up the string key finds NOTHING in every real
+    workflow file and concludes "no push trigger" -- i.e. it would excuse every
+    absence in the repo. Both keys are consulted.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - pyyaml is a declared dependency
+        return None
+    try:
+        doc = yaml.safe_load(workflow_yaml)
+    except Exception:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    triggers = doc.get("on", doc.get(True))
+    if isinstance(triggers, str):
+        return PushTrigger(present=triggers == "push")
+    if isinstance(triggers, list):
+        return PushTrigger(present="push" in triggers)
+    if not isinstance(triggers, dict):
+        return None
+    if "push" not in triggers:
+        return PushTrigger(present=False)
+    push = triggers["push"]
+    if not isinstance(push, dict):
+        # `push:` with an empty value -- every branch, every path.
+        return PushTrigger(present=True)
+    return PushTrigger(
+        present=True,
+        branches=_as_tuple(push.get("branches")),
+        branches_ignore=_as_tuple(push.get("branches-ignore")),
+        paths=_as_tuple(push.get("paths")),
+        paths_ignore=_as_tuple(push.get("paths-ignore")),
+    )
+
+
+def _glob_to_regex(pattern: str) -> str:
+    r"""GitHub filter-pattern semantics, not `fnmatch`.
+
+    `fnmatch.translate` maps `*` to `.*`, which matches across `/` -- so
+    `'*.bicep'` would match `deploy/x.bicep` and a top-level-only filter would
+    silently excuse nothing. The three wildcards differ here:
+
+        `**`  zero or more characters, INCLUDING `/`
+        `*`   zero or more characters, EXCLUDING `/`
+        `?`   exactly one character, EXCLUDING `/`
+
+    `a/**/b` matches `a/b` as well as `a/x/y/b`: the `**/` is allowed to consume
+    zero path segments together with its slash. `.github/workflows/**` therefore
+    matches `.github/workflows/validate.yml`, and `deploy/**/*.bicep` matches
+    `deploy/x.bicep` -- both of which a naive `**` -> `.*` translation gets
+    wrong in the direction of excusing too much.
+    """
+    out = []
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "*":
+            if pattern.startswith("**", i):
+                if pattern.startswith("**/", i):
+                    out.append("(?:.*/)?")
+                    i += 3
+                    continue
+                if i > 0 and pattern[i - 1] == "/" and i + 2 == len(pattern):
+                    # trailing `/**` -- the slash is already emitted, so let it
+                    # match the directory itself too.
+                    out.append(".*")
+                    i += 2
+                    continue
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(char))
+        i += 1
+    return "^" + "".join(out) + "$"
+
+
+def glob_matches(pattern: str, path: str) -> bool:
+    """Does one GitHub filter pattern match one path?"""
+    return re.match(_glob_to_regex(pattern), path) is not None
+
+
+def _any_match(patterns: tuple[str, ...], values) -> bool:
+    return any(glob_matches(p, v) for p in patterns for v in values)
+
+
+def push_event_runs(
+    trigger: PushTrigger, branch: str, changed_files
+) -> tuple[bool, str]:
+    """Would this workflow run on a push of `changed_files` to `branch`?
+
+    Returns (runs, why). The `why` is the receipt's explanation text when the
+    answer is False, so it names the filter and the population it was applied
+    to rather than saying "filtered out".
+
+    An EMPTY `changed_files` returns True with a reason saying the question was
+    unanswerable: a path filter cannot be shown to exclude a set nobody
+    measured, and "it did not run" must never be inferred from "I read no
+    files". The caller turns a True here into a FAILURE (the context should
+    have been created and was not), which is the fail-closed direction.
+    """
+    if not trigger.present:
+        return False, "the producing workflow has no `push:` trigger at all"
+    files = [f for f in changed_files if f]
+    if trigger.branches is not None and not _any_match(trigger.branches, [branch]):
+        return False, (
+            f"`push.branches` {list(trigger.branches)} does not match {branch!r}"
+        )
+    if trigger.branches_ignore is not None and _any_match(trigger.branches_ignore, [branch]):
+        return False, (
+            f"`push.branches-ignore` {list(trigger.branches_ignore)} matches {branch!r}"
+        )
+    if trigger.paths is not None:
+        if not files:
+            return True, "no changed files were measured, so no path filter can be shown to exclude them"
+        if not _any_match(trigger.paths, files):
+            return False, (
+                f"`push.paths` {list(trigger.paths)} matches none of the "
+                f"{len(files)} changed file(s)"
+            )
+    if trigger.paths_ignore is not None and files:
+        unignored = [f for f in files if not _any_match(trigger.paths_ignore, [f])]
+        if not unignored:
+            return False, (
+                f"`push.paths-ignore` {list(trigger.paths_ignore)} matches all "
+                f"{len(files)} changed file(s)"
+            )
+    return True, "the `push:` trigger admits this commit"
+
+
+@dataclass(frozen=True)
+class ContextEvidence:
+    """Everything measured about ONE required context, for the receipt.
+
+    Collected by `merge_gate.collect_ci_green_evidence`; this module never
+    reaches the network, so every branch below is reachable from a fixture.
+
+    `workflow_path` is measured at the PR HEAD -- the event where the context
+    demonstrably ran -- because that is the only place a context that is absent
+    at the merged sha can be traced back to a producer. `None` means the trace
+    failed, and an untraceable absence is NO, not an excuse.
+    """
+
+    name: str
+    workflow_path: str | None = None
+    merged_check: dict | None = None
+    head_check: dict | None = None
+    merged_workflow_run: dict | None = None
+    merged_workflow_jobs: tuple[str, ...] = ()
+    push_trigger: PushTrigger | None = None
+
+
+@dataclass(frozen=True)
+class ContextResult:
+    """One required context's standing in the receipt."""
+
+    name: str
+    state: str          # green-at-merge | renamed-at-merge | deferred-to-head | FAIL
+    detail: str
+
+    @property
+    def ok(self) -> bool:
+        return self.state != "FAIL"
+
+
+@dataclass(frozen=True)
+class CiGreenReceipt:
+    ok: bool
+    contexts: tuple[ContextResult, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+    def by_state(self, state: str) -> list[ContextResult]:
+        return [c for c in self.contexts if c.state == state]
+
+    @property
+    def summary(self) -> str:
+        counts = {}
+        for context in self.contexts:
+            counts[context.state] = counts.get(context.state, 0) + 1
+        shape = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        return f"{'GREEN' if self.ok else 'NOT GREEN'} ({shape or 'no contexts'})"
+
+
+def ci_green_receipt(
+    evidence,
+    *,
+    merged_total_count: int,
+    merged_changed_files,
+    merged_branch: str = "main",
+    trees_identical: bool,
+) -> CiGreenReceipt:
+    """The `ci-green` receipt, as a measurement that can actually be taken.
+
+    Per required context, worst-first, every unanswered question failing closed:
+
+    1. **Present at the merged sha** -- green closes it; RED and INCOMPLETE
+       fail. Reuses the same two vocabularies `classify_checks` reads, so a
+       StatusContext `ERROR` is not scored green here either.
+    2. **Absent, producer untraceable** -- FAIL. "I could not find out why" is
+       not a reason a receipt may contain (`deploy-integrity.md` R7).
+    3. **Absent, but the producing workflow RAN at the merged sha and concluded
+       green** -- the context was renamed for this event, which is the
+       `commit-message-parses.yml` shape. Resolved by workflow IDENTITY, never
+       by an alias table, and the sibling job names are recorded.
+    4. **Absent, and the producing workflow was NEVER CREATED at the merged
+       sha** -- only excused when its own `push:` trigger, read at that sha,
+       says it could not have run. Then the result is deferred to the PR head,
+       and ONLY over an identical tree: a head green over a different tree is a
+       statement about a tree that was not merged.
+    5. Anything else -- FAIL.
+
+    `merged_total_count` guards the whole receipt through `classify_missing`: if
+    the merged sha carries ZERO check-runs, nothing ran at all and every
+    "absence" above would be excused one by one into a vacuous pass.
+    """
+    contexts: list[ContextResult] = []
+    reasons: list[str] = []
+
+    if classify_missing(merged_total_count, waiting=False) == "never-created":
+        return CiGreenReceipt(
+            ok=False,
+            reasons=(
+                ("the merged sha carries ZERO check-runs - nothing ran there at all, "
+                 "so no per-context absence can be excused"),
+            ),
+        )
+
+    for item in evidence:
+        result = _one_context(
+            item,
+            merged_changed_files=merged_changed_files,
+            merged_branch=merged_branch,
+            trees_identical=trees_identical,
+        )
+        contexts.append(result)
+        if not result.ok:
+            reasons.append(f"{result.name}: {result.detail}")
+
+    if not contexts:
+        return CiGreenReceipt(
+            ok=False,
+            reasons=("no required contexts were measured - an empty receipt is not a green one",),
+        )
+    return CiGreenReceipt(ok=not reasons, contexts=tuple(contexts), reasons=tuple(reasons))
+
+
+def _one_context(
+    item: ContextEvidence,
+    *,
+    merged_changed_files,
+    merged_branch: str,
+    trees_identical: bool,
+) -> ContextResult:
+    if item.merged_check is not None:
+        verdict, status = _outcome(item.merged_check)
+        if verdict in RED_CONCLUSIONS:
+            return ContextResult(item.name, "FAIL", f"RED at the merged sha ({verdict})")
+        if not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
+            return ContextResult(
+                item.name, "FAIL",
+                f"INCOMPLETE at the merged sha (state={verdict or status or 'unknown'})",
+            )
+        if verdict == "SKIPPED":
+            return ContextResult(
+                item.name, "FAIL",
+                "SKIPPED at the merged sha - a required context that ran nothing is not a pass",
+            )
+        return ContextResult(item.name, "green-at-merge", f"green at the merged sha ({verdict})")
+
+    if not item.workflow_path:
+        return ContextResult(
+            item.name, "FAIL",
+            "absent at the merged sha and its producing workflow could not be traced "
+            "from the PR head - an absence nobody can explain is not an excused one",
+        )
+
+    if item.merged_workflow_run is not None:
+        run = item.merged_workflow_run
+        conclusion = str(run.get("conclusion") or "").upper()
+        status = str(run.get("status") or "").upper()
+        if conclusion != "SUCCESS":
+            return ContextResult(
+                item.name, "FAIL",
+                f"absent under this name, and {item.workflow_path} did run at the merged "
+                f"sha but concluded {conclusion or status or 'unknown'!s}",
+            )
+        siblings = ", ".join(item.merged_workflow_jobs) or "(no job names read)"
+        return ContextResult(
+            item.name, "renamed-at-merge",
+            f"published under a different name by {item.workflow_path}, which ran at the "
+            f"merged sha and concluded SUCCESS; its job(s) there: {siblings}",
+        )
+
+    if item.push_trigger is None:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent at the merged sha and the `on.push` trigger of {item.workflow_path} "
+            "could not be read there - fail closed rather than assume it was filtered out",
+        )
+
+    runs, why = push_event_runs(item.push_trigger, merged_branch, merged_changed_files)
+    if runs:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent at the merged sha although {item.workflow_path} SHOULD have run there "
+            f"({why}) - that is a missing check, not a structural absence",
+        )
+    if not trees_identical:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}), and the PR head result cannot "
+            "stand in for it because the merged tree differs from the PR head tree - "
+            f"dispatch {item.workflow_path} at the merged sha to obtain it",
+        )
+    if item.head_check is None:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}) and absent on the PR head too - "
+            "there is no result anywhere to defer to",
+        )
+    verdict, status = _outcome(item.head_check)
+    if verdict != "SUCCESS":
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}) and its PR-head result is "
+            f"{verdict or status or 'unknown'}, not green",
+        )
+    return ContextResult(
+        item.name, "deferred-to-head",
+        f"structurally absent at the merged sha ({why}); green on the PR head over an "
+        "identical tree",
+    )
 
 
 # ---------------------------------------------------------------------------

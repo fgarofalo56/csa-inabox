@@ -552,6 +552,211 @@ def collect(repo: str, number: int) -> dict:
     }
 
 
+def _flat_check_runs(repo: str, sha: str) -> tuple[list[dict], int]:
+    """Every check-run published at `sha`, plus the API's own `total_count`.
+
+    `total_count` is read from the API rather than derived from `len(runs)`,
+    because it is what `gates.classify_missing` needs to tell "nothing was ever
+    created here" from "the page I read happened to be empty".
+    """
+    pages = gh_json(
+        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
+         "--paginate", "--slurp"],
+        f"check-runs at {sha[:12]}",
+    )
+    assert isinstance(pages, list)
+    runs: list[dict] = []
+    total = 0
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        total = max(total, int(page.get("total_count") or 0))
+        runs.extend(page.get("check_runs") or [])
+    return runs, max(total, len(runs))
+
+
+def _workflow_runs(repo: str, sha: str) -> list[dict]:
+    pages = gh_json(
+        ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100",
+         "--paginate", "--slurp"],
+        f"workflow runs at {sha[:12]}",
+    )
+    assert isinstance(pages, list)
+    runs: list[dict] = []
+    for page in pages:
+        if isinstance(page, dict):
+            runs.extend(page.get("workflow_runs") or [])
+    return runs
+
+
+def collect_ci_green_evidence(repo: str, number: int) -> dict:
+    """Measure everything `gates.ci_green_receipt` decides on, for a MERGED PR.
+
+    #4487. Nothing here maps a context to a producer by SPELLING. The producer
+    is traced at the PR HEAD -- the event where the context demonstrably ran --
+    through `check_suite_id`, which is 1:1 with an Actions workflow run, and the
+    rename case is then resolved by that same workflow identity at the merged
+    sha. An alias table would be one conditional `name:` expression away from
+    being wrong, silently.
+    """
+    pr = gh_json(
+        ["gh", "pr", "view", str(number), "--repo", repo, "--json",
+         "number,title,state,baseRefName,headRefOid,mergeCommit"],
+        f"PR #{number}",
+    )
+    assert isinstance(pr, dict)
+    if pr.get("state") != "MERGED" or not (pr.get("mergeCommit") or {}).get("oid"):
+        raise SystemExit(
+            f"#{number} is {pr.get('state')}, not MERGED - `ci-green` is a receipt about a "
+            "MERGED sha, and there is no merged sha to measure."
+        )
+    merged = pr["mergeCommit"]["oid"]
+    head = pr["headRefOid"]
+    branch = pr["baseRefName"]
+
+    for sha in (merged, head):
+        rc, _, err = sh(["git", "fetch", "--quiet", "origin", sha])
+        if rc != 0:
+            print(f"WARNING: git fetch {sha[:12]} failed: {err[:200]}", file=sys.stderr)
+
+    merged_checks, merged_total = _flat_check_runs(repo, merged)
+    head_checks, _ = _flat_check_runs(repo, head)
+    merged_by_name = gates.worst_by_name(merged_checks)
+    head_by_name = gates.worst_by_name(head_checks)
+
+    # check_suite_id -> workflow path, on BOTH shas.
+    head_path_by_suite = {
+        r.get("check_suite_id"): r.get("path") for r in _workflow_runs(repo, head)
+    }
+    merged_runs = _workflow_runs(repo, merged)
+    merged_run_by_path: dict[str, dict] = {}
+    for run in merged_runs:
+        path = run.get("path")
+        if not path:
+            continue
+        prior = merged_run_by_path.get(path)
+        # Newest run for that workflow decides -- a re-run supersedes.
+        if prior is None or str(run.get("run_started_at") or "") >= str(prior.get("run_started_at") or ""):
+            merged_run_by_path[path] = run
+
+    # The producer of each context, traced at the head.
+    suite_of_head_check = {
+        (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
+    }
+
+    rc, out, err = sh(["git", "show", "--name-only", "--pretty=format:", merged])
+    if rc != 0:
+        raise SystemExit(
+            f"cannot read the changed files of {merged[:12]} (rc={rc}): {err[:300]}\n"
+            "Without them a path filter cannot be shown to exclude anything, and an "
+            "unmeasurable receipt is NOT a receipt."
+        )
+    changed_files = [line.strip() for line in out.splitlines() if line.strip()]
+
+    trees = []
+    for sha in (merged, head):
+        rc, out, _ = sh(["git", "rev-parse", f"{sha}^{{tree}}"])
+        trees.append(out.strip() if rc == 0 else "")
+    trees_identical = bool(trees[0]) and trees[0] == trees[1]
+
+    required = required_contexts(repo)
+    evidence = []
+    jobs_cache: dict[int, tuple[str, ...]] = {}
+    trigger_cache: dict[str, gates.PushTrigger | None] = {}
+    for name in required:
+        merged_check = merged_by_name.get(name)
+        workflow_path = head_path_by_suite.get(suite_of_head_check.get(name))
+        merged_run = None
+        merged_jobs: tuple[str, ...] = ()
+        trigger = None
+        if merged_check is None and workflow_path:
+            merged_run = merged_run_by_path.get(workflow_path)
+            if merged_run is not None:
+                run_id = merged_run.get("id")
+                if run_id not in jobs_cache:
+                    jobs = gh_paginated(
+                        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+                        f"jobs of run {run_id}",
+                    )
+                    names: list[str] = []
+                    for page in jobs:
+                        if isinstance(page, dict):
+                            names.extend(j.get("name", "") for j in (page.get("jobs") or []))
+                    jobs_cache[run_id] = tuple(n for n in names if n)
+                merged_jobs = jobs_cache[run_id]
+            else:
+                if workflow_path not in trigger_cache:
+                    rc, out, _ = sh(["git", "show", f"{merged}:{workflow_path}"])
+                    trigger_cache[workflow_path] = (
+                        gates.parse_push_trigger(out) if rc == 0 else None
+                    )
+                trigger = trigger_cache[workflow_path]
+        evidence.append(
+            gates.ContextEvidence(
+                name=name,
+                workflow_path=workflow_path,
+                merged_check=merged_check,
+                head_check=head_by_name.get(name),
+                merged_workflow_run=merged_run,
+                merged_workflow_jobs=merged_jobs,
+                push_trigger=trigger,
+            )
+        )
+
+    return {
+        "pr": pr, "merged": merged, "head": head, "branch": branch,
+        "evidence": evidence, "merged_total_count": merged_total,
+        "changed_files": changed_files, "trees_identical": trees_identical,
+    }
+
+
+def print_ci_green_receipt(repo: str, number: int, as_json: bool) -> int:
+    data = collect_ci_green_evidence(repo, number)
+    receipt = gates.ci_green_receipt(
+        data["evidence"],
+        merged_total_count=data["merged_total_count"],
+        merged_changed_files=data["changed_files"],
+        merged_branch=data["branch"],
+        trees_identical=data["trees_identical"],
+    )
+    if as_json:
+        print(json.dumps({
+            "pr": number,
+            "merged_sha": data["merged"],
+            "head_sha": data["head"],
+            "ok": receipt.ok,
+            "summary": receipt.summary,
+            "trees_identical": data["trees_identical"],
+            "contexts": [
+                {"name": c.name, "state": c.state, "detail": c.detail}
+                for c in receipt.contexts
+            ],
+            "reasons": list(receipt.reasons),
+        }, indent=1))
+        return 0 if receipt.ok else 1
+
+    print(f"# ci-green receipt - {repo}#{number}")
+    print(f"  merged sha : {data['merged']}")
+    print(f"  PR head    : {data['head']}  (tree "
+          f"{'IDENTICAL' if data['trees_identical'] else 'DIFFERS'})")
+    print(f"  changed    : {len(data['changed_files'])} file(s) at the merged sha")
+    print()
+    for context in receipt.contexts:
+        mark = "ok  " if context.ok else "FAIL"
+        print(f"  [{mark}] {context.name}")
+        print(f"         {context.state}: {context.detail}")
+    print()
+    print(f"RECEIPT: {receipt.summary}")
+    for reason in receipt.reasons:
+        print(f"  - {reason}")
+    if receipt.ok:
+        print()
+        print("Record it against the item with receipt_kind='ci-green', "
+              f"receipt_ref='{data['merged']}', and set receipt_taken_under to the item's "
+              "effective_receipt_class - see README 'If you hand-edit a receipt'.")
+    return 0 if receipt.ok else 1
+
+
 def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
               state_path: str | None = None) -> dict:
     """Run every gate over an already-collected `data` dict.
@@ -804,10 +1009,21 @@ def main() -> int:
     parser.add_argument("--allow-close", default="",
                         help="issue numbers this merge is ALLOWED to auto-close; anything "
                              "else the keyword scan finds is a NO-GO")
+    parser.add_argument("--ci-green-receipt", type=int, metavar="PR",
+                        help="#4487: take the `ci-green` receipt for a MERGED PR - every "
+                             "required context that CAN run at the merged sha is green, and "
+                             "every one that cannot is named with its reason and its "
+                             "PR-head result over an identical tree")
     args = parser.parse_args()
 
     policy = gates.load_policy(POLICY_PATH)
     repo = policy["repo"]
+
+    # #4487. The receipt is a PROGRAM, for the same reason the merge gates are:
+    # a definition with no caller is prose, and the old one named a measurement
+    # the CI topology cannot produce.
+    if args.ci_green_receipt is not None:
+        return print_ci_green_receipt(repo, args.ci_green_receipt, args.json)
 
     # Gate 7 -- the before/after audit. Run AFTER merging, with the issue-number
     # list this tool wrote before it. The scan is PREVENTION and this is
