@@ -337,11 +337,19 @@ def write_brief(item, policy: dict) -> str:
     stop = ", ".join(gates.stop_and_ask_actions(policy))
     never = ", ".join(policy.get("never", []))
     # The lane is TOLD its review requirement rather than left to infer it.
-    # W0 ran nine rounds with two reviewers because it was the merge gate; an
+    # W0 ran eight posted rounds with two reviewers because it was the merge gate; an
     # ordinary lane gets one, escalating on a finding or on a guard/deploy/
     # console path.
+    # The STREAM is authoritative here and the lane is only a hint: at brief
+    # time the diff does not exist, so the path set is a guess. `footprint_known`
+    # is False whenever the lane is missing or unmapped, which makes the guess
+    # fail CLOSED instead of quietly returning the default.
+    lane_path = gates.LANE_PATHS.get(item.lane or "")
     reviewers, why_reviewers = gates.review_requirement(
-        policy, changed_paths=[gates.LANE_PATHS.get(item.lane or "", item.lane or "")]
+        policy,
+        changed_paths=[lane_path] if lane_path else [],
+        stream=item.stream,
+        footprint_known=bool(lane_path),
     )
     return f"""### Lane {item.lane} - issue #{item.number} ({item.stream}, {item.size}pt)
 

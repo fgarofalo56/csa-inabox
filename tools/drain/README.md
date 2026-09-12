@@ -160,12 +160,12 @@ were absent until 2026-09-12, so the check refused them — which made every
 everything. A capability the operator has granted and the file does not list is
 a capability the harness does not have.
 
-**Independent review: one reviewer, escalating.** W0 took nine rounds with two
+**Independent review: one reviewer, escalating.** W0 took eight posted rounds with two
 reviewers because it *was* the merge gate; at ~296 issues that is not the
 default. `gates.review_requirement()` returns 2 when the first reviewer returns
 REQUEST-CHANGES or CANNOT-ASSESS, or when the diff touches a guard, a deploy
 path, bicep or a console surface — the failure modes a single reviewer was
-observed to miss in six of those nine rounds. Every brief states its own
+observed to miss in most of those rounds. Every brief states its own
 requirement rather than leaving the lane to infer it.
 
 **How to write a verdict that registers — POSITION, not idiom.**
@@ -244,8 +244,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 219 tests across every module
-python tools/drain/mutate_gates.py           # 93 arms, must be 93 KILLED
+python -m pytest tools/drain/__tests__ -q    # 234 tests across every module
+python tools/drain/mutate_gates.py           # 101 arms, must be 101 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -327,8 +327,8 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs all seven against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 93 mutation arms against a sandbox copy; must be 93 KILLED |
+| `mutate_gates.py` | 101 mutation arms against a sandbox copy; must be 101 KILLED |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 219 tests; a negative control for every decision function |
+| `__tests__/` | 234 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

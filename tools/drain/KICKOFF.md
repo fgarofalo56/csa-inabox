@@ -43,8 +43,11 @@ and `preflight-casedrop.py` out of temp/ into tools/drain with tests, and close
 
 ## Where this stands
 
-**The harness is on main.** PR #4483 merged at `a02cd41e6d42` after nine
-independent review rounds. `tools/drain/` is tracked, tested and CI-enforced;
+**The harness is on main.** PR #4483 merged at `a02cd41e6d42` after **eight
+posted** independent review rounds — count them yourself with
+`gh pr view 4483 --json comments`; an earlier draft of this file said nine,
+which is the kind of unverifiable number a cold start should not inherit.
+`tools/drain/` is tracked, tested and CI-enforced;
 `merge_gate.py` is the production caller that decides GO/NO-GO, and it refused
 its own PR twice before letting it through.
 
@@ -64,8 +67,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 219 pass
-python tools/drain/mutate_gates.py       # 93 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 234 pass
+python tools/drain/mutate_gates.py       # 101 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

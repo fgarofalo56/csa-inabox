@@ -540,20 +540,81 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "R1b the brief passes the LANE NAME where a PATH belongs, so nothing escalates",
         "tick.py",
-        "        policy, changed_paths=[gates.LANE_PATHS.get(item.lane or \"\", item.lane or \"\")]",
-        '        policy, changed_paths=[item.lane or ""]',
+        '    lane_path = gates.LANE_PATHS.get(item.lane or "")',
+        '    lane_path = item.lane or ""',
     ),
     (
         "R2 a REQUEST-CHANGES from the first reviewer stops escalating",
         "gates.py",
-        "    if first_verdict in BLOCKING_TOKENS:",
+        '    if review.get("escalate_on_blocking_first_verdict", True) and first_verdict:',
         "    if False:",
     ),
     (
+        # NOT `_ = (gates.review_requirement,` spliced before the original call
+        # -- that leaves a keyword argument inside a tuple display, so the arm
+        # died of a SyntaxError at collection (rc=2, zero FAILED lines). A
+        # mutant killed by a crash measures nothing about the suite, and the
+        # runner scored it alongside the genuine kills. Both reviewers caught
+        # it. Anchor the WHOLE call and replace it with something that parses.
         "R3 the brief stops telling the lane its review requirement",
         "tick.py",
-        "    reviewers, why_reviewers = gates.review_requirement(",
-        "    reviewers, why_reviewers = (1, 'unstated')\n    _ = (gates.review_requirement, ",
+        ("    reviewers, why_reviewers = gates.review_requirement(\n"
+         "        policy,\n"
+         "        changed_paths=[lane_path] if lane_path else [],\n"
+         "        stream=item.stream,\n"
+         "        footprint_known=bool(lane_path),\n"
+         "    )"),
+        '    reviewers, why_reviewers = (1, "default for an ordinary lane")',
+    ),
+    (
+        "R4 the escalation list stops being READ from the authority",
+        "gates.py",
+        '    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))',
+        ('    _ = policy\n'
+         '    return ("tools/drain", "scripts/ci", ".github/workflows",\n'
+         '            "platform/fiab/bicep", "apps/fiab-console", "deploy/")'),
+    ),
+    (
+        "R5 an unknown file footprint falls OPEN to the default again",
+        "gates.py",
+        '    if not footprint_known and review.get("escalate_when_footprint_unknown", True):',
+        "    if False:",
+    ),
+    (
+        "R6 the STREAM stops escalating, so an unlaned W0/W1 item gets one reviewer",
+        "gates.py",
+        "    if stream and stream in escalation_streams(policy):",
+        "    if False:",
+    ),
+    (
+        "R7 the reviewer COUNT stops being enforced at the merge gate",
+        "merge_gate.py",
+        "        len(approvals) >= needed,",
+        "        True,",
+    ),
+    (
+        "R8 the merge gate counts reviewers from a LANE GUESS, not the real diff",
+        "merge_gate.py",
+        '        policy, changed_paths=data.get("changed_files") or [], footprint_known=True',
+        "        policy, changed_paths=[], footprint_known=True",
+    ),
+    (
+        "R9 a blocking first verdict is matched by EXACT TOKEN, so a spelling reduces it",
+        "gates.py",
+        '        if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:',
+        "        if first_verdict in BLOCKING_TOKENS:",
+    ),
+    (
+        "B1 #4487 falls through to W4-receipts on its TITLE, demanding an estate receipt",
+        "build_inventory.py",
+        "HARNESS = {4466, 4467, 4468, 4469, 4485, 4487}",
+        "HARNESS = {4466, 4467, 4468, 4469}",
+    ),
+    (
+        "P11 a policy read via a LOCAL ALIAS is invisible to the allow-list scan",
+        "gates.py",
+        "            if re.search(alias, sources):",
+        "            if False:",
     ),
     (
         "P10 the section half of the policy-read scan rejects `.get(` again",

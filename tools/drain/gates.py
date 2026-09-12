@@ -189,7 +189,10 @@ OTHER_IMPLEMENTED_BY = {
     "never": "gates.action_is_permitted",
     "stop_and_ask": "gates.action_is_permitted",
     "review.independent_reviewers_default": "gates.review_requirement",
-    "review.escalate_to_two_when": "gates.review_requirement",
+    "review.escalate_to_two_when_path_contains": "gates.escalation_paths",
+    "review.escalate_to_two_when_stream_is": "gates.escalation_streams",
+    "review.escalate_on_blocking_first_verdict": "gates.review_requirement",
+    "review.escalate_when_footprint_unknown": "gates.review_requirement",
 }
 # Keys that are DELIBERATELY prose: they address the operator, not the program.
 # Listing them is the point -- an undeclared unconsulted key is indistinguishable
@@ -336,6 +339,20 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
         if sub:
             # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
             # chain, so the sub-key's own spelling cannot collide with anything.
+            #
+            # ...but a read split ACROSS TWO STATEMENTS is not a chain: bind the
+            # section to a local first, then subscript the local on the next
+            # line. The bridge cannot span that, so `review.*` keys could be moved
+            # onto the operator-documentation allow-list undetected while
+            # `review_requirement` still read them. The local-alias form is
+            # matched separately, keyed to the SECTION NAME as a receiver --
+            # which is the spelling that makes an alias readable in the first
+            # place.
+            alias = (r"\b" + re.escape(section) + r"\s*(?:\[|\.get\()\s*[\"']"
+                     + re.escape(sub) + r"[\"']")
+            if re.search(alias, sources):
+                found.append(dotted)
+                continue
             #
             # BOTH halves accept `.get(`, not just the sub half. The asymmetry
             # missed `policy.get("wip", {})["max_lanes"]` -- and `.get(` is this
@@ -1120,48 +1137,88 @@ def action_is_permitted(action: str, policy: dict) -> tuple[bool, str]:
     return False, "not in permitted_unattended - fails closed, add it to policy.json deliberately"
 
 
-# Paths whose diffs escalate to a second independent reviewer regardless of the
-# first verdict. Keyed to what the path DECIDES, not to a file list: a guard, a
-# deploy path and a console surface each have a failure mode that one reviewer
-# demonstrably missed during W0 -- in six of nine rounds the second reviewer
-# found something the first did not.
-ESCALATION_PATHS = ("tools/drain", "scripts/ci", ".github/workflows",
-                    "platform/fiab/bicep", "apps/fiab-console", "deploy/")
+def escalation_paths(policy: dict) -> tuple[str, ...]:
+    """Path fragments that escalate, READ FROM THE AUTHORITY.
+
+    This was a hardcoded tuple while `policy.json` carried four English
+    sentences declared as its implementation. The list could be emptied,
+    inverted or deleted and every decision stayed identical -- the
+    `marker_any_of` defect (a policy value duplicating a constant, so editing
+    the authority changes nothing) reintroduced one release after it was fixed.
+    Two independent reviewers found it in the same round.
+    """
+    return tuple(policy.get("review", {}).get("escalate_to_two_when_path_contains", ()))
+
+
+def escalation_streams(policy: dict) -> tuple[str, ...]:
+    """Workstreams that escalate whatever the diff turns out to touch."""
+    return tuple(policy.get("review", {}).get("escalate_to_two_when_stream_is", ()))
+
 
 # What each lane OWNS. A lane name is not a path -- `lane:console` contains no
 # substring of `apps/fiab-console` -- so a brief that passed the lane string
 # straight to the path test silently never escalated. Measured: the console
 # lane, which is the one `ux-baseline` G1 cares most about, asked for one
 # reviewer.
+#
+# This map is a GUESS and is treated as one. A `lane:dataplane` fix can land in
+# bicep, a workflow or a console surface, and `domains/` matches none of them --
+# which is why an item's STREAM is consulted too, and why an unmapped lane
+# escalates instead of falling through.
 LANE_PATHS = {
     "lane:console": "apps/fiab-console",
     "lane:bicep": "platform/fiab/bicep",
     "lane:ci": "scripts/ci",
     "lane:dataplane": "domains/",
+    "lane:docs": "docs/",
 }
 
 
 def review_requirement(policy: dict, changed_paths: list[str] | None = None,
-                       first_verdict: str | None = None) -> tuple[int, str]:
-    """How many independent reviewers this diff needs, and why.
+                       first_verdict: str | None = None,
+                       stream: str | None = None,
+                       footprint_known: bool = True) -> tuple[int, str]:
+    """How many independent reviewers this change needs, and why.
 
     Operator decision 2026-09-12. W0 -- the merge gate itself -- took nine
     rounds with two reviewers, and that was right for the program that decides
     every merge. It is NOT the default for ordinary lanes: at ~296 issues it
-    would dominate the run. One reviewer, escalating on a finding or on a
-    path whose failure mode one reviewer has been observed to miss.
+    would dominate the run.
 
-    Returns (reviewers, reason) so a brief can state the requirement rather
-    than leave the lane to infer it.
+    FAILS CLOSED on an unknown footprint. The decision is usually taken at brief
+    time, from a LANE, before the diff exists -- so the path set is a guess. An
+    item with no lane produced `changed_paths=[""]`, matched nothing, and got
+    one reviewer: 28 of 299 live items, including all four W0-harness ones and
+    nine W1-deploy ones, i.e. precisely the diffs the policy says need two.
+    Every sibling control in this module fails closed; this one fell open.
+
+    Returns (reviewers, reason) so a brief can state the requirement rather than
+    leave the lane to infer it.
     """
     review = policy.get("review", {})
     default = int(review.get("independent_reviewers_default", 1))
-    if first_verdict in BLOCKING_TOKENS:
-        return 2, f"the first reviewer returned {first_verdict}"
+
+    if review.get("escalate_on_blocking_first_verdict", True) and first_verdict:
+        # Shape, not spelling: `parse_verdicts` spends a whole apparatus on the
+        # fact that "CHANGES REQUIRED" is a block written the wrong way. A
+        # reviewer count that only recognised the exact token would let
+        # formatting reduce a block to "one reviewer was enough".
+        upper = first_verdict.upper()
+        if any(t in upper for t in BLOCKING_TOKENS) or "CHANGES REQUIRED" in upper:
+            return 2, f"the first reviewer returned {first_verdict.strip()!r}"
+
+    if stream and stream in escalation_streams(policy):
+        return 2, f"{stream} escalates whatever the diff turns out to touch"
+
     for path in changed_paths or []:
-        hit = next((p for p in ESCALATION_PATHS if p in path.replace("\\", "/")), None)
+        normalized = path.replace("\\", "/")
+        hit = next((p for p in escalation_paths(policy)
+                    if normalized.startswith(p) or f"/{p}" in normalized), None)
         if hit:
             return 2, f"the diff touches {hit} - a guard, deploy or console surface"
+
+    if not footprint_known and review.get("escalate_when_footprint_unknown", True):
+        return 2, "the change's file footprint is not known yet - failing closed"
     return default, "default for an ordinary lane"
 
 

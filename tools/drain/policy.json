@@ -37,12 +37,27 @@
   "review": {
     "_": "Operator decision 2026-09-12, after W0 took NINE rounds with two reviewers. That intensity was right for the merge gate ITSELF and is not the default for ordinary lanes. Read by tick.write_brief so every lane is told its own review requirement.",
     "independent_reviewers_default": 1,
-    "escalate_to_two_when": [
-      "the first reviewer returns REQUEST-CHANGES or CANNOT-ASSESS",
-      "the diff touches tools/drain, scripts/ci, or any guard",
-      "the diff touches a deploy path, a workflow, or bicep",
-      "the diff touches a console surface"
+    "_escalate": "MACHINE-READABLE ON PURPOSE. The first version of this key was four English sentences while a hardcoded ESCALATION_PATHS tuple did the work -- so the list could be emptied, inverted or deleted and every decision stayed identical. That is the marker_any_of defect this module found and fixed two rounds ago, reintroduced one release later. gates.ESCALATION_PATHS is DERIVED from this list and a test locks the two together.",
+    "escalate_to_two_when_path_contains": [
+      "tools/drain",
+      "scripts/ci",
+      "dev-loop/gates",
+      ".github/workflows",
+      "platform/fiab/bicep",
+      "deploy/",
+      "apps/fiab-console"
     ],
+    "escalate_to_two_when_stream_is": [
+      "W0-harness",
+      "W1-deploy",
+      "W2-security",
+      "W3-gov",
+      "W5-console",
+      "W7-bicep"
+    ],
+    "escalate_on_blocking_first_verdict": true,
+    "escalate_when_footprint_unknown": true,
+    "_unknown": "FAILS CLOSED. The escalation decision is taken from a LANE at brief time, before the diff exists, so the footprint is a guess. An unmapped lane, an item with no lane at all (28 of 299 live, including every W0-harness item), or a lane whose mapping is missing must escalate rather than fall through to the default. Every sibling control in this file fails closed; this one fell open.",
     "writer_is_never_the_reviewer": "enforced by TOOL ACCESS, not by instruction: the reviewer agent is read-only"
   },
 

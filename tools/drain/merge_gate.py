@@ -183,6 +183,14 @@ def collect(repo: str, number: int) -> dict:
         "open issue numbers",
     )
 
+    # The REAL changed files. At brief time the harness only has a lane to guess
+    # from; here the diff exists, so the reviewer-count decision is made on fact
+    # rather than on a lane-to-path map that cannot know where a fix will land.
+    rc, out, err = sh(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"])
+    if rc != 0:
+        raise SystemExit(f"cannot read the changed files of #{number} (rc={rc}): {err[:300]}")
+    changed_files = [line.strip() for line in out.splitlines() if line.strip()]
+
     head_runs = gh_json(
         ["gh", "api", f"repos/{repo}/commits/{head}/check-runs",
          "--jq", ("{n: .total_count, waiting: ([.check_runs[] | "
@@ -200,6 +208,7 @@ def collect(repo: str, number: int) -> dict:
         "origin_main_sha": origin_main_sha,
         "open_issues": open_issues,
         "head_runs": head_runs,
+        "changed_files": changed_files,
         "required": required_contexts(repo),
     }
 
@@ -253,6 +262,25 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None) ->
         f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
     )
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
+
+    # 3b -- HOW MANY independent reviewers, enforced here rather than described
+    # in a brief. `review_requirement` is computed from the PR's REAL changed
+    # files, not from a lane guess, because here the diff exists. Stated in a
+    # brief and enforced nowhere, the count was the shape this module was
+    # written to end: "the briefs restated the gates as instructions to an
+    # agent, so at run time GO/NO-GO was still a judgement".
+    approvals = [v for v in live if v.token == "APPROVE"]
+    needed, why_needed = gates.review_requirement(
+        policy, changed_paths=data.get("changed_files") or [], footprint_known=True
+    )
+    record(
+        "3b independent reviewers",
+        len(approvals) >= needed,
+        f"{len(approvals)} live APPROVE of {needed} required - {why_needed}"
+        + ("" if len(approvals) >= needed else
+           ". A second reviewer must be independently briefed and their verdict POSTED "
+           "to the PR - a verdict returned to the coordinator is not a verdict."),
+    )
 
     # 4 -- required contexts present, none RED, none INCOMPLETE.
     rollup = pr.get("statusCheckRollup") or []

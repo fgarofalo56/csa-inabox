@@ -199,6 +199,27 @@ def test_an_unrelated_literal_does_not_cry_wolf():
     assert "scope.target" not in gates._documentation_keys_that_are_actually_read()
 
 
+def test_negative_control_a_key_read_via_a_local_alias_is_caught():
+    """The chained-subscript scan spans ONE LINE, and `review_requirement` reads
+    its keys across two statements -- bind the section to a local, subscript the
+    local on the next line. So every `review.*` key could be moved onto the
+    operator-documentation allow-list undetected while the function still read
+    it: the allow-list becoming an off switch, by a two-line read rather than by
+    a spelling."""
+    original_map = dict(gates.OTHER_IMPLEMENTED_BY)
+    original_doc = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OTHER_IMPLEMENTED_BY.pop("review.independent_reviewers_default")
+    gates.OPERATOR_DOCUMENTATION.add("review.independent_reviewers_default")
+    try:
+        with pytest.raises(ValueError, match="READ by the code"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OTHER_IMPLEMENTED_BY.clear()
+        gates.OTHER_IMPLEMENTED_BY.update(original_map)
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original_doc)
+
+
 def test_negative_control_the_other_mapping_is_resolution_checked_too():
     """`OTHER_IMPLEMENTED_BY` was exempt from resolution, so a bogus target was
     accepted there while the same trick was refused in the two gate sections."""
@@ -236,6 +257,95 @@ def test_negative_control_a_pause_the_harness_cannot_undo_is_not_shipped():
     assert ("resume-estate" in POLICY["permitted_unattended"]) == (
         "pause-estate" in POLICY["permitted_unattended"]
     )
+
+
+def test_the_escalation_list_is_read_from_the_authority_not_hardcoded():
+    """THE defect two independent reviewers found in the same round: the policy
+    held four English sentences while a hardcoded `ESCALATION_PATHS` tuple did
+    the work, so the list could be emptied, inverted or deleted and every
+    decision stayed identical. That is `marker_any_of` reintroduced one release
+    after it was fixed. Editing the authority must change the answer."""
+    gutted = {**POLICY, "review": {**POLICY["review"],
+                                   "escalate_to_two_when_path_contains": []}}
+    n, _ = gates.review_requirement(gutted, changed_paths=["tools/drain/gates.py"])
+    assert n == 1, "emptying the authority must stop escalating"
+
+    widened = {**POLICY, "review": {**POLICY["review"],
+                                    "escalate_to_two_when_path_contains": ["docs/"]}}
+    n, why = gates.review_requirement(widened, changed_paths=["docs/whatever.md"])
+    assert n == 2, f"adding to the authority must start escalating: {why}"
+
+
+def test_the_default_is_read_from_the_authority():
+    """The one key that WAS consulted had no test that a policy edit propagates
+    -- hardcoding `default = 1` survived, because the shipped value is 1."""
+    raised = {**POLICY, "review": {**POLICY["review"], "independent_reviewers_default": 3}}
+    n, _ = gates.review_requirement(raised, changed_paths=["docs/x.md"])
+    assert n == 3
+
+
+def test_the_stream_escalates_whatever_the_diff_touches():
+    """A lane is a guess about the footprint; a stream is a fact about the work.
+    Every W0-harness item is a `tools/drain` diff by construction."""
+    for stream in ("W0-harness", "W1-deploy", "W2-security", "W5-console", "W7-bicep"):
+        n, why = gates.review_requirement(POLICY, changed_paths=[], stream=stream)
+        assert n == 2, f"{stream}: {why}"
+    n, _ = gates.review_requirement(POLICY, changed_paths=["domains/x.sql"],
+                                    stream="W8-dataplane")
+    assert n == 1
+
+
+def test_negative_control_an_unknown_footprint_fails_closed():
+    """28 of 299 live items carry no lane, so `changed_paths=[""]` matched
+    nothing and they got ONE reviewer -- including all four W0-harness items and
+    nine W1-deploy ones, i.e. exactly the diffs the policy says need two. Every
+    sibling control in this module fails closed; this one fell open."""
+    n, why = gates.review_requirement(POLICY, changed_paths=[], footprint_known=False)
+    assert n == 2
+    assert "not known" in why
+
+
+def test_every_lane_label_in_the_repo_maps_to_a_path():
+    """A lane with no mapping fell through to the default. `lane:docs` exists on
+    GitHub and had no entry, so it silently yielded one reviewer with no error."""
+    for lane in ("lane:console", "lane:bicep", "lane:ci", "lane:dataplane", "lane:docs"):
+        assert lane in gates.LANE_PATHS, lane
+
+
+def test_negative_control_each_escalating_lane_is_pinned_individually():
+    """Arms that deleted the bicep and ci rows both SURVIVED a full suite: 31 and
+    33 laned items would silently drop from two reviewers to one, over a green
+    93/93 matrix."""
+    for lane, expected in (("lane:console", 2), ("lane:bicep", 2),
+                           ("lane:ci", 2), ("lane:dataplane", 1), ("lane:docs", 1)):
+        n, why = gates.review_requirement(
+            POLICY, changed_paths=[gates.LANE_PATHS[lane]], stream="W9-rest")
+        assert n == expected, f"{lane} -> {n}, expected {expected}: {why}"
+
+
+def test_negative_control_a_blocking_first_verdict_is_matched_by_shape():
+    """`parse_verdicts` spends a whole apparatus on the fact that
+    "CHANGES REQUIRED" is a block written the wrong way. A reviewer count that
+    recognised only the exact token would let formatting reduce a block to
+    "one reviewer was enough"."""
+    for spelling in ("REQUEST-CHANGES", "request-changes", "REQUEST-CHANGES ",
+                     "## Independent review - REQUEST-CHANGES", "CHANGES REQUIRED",
+                     "CANNOT-ASSESS"):
+        n, why = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                          first_verdict=spelling)
+        assert n == 2, f"{spelling!r}: {why}"
+    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/x.md"],
+                                    first_verdict="APPROVE")
+    assert n == 1
+
+
+def test_negative_control_the_deploy_fragment_is_anchored():
+    """A bare substring made `docs/how-we-deploy/notes.md` escalate. Safe
+    direction, but a guard that cries wolf is a guard people route around."""
+    n, _ = gates.review_requirement(POLICY, changed_paths=["docs/how-we-deploy/notes.md"])
+    assert n == 1
+    n, _ = gates.review_requirement(POLICY, changed_paths=["deploy/main.bicep"])
+    assert n == 2
 
 
 def test_an_ordinary_lane_gets_one_reviewer():

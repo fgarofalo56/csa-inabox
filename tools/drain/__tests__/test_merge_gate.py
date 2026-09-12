@@ -64,6 +64,7 @@ def _data(**over) -> dict:
         "origin_main_sha": "b" * 40,
         "open_issues": [1, 2, 3],
         "head_runs": {"n": 12, "waiting": 0},
+        "changed_files": ["domains/sales/models/x.sql"],
         "required": list(REQUIRED),
     }
     for key, value in over.items():
@@ -128,6 +129,44 @@ def test_negative_control_a_live_block_is_not_discharged_by_a_later_approve():
     ])
     assert result["verdict"] == "NO-GO"
     assert "REQUEST-CHANGES" in _gate(result, "2+3")["detail"]
+
+
+def test_negative_control_a_guard_diff_needs_two_approvals():
+    """The reviewer count ENFORCED, not described. Stated in a brief and
+    enforced nowhere, it was the shape this module exists to end: a `tools/drain`
+    PR that `review_requirement` says needs two reviewers merged GO on one
+    APPROVE. And here the diff EXISTS, so the decision is made on the real
+    changed files rather than on a lane-to-path guess."""
+    one = _run(changed_files=["tools/drain/gates.py"])
+    assert one["verdict"] == "NO-GO"
+    assert not _gate(one, "3b")["ok"]
+    assert "1 live APPROVE of 2 required" in _gate(one, "3b")["detail"]
+
+    two = _run(changed_files=["tools/drain/gates.py"], comments=[
+        APPROVAL,
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nsecond pair of eyes.",
+         "created_at": "2026-09-11T12:00:00Z"},
+    ])
+    assert two["verdict"] == "GO", two["blocking"]
+
+
+def test_an_ordinary_diff_merges_on_one_approval():
+    """The control. Without it the rule above could simply be "always two", and
+    at ~296 issues that dominates the run."""
+    result = _run(changed_files=["domains/sales/models/x.sql"])
+    assert result["verdict"] == "GO", result["blocking"]
+    assert _gate(result, "3b")["ok"]
+
+
+def test_negative_control_the_count_is_taken_from_the_real_changed_files():
+    """Not from a lane guess. A console diff filed under any lane still needs
+    two, because here `gh pr diff --name-only` has already answered the question
+    the brief could only guess at."""
+    for path in ("apps/fiab-console/app/page.tsx", "platform/fiab/bicep/main.bicep",
+                 ".github/workflows/deploy-fiab-commercial.yml", "scripts/ci/check-x.mjs",
+                 "dev-loop/gates/validate-all.ps1", "deploy/main.bicep"):
+        result = _run(changed_files=[path])
+        assert result["verdict"] == "NO-GO", f"{path} merged on one approval"
 
 
 def test_negative_control_a_red_required_context_blocks():
