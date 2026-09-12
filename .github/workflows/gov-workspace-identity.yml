@@ -71,7 +71,7 @@ env:
 jobs:
   identity:
     name: Gov workspace-scoped identity E2E
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout (workspace-grants.ts is the grant-matrix source of truth)

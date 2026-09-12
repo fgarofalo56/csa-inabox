@@ -89,7 +89,7 @@ jobs:
   drift-commercial:
     name: What-if vs live Commercial estate
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     env:
       CLOUD_LABEL: commercial
@@ -436,7 +436,7 @@ jobs:
   precheck-gov:
     name: Verify Gov secrets are configured
     if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -458,7 +458,7 @@ jobs:
     name: What-if vs live Gov (GCC-High) estate
     needs: precheck-gov
     if: needs.precheck-gov.outputs.configured == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     env:
       CLOUD_LABEL: gov

@@ -95,7 +95,7 @@ permissions:
 jobs:
   build:
     name: next build (node 20)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     defaults:
       run:
@@ -305,7 +305,7 @@ jobs:
 
   vitest:
     name: vitest (node 20)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # 45m (was 25m, then 40m, then 55m). Two things trade time for correctness
     # here: the coverage provider is istanbul (Babel instrumentation costs wall
     # clock that v8's runtime-derived coverage did not) and maxForks is capped
@@ -800,7 +800,7 @@ jobs:
     # the coverage step below — that single edit permanently enforces
     # "every item/app/feature has a screenshot set".
     name: visual-tutorial coverage (report)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -827,7 +827,7 @@ jobs:
   # local `node --test` nobody runs. Pure node:test -- no install, no network.
   loom-sharing:
     name: loom-sharing entrypoint (node 20)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -863,7 +863,7 @@ jobs:
   # Pure node:test -- no install, no network, ~20s.
   node-test-suites:
     name: 'node:test suites (node 20)'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -899,7 +899,7 @@ jobs:
   # result can be discarded is not a gate.
   security-graph-artifact:
     name: 'brain security graph — committed artifact matches the tree'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4

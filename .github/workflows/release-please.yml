@@ -220,7 +220,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Raised from 45: the step below dispatches the producing workflows and then
     # WAITS for them to conclude before bridging any result. The budget is sized
     # from the slowest observed producer run (fiab-console-ci, 2083s) plus

@@ -108,7 +108,7 @@ env:
 jobs:
   precheck:
     name: Verify Gov secrets are configured
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -152,7 +152,7 @@ jobs:
     name: Deploy + validate CSA Loom in IL5
     needs: [precheck, build-gov-images]
     if: always() && needs.precheck.outputs.configured == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 150
     environment: il5-deploy   # requires manual approval
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).

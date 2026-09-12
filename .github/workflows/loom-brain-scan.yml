@@ -207,7 +207,7 @@ jobs:
   # and its transient-failure control with `gh`/`jq`/`sleep` stubbed.
   queue-watchdog:
     name: Queue watchdog
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7.0.1
@@ -534,7 +534,7 @@ jobs:
     # red was not — it was an untracked one that also drowned the Commercial
     # signal, which is why the schedule trigger came off above. Making this
     # green would be a false claim; running it nightly was a costly one.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     outputs:
       verdict: ${{ steps.scan.outputs.verdict }}

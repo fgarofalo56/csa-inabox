@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   drain:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     env:
       COSMOS_ENDPOINT: ${{ vars.COPILOT_COSMOS_ENDPOINT }}

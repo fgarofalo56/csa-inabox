@@ -91,7 +91,7 @@ env:
 
 jobs:
   pre-flight:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
@@ -132,7 +132,7 @@ jobs:
   cosmos-pitr-restore:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'cosmos')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 150
     environment: ${{ needs.pre-flight.outputs.environment }}
     env:
@@ -332,7 +332,7 @@ jobs:
   adls-softdelete-restore:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'adls-softdelete-restore')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     environment: ${{ needs.pre-flight.outputs.environment }}
     env:
@@ -429,7 +429,7 @@ jobs:
   storage-failover:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'storage-failover')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
@@ -452,7 +452,7 @@ jobs:
   keyvault-restore:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'keyvault-restore')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     environment: ${{ needs.pre-flight.outputs.environment }}
     env:
@@ -524,7 +524,7 @@ jobs:
   bicep-rollback:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'bicep-rollback')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     environment: ${{ needs.pre-flight.outputs.environment }}
     steps:
@@ -540,7 +540,7 @@ jobs:
   report:
     needs: [pre-flight, cosmos-pitr-restore, adls-softdelete-restore, storage-failover, keyvault-restore, bicep-rollback]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     steps:
       - name: Aggregate drill results
