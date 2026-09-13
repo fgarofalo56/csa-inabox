@@ -104,8 +104,13 @@ without anyone noticing.
   carried forward.
 - A brief is self-contained: it restates the traps, the gates and the acceptance
   for that item. An agent never needs the previous cycle's transcript.
-- `KICKOFF.md` is **regenerated every cycle**, so a cold start reads current
-  truth rather than a stale handoff.
+- `KICKOFF.md` is **hand-maintained, NOT regenerated** — measured 2026-09-13:
+  `grep -n KICKOFF tools/drain/tick.py` returns nothing. This line used to claim
+  it was regenerated every cycle, which is exactly the unconsulted-claim defect
+  this package keeps finding, in the document that defines the defect. Its FIRST
+  TASK section had gone stale and named work already done. It now carries its own
+  "last hand-updated" date and an instruction to re-check against `--status`
+  before pasting. Regenerating it from the ledger is an owed capability.
 - Agent output is written to the ledger as structured results, not prose.
   Prose that matters goes into the issue or the PR, where the next reader is.
 

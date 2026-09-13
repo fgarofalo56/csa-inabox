@@ -38,7 +38,8 @@ tick.py                              ledger (state.json)
                                           `needs-audit`, NEVER to `closed`
   3 REAP       --reap                 ->  return stranded in-flight lanes to ready
   4 SELECT     next lane set          ->  stream order, file-disjoint, WIP-capped
-  5 EMIT       briefs + this runbook  ->  self-contained, regenerated every cycle
+  5 EMIT       per-lane briefs        ->  self-contained, regenerated every cycle
+                                          (KICKOFF.md is NOT: it is hand-kept)
 
   agents run the briefs -> results go back into the ledger -> tick.py again
 ```

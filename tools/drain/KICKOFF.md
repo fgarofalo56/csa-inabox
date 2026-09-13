@@ -3,6 +3,15 @@
 Paste the block below as the first message of a fresh session. It is
 self-contained — it assumes no memory of how the harness got here.
 
+**This file is HAND-MAINTAINED, not generated.** `README.md` says KICKOFF is
+"regenerated every cycle"; `tick.py` contains no reference to it (`grep -n
+KICKOFF tools/drain/tick.py` returns nothing). That claim is prose, and this
+note exists so the next reader does not trust a freshness the program does not
+provide. **Re-read the FIRST TASK section against `--status` before pasting** —
+it was stale once already, naming work that had since been done.
+
+Last hand-updated: 2026-09-13.
+
 ---
 
 ```
@@ -52,11 +61,28 @@ Scope and autonomy are already decided — do not re-ask them:
     only if auth fails.
   - policy.json is the authority for what you may not do. It fails closed.
 
-FIRST TASK, before draining anything else: #4487 — the `ci-green` receipt names a
-measurement the CI topology cannot produce, so NO guard/test-only issue can reach
-a terminal state until it is fixed. Then #4468's remainder: port `unblock-git.py`
-and `preflight-casedrop.py` out of temp/ into tools/drain with tests, and close
-#4468 on its own checklist. Both are W0 — finish the gate before trusting it.
+FIRST TASK, before draining anything else — check each against live state, because
+this list is hand-maintained and was stale once already:
+
+  1. #4487 (W0) — PR #4491 is OPEN and BLOCKED on its third round of independent
+     review. The `ci-green` receipt was redefined and two blockers fixed, but the
+     re-review found the same defect ONE BRANCH ALONG: `green-at-merge` in
+     `gates.py` still accepts a check conclusion alone, without asking whether
+     the job EXECUTED anything — and that branch carries 14 of 15 contexts on a
+     typical PR. It is live: PR #4488 returns `RECEIPT: GREEN` while `next build
+     (node 20)` concluded success with 12 of 17 steps skipped. Also open on that
+     PR: `_is_bookkeeping_step` misclassifies six real step names (`Post HIGH
+     findings to PR`) in the EXCUSING direction, and six reviewer-written
+     mutation arms survived. Until this lands, NO guard/test-only issue can reach
+     a terminal state, so it gates the whole drain.
+  2. #4468's remainder — port `unblock-git.py` and `preflight-casedrop.py` out of
+     `temp/` into `tools/drain` with tests, then close #4468 on its own checklist.
+  3. PR #4492 (CI runners) may still be open. It moves CI onto in-VNet Azure
+     Container Apps runners behind the `CI_RUNNER` repo variable, which IS SET —
+     so CI already runs there. If the fleet misbehaves, the whole rollback is
+     `gh variable delete CI_RUNNER`. Do not merge it without two posted verdicts.
+
+Both #4487 and #4468 are W0 — finish the gate before trusting it.
 ```
 
 ---
