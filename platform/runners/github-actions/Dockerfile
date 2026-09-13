@@ -231,6 +231,41 @@ RUN set -euo pipefail; \
     rustup --version; \
     cargo --version
 
+# --- tell self-sizing tools the CGROUP's size, not the NODE's ---------------
+#
+# THE ROOT CAUSE OF THE TIMEOUT CANCELLATIONS, and it is not obvious from the
+# symptom. This PR's own capability probe, run inside the job, reports:
+#
+#     cpus   : 8       <- the D8 NODE
+#     memory : 31Gi    <- the D8 NODE
+#
+# while the container's cgroup is 4 vCPU / 16 GiB. `nproc`, libuv, jest, vitest,
+# pnpm, cargo and Next.js all size their worker pools from what they observe, so
+# every one of them span up 8 workers onto 4 cores. The fleet came out 2-3x
+# slower than ubuntu-latest and four REQUIRED contexts were CANCELLED at exactly
+# their `timeout-minutes` -- `next build` missed by 35 seconds.
+#
+# Raising `replicaTimeout` (done, 9600s) stops ACA killing the replica; it does
+# NOT stop GitHub cancelling the job at its own cap, and it does not make the
+# over-subscription go away. These variables do, by telling each toolchain the
+# number it should have measured.
+#
+# Keep in step with the `cpu` param of gh-runner-job.bicep. Wrong-way drift here
+# is silent: too high re-creates the over-subscription, too low wastes cores.
+# EVERY VARIABLE BELOW IS ONE A REAL TOOL READS. The first draft of this block
+# also set `JEST_WORKERS` and `LOOM_RUNNER_VCPU` -- Jest has no such variable
+# (it takes `--maxWorkers`), and nothing anywhere reads the second. Shipping
+# them would have been the unconsulted-key defect this repo keeps finding, in
+# the fix for a different one. Jest's worker count must be passed at the call
+# site; it is not settable from here.
+ENV UV_THREADPOOL_SIZE=4
+ENV NODE_OPTIONS="--max-old-space-size=12288"
+ENV VITEST_MAX_THREADS=4
+ENV VITEST_MIN_THREADS=1
+ENV CARGO_BUILD_JOBS=4
+ENV MAKEFLAGS="-j4"
+ENV PYTEST_XDIST_AUTO_NUM_WORKERS=4
+
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
 # Strip CRLF: a Windows checkout (core.autocrlf) can hand the build context an
 # entrypoint.sh with \r\n line endings — the container then dies at start with
