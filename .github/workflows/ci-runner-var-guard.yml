@@ -1,0 +1,81 @@
+name: CI_RUNNER is a well-formed runner label set
+
+# The one state of `vars.CI_RUNNER` that FAILS OPEN.
+#
+# 102 workflows route through `runs-on: ${{ fromJSON(vars.CI_RUNNER ||
+# '["ubuntu-latest"]') }}`. Measured by an independent reviewer on PR #4492:
+#
+#   unset / empty / malformed JSON  -> fail CLOSED (the job does not start)
+#   a JSON ARRAY                    -> correct
+#   a JSON SCALAR, e.g. "self-hosted"
+#                                   -> `fromJSON` returns a STRING, `runs-on:
+#                                      <string>` is legal YAML, and the job
+#                                      routes to ANY self-hosted runner with no
+#                                      `loom-aca` narrowing.
+#
+# There is no way to assert array-ness inside a GitHub expression, so this is
+# DETECTION rather than prevention, and it says so. Today the practical blast
+# radius is nil because exactly one self-hosted fleet is registered on this
+# repo — but that is a fact about the present, not a property of the design,
+# and the moment a second fleet exists a scalar silently misroutes every job.
+#
+# THIS WORKFLOW PINS `ubuntu-latest` ON PURPOSE. It must not route through the
+# variable it exists to check: a malformed value would otherwise take the guard
+# down with everything else, which is the failure mode where a control is
+# absent exactly when it is needed.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: CI_RUNNER is unset or a JSON array naming a real fleet
+    runs-on: ubuntu-latest   # NOT vars.CI_RUNNER — see the header.
+    timeout-minutes: 5
+    steps:
+      - name: Validate the variable's shape
+        env:
+          # Read RAW, never through fromJSON — the point is to judge the text
+          # before anything parses it into a shape that hides the defect.
+          CI_RUNNER_RAW: ${{ vars.CI_RUNNER }}
+        run: |
+          raw="${CI_RUNNER_RAW:-}"
+          if [ -z "$raw" ]; then
+            echo "CI_RUNNER is unset — every job falls back to ubuntu-latest. That is a"
+            echo "valid state (it is the rollback), so this passes."
+            exit 0
+          fi
+          echo "CI_RUNNER = $raw"
+
+          # jq -e exits non-zero when the filter yields false/null.
+          if ! printf '%s' "$raw" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::CI_RUNNER is not a JSON ARRAY. A scalar makes fromJSON return a"
+            echo "::error::string, runs-on accepts it, and the job routes to ANY self-hosted"
+            echo "::error::runner with no label narrowing. Set it to e.g. [\"self-hosted\",\"loom-aca\"]"
+            exit 1
+          fi
+          if ! printf '%s' "$raw" | jq -e 'length > 0' >/dev/null 2>&1; then
+            echo "::error::CI_RUNNER is an EMPTY array — no runner can satisfy it and every"
+            echo "::error::job will queue forever. Unset it instead to fall back to ubuntu-latest."
+            exit 1
+          fi
+          if ! printf '%s' "$raw" | jq -e 'all(type == "string")' >/dev/null 2>&1; then
+            echo "::error::CI_RUNNER contains a non-string element; labels must be strings."
+            exit 1
+          fi
+          # A self-hosted set must NARROW. `["self-hosted"]` alone is the array
+          # form of the same defect the scalar case produces.
+          if printf '%s' "$raw" | jq -e 'index("self-hosted")' >/dev/null 2>&1; then
+            if ! printf '%s' "$raw" | jq -e 'length > 1' >/dev/null 2>&1; then
+              echo "::error::CI_RUNNER is [\"self-hosted\"] with no narrowing label. Add the"
+              echo "::error::fleet label, e.g. [\"self-hosted\",\"loom-aca\"]."
+              exit 1
+            fi
+          fi
+          echo "ok — CI_RUNNER is a non-empty JSON array of strings$(printf '%s' "$raw" | jq -r 'if index("self-hosted") then " naming a narrowed self-hosted fleet" else "" end')."
