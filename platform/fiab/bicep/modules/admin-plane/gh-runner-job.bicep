@@ -51,8 +51,17 @@ param location string
 @description('Container Apps managed-environment (CAE) resource id — the console VNet-integrated env.')
 param environmentId string
 
-@description('uami-loom-console resource id — used for ACR pull + the runner image az login.')
+@description('DEPRECATED for this module - kept only so an existing caller does not break. The runner MUST NOT carry the console identity; see runnerUamiId. Referenced now only by githubPatKeyVaultSecretUri, which resolves the PAT at DEPLOY time, outside any job.')
 param consoleUamiId string
+
+@description('''uami-loom-ci - the runner's OWN least-privilege identity, and the boundary this module depends on.
+
+MEASURED 2026-09-13, which is why this parameter exists. The runner used to carry `uami-loom-console-centralus`: 53 role assignments including **Contributor at SUBSCRIPTION scope**, **Role Based Access Control Administrator** on this resource group, and **Key Vault Secrets Officer** on kv-loom. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into the job, so ANY job step could assume that identity. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands back this job's own `github-pat` secret - and RBAC Administrator grants exactly the roleAssignments/write that Contributor notActions deny, i.e. self-promotion to Owner. On a PUBLIC repo, where an approved fork PR runs arbitrary code here.
+
+Removing the PAT from the process environment did NOT fix that; it closed the smaller door. Two independent reviewers demonstrated the recovery path separately.
+
+uami-loom-ci holds ONE role assignment: AcrPull on this registry, which is the only thing the runner needs to start. Add a grant only when a specific job proves it needs one, and record why here.''')
+param runnerUamiId string
 
 @description('ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io.')
 param acrLoginServer string
@@ -125,6 +134,11 @@ var patSecret = empty(githubPatKeyVaultSecretUri)
       {
         name: 'github-pat'
         keyVaultUrl: githubPatKeyVaultSecretUri
+        // DELIBERATELY the console identity, and the ONLY remaining use of it
+        // here. A Key Vault-backed ACA secret is resolved by the PLATFORM at
+        // deploy/update time, not by job code, so this grant never reaches a
+        // job. The runner identity must NOT hold Key Vault access: that is
+        // precisely the capability that made the old arrangement escalatable.
         identity: consoleUamiId
       }
     ]
@@ -138,7 +152,8 @@ resource runnerJob 'Microsoft.App/jobs@2025-02-02-preview' = {
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${consoleUamiId}': {}
+      // EXACTLY ONE, and it is NOT the console's. See runnerUamiId.
+      '${runnerUamiId}': {}
     }
   }
   properties: {
@@ -180,7 +195,8 @@ resource runnerJob 'Microsoft.App/jobs@2025-02-02-preview' = {
       registries: [
         {
           server: acrLoginServer
-          identity: consoleUamiId
+          // The runner's own identity, which holds AcrPull and nothing else.
+          identity: runnerUamiId
         }
       ]
       secrets: patSecret
