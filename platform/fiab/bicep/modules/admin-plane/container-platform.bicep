@@ -81,7 +81,20 @@ resource cae 'Microsoft.App/managedEnvironments@2025-02-02-preview' = if (contai
         name: 'D8'
         workloadProfileType: 'D8'
         minimumCount: 0
-        maximumCount: 10
+        // OPERATOR COST DECISION 2026-09-13, capped from 10 to 3.
+        //
+        // A D8 node bills per hour while it is up, so the ceiling is the cost
+        // bound, not `maxExecutions` on any one job. At 10 the CI fleet alone
+        // could reach roughly 3.3x the intended spend, and the operator chose
+        // the lower ceiling after being shown the arithmetic (rate card x
+        // measured config; the Cost Management query rate-limited).
+        //
+        // THIS WAS SET LIVE BEFORE IT WAS DECLARED HERE, and a reviewer caught
+        // exactly that: the cap was asserted in the PR body and in
+        // gh-runner-job.bicep, implemented in neither, so a redeploy of this
+        // module would silently restore 10. Raise it together with the job's
+        // maxExecutions, never alone.
+        maximumCount: 3
       }
     ]
     vnetConfiguration: {
