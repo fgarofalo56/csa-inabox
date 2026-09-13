@@ -214,6 +214,23 @@ RUN set -euo pipefail; \
     chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 
+# --- Rust toolchain --------------------------------------------------------
+# `ubuntu-latest` ships rustup preinstalled and three jobs assume it:
+# `cargo build + test (engine-only)`, `(default (engine + azure))` and
+# `cargo build --release (the profile the image ships)`. Measured on the first
+# migrated run: `rustup: command not found`, rc=127.
+#
+# Installed to a SHARED location, not $HOME, for the same reason bicep is: a
+# root-time install under /root/.cargo is invisible to the job user.
+ENV RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:$PATH
+RUN set -euo pipefail; \
+    curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path; \
+    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"; \
+    rustup --version; \
+    cargo --version
+
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
 # Strip CRLF: a Windows checkout (core.autocrlf) can hand the build context an
 # entrypoint.sh with \r\n line endings — the container then dies at start with
@@ -223,5 +240,34 @@ COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.
 RUN sed -i 's/\r$//' /home/runner/actions-runner/entrypoint.sh; \
     chmod +x /home/runner/actions-runner/entrypoint.sh
 
-USER runner
+USER root
+# RUN AS ROOT, DELIBERATELY, AND THIS IS NOT THE CONVENIENT CHOICE -- it is the
+# only one the platform allows. Operator decision 2026-09-12, on this
+# measurement from the first migrated CI run:
+#
+#     sudo: The "no new privileges" flag is set, which prevents sudo from
+#     running as root.
+#
+# Azure Container Apps sets `no_new_privs` on the container, so a setuid binary
+# can NEVER elevate there. `sudo` is therefore structurally impossible on these
+# runners -- a platform limit like the absent Docker daemon, not a missing
+# package -- and 13 `sudo apt-get` calls across 7 workflows depend on it
+# (unixodbc for the dbt/transform runners, the Rust toolchain, the Bicep CLI).
+#
+# When the process is ALREADY root, sudo does not need to change uid, so it
+# succeeds and every one of those workflows runs unmodified and identically to
+# `ubuntu-latest`. The alternative -- rewriting 13 call sites -- diverges from
+# the hosted runner permanently, and the next person to add a `sudo` step
+# breaks CI with a confusing error.
+#
+# WHY THIS IS AN ACCEPTABLE POSTURE, stated rather than assumed: the job's code
+# already has full control of this container as `runner`, the replica is
+# EPHEMERAL (one job, then destroyed), and the security boundary is the
+# container plus the fork-PR approval policy -- tightened to
+# `all_external_contributors` as part of this migration -- not the in-container
+# uid. Root here reaches nothing `runner` could not already reach.
+#
+# The runner agent refuses to run as root unless this is set, and that refusal
+# exists for the bare-metal case it does not apply to here.
+ENV RUNNER_ALLOW_RUNASROOT=1
 ENTRYPOINT ["/home/runner/actions-runner/entrypoint.sh"]
