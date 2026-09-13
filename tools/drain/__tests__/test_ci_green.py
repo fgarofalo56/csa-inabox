@@ -64,8 +64,14 @@ GREEN = {"conclusion": "SUCCESS", "status": "COMPLETED"}
 #: `test.yml` publishes `Python Tests (3.x)` on `pull_request` with every
 #: substantive step `skipped`, BY DESIGN, and the first version of this receipt
 #: deferred to exactly that. Measured on PRs #4440 and #4437.
-def _job(name, *, steps=("Run pytest with coverage", "Lint with ruff"),
-         skipped=(), conclusion="success"):
+def _job(name, *, steps=None, skipped=(), conclusion="success"):
+    # DEFAULT TO THE DECLARED SUBSTANTIVE STEPS for this context, so a fixture
+    # exercises the same declaration the live receipt reads. Inventing step
+    # names here would make the tests pass over a rule the real contexts do not
+    # satisfy -- the fixture-measures-the-author defect.
+    if steps is None:
+        declared = POLICY["receipts"]["ci_green_rule"]["substantive_steps"].get(name)
+        steps = tuple(declared) if isinstance(declared, list) else ("did the work",)
     record = [
         {"name": "Set up job", "conclusion": "success"},
         *[
@@ -77,8 +83,11 @@ def _job(name, *, steps=("Run pytest with coverage", "Lint with ruff"),
     return {"name": name, "conclusion": conclusion, "steps": record}
 
 
-def _hollow_job(name, *, steps=("Run pytest with coverage", "Lint with ruff", "mypy")):
-    """Green, and every work step skipped -- the `test.yml` `pull_request` shape."""
+def _hollow_job(name, *, steps=None):
+    """Green, with its DECLARED substantive step(s) skipped."""
+    if steps is None:
+        declared = POLICY["receipts"]["ci_green_rule"]["substantive_steps"].get(name)
+        steps = tuple(declared) if isinstance(declared, list) else ("did the work",)
     return _job(name, steps=steps, skipped=steps)
 
 
@@ -94,6 +103,12 @@ def _green(name):
 
 
 def _ev(name, **kw):
+    # A real merged check ALWAYS has a job behind it, so a fixture that sets
+    # `merged_check` without `merged_job` describes a state GitHub does not
+    # produce. Default it to a job that ran its declared substantive step;
+    # tests that care about the hollow case pass `merged_job=` explicitly.
+    if kw.get("merged_check") is not None and "merged_job" not in kw:
+        kw["merged_job"] = _job(name)
     return gates.ContextEvidence(name=name, **kw)
 
 
@@ -115,6 +130,7 @@ def _receipt(evidence, **kw):
     kw.setdefault("merged_changed_files", MERGED_FILES)
     kw.setdefault("merged_sha", MERGED_SHA)
     kw.setdefault("trees_identical", True)
+    kw.setdefault("policy", POLICY)
     return gates.ci_green_receipt(evidence, **kw)
 
 
@@ -231,9 +247,22 @@ def test_negative_control_an_unmeasured_file_set_never_excuses_a_path_filter():
 
 
 def test_the_measured_4483_shape_is_a_green_receipt():
-    """Green at the merged sha, path-filtered, and renamed -- the exact
-    population measured at `a02cd41e6d42`, which the OLD definition scored
-    10-of-15 and therefore could not close."""
+    """Green at the merged sha, path-filtered, and renamed -- the SHAPE measured
+    at `a02cd41e6d42`, which the OLD definition scored 10-of-15 and could not
+    close.
+
+    THE SHAPE, NOT THE VERDICT ON THAT PR. Live, #4483 now returns NOT GREEN,
+    and correctly: two of its required contexts (`next build (node 20)` and
+    `vitest (node 20)`) concluded SUCCESS at the merged sha with their declared
+    substantive steps SKIPPED. The earlier "#4483 is the green control" claim
+    was true only while `green-at-merge` accepted a conclusion without asking
+    whether the job did its work -- so that receipt was itself false, and
+    tightening the rule revealed it rather than broke it.
+
+    The contexts below are ones that genuinely executed, so this still tests
+    that the three states compose into a pass. `test_ci_green_blockers.py`
+    holds the refusals.
+    """
     evidence = [
         _ev("Python Tests (3.10)", merged_check=_green("Python Tests (3.10)")),
         _ev("vitest (node 20)", merged_check=_green("vitest (node 20)")),

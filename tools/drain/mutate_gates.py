@@ -1250,17 +1250,27 @@ ARMS: list[tuple[str, str, str, str]] = [
     # CB* are those arms, now that the producer's decisions live in tested
     # functions rather than inline in the collector.
     (
-        ("CB1 a PR-head green that EXECUTED NOTHING is deferrable again "
-         "(the test.yml pull_request shape: SUCCESS, every work step skipped)"),
+        ("CB1 a PR-head green that did NOT execute its declared substantive step "
+         "is deferrable again (the test.yml pull_request shape)"),
         "gates.py",
-        "    ran, evidence = job_executed(item.head_job)\n    if not ran:",
-        "    ran, evidence = job_executed(item.head_job)\n    if False:",
+        "    ran, evidence = context_did_its_work(item.name, item.head_job, policy)\n    if not ran:",
+        "    ran, evidence = context_did_its_work(item.name, item.head_job, policy)\n    if False:",
     ),
     (
         "CB2 `job_executed` stops fail-closing on absent step data",
         "gates.py",
-        '        return False, "no job record was read for it, so it cannot be shown to have run"',
-        '        return True, "no job record was read for it, so it cannot be shown to have run"',
+        ('    if not isinstance(job, dict):\n'
+         '        return False, "no job record was read for it, so it cannot be shown to have run"\n'
+         '    steps = job.get("steps")\n'
+         '    if not isinstance(steps, list) or not steps:\n'
+         '        return False, "its job record carries no steps, so it cannot be shown to have run"\n'
+         '    substantive = ['),
+        ('    if not isinstance(job, dict):\n'
+         '        return True, "no job record was read for it, so it cannot be shown to have run"\n'
+         '    steps = job.get("steps")\n'
+         '    if not isinstance(steps, list) or not steps:\n'
+         '        return False, "its job record carries no steps, so it cannot be shown to have run"\n'
+         '    substantive = ['),
     ),
     (
         ("CB3 `job_executed` counts runner BOOKKEEPING as work, so a job whose "
@@ -1270,12 +1280,54 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if isinstance(step, dict)",
     ),
     (
-        ("CB4 the execution rule becomes ANY-work-step-ran instead of EVERY, so "
-         "a change-detection gate step that skipped the other ten satisfies it "
-         "- the defect the FIRST fix for blocker 1 shipped with"),
+        ("CB4 a SKIPPED declared substantive step counts as executed, so the "
+         "check that concluded green without doing its work passes"),
         "gates.py",
-        '        if str(step.get("conclusion") or "").lower() in ("skipped", "")',
-        "        if False",
+        '        return str(step.get("conclusion") or "").lower() not in ("skipped", "")',
+        "        return True",
+    ),
+    (
+        ("CB4b green-at-merge returns a pass on the check CONCLUSION alone - the "
+         "branch that carries 14 of 15 contexts, and the defect both reviewers "
+         "found one branch along from the deferral one"),
+        "gates.py",
+        "        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)\n        if not did_work:",
+        "        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)\n        if False:",
+    ),
+    (
+        ("CB4c an UNDECLARED context stops failing closed, so adding a required "
+         "context silently removes it from the receipt"),
+        "gates.py",
+        "    if name not in declared:\n        return False, (",
+        "    if name not in declared:\n        return True, (",
+    ),
+    (
+        ("CB4d the declared step is matched but its SKIPPED state is ignored - "
+         "presence of the step, rather than its execution, decides"),
+        "gates.py",
+        "        elif not any(ran(s) for s in matches):",
+        "        elif False:",
+    ),
+    (
+        ("CB4e a STALE declaration (step absent from the job) passes instead of "
+         "failing closed, so a renamed step silently stops being checked"),
+        "gates.py",
+        "    if missing:\n        return False, (",
+        "    if missing:\n        return True, (",
+    ),
+    (
+        ("CB4f the ALL rule accepts any number of skipped steps, so guardrails "
+         "and Repo Hygiene stop being checked at all"),
+        "gates.py",
+        "        skipped = [s for s in work if not ran(s)]\n        if skipped:",
+        "        skipped = [s for s in work if not ran(s)]\n        if False:",
+    ),
+    (
+        ("CB4g the policy contract walks only the first level again, so a "
+         "three-deep key the authority does not carry goes unnoticed"),
+        "gates.py",
+        "            if not isinstance(node, dict) or part not in node:\n                absent.append(dotted)",
+        "            if False:\n                absent.append(dotted)",
     ),
     (
         ("CB5 the rename stops requiring the `push` event, so a green cron or "

@@ -682,6 +682,10 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
     #: a green check EXECUTED anything. `statusCheckRollup` carries no
     #: population; `steps[].conclusion` on the jobs API does.
     head_job_by_name = _jobs_by_name(repo, _run_ids(_workflow_runs(repo, head)))
+    #: The same, at the MERGED sha. `green-at-merge` needs it for exactly the
+    #: reason the deferral branch needs the head one: a green conclusion is not
+    #: evidence the check did its work.
+    merged_job_by_name = _jobs_by_name(repo, _run_ids(merged_runs))
 
     rc, out, err = sh(["git", "show", "--name-only", "--pretty=format:", merged])
     if rc != 0:
@@ -736,6 +740,7 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
                 merged_workflow_run=merged_run,
                 merged_workflow_jobs=merged_jobs,
                 head_job=head_job_by_name.get(name),
+                merged_job=merged_job_by_name.get(name),
                 push_trigger=trigger,
             )
         )
@@ -747,7 +752,7 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
     }
 
 
-def print_ci_green_receipt(repo: str, number: int, as_json: bool) -> int:
+def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
     data = collect_ci_green_evidence(repo, number)
     receipt = gates.ci_green_receipt(
         data["evidence"],
@@ -756,6 +761,7 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool) -> int:
         merged_branch=data["branch"],
         merged_sha=data["merged"],
         trees_identical=data["trees_identical"],
+        policy=policy,
     )
     if as_json:
         print(json.dumps({
@@ -1061,7 +1067,7 @@ def main() -> int:
     # a definition with no caller is prose, and the old one named a measurement
     # the CI topology cannot produce.
     if args.ci_green_receipt is not None:
-        return print_ci_green_receipt(repo, args.ci_green_receipt, args.json)
+        return print_ci_green_receipt(repo, args.ci_green_receipt, args.json, policy)
 
     # Gate 7 -- the before/after audit. Run AFTER merging, with the issue-number
     # list this tool wrote before it. The scan is PREVENTION and this is

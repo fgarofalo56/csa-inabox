@@ -266,6 +266,7 @@ OTHER_IMPLEMENTED_BY = {
     "receipts.ui-surface": "gates.receipt_satisfies",
     "receipts.human-only": "gates.receipt_satisfies",
     "receipts.ci_green_rule": "gates.ci_green_receipt",
+    "receipts.ci_green_rule.substantive_steps": "gates.context_did_its_work",
     "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
     "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
     "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
@@ -383,14 +384,25 @@ def assert_policy_matches_code(policy: dict) -> None:
     # mapping claimed an implementation for a key the authority no longer
     # contained. "Undeclared behaviour is as bad as undelivered behaviour" is
     # asserted for the other two sections and was missing here.
+    #
+    # WALKS TO ANY DEPTH. It used to `partition` on the FIRST dot and look the
+    # remainder up as a single key, so a three-level entry like
+    # `receipts.ci_green_rule.substantive_steps` was reported absent even when
+    # the authority carried it -- and, worse, a three-level key the authority
+    # did NOT carry was structurally unmissable in the other direction. That is
+    # the same hole an independent reviewer found at two levels, one level down:
+    # fixing one depth and leaving the next is the one-side-of-a-symmetry defect
+    # this package keeps producing. Measured before changing it: 71 leaf paths,
+    # 19 of them three-or-more levels deep, and ZERO newly unclaimed -- so this
+    # tightens the contract without a cascade.
     absent = []
     for dotted in OTHER_IMPLEMENTED_BY:
-        section, _, sub = dotted.partition(".")
-        if sub:
-            if sub not in policy.get(section, {}):
+        node = policy
+        for part in dotted.split("."):
+            if not isinstance(node, dict) or part not in node:
                 absent.append(dotted)
-        elif section not in policy:
-            absent.append(dotted)
+                break
+            node = node[part]
     if absent:
         raise ValueError(
             f"implemented but not declared in policy.json: {sorted(absent)} - "
@@ -1692,6 +1704,10 @@ class ContextEvidence:
     #: `skipped`, BY DESIGN, and runs the real suite only on `push`. Measured on
     #: PRs #4440 and #4437, whose deferral this receipt used to accept.
     head_job: dict | None = None
+    #: The job behind `merged_check`, same shape. `green-at-merge` needs it for
+    #: exactly the reason `deferred-to-head` needs `head_job`: a green
+    #: conclusion is not evidence the check did its work.
+    merged_job: dict | None = None
     push_trigger: PushTrigger | None = None
 
 
@@ -1734,6 +1750,7 @@ def ci_green_receipt(
     merged_sha: str,
     merged_branch: str = "main",
     trees_identical: bool,
+    policy: dict,
 ) -> CiGreenReceipt:
     """The `ci-green` receipt, as a measurement that can actually be taken.
 
@@ -1778,6 +1795,7 @@ def ci_green_receipt(
             merged_branch=merged_branch,
             merged_sha=merged_sha,
             trees_identical=trees_identical,
+            policy=policy,
         )
         contexts.append(result)
         if not result.ok:
@@ -1798,6 +1816,7 @@ def _one_context(
     merged_branch: str,
     merged_sha: str,
     trees_identical: bool,
+    policy: dict,
 ) -> ContextResult:
     if item.merged_check is not None:
         verdict, status = _outcome(item.merged_check)
@@ -1813,7 +1832,23 @@ def _one_context(
                 item.name, "FAIL",
                 "SKIPPED at the merged sha - a required context that ran nothing is not a pass",
             )
-        return ContextResult(item.name, "green-at-merge", f"green at the merged sha ({verdict})")
+        # A GREEN CONCLUSION IS NOT EVIDENCE THE CHECK DID ITS WORK, and this
+        # branch carries 14 of 15 contexts on a typical PR. It used to return a
+        # pass on the conclusion alone -- the same defect the deferral branch
+        # had, one branch along, which is this package's most persistent shape.
+        # Live at the time it was found: PR #4488 returned RECEIPT: GREEN while
+        # `next build (node 20)` concluded success with `Build (next build)`
+        # SKIPPED behind a change-detection gate.
+        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)
+        if not did_work:
+            return ContextResult(
+                item.name, "FAIL",
+                f"green at the merged sha ({verdict}), but {evidence}",
+            )
+        return ContextResult(
+            item.name, "green-at-merge",
+            f"green at the merged sha ({verdict}), and it {evidence}",
+        )
 
     if not item.workflow_path:
         return ContextResult(
@@ -1872,7 +1907,7 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
-    ran, evidence = job_executed(item.head_job)
+    ran, evidence = context_did_its_work(item.name, item.head_job, policy)
     if not ran:
         return ContextResult(
             item.name, "FAIL",
@@ -1885,6 +1920,101 @@ def _one_context(
         f"structurally absent at the merged sha ({why}); green on the PR head over an "
         f"identical tree, and it {evidence}",
     )
+
+
+def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[bool, str]:
+    """Did THIS context execute the step that IS the check?
+
+    WHICH step, not how many, and the distinction is the whole control.
+    Measured 2026-09-13 over 24 `green-at-merge` contexts on PRs #4483 and
+    #4488, a proportion cannot decide it:
+
+        Python Tests (3.10)    9% skipped -> `Coverage summary`      LEGITIMATE
+        vitest (node 20)      38% skipped -> `Run vitest (...)`      HOLLOW
+        next build (node 20)  92% skipped -> `Build (next build)`    HOLLOW
+
+    `vitest` skipped the step that IS the check while sitting at a LOWER
+    proportion than a job that skipped only a trailing report. Any threshold
+    that accepts the second accepts the first.
+
+    Nor can it be inferred from names: `_is_bookkeeping_step` already
+    misclassifies six real step names (`Post HIGH findings to PR`) in the
+    EXCUSING direction, which is what a name-shaped guess buys you.
+
+    So it is DECLARED in `policy.json` under
+    `receipts.ci_green_rule.substantive_steps`, read off real green runs. A
+    context absent from that map FAILS CLOSED -- the alternative is a receipt
+    that silently stops checking whenever someone adds a required context.
+
+    `"ALL"` means every work step must have run, for contexts whose work is
+    spread across many steps (`guardrails` has 158) rather than concentrated in
+    one. A LIST names the steps that must have executed, matched as substrings
+    so a step's parenthetical detail can change without breaking the receipt.
+    """
+    declared = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+    )
+    if name not in declared:
+        return False, (
+            f"no substantive step is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.substantive_steps) - an undeclared context "
+            "fails closed rather than silently stop being checked"
+        )
+    if not isinstance(job, dict):
+        return False, "no job record was read for it, so it cannot be shown to have run"
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return False, "its job record carries no steps, so it cannot be shown to have run"
+
+    work = [
+        s for s in steps
+        if isinstance(s, dict) and not _is_bookkeeping_step(str(s.get("name") or ""))
+    ]
+    if not work:
+        return False, (
+            f"all {len(steps)} of its steps are runner bookkeeping - no work steps at all"
+        )
+
+    def ran(step: dict) -> bool:
+        return str(step.get("conclusion") or "").lower() not in ("skipped", "")
+
+    rule = declared[name]
+    if rule == "ALL":
+        skipped = [s for s in work if not ran(s)]
+        if skipped:
+            names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+            return False, (
+                f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
+                f"are SKIPPED ({names})"
+            )
+        return True, f"declared ALL; every one of its {len(work)} work step(s) ran"
+
+    if not isinstance(rule, list) or not rule:
+        return False, (
+            f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
+            "non-empty list of step names"
+        )
+
+    missing, hollow = [], []
+    for wanted in rule:
+        matches = [s for s in work if wanted in str(s.get("name") or "")]
+        if not matches:
+            missing.append(wanted)
+        elif not any(ran(s) for s in matches):
+            hollow.append(wanted)
+    if missing:
+        return False, (
+            f"the declared step(s) {missing} are ABSENT from this job - the declaration "
+            "is stale, or this is not the job it describes; re-read it off a green run"
+        )
+    if hollow:
+        return False, (
+            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
+            "concluded green having not done the thing it is required for"
+        )
+    return True, f"executed its declared substantive step(s) {list(rule)}"
 
 
 def job_executed(job: dict | None) -> tuple[bool, str]:

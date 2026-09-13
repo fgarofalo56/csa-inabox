@@ -103,7 +103,25 @@
       "definition": "every required context that CAN run at the merged sha is green; every one that CANNOT is NAMED, with the reason it could not and its result on the PR head over an IDENTICAL TREE",
       "absence_is_excused_only_when": "the producing workflow - traced by workflow IDENTITY from the PR head, never by an alias table - either RAN at the merged sha and concluded SUCCESS under a different job name (the per-event rename case), or was NEVER CREATED there because its own on.push trigger, read AT that sha, could not have admitted the commit (the path-filter case)",
       "fails_closed_on": "an untraceable producer, an unreadable on.push trigger, a workflow that SHOULD have run and did not, a merged sha carrying zero check-runs at all, an empty required set, and a deferral to a PR head whose tree differs from the merged tree",
-      "not_proven_by_this_receipt": "that any required context measured a non-empty POPULATION. statusCheckRollup publishes none, so green-over-zero-items (the #4451 shape) stays invisible here and remains an owed capability, not a claim."
+      "not_proven_by_this_receipt": "that any required context measured a non-empty POPULATION. statusCheckRollup publishes none, so green-over-zero-items (the #4451 shape) stays invisible here and remains an owed capability, not a claim.",
+      "_substantive_steps": "WHICH step a context must have EXECUTED, not how many. Measured 2026-09-13 over 24 green-at-merge contexts on PRs 4483 and 4488: a proportion cannot decide this. `vitest (node 20)` skipped `Run vitest (with istanbul coverage floor)` - the step that IS the check - at 38% skipped, while `Python Tests (3.10)` skipped only its trailing `Coverage summary` at 9%. Any threshold accepting the second accepts the first. Nor can it be inferred from names: `_is_bookkeeping_step` already misclassifies six real step names (`Post HIGH findings to PR`) in the EXCUSING direction. So it is DECLARED, per context, from evidence. A context ABSENT from this map FAILS CLOSED - add it with the step read off a real green run, never guessed. `ALL` means every work step must have run, for contexts whose work is distributed across many steps rather than concentrated in one.",
+      "substantive_steps": {
+        "Python Lint": ["Lint Python files"],
+        "Python Tests (3.10)": ["Run pytest with coverage"],
+        "Python Tests (3.11)": ["Run pytest with coverage"],
+        "Python Tests (3.12)": ["Run pytest with coverage"],
+        "PowerShell Lint": ["Lint PowerShell scripts"],
+        "Secret Scan": ["Run gitleaks"],
+        "Repo Hygiene": "ALL",
+        "dbt Compile (shared)": ["Compile dbt models"],
+        "dbt Compile (finance)": ["Compile dbt models"],
+        "dbt Compile (inventory)": ["Compile dbt models"],
+        "dbt Compile (sales)": ["Compile dbt models"],
+        "next build (node 20)": ["Build (next build)"],
+        "guardrails": "ALL",
+        "vitest (node 20)": ["Run vitest (with istanbul coverage floor)"],
+        "changelog parser can read every commit message": ["Check every changelog-bound commit message"]
+      }
     }
   },
 

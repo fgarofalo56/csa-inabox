@@ -62,7 +62,8 @@ def test_negative_control_a_head_green_that_executed_nothing_is_not_deferrable()
                        head_job=_hollow_job("Python Tests (3.10)")),
     ])
     assert not receipt.ok
-    assert any("3 of its 3 work step(s) are SKIPPED" in r for r in receipt.reasons)
+    assert any("were SKIPPED" in r for r in receipt.reasons)
+    assert any("Run pytest with coverage" in r for r in receipt.reasons)
     assert any("not a result to defer to" in r for r in receipt.reasons)
 
 
@@ -134,14 +135,21 @@ def test_a_head_green_that_really_ran_is_still_deferrable():
     deferrals that are hollow, not all of them -- so a fix that distrusted
     deferral as a CATEGORY would be the remedy-worse-than-the-defect shape
     this package keeps finding.
+
+    The job below carries eight incidental steps AND the declared substantive
+    one. That combination is the point: under the declared rule the eight are
+    irrelevant and the one decides, which is exactly what the proportion-based
+    rule could not express.
     """
     receipt = _receipt([
         _path_filtered("dbt Compile (shared)",
                        head_job=_job("dbt Compile (shared)",
-                                     steps=tuple(f"step {i}" for i in range(9)))),
+                                     steps=(*(f"step {i}" for i in range(8)),
+                                            "Compile dbt models"))),
     ])
     assert receipt.ok, receipt.reasons
-    assert "executed 9 of 9 work step(s)" in receipt.by_state("deferred-to-head")[0].detail
+    detail = receipt.by_state("deferred-to-head")[0].detail
+    assert "Compile dbt models" in detail
 
 
 def test_negative_control_absent_step_data_fails_closed_in_every_shape():
