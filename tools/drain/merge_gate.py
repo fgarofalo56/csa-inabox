@@ -589,6 +589,50 @@ def _workflow_runs(repo: str, sha: str) -> list[dict]:
     return runs
 
 
+def _run_ids(runs) -> list:
+    return [r.get("id") for r in runs if isinstance(r, dict) and r.get("id")]
+
+
+def _jobs_of_run(repo: str, run_id) -> tuple[dict, ...]:
+    """Every job of one workflow run, WITH its steps.
+
+    Steps are the whole point: a job that concluded SUCCESS with every
+    substantive step `skipped` measured nothing, and `statusCheckRollup` cannot
+    see that. The jobs API can. This used to return bare NAMES, which the
+    receipt then read only to PRINT -- evidence gathered and discarded.
+    """
+    pages = gh_paginated(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+        f"jobs of run {run_id}",
+    )
+    jobs: list[dict] = []
+    for page in pages:
+        if isinstance(page, dict):
+            jobs.extend(j for j in (page.get("jobs") or []) if isinstance(j, dict))
+    return tuple(jobs)
+
+
+def _jobs_by_name(repo: str, run_ids) -> dict[str, dict]:
+    """Job NAME -> the job, across several runs, worst-first on ties.
+
+    A check-run's name IS its job's name, which is how a context is joined back
+    to the steps that produced it. On a duplicate the one that executed LESS
+    wins, so a green re-run cannot hide a sibling that ran nothing.
+    """
+    out: dict[str, dict] = {}
+    for run_id in run_ids:
+        for job in _jobs_of_run(repo, run_id):
+            name = str(job.get("name") or "")
+            if not name:
+                continue
+            prior = out.get(name)
+            if prior is None or (
+                gates.job_executed(job)[0] is False and gates.job_executed(prior)[0] is True
+            ):
+                out[name] = job
+    return out
+
+
 def collect_ci_green_evidence(repo: str, number: int) -> dict:
     """Measure everything `gates.ci_green_receipt` decides on, for a MERGED PR.
 
@@ -629,20 +673,15 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
         r.get("check_suite_id"): r.get("path") for r in _workflow_runs(repo, head)
     }
     merged_runs = _workflow_runs(repo, merged)
-    merged_run_by_path: dict[str, dict] = {}
-    for run in merged_runs:
-        path = run.get("path")
-        if not path:
-            continue
-        prior = merged_run_by_path.get(path)
-        # Newest run for that workflow decides -- a re-run supersedes.
-        if prior is None or str(run.get("run_started_at") or "") >= str(prior.get("run_started_at") or ""):
-            merged_run_by_path[path] = run
 
     # The producer of each context, traced at the head.
     suite_of_head_check = {
         (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
     }
+    #: PR-head check-run id -> the job behind it, so the receipt can ask whether
+    #: a green check EXECUTED anything. `statusCheckRollup` carries no
+    #: population; `steps[].conclusion` on the jobs API does.
+    head_job_by_name = _jobs_by_name(repo, _run_ids(_workflow_runs(repo, head)))
 
     rc, out, err = sh(["git", "show", "--name-only", "--pretty=format:", merged])
     if rc != 0:
@@ -661,28 +700,25 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
 
     required = required_contexts(repo)
     evidence = []
-    jobs_cache: dict[int, tuple[str, ...]] = {}
+    jobs_cache: dict[int, tuple[dict, ...]] = {}
     trigger_cache: dict[str, gates.PushTrigger | None] = {}
     for name in required:
         merged_check = merged_by_name.get(name)
         workflow_path = head_path_by_suite.get(suite_of_head_check.get(name))
         merged_run = None
-        merged_jobs: tuple[str, ...] = ()
+        merged_jobs: tuple[dict, ...] = ()
         trigger = None
         if merged_check is None and workflow_path:
-            merged_run = merged_run_by_path.get(workflow_path)
+            # `gates.select_merged_run` -- the `push` run of this workflow AT
+            # this sha. NOT "the newest run of that path", which is what this
+            # used to do: a single sha carries many runs per path across
+            # `push`, `schedule` and `check_suite`, so a cron could supply the
+            # rename evidence for a `push` that went red.
+            merged_run = gates.select_merged_run(merged_runs, workflow_path, merged)
             if merged_run is not None:
                 run_id = merged_run.get("id")
                 if run_id not in jobs_cache:
-                    jobs = gh_paginated(
-                        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
-                        f"jobs of run {run_id}",
-                    )
-                    names: list[str] = []
-                    for page in jobs:
-                        if isinstance(page, dict):
-                            names.extend(j.get("name", "") for j in (page.get("jobs") or []))
-                    jobs_cache[run_id] = tuple(n for n in names if n)
+                    jobs_cache[run_id] = _jobs_of_run(repo, run_id)
                 merged_jobs = jobs_cache[run_id]
             else:
                 if workflow_path not in trigger_cache:
@@ -699,6 +735,7 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
                 head_check=head_by_name.get(name),
                 merged_workflow_run=merged_run,
                 merged_workflow_jobs=merged_jobs,
+                head_job=head_job_by_name.get(name),
                 push_trigger=trigger,
             )
         )
@@ -717,6 +754,7 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool) -> int:
         merged_total_count=data["merged_total_count"],
         merged_changed_files=data["changed_files"],
         merged_branch=data["branch"],
+        merged_sha=data["merged"],
         trees_identical=data["trees_identical"],
     )
     if as_json:

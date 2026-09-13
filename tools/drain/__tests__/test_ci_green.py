@@ -59,6 +59,35 @@ MERGED_FILES = [
 
 GREEN = {"conclusion": "SUCCESS", "status": "COMPLETED"}
 
+#: A job that DID work. Bookkeeping steps plus real ones that actually ran.
+#: Fixtures carry these because a green check is not evidence a job executed:
+#: `test.yml` publishes `Python Tests (3.x)` on `pull_request` with every
+#: substantive step `skipped`, BY DESIGN, and the first version of this receipt
+#: deferred to exactly that. Measured on PRs #4440 and #4437.
+def _job(name, *, steps=("Run pytest with coverage", "Lint with ruff"),
+         skipped=(), conclusion="success"):
+    record = [
+        {"name": "Set up job", "conclusion": "success"},
+        *[
+            {"name": s, "conclusion": "skipped" if s in skipped else "success"}
+            for s in steps
+        ],
+        {"name": "Complete job", "conclusion": "success"},
+    ]
+    return {"name": name, "conclusion": conclusion, "steps": record}
+
+
+def _hollow_job(name, *, steps=("Run pytest with coverage", "Lint with ruff", "mypy")):
+    """Green, and every work step skipped -- the `test.yml` `pull_request` shape."""
+    return _job(name, steps=steps, skipped=steps)
+
+
+def _push_run(*, sha="MERGED", conclusion="success", event="push"):
+    return {"head_sha": sha, "conclusion": conclusion, "status": "completed", "event": event}
+
+
+MERGED_SHA = "MERGED"
+
 
 def _green(name):
     return {"name": name, **GREEN}
@@ -68,13 +97,14 @@ def _ev(name, **kw):
     return gates.ContextEvidence(name=name, **kw)
 
 
-def _path_filtered(name, *, head_green=True):
+def _path_filtered(name, *, head_green=True, head_job=None):
     """A context that structurally could not run at the merged sha."""
     return _ev(
         name,
         workflow_path=".github/workflows/validate.yml",
         merged_check=None,
         head_check=_green(name) if head_green else {"name": name, "conclusion": "FAILURE"},
+        head_job=head_job if head_job is not None else _job(name),
         merged_workflow_run=None,
         push_trigger=gates.parse_push_trigger(VALIDATE_YML),
     )
@@ -83,6 +113,7 @@ def _path_filtered(name, *, head_green=True):
 def _receipt(evidence, **kw):
     kw.setdefault("merged_total_count", 130)
     kw.setdefault("merged_changed_files", MERGED_FILES)
+    kw.setdefault("merged_sha", MERGED_SHA)
     kw.setdefault("trees_identical", True)
     return gates.ci_green_receipt(evidence, **kw)
 
@@ -213,8 +244,9 @@ def test_the_measured_4483_shape_is_a_green_receipt():
         _ev(
             "changelog parser can read every commit message",
             workflow_path=".github/workflows/commit-message-parses.yml",
-            merged_workflow_run={"conclusion": "success", "status": "completed"},
-            merged_workflow_jobs=("changelog parser can read what landed on main",),
+            merged_workflow_run=_push_run(),
+            merged_workflow_jobs=(_job("changelog parser can read what landed on main",
+                                       steps=("Check every changelog-bound commit message",)),),
         ),
     ]
     receipt = _receipt(evidence)
@@ -307,8 +339,8 @@ def test_negative_control_a_renamed_sibling_whose_run_failed_is_not_a_receipt():
     receipt = _receipt([
         _ev("changelog parser can read every commit message",
             workflow_path=".github/workflows/commit-message-parses.yml",
-            merged_workflow_run={"conclusion": "failure", "status": "completed"},
-            merged_workflow_jobs=("changelog parser can read what landed on main",)),
+            merged_workflow_run=_push_run(conclusion="failure"),
+            merged_workflow_jobs=(_job("changelog parser can read what landed on main"),)),
     ])
     assert not receipt.ok
     assert any("concluded FAILURE" in r for r in receipt.reasons)

@@ -1108,8 +1108,15 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "P4 the policy contract covers only the two gate sections again",
         "gates.py",
-        "        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:\n            continue",
+        "        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):\n            continue\n        if key in OPERATOR_DOCUMENTATION:\n            continue",
         "        continue",
+    ),
+    (
+        ("P12 a dict-valued top-level key exempts every sub-key under it again, "
+         "so an unread `receipts.*` is structurally unreachable"),
+        "gates.py",
+        "        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):",
+        "        if key in OTHER_IMPLEMENTED_BY:",
     ),
     (
         "P2 the policy mapping accepts a name that resolves to nothing",
@@ -1228,6 +1235,107 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "        if prior is None or _check_rank(check) > _check_rank(prior):",
         "        if prior is None:",
+    ),
+
+    # -- the two blockers from #4491's independent review --------------------
+    #
+    # Both reviewers returned REQUEST-CHANGES, from different angles, and
+    # converged on the same two holes. Reviewer 2 also wrote six arms against
+    # the COLLECTOR -- 216 lines with no tests and no arms -- and FIVE SURVIVED
+    # the full suite, the worst being `trees_identical = True` hardcoded, the
+    # single condition the whole deferral rests on. CG4 killed the consumer in
+    # gates.py; nothing mutated the producer. "168/168 KILLED" was true about
+    # the pure function and not about the program deciding its inputs.
+    #
+    # CB* are those arms, now that the producer's decisions live in tested
+    # functions rather than inline in the collector.
+    (
+        ("CB1 a PR-head green that EXECUTED NOTHING is deferrable again "
+         "(the test.yml pull_request shape: SUCCESS, every work step skipped)"),
+        "gates.py",
+        "    ran, evidence = job_executed(item.head_job)\n    if not ran:",
+        "    ran, evidence = job_executed(item.head_job)\n    if False:",
+    ),
+    (
+        "CB2 `job_executed` stops fail-closing on absent step data",
+        "gates.py",
+        '        return False, "no job record was read for it, so it cannot be shown to have run"',
+        '        return True, "no job record was read for it, so it cannot be shown to have run"',
+    ),
+    (
+        ("CB3 `job_executed` counts runner BOOKKEEPING as work, so a job whose "
+         "real steps were all skipped reads as having run"),
+        "gates.py",
+        "        if isinstance(step, dict) and not _is_bookkeeping_step(str(step.get(\"name\") or \"\"))",
+        "        if isinstance(step, dict)",
+    ),
+    (
+        ("CB4 the execution rule becomes ANY-work-step-ran instead of EVERY, so "
+         "a change-detection gate step that skipped the other ten satisfies it "
+         "- the defect the FIRST fix for blocker 1 shipped with"),
+        "gates.py",
+        '        if str(step.get("conclusion") or "").lower() in ("skipped", "")',
+        "        if False",
+    ),
+    (
+        ("CB5 the rename stops requiring the `push` event, so a green cron or "
+         "dispatch supplies the evidence for a push that went red"),
+        "gates.py",
+        '    if event != "push":',
+        "    if False:",
+    ),
+    (
+        "CB6 the rename stops requiring the run to be about the merged commit",
+        "gates.py",
+        "    if not head_sha or (merged_sha and head_sha != merged_sha):",
+        "    if False:",
+    ),
+    (
+        "CB7 an EMPTY job list is evidence of a rename again",
+        "gates.py",
+        "    if not jobs:",
+        "    if False:",
+    ),
+    (
+        ("CB8 a run that DOES carry the required context still counts as a "
+         "rename, asserting a cause the evidence contradicts"),
+        "gates.py",
+        "    if item.name in names:",
+        "    if False:",
+    ),
+    (
+        ("CB9 the standing-in sibling no longer has to have executed anything, "
+         "so the hollow-green hole reopens inside the rename case"),
+        "gates.py",
+        '        if ok and str(j.get("conclusion") or "").lower() == "success"',
+        "        if True",
+    ),
+    (
+        ("CB10 `select_merged_run` takes the NEWEST run of a path regardless of "
+         "event - reviewer 2's attack on the collector, at its new home"),
+        "gates.py",
+        '        and str(run.get("event") or "").lower() == "push"',
+        "        and True",
+    ),
+    (
+        "CB11 `select_merged_run` stops pinning to the merged sha",
+        "gates.py",
+        '        and str(run.get("head_sha") or "") == merged_sha',
+        "        and True",
+    ),
+    (
+        ("CB12 the glob silently treats an unrepresentable pattern as a literal, "
+         "which UNDER-matches - the direction that EXCUSES an absence"),
+        "gates.py",
+        "    if _UNSUPPORTED_GLOB.search(pattern):\n        raise UnsupportedPatternError(pattern)",
+        "    if False:\n        raise UnsupportedPatternError(pattern)",
+    ),
+    (
+        ("CB13 an unrepresentable pattern in a push trigger resolves to "
+         "DID-NOT-RUN instead of RUNS, so it excuses rather than refuses"),
+        "gates.py",
+        "                return True, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
+        "                return False, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
     ),
 ]
 

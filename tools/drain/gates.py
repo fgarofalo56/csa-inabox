@@ -255,7 +255,24 @@ OTHER_IMPLEMENTED_BY = {
     "wip.max_lanes_hard_ceiling": "tick.select_cycle",
     "ordering.streams": "tick.select_cycle",
     "receipts": "ledger.Ledger.receipt_ok",
+    # EACH CLASS DECLARED INDIVIDUALLY, now that a dict-valued top-level key no
+    # longer exempts its sub-keys. `receipt_satisfies` looks each of these up by
+    # name, so they are read, not prose -- and spelling them out is what makes
+    # an ADDED-but-unread sibling detectable, which is the hole a reviewer
+    # walked through with `receipts.totally_unread_rule`.
+    "receipts.guard-or-test-only": "gates.receipt_satisfies",
+    "receipts.deploy-path": "gates.receipt_satisfies",
+    "receipts.estate-behaviour": "gates.receipt_satisfies",
+    "receipts.ui-surface": "gates.receipt_satisfies",
+    "receipts.human-only": "gates.receipt_satisfies",
     "receipts.ci_green_rule": "gates.ci_green_receipt",
+    "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
+    "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
+    "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
+    "stop_and_ask.force_push_shared_branch": "gates.action_is_permitted",
+    "stop_and_ask.weaken_or_baseline_a_guard": "gates.action_is_permitted",
+    "stop_and_ask.add_trivyignore_entry": "gates.action_is_permitted",
+    "stop_and_ask.use_skip_valve": "gates.action_is_permitted",
     "scope.closed_requires_receipt": "ledger.Ledger.receipt_ok",
     "permitted_unattended": "gates.action_is_permitted",
     "never": "gates.action_is_permitted",
@@ -272,6 +289,12 @@ OTHER_IMPLEMENTED_BY = {
 # from a control that stopped working.
 OPERATOR_DOCUMENTATION = {
     "schema",
+    # Addressed to the agent taking a G1 receipt, not to any function: there is
+    # no program that can decide whether an assertion is reachable from an error
+    # path. Declared rather than claimed, which is the whole point of this list
+    # -- and it only became VISIBLE once a dict-valued top-level key stopped
+    # exempting its sub-keys.
+    "receipts.g1_assertion_rule",
     "review.writer_is_never_the_reviewer",
     "scope.target", "scope.definition_of_done",
     "wip.serialize_on_shared_checkout",
@@ -304,7 +327,20 @@ def policy_keys_without_implementation(policy: dict) -> list[str]:
                 if not sub.startswith("_") and sub not in sectioned[key]:
                     missing.append(f"{key}.{sub}")
             continue
-        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:
+        # A TOP-LEVEL DECLARATION USED TO EXEMPT EVERY SUB-KEY UNDER IT, and an
+        # independent reviewer disproved this function's own advertised contract
+        # by planting `receipts.totally_unread_rule`: the suite stayed green and
+        # `assert_policy_matches_code` passed, because `receipts` is declared at
+        # the top level and this branch short-circuited before the sub-key walk.
+        # So "a key with no implementation" was STRUCTURALLY UNREACHABLE for
+        # exactly the section this module had just added a key to -- the hole
+        # being reported as closed by the change that widened it.
+        #
+        # A dict-valued key now still walks its sub-keys. Scalar top-level keys
+        # (`repo`) are unchanged.
+        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):
+            continue
+        if key in OPERATOR_DOCUMENTATION:
             continue
         if isinstance(value, dict):
             for sub in value:
@@ -1498,13 +1534,70 @@ def _glob_to_regex(pattern: str) -> str:
     return "^" + "".join(out) + "$"
 
 
+#: Filter-pattern syntax this translator does NOT implement. `!` negates,
+#: `[...]` is a character range, `+` and `(` are extglob-ish. Translating them
+#: as LITERALS under-matches, and under-matching a positive `paths:` list is the
+#: EXCUSING direction -- the filter looks like it admitted nothing, so an
+#: absence gets excused. `!` under `paths-ignore:` is worse still: it re-includes
+#: a path, so ignoring it can excuse outright.
+#:
+#: Zero workflows in this repo use any of them today (measured), which is
+#: exactly why refusing is free. A pattern this cannot represent is an
+#: unanswered question, and unanswered questions fail closed here.
+_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|]")
+
+
+class UnsupportedPatternError(ValueError):
+    """A filter pattern this translator cannot represent faithfully."""
+
+
 def glob_matches(pattern: str, path: str) -> bool:
-    """Does one GitHub filter pattern match one path?"""
+    """Does one GitHub filter pattern match one path?
+
+    Raises `UnsupportedPattern` rather than guessing. See `_UNSUPPORTED_GLOB`:
+    silently treating `!` or `[0-9]` as literal text under-matches, and
+    under-matching is the direction that EXCUSES an absence.
+    """
+    if _UNSUPPORTED_GLOB.search(pattern):
+        raise UnsupportedPatternError(pattern)
     return re.match(_glob_to_regex(pattern), path) is not None
 
 
 def _any_match(patterns: tuple[str, ...], values) -> bool:
     return any(glob_matches(p, v) for p in patterns for v in values)
+
+
+def select_merged_run(runs, workflow_path: str, merged_sha: str) -> dict | None:
+    """The `push` run of `workflow_path` AT the merged sha, or None.
+
+    EXTRACTED FROM THE COLLECTOR SO IT CAN BE TESTED. The version that lived
+    inline in `merge_gate.collect_ci_green_evidence` took the NEWEST run for a
+    path with no event filter and no sha filter, and both independent reviewers
+    built the same attack on it: a single sha carries many runs per path across
+    `push`, `schedule`, `check_suite` and `issues` -- measured, 73 workflow runs
+    at `a02cd41e6d42` with 10 paths carrying more than one -- so a RED `push`
+    run followed by any green cron would supply the "rename" evidence.
+
+    `push` is the only event that answers the question being asked. The
+    required context is the `pull_request` spelling; what is being excused is
+    that the `push` event published a different job name at this commit. A
+    `schedule` or `workflow_dispatch` run is a different question with a
+    different range, which `commit-message-parses.yml` states about itself in
+    so many words.
+
+    Newest-first among genuine candidates only, so a re-run of the push
+    supersedes the original rather than a cron superseding both.
+    """
+    candidates = [
+        run for run in runs
+        if isinstance(run, dict)
+        and run.get("path") == workflow_path
+        and str(run.get("head_sha") or "") == merged_sha
+        and str(run.get("event") or "").lower() == "push"
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: str(r.get("run_started_at") or ""))
 
 
 def push_event_runs(
@@ -1525,6 +1618,25 @@ def push_event_runs(
     if not trigger.present:
         return False, "the producing workflow has no `push:` trigger at all"
     files = [f for f in changed_files if f]
+
+    # An UNREPRESENTABLE pattern anywhere in this trigger makes the whole
+    # question unanswerable, and it resolves to "it runs" -- which the receipt
+    # turns into a FAILURE. Never into an excused absence.
+    for label, patterns in (
+        ("push.branches", trigger.branches),
+        ("push.branches-ignore", trigger.branches_ignore),
+        ("push.paths", trigger.paths),
+        ("push.paths-ignore", trigger.paths_ignore),
+    ):
+        if patterns is None:
+            continue
+        for pattern in patterns:
+            if _UNSUPPORTED_GLOB.search(pattern):
+                return True, (
+                    f"`{label}` contains {pattern!r}, which this translator cannot "
+                    "represent faithfully - refusing to guess rather than under-match"
+                )
+
     if trigger.branches is not None and not _any_match(trigger.branches, [branch]):
         return False, (
             f"`push.branches` {list(trigger.branches)} does not match {branch!r}"
@@ -1569,7 +1681,17 @@ class ContextEvidence:
     merged_check: dict | None = None
     head_check: dict | None = None
     merged_workflow_run: dict | None = None
-    merged_workflow_jobs: tuple[str, ...] = ()
+    #: The JOBS of `merged_workflow_run`, as dicts carrying at least `name`,
+    #: `conclusion` and `steps`. This used to be a tuple of bare NAMES that the
+    #: receipt read only to PRINT -- the evidence that would prove a rename was
+    #: gathered and then discarded, and both independent reviewers found it.
+    merged_workflow_jobs: tuple[dict, ...] = ()
+    #: The PR-head job behind `head_check`, same shape. Needed because a green
+    #: check is not proof that anything RAN: `test.yml` reports SUCCESS on
+    #: `pull_request` with `Run pytest`, `Lint with ruff` and `mypy` all
+    #: `skipped`, BY DESIGN, and runs the real suite only on `push`. Measured on
+    #: PRs #4440 and #4437, whose deferral this receipt used to accept.
+    head_job: dict | None = None
     push_trigger: PushTrigger | None = None
 
 
@@ -1609,6 +1731,7 @@ def ci_green_receipt(
     *,
     merged_total_count: int,
     merged_changed_files,
+    merged_sha: str,
     merged_branch: str = "main",
     trees_identical: bool,
 ) -> CiGreenReceipt:
@@ -1653,6 +1776,7 @@ def ci_green_receipt(
             item,
             merged_changed_files=merged_changed_files,
             merged_branch=merged_branch,
+            merged_sha=merged_sha,
             trees_identical=trees_identical,
         )
         contexts.append(result)
@@ -1672,6 +1796,7 @@ def _one_context(
     *,
     merged_changed_files,
     merged_branch: str,
+    merged_sha: str,
     trees_identical: bool,
 ) -> ContextResult:
     if item.merged_check is not None:
@@ -1698,21 +1823,7 @@ def _one_context(
         )
 
     if item.merged_workflow_run is not None:
-        run = item.merged_workflow_run
-        conclusion = str(run.get("conclusion") or "").upper()
-        status = str(run.get("status") or "").upper()
-        if conclusion != "SUCCESS":
-            return ContextResult(
-                item.name, "FAIL",
-                f"absent under this name, and {item.workflow_path} did run at the merged "
-                f"sha but concluded {conclusion or status or 'unknown'!s}",
-            )
-        siblings = ", ".join(item.merged_workflow_jobs) or "(no job names read)"
-        return ContextResult(
-            item.name, "renamed-at-merge",
-            f"published under a different name by {item.workflow_path}, which ran at the "
-            f"merged sha and concluded SUCCESS; its job(s) there: {siblings}",
-        )
+        return _renamed_at_merge(item, merged_sha=merged_sha)
 
     if item.push_trigger is None:
         return ContextResult(
@@ -1748,10 +1859,193 @@ def _one_context(
             f"structurally absent at the merged sha ({why}) and its PR-head result is "
             f"{verdict or status or 'unknown'}, not green",
         )
+    # A GREEN THAT RAN NOTHING IS NOT A RESULT TO DEFER TO, and this is the
+    # branch both independent reviewers blocked on. `test.yml` publishes
+    # `Python Tests (3.x)` on BOTH events and, on `pull_request`, reports
+    # SUCCESS with `Run pytest with coverage`, `Lint with ruff` and `mypy` all
+    # `skipped` -- by design, documented in the workflow, because the real suite
+    # is meant to run on `push`. Deferring a path-filtered context to that green
+    # is precisely "quietly accept 10-of-15" wearing a function.
+    #
+    # Measured live before this check existed: the receipt returned GREEN for
+    # #4440 and #4437 on exactly that job (run 34483464251). It is 3 of 11
+    # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
+    # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
+    # than distrust deferral as a category.
+    ran, evidence = job_executed(item.head_job)
+    if not ran:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}), and its PR-head run is green "
+            f"but {evidence} - a check that executed nothing is not a result to defer to; "
+            f"dispatch {item.workflow_path} at the merged sha instead",
+        )
     return ContextResult(
         item.name, "deferred-to-head",
         f"structurally absent at the merged sha ({why}); green on the PR head over an "
-        "identical tree",
+        f"identical tree, and it {evidence}",
+    )
+
+
+def job_executed(job: dict | None) -> tuple[bool, str]:
+    """Did this job actually DO its work, or conclude green having skipped it?
+
+    The population source `statusCheckRollup` does not have and the Actions
+    jobs API does: `steps[].conclusion`.
+
+    THE PREDICATE IS "EVERY WORK STEP RAN", NOT "ANY DID", and that distinction
+    is the whole control. The first version of this function asked whether ANY
+    substantive step executed -- and on PR #4440 the `Python Tests (3.10)` head
+    job satisfied it with exactly one: `Detect Python-relevant changes`, the
+    change-detection gate that then SKIPPED the other ten, including `Run
+    pytest with coverage`, `Lint with ruff` and `Typecheck with mypy (strict)`.
+    A predicate a gate step can satisfy is not a predicate. That was found by
+    running the corrected receipt against the reviewer's own counterexample
+    instead of against the fixture written from their description.
+
+    MEASURED BEFORE CHOOSING THE RULE, because a threshold picked without the
+    distribution is the same defect one level up. Across the 16 deferrals on
+    PRs #4440 and #4483 the split is BIMODAL WITH NO MIDDLE:
+
+        genuine   `Python Lint`, `Secret Scan`, `Repo Hygiene`, all four
+                  `dbt Compile (*)`, `changelog parser ...`, `PowerShell Lint`
+                  -> 0 skipped, of 2 to 7 work steps. Every one.
+        hollow    `Python Tests (3.10|3.11|3.12)` -> 10 skipped of 11.
+
+    No job is partially skipped, so "any skip refuses" costs nothing today and
+    a ratio threshold would be an arbitrary number dressed as a measurement. If
+    a job legitimately starts skipping a step, this refuses and a human looks —
+    which is the direction this package fails in.
+
+    Fails CLOSED on absent step data: `None`, an empty `steps` list, or a
+    non-dict all mean the question was not answered, and an unanswered question
+    is not evidence. Returns (ran, evidence-phrase) so the caller can quote
+    WHAT it saw rather than assert a cause (R7).
+
+    The runner's own bookkeeping is not evidence that the job did its work:
+    `Set up job`, `Complete job`, `Post ...` and the checkout run on every job
+    including one whose real steps were all skipped.
+    """
+    if not isinstance(job, dict):
+        return False, "no job record was read for it, so it cannot be shown to have run"
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return False, "its job record carries no steps, so it cannot be shown to have run"
+    substantive = [
+        step for step in steps
+        if isinstance(step, dict) and not _is_bookkeeping_step(str(step.get("name") or ""))
+    ]
+    if not substantive:
+        return False, (
+            f"all {len(steps)} of its steps are runner bookkeeping - it has no work steps at all"
+        )
+    skipped = [
+        step for step in substantive
+        if str(step.get("conclusion") or "").lower() in ("skipped", "")
+    ]
+    if skipped:
+        names = ", ".join(str(s.get("name") or "?") for s in skipped[:4])
+        more = f", +{len(skipped) - 4} more" if len(skipped) > 4 else ""
+        return False, (
+            f"{len(skipped)} of its {len(substantive)} work step(s) are SKIPPED "
+            f"({names}{more})"
+        )
+    return True, f"executed {len(substantive)} of {len(substantive)} work step(s)"
+
+
+_BOOKKEEPING = (
+    "set up job", "complete job", "checkout", "post ", "set up runner",
+)
+
+
+def _is_bookkeeping_step(name: str) -> bool:
+    lowered = name.strip().lower()
+    return any(lowered.startswith(prefix) or prefix in lowered for prefix in _BOOKKEEPING)
+
+
+def _renamed_at_merge(item: ContextEvidence, *, merged_sha: str) -> ContextResult:
+    """The per-event RENAME case, on evidence rather than on a green run.
+
+    THE FIRST VERSION OF THIS WAS A WEAKENING and both independent reviewers
+    blocked on it. It asked one question -- did some run of this workflow path
+    at the merged sha conclude SUCCESS -- and from that asserted "published
+    under a different name", which is a cause it never established (R7). It
+    accepted an EMPTY job list, never read a job's conclusion, never checked
+    the run was even about this commit, and the collector handed it the NEWEST
+    run of that path regardless of event. Since `commit-message-parses.yml`
+    also carries `schedule:` and `workflow_dispatch:`, and its own header says
+    the dispatch shape "goes green having judged no commits at all", a RED push
+    run followed by any green cron could produce `RECEIPT: GREEN`. Under the
+    definition this replaced there was simply no receipt.
+
+    So the rename must now be SHOWN, not inferred:
+
+    1. the run is about THIS commit (`head_sha` == the merged sha),
+    2. it is the `push` run -- the event whose spelling we are excusing,
+    3. it concluded SUCCESS,
+    4. its job list is non-empty and the required context is genuinely ABSENT
+       from it (that is what makes this a rename rather than a missing job),
+    5. the sibling job that stands in concluded success and EXECUTED steps.
+
+    Every one of those fails closed, and the message names the sibling actually
+    observed instead of asserting one exists.
+    """
+    run = item.merged_workflow_run or {}
+    where = item.workflow_path
+    conclusion = str(run.get("conclusion") or "").upper()
+    status = str(run.get("status") or "").upper()
+
+    head_sha = str(run.get("head_sha") or "")
+    if not head_sha or (merged_sha and head_sha != merged_sha):
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and the {where} run offered as the rename is for "
+            f"{head_sha[:12] or 'an unreadable sha'}, not the merged sha {merged_sha[:12]}",
+        )
+    event = str(run.get("event") or "").lower()
+    if event != "push":
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and the {where} run offered as the rename was "
+            f"triggered by {event or 'an unreadable event'}, not `push` - a scheduled or "
+            "dispatched run is not the event whose spelling is being excused",
+        )
+    if conclusion != "SUCCESS":
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and {where} did run at the merged sha but concluded "
+            f"{conclusion or status or 'unknown'}",
+        )
+    jobs = [j for j in item.merged_workflow_jobs if isinstance(j, dict)]
+    if not jobs:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and no jobs could be read from the {where} run - "
+            "with no job list there is nothing showing a rename rather than a missing job",
+        )
+    names = [str(j.get("name") or "") for j in jobs]
+    if item.name in names:
+        return ContextResult(
+            item.name, "FAIL",
+            f"the {where} run DOES carry a job named {item.name!r}, so this is not a "
+            "rename - the context is absent for some other reason",
+        )
+    ran = [(j, job_executed(j)) for j in jobs]
+    usable = [
+        (j, ev) for j, (ok, ev) in ran
+        if ok and str(j.get("conclusion") or "").lower() == "success"
+    ]
+    if not usable:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and no job in the {where} run both concluded success "
+            f"and executed anything (jobs: {', '.join(n or '?' for n in names[:4])})",
+        )
+    sibling, evidence = usable[0]
+    return ContextResult(
+        item.name, "renamed-at-merge",
+        f"{where} ran on `push` at the merged sha, concluded SUCCESS, and published "
+        f"{str(sibling.get('name'))!r} instead of this context - which {evidence}",
     )
 
 
