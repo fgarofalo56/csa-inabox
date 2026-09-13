@@ -81,8 +81,8 @@ param runnerNamePrefix string = 'loom-aca'
 @description('Pending-run count that maps to one job execution.')
 param targetWorkflowQueueLength int = 1
 
-@description('Max concurrent job executions per polling interval.')
-param maxExecutions int = 5
+@description('Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30), together with the D8 profile ceiling of 3 nodes, to bound fleet cost at roughly a third of an unbounded ceiling. Raise both together if PRs start queueing.')
+param maxExecutions int = 8
 
 @description('Min executions. 0 = scale-to-zero.')
 @minValue(0)
@@ -91,14 +91,17 @@ param minExecutions int = 0
 @description('Scaler polling interval (seconds).')
 param pollingInterval int = 30
 
-@description('Max seconds a runner replica may execute before it is terminated.')
-param replicaTimeout int = 1800
+@description('Max seconds a runner replica may execute before it is terminated. MUST exceed the longest `timeout-minutes` of any job that targets this fleet, or ACA kills the replica mid-job and the check reports CANCELLED - indistinguishable from a human cancel. Measured 2026-09-13: 40 job definitions declare 40-150 minutes, the longest being deploy-fiab-il5 and dr-drill at 150. 9600s = 160 minutes leaves headroom over that maximum.')
+param replicaTimeout int = 9600
 
-@description('vCPU per runner replica.')
-param cpu string = '1.0'
+@description('vCPU per runner replica. Matches the 4 vCPU of a GitHub-hosted ubuntu-latest runner; the workflows are written against that and the caps assume it.')
+param cpu string = '4.0'
 
-@description('Memory per runner replica (e.g. 2.0Gi).')
-param memory string = '2.0Gi'
+@description('Memory per runner replica. 16Gi matches ubuntu-latest. NOT arbitrary: at 2.0Gi the console `next build` was OOM-killed after ~4.5 minutes with no error message, and fiab-console-ci.yml sets NODE_OPTIONS=--max-old-space-size=6144, which alone exceeds a 2Gi container.')
+param memory string = '16.0Gi'
+
+@description('Container Apps workload profile. The heavy jobs (next build, vitest, the Python matrix) do not fit the Consumption profile, so this fleet runs on the dedicated D8 profile that the environment already provisions and which scales to zero.')
+param workloadProfileName string = 'D8'
 
 @description('GitHub PAT value (repo-scoped). Supply via a pipeline @secure() variable. Leave empty when using githubPatKeyVaultSecretUri.')
 @secure()
@@ -140,6 +143,7 @@ resource runnerJob 'Microsoft.App/jobs@2025-02-02-preview' = {
   }
   properties: {
     environmentId: environmentId
+    workloadProfileName: workloadProfileName
     configuration: {
       triggerType: 'Event'
       replicaTimeout: replicaTimeout
