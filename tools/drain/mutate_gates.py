@@ -1284,21 +1284,21 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB1 a PR-head green that did NOT execute its declared substantive step "
          "is deferrable again (the test.yml pull_request shape)"),
         "gates.py",
-        ("    ran, evidence, scope_skip = context_is_accounted_for(\n"
+        ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
-         "        push_trigger=item.push_trigger,\n"
+         "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
          "    )\n    if not ran:"),
-        ("    ran, evidence, scope_skip = context_is_accounted_for(\n"
+        ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
-         "        push_trigger=item.push_trigger,\n"
+         "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
          "    )\n    if False:"),
     ),
     (
         ("SC9 an UNREPRESENTABLE pattern in a declared scope propagates out of "
          "the gate instead of failing closed - a crash, not a refusal"),
         "gates.py",
-        "    except UnsupportedPatternError as exc:\n        return False, (",
-        "    except UnsupportedPatternError as exc:\n        return True, (",
+        "    except UnsupportedPatternError as exc:\n        return None, (",
+        "    except UnsupportedPatternError as exc:\n        return [], (",
     ),
     (
         ("SC8 a DELEGATED scope resolves to an empty path list instead of failing "
@@ -1342,11 +1342,13 @@ ARMS: list[tuple[str, str, str, str]] = [
          "branch that carries 14 of 15 contexts, and the defect both reviewers "
          "found one branch along from the deferral one"),
         "gates.py",
-        ("        did_work, evidence, scope_skip = context_is_accounted_for(\n"
-         "            item.name, item.merged_job, merged_changed_files, policy\n"
+        ("        did_work, evidence, route = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy,\n"
+         "            infra_ere=infra_ere,\n"
          "        )\n        if not did_work:"),
-        ("        did_work, evidence, scope_skip = context_is_accounted_for(\n"
-         "            item.name, item.merged_job, merged_changed_files, policy\n"
+        ("        did_work, evidence, route = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy,\n"
+         "            infra_ere=infra_ere,\n"
          "        )\n        if False:"),
     ),
     (
@@ -1526,15 +1528,57 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4l a declared ALTERNATIVE that was SKIPPED counts as work done, so "
          "the two-output job stops being checked on either half"),
         "gates.py",
-        "                and ran(s)",
-        "                and True",
+        '        and str(s.get("conclusion") or "").lower() == "success"',
+        '        and str(s.get("conclusion") or "").lower() != "__never__"',
+    ),
+    # ROUND 6. Four arms an independent reviewer wrote against round 5's new
+    # code, ALL FOUR OF WHICH SURVIVED. The lesson is the one this file records
+    # twice already and the author has now failed to apply three rounds running:
+    # the author mutates the CHECK, the reviewer narrows the POPULATION, and it
+    # is the population narrowing that lives. `[:1]` is the honest shape of an
+    # accident where `[:0]` is not, because a one-element slice still reaches
+    # the right answer on any fixture that happens to order the interesting
+    # element first -- which is exactly why R2A3 survived.
+    (
+        ("R2A1 only the FIRST declared alternative is consulted, so a job whose "
+         "SECOND alternative ran stops being accounted for"),
+        "gates.py",
+        '        if any(alt in str(s.get("name") or "") for alt in alternatives)',
+        '        if any(alt in str(s.get("name") or "") for alt in alternatives[:1])',
+    ),
+    (
+        ("R2A6 alternatives are consulted only when EXACTLY ONE is declared - "
+         "i.e. the feature is deleted for half its declared population, and "
+         "before round 6 no test named `Jest (portal)` at all"),
+        "gates.py",
+        "    if not isinstance(alternatives, list) or not alternatives:",
+        "    if not isinstance(alternatives, list) or len(alternatives) != 1:",
+    ),
+    (
+        ("R2A3 the gate-step all() reads only the FIRST detector - the honest "
+         "narrowing of round 5's own any()->all() blocker fix"),
+        "gates.py",
+        ('        for s in detectors\n'
+         '        if str(s.get("conclusion") or "").lower() != "success"'),
+        ('        for s in detectors[:1]\n'
+         '        if str(s.get("conclusion") or "").lower() != "success"'),
+    ),
+    (
+        ("R2A5 a FAILED work step stops counting as work, so the excuse prints "
+         "'nothing for it to do' about a job that ran a step and it failed"),
+        "gates.py",
+        '        and str(s.get("conclusion") or "").lower() not in ("skipped", "")',
+        '        and str(s.get("conclusion") or "").lower() not in ("skipped", "", "failure")',
     ),
     (
         ("SC3 a context with no declared scope BORROWS another context's, so the "
          "excuse stops being per-context at all"),
         "gates.py",
-        "    row = rows.get(name)",
-        "    row = rows.get(name) or next(iter(rows.values()), None)",
+        "    return row if isinstance(row, dict) else None",
+        ("    return row if isinstance(row, dict) else next(\n"
+         "        (r for r in (policy.get(\"receipts\", {}).get(\"ci_green_rule\", {})\n"
+         "                     .get(\"scope_paths\", {}) or {}).values()\n"
+         "         if isinstance(r, dict)), None)"),
     ),
     (
         ("SC4 an EMPTY merged changed-file list is excused instead of refused, so "

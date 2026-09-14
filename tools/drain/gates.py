@@ -268,7 +268,7 @@ OTHER_IMPLEMENTED_BY = {
     "receipts.ci_green_rule": "gates.ci_green_receipt",
     "receipts.ci_green_rule.substantive_steps": "gates.context_did_its_work",
     "receipts.ci_green_rule.scope_paths": "gates.scope_untouched_at_merge",
-    "receipts.ci_green_rule.alternatives": "gates.context_did_its_work",
+    "receipts.ci_green_rule.alternatives": "gates.alternative_accounted_for",
     "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
     "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
     "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
@@ -1814,6 +1814,7 @@ def ci_green_receipt(
     merged_branch: str = "main",
     trees_identical: bool,
     policy: dict,
+    infra_ere: str | None = None,
 ) -> CiGreenReceipt:
     """The `ci-green` receipt, as a measurement that can actually be taken.
 
@@ -1859,6 +1860,7 @@ def ci_green_receipt(
             merged_sha=merged_sha,
             trees_identical=trees_identical,
             policy=policy,
+            infra_ere=infra_ere,
         )
         contexts.append(result)
         if not result.ok:
@@ -1880,6 +1882,7 @@ def _one_context(
     merged_sha: str,
     trees_identical: bool,
     policy: dict,
+    infra_ere: str | None = None,
 ) -> ContextResult:
     if item.merged_check is not None:
         verdict, status = _outcome(item.merged_check)
@@ -1902,22 +1905,35 @@ def _one_context(
         # Live at the time it was found: PR #4488 returned RECEIPT: GREEN while
         # `next build (node 20)` concluded success with `Build (next build)`
         # SKIPPED behind a change-detection gate.
-        did_work, evidence, scope_skip = context_is_accounted_for(
-            item.name, item.merged_job, merged_changed_files, policy
+        did_work, evidence, route = context_is_accounted_for(
+            item.name, item.merged_job, merged_changed_files, policy,
+            infra_ere=infra_ere,
         )
         if not did_work:
             return ContextResult(
                 item.name, "FAIL",
                 f"green at the merged sha ({verdict}), but {evidence}",
             )
-        if scope_skip:
+        if route == ACCOUNTED_SCOPE_SKIP:
             return ContextResult(
-                item.name, "scope-untouched-at-merge",
+                item.name, ACCOUNTED_SCOPE_SKIP,
                 f"green at the merged sha ({verdict}); it skipped its declared work, and "
                 f"{evidence}",
             )
+        if route == ACCOUNTED_ALTERNATIVE:
+            # REPORTED SEPARATELY FROM `green-at-merge`, because it is a
+            # different claim. Its declared substantive step was SKIPPED, and an
+            # independent reviewer pointed out that folding it in makes the one
+            # line a reader acts on say twelve contexts executed their check when
+            # eleven did and one did the other half of its job. The README
+            # already refuses that fold for `scope-untouched-at-merge`; the
+            # asymmetry was the defect.
+            return ContextResult(
+                item.name, ACCOUNTED_ALTERNATIVE,
+                f"green at the merged sha ({verdict}); it {evidence}",
+            )
         return ContextResult(
-            item.name, "green-at-merge",
+            item.name, ACCOUNTED_DID_WORK,
             f"green at the merged sha ({verdict}), and it {evidence}",
         )
 
@@ -1932,6 +1948,7 @@ def _one_context(
         return _renamed_at_merge(
             item, merged_sha=merged_sha,
             merged_changed_files=merged_changed_files, policy=policy,
+            infra_ere=infra_ere,
         )
 
     if item.push_trigger is None:
@@ -1981,9 +1998,9 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
-    ran, evidence, scope_skip = context_is_accounted_for(
+    ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
-        push_trigger=item.push_trigger,
+        push_trigger=item.push_trigger, infra_ere=infra_ere,
     )
     if not ran:
         return ContextResult(
@@ -1992,11 +2009,17 @@ def _one_context(
             f"but {evidence} - a check that executed nothing is not a result to defer to; "
             f"dispatch {item.workflow_path} at the merged sha instead",
         )
-    if scope_skip:
+    if route == ACCOUNTED_SCOPE_SKIP:
         return ContextResult(
-            item.name, "scope-untouched-at-merge",
+            item.name, ACCOUNTED_SCOPE_SKIP,
             f"structurally absent at the merged sha ({why}); green on the PR head over an "
             f"identical tree, where it skipped its declared work, and {evidence}",
+        )
+    if route == ACCOUNTED_ALTERNATIVE:
+        return ContextResult(
+            item.name, ACCOUNTED_ALTERNATIVE,
+            f"structurally absent at the merged sha ({why}); green on the PR head over an "
+            f"identical tree, where it {evidence}",
         )
     return ContextResult(
         item.name, "deferred-to-head",
@@ -2108,68 +2131,94 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
             f"the declared step(s) {missing} are ABSENT from this job - the declaration "
             "is stale, or this is not the job it describes; re-read it off a green run"
         )
-    if hollow:
-        # A DECLARED ALTERNATIVE THAT RAN IS THE CONTEXT DOING ITS WORK. A job
-        # may carry MORE THAN ONE work-gating output, and a declaration naming
-        # only the first makes the receipt state something FALSE -- which an
-        # independent reviewer measured on the two merged shas this PR presents
-        # as its receipt: `Run vitest (with istanbul coverage floor)` skipped,
-        # `Run vitest (infra-reading suites only)` SUCCEEDED, and the receipt
-        # printed "there was nothing for it to do". It did work.
-        #
-        # Checked HERE rather than in the scope branch on purpose: this is the
-        # context having done its work, not an excuse for not having done it, and
-        # the two must not be reported as the same thing.
-        alternatives = (
-            policy.get("receipts", {})
-            .get("ci_green_rule", {})
-            .get("alternatives", {})
-            .get(name)
-        )
-        if isinstance(alternatives, list):
-            ran_instead = [
-                str(s.get("name") or "")
-                for s in work
-                if any(alt in str(s.get("name") or "") for alt in alternatives)
-                and ran(s)
-            ]
-            if ran_instead:
-                return True, (
-                    f"skipped its primary step(s) {hollow} and executed its declared "
-                    f"alternative(s) {ran_instead} instead - the other half of a job "
-                    "whose work is gated on more than one output"
-                )
-        return False, (
-            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
-            "concluded green having not done the thing it is required for"
-        )
     if ambiguous:
+        # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched several
+        # steps with a MIXED outcome cannot say which one is the check, and
+        # round 5 answered a hollow primary with an alternative BEFORE reaching
+        # this refusal -- so a two-entry declaration with one hollow entry and
+        # one ambiguous entry returned a pass and this sentence was never
+        # printed. An independent reviewer demonstrated it synthetically; it was
+        # latent only because both rows that declare alternatives name exactly
+        # one primary step.
         return False, (
             "a declaration matched several steps with a MIXED outcome, so which one "
             f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
             "the declaration name exactly one step"
         )
+    if hollow:
+        # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
+        # blocker. Round 5 accepted "a declared alternative ran" as the context
+        # having done its work, inside this function -- which has no
+        # `changed_files` and cannot ask the only question that makes such an
+        # acceptance safe. `context_is_accounted_for` returned on `did` before
+        # the merged file list was ever consulted, so the `hits` refusal (a
+        # change detector that MISSED a change, the #3783 shape `policy.json`
+        # says must never be laundered) became unreachable whenever any
+        # alternative ran. Two reviewers found it independently, on different
+        # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
+        #
+        # So the alternative lives in `alternative_accounted_for`, which asks
+        # the scope question and this one as two halves of a single predicate.
+        return False, (
+            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
+            "concluded green having not done the thing it is required for"
+        )
     return True, f"executed its declared substantive step(s) {list(rule)}"
 
 
-#: A `scope_paths` row may declare its scope to BE the producing workflow's own
-#: `on.push.paths` rather than a copy of it. Used where the workflow's in-job
+#: A `scope_paths` output may declare its scope to BE the producing workflow's
+#: own `on.push.paths` rather than a copy of it. Used where the workflow's in-job
 #: detector parses that key out of the file itself, so a second list in
 #: `policy.json` would be the drift the workflow explicitly refuses to carry.
 ON_PUSH_PATHS = "on.push.paths"
+
+#: The same delegation, for a scope that is COMPUTED rather than written down.
+#: `fiab-console-ci.yml`'s vitest detector derives its `infra` ERE by running
+#: `node scripts/ci/derive-infra-reading-suites.mjs --ere` over the tree, so
+#: there is no list to copy and any copy would be stale the moment a suite moves.
+#: The value is resolved by the CALLER and injected, exactly as `push_trigger`
+#: is -- `gates.py` runs no subprocess, so the decision function stays pure and a
+#: test can drive both the resolved and the unresolvable case.
+INFRA_READING_ERE = "derive-infra-reading-suites.mjs --ere"
+
+#: The routes by which a green required context can be ACCOUNTED FOR. Returned
+#: by `context_is_accounted_for` as the third element so the collector names the
+#: route rather than re-deriving it, and so the three cannot be folded into one
+#: another in a summary line. They are genuinely different claims:
+#:
+#:   DID_WORK     it executed the step that IS the check
+#:   ALTERNATIVE  it skipped that step and executed a declared OTHER half of the
+#:                same job, with the merged files outside the primary's scope
+#:   SCOPE_SKIP   it skipped that step, ran nothing at all, and the merged files
+#:                are outside every scope the job gates work on
+#:
+#: An independent reviewer found ALTERNATIVE being counted inside DID_WORK: on
+#: #4488 that is the difference between `green-at-merge=13` and `12 + 1`, and the
+#: per-context detail was honest while the summary a reader acts on was not.
+ACCOUNTED_DID_WORK = "green-at-merge"
+ACCOUNTED_ALTERNATIVE = "alternative-work-at-merge"
+ACCOUNTED_SCOPE_SKIP = "scope-untouched-at-merge"
 
 
 def context_is_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
-) -> tuple[bool, str, bool]:
+    infra_ere: str | None = None,
+) -> tuple[bool, str, str]:
     """ONE question -- is this green check accounted for? -- asked in one place.
 
-    Returns `(ok, evidence, was_a_scope_skip)`.
+    Returns `(ok, evidence, route)`, where `route` is one of
+    `ACCOUNTED_DID_WORK`, `ACCOUNTED_ALTERNATIVE`, `ACCOUNTED_SCOPE_SKIP`, or
+    `""` when the answer is no.
 
-    A green check is accounted for when it EXECUTED its declared substantive
-    step, or when it skipped that step and the skip is corroborated by the
-    merged commit's own file list falling outside the context's declared scope.
+    A green check is accounted for by exactly one of three routes:
+
+    1. it EXECUTED its declared substantive step;
+    2. it skipped that step and executed a declared ALTERNATIVE -- the other
+       half of a job whose work is gated on more than one output -- **with the
+       merged files outside the primary's declared scope**;
+    3. it skipped that step, ran nothing at all, and the merged commit's own
+       file list falls outside every scope the job gates work on.
 
     Every branch of the receipt goes through here. Three of them used to ask the
     question with three different predicates -- `green-at-merge` and
@@ -2179,20 +2228,42 @@ def context_is_accounted_for(
     fixed, the green-at-merge branch was not, and a reviewer found it one round
     later. A single entry point is not tidiness; it is what makes "fixed on one
     side only" impossible to write.
+
+    THE ORDER OF 2 AND 3 IS NOT ARBITRARY and neither may skip the other's
+    question. Round 5 put the alternative inside `context_did_its_work`, which
+    receives no `changed_files`, so route 2 returned a pass before route 3's
+    scope corroboration was ever reached -- and the `hits` refusal, the one
+    check watching for a detector that MISSED a change, became unreachable
+    whenever an alternative ran. Both reviewers reproduced it: the identical
+    input that round 4 refused with "that is a change detector that missed a
+    change", round 5 accepted as `green-at-merge`. Routes 2 and 3 now share
+    `_merged_files_outside_scope`, so the file-list question is asked on every
+    route that accepts a SKIPPED primary, and the two are halves of one
+    predicate rather than two branches that can each bypass the other.
     """
     did, evidence = context_did_its_work(name, job, policy)
     if did:
-        return True, evidence, False
+        return True, evidence, ACCOUNTED_DID_WORK
     excused, why = scope_untouched_at_merge(
-        name, job, changed_files, policy, push_trigger=push_trigger)
+        name, job, changed_files, policy,
+        push_trigger=push_trigger, infra_ere=infra_ere)
     if excused:
-        return True, why, True
-    return False, f"{evidence}. Nor is that a scope skip: {why}", False
+        return True, why, ACCOUNTED_SCOPE_SKIP
+    alt_ok, alt_why = alternative_accounted_for(
+        name, job, changed_files, policy,
+        push_trigger=push_trigger, infra_ere=infra_ere)
+    if alt_ok:
+        return True, alt_why, ACCOUNTED_ALTERNATIVE
+    return False, (
+        f"{evidence}. Nor is that a scope skip: {why}. "
+        f"Nor a declared alternative: {alt_why}"
+    ), ""
 
 
 def scope_untouched_at_merge(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
+    infra_ere: str | None = None,
 ) -> tuple[bool, str]:
     """Was the substantive step skipped because this context's SCOPE did not change?
 
@@ -2237,70 +2308,110 @@ def scope_untouched_at_merge(
       skipped work it should have done, which is the #3783 shape and a real
       defect rather than an excuse.
     """
-    rows = (
-        policy.get("receipts", {})
-        .get("ci_green_rule", {})
-        .get("scope_paths", {})
-    )
-    row = rows.get(name)
-    if not isinstance(row, dict):
+    row = _scope_row(name, policy)
+    if row is None:
         return False, (
             f"no change-detection scope is DECLARED for {name!r} in policy.json "
             "(receipts.ci_green_rule.scope_paths), so its skip cannot be excused "
             "as a scope skip"
         )
     gate_step = str(row.get("gate_step") or "")
-    paths = row.get("paths")
-    if paths == ON_PUSH_PATHS:
-        # THE DETECTOR READS THE WORKFLOW'S OWN `on.push.paths`, so there is no
-        # second list to drift. `test.yml`'s `Detect Python-relevant changes`
-        # delegates to `scripts/ci/python_trigger_scope.py`, which parses that
-        # very key out of the file -- its own comment says "ONE list ... READ OUT
-        # OF THIS FILE - not a second copy of it that has to be kept in agreement
-        # by review". Copying those 15 globs into `policy.json` would create
-        # exactly the second copy that file refuses to have.
-        #
-        # This is the SAME predicate `push_event_runs` applies one branch up, and
-        # that is the point rather than a circularity: one list governs both
-        # whether the workflow could run at the merged sha and whether the step
-        # could run at the head, because the workflow was written that way.
-        if push_trigger is None or not push_trigger.paths:
-            return False, (
-                f"{name!r} declares its scope as the producing workflow's "
-                "`on.push.paths`, and that trigger could not be read here - fail "
-                "closed rather than assume it excludes anything"
-            )
-        paths = list(push_trigger.paths)
-    if not gate_step or not isinstance(paths, list) or not paths:
-        return False, (
-            f"the declared scope for {name!r} is {row!r}, which is missing a "
-            "`gate_step` or a non-empty `paths` list"
-        )
-
     if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
         return False, "no job record was read for it, so its skip cannot be explained"
     steps = [s for s in job["steps"] if isinstance(s, dict)]
 
+    gate_ok, gate_why, detectors = _declared_gate_ran(row, steps)
+    if not gate_ok:
+        return False, gate_why
+
+    hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
+    if not hollow_ok:
+        return False, hollow_why
+
+    files = [str(f) for f in (changed_files or []) if str(f).strip()]
+    # "NOTHING FOR IT TO DO" MUST BE TRUE WHEN IT IS PRINTED (R7), and so must
+    # every refusal on the way there. This is asked BEFORE the scope comparison
+    # because a job that ran its other half would otherwise be refused with
+    # "that is a change detector that missed a change" -- a sentence about a
+    # detector that did NOT miss anything, since the matching scope is exactly
+    # why the alternative ran. Round 6 introduced that inversion by adding the
+    # second output and left the order alone; the order IS the claim.
+    #
+    # It closes the BENIGN direction only, and that is stated because round 5's
+    # reply claimed more for it. A detector that wrongly reports FALSE runs
+    # nothing, so `did_run` is empty and this assertion is silent -- the
+    # dangerous direction is closed by `_merged_files_outside_scope` asking
+    # EVERY output below, which is what makes an under-declared row impossible
+    # rather than merely unlikely.
+    did_run = [
+        str(s.get("name") or "?")
+        for s in steps
+        if s not in detectors
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
+        and str(s.get("conclusion") or "").lower() not in ("skipped", "")
+    ]
+    if did_run:
+        return False, (
+            f"{len(did_run)} work step(s) RAN anyway ({', '.join(did_run[:3])}) - a job "
+            "that did work is not a job with nothing to do. If those steps are a second "
+            "half of this job's work, declare them under `alternatives`, which is "
+            "corroborated against the merged files exactly as this branch is"
+        )
+    clear, scope_why = _merged_files_outside_scope(
+        name, row, files, push_trigger, infra_ere)
+    if not clear:
+        return False, scope_why
+    return True, (
+        f"its declared gate step {gate_step!r} ran, {scope_why}, and no work "
+        "step in the job ran - so there was nothing for it to do"
+    )
+
+
+def _scope_row(name: str, policy: dict) -> dict | None:
+    """The `scope_paths` row for a context, or None when it declares no scope."""
+    row = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("scope_paths", {})
+        .get(name)
+    )
+    return row if isinstance(row, dict) else None
+
+
+def _declared_gate_ran(
+    row: dict, steps: list[dict],
+) -> tuple[bool, str, list[dict]]:
+    """Did the declared change detector run and conclude success?
+
+    Returns `(ok, why, detectors)`.
+
+    EVERY matching gate step must have concluded success, not ANY of them.
+    `gate_step` is matched as a SUBSTRING, so `any()` let a step whose name
+    merely CONTAINS the declared one answer for a detector that was itself
+    skipped -- an independent reviewer's counterexample:
+
+      Detect console changes                 -> skipped
+      Detect console changes (portal half)   -> success
+      Build (next build)                     -> skipped
+      => excused, claiming "its declared gate step ... ran"
+
+    That is also an R7 lie: the message asserts the declared detector ran when
+    what ran was a different step. `context_did_its_work` moved from `any` to
+    `all` for exactly this reason; this parallel loop stayed behind, which was
+    the one-side-of-a-symmetry defect again, inside the round that named it.
+    """
+    gate_step = str(row.get("gate_step") or "")
+    if not gate_step:
+        return False, (
+            f"the declared scope {row!r} is missing a `gate_step`, so nothing "
+            "establishes WHY the work was skipped"
+        ), []
     detectors = [s for s in steps if gate_step in str(s.get("name") or "")]
     if not detectors:
         return False, (
             f"its declared gate step {gate_step!r} is ABSENT from this job - the "
             "declaration is stale, or this is not the job it describes"
-        )
-    # EVERY matching gate step must have concluded success, not ANY of them.
-    # `gate_step` is matched as a SUBSTRING, so `any()` let a step whose name
-    # merely CONTAINS the declared one answer for a detector that was itself
-    # skipped -- an independent reviewer's counterexample:
-    #
-    #   Detect console changes                 -> skipped
-    #   Detect console changes (portal half)   -> success
-    #   Build (next build)                     -> skipped
-    #   => excused, claiming "its declared gate step ... ran"
-    #
-    # That is also an R7 lie: the message asserts the declared detector ran when
-    # what ran was a different step. `context_did_its_work` moved from `any` to
-    # `all` for exactly this reason; this parallel loop stayed behind, which is
-    # the one-side-of-a-symmetry defect again, inside the round that names it.
+        ), []
     off = [
         f"{s.get('name') or '?'!s}={s.get('conclusion') or '?'!s}"
         for s in detectors
@@ -2311,8 +2422,19 @@ def scope_untouched_at_merge(
             f"its declared gate step {gate_step!r} matches {len(detectors)} step(s) "
             f"and {len(off)} of them did not conclude success ({', '.join(off[:3])}), "
             "so nothing establishes WHY the work was skipped"
-        )
+        ), detectors
+    return True, "", detectors
 
+
+def _primary_steps_all_skipped(
+    name: str, steps: list[dict], policy: dict,
+) -> tuple[bool, str]:
+    """Were ALL of this context's declared substantive steps skipped?
+
+    The precondition both routes that accept a skipped primary share. A step
+    that concluded anything else (failed, cancelled) is not a skip and neither
+    route may excuse or substitute for it.
+    """
     declared_steps = (
         policy.get("receipts", {})
         .get("ci_green_rule", {})
@@ -2338,12 +2460,76 @@ def scope_untouched_at_merge(
                 f"its declared step {wanted!r} concluded {', '.join(off)} rather "
                 "than `skipped`, so this is not a scope skip"
             )
+    return True, ""
 
-    files = [str(f) for f in (changed_files or []) if str(f).strip()]
-    if not files:
-        return False, (
-            "the merged commit's changed-file list is empty, so the declared scope "
-            "cannot be shown to exclude anything"
+
+def _output_scope_hits(
+    spec, files: list[str],
+    push_trigger: PushTrigger | None, infra_ere: str | None,
+) -> tuple[list[str] | None, str]:
+    """Which merged files fall inside ONE declared output's scope?
+
+    Returns `(hits, description)`, or `(None, refusal)` when the scope cannot be
+    evaluated -- every unanswerable question resolves in the refusing direction.
+    """
+    if not isinstance(spec, dict):
+        return None, (
+            f"a declared output is {spec!r}, not an object with `output` and `paths`"
+        )
+    out = str(spec.get("output") or "")
+    if not out:
+        return None, f"a declared output {spec!r} does not name the output it gates"
+    paths = spec.get("paths")
+
+    if paths == ON_PUSH_PATHS:
+        # THE DETECTOR READS THE WORKFLOW'S OWN `on.push.paths`, so there is no
+        # second list to drift. `test.yml`'s `Detect Python-relevant changes`
+        # delegates to `scripts/ci/python_trigger_scope.py`, which parses that
+        # very key out of the file -- its own comment says "ONE list ... READ OUT
+        # OF THIS FILE - not a second copy of it that has to be kept in agreement
+        # by review". Copying those 15 globs into `policy.json` would create
+        # exactly the second copy that file refuses to have.
+        #
+        # This is the SAME predicate `push_event_runs` applies one branch up, and
+        # that is the point rather than a circularity: one list governs both
+        # whether the workflow could run at the merged sha and whether the step
+        # could run at the head, because the workflow was written that way.
+        if push_trigger is None or not push_trigger.paths:
+            return None, (
+                f"output {out!r} declares its scope as the producing workflow's "
+                "`on.push.paths`, and that trigger could not be read here - fail "
+                "closed rather than assume it excludes anything"
+            )
+        paths = list(push_trigger.paths)
+
+    if paths == INFRA_READING_ERE:
+        # THE SAME DELEGATION, for a scope that is COMPUTED. The vitest
+        # detector's `infra` half greps the merged files against an ERE produced
+        # by `derive-infra-reading-suites.mjs --ere`, which walks the tree -- so
+        # there is no list to copy, and a copy would be stale the moment a suite
+        # moves. Resolved by the caller and injected; unresolvable means refuse.
+        if not infra_ere:
+            return None, (
+                f"output {out!r} declares its scope as the ERE computed by "
+                f"{INFRA_READING_ERE}, and it was not resolved here - fail closed "
+                "rather than assume it excludes anything"
+            )
+        try:
+            return (
+                sorted({f for f in files if re.search(infra_ere, f)}),
+                f"{out}=/{infra_ere}/",
+            )
+        except re.error as exc:
+            return None, (
+                f"output {out!r} resolved to {infra_ere!r}, which is not a regular "
+                f"expression this gate can evaluate ({exc}) - a scope that cannot "
+                "be evaluated excuses nothing"
+            )
+
+    if not isinstance(paths, list) or not paths:
+        return None, (
+            f"output {out!r} declares {paths!r}, which is neither a non-empty list "
+            f"of globs nor a recognised delegation"
         )
     # AN UNREPRESENTABLE PATTERN IS AN UNANSWERED QUESTION, and `glob_matches`
     # RAISES on one rather than guessing -- so without this the excuse branch
@@ -2354,45 +2540,226 @@ def scope_untouched_at_merge(
     try:
         hits = sorted({f for f in files if _any_match(tuple(paths), [f])})
     except UnsupportedPatternError as exc:
-        return False, (
+        return None, (
             f"its declared scope contains {str(exc)!r}, which this translator "
             "cannot represent faithfully - a scope that cannot be evaluated "
             "excuses nothing"
         )
-    if hits:
-        shown = ", ".join(hits[:3])
-        more = f", +{len(hits) - 3} more" if len(hits) > 3 else ""
+    return hits, f"{out}={list(paths)}"
+
+
+def _merged_files_outside_scope(
+    name: str, row: dict, files: list[str],
+    push_trigger: PushTrigger | None = None, infra_ere: str | None = None,
+    only_gating: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Do the merged files fall outside the scope of the outputs that matter?
+
+    THE UNIT IS THE OUTPUT, NOT THE CONTEXT, and that is round 6's second
+    blocker. A `scope_paths` row used to carry one `paths` list against a
+    `gate_step` that emits SEVERAL outputs, and the receipt corroborated only
+    the first of them. Measured by an independent reviewer:
+
+      next build (node 20)  declared `console`; the same detector also emits
+                            `portal` (`^portal/react-webapp/`), and
+                            `fiab-console-ci.yml` records this job as the
+                            portal's ONLY blocking check. A portal-only merge
+                            whose portal grep did not fire was excused with
+                            "there was nothing for it to do" by the one required
+                            context that would have caught it.
+      vitest (node 20)      declared `console`; also emits `infra`, whose scope
+                            is an ERE computed by a script and named in no row.
+
+    So a row enumerates EVERY output that gates work, each with its own scope
+    and the steps it gates. An output that cannot be evaluated REFUSES -- an
+    under-declared row is a refusal rather than a silent pass, which is the
+    direction this whole receipt is specified to fail in.
+
+    `only_gating` NARROWS THE QUESTION TO THE OUTPUTS THAT GATE THOSE STEPS, and
+    getting this wrong re-breaks the receipt rather than merely weakening it.
+    The two routes ask genuinely different questions:
+
+      excuse       nothing ran, so EVERY output must have been false, so no
+                   output's scope may match. `only_gating=None`.
+      alternative  the PRIMARY's output was false and ANOTHER output was true.
+                   Only the primary's scope may not match -- the alternative's
+                   scope SHOULD match, because that is WHY it ran.
+
+    Asking every output on the alternative route makes `ci-green` unobtainable
+    for the exact class it closes, which is round 4's defect rebuilt: `infra`'s
+    ERE contains `tools/` and `PRPs/`, so every drain PR matches it, and vitest
+    -- whose infra suite genuinely runs on those PRs -- would be refused for
+    having done the work. Both reviewers asked for the primary's scope
+    specifically; this is that, made explicit rather than implied.
+
+    A scope that MATCHES a merged file is a FAILURE, loudly: that is a change
+    detector that missed a change (#3783), and it is the defect this must never
+    launder. Both routes that accept a SKIPPED primary come through here, so
+    that refusal cannot be bypassed by taking the other one.
+    """
+    outputs = row.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
         return False, (
-            f"its declared scope {list(paths)} MATCHES {len(hits)} merged file(s) "
-            f"({shown}{more}) and the work was skipped anyway - that is a change "
-            "detector that missed a change, not a scope skip"
+            f"the declared scope for {name!r} is {row!r}, which carries no non-empty "
+            "`outputs` list - a row that does not enumerate every work-gating output "
+            "cannot show this job had nothing to do"
         )
-    # "NOTHING FOR IT TO DO" MUST BE TRUE WHEN IT IS PRINTED (R7). A job with a
-    # second work-gating output can skip its primary step and still run real
-    # work -- the `Run vitest (infra-reading suites only)` case, measured on the
-    # very shas this receipt was taken against. `context_did_its_work` now
-    # reports that as work done, so by the time control reaches here nothing
-    # should have run; asserting it makes the sentence checkable rather than
-    # assumed, and a job that DID run something can never be laundered into an
-    # excuse by a future edit to the branch above.
-    did_run = [
-        str(s.get("name") or "?")
-        for s in steps
-        if s not in detectors
-        and not _is_bookkeeping_step(str(s.get("name") or ""))
-        and str(s.get("conclusion") or "").lower() not in ("skipped", "")
-    ]
-    if did_run:
+    if not files:
         return False, (
-            f"its declared scope excludes every merged file, but {len(did_run)} work "
-            f"step(s) RAN anyway ({', '.join(did_run[:3])}) - a job that did work is "
-            "not a job with nothing to do; declare those steps as alternatives"
+            "the merged commit's changed-file list is empty, so the declared scope "
+            "cannot be shown to exclude anything"
+        )
+    selected, described = [], []
+    for spec in outputs:
+        if not isinstance(spec, dict):
+            return False, (
+                f"a declared output of {name!r} is {spec!r}, not an object"
+            )
+        gated = spec.get("gates")
+        if not isinstance(gated, list) or not gated:
+            return False, (
+                f"declared output {spec.get('output')!r} of {name!r} does not name the "
+                "steps it `gates`, so it cannot be matched to a substantive step"
+            )
+        if only_gating is None:
+            selected.append(spec)
+            continue
+        if any(w in g or g in w for g in gated for w in only_gating):
+            selected.append(spec)
+    if only_gating is not None and not selected:
+        return False, (
+            f"no declared output of {name!r} gates its substantive step(s) "
+            f"{list(only_gating)} - the row cannot say which detector decided them"
+        )
+    for spec in selected:
+        hits, detail = _output_scope_hits(spec, files, push_trigger, infra_ere)
+        if hits is None:
+            return False, detail
+        if hits:
+            shown = ", ".join(hits[:3])
+            more = f", +{len(hits) - 3} more" if len(hits) > 3 else ""
+            return False, (
+                f"its declared scope {detail} MATCHES {len(hits)} merged file(s) "
+                f"({shown}{more}) and the work was skipped anyway - that is a change "
+                "detector that missed a change, not a scope skip"
+            )
+        described.append(detail)
+    return True, (
+        f"none of the {len(files)} merged file(s) is inside any of the "
+        f"{len(described)} declared scope(s) checked ({'; '.join(described)})"
+    )
+
+
+def alternative_accounted_for(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+    infra_ere: str | None = None,
+) -> tuple[bool, str]:
+    """Did this context skip its primary step and do the OTHER half of its work?
+
+    A job may carry more than one work-gating output. `vitest (node 20)` skips
+    `Run vitest (with istanbul coverage floor)` when the console is untouched
+    and runs `Run vitest (infra-reading suites only)` when `infra` fired -- and
+    `infra`'s ERE contains `tools/` and `PRPs/`, the exact footprint of a drain
+    PR. Reporting that as "there was nothing for it to do" stated something
+    FALSE about a job that had done work (R7), which is what round 5 fixed.
+
+    THE FIX FOR ROUND 5'S FIX. That acceptance was made inside
+    `context_did_its_work`, which receives no `changed_files`, so it returned a
+    pass before the scope corroboration ran -- and `_merged_files_outside_scope`
+    is the only place a detector's output is checked against the merged commit's
+    own file list. Both reviewers demonstrated the consequence on different
+    rows: with a console file in the merge and the detector wrongly reporting
+    `console=false`, round 4 refused ("a change detector that missed a change")
+    and round 5 returned `green-at-merge`, naming the alternative. A required
+    context was certified green over a console that was never built or tested.
+
+    So an alternative may stand in for a skipped primary ONLY when the merged
+    files are provably outside every declared scope -- the same question the
+    excuse branch asks, asked here too. The two are halves of one predicate.
+
+    Three further conditions, each of which was a reviewer's finding:
+
+    - the alternative must have concluded SUCCESS, not merely "not skipped".
+      `ran()` counts `failure` and `cancelled` as executed, which is harmless
+      for a primary inside a green job and is not harmless here: it would
+      report a FAILED step as the work this context did instead.
+    - the alternative must not be the gate step. Alternatives are matched as
+      substrings against the job's steps, and the detector always runs, so
+      declaring it would make this function return True for every green run of
+      the context -- switching the substantive-step rule off entirely, with a
+      one-line edit to `policy.json` and no test failing.
+    - the primary must be cleanly HOLLOW. `_primary_steps_all_skipped` refuses a
+      primary that failed or was cancelled, and `context_did_its_work` refuses an
+      AMBIGUOUS declaration before either route is reached.
+    """
+    alternatives = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("alternatives", {})
+        .get(name)
+    )
+    if not isinstance(alternatives, list) or not alternatives:
+        return False, (
+            f"no alternative step is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.alternatives)"
+        )
+    row = _scope_row(name, policy)
+    if row is None:
+        return False, (
+            f"no change-detection scope is DECLARED for {name!r}, so an alternative "
+            "cannot be corroborated against the merged files"
+        )
+    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+        return False, "no job record was read for it, so no alternative can be shown to have run"
+    steps = [s for s in job["steps"] if isinstance(s, dict)]
+
+    gate_ok, gate_why, _ = _declared_gate_ran(row, steps)
+    if not gate_ok:
+        return False, gate_why
+    hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
+    if not hollow_ok:
+        return False, hollow_why
+
+    files = [str(f) for f in (changed_files or []) if str(f).strip()]
+    declared_primary = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+    if not isinstance(declared_primary, list) or not declared_primary:
+        return False, (
+            f"the substantive-step declaration for {name!r} is {declared_primary!r}; "
+            "an alternative is only meaningful for a NAMED primary step"
+        )
+    # ONLY THE PRIMARY'S OUTPUT. The alternative's own scope SHOULD match a
+    # merged file -- that is why it ran -- so asking every output here would
+    # refuse exactly the population this route exists to serve.
+    clear, scope_why = _merged_files_outside_scope(
+        name, row, files, push_trigger, infra_ere, only_gating=list(declared_primary))
+    if not clear:
+        return False, scope_why
+
+    gate_step = str(row.get("gate_step") or "")
+    ran_instead = [
+        str(s.get("name") or "")
+        for s in steps
+        if any(alt in str(s.get("name") or "") for alt in alternatives)
+        and str(s.get("conclusion") or "").lower() == "success"
+        and gate_step not in str(s.get("name") or "")
+    ]
+    if not ran_instead:
+        return False, (
+            f"none of its declared alternative(s) {list(alternatives)} concluded "
+            "success in this job"
         )
     return True, (
-        f"its declared gate step {gate_step!r} ran, none of the {len(files)} "
-        f"merged file(s) is inside its declared scope {list(paths)}, and no work "
-        "step in the job ran - so there was nothing for it to do"
+        f"skipped its primary step(s) {list(declared_primary)} and executed its "
+        f"declared alternative(s) {ran_instead} instead - the other half of a job whose "
+        f"work is gated on more than one output - and {scope_why}"
     )
+
 
 def job_executed(job: dict | None) -> tuple[bool, str]:
     """Did this job actually DO its work, or conclude green having skipped it?
@@ -2471,7 +2838,8 @@ def _is_bookkeeping_step(name: str) -> bool:
 
 
 def _renamed_at_merge(
-    item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict
+    item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict,
+    infra_ere: str | None = None,
 ) -> ContextResult:
     """The per-event RENAME case, on evidence rather than on a green run.
 
@@ -2546,11 +2914,12 @@ def _renamed_at_merge(
             "rename - the context is absent for some other reason",
         )
     ran = [
-        (j, context_is_accounted_for(item.name, j, merged_changed_files, policy))
+        (j, context_is_accounted_for(
+            item.name, j, merged_changed_files, policy, infra_ere=infra_ere))
         for j in jobs
     ]
     usable = [
-        (j, ev) for j, (ok, ev, _scope) in ran
+        (j, ev) for j, (ok, ev, _route) in ran
         if ok and str(j.get("conclusion") or "").lower() == "success"
     ]
     if not usable:

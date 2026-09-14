@@ -799,6 +799,32 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
     }
 
 
+def resolve_infra_ere() -> str | None:
+    """The ERE `fiab-console-ci.yml`'s vitest detector greps its `infra` half on.
+
+    Resolved HERE and injected, for the same reason `push_trigger` is: `gates.py`
+    stays a pure decision module that a test can drive both ways, and the one
+    list lives where the workflow puts it rather than in a copy in
+    `policy.json`. The workflow computes it with the identical command.
+
+    Returns None on any failure -- a missing `node`, a non-zero exit, an empty
+    line. The caller fails CLOSED on None (it refuses to excuse a skip it cannot
+    corroborate), which is the same direction the workflow itself takes when the
+    deriver breaks: it builds everything rather than guessing which subset is
+    safe to skip.
+    """
+    try:
+        out = subprocess.run(
+            ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
 def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
     data = collect_ci_green_evidence(repo, number)
     receipt = gates.ci_green_receipt(
@@ -809,6 +835,7 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) 
         merged_sha=data["merged"],
         trees_identical=data["trees_identical"],
         policy=policy,
+        infra_ere=resolve_infra_ere(),
     )
     if as_json:
         print(json.dumps({

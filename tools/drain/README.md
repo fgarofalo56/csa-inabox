@@ -115,7 +115,7 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 | kind | closes | how it is obtained |
 |---|---|---|
-| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green **and executed its declared substantive step** — or skipped it with the merged files provably outside its declared scope; every context that cannot run there is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
+| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green and is accounted for by one of three routes — it **executed its declared substantive step**; or it skipped that step and executed a declared **alternative**, the other half of a job gated on more than one output, with the merged files outside the *primary's* scope; or it skipped that step, ran **nothing at all**, and the merged files are outside **every** scope the job gates work on. Every context that cannot run there is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
 | `deploy-run` | deploy-path | a run whose deploy job **executed steps** against a live subscription |
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
@@ -185,13 +185,38 @@ That is this file's own thesis one branch along, so the answer is the same
 measurement rather than an exception: `receipts.ci_green_rule.scope_paths`
 declares each such context's **scope**, read off the producing workflow's own
 detector, and the skip is excused only when the merged commit's changed files —
-the same list the on-push detector computes for itself — fall outside it. The
-state is reported as `scope-untouched-at-merge`, never folded into
-`green-at-merge`. Every unanswered question fails closed: no declared row, a
-gate step that is absent or did not succeed, a declared step that concluded
-anything other than `skipped`, an empty changed-file list. And a scope that
-**matches** a merged file is a FAILURE, loudly — that is a detector that missed
-a change (#3783), which is the defect this must never launder.
+the same list the on-push detector computes for itself — fall outside **every**
+output that detector drives. The state is reported as
+`scope-untouched-at-merge`, never folded into `green-at-merge`. Every
+unanswered question fails closed: no declared row, a gate step that is absent
+or did not succeed, a declared step that concluded anything other than
+`skipped`, an empty changed-file list, a delegated scope that will not resolve.
+
+**Round 6 found the sentence that used to sit here false.** It read: *a scope
+that **matches** a merged file is a FAILURE, loudly — that is a detector that
+missed a change (#3783).* That holds only of a job that then did **nothing**.
+`vitest (node 20)`'s one detector drives two outputs, and a drain PR touching
+`tools/` matches the `infra` one — so the job skips `Run vitest` and runs `Run
+vitest (infra-reading suites only)` instead. There, a matching scope is exactly
+*why* the other half ran; refusing it as a missed change indicts the detector
+for working. The corroboration and the acceptance are therefore two halves of
+one predicate, asking two different questions:
+
+- the **excuse** (`scope-untouched-at-merge`) asks every output the detector
+  drives, and demands the job ran **nothing**. A work step that ran — success
+  or failure — is refused in those words: a job that did work is not a job with
+  nothing to do.
+- the **alternative** (`alternative-work-at-merge`) applies only when the job
+  ran the *other half* of its own declared work. It requires the gate step to
+  have succeeded, the primary step to be cleanly skipped, a declared
+  `alternatives` step to have succeeded, and the merged files to fall outside
+  the scope of the **primary's** output only — the one whose `gates` list names
+  that step — never outside every output, which an alternative that ran matches
+  by construction.
+
+The #3783 defect is still refused, now by the branch that can see it: a job
+whose detector matched a merged file and which then ran no work at all is
+granted neither route.
 
 The difference between a `on.push.paths` filter and a shell-step filter is where
 GitHub lets you write a filter, not how much the merge was checked. Treating the
@@ -429,9 +454,16 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 383 tests across every module
-python tools/drain/mutate_gates.py           # 209 arms, must be 209 KILLED
+python -m pytest tools/drain/__tests__ -q    # every test across every module
+python tools/drain/mutate_gates.py           # every arm must be KILLED
 ```
+
+Neither total is written down here on purpose. Both move — the arm count went
+155 → 205 → 209 → 213 inside #4487 alone — and a number in prose that nothing
+enforces goes stale silently, which is the same defect this package exists to
+refuse. Each command prints its own total and **fails closed**:
+`mutate_gates.py` exits non-zero on any survivor, skip, error, or a sandbox
+whose file set changed under it.
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
 gate is not trustworthy — fix that before trusting a merge. Two caveats learned
@@ -528,9 +560,9 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 209 mutation arms against a sandbox copy; must be 209 KILLED |
+| `mutate_gates.py` | mutation arms against a sandbox copy; every arm must be KILLED |
 | `required_contexts.json` | snapshot of `main`'s required contexts, so the declaration check can assert SET equality offline (`merge_gate.py --refresh-required-contexts`) |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 383 tests; a negative control for every decision function |
+| `__tests__/` | a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

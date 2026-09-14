@@ -41,6 +41,23 @@ from test_ci_green import (
 
 import gates
 
+#: The `infra` ERE that `fiab-console-ci.yml`'s vitest detector greps on,
+#: resolved by `merge_gate.resolve_infra_ere()` in production.
+#:
+#: THIS IS A TEST FIXTURE, NOT A SECOND COPY OF THE AUTHORITY. `policy.json`
+#: declares the DELEGATION (`derive-infra-reading-suites.mjs --ere`) and never a
+#: path list, for exactly the reason the Python rows point at `on.push.paths`.
+#: But a test has to drive the code with a concrete value, and one that reached
+#: for `node` would make this suite depend on a toolchain it does not otherwise
+#: need. `test_the_infra_ere_fixture_still_matches_the_deriver` keeps it honest
+#: where `node` is available, and SKIPS where it is not -- so a drift is visible
+#: to a developer and silent in CI, which is stated rather than implied.
+INFRA_ERE = (
+    r"^(\.claude|\.github|PRPs|azure-functions|content|deploy|docs|domains"
+    r"|examples|notebooks|overrides|packages|platform|scripts|sdk|templates"
+    r"|tests|tools)/"
+)
+
 # ---------------------------------------------------------------------------
 # CB4b -- green-at-merge must ASK, not assume
 # ---------------------------------------------------------------------------
@@ -210,22 +227,70 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
         job = _job_block((root / row["workflow"]).read_text(encoding="utf-8"), row["job"])
         assert job is not None, f"{name}: no job block in {row['workflow']}"
         assert steps, f"{name}: empty alternative list"
+
+        # The output that gates the PRIMARY, read off the row rather than
+        # assumed to be the first one.
+        primary_outputs = {
+            spec["output"] for spec in row["outputs"]
+            if any(p in g or g in p for g in spec["gates"] for p in primary[name])
+        }
+        assert primary_outputs, (
+            f"{name}: no declared output gates its primary step(s) {primary[name]}"
+        )
         for step in steps:
             assert f"name: {step}" in job, (
                 f"{name}: declared alternative {step!r} does not exist in its job"
             )
-            assert f"outputs.{row['output']} == 'true'" not in _gate_of(job, step), (
-                f"{name}: alternative {step!r} is gated on the SAME output as the "
-                f"primary step, so it can never run when the primary does not"
+            # AN ALTERNATIVE MAY NOT BE THE GATE STEP. Alternatives are matched
+            # as substrings against the job's steps and the detector ALWAYS
+            # runs, so declaring it would make `alternative_accounted_for`
+            # return True for every green run of this context -- switching the
+            # substantive-step rule off entirely with a one-line edit to
+            # `policy.json`. An independent reviewer drove exactly that
+            # declaration through the previous version of this guard and it
+            # passed silently, because `Detect console changes` carries no `if:`
+            # and so satisfied the "not gated on the same output" assertion
+            # vacuously. `gates.alternative_accounted_for` refuses it too; this
+            # asserts the declaration, that asserts the decision.
+            assert row["gate_step"] not in step, (
+                f"{name}: alternative {step!r} IS the gate step, which always runs - "
+                "declaring it would make the substantive-step rule vacuous"
             )
+            gate = _gate_of(job, step)
+            assert gate is not None, (
+                f"{name}: alternative {step!r} could not be located as a step in its "
+                "own job block, so its gate cannot be read - fail closed"
+            )
+            # AN UNGATED ALTERNATIVE IS A FAILURE, NOT A PASS. The previous
+            # version read the empty string for a step with no `if:` and the
+            # `not in` assertion below was then vacuously true -- fail-open in a
+            # guard whose whole job is to refuse a bad declaration.
+            assert gate, (
+                f"{name}: alternative {step!r} carries no `if:` at all, so it runs "
+                "unconditionally and cannot evidence a second work-gating output"
+            )
+            for out in sorted(primary_outputs):
+                assert f"outputs.{out} == 'true'" not in gate, (
+                    f"{name}: alternative {step!r} is gated on {out!r}, the SAME "
+                    "output as the primary step, so it can never run when the "
+                    "primary does not"
+                )
         for step in primary[name]:
             assert step not in steps, (
                 f"{name}: {step!r} is declared as both primary and alternative"
             )
 
 
-def _gate_of(job: str, step_name: str) -> str:
-    """The `if:` expression attached to a named step, or "" when it has none."""
+def _gate_of(job: str, step_name: str) -> str | None:
+    """The `if:` expression attached to a named step.
+
+    `""` when the step exists and carries no gate, and `None` when the step
+    could not be located at all -- which the caller treats as a failure. They
+    used to be the same value, so a step this regex could not find was
+    indistinguishable from an unconditional one and both satisfied a `not in`
+    assertion. The existence check in the caller is indentation-agnostic while
+    this is not, so the two CAN disagree; the disagreement must be loud.
+    """
     import re as _re
 
     m = _re.search(
@@ -233,7 +298,7 @@ def _gate_of(job: str, step_name: str) -> str:
         job, _re.MULTILINE | _re.DOTALL,
     )
     if m is None:
-        return ""
+        return None
     gate = _re.search(r"^        if: (.+)$", m.group(1), _re.MULTILINE)
     return gate.group(1) if gate else ""
 
@@ -242,7 +307,13 @@ def test_negative_control_a_declared_alternative_that_ran_is_work_not_an_excuse(
     """The receipt must report work DONE, not an excuse, when the other half of
     a two-output job ran. Reporting it as `scope-untouched-at-merge` was the
     R7 violation: it printed "nothing for it to do" about a job that had just
-    run 42 test suites."""
+    run 42 test suites.
+
+    ROUND 6: the acceptance also has to be CORROBORATED. It lives in
+    `alternative_accounted_for`, not in `context_did_its_work`, because the
+    latter has no merged-file list and so could not ask whether the primary's
+    detector was right to say no.
+    """
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
@@ -250,20 +321,112 @@ def test_negative_control_a_declared_alternative_that_ran_is_work_not_an_excuse(
                "Run vitest (infra-reading suites only)"),
         skipped=("Run vitest (with istanbul coverage floor)",),
     )
-    ok, why = gates.context_did_its_work("vitest (node 20)", job, POLICY)
+    # The primary is SKIPPED, so the plain predicate refuses -- that is the
+    # question it is able to answer.
+    did, _ = gates.context_did_its_work("vitest (node 20)", job, POLICY)
+    assert not did
+
+    ok, why = gates.alternative_accounted_for(
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE)
     assert ok, why
     assert "Run vitest (infra-reading suites only)" in why
     assert "alternative" in why
 
+    # And it is NOT an excuse: a job that ran something has no "nothing to do".
     excused, scope_why = gates.scope_untouched_at_merge(
-        "vitest (node 20)", job, MERGED_FILES, POLICY)
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE)
     assert not excused
     assert "work step(s) RAN anyway" in scope_why
+
+    # The composed answer names the route rather than folding it into
+    # `green-at-merge`, which an independent reviewer flagged as a summary line
+    # that says twelve contexts ran their check when eleven did.
+    acct, _, route = gates.context_is_accounted_for(
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE)
+    assert acct
+    assert route == gates.ACCOUNTED_ALTERNATIVE
+
+
+def test_blocker_an_alternative_cannot_launder_a_detector_that_missed_a_change():
+    """ROUND 6 BLOCKER, found independently by both reviewers on different rows.
+
+    Round 5 accepted "a declared alternative ran" inside `context_did_its_work`,
+    which receives no `changed_files` -- so `context_is_accounted_for` returned
+    on `did` before the scope corroboration ran, and the `hits` refusal became
+    unreachable whenever any alternative ran. The identical input that round 4
+    REFUSED ("a change detector that missed a change") round 5 ACCEPTED as
+    `green-at-merge`: a required context certified green over a console that was
+    never built or tested. This is the #3783 shape `policy.json` says must never
+    be laundered, laundered by the fix for something else.
+    """
+    job = _job(
+        "next build (node 20)",
+        steps=("Detect console changes", "Build (next build)",
+               "Type-check (portal)", "Jest (portal)"),
+        skipped=("Build (next build)",),
+    )
+    merged_with_a_console_file = [
+        "apps/fiab-console/lib/editors/lakehouse.tsx",
+        "portal/react-webapp/package.json",
+    ]
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, merged_with_a_console_file, POLICY)
+    assert not ok
+    assert "detector that missed a change" in why
+    assert "apps/fiab-console/lib/editors/lakehouse.tsx" in why
+
+    # And the composed entry point must refuse too -- the bypass was THERE, not
+    # in the predicate.
+    acct, evidence, route = gates.context_is_accounted_for(
+        "next build (node 20)", job, merged_with_a_console_file, POLICY)
+    assert not acct, evidence
+    assert route == ""
+
+
+def test_blocker_the_alternative_route_asks_only_the_primarys_scope():
+    """The other half of the same blocker, and the one that re-breaks the
+    receipt if it is got wrong.
+
+    The alternative's OWN scope should match a merged file -- that is why it
+    ran. `infra`'s ERE contains `tools/` and `PRPs/`, the exact footprint of a
+    drain PR, so asking every output on this route would refuse `vitest (node
+    20)` on every drain merge for the crime of having done the work. That is
+    round 4's "unobtainable for the exact class it closes", rebuilt inside the
+    fix for round 5.
+    """
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes",
+               "Run vitest (with istanbul coverage floor)",
+               "Run vitest (infra-reading suites only)"),
+        skipped=("Run vitest (with istanbul coverage floor)",),
+    )
+    # MERGED_FILES is a drain footprint: it matches `infra`, and not `console`.
+    assert any(f.startswith("tools/") for f in MERGED_FILES)
+    ok, why = gates.alternative_accounted_for(
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE)
+    assert ok, why
+
+    # Asking EVERY output on the same inputs is the refusal we must not make.
+    row = gates._scope_row("vitest (node 20)", POLICY)
+    every, _ = gates._merged_files_outside_scope(
+        "vitest (node 20)", row, list(MERGED_FILES), None, INFRA_ERE)
+    assert not every, (
+        "the fixture no longer distinguishes the two questions, so this test "
+        "would pass under a mutant that asks every output"
+    )
 
 
 def test_negative_control_a_skipped_alternative_is_not_work():
     """Both halves skipped is the genuine scope skip, and must stay reachable —
-    otherwise the fix for the lie would re-break the receipt it repaired."""
+    otherwise the fix for the lie would re-break the receipt it repaired.
+
+    The merged files must fall outside BOTH declared scopes for this to be a
+    real "nothing to do": `apps/loom-vscode` is neither a console path nor
+    inside the infra ERE's top-level directory list. That is the population the
+    README names -- the dependency bumps that score five scope-untouched
+    contexts because no required context builds those packages.
+    """
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
@@ -272,26 +435,64 @@ def test_negative_control_a_skipped_alternative_is_not_work():
         skipped=("Run vitest (with istanbul coverage floor)",
                  "Run vitest (infra-reading suites only)"),
     )
+    outside_both = ["apps/loom-vscode/package.json", "apps/loom-vscode/src/ext.ts"]
     ok, _ = gates.context_did_its_work("vitest (node 20)", job, POLICY)
     assert not ok
     excused, why = gates.scope_untouched_at_merge(
-        "vitest (node 20)", job, MERGED_FILES, POLICY)
+        "vitest (node 20)", job, outside_both, POLICY, infra_ere=INFRA_ERE)
     assert excused, why
     assert "no work step in the job ran" in why
+
+
+def test_negative_control_an_unresolvable_infra_ere_fails_closed():
+    """The delegation is only safe if not resolving it REFUSES.
+
+    `vitest (node 20)`'s `infra` scope is computed by a script rather than
+    written down, so the gate cannot evaluate it when the caller did not resolve
+    it. Assuming it excludes everything would excuse a skip on an unanswered
+    question -- which is the one thing every branch of this receipt is specified
+    not to do.
+    """
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes",
+               "Run vitest (with istanbul coverage floor)",
+               "Run vitest (infra-reading suites only)"),
+        skipped=("Run vitest (with istanbul coverage floor)",
+                 "Run vitest (infra-reading suites only)"),
+    )
+    outside_both = ["apps/loom-vscode/package.json"]
+    excused, why = gates.scope_untouched_at_merge(
+        "vitest (node 20)", job, outside_both, POLICY, infra_ere=None)
+    assert not excused
+    assert "fail closed" in why
+    # ... and resolving it is what makes the same inputs excusable.
+    excused2, _ = gates.scope_untouched_at_merge(
+        "vitest (node 20)", job, outside_both, POLICY, infra_ere=INFRA_ERE)
+    assert excused2
 
 
 def test_negative_control_a_sibling_gate_step_cannot_answer_for_a_skipped_one():
     """Round 5 BLOCKER: `gate_step` is matched as a SUBSTRING and the check was
     `any()`, so a step whose name merely CONTAINS the declared one could answer
     for a detector that was itself skipped — and the message then asserted the
-    declared detector had run, which it had not."""
+    declared detector had run, which it had not.
+
+    THE SUCCEEDING SIBLING COMES FIRST, DELIBERATELY. Round 6: an independent
+    reviewer's arm narrowed the population to `detectors[:1]` — the honest form
+    of an accident, where `[:0]` is not — and it SURVIVED, because this fixture
+    listed the SKIPPED detector first and a one-element slice therefore reached
+    the same refusal by luck. With the succeeding sibling first, only a check
+    that reads EVERY matching detector can refuse, so the `all` semantics the
+    round-5 fix installed are what this test depends on.
+    """
     job = {
         "name": "next build (node 20)",
         "conclusion": "success",
         "steps": [
             {"name": "Set up job", "conclusion": "success"},
-            {"name": "Detect console changes", "conclusion": "skipped"},
             {"name": "Detect console changes (portal half)", "conclusion": "success"},
+            {"name": "Detect console changes", "conclusion": "skipped"},
             {"name": "Build (next build)", "conclusion": "skipped"},
             {"name": "Complete job", "conclusion": "success"},
         ],
@@ -300,6 +501,146 @@ def test_negative_control_a_sibling_gate_step_cannot_answer_for_a_skipped_one():
         "next build (node 20)", job, MERGED_FILES, POLICY)
     assert not ok
     assert "did not conclude success" in why
+
+
+def test_negative_control_every_declared_alternative_is_consulted_not_just_the_first():
+    """ROUND 6 BLOCKER: two of the reviewer's surviving arms, `alternatives[:1]`
+    and `len(alternatives) == 1`, both disable the alternatives path for
+    `next build (node 20)` — the row the round-5 commit message calls the
+    portal's only blocking check — and nothing noticed. Grepping the suite for
+    `Jest (portal)` returned nothing: the second of the only two rows in the map
+    had ZERO behavioural coverage.
+
+    So this drives it through with ONLY THE SECOND declared alternative running.
+    A truncating mutant sees `Jest (portal)` skipped and refuses; a mutant that
+    requires exactly one declaration refuses outright.
+    """
+    declared = POLICY["receipts"]["ci_green_rule"]["alternatives"]["next build (node 20)"]
+    assert declared[0] == "Jest (portal)", declared
+    assert declared[1] == "Type-check (portal)", declared
+
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "success"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    # A portal-only merge: outside the PRIMARY's (`console`) scope, which is why
+    # the primary skipped, and inside the alternative's, which is why it ran.
+    portal_only = ["portal/react-webapp/src/App.tsx"]
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, portal_only, POLICY)
+    assert ok, why
+    assert "Type-check (portal)" in why
+
+
+def test_negative_control_a_failed_work_step_still_counts_as_work():
+    """ROUND 6: the reviewer's `did_run` narrowing survived — a mutant that stops
+    counting a FAILED step as work prints "nothing for it to do" about a job
+    that ran a step and it failed. That is the R7 lie this branch exists to
+    refuse, reachable through `continue-on-error`.
+    """
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Upload coverage artifact", "conclusion": "failure"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    outside = ["apps/loom-vscode/package.json"]
+    ok, why = gates.scope_untouched_at_merge(
+        "next build (node 20)", job, outside, POLICY)
+    assert not ok
+    assert "RAN anyway" in why
+    assert "Upload coverage artifact" in why
+
+
+def test_negative_control_an_alternative_that_failed_is_not_work_done():
+    """The mirror of the above, in the new branch. `ran()` counts `failure` and
+    `cancelled` as executed, which is harmless for a primary inside a green job
+    and is NOT harmless for an alternative: it would report a FAILED step as the
+    work this context did instead of its primary.
+    """
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "failure"},
+            {"name": "Type-check (portal)", "conclusion": "skipped"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], POLICY)
+    assert not ok
+    assert "concluded success" in why
+
+
+def test_negative_control_the_gate_step_cannot_be_declared_as_its_own_alternative():
+    """An independent reviewer's one-line policy edit: declare the DETECTOR as
+    an alternative. It always runs, so every green run of the context would
+    return "it did its work" and the substantive-step rule would silently stop
+    applying. The guard test missed it because the detector carries no `if:`;
+    the DECISION FUNCTION must refuse it too.
+    """
+    planted = copy.deepcopy(POLICY)
+    planted["receipts"]["ci_green_rule"]["alternatives"]["next build (node 20)"] = [
+        "Detect console changes"
+    ]
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+        ],
+    }
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], planted)
+    assert not ok
+    assert "concluded success" in why
+
+
+def test_the_infra_ere_fixture_still_matches_the_deriver():
+    """The fixture is a copy, so it needs a currency check — and the check is
+    honest about where it runs.
+
+    `node` is not a dependency of this suite, so this SKIPS when the deriver
+    cannot be run. That makes a drift visible to a developer and invisible in
+    CI, which is stated here rather than implied — the same disclosure the
+    `required_contexts.json` snapshot carries one file over.
+    """
+    import subprocess
+
+    root = _repo_root()
+    if root is None:  # pragma: no cover - mutation sandbox
+        pytest.skip("repo tree not reachable from here (mutation sandbox)")
+    try:
+        out = subprocess.run(
+            ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
+            capture_output=True, text=True, cwd=root, timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover
+        pytest.skip("node is not available here")
+    if out.returncode != 0:  # pragma: no cover
+        pytest.skip(f"the deriver did not run here (rc={out.returncode})")
+    assert out.stdout.strip() == INFRA_ERE, (
+        "the infra ERE has drifted from the fixture in this file; update "
+        "INFRA_ERE. policy.json declares the DELEGATION and needs no change."
+    )
 
 
 def test_negative_control_every_declared_pattern_is_applied_not_just_the_first():
@@ -372,45 +713,78 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
             f"{name}: its declared gate step is not in ITS OWN job block"
         )
 
-        if row["paths"] == gates.ON_PUSH_PATHS:
-            shapes.add("delegated")
-            # The delegation itself is the contract. If the detector stops
-            # reading the trigger out of its own file, the declaration below
-            # stops describing it -- and that is precisely the silent drift.
-            assert "python_trigger_scope.py --changed-file" in job, (
-                f"{name}: {row['workflow']}'s detector no longer delegates to the "
-                "shared scope script, so `on.push.paths` is no longer its scope"
-            )
-            trigger = gates.parse_push_trigger(text)
-            assert trigger is not None, (
-                f"{name}: {row['workflow']} has no readable push trigger"
-            )
-            assert trigger.paths, (
-                f"{name}: {row['workflow']} has no `on.push.paths` to be the "
-                "declared scope"
-            )
-            continue
+        # EVERY DECLARED OUTPUT, not just the first. Round 6 BLOCKER: a row
+        # carried one `paths` against a `gate_step` that emits SEVERAL outputs,
+        # so the receipt corroborated `console` and never `portal` or `infra` --
+        # and `next build (node 20)` is, per that workflow's own #4187 comment,
+        # the portal's ONLY blocking check. Walking the list is what makes an
+        # under-declared row visible here rather than at a false receipt.
+        for spec in row["outputs"]:
+            gated = spec["gates"]
+            assert isinstance(gated, list), (name, spec)
+            assert gated, (name, spec)
+            for step in gated:
+                assert f"name: {step}" in job, (
+                    f"{name}: output {spec['output']!r} claims to gate {step!r}, "
+                    "which is not a step in its own job block"
+                )
 
-        shapes.add("literal")
-        found = None
-        for match in re.finditer(r"grep -qE '([^']+)'", job):
-            tail = job[match.end():match.end() + 400]
-            if f'echo "{row["output"]}=true"' not in tail:
+            if spec["paths"] == gates.ON_PUSH_PATHS:
+                shapes.add("delegated")
+                # The delegation itself is the contract. If the detector stops
+                # reading the trigger out of its own file, the declaration below
+                # stops describing it -- and that is precisely the silent drift.
+                assert "python_trigger_scope.py --changed-file" in job, (
+                    f"{name}: {row['workflow']}'s detector no longer delegates to the "
+                    "shared scope script, so `on.push.paths` is no longer its scope"
+                )
+                trigger = gates.parse_push_trigger(text)
+                assert trigger is not None, (
+                    f"{name}: {row['workflow']} has no readable push trigger"
+                )
+                assert trigger.paths, (
+                    f"{name}: {row['workflow']} has no `on.push.paths` to be the "
+                    "declared scope"
+                )
                 continue
-            found = {
-                alt.lstrip("^").replace(r"\.", ".").rstrip("/")
-                for alt in match.group(1).split("|")
-            }
-            break
-        assert found is not None, (
-            f"{name}: no `grep -qE` in its own job block sets "
-            f"{row['output']}=true - the detector's shape changed"
-        )
-        declared = {p[: -len("/**")] if p.endswith("/**") else p for p in row["paths"]}
-        assert declared == found, (name, sorted(declared), sorted(found))
 
-    assert shapes == {"literal", "delegated"}, (
-        f"both row shapes must stay exercised; saw {sorted(shapes)}"
+            if spec["paths"] == gates.INFRA_READING_ERE:
+                shapes.add("computed")
+                # Same contract, for a scope that is DERIVED rather than
+                # written. The declaration says "whatever that script prints";
+                # if the job stops asking the script, it stops being true.
+                assert "derive-infra-reading-suites.mjs --ere" in job, (
+                    f"{name}: output {spec['output']!r} declares its scope as the "
+                    "ERE that script computes, and its own job block no longer "
+                    "runs it"
+                )
+                assert f'echo "{spec["output"]}=true"' in job, (
+                    f"{name}: its job block never sets {spec['output']}=true"
+                )
+                continue
+
+            shapes.add("literal")
+            found = None
+            for match in re.finditer(r"grep -qE '([^']+)'", job):
+                tail = job[match.end():match.end() + 400]
+                if f'echo "{spec["output"]}=true"' not in tail:
+                    continue
+                found = {
+                    alt.lstrip("^").replace(r"\.", ".").rstrip("/")
+                    for alt in match.group(1).split("|")
+                }
+                break
+            assert found is not None, (
+                f"{name}: no `grep -qE` in its own job block sets "
+                f"{spec['output']}=true - the detector's shape changed"
+            )
+            declared = {
+                p[: -len("/**")] if p.endswith("/**") else p for p in spec["paths"]
+            }
+            assert declared == found, (name, spec["output"], sorted(declared), sorted(found))
+
+    assert shapes == {"literal", "delegated", "computed"}, (
+        f"all three row shapes must stay exercised; saw {sorted(shapes)}"
     )
 
 
@@ -679,8 +1053,11 @@ def test_negative_control_an_unrepresentable_scope_pattern_fails_closed():
     planted["receipts"]["ci_green_rule"]["scope_paths"]["next build (node 20)"] = {
         "workflow": ".github/workflows/fiab-console-ci.yml",
         "gate_step": "Detect console changes",
-        "output": "console",
-        "paths": ["apps/fiab-console/[0-9]**"],
+        "outputs": [{
+            "output": "console",
+            "paths": ["apps/fiab-console/[0-9]**"],
+            "gates": ["Build (next build)"],
+        }],
     }
     hollow = _job("next build (node 20)", steps=("Detect console changes", "Build (next build)"),
                   skipped=("Build (next build)",))
