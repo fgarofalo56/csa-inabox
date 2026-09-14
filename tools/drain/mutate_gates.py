@@ -39,7 +39,12 @@ import tempfile
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # LINE BUFFERED, not block buffered. Round 14: redirected to a file this
+    # wrote NOTHING until ~8KB had accumulated, so a run that died partway --
+    # and several did, to memory pressure -- left a zero-byte log and an
+    # unexplainable exit code. A 30-minute instrument whose progress is
+    # invisible until it finishes cannot be diagnosed when it does not.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -759,6 +764,48 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # -- ROUND 14: round 13's fix landed on ONE OF THREE ROUTES --------------
+    # An independent reviewer found the SEVENTH and EIGHTH readers of
+    # `conclusion` still coercing, and a job-level verdict that only
+    # `_renamed_at_merge` had ever read. A receipt is only as good as its
+    # least-asked route.
+    (
+        ("U1 `green-at-merge` stops refusing a job whose work steps have NOT "
+         "CONCLUDED, so an in-progress job whose declared step already "
+         "succeeded is accepted - and the job join PREFERS that job"),
+        "gates.py",
+        ("    if unfinished:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "'),
+    ),
+    (
+        ("U2 `green-at-merge` stops reading the JOB's own verdict, so a job that "
+         "concluded FAILURE is accepted as having executed its declared "
+         "substantive step"),
+        "gates.py",
+        '    if job_verdict != "success":',
+        "    if False:",
+    ),
+    (
+        ("U3 the job-level NOT-CONCLUDED refusal collapses, so a job that is "
+         "still running answers for a merge"),
+        "gates.py",
+        "    if job_verdict is None:",
+        "    if False:",
+    ),
+    (
+        ("U4 `job_executed` -- the SELECTOR that steers the route choice -- "
+         "calls a QUEUED step SKIPPED again, which is both R7-false and the "
+         "wrong route"),
+        "gates.py",
+        ("    if unfinished:\n"
+         "        names = \", \".join(str(s.get(\"name\") or \"?\") for s in unfinished[:4])"),
+        ("    if False:\n"
+         "        names = \", \".join(str(s.get(\"name\") or \"?\") for s in unfinished[:4])"),
+    ),
     # -- ROUND 13: a step with NO conclusion, and the untested absent-step ----
     # The most reachable defect this issue has produced -- no mutation, no policy
     # edit, live production path. `did_run` folded "has not concluded" into "did
@@ -770,8 +817,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          "still queued or running is excused with 'nothing for it to do' - the "
          "live fail-open, restored"),
         "gates.py",
-        "    if unfinished:",
-        "    if False:",
+        ("    if unfinished:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} work step(s) have NOT CONCLUDED "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} work step(s) have NOT CONCLUDED "'),
     ),
     (
         ("V2 `step_conclusion` returns '' instead of None for a step that has "
@@ -1633,7 +1684,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4 a SKIPPED declared substantive step counts as executed, so the "
          "check that concluded green without doing its work passes"),
         "gates.py",
-        '        return str(step.get("conclusion") or "").lower() not in ("skipped", "")',
+        '        return step_conclusion(step) != "skipped"',
         "        return True",
     ),
     (
@@ -1920,21 +1971,85 @@ ARMS: list[tuple[str, str, str, str]] = [
 
 
 def digest_tree(root: Path) -> str:
-    """One digest over every tracked source this harness could possibly touch."""
+    """One digest over every tracked source this harness could possibly touch.
+
+    ROUND 14: this had NO TEST, and `tracked tree untouched: True` -- a line
+    quoted as evidence in every round of this issue -- had never been exhibited
+    printing False. An independent reviewer showed `sorted(SOURCES)[:0]` or a
+    constant return makes the claim vacuous over a real modification of
+    `gates.py`, with the suite green.
+
+    It REFUSES an empty population rather than digesting nothing, because a
+    digest over zero files is a constant, and a constant compares equal to
+    itself for any tree.
+    """
+    if not SOURCES:
+        raise ValueError(
+            "digest_tree over an EMPTY source list would be a constant, and a "
+            "constant makes `tracked tree untouched` true for every tree"
+        )
     sha = hashlib.sha256()
+    seen = 0
     for name in sorted(SOURCES):
         sha.update(name.encode("utf-8"))
         sha.update((root / name).read_bytes())
+        seen += 1
+    if seen != len(SOURCES):  # pragma: no cover - defensive
+        raise ValueError(f"digested {seen} of {len(SOURCES)} sources")
     return sha.hexdigest()
 
 
-#: pytest's own summary vocabulary. A kill must be a TEST that failed, not any
-#: non-zero exit -- see the comment at the scoring branch.
-_FAILURE_MARKERS = ("FAILED", " failed", "failed,", "AssertionError")
+#: pytest's summary line, parsed by COUNT rather than searched by substring.
+#:
+#: ROUND 14, twice. First `_FAILURE_MARKERS` carried the bare string
+#: `AssertionError` -- TRACEBACK vocabulary, which a COLLECTION ERROR also
+#: prints -- so a run with rc=1, `1 error` and ZERO failed scored KILLED. Then
+#: the first fix for that introduced `_ERROR_MARKERS` containing `" error"`,
+#: which matched the SUITE'S OWN ASSERTION TEXT (`assert "no error" in why`) and
+#: scored three real kills as ERROR. The same defect, inside its own repair.
+#:
+#: A substring of the whole stdout can never answer this: the suite's output
+#: contains the vocabulary it is testing. pytest states its verdict in ONE line,
+#: and that line is what gets read.
+_SUMMARY_COUNT_RE = re.compile(
+    r"(\d+)\s+(failed|passed|error|errors|skipped|deselected|xfailed|xpassed)\b"
+)
+
+
+def _summary_counts(stdout: str) -> dict[str, int]:
+    """pytest's own tallies, off its LAST summary line. Empty when it did not say.
+
+    The summary is the last line carrying at least one `<n> <word>` pair from
+    pytest's vocabulary -- `-q` prints e.g. `1 failed, 427 passed in 12.34s`, and
+    a collection failure prints `1 error in 0.40s`. Reading the last such line
+    rather than the whole stream is what stops the suite's own assertion text
+    from voting on its own result.
+    """
+    for line in reversed(stdout.strip().splitlines()):
+        pairs = _SUMMARY_COUNT_RE.findall(line)
+        if pairs:
+            counts: dict[str, int] = {}
+            for n, word in pairs:
+                key = "error" if word == "errors" else word
+                counts[key] = counts.get(key, 0) + int(n)
+            return counts
+    return {}
 
 
 def _reports_a_failure(stdout: str) -> bool:
-    return any(marker in stdout for marker in _FAILURE_MARKERS)
+    """Did a TEST fail? Not: did anything anywhere print something alarming."""
+    return _summary_counts(stdout).get("failed", 0) > 0
+
+
+def _reports_an_error(stdout: str) -> bool:
+    """Did the suite ERROR rather than fail? Then it did not decide this arm.
+
+    A failure is the suite working; an error is the suite not running. Only the
+    first is evidence about a mutation, and a mutant that breaks the instrument
+    has not been caught by it.
+    """
+    counts = _summary_counts(stdout)
+    return counts.get("error", 0) > 0 or "INTERNALERROR" in stdout
 
 
 def _write_lf(path: Path, text: str) -> None:
@@ -2188,7 +2303,15 @@ def main() -> int:
             "__tests__/test_mutate_gates.py::"
             "test_every_arm_anchor_is_present_and_unique_in_the_current_source"
         )
+        # `-o addopts=` FOR THE SAME REASON `_collected` CARRIES IT. Round 14:
+        # this command lacked it, so an ancestor `pytest.ini` or `tox.ini` above
+        # the sandbox would change what the control and EVERY ARM actually run
+        # while all four preamble gates read identically -- measured at 365
+        # instead of 424, caught only incidentally by the deselect check and
+        # then mis-diagnosed. The env is stripped upstream; config above the
+        # sandbox is the other half of the same hole.
         cmd = [sys.executable, "-m", "pytest", str(sandbox / "__tests__"), "-q",
+               "-o", "addopts=",
                "-p", "no:cacheprovider", "--deselect", deselect]
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
@@ -2341,11 +2464,21 @@ def main() -> int:
             # edit `policy.json` are the likeliest to reproduce it: a malformed
             # edit raises inside `load_policy` at import time.
             #
-            # A kill is rc=1 AND a pytest failure line in the output. Anything
-            # else is its own bucket and fails the run for a DIFFERENT reason,
-            # because "the mutation was never evaluated" and "the suite is
-            # blind" need different fixes.
-            failed_a_test = run.returncode == 1 and _reports_a_failure(run.stdout)
+            # A kill is rc=1 AND a pytest failure line AND no ERROR line.
+            #
+            # ROUND 14: the last conjunct is new, and it was wrong before it was
+            # missing. `_FAILURE_MARKERS` carried the bare string
+            # `AssertionError`, which is TRACEBACK vocabulary rather than
+            # SUMMARY vocabulary -- so a run with rc=1, `1 error` and ZERO
+            # failed scored KILLED on the strength of a traceback from a suite
+            # that never decided the arm. An independent reviewer measured it.
+            # A mutant that breaks the instrument has not been caught by it.
+            errored_out = _reports_an_error(run.stdout)
+            failed_a_test = (
+                run.returncode == 1
+                and _reports_a_failure(run.stdout)
+                and not errored_out
+            )
             if failed_a_test:
                 print(f"  KILLED   {name:<72} rc={run.returncode}")
                 killed += 1
@@ -2371,6 +2504,20 @@ def main() -> int:
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
           f"of {len(ARMS)} arms")
+    # EVERY ARM MUST HAVE BEEN SCORED. Round 14: this did not check that the
+    # buckets ADD UP, so `ARMS[:0]` exited 0 over zero arms -- a matrix that
+    # ran nothing reporting success. `test.yml` claims this enforcement; the
+    # code only implied it.
+    scored = killed + survived + skipped + errored
+    if scored != len(ARMS):
+        print(f"REFUSING -- scored {scored} arms but the matrix declares "
+              f"{len(ARMS)}. A run that did not evaluate every arm is not a "
+              "run, whatever its buckets say.")
+        return 1
+    if not ARMS:
+        print("REFUSING -- the matrix is EMPTY, and an empty matrix cannot be "
+              "evidence about anything")
+        return 1
     return 1 if (survived or skipped or errored or before != after) else 0
 
 

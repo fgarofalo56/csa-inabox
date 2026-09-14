@@ -2070,6 +2070,25 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
         )
     if not isinstance(job, dict):
         return False, "no job record was read for it, so it cannot be shown to have run"
+    # THE JOB'S OWN VERDICT, which this path never read. Round 14: `green-at-
+    # merge` and the deferral path asked only about STEPS, so a job that
+    # concluded `failure` was accepted as having "executed its declared
+    # substantive step" -- and an independent reviewer proved the job join
+    # PREFERS that failed job over its green twin. `_renamed_at_merge` has
+    # always read this field; the other two routes did not, and a receipt is
+    # only as good as its least-asked route.
+    job_verdict = step_conclusion(job)
+    if job_verdict is None:
+        return False, (
+            "its job record has not concluded, so it is still running and "
+            "cannot yet be shown to have done its work"
+        )
+    if job_verdict != "success":
+        return False, (
+            f"its job concluded {job_verdict!r}, not success - a job that did "
+            "not pass has not done the thing it is required for, whatever its "
+            "individual steps say"
+        )
     steps = job.get("steps")
     if not isinstance(steps, list) or not steps:
         return False, "its job record carries no steps, so it cannot be shown to have run"
@@ -2083,8 +2102,24 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
             f"all {len(steps)} of its steps are runner bookkeeping - no work steps at all"
         )
 
+    # A STEP THAT HAS NOT CONCLUDED IS NEITHER RUN NOR SKIPPED, and this is the
+    # SEVENTH reader of that field. Round 13 fixed `scope_untouched_at_merge`
+    # and called it a root-cause fix; an independent reviewer showed it landed
+    # on ONE OF THREE ROUTES. Here the consequence is `green-at-merge`: an
+    # in-progress job whose declared step had already succeeded was accepted,
+    # and `merge_gate`'s job join PREFERS that job in both input orders.
+    unfinished = [
+        str(s.get("name") or "?") for s in work if step_conclusion(s) is None
+    ]
+    if unfinished:
+        return False, (
+            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "
+            f"({', '.join(unfinished[:3])}) - this job is still running, so it "
+            "cannot yet be shown to have done the thing it is required for"
+        )
+
     def ran(step: dict) -> bool:
-        return str(step.get("conclusion") or "").lower() not in ("skipped", "")
+        return step_conclusion(step) != "skipped"
 
     rule = declared[name]
     if rule == "ALL":
@@ -3189,9 +3224,24 @@ def job_executed(job: dict | None) -> tuple[bool, str]:
         return False, (
             f"all {len(steps)} of its steps are runner bookkeeping - it has no work steps at all"
         )
+    # THE EIGHTH READER, and the one that STEERS the others: this boolean is the
+    # selector `merge_gate` uses to choose a route. Round 14: it folded "has not
+    # concluded" into "skipped" and then printed "1 of its 1 work step(s) are
+    # SKIPPED" about a step that was QUEUED -- an R7-false sentence feeding a
+    # wrong route choice.
+    unfinished = [
+        step for step in substantive if step_conclusion(step) is None
+    ]
+    if unfinished:
+        names = ", ".join(str(s.get("name") or "?") for s in unfinished[:4])
+        return False, (
+            f"{len(unfinished)} of its {len(substantive)} work step(s) have NOT "
+            f"CONCLUDED ({names}) - the job is still running, which is not the "
+            "same as having skipped its work"
+        )
     skipped = [
         step for step in substantive
-        if str(step.get("conclusion") or "").lower() in ("skipped", "")
+        if step_conclusion(step) == "skipped"
     ]
     if skipped:
         names = ", ".join(str(s.get("name") or "?") for s in skipped[:4])

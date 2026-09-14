@@ -1944,3 +1944,91 @@ def test_an_output_gating_an_absent_step_is_refused():
         "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], POLICY)
     assert not ok, why
     assert "absent from this job" in why, why
+
+
+# ---------------------------------------------------------------------------
+# ROUND 14: round 13's "root cause" fix landed on ONE OF THREE ROUTES. These
+# cover the other two, plus the job's own verdict, which no route but
+# `_renamed_at_merge` had ever read.
+# ---------------------------------------------------------------------------
+
+def test_green_at_merge_refuses_a_job_that_is_still_running():
+    """BLOCKER. `context_did_its_work`'s `ran()` was the SEVENTH reader of
+    `conclusion` and still coerced, so an in-progress job whose declared step
+    had already succeeded was accepted as `green-at-merge` -- and the job join
+    PREFERS that job in both input orders.
+
+    TWO SEPARATE GUARDS, DRIVEN SEPARATELY. The first version of this test set
+    the JOB conclusion to None as well, so the job-level refusal fired first and
+    silently covered for the work-step refusal -- arm U1 SURVIVED the whole
+    suite. A test that is satisfied by either of two guards cannot witness
+    either, which is the shape an independent reviewer named one round earlier
+    and which I then reproduced.
+    """
+    # 1. THE WORK-STEP GUARD, isolated: the job itself claims success while one
+    #    of its work steps never concluded. GitHub should not emit this, but the
+    #    job record here is chosen by a JOIN across duplicate jobs, so a
+    #    half-written or truncated record can surface it -- and "should not
+    #    happen" is not a control.
+    step_level = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "success"},
+            {"name": "Lint (next lint)", "conclusion": None},
+        ],
+    }
+    ok, why = gates.context_did_its_work("next build (node 20)", step_level, POLICY)
+    assert not ok, why
+    assert "work step(s) have NOT CONCLUDED" in why, why
+
+    # 2. THE JOB-LEVEL GUARD, isolated: every step concluded, the job did not.
+    job_level = {
+        "name": "next build (node 20)", "conclusion": None,
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "success"},
+        ],
+    }
+    ok2, why2 = gates.context_did_its_work("next build (node 20)", job_level, POLICY)
+    assert not ok2, why2
+    assert "its job record has not concluded" in why2, why2
+
+
+def test_green_at_merge_refuses_a_job_that_concluded_failure():
+    """The job's OWN verdict, which this route never read. A job that concluded
+    `failure` was accepted as having executed its declared substantive step,
+    and the join prefers the failed job over its green twin."""
+    job = {
+        "name": "next build (node 20)", "conclusion": "failure",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "success"},
+        ],
+    }
+    ok, why = gates.context_did_its_work("next build (node 20)", job, POLICY)
+    assert not ok, why
+    assert "concluded 'failure', not success" in why, why
+
+    # CONTROL: the same job concluding success is still accepted, or this
+    # refuses the population every green receipt depends on.
+    job["conclusion"] = "success"
+    ok2, why2 = gates.context_did_its_work("next build (node 20)", job, POLICY)
+    assert ok2, why2
+
+
+def test_job_executed_does_not_call_a_queued_step_skipped():
+    """BLOCKER. `job_executed` was the EIGHTH reader, and it is the SELECTOR
+    that steers the receipt into a route -- so its message being false about a
+    queued step (R7) also made the route choice wrong."""
+    job = {
+        "name": "guardrails", "conclusion": None,
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Run the guard", "conclusion": None},
+        ],
+    }
+    ok, why = gates.job_executed(job)
+    assert not ok
+    assert "NOT CONCLUDED" in why, why
+    assert "SKIPPED" not in why, why

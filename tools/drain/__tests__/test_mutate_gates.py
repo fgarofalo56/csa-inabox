@@ -27,14 +27,24 @@ import mutate_gates
 
 
 def test_a_real_pytest_failure_reports_a_failure():
-    """The accept side. Both the per-test line and the summary line count, and
-    an `AssertionError` in a traceback counts too -- pytest's own vocabulary
-    varies with `-q`, `-x` and the failure's shape."""
+    """The accept side: pytest's SUMMARY vocabulary, and only that.
+
+    ROUND 14: this test used to assert that a bare traceback line
+    (`E       AssertionError: ...`) also counts, and the marker list carried
+    `AssertionError` to satisfy it. That was the defect, encoded as a control.
+    A COLLECTION ERROR prints the same string, so a run with rc=1, `1 error`
+    and ZERO failed scored KILLED -- measured by an independent reviewer.
+
+    ROUND 14, again: the fixtures are now WHOLE pytest outputs rather than
+    single lines. A real run never prints a `FAILED` line without a summary
+    line, so a one-line fixture was describing output pytest cannot produce --
+    and it is what made the bare-substring reader look adequate.
+    """
     for stdout in (
-        "FAILED tools/drain/__tests__/test_ledger.py::test_x - AssertionError",
+        ("FAILED tools/drain/__tests__/test_ledger.py::test_x - AssertionError\n"
+         "1 failed, 431 passed in 12.02s\n"),
         "=== 1 failed, 261 passed in 1.02s ===",
-        "2 failed, 260 passed",
-        "E       AssertionError: the receipt must be VOID",
+        "2 failed, 260 passed in 3.41s",
     ):
         assert mutate_gates._reports_a_failure(stdout), stdout
 
@@ -294,3 +304,119 @@ def test_the_population_counter_reads_the_summary_not_the_listing():
         "the `-qq` shape -- `-o addopts=` is what keeps the two trees comparable"
     )
     assert n > 100, n
+
+
+# ---------------------------------------------------------------------------
+# ROUND 14: the runner's HELPERS were tested and its DECISIONS were not.
+# An independent reviewer mutated the runner by hand 15 ways and 14 survived;
+# the only kill was the one behaviour that had a test. `mutate_gates.py` is in
+# COPIED but not SOURCES, so no arm can reach any of this -- ordinary tests are
+# the only instrument it can have.
+# ---------------------------------------------------------------------------
+
+def test_a_collection_error_is_not_scored_as_a_kill():
+    """BLOCKER, and it was wrong UNMUTATED. `_FAILURE_MARKERS` carried the bare
+    string `AssertionError`, which is TRACEBACK vocabulary rather than SUMMARY
+    vocabulary -- so a run with rc=1, `1 error` and ZERO failed scored KILLED on
+    a traceback from a suite that never decided the arm.
+
+    A mutant that breaks the instrument has not been caught by it.
+    """
+    errored = (
+        "ERROR tests/test_x.py - AssertionError: boom\n"
+        "1 error in 0.4s\n"
+    )
+    assert mutate_gates._reports_an_error(errored) is True
+    assert mutate_gates._reports_a_failure(errored) is False, (
+        "`AssertionError` must not be read as a pytest failure line"
+    )
+
+    # CONTROL: a real failure is still a failure.
+    failed = "FAILED tests/test_x.py::test_a - assert 1 == 2\n1 failed in 0.3s\n"
+    assert mutate_gates._reports_a_failure(failed) is True
+    assert mutate_gates._reports_an_error(failed) is False
+
+
+def test_the_suites_own_vocabulary_does_not_vote_on_its_own_result():
+    """ROUND 14, THE SECOND TIME. The first fix for the above introduced an
+    `" error"` substring marker, which matched the drain suite's own ASSERTION
+    TEXT -- `assert "no error" in why` -- and scored three real kills as ERROR.
+    The same defect, inside its own repair.
+
+    A substring of the whole stdout can never answer this question: the suite's
+    output contains the vocabulary it is testing. Only the summary line can.
+    """
+    noisy = (
+        "tools/drain/__tests__/test_tick.py::test_x\n"
+        "    assert 'no error' in why\n"
+        "E   AssertionError: 1 error during the refresh guard\n"
+        "FAILED tools/drain/__tests__/test_tick.py::test_x\n"
+        "2 failed, 426 passed, 3 skipped, 1 deselected in 12.01s\n"
+    )
+    assert mutate_gates._reports_a_failure(noisy) is True
+    assert mutate_gates._reports_an_error(noisy) is False, (
+        "the words `error` and `AssertionError` appear in the suite's own "
+        "output; only pytest's summary line decides"
+    )
+
+    # And the reverse: a genuine error summary is still an error, even when the
+    # run also printed the word `failed` in a traceback above it.
+    real_error = (
+        "E   assert 'failed' in result\n"
+        "ERROR tools/drain/__tests__/test_policy.py\n"
+        "1 error in 0.22s\n"
+    )
+    assert mutate_gates._reports_an_error(real_error) is True
+    assert mutate_gates._reports_a_failure(real_error) is False
+
+
+def test_the_summary_reader_says_nothing_when_pytest_said_nothing():
+    """No summary line means no verdict, and "no verdict" must not read as
+    "no failure" -- that is the direction that scores a dead run as a
+    survivor."""
+    assert mutate_gates._summary_counts("") == {}
+    assert mutate_gates._summary_counts("Traceback (most recent call last):") == {}
+    assert mutate_gates._reports_a_failure("") is False
+    assert mutate_gates._reports_an_error("INTERNALERROR> boom") is True
+
+
+def test_the_tree_digest_changes_when_a_source_changes(tmp_path):
+    """BLOCKER. `tracked tree untouched: True` is quoted as evidence in every
+    round of this issue, and it had NO TEST -- nor had it ever been exhibited
+    printing False. A constant return or an empty population makes it vacuous.
+    """
+    for name in mutate_gates.SOURCES:
+        (tmp_path / name).write_text("original\n", encoding="utf-8")
+    before = mutate_gates.digest_tree(tmp_path)
+    assert before == mutate_gates.digest_tree(tmp_path), "must be stable"
+
+    # EXHIBIT THE FALSE. Every source, one at a time, must move the digest --
+    # otherwise a file is in SOURCES and not actually being watched.
+    for name in mutate_gates.SOURCES:
+        (tmp_path / name).write_text("mutated\n", encoding="utf-8")
+        assert mutate_gates.digest_tree(tmp_path) != before, (
+            f"{name} is declared a watched source but does not move the digest"
+        )
+        (tmp_path / name).write_text("original\n", encoding="utf-8")
+    assert mutate_gates.digest_tree(tmp_path) == before
+
+
+def test_the_tree_digest_refuses_an_empty_population(monkeypatch, tmp_path):
+    """A digest over zero files is a constant, and a constant compares equal to
+    itself for any tree -- so `sorted(SOURCES)[:0]` would print
+    `tracked tree untouched: True` over any modification at all."""
+    monkeypatch.setattr(mutate_gates, "SOURCES", [])
+    with pytest.raises(ValueError, match="EMPTY source list"):
+        mutate_gates.digest_tree(tmp_path)
+
+
+def test_the_clean_env_strips_both_variables(monkeypatch):
+    """`PYTEST_PLUGINS` was the untested half. Both can change what a pytest
+    subprocess runs without changing any file."""
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k nope")
+    monkeypatch.setenv("PYTEST_PLUGINS", "some_plugin")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    env = mutate_gates._clean_env()
+    assert "PYTEST_ADDOPTS" not in env
+    assert "PYTEST_PLUGINS" not in env
+    assert "PATH" in env, "it must still be a usable environment"
