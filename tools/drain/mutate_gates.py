@@ -51,7 +51,7 @@ ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "operating_point.py", "policy.json"]
+           "operating_point.py", "policy.json", "complete.py"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -1966,6 +1966,106 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
         "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
+    ),
+
+    # -- complete.py: the module that CLOSES ISSUES UNATTENDED --------------
+    # Every arm here is a way the harness could close something it had not
+    # established. They exist because this module has the widest blast radius
+    # in the package and, until now, nothing in the matrix pointed at it.
+    (
+        ("CP1 human-only auto-closes, so the one class whose receipt IS a "
+         "person's judgement is certified by the harness instead"),
+        "complete.py",
+        '        False, "",\n        "human-only: an operator receipt is a person\'s judgement and is never "',
+        '        True, "auto-approved",\n        "human-only: an operator receipt is a person\'s judgement and is never "',
+    ),
+    (
+        ("CP2 the reopen guard stops guarding, so an item a PERSON reopened "
+         "after the claiming PR merged is closed again by the sweep"),
+        "complete.py",
+        "        if rejected:",
+        "        if False:",
+    ),
+    (
+        ("CP3 evidence with an EMPTY ref is accepted, so a close records nothing "
+         "a reader could follow back to re-check it"),
+        "complete.py",
+        "    if found.ok and not found.ref.strip():",
+        "    if False:",
+    ),
+    (
+        ("CP4 an adapter that RAISED is no longer marked a fault, collapsing "
+         "'the tool is broken' back into 'the evidence says no'"),
+        "complete.py",
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {exc}"[:300],\n            fault=True)',
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {exc}"[:300],\n            fault=False)',
+    ),
+    (
+        ("CP5 a FAULT falls through to the no-evidence branch, so a broken "
+         "adapter moves the item to AWAITING_RECEIPT - a state claim the code "
+         "did not establish (R7)"),
+        "complete.py",
+        "        if found.fault:",
+        "        if False:",
+    ),
+    (
+        ("CP6 the fault breaker never trips, so a structurally dead adapter "
+         "prints a refusal for every item and the sweep exits 0 having drained "
+         "nothing - the green-dashboard outcome"),
+        "complete.py",
+        "CONSECUTIVE_FAULT_LIMIT = 3",
+        "CONSECUTIVE_FAULT_LIMIT = 10_000",
+    ),
+    (
+        ("CP7 the fault streak becomes CUMULATIVE rather than consecutive, so a "
+         "merely flaky run aborts as though it were broken"),
+        "complete.py",
+        "        faults[kind] = 0  # a reply that was ABOUT the item clears the streak",
+        "        pass  # a reply that was ABOUT the item clears the streak",
+    ),
+    (
+        ("CP8 the PR reference is read from the FIRST `(#N)` rather than the "
+         "last, so `fix(ci): guard ... (#3338) (#4371)` binds the item to the "
+         "ISSUE number it fixes as though that were its PR"),
+        "complete.py",
+        '_TRAILING_PR_RE = re.compile(r"\\(#(\\d+)\\)\\s*$")',
+        '_TRAILING_PR_RE = re.compile(r"\\(#(\\d+)\\)")',
+    ),
+    (
+        ("CP9 --dry-run writes, so the command whose entire contract is 'gather "
+         "and print, change nothing' closes issues"),
+        "complete.py",
+        "        if dry_run:",
+        "        if False:",
+    ),
+    (
+        ("CP10 the sweep no longer refuses without a receipts map, so every "
+         "close runs with no KIND to validate against"),
+        "complete.py",
+        "    if not receipts:",
+        "    if False:",
+    ),
+    (
+        ("CP11 PROSE decides again - the #3883 defect exactly: a publication "
+         "guard that deliberately over-matches is reused as a completion "
+         "oracle, and a PR body saying 'Deliberately NOT closed' closes it"),
+        "complete.py",
+        ("    if isinstance(item.pr, int) and item.pr > 0:\n"
+         "        hit = closing.get(item.number)\n"
+         '        when = hit[1] if hit else ""\n'
+         '        return item.pr, when, f"bound to PR #{item.pr}"'),
+        ("    hit = closing.get(item.number)\n"
+         "    if hit:\n"
+         '        return hit[0], hit[1], f"claimed by PR #{hit[0]}"\n'
+         "    if isinstance(item.pr, int) and item.pr > 0:\n"
+         '        return item.pr, "", f"bound to PR #{item.pr}"'),
+    ),
+    (
+        ("CP12 NEEDS_AUDIT becomes completable, so an item that LEFT GitHub or "
+         "disagreed with it is closed by the sweep rather than answered first"),
+        "complete.py",
+        "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT)",
+        "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, ledger.NEEDS_AUDIT)",
     ),
 ]
 
