@@ -10,7 +10,7 @@ note exists so the next reader does not trust a freshness the program does not
 provide. **Re-read the FIRST TASK section against `--status` before pasting** —
 it was stale once already, naming work that had since been done.
 
-Last hand-updated: 2026-09-13 (re-checked against live state: PR #4491 round 4, #4492 open and CI_RUNNER unset).
+Last hand-updated: 2026-09-13 (re-checked against live state: PR #4491 round 5; #4492 PARKED as draft — the migration premise did not hold, see its thread).
 
 ---
 
@@ -64,32 +64,30 @@ Scope and autonomy are already decided — do not re-ask them:
 FIRST TASK, before draining anything else — check each against live state, because
 this list is hand-maintained and was stale once already:
 
-  1. #4487 (W0) — PR #4491 is OPEN and on its FOURTH round of independent review.
-     Rounds 1-3 are closed; round 4 raised three more and they are fixed at head
-     `PLACEHOLDER_HEAD`. What round 4 found, because the shape keeps recurring:
-     the depth fix to `policy_keys_without_implementation` was applied at two
-     levels and the walk needed three (it is now unbounded, in all THREE
-     walkers); and the substantive-step rule — correct in itself — made
-     `ci-green` UNOBTAINABLE for the very class it closes, because a
-     guard/test-only PR does not touch `apps/fiab-console` and the console
-     contexts skip their work behind an in-job change detector. Measured before
-     the fix: 4 of the 12 most recent merges could take the receipt; after, 12
-     of 12, with every excused context named and its scope corroborated against
-     the merged commit's own file list. Until this lands, NO guard/test-only
-     issue can reach a terminal state, so it gates the whole drain.
+  1. #4487 (W0) — PR #4491 is OPEN and on its FIFTH round of independent review.
+     Rounds 1-4 are closed. Read the PR's own comments for the live state rather
+     than trusting a sha written here; every round so far found its blocker
+     INSIDE the previous round's fix, which is the pattern to expect. Round 5's
+     were: a sibling gate step could answer for a skipped detector (`any()` over
+     a substring-matched population), and a job with TWO work-gating outputs was
+     reported as having "nothing to do" when its second half had actually run.
+     Until this lands, NO guard/test-only issue can reach a terminal state, so
+     it gates the whole drain.
   2. #4468's remainder — port `unblock-git.py` and `preflight-casedrop.py` out of
      `temp/` into `tools/drain` with tests, then close #4468 on its own checklist.
-  3. PR #4492 (CI runners) is still OPEN, head `3d3f6124`, MERGEABLE, no posted
-     verdicts. It moves CI onto in-VNet Azure Container Apps runners behind a
-     `CI_RUNNER` repo variable. **That variable is NOT set** — measured
-     2026-09-13, `gh variable list` returns 11 names and `CI_RUNNER` is not one
-     of them, and the last 6 workflow runs all ran on GitHub-hosted
-     `ubuntu-latest` (runner names `GitHub Actions 10003205xx`). So CI is NOT on
-     the Azure fleet and nothing has moved off GitHub-hosted minutes. An earlier
-     revision of this file said the variable "IS SET — so CI already runs there",
-     which was the second time this hand-maintained section stated something the
-     live state contradicted. Once it IS merged and set, the whole rollback is
-     `gh variable delete CI_RUNNER`. Do not merge it without two posted verdicts.
+  3. PR #4492 (CI runners) is PARKED as a draft — do not pick it up without
+     reading its thread. It moved CI onto in-VNet Azure Container Apps runners
+     behind a `CI_RUNNER` repo variable, to remove a CI billing blocker. **There
+     is no CI billing blocker**: this repo is PUBLIC, so GitHub-hosted runners
+     are free, and the ACA fleet costs ~$0.62/node-hour in use. The migration
+     added cost rather than removing it. Measured 2026-09-13: `CI_RUNNER` unset,
+     0 runners registered, `gh-aca-runner` at `maxExecutions: 0`, D8 profile at
+     `minimumCount: 0` — so the fleet is off and costs nothing to leave in place.
+     Two independent reviews also found it not ready (network axis unmeasured,
+     the body's "CI_RUNNER is set" claim false, `provision-gh-runner.sh` unable
+     to reproduce the fleet). If an in-VNet driver appears later — CI needing
+     private endpoints or Key Vault that GitHub-hosted runners cannot reach —
+     that branch is the starting point and its thread is the fix list.
 
 Both #4487 and #4468 are W0 — finish the gate before trusting it.
 ```
@@ -122,8 +120,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 378 pass
-python tools/drain/mutate_gates.py       # 205 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 383 pass
+python tools/drain/mutate_gates.py       # 209 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

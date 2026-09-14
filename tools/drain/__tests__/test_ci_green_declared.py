@@ -115,7 +115,7 @@ def test_negative_control_a_scope_skip_needs_the_gate_step_to_have_run():
         "next build (node 20)", dead, MERGED_FILES, POLICY)
     assert not ok
     assert "gate step" in why
-    assert "rather than success" in why
+    assert "did not conclude success" in why
 
 
 def test_negative_control_a_scope_skip_needs_a_declared_scope():
@@ -157,6 +157,168 @@ def test_negative_control_a_failed_declared_step_is_not_a_scope_skip():
     assert "rather than `skipped`" in why
 
 
+def _job_block(text: str, job_key: str) -> str | None:
+    """The slice of a workflow file belonging to one JOB, keyed by its YAML key.
+
+    Keyed to the job KEY rather than the context's display name, for two
+    measured reasons. Both reviewers found the name-keyed version reading the
+    WRONG job — it scanned the whole file and stopped at the first match, so
+    both console rows resolved to `build` and `vitest`'s detector 250 lines down
+    was never read. And a display name is not always IN the file: `Python Tests
+    (3.10)` comes from `name: Python Tests (${{ matrix.python-version }})`, so
+    the literal context name appears nowhere.
+
+    Crude on purpose — the alternative is a YAML round-trip inside a drift
+    guard, and this must fail LOUDLY when the shape changes rather than parse
+    cleverly around it.
+    """
+    import re as _re
+
+    marker = _re.search(r"^  " + _re.escape(job_key) + r":\s*$", text, _re.MULTILINE)
+    if marker is None:
+        return None
+    rest = text[marker.end():]
+    nxt = _re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, _re.MULTILINE)
+    return rest[: nxt.start()] if nxt else rest
+
+
+def test_every_declared_alternative_exists_and_is_gated_differently():
+    """Round 5's blocker, as a contract.
+
+    A job may have MORE THAN ONE work-gating output, and a row naming only the
+    first made the receipt print "there was nothing for it to do" about a merge
+    where `Run vitest (infra-reading suites only)` had SUCCEEDED. An alternative
+    is therefore only meaningful if it (a) exists in the producing workflow's
+    own job block and (b) is gated on a DIFFERENT condition than the primary
+    step -- an "alternative" behind the same `if:` can never run when the
+    primary does not, so declaring one would be decoration.
+    """
+    root = _repo_root()
+    if root is None:  # pragma: no cover - mutation sandbox
+        pytest.skip("workflow tree not reachable from here (mutation sandbox)")
+    alts = {
+        name: steps
+        for name, steps in POLICY["receipts"]["ci_green_rule"]["alternatives"].items()
+        if not name.startswith("_")
+    }
+    assert alts, "an empty alternatives map would make this guard vacuous"
+    scope_rows = POLICY["receipts"]["ci_green_rule"]["scope_paths"]
+    primary = POLICY["receipts"]["ci_green_rule"]["substantive_steps"]
+    for name, steps in alts.items():
+        row = scope_rows.get(name)
+        assert isinstance(row, dict), f"{name}: an alternative needs a scope row"
+        job = _job_block((root / row["workflow"]).read_text(encoding="utf-8"), row["job"])
+        assert job is not None, f"{name}: no job block in {row['workflow']}"
+        assert steps, f"{name}: empty alternative list"
+        for step in steps:
+            assert f"name: {step}" in job, (
+                f"{name}: declared alternative {step!r} does not exist in its job"
+            )
+            assert f"outputs.{row['output']} == 'true'" not in _gate_of(job, step), (
+                f"{name}: alternative {step!r} is gated on the SAME output as the "
+                f"primary step, so it can never run when the primary does not"
+            )
+        for step in primary[name]:
+            assert step not in steps, (
+                f"{name}: {step!r} is declared as both primary and alternative"
+            )
+
+
+def _gate_of(job: str, step_name: str) -> str:
+    """The `if:` expression attached to a named step, or "" when it has none."""
+    import re as _re
+
+    m = _re.search(
+        r"^      - name: " + _re.escape(step_name) + r".*?$(.*?)(?=^      - name: |\Z)",
+        job, _re.MULTILINE | _re.DOTALL,
+    )
+    if m is None:
+        return ""
+    gate = _re.search(r"^        if: (.+)$", m.group(1), _re.MULTILINE)
+    return gate.group(1) if gate else ""
+
+
+def test_negative_control_a_declared_alternative_that_ran_is_work_not_an_excuse():
+    """The receipt must report work DONE, not an excuse, when the other half of
+    a two-output job ran. Reporting it as `scope-untouched-at-merge` was the
+    R7 violation: it printed "nothing for it to do" about a job that had just
+    run 42 test suites."""
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes",
+               "Run vitest (with istanbul coverage floor)",
+               "Run vitest (infra-reading suites only)"),
+        skipped=("Run vitest (with istanbul coverage floor)",),
+    )
+    ok, why = gates.context_did_its_work("vitest (node 20)", job, POLICY)
+    assert ok, why
+    assert "Run vitest (infra-reading suites only)" in why
+    assert "alternative" in why
+
+    excused, scope_why = gates.scope_untouched_at_merge(
+        "vitest (node 20)", job, MERGED_FILES, POLICY)
+    assert not excused
+    assert "work step(s) RAN anyway" in scope_why
+
+
+def test_negative_control_a_skipped_alternative_is_not_work():
+    """Both halves skipped is the genuine scope skip, and must stay reachable —
+    otherwise the fix for the lie would re-break the receipt it repaired."""
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes",
+               "Run vitest (with istanbul coverage floor)",
+               "Run vitest (infra-reading suites only)"),
+        skipped=("Run vitest (with istanbul coverage floor)",
+                 "Run vitest (infra-reading suites only)"),
+    )
+    ok, _ = gates.context_did_its_work("vitest (node 20)", job, POLICY)
+    assert not ok
+    excused, why = gates.scope_untouched_at_merge(
+        "vitest (node 20)", job, MERGED_FILES, POLICY)
+    assert excused, why
+    assert "no work step in the job ran" in why
+
+
+def test_negative_control_a_sibling_gate_step_cannot_answer_for_a_skipped_one():
+    """Round 5 BLOCKER: `gate_step` is matched as a SUBSTRING and the check was
+    `any()`, so a step whose name merely CONTAINS the declared one could answer
+    for a detector that was itself skipped — and the message then asserted the
+    declared detector had run, which it had not."""
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect console changes", "conclusion": "skipped"},
+            {"name": "Detect console changes (portal half)", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    ok, why = gates.scope_untouched_at_merge(
+        "next build (node 20)", job, MERGED_FILES, POLICY)
+    assert not ok
+    assert "did not conclude success" in why
+
+
+def test_negative_control_every_declared_pattern_is_applied_not_just_the_first():
+    """Round 5 BLOCKER 2, and the arm that proved no test drove it: the console
+    rows declare TWO patterns, and `MERGED_FILES` carries no workflow path, so
+    a mutation applying only `paths[0]` survived. A merge that touches ONLY
+    `.github/workflows/fiab-console-ci.yml` is inside the declared scope by the
+    second pattern — it is the #3783 case this branch exists to catch."""
+    hollow = _job("next build (node 20)",
+                  steps=("Detect console changes", "Build (next build)"),
+                  skipped=("Build (next build)",))
+    ok, why = gates.scope_untouched_at_merge(
+        "next build (node 20)", hollow,
+        [".github/workflows/fiab-console-ci.yml"], POLICY)
+    assert not ok
+    assert "missed a change" in why
+    assert "fiab-console-ci.yml" in why
+
+
 def test_the_declared_scope_matches_the_workflows_own_change_detector():
     """DRIFT GUARD. `scope_paths` is read off the producing workflow's detector,
     and a lookup table read off something else is one edit away from being
@@ -193,13 +355,29 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
     for name, row in rows.items():
         text = (root / row["workflow"]).read_text(encoding="utf-8")
         assert row["gate_step"] in text, (name, row["gate_step"])
+        # SCOPED TO THIS ROW'S OWN JOB. Both independent reviewers found this
+        # guard reading the WRONG job: it scanned the whole file and broke at the
+        # first `grep -qE` setting the declared output, so BOTH literal rows
+        # resolved to the `next build` job's detector and the `vitest` job's --
+        # 250 lines further down, with a different second output -- was never
+        # read. A drift guard that validates one job twice is not a drift guard,
+        # and `DATA_NOT_NAMESPACE` stops the policy-key walk on the strength of
+        # this test.
+        job = _job_block(text, row["job"])
+        assert job is not None, (
+            f"{name}: no job in {row['workflow']} publishes this context - the "
+            "`name:` changed, or the row points at the wrong workflow"
+        )
+        assert row["gate_step"] in job, (
+            f"{name}: its declared gate step is not in ITS OWN job block"
+        )
 
         if row["paths"] == gates.ON_PUSH_PATHS:
             shapes.add("delegated")
             # The delegation itself is the contract. If the detector stops
             # reading the trigger out of its own file, the declaration below
             # stops describing it -- and that is precisely the silent drift.
-            assert "python_trigger_scope.py --changed-file" in text, (
+            assert "python_trigger_scope.py --changed-file" in job, (
                 f"{name}: {row['workflow']}'s detector no longer delegates to the "
                 "shared scope script, so `on.push.paths` is no longer its scope"
             )
@@ -215,8 +393,8 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
 
         shapes.add("literal")
         found = None
-        for match in re.finditer(r"grep -qE '([^']+)'", text):
-            tail = text[match.end():match.end() + 400]
+        for match in re.finditer(r"grep -qE '([^']+)'", job):
+            tail = job[match.end():match.end() + 400]
             if f'echo "{row["output"]}=true"' not in tail:
                 continue
             found = {
@@ -225,7 +403,7 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
             }
             break
         assert found is not None, (
-            f"{name}: no `grep -qE` in {row['workflow']} sets "
+            f"{name}: no `grep -qE` in its own job block sets "
             f"{row['output']}=true - the detector's shape changed"
         )
         declared = {p[: -len("/**")] if p.endswith("/**") else p for p in row["paths"]}

@@ -268,6 +268,7 @@ OTHER_IMPLEMENTED_BY = {
     "receipts.ci_green_rule": "gates.ci_green_receipt",
     "receipts.ci_green_rule.substantive_steps": "gates.context_did_its_work",
     "receipts.ci_green_rule.scope_paths": "gates.scope_untouched_at_merge",
+    "receipts.ci_green_rule.alternatives": "gates.context_did_its_work",
     "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
     "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
     "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
@@ -335,6 +336,11 @@ DATA_NOT_NAMESPACE = {
         "rows are checked against the producing workflow's own change detector "
         "by __tests__/test_ci_green_declared.py, and a context without a row "
         "cannot reach the scope-untouched branch at all",
+    "receipts.ci_green_rule.alternatives":
+        "rows are checked against the producing workflow by "
+        "__tests__/test_ci_green_declared.py, which requires every named "
+        "alternative step to EXIST in that workflow and to be gated on a "
+        "DIFFERENT output than the primary step it stands in for",
 }
 
 
@@ -2103,6 +2109,36 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
             "is stale, or this is not the job it describes; re-read it off a green run"
         )
     if hollow:
+        # A DECLARED ALTERNATIVE THAT RAN IS THE CONTEXT DOING ITS WORK. A job
+        # may carry MORE THAN ONE work-gating output, and a declaration naming
+        # only the first makes the receipt state something FALSE -- which an
+        # independent reviewer measured on the two merged shas this PR presents
+        # as its receipt: `Run vitest (with istanbul coverage floor)` skipped,
+        # `Run vitest (infra-reading suites only)` SUCCEEDED, and the receipt
+        # printed "there was nothing for it to do". It did work.
+        #
+        # Checked HERE rather than in the scope branch on purpose: this is the
+        # context having done its work, not an excuse for not having done it, and
+        # the two must not be reported as the same thing.
+        alternatives = (
+            policy.get("receipts", {})
+            .get("ci_green_rule", {})
+            .get("alternatives", {})
+            .get(name)
+        )
+        if isinstance(alternatives, list):
+            ran_instead = [
+                str(s.get("name") or "")
+                for s in work
+                if any(alt in str(s.get("name") or "") for alt in alternatives)
+                and ran(s)
+            ]
+            if ran_instead:
+                return True, (
+                    f"skipped its primary step(s) {hollow} and executed its declared "
+                    f"alternative(s) {ran_instead} instead - the other half of a job "
+                    "whose work is gated on more than one output"
+                )
         return False, (
             f"its declared substantive step(s) {hollow} were SKIPPED - the check "
             "concluded green having not done the thing it is required for"
@@ -2251,13 +2287,30 @@ def scope_untouched_at_merge(
             f"its declared gate step {gate_step!r} is ABSENT from this job - the "
             "declaration is stale, or this is not the job it describes"
         )
-    if not any(
-        str(s.get("conclusion") or "").lower() == "success" for s in detectors
-    ):
-        got = ", ".join(str(s.get("conclusion") or "?") for s in detectors)
+    # EVERY matching gate step must have concluded success, not ANY of them.
+    # `gate_step` is matched as a SUBSTRING, so `any()` let a step whose name
+    # merely CONTAINS the declared one answer for a detector that was itself
+    # skipped -- an independent reviewer's counterexample:
+    #
+    #   Detect console changes                 -> skipped
+    #   Detect console changes (portal half)   -> success
+    #   Build (next build)                     -> skipped
+    #   => excused, claiming "its declared gate step ... ran"
+    #
+    # That is also an R7 lie: the message asserts the declared detector ran when
+    # what ran was a different step. `context_did_its_work` moved from `any` to
+    # `all` for exactly this reason; this parallel loop stayed behind, which is
+    # the one-side-of-a-symmetry defect again, inside the round that names it.
+    off = [
+        f"{s.get('name') or '?'!s}={s.get('conclusion') or '?'!s}"
+        for s in detectors
+        if str(s.get("conclusion") or "").lower() != "success"
+    ]
+    if off:
         return False, (
-            f"its declared gate step {gate_step!r} concluded {got} rather than "
-            "success, so nothing establishes WHY the work was skipped"
+            f"its declared gate step {gate_step!r} matches {len(detectors)} step(s) "
+            f"and {len(off)} of them did not conclude success ({', '.join(off[:3])}), "
+            "so nothing establishes WHY the work was skipped"
         )
 
     declared_steps = (
@@ -2314,12 +2367,32 @@ def scope_untouched_at_merge(
             f"({shown}{more}) and the work was skipped anyway - that is a change "
             "detector that missed a change, not a scope skip"
         )
+    # "NOTHING FOR IT TO DO" MUST BE TRUE WHEN IT IS PRINTED (R7). A job with a
+    # second work-gating output can skip its primary step and still run real
+    # work -- the `Run vitest (infra-reading suites only)` case, measured on the
+    # very shas this receipt was taken against. `context_did_its_work` now
+    # reports that as work done, so by the time control reaches here nothing
+    # should have run; asserting it makes the sentence checkable rather than
+    # assumed, and a job that DID run something can never be laundered into an
+    # excuse by a future edit to the branch above.
+    did_run = [
+        str(s.get("name") or "?")
+        for s in steps
+        if s not in detectors
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
+        and str(s.get("conclusion") or "").lower() not in ("skipped", "")
+    ]
+    if did_run:
+        return False, (
+            f"its declared scope excludes every merged file, but {len(did_run)} work "
+            f"step(s) RAN anyway ({', '.join(did_run[:3])}) - a job that did work is "
+            "not a job with nothing to do; declare those steps as alternatives"
+        )
     return True, (
-        f"its declared gate step {gate_step!r} ran and none of the {len(files)} "
-        f"merged file(s) is inside its declared scope {list(paths)}, so there was "
-        "nothing for it to do"
+        f"its declared gate step {gate_step!r} ran, none of the {len(files)} "
+        f"merged file(s) is inside its declared scope {list(paths)}, and no work "
+        "step in the job ran - so there was nothing for it to do"
     )
-
 
 def job_executed(job: dict | None) -> tuple[bool, str]:
     """Did this job actually DO its work, or conclude green having skipped it?

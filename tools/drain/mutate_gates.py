@@ -1495,9 +1495,39 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("SC2 the gate step's own conclusion stops being checked, so a job whose "
          "DETECTOR was itself skipped excuses its skipped work"),
         "gates.py",
-        ('    if not any(\n        str(s.get("conclusion") or "").lower() == "success" '
-         "for s in detectors\n    ):"),
-        "    if False:",
+        "    if off:\n        return False, (\n            f\"its declared gate step {gate_step!r} matches",
+        "    if False:\n        return False, (\n            f\"its declared gate step {gate_step!r} matches",
+    ),
+    (
+        ("SC10 a SIBLING gate step answers for a skipped one - `any()` over a "
+         "SUBSTRING-matched population, which is the round-5 blocker and the same "
+         "any/all asymmetry context_did_its_work had already fixed"),
+        "gates.py",
+        ("        for s in detectors\n"
+         '        if str(s.get("conclusion") or "").lower() != "success"'),
+        ("        for s in detectors[:0]\n"
+         '        if str(s.get("conclusion") or "").lower() != "success"'),
+    ),
+    (
+        ("SC11 the scope excuse stops asking whether any work step RAN, so "
+         '"nothing for it to do" is printed about a job that did work'),
+        "gates.py",
+        "    if did_run:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        ("SC12 only the FIRST declared scope pattern is applied, so a merge that "
+         "matches only the SECOND is excused - the #3783 case, laundered"),
+        "gates.py",
+        "        hits = sorted({f for f in files if _any_match(tuple(paths), [f])})",
+        "        hits = sorted({f for f in files if _any_match(tuple(paths[:1]), [f])})",
+    ),
+    (
+        ("CB4l a declared ALTERNATIVE that was SKIPPED counts as work done, so "
+         "the two-output job stops being checked on either half"),
+        "gates.py",
+        "                and ran(s)",
+        "                and True",
     ),
     (
         ("SC3 a context with no declared scope BORROWS another context's, so the "
