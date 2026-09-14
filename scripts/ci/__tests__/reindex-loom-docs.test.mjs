@@ -1052,14 +1052,15 @@ test('#4497 a durable last-run FAILURE ends the wait immediately, naming the cau
       status: 200,
       body: pollBodyWithLastRun({
         freshness: 'stale',
-        // Far future, so it is unambiguously after the script's start mark.
         lastRun: {
           outcome: 'failed',
-          finishedAt: '2099-01-01T00:00:00Z',
+          finishedAt: '2026-09-11T04:12:00Z',
           error: 'Corpus indexed, but the freshness manifest could not be persisted to ai-search: 403 Forbidden',
           sourceCommit: 'dcabe1dd02af4a20',
           backend: 'ai-search',
           chunkCount: 51079,
+          // The id the 202 handed back. This is what makes the record OURS.
+          jobId: 'j-1',
         },
       }),
     }),
@@ -1079,10 +1080,18 @@ test('#4497 a durable last-run FAILURE ends the wait immediately, naming the cau
   );
 });
 
-test('#4497 a last-run failure from a PREVIOUS run does not fail a healthy rebuild', async () => {
-  // The record is durable, so it outlives the run that wrote it. Without the
-  // freshness-of-the-record check every later reindex would inherit the last
-  // failure forever, and a guard that can never pass is not a guard.
+test('#4497 a last-run failure from ANOTHER job does not fail a healthy rebuild', async () => {
+  // The record is durable, so it outlives the run that wrote it — and the
+  // console serves every replica, so it may describe a rebuild this script never
+  // started (a scheduled refresh, an admin button press, this script's own POST
+  // retry). Correlating on the jobId the 202 returned settles it: the record is
+  // about our attempt or it is not.
+  //
+  // This replaced a wall-clock comparison against the script's start mark, which
+  // could not make that distinction at all: it missed a sub-second failure that
+  // landed before the mark, and it let an unrelated concurrent run's failure red
+  // a healthy rebuild. A guard that fires on someone else's evidence is worse
+  // than no guard.
   await withServer(
     () => ACCEPTED,
     (n) => ({
@@ -1091,11 +1100,13 @@ test('#4497 a last-run failure from a PREVIOUS run does not fail a healthy rebui
         freshness: n >= 2 ? 'fresh' : 'stale',
         lastRun: {
           outcome: 'failed',
-          finishedAt: '2000-01-01T00:00:00Z',
-          error: 'an ancient failure that has since been fixed',
-          sourceCommit: 'oldoldoldold',
+          // NEWER than ours, so no timestamp rule could exclude it — only the id.
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'a DIFFERENT rebuild, on another replica, failed',
+          sourceCommit: 'dcabe1dd02af4a20',
           backend: 'ai-search',
           chunkCount: 0,
+          jobId: 'some-other-job',
         },
       }),
     }),
@@ -1107,9 +1118,71 @@ test('#4497 a last-run failure from a PREVIOUS run does not fail a healthy rebui
   );
 });
 
+test('#4497 a last-run failure with NO jobId is not attributed to us', async () => {
+  // A console image that predates the jobId field records the outcome without
+  // one. Treating a record we cannot attribute as ours would fail every roll
+  // against such an image on the first stale poll — the guard must fail closed
+  // toward WAITING, not toward failing.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 2 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'recorded by an image that did not carry job ids',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: null,
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.match(res.stdout, /COMPLETE/);
+    },
+  );
+});
+
+test('#4497 a last-run failure is not attributed to us when the POST gave no jobId', async () => {
+  // The other side of the same coin: the POST was refused at the edge (504), so
+  // this script holds no id to correlate against. An empty POST_JOB_ID must
+  // never match an empty LAST_JOB_ID into a "that failure was ours" claim —
+  // `[ "" = "" ]` is true in shell, and that is exactly how a correlation check
+  // degrades into no check at all.
+  await withServer(
+    () => EDGE_504,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 3 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'someone else rebuild failed',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: null,
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 0, out);
+      assert.doesNotMatch(out, /reindex FAILED on the replica that ran it/);
+    },
+  );
+});
+
 test('#4497 a last-run SUCCESS never ends the wait early', async () => {
   // Only `failed` is terminal here. A success record says A rebuild finished,
-  // not that THIS one did, so freshness remains the completion signal.
+  // not that the corpus is fresh, so freshness remains the completion signal.
   await withServer(
     () => ACCEPTED,
     (n) => ({
@@ -1118,11 +1191,12 @@ test('#4497 a last-run SUCCESS never ends the wait early', async () => {
         freshness: n >= 3 ? 'fresh' : 'stale',
         lastRun: {
           outcome: 'succeeded',
-          finishedAt: '2099-01-01T00:00:00Z',
+          finishedAt: '2026-09-11T04:12:00Z',
           error: null,
           sourceCommit: 'dcabe1dd02af4a20',
           backend: 'ai-search',
           chunkCount: 51079,
+          jobId: 'j-1',
         },
       }),
     }),
@@ -1134,19 +1208,78 @@ test('#4497 a last-run SUCCESS never ends the wait early', async () => {
   );
 });
 
-test('#4497 freshness=unknown is a failed READ and does not feed the idle streak', async () => {
-  // `unknown` means the console could not read the manifest. That is a fact
-  // about the CHECK, not the corpus, so it must not count as one of the
-  // trailing `stale`/`idle` observations the `trigger_refused` verdict claims
-  // to have made — that verdict would then assert a reading nothing produced.
+/**
+ * ── #4497 — AN UNREADABLE POLL IS NOT A `stale`/`idle` OBSERVATION ───────────
+ *
+ * The first version of this test was VACUOUS, and a reviewer proved it: it
+ * fixed every poll at `unknown`, so the streak stayed 0 under the shipped code
+ * AND under the code with the `unknown` handling deleted. It asserted a
+ * property no fixture in it could violate.
+ *
+ * This is the discriminating fixture. Threshold 3, four polls, and exactly one
+ * of them — poll 3 — reads `unknown` while the chunk count holds:
+ *
+ *   FRESH = "stale"  (shipped):   1, 2, 0, 1  -> does NOT rename
+ *   FRESH != "fresh" (the defect): 1, 2, 3, 4 -> renames at poll 3
+ *
+ * MUTATION-PROOF: widen that equality to `[ "$FRESH" != "fresh" ]` and this
+ * reds — `TRIGGER REFUSED … the LAST 3 polls read stale/idle` would be printed
+ * over a run in which one of those three polls read nothing at all (R7).
+ */
+test('#4497 an unreadable poll breaks the idle streak instead of counting toward it', async () => {
   await withServer(
-    () => ({ status: 504, body: '<html><title>504 Gateway Time-out</title></html>' }),
-    () => ({ status: 200, body: pollBody({ freshness: 'unknown', job: 'idle' }) }),
-    async (url) => {
-      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POST_RETRIES: '0' });
+    () => EDGE_504,
+    // GET 1 = pre-retry probe; polls are GETs 2..5. Poll 3 (GET 4) is the
+    // manifest read that failed. The count is constant throughout, so the
+    // streak's own `-n`/unchanged conditions are satisfied on every poll and
+    // the ONLY thing that can break the run is the freshness equality.
+    (n) => ({
+      status: 200,
+      body: pollBody({ freshness: n === 4 ? 'unknown' : 'stale', job: 'idle', chunks: 51079 }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
       const out = res.stdout + res.stderr;
       assert.equal(res.status, 1, out);
-      assert.doesNotMatch(out, /TRIGGER REFUSED/);
+      assert.equal(counts().gets, 5, '1 pre-retry probe + 4 polls');
+      assert.match(out, /freshness=unknown/, 'the unreadable poll is in the log');
+      assert.doesNotMatch(
+        out,
+        /TRIGGER REFUSED/,
+        'the trailing stale/idle run is 1 — poll 3 read nothing, so it cannot be counted',
+      );
+      assert.match(out, /did NOT reach a fresh state/, 'it is an ordinary ceiling timeout');
+    },
+  );
+});
+
+/**
+ * ── #4497 — `unknown` STILL LETS THE SAW_RUNNING LATCH RUN ───────────────────
+ *
+ * The regression a reviewer caught in the previous revision: an `unknown`
+ * branch placed ABOVE the latch `continue`d past it, so a poll that printed
+ * `freshness=unknown job=running` could end in "the rebuild was never OBSERVED
+ * to be accepted or running" — contradicted by a line in the same log. The two
+ * fields fail independently and `job.state` is readable whatever freshness says.
+ */
+test('#4497 a job=running sighting counts even when that poll could not read freshness', async () => {
+  await withServer(
+    () => EDGE_504,
+    // Poll 1 sees the rebuild while the manifest read is failing; every later
+    // poll reads stale/idle and the streak clears the threshold of 3.
+    (n) => (n === 2
+      ? { status: 200, body: pollBody({ freshness: 'unknown', job: 'running', chunks: 51079 }) }
+      : { status: 200, body: pollBody({ freshness: 'stale', job: 'idle', chunks: 51079 }) }),
+    async (url) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.match(out, /poll: HTTP 200 freshness=unknown job=running/);
+      assert.doesNotMatch(
+        out,
+        /TRIGGER REFUSED/,
+        'a rebuild WAS observed running, so "never observed" would be refuted by the log above it',
+      );
     },
   );
 });

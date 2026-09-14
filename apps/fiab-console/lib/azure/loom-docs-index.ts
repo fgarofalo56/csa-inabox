@@ -877,32 +877,53 @@ const LAST_RUN_KEY = 'corpus-last-run';
  * it is attempted on the FAILURE path too, which is the whole point — the case
  * that defeated the roll is the manifest write itself failing, and a record
  * that only exists when the manifest succeeded could never describe it.
+ *
+ * IT FALLS BACK TO THE OTHER STORE, because the honest scope of the original
+ * claim was narrower than the claim. A reviewer measured three failure classes:
+ * a rejected manifest DOCUMENT writes the record fine, but an AI Search 503
+ * from the manifest write onward, and a write-403 that fell back to Cosmos,
+ * both left `lastRun` null — the record died of the same cause as the thing it
+ * was meant to explain. Trying the other backend does not make this
+ * bulletproof and is not claimed to: a total outage of both stores still
+ * leaves nothing to read, and the poller's timeout is still the backstop for
+ * that. It removes the single-store correlation, which is the common case.
  */
 async function saveLastRun(
   backend: 'ai-search' | 'cosmos',
   run: CorpusLastRun,
 ): Promise<void> {
-  try {
-    const content = JSON.stringify(run);
-    if (backend === 'ai-search') {
-      const svc = searchServiceName();
-      if (!svc) return;
-      const tok = await searchToken();
-      await indexBatch(svc, tok, [{
-        '@search.action': 'mergeOrUpload',
+  const order: ('ai-search' | 'cosmos')[] =
+    backend === 'ai-search' ? ['ai-search', 'cosmos'] : ['cosmos', 'ai-search'];
+  const failures: string[] = [];
+  for (const store of order) {
+    try {
+      const content = JSON.stringify(run);
+      if (store === 'ai-search') {
+        const svc = searchServiceName();
+        if (!svc) { failures.push('ai-search: not configured'); continue; }
+        const tok = await searchToken();
+        const out = await indexBatch(svc, tok, [{
+          '@search.action': 'mergeOrUpload',
+          id: LAST_RUN_KEY, kind: META_KIND, path: '__corpus_last_run__',
+          content, touchedAt: run.finishedAt,
+        }]);
+        // `indexBatch` REPORTS failure rather than throwing, so an unchecked
+        // call here would have looked like a successful write.
+        if (!out.ok) { failures.push(`ai-search: ${out.error}`); continue; }
+        return;
+      }
+      const c = await helpCorpusContainer();
+      await c.items.upsert({
         id: LAST_RUN_KEY, kind: META_KIND, path: '__corpus_last_run__',
         content, touchedAt: run.finishedAt,
-      }]);
+      });
       return;
+    } catch (e: any) {
+      failures.push(`${store}: ${e?.message || String(e)}`);
     }
-    const c = await helpCorpusContainer();
-    await c.items.upsert({
-      id: LAST_RUN_KEY, kind: META_KIND, path: '__corpus_last_run__',
-      content, touchedAt: run.finishedAt,
-    });
-  } catch (e: any) {
-    console.warn('[loom-docs-index] last-run record write failed', e?.message || String(e));
   }
+  console.warn('[loom-docs-index] last-run record could not be persisted to any store:',
+    failures.join('; '));
 }
 
 /** Read the last rebuild attempt any replica recorded. Null when absent or
@@ -1079,6 +1100,22 @@ export interface CorpusLastRun {
   sourceCommit: string | null;
   backend: 'ai-search' | 'cosmos' | 'none';
   chunkCount: number;
+  /**
+   * The `jobId` the POST returned to whoever triggered this attempt.
+   *
+   * IDENTITY, NOT TIME, is what a poller must correlate on. An earlier
+   * revision of the poller compared `finishedAt` against a mark it took at
+   * startup, and a reviewer demonstrated two defects in that: the mark is
+   * `date -u +%Y-%m-%dT%H:%M:%SZ` (second precision) while this field is
+   * `toISOString()` (milliseconds), and `.` sorts BELOW `Z`, so a record at
+   * `…:46.999Z` compared against a mark of `…:46Z` reads as OLDER and is
+   * ignored — a blind window covering exactly the fast failures, which is the
+   * class a manifest-write 403 falls into. And two runs overlapping meant an
+   * unrelated failure could red a healthy rebuild, including one started by
+   * this script's own documented POST retry. Matching the jobId removes both:
+   * a record is about YOUR attempt or it is not.
+   */
+  jobId: string | null;
 }
 
 export interface CorpusFreshness {
@@ -1095,9 +1132,29 @@ export interface CorpusFreshness {
   lastRun: CorpusLastRun | null;
 }
 
-/** The staged source commit / build SHA, when the image stamps it. */
+/** Placeholder build stamps that are NOT commits.
+ *
+ * `Dockerfile:41` and `:96` both declare `ARG LOOM_BUILD_SHA=unknown`, so any
+ * image built without `--build-arg` ships the literal string `unknown` in that
+ * env var. Treating it as a revision is not a cosmetic bug: two such replicas
+ * "agree", the commit comparison engages, and freshness reports FRESH over a
+ * corpus whose staged docs have changed -- a false green on the one gate that
+ * exists to catch a stale index. Measured by a reviewer with otherwise
+ * identical inputs: the commit path said `fresh (built from this revision
+ * (unknown))` where the stat path said `stale`.
+ */
+const PLACEHOLDER_COMMITS = new Set(['unknown', 'none', 'null', 'undefined', 'dev', 'local', 'head']);
+
+/** The staged source commit / build SHA, when the image genuinely stamps one.
+ *
+ * Returns null for a placeholder, which routes freshness back to the stat
+ * comparison -- weaker across replicas, but weaker in the SAFE direction: it
+ * over-reports `stale` rather than under-reporting it. */
 function currentSourceCommit(): string | null {
-  return (process.env.LOOM_BUILD_SHA || '').trim() || null;
+  const raw = (process.env.LOOM_BUILD_SHA || '').trim();
+  if (!raw) return null;
+  if (PLACEHOLDER_COMMITS.has(raw.toLowerCase())) return null;
+  return raw;
 }
 
 /** Pure freshness evaluation from the current fingerprints + the manifest.
@@ -1138,8 +1195,16 @@ export function evaluateFreshness(
   }
   if (!manifest) return { state: 'never-indexed', reason: 'The Help Copilot corpus has never been indexed in this backend.' };
 
-  const currentCommit = (opts?.currentCommit ?? '').trim();
-  const indexedCommit = (manifest.sourceCommit ?? '').trim();
+  // BOTH sides are filtered, not just the live one. `currentSourceCommit()`
+  // rejects placeholders at the source, but `manifest.sourceCommit` is
+  // PERSISTED DATA -- a manifest written by an image built without
+  // `--build-arg LOOM_BUILD_SHA` carries the literal `unknown` forever, and it
+  // outlives the image that wrote it. Filtering only the live value would let
+  // an old manifest reintroduce the false green this guard exists to stop.
+  const live = (opts?.currentCommit ?? '').trim();
+  const indexed = (manifest.sourceCommit ?? '').trim();
+  const currentCommit = PLACEHOLDER_COMMITS.has(live.toLowerCase()) ? '' : live;
+  const indexedCommit = PLACEHOLDER_COMMITS.has(indexed.toLowerCase()) ? '' : indexed;
   if (currentCommit && indexedCommit) {
     if (currentCommit !== indexedCommit) {
       return {
@@ -1226,7 +1291,8 @@ export async function buildCorpus(): Promise<DocChunk[]> {
  * is a scheme that will miss one. The roll this fixes failed because an outcome
  * was visible on exactly one replica.
  */
-export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult> {
+export async function reindex(opts?: { full?: boolean; jobId?: string }): Promise<ReindexResult> {
+  const jobId = opts?.jobId ?? null;
   let result: ReindexResult;
   try {
     result = await reindexInner(opts);
@@ -1242,6 +1308,7 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
       sourceCommit: currentSourceCommit(),
       backend: isSearchConfigured() ? 'ai-search' : 'cosmos',
       chunkCount: 0,
+      jobId,
     });
     throw e;
   }
@@ -1254,6 +1321,7 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
     sourceCommit: currentSourceCommit(),
     backend: result.backend,
     chunkCount: result.totalChunks,
+    jobId,
   });
   return result;
 }
@@ -1408,6 +1476,11 @@ export const __testInternals = {
   MANIFEST_SHARD_CHARS,
   MANIFEST_KEY,
   manifestShardKey,
+  // #4497 — the durable last-run document id. Exposed so the producer test
+  // asserts on the SHARED-STORE bytes rather than on `reindex`'s return value:
+  // the return value is this replica's view, and this replica's view is exactly
+  // what the roll already had and could not act on.
+  LAST_RUN_KEY,
   // #2970 — point the AI Search path's corpus statistics at a synthetic corpus
   // so a backend-symmetry test can hold BOTH paths to the same corpus. Pass
   // `undefined` to restore the real bundled-corpus source.

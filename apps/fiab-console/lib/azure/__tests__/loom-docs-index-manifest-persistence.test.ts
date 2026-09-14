@@ -52,9 +52,36 @@ vi.mock('@/lib/azure/aca-managed-identity', () => ({
   },
 }));
 
+// A Cosmos container, so the CROSS-STORE FALLBACK in `saveLastRun` has a second
+// store to actually reach (#4497). Every test in this file runs with AI Search
+// configured, so this is only exercised when the AI Search write refuses —
+// which is exactly the arm under test.
+vi.mock('@/lib/azure/cosmos-client', () => {
+  const items = new Map<string, any>();
+  const corpus = {
+    items: {
+      create: async (d: any) => { items.set(d.id, d); return { resource: d }; },
+      upsert: async (d: any) => {
+        if ((globalThis as any).__cosmosRefuses) throw new Error('cosmos unreachable');
+        items.set(d.id, d);
+        return { resource: d };
+      },
+      query: () => ({ fetchAll: async () => ({ resources: [] }) }),
+    },
+    item: (id: string) => ({
+      read: async () => ({ resource: items.get(id) || null }),
+      replace: async (d: any) => { items.set(id, d); return { resource: d }; },
+      delete: async () => { items.delete(id); return {}; },
+    }),
+  };
+  const cs = { database: { containers: { createIfNotExists: async () => ({ container: corpus }) } } };
+  (globalThis as any).__cosmosDocs = items;
+  return { copilotSessionsContainer: async () => cs };
+});
+
 import { reindex, corpusFreshness, __testInternals } from '../loom-docs-index';
 
-const { encodeFiles, decodeFiles, SEARCH_MAX_TERM_BYTES, MANIFEST_SHARD_CHARS, MANIFEST_KEY, manifestShardKey } =
+const { encodeFiles, decodeFiles, SEARCH_MAX_TERM_BYTES, MANIFEST_SHARD_CHARS, MANIFEST_KEY, manifestShardKey, LAST_RUN_KEY } =
   __testInternals as any;
 
 // ---------------------------------------------------------------------------
@@ -117,6 +144,8 @@ function respond(url: string, init?: any): Response {
 beforeEach(() => {
   docs = new Map();
   rejectKeys.clear();
+  (globalThis as any).__cosmosDocs?.clear();
+  delete (globalThis as any).__cosmosRefuses;
   process.env.LOOM_AI_SEARCH_SERVICE = 'search-emulated';
   process.env.LOOM_BUILD_SHA = 'abc12345';
   vi.stubGlobal('fetch', vi.fn(async (input: any, init: any) => respond(String(input), init)));
@@ -244,4 +273,81 @@ describe('a rejected manifest write FAILS the run (it can no longer pass silentl
     expect(second.ok).toBe(true);
     expect(second.mode).toBe('full');
   }, 240_000);
+});
+
+/**
+ * The durable last-run record on the backend that actually ships (#4497).
+ *
+ * `loom-docs-lastrun.test.ts` covers the PRODUCER, but it forces the Cosmos
+ * backend — so the AI Search write arm of `saveLastRun`, and the cross-store
+ * fallback beside it, had no coverage on the path the live console takes.
+ *
+ * The fallback's own comment justifies itself with three measured failure
+ * classes in which "the record died of the same cause as the thing it was meant
+ * to explain". That is a durability claim, and an unmeasured durability claim is
+ * the exact defect #4497 exists to fix. These cases measure it.
+ */
+describe('the last-run record on the AI Search path (#4497)', () => {
+  it('is written into the SAME index as the chunks, under the pinned key', async () => {
+    const r = await reindex({ jobId: 'job-ai-search' });
+    expect(r.ok).toBe(true);
+    expect(r.backend).toBe('ai-search');
+
+    const doc = docs.get(LAST_RUN_KEY);
+    expect(doc).toBeTruthy();
+    const run = JSON.parse(doc.content);
+    expect(run.outcome).toBe('succeeded');
+    expect(run.jobId).toBe('job-ai-search');
+    expect(run.backend).toBe('ai-search');
+    expect(run.sourceCommit).toBe('abc12345');
+    expect(run.chunkCount).toBe(r.totalChunks);
+  }, 120_000);
+
+  it('a rejected MANIFEST still records the failure — the roll case, on this backend', async () => {
+    // The pairing that defeated the roll: the manifest write fails, freshness
+    // never flips, and the poller's only output is "900s elapsed". The record
+    // must survive the manifest's failure to be able to explain it, and the two
+    // writes are independent documents precisely so that it can.
+    rejectKeys.add(MANIFEST_KEY);
+    const r = await reindex({ jobId: 'job-manifest-rejected' });
+    expect(r.ok).toBe(false);
+
+    const run = JSON.parse(docs.get(LAST_RUN_KEY).content);
+    expect(run.outcome).toBe('failed');
+    expect(run.error).toMatch(/freshness manifest could not be persisted/i);
+    expect(run.jobId).toBe('job-manifest-rejected');
+  }, 120_000);
+
+  it('falls back to Cosmos when AI Search refuses the record itself', async () => {
+    // The failure class the fallback was added for: the record cannot be written
+    // to the same store that just failed. Rejecting the record's OWN key (rather
+    // than the manifest's) is the only way to reach that arm, because
+    // `indexBatch` reports per-document status — a rejection of one document
+    // says nothing about the next.
+    rejectKeys.add(LAST_RUN_KEY);
+    const r = await reindex({ jobId: 'job-fallback' });
+    expect(r.ok).toBe(true); // a diagnosis write must never fail a good rebuild
+
+    expect(docs.has(LAST_RUN_KEY)).toBe(false); // AI Search really did refuse it
+    const fallback = (globalThis as any).__cosmosDocs.get(LAST_RUN_KEY);
+    expect(fallback).toBeTruthy();
+    expect(JSON.parse(fallback.content).jobId).toBe('job-fallback');
+  }, 120_000);
+
+  it('a total outage of both stores warns and still returns the rebuild', async () => {
+    // The honest limit of the claim, pinned so it is not overstated later: the
+    // fallback removes the single-store correlation, it does not make the record
+    // bulletproof. When neither store takes it there is nothing to read, and the
+    // poller's timeout is the backstop — but the rebuild itself must not fail.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    rejectKeys.add(LAST_RUN_KEY);
+    (globalThis as any).__cosmosRefuses = true;
+
+    const r = await reindex({ jobId: 'job-no-store' });
+    expect(r.ok).toBe(true);
+    expect(docs.has(LAST_RUN_KEY)).toBe(false);
+    expect((globalThis as any).__cosmosDocs.has(LAST_RUN_KEY)).toBe(false);
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/last-run record could not be persisted/);
+    warn.mockRestore();
+  }, 120_000);
 });

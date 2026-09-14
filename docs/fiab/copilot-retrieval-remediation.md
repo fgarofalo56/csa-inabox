@@ -521,9 +521,10 @@ scoring profile, which §4 measured as *not* a free win.
 
 ## 10. The freshness manifest could never be written on AI Search (#2964)
 
-`#2953` made `freshness.state === 'fresh'` — the DURABLE, cross-replica corpus
-manifest — the completion signal for the reindex gate, and made a poll timeout a
-failure. Both decisions were right. But the manifest write had never worked on
+`#2953` made `freshness.state === 'fresh'` — believed at the time to be the
+DURABLE, cross-replica corpus manifest — the completion signal for the reindex
+gate, and made a poll timeout a failure. Both decisions were right. But the
+manifest write had never worked on
 the backend the console actually runs (**AI Search**), so the gate could only
 ever time out: `copilot-quality-evals` run `30964329751` died in its reindex
 step after 900s of `freshness=never-indexed job=succeeded`, and the evals never
@@ -576,6 +577,15 @@ Measured against a live search service on the exact index definition:
    (`POLL_OUTCOME=failed` → exit 1) instead of waiting out the 900s cap with no
    reason. A run that indexed every chunk but could not persist the manifest has
    not completed as far as any caller can observe.
+
+   > **SUPERSEDED by #4497 — this step did not work as written.** `job.state` is
+   > one replica's in-memory field, and the console runs `minReplicas: 2` behind
+   > a Front Door with `sessionAffinityState: 'Disabled'`. The poller therefore
+   > reads `idle` from a replica that never ran the job, and the `failed` it was
+   > promised to break on is unreachable from where it polls. Measured on roll
+   > `34648534467`: the rebuild failed, the poll printed `job=idle` for the full
+   > 900s, and the script timed out with no reason — exactly the outcome this
+   > step claimed to have eliminated. See §13.
 
 Covered by `lib/azure/__tests__/loom-docs-index-manifest-persistence.test.ts`,
 whose emulator enforces the same 32,766-byte ceiling and the same 207 semantics
@@ -741,3 +751,63 @@ what it means, in line with `docs-grounding` rule 1 ("answer with what LOOM
 does"). Two genuine corpus gaps were closed at the same time: the Loom coverage
 rows now state "up to **5 data sources**" and "up to **15,000** characters"
 explicitly, so those facts are answerable without reading Fabric's inventory.
+
+---
+
+## 13. The reindex gate polled a signal that cannot converge (#4497)
+
+**Issue:** [#4497](https://github.com/fgarofalo56/csa-inabox/issues/4497) ·
+**Status:** fixed in code + unit-proved; **live confirmation OWED** (a
+`loom-roll-and-validate` run whose reindex step exits 0).
+
+§10 above records two beliefs that a roll then disproved. Both were about
+DURABILITY, and both were wrong in the same direction: a signal was treated as
+shared across replicas when it was scoped to one.
+
+**What ran.** `loom-roll-and-validate` run `34648534467`, 2026-09-11. The image
+roll itself succeeded — 25 steps, live URL validated. The post-roll step
+`Reindex loom-docs + wait for cross-replica freshness` then failed:
+
+```
+reindex ACCEPTED (HTTP 202, job=46b94165-abad-4d8e-ba87-66238b118e3a)
+poll: freshness=never-indexed  job=idle
+poll: freshness=stale  job=idle  indexedChunks=51079   x ~15 min, then timeout
+```
+
+**Three defects, measured.**
+
+1. **`freshness.state` was replica-local, not cross-replica.** `statFingerprint`
+   hashes `path:size:mtime` from the ANSWERING replica's filesystem, while the
+   manifest it compares against is shared. Two replicas of the same revision
+   carry different mtimes, so the comparison says `stale` forever. The manifest
+   was durable; the comparison was not. Fixed by comparing `sourceCommit` when
+   both sides have a real one — same revision means same corpus, whatever the
+   mtimes say — and falling back to the stat comparison otherwise, which
+   over-reports `stale` rather than under-reporting it. The literal build stamp
+   `unknown` (`Dockerfile:41`, `:96` — `ARG LOOM_BUILD_SHA=unknown`) is not a
+   commit on either side, or two un-stamped images would "agree" and report
+   `fresh` over docs that had changed.
+
+2. **`job.state` was one replica's memory** (the §10.3 correction above). The
+   gate now reads a DURABLE last-run document (`corpus-last-run`) that
+   `reindex()` writes on every outcome — succeeded, failed, and thrown — and
+   correlates it by the `jobId` the POST handed back, not by wall-clock time. A
+   timestamp comparison both misses a sub-second failure and lets an unrelated
+   concurrent run's failure red a healthy one; only the id excludes it.
+
+3. **`never-indexed` was a claim the code had not established** (`deploy-integrity`
+   R7). `loadManifestHead` caught every exception and returned `null`, so a read
+   failure arrived indistinguishable from a corpus that was never built — which
+   is why the poll log alternated `never-indexed` / `stale` while nothing about
+   the corpus changed. `evaluateFreshness` now reports `unknown` with the read
+   error in its reason, and `unknown` outranks every other signal: a matching
+   fingerprint over an unreadable manifest is a gate passing on data it could
+   not confirm.
+
+Covered by `lib/azure/__tests__/loom-docs-index-incremental.test.ts` (the
+freshness logic), `lib/azure/__tests__/loom-docs-lastrun.test.ts` (that the
+record is PRODUCED — asserting on the shared-store bytes, never on `reindex()`'s
+return value, because a return value is the replica-local view the roll already
+had), and the seven `#4497` cases in
+`scripts/ci/__tests__/reindex-loom-docs.test.mjs`.
+

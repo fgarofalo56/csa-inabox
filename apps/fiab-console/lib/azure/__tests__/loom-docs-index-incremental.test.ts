@@ -186,6 +186,44 @@ describe('evaluateFreshness (G2)', () => {
       currentCommit: '  ',
     }).state).toBe('fresh');
   });
+
+  it('the literal build stamp "unknown" is NOT a commit, on either side', () => {
+    // `Dockerfile:41` and `:96` both declare `ARG LOOM_BUILD_SHA=unknown`, so an
+    // image built without `--build-arg` ships that literal. Two such replicas
+    // "agree", the commit path engages, and freshness reports FRESH over docs
+    // that have changed — a false green on the one gate that catches a stale
+    // index. Measured by a reviewer against the previous revision of this code.
+    //
+    // Both sides are checked, because `manifest.sourceCommit` is PERSISTED: a
+    // manifest written by such an image carries `unknown` long after the image
+    // is gone.
+    const staleByStat = { statFingerprint: 'built-then', sourceCommit: 'unknown' };
+    expect(evaluateFreshness('changed-now', staleByStat, { currentCommit: 'unknown' }).state)
+      .toBe('stale');
+    expect(evaluateFreshness('changed-now', staleByStat, { currentCommit: 'dcabe1dd02af' }).state)
+      .toBe('stale');
+    expect(evaluateFreshness(
+      'changed-now',
+      { statFingerprint: 'built-then', sourceCommit: 'dcabe1dd02af' },
+      { currentCommit: 'unknown' },
+    ).state).toBe('stale');
+    // Case-insensitively, and for the other placeholders the same ARG pattern
+    // produces. Falling back to stat is weaker across replicas but weaker in
+    // the SAFE direction: it over-reports stale rather than under-reporting it.
+    for (const placeholder of ['UNKNOWN', 'none', 'null', 'undefined', 'dev', 'local', 'HEAD']) {
+      expect(evaluateFreshness(
+        'changed-now',
+        { statFingerprint: 'built-then', sourceCommit: placeholder },
+        { currentCommit: placeholder },
+      ).state).toBe('stale');
+    }
+    // ...and a real pair still takes the commit path.
+    expect(evaluateFreshness(
+      'mtimes-differ-across-replicas',
+      { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' },
+      { currentCommit: 'dcabe1dd02af' },
+    ).state).toBe('fresh');
+  });
 });
 
 describe('reindex incremental round-trip (G1 + G2)', () => {

@@ -228,7 +228,19 @@ do_post() {
     --max-time 120 \
     "$ENDPOINT") || true
   [ -n "$CODE" ] || CODE=000
-  echo "reindex POST $ENDPOINT -> HTTP $CODE"
+  # The jobId this attempt was given. It is what the durable last-run record is
+  # correlated against, so a failure recorded by an UNRELATED overlapping run
+  # cannot red this one, and a failure that lands in the same second as our
+  # start mark cannot be missed. Empty when the POST was not answered by the
+  # console -- in which case the record check below simply never fires, which
+  # is the correct fail-closed behaviour: no identity, no claim.
+  POST_JOB_ID=$(node -e '
+    const fs = require("node:fs");
+    let j = {};
+    try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
+    process.stdout.write(j && j.jobId ? String(j.jobId).replace(/[\r\n|]+/g, "") : "");
+  ' "$POST_BODY_FILE" 2>/dev/null || true)
+  echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
   head -c 800 "$POST_BODY_FILE" || true
   echo ""
 }
@@ -260,6 +272,7 @@ get_status() {
   LAST_OUTCOME=''
   LAST_FINISHED=''
   LAST_ERROR=''
+  LAST_JOB_ID=''
   if [ "$GCODE" = "000" ]; then
     return 0
   fi
@@ -278,13 +291,22 @@ get_status() {
     const lr = (j.freshness && j.freshness.lastRun) || null;
     const lo = lr && lr.outcome ? String(lr.outcome) : "";
     const lf = lr && lr.finishedAt ? String(lr.finishedAt) : "";
-    const le = lr && lr.error ? String(lr.error).replace(/[\r\n|]+/g, " ").slice(0, 300) : "";
-    process.stdout.write([f, s, c, lo, lf, le].join("|"));
+    const lj = lr && lr.jobId ? String(lr.jobId) : "";
+    // EVERY field is stripped of the separator and of newlines, not just the
+    // error. A pipe anywhere in any of them shifts every later field by one,
+    // and these values come from a remote service -- so "this field cannot
+    // contain a pipe" is an assumption about data we do not control.
+    // NOTE: no apostrophes in this block. It is inside a single-quoted shell
+    // string, so one would close the quote and bash would parse the rest of
+    // the JavaScript as shell.
+    const clean = (v) => String(v).replace(/[\r\n|]+/g, " ");
+    const le = lr && lr.error ? clean(lr.error).slice(0, 300) : "";
+    process.stdout.write([f, s, c, lo, lf, le, lj].map(clean).join("|"));
   ' "$POLL_BODY_FILE")
-  # Six fields now. Read positionally into named vars -- `${STATES%%|*}` style
-  # trimming does not extend past two fields, and the last field can itself
-  # contain spaces, so it must be the final `read` target.
-  IFS='|' read -r FRESH JOB CHUNKS LAST_OUTCOME LAST_FINISHED LAST_ERROR <<< "$STATES"
+  # Seven fields. Read positionally into named vars -- `${STATES%%|*}` style
+  # trimming does not extend past two fields. `le` is placed second-to-last
+  # rather than last so a truncated error cannot swallow the jobId.
+  IFS='|' read -r FRESH JOB CHUNKS LAST_OUTCOME LAST_FINISHED LAST_ERROR LAST_JOB_ID <<< "$STATES"
   FRESH="${FRESH:-unknown}"
   JOB="${JOB:-unknown}"
   return 0
@@ -295,12 +317,7 @@ get_status() {
 # #3394): the edge replied for the console, so whether the POST reached a replica
 # is unknown. Do not guess — fall through to the poll and let the durable
 # freshness signal settle it. Every OTHER non-zero stays a failure.
-# Captured BEFORE the first POST, not at the poll loop, and that matters: the
-# rebuild begins at the POST, so a run that failed between the POST and the
-# first poll has a `finishedAt` earlier than the loop but later than this. A
-# later mark would miss exactly the fastest failures (#4497).
-STARTED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-REBUILD_ERROR=''
+POST_JOB_ID=''
 do_post
 POST_ATTEMPTS=1
 # EVERY attempt's status, in order. The verdict's parenthetical is plural ("All
@@ -512,25 +529,42 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # durable store as the manifest, INCLUDING when the manifest write is itself
   # what failed, which is the case no manifest-based signal can ever report.
   #
-  # Only a record that finished AFTER this script started counts. A stale
-  # record from an earlier run would otherwise fail a healthy rebuild --
-  # a lexicographic compare is sound here because both are ISO-8601 UTC
-  # (`new Date().toISOString()` always ends in `Z`).
-  if [ "$LAST_OUTCOME" = "failed" ] && [ -n "$LAST_FINISHED" ] && \
-     [[ "$LAST_FINISHED" > "$STARTED_ISO" ]]; then
-    echo "  last-run record: FAILED at $LAST_FINISHED — $LAST_ERROR"
+  # CORRELATED BY jobId, NOT BY TIME, and an earlier revision used time and was
+  # wrong twice over. The start mark is `date -u +%Y-%m-%dT%H:%M:%SZ` (second
+  # precision) while the record is `toISOString()` (milliseconds), and `.`
+  # (0x2E) sorts BELOW `Z` (0x5A) -- so a record at `…:46.999Z` compared with a
+  # mark of `…:46Z` read as OLDER and was ignored. That blind window covers
+  # exactly the FAST failures, which is the class a manifest-write 403 is in:
+  # the fix would have silently not worked for its own headline case. And with
+  # no run identity, an unrelated overlapping run's failure could red a healthy
+  # rebuild -- including one started by this script's own POST retry. The
+  # jobId the 202 handed us settles both: the record is about our attempt or it
+  # is not.
+  if [ "$LAST_OUTCOME" = "failed" ] && [ -n "$POST_JOB_ID" ] && \
+     [ "$LAST_JOB_ID" = "$POST_JOB_ID" ]; then
+    echo "  last-run record: job $LAST_JOB_ID FAILED at $LAST_FINISHED — $LAST_ERROR"
     OUTCOME=rebuild_failed
-    REBUILD_ERROR="$LAST_ERROR"
     break
   fi
 
-  # A freshness state of `unknown` means the console could not READ the
-  # manifest -- it is a fact about the check, not about the corpus. It must not
-  # feed the idle streak, whose verdict claims a `stale`/`idle` reading.
-  if [ "$FRESH" = "unknown" ]; then
-    IDLE_STREAK=0
-    continue
-  fi
+  # THE LATCH RUNS BEFORE ANY `unknown` HANDLING, and an earlier revision of this
+  # change got that wrong. It added an `if [ "$FRESH" = "unknown" ]; then …
+  # continue; fi` ABOVE this line, which skipped the `SAW_RUNNING` update, so a
+  # poll that printed `freshness=unknown job=running` could still end in
+  # `TRIGGER REFUSED … the rebuild was never OBSERVED to be accepted or running`
+  # — a sentence contradicted by the script's own output four lines earlier. A
+  # reviewer demonstrated it end-to-end with real curl, and `main` does not make
+  # that claim, so the branch would have INTRODUCED a false statement while
+  # fixing a different one. `job.state` is readable whatever freshness says: the
+  # two fields fail independently.
+  #
+  # That branch is now GONE rather than reordered. Its body was
+  # `IDLE_STREAK=0; continue`, which leaves exactly the state the `else` below
+  # already produces for any non-`stale` reading — provably equivalent to its own
+  # absence, so no fixture could distinguish it and no mutation of it could be
+  # killed. The `[ "$FRESH" = "stale" ]` guard below is what actually keeps
+  # `unknown` out of the streak, and it is tested directly.
+  if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
 
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────
   # Maintained here, EVALUATED AFTER THE LOOP. It decides the NAME of a failure
@@ -558,12 +592,21 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # 9 — turned a run that exits 0 at head into exit 1 at poll 8. Deciding a NAME
   # on weak evidence costs a misleading sentence in a log that is already red;
   # deciding a WAIT on it costs a false failure.
-  if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
-  # `-n "$CHUNKS"` is not a formality: the classifier's verdict SAYS "with the
-  # indexed chunk count unchanged", and a body that never reported a count
+  #
+  # `[ "$FRESH" = "stale" ]` is an EQUALITY, not `!= "fresh"`, and that is the
+  # whole of the `unknown` handling. `unknown` means the console could not READ
+  # the manifest — a fact about the CHECK, not about the corpus — so a poll that
+  # reads it is not one of the `stale`/`idle` observations the verdict claims to
+  # have made. Under `!= "fresh"` an unreadable poll would count toward that
+  # sentence and the verdict would assert a reading nothing produced (R7).
+  # Falling to the `else` also RESETS the streak, which is the honest reading:
+  # after `stale`×7, `unknown`, `stale`×7 the trailing run of stale/idle polls is
+  # 7, not 14, and the verdict names the trailing run.
+  #
+  # `-n "$CHUNKS"` is not a formality either: the classifier's verdict SAYS "with
+  # the indexed chunk count unchanged", and a body that never reported a count
   # cannot support that sentence. With no count the streak never starts and the
-  # verdict keeps its `timeout` name (R7: do not fire a verdict whose stated
-  # evidence you do not have).
+  # verdict keeps its `timeout` name.
   if [ "$POST_REFUSED" = "true" ] && [ "$SAW_RUNNING" = "false" ] && \
      [ "$REFUSED_IDLE_POLLS" -gt 0 ] && [ "$FRESH" = "stale" ] && [ "$JOB" = "idle" ] && \
      [ -n "$CHUNKS" ]; then
