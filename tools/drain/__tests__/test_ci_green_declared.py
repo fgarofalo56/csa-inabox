@@ -1840,3 +1840,107 @@ def test_an_ambiguous_primary_step_is_refused_not_reduced():
     assert not ok
     assert "cannot be resolved" in why, why
     assert "NONE is named exactly that" in why, why
+
+
+# ---------------------------------------------------------------------------
+# ROUND 13: a step with NO conclusion. The most reachable defect this issue has
+# produced -- no mutation, no policy edit, live production path -- plus the
+# three readers an independent reviewer proved uninstrumented.
+# ---------------------------------------------------------------------------
+
+def test_a_step_still_running_is_not_a_step_that_did_nothing():
+    """THE BLOCKER. `did_run` folded "has no conclusion" into "did not run", so
+    a job with `queued` or `in_progress` work steps was excused with "no work
+    step in the job ran - so there was nothing for it to do".
+
+    Reachability was measured end to end by the reviewer, not argued: the job
+    join applies no `status == "completed"` filter and PREFERS the job that
+    executed less, so an in-progress duplicate wins in both input orders, and
+    the live jobs API returned `guardrails steps=162 status=in_progress
+    nullsteps=11` that day.
+    """
+    for unfinished in (None, "", "   "):
+        job = {
+            "name": "next build (node 20)", "conclusion": "success",
+            "steps": [
+                {"name": "Detect console changes", "conclusion": "success"},
+                {"name": "Build (next build)", "conclusion": "skipped"},
+                {"name": "Lint (next lint)", "conclusion": unfinished},
+            ],
+        }
+        ok, why = gates.scope_untouched_at_merge(
+            "next build (node 20)", job, MERGED_FILES, POLICY)
+        assert not ok, f"conclusion={unfinished!r} read as 'did nothing': {why}"
+        assert "have NOT CONCLUDED" in why, (unfinished, why)
+        # AND THE MESSAGE MUST NOT CLAIM THE OPPOSITE (R7).
+        assert "nothing for it to do" not in why, (unfinished, why)
+
+    # CONTROL: every work step genuinely skipped is still the excuse this
+    # branch exists for.
+    clean = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Lint (next lint)", "conclusion": "skipped"},
+        ],
+    }
+    ok2, why2 = gates.scope_untouched_at_merge(
+        "next build (node 20)", clean, MERGED_FILES, POLICY)
+    assert ok2, why2
+
+
+def test_the_shared_conclusion_reader_separates_none_from_every_verdict():
+    """`None` is not `skipped`, not `success`, not `failure`. It is "this step
+    has not said", and every reader must be able to tell it apart."""
+    assert gates.step_conclusion({"conclusion": "SUCCESS"}) == "success"
+    assert gates.step_conclusion({"conclusion": " Skipped "}) == "skipped"
+    assert gates.step_conclusion({"conclusion": None}) is None
+    assert gates.step_conclusion({"conclusion": ""}) is None
+    assert gates.step_conclusion({}) is None
+    assert gates.step_has_concluded({"conclusion": "failure"}) is True
+    assert gates.step_has_concluded({"conclusion": None}) is False
+
+
+def test_an_unconcluded_detector_does_not_answer_for_the_scope():
+    """`_declared_gate_ran` must refuse a detector that has not concluded --
+    an uninstrumented row the reviewer's arm survived on."""
+    steps = [
+        {"name": "Detect console changes", "conclusion": None},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+    ]
+    row = gates._scope_row("next build (node 20)", POLICY)
+    ok, why, _ = gates._declared_gate_ran(row, steps)
+    assert not ok
+    assert "NOT CONCLUDED" in why, why
+
+
+def test_an_unconcluded_primary_is_not_a_clean_scope_skip():
+    """`_primary_steps_all_skipped` gates BOTH routes; a primary that has not
+    concluded has not been shown to be hollow."""
+    steps = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": None},
+    ]
+    ok, why = gates._primary_steps_all_skipped(
+        "next build (node 20)", steps, POLICY)
+    assert not ok
+    assert "NOT CONCLUDED" in why, why
+
+
+def test_an_output_gating_an_absent_step_is_refused():
+    """ROUND 13 BLOCKER 2. This refusal had NO test: replacing it with
+    `continue` accepted a portal-only merge with `Type-check (portal)` missing
+    from the job entirely, on the alternative route."""
+    job = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "success"},
+        ],
+    }
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], POLICY)
+    assert not ok, why
+    assert "absent from this job" in why, why

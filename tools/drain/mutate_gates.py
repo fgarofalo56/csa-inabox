@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -758,14 +759,48 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # -- ROUND 13: a step with NO conclusion, and the untested absent-step ----
+    # The most reachable defect this issue has produced -- no mutation, no policy
+    # edit, live production path. `did_run` folded "has not concluded" into "did
+    # not run", so a job with `in_progress` work steps was excused with "no work
+    # step in the job ran". Three more readers were uninstrumented, and the
+    # absent-gated-step refusal had no test at all.
+    (
+        ("V1 the NOT-CONCLUDED refusal collapses, so a job whose work steps are "
+         "still queued or running is excused with 'nothing for it to do' - the "
+         "live fail-open, restored"),
+        "gates.py",
+        "    if unfinished:",
+        "    if False:",
+    ),
+    (
+        ("V2 `step_conclusion` returns '' instead of None for a step that has "
+         "not concluded, which is how every reader in this module used to fold "
+         "'still running' into 'did not run'"),
+        "gates.py",
+        "    return text or None",
+        "    return text",
+    ),
+    (
+        ("V3 an output may declare a gated step that is ABSENT from the job and "
+         "still be excused - the refusal that had no test, and which accepted a "
+         "portal-only merge with `Type-check (portal)` missing entirely"),
+        "gates.py",
+        ("            if not matches:\n"
+         "                return None, (\n"
+         '                    f"declared output {out!r} of {name!r} claims to gate {wanted!r}, "\n'
+         '                    "which is absent from this job - the row cannot say whether that "\n'
+         '                    "output\'s work ran"\n'
+         "                )"),
+        "            if not matches:\n                continue",
+    ),
     # -- ROUND 12: the round-11 fix, and two more fail-open survivors --------
     # Both reviewers converged: the round-11 rule was WRONG (one row of a
     # six-row table) and had NO ARM. Mutating its refusal to `elif False:`
     # survived the whole suite. That is the fourth round running where a fix
     # shipped unobserved, so these three exist before anything else does.
     (
-        ("W1 the whole-table refusal collapses, so an output whose steps neither "
-         "all skipped nor all succeeded is EXCLUDED and its scope never asked - "
+        ("W1 the whole-table refusal collapses, so an output whose steps neither "         "all skipped nor all succeeded is EXCLUDED and its scope never asked - "
          "a FAILED portal step then excuses a matching portal scope"),
         "gates.py",
         '        elif outcomes == {"success"}:',
@@ -846,10 +881,10 @@ ARMS: list[tuple[str, str, str, str]] = [
          "primary that RAN reads as cleanly hollow"),
         "gates.py",
         ("        off = [\n"
-         '            str(s.get("conclusion") or "?")\n'
+         '            step_conclusion(s) or "NOT CONCLUDED"\n'
          "            for s in matches"),
         ("        off = [\n"
-         '            str(s.get("conclusion") or "?")\n'
+         '            step_conclusion(s) or "NOT CONCLUDED"\n'
          "            for s in matches[:1]"),
     ),
     # -- the SINGLE RESOLVER, which round 9 added and left unobserved ----------
@@ -1770,9 +1805,9 @@ ARMS: list[tuple[str, str, str, str]] = [
          "any/all asymmetry context_did_its_work had already fixed"),
         "gates.py",
         ("        for s in detectors\n"
-         '        if str(s.get("conclusion") or "").lower() != "success"'),
+         '        if step_conclusion(s) != "success"'),
         ("        for s in detectors[:0]\n"
-         '        if str(s.get("conclusion") or "").lower() != "success"'),
+         '        if step_conclusion(s) != "success"'),
     ),
     (
         ("SC11 the scope excuse stops asking whether any work step RAN, so "
@@ -1823,16 +1858,16 @@ ARMS: list[tuple[str, str, str, str]] = [
          "narrowing of round 5's own any()->all() blocker fix"),
         "gates.py",
         ('        for s in detectors\n'
-         '        if str(s.get("conclusion") or "").lower() != "success"'),
+         '        if step_conclusion(s) != "success"'),
         ('        for s in detectors[:1]\n'
-         '        if str(s.get("conclusion") or "").lower() != "success"'),
+         '        if step_conclusion(s) != "success"'),
     ),
     (
         ("R2A5 a FAILED work step stops counting as work, so the excuse prints "
          "'nothing for it to do' about a job that ran a step and it failed"),
         "gates.py",
-        '        and str(s.get("conclusion") or "").lower() not in ("skipped", "")',
-        '        and str(s.get("conclusion") or "").lower() not in ("skipped", "", "failure")',
+        '        and step_conclusion(s) != "skipped"',
+        '        and step_conclusion(s) not in ("skipped", "failure")',
     ),
     (
         ("SC3 a context with no declared scope BORROWS another context's, so the "
@@ -1948,6 +1983,30 @@ EXPECTED_SANDBOX_SKIPS = (
 )
 
 
+#: The environment every pytest subprocess here runs under, with the ambient
+#: `PYTEST_ADDOPTS` REMOVED.
+#:
+#: ROUND 13 BLOCKER, and the reason the round-12 "fix" for this did not fix it.
+#: Round 12 made `_collected` read the SELECTED count out of
+#: `354/413 tests collected (59 deselected)` and then asserted, in a comment,
+#: that the inherited-`PYTEST_ADDOPTS` blind run was closed. An independent
+#: reviewer measured it OPEN: the sandbox is a byte copy of this tree running
+#: under the SAME environment, so any `-k` moves BOTH numbers together. Reading
+#: the selected count changed the printed number and never the verdict --
+#: `here_n=360 there_n=360 gate passes: True` while the suite really ran 360 of
+#: 419.
+#:
+#: A comparison cannot detect a variable that perturbs both sides equally. The
+#: only fix is to stop inheriting it, so the matrix runs the suite it names.
+#: That is the THIRD false "this hole is closed" claim in this file's history,
+#: and the note stays because the claim is the defect, not the hole.
+def _clean_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("PYTEST_PLUGINS", None)
+    return env
+
+
 def _collected(tests_dir: Path, cwd: Path) -> int | None:
     """How many tests pytest COLLECTS in a tree. None when it cannot say.
 
@@ -1967,7 +2026,7 @@ def _collected(tests_dir: Path, cwd: Path) -> int | None:
     out = subprocess.run(
         [sys.executable, "-m", "pytest", str(tests_dir), "--collect-only", "-q",
          "-o", "addopts=", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True, text=True, cwd=cwd, env=_clean_env(),
     )
     if out.returncode != 0:
         return None
@@ -2015,7 +2074,8 @@ def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | No
     than appending to it.
     """
     verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
-    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox)
+    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox,
+                         env=_clean_env())
     if out.returncode != 0:
         return None
     ids = set()
@@ -2133,7 +2193,8 @@ def main() -> int:
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
         # every red below is noise and the run proves nothing.
-        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
+        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
+                                 env=_clean_env())
         tail = (control.stdout.strip().splitlines() or [""])[-1]
         print(f"CONTROL rc={control.returncode}  {tail[:70]}")
         if control.returncode != 0:
@@ -2184,13 +2245,20 @@ def main() -> int:
         # renamed file, `--ignore`, a `collect_ignore`, or an inherited
         # `PYTEST_ADDOPTS=--deselect` all restore round 10's own blocker.
         #
-        # ROUND 12: the `PYTEST_ADDOPTS` case was NOT closed by the first version
-        # of this check, though this comment said it was. `_collected` read the
-        # TOTAL out of `354/413 tests collected (59 deselected)`, so both trees
-        # reported 413 while 354 ran. It reads the SELECTED count now. An
-        # independent reviewer measured that; the claim above is corrected rather
-        # than quietly patched, because a comment asserting a closed hole is the
-        # same defect one level up.
+        # ROUND 12 said the `PYTEST_ADDOPTS` case was closed by reading the
+        # SELECTED count instead of the total. ROUND 13: it was not, and that
+        # was the SECOND false "closed" claim at this spot. Both trees are the
+        # same copy under the same environment, so any `-k` moves BOTH numbers
+        # together -- reading the selected count changes the printed number and
+        # never the verdict. Measured by an independent reviewer at
+        # `here_n=360 there_n=360 gate passes: True` while the suite really ran
+        # 360 of 419.
+        #
+        # A comparison cannot detect a variable that perturbs both sides
+        # equally. What closes it is `_clean_env()`, which strips the variable
+        # from every pytest subprocess so the matrix runs the suite it names.
+        # This check catches the tree DIFFERENCES; the env is handled upstream
+        # of it, and neither claim covers the other.
         #
         # So the sandbox's collected test count is compared against the REPO's.
         # They must agree: the sandbox is a copy, and a copy that collects fewer
@@ -2217,7 +2285,7 @@ def main() -> int:
         # trusting rather than measuring.
         with_meta = subprocess.run(
             [c for c in cmd if c not in ("--deselect", deselect)],
-            capture_output=True, text=True, cwd=sandbox,
+            capture_output=True, text=True, cwd=sandbox, env=_clean_env(),
         )
         selected_with = _passed_count(with_meta.stdout)
         selected_without = _passed_count(control.stdout)
@@ -2261,7 +2329,8 @@ def main() -> int:
                 skipped += 1
                 continue
             _write_lf(sandbox / filename, source.replace(old, new, 1))
-            run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
+            run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
+                                 env=_clean_env())
             _write_lf(sandbox / filename, source)
             # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
             # comment records the consequence: a mutation that was a

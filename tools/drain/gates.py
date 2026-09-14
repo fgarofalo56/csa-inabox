@@ -2343,12 +2343,31 @@ def scope_untouched_at_merge(
     # dangerous direction is closed by `_merged_files_outside_scope` asking
     # EVERY output below, which is what makes an under-declared row impossible
     # rather than merely unlikely.
+    # A STEP THAT HAS NOT CONCLUDED IS NOT A STEP THAT DID NOT RUN. Round 13:
+    # this read `conclusion or ""` and folded `""` into the "did not run" set
+    # alongside `skipped`, so a `queued` or `in_progress` step -- whose
+    # conclusion is `null` -- made this branch report "no work step in the job
+    # ran". Measured live, with no mutation and no policy edit.
+    unfinished = [
+        str(s.get("name") or "?")
+        for s in steps
+        if s not in detectors
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
+        and step_conclusion(s) is None
+    ]
+    if unfinished:
+        return False, (
+            f"{len(unfinished)} work step(s) have NOT CONCLUDED "
+            f"({', '.join(unfinished[:3])}) - a step that is queued or still "
+            "running has not been shown to have done nothing, and this branch "
+            "may only excuse a job that provably had nothing to do"
+        )
     did_run = [
         str(s.get("name") or "?")
         for s in steps
         if s not in detectors
         and not _is_bookkeeping_step(str(s.get("name") or ""))
-        and str(s.get("conclusion") or "").lower() not in ("skipped", "")
+        and step_conclusion(s) != "skipped"
     ]
     if did_run:
         return False, (
@@ -2413,9 +2432,9 @@ def _declared_gate_ran(
             "declaration is stale, or this is not the job it describes"
         ), []
     off = [
-        f"{s.get('name') or '?'!s}={s.get('conclusion') or '?'!s}"
+        f"{s.get('name') or '?'!s}={step_conclusion(s) or 'NOT CONCLUDED'!s}"
         for s in detectors
-        if str(s.get("conclusion") or "").lower() != "success"
+        if step_conclusion(s) != "success"
     ]
     if off:
         return False, (
@@ -2424,6 +2443,40 @@ def _declared_gate_ran(
             "so nothing establishes WHY the work was skipped"
         ), detectors
     return True, "", detectors
+
+
+def step_conclusion(step: dict) -> str | None:
+    """A step's conclusion, or None when it HAS NOT REACHED ONE.
+
+    ROUND 13 BLOCKER, and the most reachable defect this issue has produced: no
+    mutation, no policy edit, live production path. A step that is `queued` or
+    `in_progress` carries `conclusion: null`, and every reader in this module
+    coerced that to `""` -- which `did_run` then folded into "did not run", so
+    `scope_untouched_at_merge` returned True and printed "no work step in the
+    job ran - so there was nothing for it to do" about steps that were STILL
+    RUNNING. An R7 lie and a fail-open in one sentence.
+
+    An independent reviewer measured the whole chain rather than asserting it:
+    `merge_gate` applies no `status == "completed"` filter, its job join PREFERS
+    the job that executed less (so an in-progress duplicate wins in both input
+    orders), and the live jobs API returned `guardrails steps=162
+    status=in_progress nullsteps=11` on the day it was found.
+
+    So `None` is its own answer here. It is not `skipped`, it is not `success`,
+    and it is not `failure`: it is "this step has not said". Every caller must
+    treat it as undecidable and refuse, because the alternative is to decide on
+    behalf of a step that is still running.
+    """
+    raw = step.get("conclusion")
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    return text or None
+
+
+def step_has_concluded(step: dict) -> bool:
+    """Has this step reached a conclusion at all? The negation is a refusal."""
+    return step_conclusion(step) is not None
 
 
 def steps_named(wanted: str, steps: list[dict]) -> tuple[list[dict] | None, str]:
@@ -2515,9 +2568,9 @@ def _primary_steps_all_skipped(
         if not matches:
             return False, f"its declared step {wanted!r} is absent from this job"
         off = [
-            str(s.get("conclusion") or "?")
+            step_conclusion(s) or "NOT CONCLUDED"
             for s in matches
-            if str(s.get("conclusion") or "").lower() != "skipped"
+            if step_conclusion(s) != "skipped"
         ]
         if off:
             return False, (

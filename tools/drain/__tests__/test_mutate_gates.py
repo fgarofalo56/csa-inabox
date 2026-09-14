@@ -17,8 +17,6 @@ raises inside `load_policy` at import.
 from __future__ import annotations
 
 import os
-import re
-import subprocess
 import sys
 
 import pytest
@@ -197,17 +195,53 @@ def test_the_population_counter_reads_the_selected_count_not_the_total(tmp_path)
     )
     assert mutate_gates._collected(suite, tmp_path) == 2
 
-    env = dict(os.environ, PYTEST_ADDOPTS='-k "not drop"')
-    out = subprocess.run(
-        [sys.executable, "-m", "pytest", str(suite), "--collect-only", "-q",
-         "-o", "addopts=", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, cwd=tmp_path, env=env,
+    # CALL THE FUNCTION, DO NOT RESTATE IT. Round 13: this block used to re-type
+    # `_collected`'s own regex in the test body and run pytest itself, so
+    # reverting the real parser left the suite green -- the EXACT defect round 12
+    # diagnosed in the sibling test three functions above, repeated in the fix
+    # for it.
+    #
+    # The deselection comes from a conftest HOOK rather than from
+    # `PYTEST_ADDOPTS`, because `_collected` now strips that variable (see the
+    # test below) and `-o addopts=` neutralises config. A hook is what still
+    # produces `1/2 tests collected (1 deselected)` under a clean environment,
+    # which is the line the parser has to read correctly.
+    (suite / "conftest.py").write_text(
+        "def pytest_collection_modifyitems(config, items):\n"
+        "    keep = [i for i in items if 'drop' not in i.name]\n"
+        "    dropped = [i for i in items if 'drop' in i.name]\n"
+        "    config.hook.pytest_deselected(items=dropped)\n"
+        "    items[:] = keep\n",
+        encoding="utf-8",
     )
-    assert "1/2 tests collected" in out.stdout, out.stdout
-    m = re.search(r"(?:(\d+)/)?(\d+) tests? collected", out.stdout)
-    assert int(m.group(1) or m.group(2)) == 1, (
-        "the SELECTED count is the one that will execute"
+    assert mutate_gates._collected(suite, tmp_path) == 1, (
+        "the SELECTED count is the one that will execute; the pre-fix parser "
+        "reads the total and returns 2 here"
     )
+
+
+def test_the_matrix_does_not_inherit_pytest_addopts(tmp_path, monkeypatch):
+    """ROUND 13 BLOCKER. Round 12 claimed reading the SELECTED count closed the
+    inherited-`PYTEST_ADDOPTS` blind run. It did not, and that was the SECOND
+    false "closed" claim at that spot: the sandbox is a byte copy of the repo
+    running under the SAME environment, so any `-k` moves BOTH numbers together
+    and the comparison can never see it.
+
+    A comparison cannot detect a variable that perturbs both sides equally. What
+    closes it is refusing to inherit the variable at all.
+    """
+    monkeypatch.setenv("PYTEST_ADDOPTS", '-k "not drop"')
+    assert "PYTEST_ADDOPTS" not in mutate_gates._clean_env()
+
+    suite = tmp_path / "__tests__"
+    suite.mkdir()
+    (suite / "test_two.py").write_text(
+        "def test_keep():\n    pass\n\ndef test_drop():\n    pass\n",
+        encoding="utf-8",
+    )
+    # With the variable stripped, the count is the WHOLE suite again -- which is
+    # the suite the matrix says it ran.
+    assert mutate_gates._collected(suite, tmp_path) == 2
 
 
 def test_the_population_counter_fails_closed_when_it_cannot_say(tmp_path):
