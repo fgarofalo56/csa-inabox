@@ -1997,8 +1997,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CP4 an adapter that RAISED is no longer marked a fault, collapsing "
          "'the tool is broken' back into 'the evidence says no'"),
         "complete.py",
-        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {exc}"[:300],\n            fault=True)',
-        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {exc}"[:300],\n            fault=False)',
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {detail}"[:300],\n            fault=True)',
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {detail}"[:300],\n            fault=False)',
     ),
     (
         ("CP5 a FAULT falls through to the no-evidence branch, so a broken "
@@ -2051,14 +2051,15 @@ ARMS: list[tuple[str, str, str, str]] = [
          "oracle, and a PR body saying 'Deliberately NOT closed' closes it"),
         "complete.py",
         ("    if isinstance(item.pr, int) and item.pr > 0:\n"
-         "        hit = closing.get(item.number)\n"
-         '        when = hit[1] if hit else ""\n'
-         '        return item.pr, when, f"bound to PR #{item.pr}"'),
-        ("    hit = closing.get(item.number)\n"
-         "    if hit:\n"
-         '        return hit[0], hit[1], f"claimed by PR #{hit[0]}"\n'
+         "        # The BOUND PR's own merge time. Not the prose map's -- see\n"
+         "        # `bound_pr_merged_at` for the two failures that came from reading\n"
+         "        # prose here, one inert and one that closed an item a person reopened.\n"
+         "        when, refused = bound_pr_merged_at(repo, item.pr)"),
+        ("    _hit = index.prose.get(item.number)\n"
+         "    if _hit:\n"
+         '        return _hit[0], _hit[1], f"claimed by PR #{_hit[0]}"\n'
          "    if isinstance(item.pr, int) and item.pr > 0:\n"
-         '        return item.pr, "", f"bound to PR #{item.pr}"'),
+         "        when, refused = bound_pr_merged_at(repo, item.pr)"),
     ),
     (
         ("CP12 NEEDS_AUDIT becomes completable, so an item that LEFT GitHub or "
@@ -2066,6 +2067,105 @@ ARMS: list[tuple[str, str, str, str]] = [
         "complete.py",
         "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT)",
         "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, ledger.NEEDS_AUDIT)",
+    ),
+
+    # -- round 2 of complete.py: the defects TWO REVIEWERS measured ---------
+    # Every arm below corresponds to a finding that was DEMONSTRATED against
+    # the previous head, not reasoned about. They are here because the first
+    # twelve arms all died and the module was still wrong -- an arm set proves
+    # only what it points at, and none of them pointed inside the one adapter
+    # with a live producer, at the exception its only caller actually raises,
+    # or at a sweep short enough that the breaker cannot fire.
+    (
+        ("CP13 a REFUSED ci-green receipt is returned as evidence, so an item "
+         "closes on a merged sha whose CI was RED"),
+        "complete.py",
+        "    if not receipt.ok:",
+        "    if False:",
+    ),
+    (
+        ("CP14 a green receipt over an UNKNOWN sha is accepted, so the close "
+         "cites `PR #N @ ` -- a reference with no target"),
+        "complete.py",
+        "    if not sha:",
+        "    if False:",
+    ),
+    (
+        ("CP15 the evidence ref stops naming the sha it was taken at, so the "
+         "audit trail of an unattended close cannot be re-run"),
+        "complete.py",
+        'return Evidence(True, f"PR #{pr} @ {sha}", f"ci-green at {sha}: {receipt.summary}")',
+        'return Evidence(True, f"PR #{pr}", f"ci-green at {sha}: {receipt.summary}")',
+    ),
+    (
+        ("CP16 --dry-run writes on the NO-EVIDENCE path -- the path a first dry "
+         "run over a real queue takes for almost every item"),
+        "complete.py",
+        "            if not dry_run and item.state != AWAITING_RECEIPT:",
+        "            if item.state != AWAITING_RECEIPT:",
+    ),
+    (
+        ("CP17 the aggregate dead-adapter check is removed, so `--limit 1` "
+         "against a structurally dead adapter exits 0 -- and `--limit 1` is the "
+         "first live run this module's own docs recommend"),
+        "complete.py",
+        ("    dead = [k for k, n in attempts.items()\n"
+         "            if n > 0 and fault_total.get(k, 0) >= n]"),
+        "    dead = []",
+    ),
+    (
+        ("CP18 SystemExit stops being caught as a fault -- the exception the ONE "
+         "live adapter actually raises, which kills the sweep mid-loop"),
+        "complete.py",
+        "    except (Exception, SystemExit) as exc:  # a fault is a REFUSAL, never evidence",
+        "    except Exception as exc:  # a fault is a REFUSAL, never evidence",
+    ),
+    (
+        ("CP19 the BOUND item's merge time is read from the prose map again, so "
+         "the 296 of 301 items prose does not mention are skipped forever"),
+        "complete.py",
+        "        when, refused = bound_pr_merged_at(repo, item.pr)",
+        ("        _hit = index.prose.get(item.number)\n"
+         "        when, refused = (_hit[1] if _hit else \"\"), \"no prose entry\""),
+    ),
+    (
+        ("CP20 --bind stops rejecting 0, so one typo stores a real binding to "
+         "PR #0 and every later correction is refused as 'already bound'"),
+        "complete.py",
+        "        if issue <= 0 or pr <= 0:",
+        "        if False:",
+    ),
+    (
+        ("CP21 the closing map loses its VETO, so a transposed digit binds an "
+         "item to an unrelated PR and closes it on that PR's green CI"),
+        "complete.py",
+        "            if claim and claim[0] != pr:",
+        "            if False:",
+    ),
+    (
+        ("CP22 a merged-PR list truncated at the ceiling is accepted, so the map "
+         "silently describes the newest slice of history and its veto shrugs"),
+        "complete.py",
+        "    if len(raw) >= ceiling:",
+        "    if False:",
+    ),
+    (
+        ("CP23 the close is announced BEFORE it is saved, so anything that ends "
+         "the sweep early prints `CLOSED` for items that never reached disk"),
+        "complete.py",
+        ("        led.save()\n"
+         '        print(f"  #{item.number:<5} {klass:<20} CLOSED {kind} {found.ref}")'),
+        '        print(f"  #{item.number:<5} {klass:<20} CLOSED {kind} {found.ref}")',
+    ),
+    (
+        ("CP24 an adapter reporting evidence with an EMPTY ref is downgraded from "
+         "a fault to a plain refusal, so a plainly broken adapter moves every "
+         "item to AWAITING_RECEIPT and exits 0"),
+        "complete.py",
+        ('            "receipt with no reference cannot be re-checked, so it is not one",\n'
+         "            fault=True,"),
+        ('            "receipt with no reference cannot be re-checked, so it is not one",\n'
+         "            fault=False,"),
     ),
 ]
 

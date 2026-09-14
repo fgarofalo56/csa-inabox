@@ -266,6 +266,21 @@ def gather(kind: str, repo: str, pr: int) -> Evidence:
 
     An adapter that RAISES is a refusal, not a crash: the sweep must not stop
     on one unreadable item, and it must not treat an exception as evidence.
+
+    `SystemExit` IS CAUGHT, AND IT IS THE ONE THAT MATTERS. An earlier revision
+    caught `Exception`, which does not cover it -- `SystemExit` derives from
+    `BaseException` -- and the only live adapter raises exactly that:
+    `merge_gate.gh_json` exits on any failed `gh` call, and
+    `collect_ci_green_evidence` exits when the bound PR is not merged. So the
+    one exception this module was certain to meet was the one it did not catch.
+    Measured by a reviewer: a sweep printed `CLOSED` for two items and then
+    died, and because the ledger is saved after the loop, neither close reached
+    disk. Two stdout lines asserting a state that does not exist -- the R7
+    violation this package keeps re-learning, this time about its own output.
+
+    `KeyboardInterrupt` is deliberately NOT caught: an operator interrupting a
+    sweep is not an adapter fault, and swallowing it would make the run
+    unstoppable.
     """
     adapter = ADAPTERS.get(kind)
     if adapter is None:
@@ -276,19 +291,26 @@ def gather(kind: str, repo: str, pr: int) -> Evidence:
         )
     try:
         found = adapter(repo, pr)
-    except Exception as exc:  # an adapter fault is a REFUSAL, never evidence
+    except (Exception, SystemExit) as exc:  # a fault is a REFUSAL, never evidence
+        detail = str(exc) or type(exc).__name__
         return Evidence(
-            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {exc}"[:300],
+            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {detail}"[:300],
             fault=True)
     if not isinstance(found, Evidence):
         return Evidence(
             False, "", f"adapter for {kind!r} returned {type(found).__name__}, not Evidence",
             fault=True)
     if found.ok and not found.ref.strip():
+        # A FAULT, not a plain refusal, and that is a correction. An adapter
+        # that reports evidence it cannot reference is MALFUNCTIONING by the
+        # definition in `Evidence.fault` -- it is a fact about the tool, not
+        # about the item -- so it must not quietly move the item to
+        # `AWAITING_RECEIPT` as though the evidence had merely been absent.
         return Evidence(
             False, "",
             f"adapter for {kind!r} reported evidence with an EMPTY ref - a "
             "receipt with no reference cannot be re-checked, so it is not one",
+            fault=True,
         )
     return found
 
@@ -305,7 +327,33 @@ def gather(kind: str, repo: str, pr: int) -> Evidence:
 _TRAILING_PR_RE = re.compile(r"\(#(\d+)\)\s*$")
 
 
-def build_closing_map(repo: str) -> dict[int, tuple[int, str, str]]:
+@dataclass(frozen=True)
+class ClosingIndex:
+    """What the merged history says about which PR resolved which issue.
+
+    TWO MAPS, DELIBERATELY SEPARATE, because they are not the same kind of
+    claim and must never be merged into one "the PR for this issue" answer:
+
+    - `prose` is THIS module's scanner over commit bodies and PR bodies. It is
+      a publication guard reused for reading, and it over-matches on purpose:
+      `CLOSING_RE` joins verb and reference with `\\s*`, `\\s` matches newlines,
+      so a heading "## Deliberately NOT closed" followed by "#3883" reads as a
+      close. Wide is right for "warn the author"; it is wrong for any decision.
+    - `linked` is GITHUB's own `closingIssuesReferences`. Independently parsed,
+      so it is a genuine second opinion rather than a second look by the same
+      eye. Its failure mode is the safe one -- it read EMPTY while a squash
+      commit closed #4361 -- so it is trustworthy as CORROBORATION and useless
+      as a sole source. Measured on this queue it covers 2 of 301 items.
+
+    Neither decides a close. `Item.pr` does. These decide only what the tool is
+    willing to SUGGEST to a human, which is why the distinction is kept in the
+    type rather than in a comment.
+    """
+    prose: dict[int, tuple[int, str, str]]
+    linked: dict[int, set[int]]
+
+
+def build_closing_map(repo: str) -> ClosingIndex:
     """issue -> (pr, merged_at, where), built ONCE for the whole sweep.
 
     THE QUERY IS INVERTED, and it had to be. The first version asked, per item,
@@ -327,6 +375,7 @@ def build_closing_map(repo: str) -> dict[int, tuple[int, str, str]]:
       closes declared in the body and nowhere else.
     """
     found: dict[int, tuple[int, str, str]] = {}
+    linked: dict[int, set[int]] = {}
 
     # -- the commit trail, from local git --------------------------------
     rc, out, err = merge_gate.sh(
@@ -350,27 +399,47 @@ def build_closing_map(repo: str) -> dict[int, tuple[int, str, str]]:
             found.setdefault(issue, (pr, when, f"commit of PR #{pr}"))
 
     # -- merged PR bodies, one paginated list ----------------------------
+    # THE LIMIT IS ABOVE THE POPULATION, AND THE TRUNCATION IS DETECTED.
+    # It was `--limit 1000` against 3312 merged PRs, and `gh` returns exactly
+    # 1000 with no indication that it stopped -- so the map silently described
+    # the newest third of history while reading as though it described all of
+    # it. A reviewer caught it by comparing the returned length to the real
+    # count. Ask for more than exist, then refuse if the answer comes back
+    # exactly at the ceiling, because that is the one length that means
+    # "there may be more" rather than "this is all of them".
+    ceiling = 6000
     raw = merge_gate.gh_json(
         ["gh", "pr", "list", "--repo", repo, "--state", "merged",
-         "--limit", "1000", "--json", "number,body,mergedAt"],
+         "--limit", str(ceiling),
+         "--json", "number,body,mergedAt,closingIssuesReferences"],
         "merged PR bodies",
     )
     if not isinstance(raw, list):
         raise SystemExit(f"unexpected shape for merged PRs: {type(raw).__name__}")
+    if len(raw) >= ceiling:
+        raise SystemExit(
+            f"merged-PR list came back at the {ceiling} ceiling, so it may be "
+            "truncated. A closing map that silently covers only the newest "
+            "PRs would refuse binds it should corroborate; raise the ceiling "
+            "rather than sweeping on a partial history."
+        )
     for pr_row in raw:
         if not isinstance(pr_row, dict) or not isinstance(pr_row.get("number"), int):
             continue
         pr = pr_row["number"]
         when = str(pr_row.get("mergedAt") or "")
+        for ref in (pr_row.get("closingIssuesReferences") or []):
+            if isinstance(ref, dict) and isinstance(ref.get("number"), int):
+                linked.setdefault(ref["number"], set()).add(pr)
         for issue in gates.scan_closing_keywords(str(pr_row.get("body") or "")).hard:
             if issue == pr:
                 continue
             found.setdefault(issue, (pr, when, f"body of PR #{pr}"))
-    return found
+    return ClosingIndex(prose=found, linked=linked)
 
 
-def merged_pr_for_issue(closing: dict[int, tuple[int, str, str]],
-                        item) -> tuple[int | None, str, str]:
+def merged_pr_for_issue(repo: str, index: ClosingIndex, item,
+                        ) -> tuple[int | None, str, str]:
     """The PR this item is BOUND to, or None. A prose claim is not a binding.
 
     THE CORRECTION THAT MATTERS MOST IN THIS MODULE. The first version resolved
@@ -406,16 +475,88 @@ def merged_pr_for_issue(closing: dict[int, tuple[int, str, str]],
     look related, go and bind them if they are". It never decides.
     """
     if isinstance(item.pr, int) and item.pr > 0:
-        hit = closing.get(item.number)
-        when = hit[1] if hit else ""
+        # The BOUND PR's own merge time. Not the prose map's -- see
+        # `bound_pr_merged_at` for the two failures that came from reading
+        # prose here, one inert and one that closed an item a person reopened.
+        when, refused = bound_pr_merged_at(repo, item.pr)
+        if not when:
+            return None, "", f"#{item.number} is bound to PR #{item.pr} but {refused}"
         return item.pr, when, f"bound to PR #{item.pr}"
     hint = ""
-    if item.number in closing:
-        pr, _when, where = closing[item.number]
-        hint = (f" (a merged PR #{pr} mentions it in its {where.split(' of ')[0]}, "
-                "which is a SUGGESTION, not a binding - bind it with "
-                f"`--bind {item.number}={pr}` if a lane really did this work)")
+    if item.number in index.prose:
+        pr, _when, where = index.prose[item.number]
+        corroborated = pr in index.linked.get(item.number, set())
+        if corroborated:
+            # GitHub's OWN parser links this PR to this issue. That is a second,
+            # independently-derived signal, so a paste-ready command is honest.
+            hint = (f" (merged PR #{pr} mentions it in its {where.split(' of ')[0]} "
+                    "AND GitHub's own closing-reference parser links them; if a "
+                    f"lane really did this work, bind it: `--bind {item.number}={pr}`)")
+        else:
+            # NO PASTE-READY COMMAND. The only signal is this module's own
+            # scanner, which is a PUBLICATION GUARD and deliberately
+            # over-matches: `CLOSING_RE` joins verb and reference with `\s*`,
+            # `\s` matches newlines, and that is how it read a heading reading
+            # "## Deliberately NOT closed" followed by "#3883" as a close.
+            # A reviewer measured that the five suggestions this tool emits over
+            # the live queue are the four issues the operator personally
+            # reopened plus #3883 -- i.e. handing over a command to paste
+            # selected precisely for the items that must not close. Say what
+            # was seen, and make the human go and read it.
+            hint = (f" (merged PR #{pr} mentions it in its {where.split(' of ')[0]}, "
+                    "but GitHub's own parser does NOT link them - this scanner "
+                    "over-matches across line breaks, so READ THE PR before "
+                    "deciding; no bind command is offered for an uncorroborated "
+                    "prose match)")
     return None, "", f"#{item.number} is not bound to a PR{hint}"
+
+
+def bound_pr_merged_at(repo: str, pr: int) -> tuple[str, str]:
+    """When did the BOUND PR merge? Read from that PR, never from prose.
+
+    Returns `(merged_at, why_refused)`; an empty `merged_at` means refuse, and
+    `why_refused` is then non-empty.
+
+    THIS EXISTS BECAUSE THE BINDING WAS INERT WITHOUT IT. `merged_pr_for_issue`
+    used to take `merged_at` from the PROSE map even for an item bound by
+    `Item.pr`, and prose covers 5 of the 301 completable items. For the other
+    296 the time came back `""`, `operator_reopened_after` correctly read that
+    as "a later reopen cannot be ruled out", and the item was skipped as
+    REOPENED -- permanently. So `--bind`, the only producer of a binding,
+    could not make 98.3% of the queue closable no matter what a lane did.
+
+    The second failure was worse than inert. When prose DID have an entry it
+    was built `setdefault` over a newest-first git log, so the newest claim
+    won -- and a later unrelated PR's merge time, compared against a real
+    operator reopen, made the reopen look like it happened BEFORE the merge.
+    A reviewer demonstrated it with #2678's real numbers: bound to #3012,
+    prose from #4300, operator reopen at 2026-08-06T16:47:29Z, and the item
+    closed. The freshness guard was reading the wrong clock.
+
+    Fails CLOSED on everything: an unreadable answer, a PR that is not MERGED,
+    or a merged PR with no `mergedAt`. An open PR reaching the adapter is also
+    how `collect_ci_green_evidence` raises `SystemExit`, so refusing here turns
+    a sweep-killer into one printed line about one item.
+    """
+    try:
+        data = merge_gate.gh_json(
+            ["gh", "pr", "view", str(pr), "--repo", repo,
+             "--json", "number,state,mergedAt"],
+            f"PR #{pr}",
+        )
+    except (Exception, SystemExit) as exc:
+        return "", (f"could not read PR #{pr} ({type(exc).__name__}: "
+                    f"{str(exc) or 'no detail'}), so its merge time is unknown")
+    if not isinstance(data, dict):
+        return "", f"PR #{pr} returned {type(data).__name__}, not an object"
+    state = str(data.get("state") or "")
+    if state != "MERGED":
+        return "", (f"PR #{pr} is {state or 'in an unknown state'}, not MERGED - "
+                    "a close needs the work actually landed (deploy-integrity R2)")
+    when = str(data.get("mergedAt") or "")
+    if not when:
+        return "", f"PR #{pr} reports MERGED with no mergedAt, which cannot both be true"
+    return when, ""
 
 
 def operator_reopened_after(repo: str, number: int, merged_at: str) -> tuple[bool, str]:
@@ -460,7 +601,15 @@ def operator_reopened_after(repo: str, number: int, merged_at: str) -> tuple[boo
 # -- the sweep --------------------------------------------------------------
 
 
-def bind(led: Ledger, pairs: list[str]) -> int:
+#: ASCII digits ONLY. `str.isdigit()` is True for Arabic-Indic and other
+#: Unicode digit forms, and `int()` accepts them, so a pair written in
+#: Arabic-Indic numerals validated and bound. Nothing downstream can render
+#: that back to a number an operator can check against GitHub.
+_NUMERIC_RE = re.compile(r"\A[0-9]+\Z")
+
+
+def bind(led: Ledger, pairs: list[str], repo: str,
+         index: ClosingIndex | None = None) -> int:
     """Record `Item.pr` for `ISSUE=PR` pairs. The writer #4489 asks for.
 
     `Item.pr` has existed since the ledger was written and NOTHING wrote it,
@@ -475,13 +624,29 @@ def bind(led: Ledger, pairs: list[str]) -> int:
     a lane running the gate from its own worktree rewrote a ledger in a
     different checkout. One writer, in the drain's own tools, with the ledger's
     own save.
+
+    IT VALIDATES, WHICH IT DID NOT USED TO. A reviewer measured that `1=0` was
+    accepted and then permanently bricked the item (every later bind refused
+    with "already bound to PR #0"), that `1=99999999` was accepted, and that a
+    single transposed digit -- `4396` for `4369` -- bound an item to an
+    unrelated PR and CLOSED it on that PR's green CI, while the closing map
+    said otherwise and nothing consulted it. The binding is the ONLY thing
+    standing between prose and an unattended close, so an unchecked binding is
+    an unchecked close.
     """
     bound = 0
     for pair in pairs:
-        issue_s, _, pr_s = pair.partition("=")
-        if not issue_s.strip().isdigit() or not pr_s.strip().isdigit():
-            raise SystemExit(f"--bind expects ISSUE=PR, got {pair!r}")
+        issue_s, sep, pr_s = pair.partition("=")
+        if not sep or not _NUMERIC_RE.match(issue_s.strip()) or \
+                not _NUMERIC_RE.match(pr_s.strip()):
+            raise SystemExit(
+                f"--bind expects ISSUE=PR with ASCII digits on both sides, got {pair!r}")
         issue, pr = int(issue_s), int(pr_s)
+        if issue <= 0 or pr <= 0:
+            raise SystemExit(
+                f"--bind {pair}: issue and PR must both be positive. `0` is not a "
+                "sentinel here - it would be stored as a real binding and then "
+                "refuse every later attempt to correct it.")
         if issue not in led.items:
             raise SystemExit(f"--bind {pair}: #{issue} is not in the ledger")
         item = led.items[issue]
@@ -492,15 +657,38 @@ def bind(led: Ledger, pairs: list[str]) -> int:
                 "Rebinding would move the evidence for a close; do it by hand "
                 "and say why in the item's history."
             )
+        # THE PR MUST EXIST AND HAVE MERGED. Checked here rather than left to
+        # the adapter, because an unmerged PR reaching
+        # `collect_ci_green_evidence` raises `SystemExit` and takes the whole
+        # sweep down with it.
+        when, refused = bound_pr_merged_at(repo, pr)
+        if not when:
+            raise SystemExit(f"--bind {pair}: {refused}")
+        # AND THE PROSE MAP GETS A VETO -- only a veto, never a vote. It cannot
+        # authorise a binding (it over-matches; that is the #3883 defect), but
+        # when it names a DIFFERENT PR for this issue that disagreement is
+        # exactly the signature of a typo, and refusing costs nothing but a
+        # re-read. This is the check that would have caught `4396` for `4369`.
+        if index is not None:
+            claim = index.prose.get(issue)
+            if claim and claim[0] != pr:
+                raise SystemExit(
+                    f"--bind {pair}: the merged history attributes #{issue} to "
+                    f"PR #{claim[0]} ({claim[2]}), not PR #{pr}. That disagreement "
+                    "is what a transposed digit looks like. If PR "
+                    f"#{pr} really is the one, unbind-and-say-why by hand; this "
+                    "refuses rather than closing an item on an unrelated PR's CI."
+                )
         item.pr = pr
-        item.history.append(f"{ledger._now()} bound to PR #{pr}")
-        print(f"  #{issue} -> PR #{pr}")
+        item.history.append(f"{ledger._now()} bound to PR #{pr} (merged {when})")
+        print(f"  #{issue} -> PR #{pr}  (merged {when})")
         bound += 1
     return bound
 
 
 def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
-          limit: int | None, only: str | None) -> tuple[int, int]:
+          limit: int | None, only: str | None,
+          index: ClosingIndex | None = None) -> tuple[int, int]:
     """Drive every completable item to a terminal state, or say why not.
 
     Returns `(closed, examined)`. Writes nothing when `dry_run`.
@@ -513,8 +701,21 @@ def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
         )
     closed = examined = 0
     faults: dict[str, int] = {}
-    closing = build_closing_map(repo)
-    print(f"  {len(closing)} issue(s) are claimed by a merged PR's body or commit trail")
+    # AGGREGATE fault bookkeeping, separate from the consecutive streak above.
+    # The streak catches a dead adapter part-way through a LONG sweep; it
+    # cannot catch one at all in a SHORT sweep, and the short sweep is the one
+    # this module's own docs tell an operator to run first
+    # (`--only guard-or-test-only --limit 1`). A reviewer demonstrated that
+    # `--limit 1` and `--limit 2` against a structurally dead adapter return
+    # `closed=0`, print no abort, and exit 0 -- the exact "green over a dead
+    # pipeline" outcome the fault field was introduced to prevent, surviving
+    # inside the fix for it. These two counters are what the post-loop check
+    # reads, so a fault is fatal at any sweep length.
+    attempts: dict[str, int] = {}
+    fault_total: dict[str, int] = {}
+    index = index if index is not None else build_closing_map(repo)
+    print(f"  {len(index.prose)} issue(s) are claimed by a merged PR's body or "
+          f"commit trail; GitHub's own parser links {len(index.linked)}")
     for item in sorted(led.remaining(), key=lambda i: i.number):
         if item.state not in COMPLETABLE:
             continue
@@ -525,7 +726,7 @@ def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
             break
         examined += 1
 
-        pr, merged_at, why_pr = merged_pr_for_issue(closing, item)
+        pr, merged_at, why_pr = merged_pr_for_issue(repo, index, item)
         if pr is None:
             print(f"  #{item.number:<5} {klass:<20} SKIP   {why_pr}")
             continue
@@ -546,19 +747,25 @@ def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
             continue
 
         found = gather(kind, repo, pr)
+        attempts[kind] = attempts.get(kind, 0) + 1
         if found.fault:
             # The ADAPTER misbehaved. This says nothing about the item, so the
             # item is not moved: `AWAITING_RECEIPT` would be a state claim the
             # code did not establish (R7).
             faults[kind] = faults.get(kind, 0) + 1
+            fault_total[kind] = fault_total.get(kind, 0) + 1
             print(f"  #{item.number:<5} {klass:<20} FAULT  {found.why[:120]}")
             if faults[kind] >= CONSECUTIVE_FAULT_LIMIT:
                 raise SystemExit(
                     f"ABORTING: the {kind!r} adapter has faulted "
-                    f"{faults[kind]} times in a row. That is the harness being "
-                    f"broken, not the evidence being absent, so continuing would "
-                    f"print a refusal for every remaining {kind!r} item and exit "
-                    f"0 with nothing drained. Last fault: {found.why[:200]}"
+                    f"{faults[kind]} times in a row. A fault is the adapter "
+                    f"failing to answer, not the item failing to qualify, so "
+                    f"continuing would print a non-answer for every remaining "
+                    f"{kind!r} item and exit 0 with nothing drained. This "
+                    f"cannot tell a broken adapter from {faults[kind]} "
+                    f"consecutive rate-limit errors, and does not claim to - "
+                    f"either way the run is not measuring anything. "
+                    f"Last fault: {found.why[:200]}"
                 )
             continue
         faults[kind] = 0  # a reply that was ABOUT the item clears the streak
@@ -569,6 +776,7 @@ def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
                 # AWAITING_RECEIPT means, and nothing has ever set it.
                 led.transition(item.number, AWAITING_RECEIPT,
                                f"{why_pr}; awaiting {kind}: {found.why[:160]}")
+                led.save()
             continue
 
         if dry_run:
@@ -578,8 +786,35 @@ def sweep(led: Ledger, policy: dict, repo: str, *, dry_run: bool,
 
         led.record_receipt(item.number, kind, found.ref)
         led.transition(item.number, CLOSED, f"{why_pr}; {found.why[:200]}")
+        # SAVED BEFORE IT IS ANNOUNCED. The ledger used to be written once,
+        # after the loop returned, so anything that ended the sweep early threw
+        # away every close it had already printed. A reviewer measured a sweep
+        # printing `CLOSED` for two items and then dying with the ledger
+        # untouched: two lines of stdout asserting a state that existed
+        # nowhere. Printing a claim the disk does not back is the same defect
+        # as an error message naming a cause the code did not establish.
+        led.save()
         print(f"  #{item.number:<5} {klass:<20} CLOSED {kind} {found.ref}")
         closed += 1
+
+    # -- the aggregate fault verdict, read AFTER the loop --------------------
+    # A sweep that never got an answer about anything must not exit 0. This is
+    # length-independent on purpose: one attempt that faulted is 1 of 1, and
+    # `--limit 1` is what the docs tell an operator to run first.
+    dead = [k for k, n in attempts.items()
+            if n > 0 and fault_total.get(k, 0) >= n]
+    if dead:
+        raise SystemExit(
+            "ABORTING: the adapter(s) " + ", ".join(repr(k) for k in sorted(dead))
+            + " faulted on EVERY call this sweep made to them "
+            + ", ".join(f"{k}: {fault_total[k]}/{attempts[k]}" for k in sorted(dead))
+            + ". Not one reply was about an item, so this run measured nothing "
+              "about the queue and its exit status must not suggest otherwise."
+        )
+    stragglers = {k: n for k, n in fault_total.items() if n}
+    if stragglers:
+        print("\nFAULTS (adapter did not answer; the item was NOT moved): "
+              + ", ".join(f"{k} {n}/{attempts[k]}" for k, n in sorted(stragglers.items())))
     return closed, examined
 
 
@@ -612,17 +847,32 @@ def main() -> int:
     print(f"COMPLETE {mode}  repo={repo}  "
           f"only={args.only or 'every class'}  limit={args.limit or 'none'}")
 
+    # A TYPO IN `--only` USED TO BE A CLEAN PASS. `--only guard-or-test_only`
+    # matched no item's class, so the sweep examined nothing, printed
+    # "would close 0 of 0 examined" and exited 0 -- a run that measured nothing
+    # and reported like a run that found nothing to do. Validate against the
+    # classes policy.json actually declares.
+    known = set((policy.get("receipts") or {}).keys())
+    if args.only and args.only not in known:
+        print(f"--only {args.only!r} is not a receipt class in policy.json. "
+              f"Known: {', '.join(sorted(known)) or '(none)'}", file=sys.stderr)
+        return 2
+
+    # ONE index for the whole invocation: `bind` needs it for its veto and the
+    # sweep needs it for its suggestions, and it costs a full merged-PR read.
+    index = build_closing_map(repo)
+
     if args.bind:
         if args.dry_run:
             raise SystemExit("--bind writes; it cannot be combined with --dry-run")
         print(f"BINDING {len(args.bind)} item(s) to their PRs:")
-        bind(led, args.bind)
+        bind(led, args.bind, repo, index)
         led.save()
         if not args.sweep:
             return 0
 
     closed, examined = sweep(led, policy, repo, dry_run=args.dry_run,
-                             limit=args.limit, only=args.only)
+                             limit=args.limit, only=args.only, index=index)
     if not args.dry_run:
         led.save()
     verb = "would close" if args.dry_run else "closed"
