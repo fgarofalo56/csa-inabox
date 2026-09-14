@@ -1029,3 +1029,124 @@ test('#4373 the poll that MOVED the chunk count restarts the streak at 1, not 0'
     },
   );
 });
+
+// ── THE DURABLE LAST-RUN RECORD (#4497) ─────────────────────────────────────
+// Roll 34648534467 (2026-09-11) polled for 912s across 55 polls, read
+// `stale`/`idle` every time, and failed with "NOTHING WAS OBSERVED RUNNING".
+// That sentence was true about what the poll saw and silent about what had
+// happened: `reindex()` had already failed and recorded it in the in-memory job
+// state of the ONE replica that ran it. With Front Door session affinity
+// Disabled and 2-6 replicas, no poll was ever going to land there.
+
+/** A poll body carrying the durable last-run record any replica can read. */
+function pollBodyWithLastRun({ freshness, job = 'idle', chunks = 51079, lastRun }) {
+  const body = pollBody({ freshness, job, chunks });
+  body.freshness.lastRun = lastRun;
+  return body;
+}
+
+test('#4497 a durable last-run FAILURE ends the wait immediately, naming the cause', async () => {
+  await withServer(
+    () => ACCEPTED,
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        // Far future, so it is unambiguously after the script's start mark.
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'Corpus indexed, but the freshness manifest could not be persisted to ai-search: 403 Forbidden',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      // It must stop on the RECORD, not grind to the attempt ceiling. That is
+      // the whole value of the change: 912s of silence becomes one poll.
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /manifest could not be persisted/);
+      assert.match(out, /NOT a timeout/);
+      // And it must not describe itself as the thing it is not.
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+    },
+  );
+});
+
+test('#4497 a last-run failure from a PREVIOUS run does not fail a healthy rebuild', async () => {
+  // The record is durable, so it outlives the run that wrote it. Without the
+  // freshness-of-the-record check every later reindex would inherit the last
+  // failure forever, and a guard that can never pass is not a guard.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 2 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2000-01-01T00:00:00Z',
+          error: 'an ancient failure that has since been fixed',
+          sourceCommit: 'oldoldoldold',
+          backend: 'ai-search',
+          chunkCount: 0,
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.match(res.stdout, /COMPLETE/);
+    },
+  );
+});
+
+test('#4497 a last-run SUCCESS never ends the wait early', async () => {
+  // Only `failed` is terminal here. A success record says A rebuild finished,
+  // not that THIS one did, so freshness remains the completion signal.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 3 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'succeeded',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: null,
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.ok(counts().gets >= 3, 'expected to keep polling to freshness, got ' + counts().gets);
+    },
+  );
+});
+
+test('#4497 freshness=unknown is a failed READ and does not feed the idle streak', async () => {
+  // `unknown` means the console could not read the manifest. That is a fact
+  // about the CHECK, not the corpus, so it must not count as one of the
+  // trailing `stale`/`idle` observations the `trigger_refused` verdict claims
+  // to have made — that verdict would then assert a reading nothing produced.
+  await withServer(
+    () => ({ status: 504, body: '<html><title>504 Gateway Time-out</title></html>' }),
+    () => ({ status: 200, body: pollBody({ freshness: 'unknown', job: 'idle' }) }),
+    async (url) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '2', POST_RETRIES: '0' });
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.doesNotMatch(out, /TRIGGER REFUSED/);
+    },
+  );
+});

@@ -306,6 +306,35 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
           (parsed?.job?.error ? ` error=${firstLine(String(parsed.job.error))}` : '') +
           '. The index was NOT refreshed — failing loud rather than measuring a stale index.',
       };
+    case 'rebuild_failed': {
+      // THE DURABLE FAILURE RECORD, added after roll 34648534467 (2026-09-11).
+      // `reindex()` has always failed correctly when it could not persist the
+      // manifest — but it recorded that ONLY in the in-memory job state of the
+      // replica that ran it. Front Door session affinity is Disabled and the
+      // console runs 2-6 replicas, so the poll essentially never lands there:
+      // every other replica answers `job=idle` with an unchanged manifest. That
+      // roll polled 912s, read `stale`/`idle` 55 times, and reported "NOTHING
+      // WAS OBSERVED RUNNING" — true about what it saw, and silent about a
+      // failure that had already happened and been recorded nowhere readable.
+      //
+      // Read from the BODY, not from a separate env var: the shell already had
+      // to parse this to decide to stop waiting, and a second copy passed
+      // alongside is a second thing that can disagree with the first.
+      const lastRun = parsed?.freshness?.lastRun ?? null;
+      const when = lastRun?.finishedAt ? ` at ${lastRun.finishedAt}` : '';
+      const why = lastRun?.error ? firstLine(String(lastRun.error)) : '';
+      const commit = lastRun?.sourceCommit ? ` (revision ${String(lastRun.sourceCommit).slice(0, 12)})` : '';
+      return {
+        verdict: 'fail',
+        level: 'error',
+        message:
+          `loom-docs reindex FAILED on the replica that ran it${when}${commit} — ${detail}. ` +
+          (why ? `Reported cause: ${why}. ` : 'The record carried no error string, which is itself a defect. ') +
+          'This is the durable last-run record, not an inference from the poll: the rebuild ' +
+          'finished and reported failure. NOT a timeout and NOT a slow rebuild — waiting longer ' +
+          'cannot help. Fix the cause above and re-run.',
+      };
+    }
     case 'timeout': {
       // #3942 — SAY WHICH CEILING TRIPPED. The poll loop now carries a wall
       // clock AND an attempt cap, and a message that names only the seconds

@@ -257,6 +257,9 @@ get_status() {
   FRESH=unknown
   JOB=unknown
   CHUNKS=''
+  LAST_OUTCOME=''
+  LAST_FINISHED=''
+  LAST_ERROR=''
   if [ "$GCODE" = "000" ]; then
     return 0
   fi
@@ -269,11 +272,19 @@ get_status() {
     const c = j.freshness && Number.isFinite(j.freshness.indexedChunkCount)
       ? String(j.freshness.indexedChunkCount)
       : "";
-    process.stdout.write(f + "|" + s + "|" + c);
+    // The DURABLE last-run record (#4497). Written by every replica into the
+    // same store as the manifest, so a failure that happened on a replica this
+    // poll will never reach is still readable here.
+    const lr = (j.freshness && j.freshness.lastRun) || null;
+    const lo = lr && lr.outcome ? String(lr.outcome) : "";
+    const lf = lr && lr.finishedAt ? String(lr.finishedAt) : "";
+    const le = lr && lr.error ? String(lr.error).replace(/[\r\n|]+/g, " ").slice(0, 300) : "";
+    process.stdout.write([f, s, c, lo, lf, le].join("|"));
   ' "$POLL_BODY_FILE")
-  # Three fields, so `${STATES%%|*}` / `${STATES##*|}` do not suffice — the
-  # suffix form would have handed JOB the chunk count.
-  IFS='|' read -r FRESH JOB CHUNKS <<< "$STATES"
+  # Six fields now. Read positionally into named vars -- `${STATES%%|*}` style
+  # trimming does not extend past two fields, and the last field can itself
+  # contain spaces, so it must be the final `read` target.
+  IFS='|' read -r FRESH JOB CHUNKS LAST_OUTCOME LAST_FINISHED LAST_ERROR <<< "$STATES"
   FRESH="${FRESH:-unknown}"
   JOB="${JOB:-unknown}"
   return 0
@@ -284,6 +295,12 @@ get_status() {
 # #3394): the edge replied for the console, so whether the POST reached a replica
 # is unknown. Do not guess — fall through to the poll and let the durable
 # freshness signal settle it. Every OTHER non-zero stays a failure.
+# Captured BEFORE the first POST, not at the poll loop, and that matters: the
+# rebuild begins at the POST, so a run that failed between the POST and the
+# first poll has a `finishedAt` earlier than the loop but later than this. A
+# later mark would miss exactly the fastest failures (#4497).
+STARTED_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+REBUILD_ERROR=''
 do_post
 POST_ATTEMPTS=1
 # EVERY attempt's status, in order. The verdict's parenthetical is plural ("All
@@ -487,6 +504,33 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   echo "  poll: HTTP $GCODE freshness=$FRESH job=$JOB indexedChunks=${CHUNKS:-unknown}"
   if [ "$FRESH" = "fresh" ]; then OUTCOME=fresh; break; fi
   if [ "$JOB" = "failed" ]; then OUTCOME=failed; break; fi
+
+  # ── THE DURABLE LAST-RUN RECORD ENDS THE WAIT (#4497) ─────────────────────
+  # `job.state` is the answering replica's in-memory view, so it can prove a
+  # failure and never a success -- and it almost never lands on the replica
+  # that ran the job. The console now writes each attempt's outcome to the same
+  # durable store as the manifest, INCLUDING when the manifest write is itself
+  # what failed, which is the case no manifest-based signal can ever report.
+  #
+  # Only a record that finished AFTER this script started counts. A stale
+  # record from an earlier run would otherwise fail a healthy rebuild --
+  # a lexicographic compare is sound here because both are ISO-8601 UTC
+  # (`new Date().toISOString()` always ends in `Z`).
+  if [ "$LAST_OUTCOME" = "failed" ] && [ -n "$LAST_FINISHED" ] && \
+     [[ "$LAST_FINISHED" > "$STARTED_ISO" ]]; then
+    echo "  last-run record: FAILED at $LAST_FINISHED — $LAST_ERROR"
+    OUTCOME=rebuild_failed
+    REBUILD_ERROR="$LAST_ERROR"
+    break
+  fi
+
+  # A freshness state of `unknown` means the console could not READ the
+  # manifest -- it is a fact about the check, not about the corpus. It must not
+  # feed the idle streak, whose verdict claims a `stale`/`idle` reading.
+  if [ "$FRESH" = "unknown" ]; then
+    IDLE_STREAK=0
+    continue
+  fi
 
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────
   # Maintained here, EVALUATED AFTER THE LOOP. It decides the NAME of a failure

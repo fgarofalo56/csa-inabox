@@ -122,6 +122,70 @@ describe('evaluateFreshness (G2)', () => {
   it('reports stale when fingerprints differ', () => {
     expect(evaluateFreshness('fp-new', { statFingerprint: 'fp-old' }).state).toBe('stale');
   });
+
+  // --- the roll that this fixes (run 34648534467, 2026-09-11) ---------------
+
+  it('reports UNKNOWN, not never-indexed, when the manifest could not be READ', () => {
+    // `loadManifestHead` catches every exception and returns null, so an AI
+    // Search blip arrived here indistinguishable from a corpus that was never
+    // built -- and this function asserted the latter. That is a claim it had
+    // not established (deploy-integrity R7), and it is why the roll's poll log
+    // alternated `never-indexed` / `stale` while nothing about the corpus
+    // changed: reads were intermittently failing and each failure printed as a
+    // different fact.
+    const out = evaluateFreshness('fp', null, { manifestError: 'AI Search 503' });
+    expect(out.state).toBe('unknown');
+    expect(out.reason).toContain('could not be READ');
+    expect(out.reason).toContain('AI Search 503');
+    expect(out.reason).not.toContain('never been indexed');
+  });
+
+  it('an unreadable manifest outranks every other signal', () => {
+    // Even with a manifest object and matching fingerprints in hand, a read
+    // error means the answer is not known. Reporting `fresh` here would be a
+    // gate passing on data it could not confirm.
+    const out = evaluateFreshness('fp', { statFingerprint: 'fp' }, { manifestError: 'token expired' });
+    expect(out.state).toBe('unknown');
+  });
+
+  it('two replicas of the SAME revision agree, even though their mtimes do not', () => {
+    // THE DEFECT THAT BROKE THE ROLL. `statFingerprint` hashes
+    // `path:size:mtime` from the ANSWERING replica's local filesystem, while
+    // the manifest is shared -- so the comparison was replica-local against
+    // durable. `reindex-loom-docs.sh` polls `freshness.state` believing it is
+    // "the DURABLE, cross-replica signal", and it was not one.
+    //
+    // Same build SHA => same revision => same corpus, whatever the mtimes say.
+    const manifest = { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' };
+    const replicaB = evaluateFreshness('replica-B-different-mtimes', manifest, {
+      currentCommit: 'dcabe1dd02af',
+    });
+    expect(replicaB.state).toBe('fresh');
+  });
+
+  it('a DIFFERENT revision is stale even when the stat fingerprint happens to match', () => {
+    const out = evaluateFreshness('same-fp', { statFingerprint: 'same-fp', sourceCommit: 'aaaaaaaaaaaa' }, {
+      currentCommit: 'bbbbbbbbbbbb',
+    });
+    expect(out.state).toBe('stale');
+    expect(out.reason).toContain('aaaaaaaaaaaa');
+    expect(out.reason).toContain('bbbbbbbbbbbb');
+  });
+
+  it('falls back to the stat comparison when either commit is missing', () => {
+    // Dev, and manifests written before commits were recorded. The fallback is
+    // what keeps this change from stranding an existing deployment.
+    expect(evaluateFreshness('fp', { statFingerprint: 'fp', sourceCommit: null }, {
+      currentCommit: 'dcabe1dd02af',
+    }).state).toBe('fresh');
+    expect(evaluateFreshness('fp-new', { statFingerprint: 'fp-old', sourceCommit: 'dcabe1dd02af' }, {
+      currentCommit: null,
+    }).state).toBe('stale');
+    // An EMPTY string is missing, not a commit that differs from everything.
+    expect(evaluateFreshness('fp', { statFingerprint: 'fp', sourceCommit: '' }, {
+      currentCommit: '  ',
+    }).state).toBe('fresh');
+  });
 });
 
 describe('reindex incremental round-trip (G1 + G2)', () => {
