@@ -1017,6 +1017,24 @@ def test_a_contaminated_but_compilable_ere_is_refused_not_accepted(monkeypatch):
     assert merge_gate.resolve_infra_ere() == REAL_ERE
 
 
+def test_a_diagnostic_after_the_ere_is_refused_by_the_newline_check(monkeypatch):
+    """ROUND 9. The fixture above puts the diagnostic BEFORE the ERE, where the
+    `^(` anchor check alone already refuses it -- so the "contains a newline"
+    half of the shape check was a SURVIVING MUTANT: an independent reviewer
+    dropped only that clause and the whole suite stayed green.
+
+    Put the diagnostic AFTER instead (the deriver prints the ERE, then
+    `warning: 3 suites could not be parsed`) and the anchor check passes while
+    the value is still contaminated. It compiles, matches no path, and the
+    excuse route returns ok=True. Each half of that `or` needs its own fixture
+    or the matrix cannot tell the halves apart.
+    """
+    monkeypatch.setattr(
+        merge_gate.subprocess, "run",
+        _fake_run(f"{REAL_ERE}\nwarning: 3 suites could not be parsed\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
 def test_an_unanchored_ere_is_refused(monkeypatch):
     """A single line that is not the deriver's declared shape is still not it.
 

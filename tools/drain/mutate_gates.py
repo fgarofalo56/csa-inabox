@@ -758,7 +758,58 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
-    # -- the RECEIPT's own data, which no arm reached for three rounds --------
+    # -- the DELEGATED infra scope's two guards, added round 8 with no arms ---
+    # Round 9. An independent reviewer grepped this file for `resolve_infra_ere`
+    # and `top_level_dirs_agree` and found NOTHING: two guards were added to the
+    # module the matrix exists to police and neither was mutable. Round 8's own
+    # post-mortem lists "no arm had ever touched `receipts.ci_green_rule`" as a
+    # reason round 6's hole survived -- and that reason had simply moved one file
+    # over. The reviewer then killed the newline half by hand and it SURVIVED,
+    # because the only fixture put the diagnostic BEFORE the ERE where the anchor
+    # check already refuses it.
+    (
+        ("E1 the newline half of the ERE shape check drops, so a deriver that "
+         "prints the ERE and THEN a warning returns a contaminated string that "
+         "compiles, matches nothing, and EXCUSES"),
+        "merge_gate.py",
+        '    if not ere or "\\n" in ere or not ere.startswith("^("):',
+        '    if not ere or not ere.startswith("^("):',
+    ),
+    (
+        ("E2 the ANCHOR half drops, so a single-line diagnostic with no ERE at "
+         "all is accepted as the delegated scope"),
+        "merge_gate.py",
+        '    if not ere or "\\n" in ere or not ere.startswith("^("):',
+        '    if not ere or "\\n" in ere:',
+    ),
+    (
+        ("E3 the two-clocks guard is never consulted, so a receipt answers the "
+         "merged sha's infra scope from TODAY's possibly-narrower tree"),
+        "merge_gate.py",
+        "    if merged_sha and not _top_level_dirs_agree(merged_sha):",
+        "    if False:",
+    ),
+    (
+        ("E4 the two-clocks guard always AGREES - the shape where a guard is "
+         "present, is called, and decides nothing"),
+        "merge_gate.py",
+        "    return not (at_merge - today)",
+        "    return True",
+    ),
+    (
+        ("E5 the two-clocks comparison INVERTS, so it refuses a widening (safe) "
+         "and permits a narrowing (the excusing direction)"),
+        "merge_gate.py",
+        "    return not (at_merge - today)",
+        "    return not (today - at_merge)",
+    ),
+    (
+        ("E6 an unlistable merged tree AGREES instead of failing closed - "
+         "'cannot be shown to agree' silently becoming 'agree'"),
+        "merge_gate.py",
+        "    if at_merge is None or today is None:\n        return False",
+        "    if at_merge is None or today is None:\n        return True",
+    ),
     # Round 8, found by BOTH independent reviewers by different methods. Every
     # policy arm above targets `review.escalate_to_two_when_path_contains`; not
     # one touched `receipts.ci_green_rule`, so `killed=213 survived=0` was
@@ -1560,8 +1611,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4l a declared ALTERNATIVE that was SKIPPED counts as work done, so "
          "the two-output job stops being checked on either half"),
         "gates.py",
-        '        and str(s.get("conclusion") or "").lower() == "success"',
-        '        and str(s.get("conclusion") or "").lower() != "__never__"',
+        '        if concluded == {"success"}:',
+        "        if concluded:",
     ),
     # ROUND 6. Four arms an independent reviewer wrote against round 5's new
     # code, ALL FOUR OF WHICH SURVIVED. The lesson is the one this file records
@@ -1575,8 +1626,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("R2A1 only the FIRST declared alternative is consulted, so a job whose "
          "SECOND alternative ran stops being accounted for"),
         "gates.py",
-        '        if any(alt in str(s.get("name") or "") for alt in alternatives)',
-        '        if any(alt in str(s.get("name") or "") for alt in alternatives[:1])',
+        "    for alt in alternatives:",
+        "    for alt in list(alternatives)[:1]:",
     ),
     (
         ("R2A6 alternatives are consulted only when EXACTLY ONE is declared - "
@@ -1703,6 +1754,44 @@ def _passed_count(stdout: str) -> int:
     return int(match.group(1)) if match else -1
 
 
+#: The tests that MAY skip inside the sandbox, by nodeid, because they reach
+#: outside the copied tree. Both are keyed on `_repo_root()`, which the sandbox
+#: deliberately cannot satisfy: one shells out to `node`, the other calls
+#: `gh api`. Anything else skipping means a guard stopped guarding -- and a
+#: guard that skips where the mutants live cannot kill an arm, so the arms it
+#: covers would score KILLED on unrelated tests regardless of their mutation.
+EXPECTED_SANDBOX_SKIPS = (
+    "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
+    "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
+)
+
+
+def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> set[str] | None:
+    """Which tests SKIPPED in the sandbox, as `file.py::name`. None if unreadable.
+
+    Parsed from a verbose re-run rather than counted, because "2 skipped" is
+    equally satisfied by the WRONG two -- and the whole point of pinning this is
+    that a guard silently reverting to SKIP must be visible. `-rs` names only the
+    file and line, so it cannot answer this; `-v` names the test.
+
+    `-q` IS STRIPPED, not merely overridden. pytest sums verbosity flags, so
+    `[*cmd, "-v"]` against a cmd already carrying `-q` nets ZERO and prints no
+    per-test lines at all. That returned an empty skip set on the first run and
+    the control refused -- correctly, and it is why this reads the flag list
+    rather than appending to it.
+    """
+    verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
+    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox)
+    if out.returncode != 0:
+        return None
+    ids = set()
+    for line in out.stdout.splitlines():
+        m = re.match(r"(\S+\.py)::(\S+?)\s+SKIPPED", line.strip())
+        if m:
+            ids.add(f"{Path(m.group(1)).name}::{m.group(2)}")
+    return ids
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -1811,6 +1900,30 @@ def main() -> int:
             print("REFUSING -- control is not green; nothing below would mean anything")
             print(control.stdout[-3000:])
             return 2
+        # AND THE SKIP SET IS PINNED. Round 9, found by an independent reviewer:
+        # the control asserted rc and the deselect delta and nothing else, so a
+        # test that started SKIPPING was invisible -- it is not a failure, and it
+        # subtracts equally from both `_passed_count` readings, so the delta
+        # still held. That is round 8's OWN defect ("the one test tying rows to
+        # workflows skipped by construction inside the sandbox") left with no
+        # instrument watching it.
+        #
+        # TWO skips are expected here and they are named, not counted: the test
+        # that shells out to `node` and the one that calls `gh api`, both keyed
+        # on `_repo_root()` so they stay offline in the sandbox. A THIRD skip
+        # means a guard has silently stopped guarding.
+        skipped_ids = _skipped_nodeids(sandbox, cmd)
+        if skipped_ids is None:
+            print("REFUSING -- could not read the sandbox skip set, so a guard "
+                  "that reverted to SKIP would be invisible")
+            return 2
+        if sorted(skipped_ids) != sorted(EXPECTED_SANDBOX_SKIPS):
+            print(f"REFUSING -- sandbox skips are {sorted(skipped_ids)}, expected "
+                  f"{sorted(EXPECTED_SANDBOX_SKIPS)}. A test that skips here cannot "
+                  "kill anything, so every arm it guards would score KILLED on the "
+                  "other tests regardless of the mutation.")
+            return 2
+        print(f"SKIPS     {len(skipped_ids)} pinned: {', '.join(sorted(skipped_ids))}")
         # ...and the DESELECT must have removed exactly one test. pytest accepts
         # a nodeid that matches nothing in silence, so a typo here would put the
         # meta-test back in the decision path and every arm would score KILLED

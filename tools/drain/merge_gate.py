@@ -870,7 +870,24 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     against the ERE would refuse every receipt. Caught here by measurement
     before it reached the census.
 
-    Fails CLOSED on any error: "cannot be shown to agree" is not "agree".
+    WHAT THIS DOES NOT COVER, stated because an independent reviewer measured it
+    rather than left as an implied guarantee: the ERE's alternatives are the
+    top-level directory set INTERSECTED with the directories the console's
+    vitest suites reference, and those suites are read from the working tree.
+    Deleting or refactoring the last suite that reads `docs/` narrows the
+    emitted ERE with `ls-tree` UNCHANGED, and the deriver's own documentation
+    records exactly that shadow for `docs`, `content`, `notebooks` and
+    `packages`. So this closes ONE of the deriver's two narrowing mechanisms.
+    Closing the other means comparing the emitted ERE across the two shas, which
+    needs the merged tree checked out; until then the limit is disclosed here
+    rather than overstated.
+
+    Fails CLOSED on any error: "cannot be shown to agree" is not "agree". Note
+    the consequence on a host whose object store lacks the merged sha -- the
+    `infra` half becomes uncorroborable and `vitest (node 20)` cannot take the
+    excuse there. That is the safe direction, but it is "unobtainable for the
+    class it serves" if it ever becomes common; fetch the sha rather than
+    loosening this.
     """
     def dirs(ref: str) -> set[str] | None:
         try:

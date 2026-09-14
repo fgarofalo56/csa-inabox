@@ -2426,6 +2426,58 @@ def _declared_gate_ran(
     return True, "", detectors
 
 
+def steps_named(wanted: str, steps: list[dict]) -> tuple[list[dict] | None, str]:
+    """Every step a DECLARED name refers to, or None when it cannot be decided.
+
+    ROUND 9. There are five places in this module that resolve a declared step
+    name against a job's actual steps by SUBSTRING. Three were hardened in
+    earlier rounds of this issue, each after a reviewer found the ambiguity, and
+    each independently:
+
+        context_did_its_work        REFUSES a mixed-outcome match
+        _declared_gate_ran          REFUSES unless every match concluded success
+        _primary_steps_all_skipped  REFUSES unless every match skipped
+
+    Round 8 added a fourth (`_outputs_whose_work_did_not_run`) and left a fifth
+    (`ran_instead`) unhardened, and an independent reviewer showed both were
+    exploitable by adding ONE step whose name extends a declared one:
+
+      - the fourth DROPPED the output from the scope question entirely, so a
+        portal-only merge with every portal step skipped was certified green by
+        the portal's only blocking check -- round 6's blocker restored;
+      - the fifth reported the MATCHED step as the declared alternative, so the
+        receipt said `executed its declared alternative(s) ['Jest (portal) -
+        snapshot freshness report']` while both DECLARED alternatives were
+        skipped. That is the R7 lie fixed at `_declared_gate_ran` and not
+        carried across.
+
+    So the resolution lives in ONE place. A sixth site must call this rather
+    than write a sixth ruling.
+
+    An EXACT name match wins outright: that is what the declaration means when
+    the workflow says it. Otherwise a substring match is accepted only when it
+    is unique -- several near-misses and no exact hit cannot say which step the
+    declaration meant, and this repo's naming convention makes that live rather
+    than hypothetical (`Use Node.js 20` / `Use Node.js 20 (portal)` and
+    `Install dependencies` / `Install dependencies (portal)` are both in the one
+    job whose row declares `Jest (portal)` and `Type-check (portal)`).
+
+    Returns `([], "")` for "no such step" -- an absent step is a different
+    finding from an undecidable one, and each caller words it differently.
+    """
+    exact = [s for s in steps if str(s.get("name") or "") == wanted]
+    if exact:
+        return exact, ""
+    loose = [s for s in steps if wanted in str(s.get("name") or "")]
+    if len(loose) > 1:
+        shown = ", ".join(sorted(repr(str(s.get("name") or "")) for s in loose))
+        return None, (
+            f"{wanted!r} matches {len(loose)} steps and NONE is named exactly that "
+            f"({shown}) - which step the declaration means cannot be decided from it"
+        )
+    return loose, ""
+
+
 def _primary_steps_all_skipped(
     name: str, steps: list[dict], policy: dict,
 ) -> tuple[bool, str]:
@@ -2511,7 +2563,18 @@ def _outputs_whose_work_did_not_run(
             )
         conclusions: list[str] = []
         for wanted in gated:
-            matches = [s for s in steps if str(wanted) in str(s.get("name") or "")]
+            matches, ambiguous = steps_named(str(wanted), steps)
+            if matches is None:
+                # ROUND 9 BLOCKER. This used to resolve a mixed-outcome match in
+                # the EXCUSING direction: `all(c == "skipped")` came back False,
+                # the output was silently removed from `asked`, and its scope was
+                # then never compared against the merged files at all. One added
+                # step named `Jest (portal) - snapshot freshness report` flipped a
+                # portal-only merge -- every portal step skipped -- from refused to
+                # `ok=True route=alternative-work-at-merge`.
+                return None, (
+                    f"declared output {out!r} of {name!r} cannot be resolved: {ambiguous}"
+                )
             if not matches:
                 return None, (
                     f"declared output {out!r} of {name!r} claims to gate {wanted!r}, "
@@ -2519,6 +2582,19 @@ def _outputs_whose_work_did_not_run(
                     "output's work ran"
                 )
             conclusions += [str(s.get("conclusion") or "?").lower() for s in matches]
+        if not conclusions:
+            return None, (
+                f"declared output {out!r} of {name!r} resolved to no steps at all, so "
+                "whether its work ran cannot be decided"
+            )
+        # ALL SKIPPED -> ask its scope. ANY step of its work ran -> exclude it,
+        # because its scope SHOULD match and that is why the work ran. The
+        # ambiguity round 9 closed is one NAME matching several STEPS, resolved
+        # in `steps_named` above; an output legitimately gating two DIFFERENT
+        # declared steps that disagree is a job where part of that output's work
+        # ran, and excluding it is the same answer as for a clean run. Refusing
+        # here instead was an over-correction that broke the control proving
+        # every declared alternative is consulted, not just the first.
         if all(c == "skipped" for c in conclusions):
             asked.append(str(out))
     return asked, ""
@@ -2840,20 +2916,41 @@ def alternative_accounted_for(
         return False, scope_why
 
     gate_step = str(row.get("gate_step") or "")
-    # SAME DEFINITION OF "A STEP THAT RAN" AS THE EXCUSE BRANCH. Round 8 note:
-    # `did_run` filtered bookkeeping and this did not, so the two halves of what
-    # the docstring calls one predicate disagreed about what a work step is.
-    # Here the filter is the CONSERVATIVE direction -- it can only remove a
-    # candidate alternative, never add one -- which is the opposite of its
-    # effect in `did_run`, where a misread name excuses a job that worked.
-    ran_instead = [
-        str(s.get("name") or "")
-        for s in steps
-        if any(alt in str(s.get("name") or "") for alt in alternatives)
-        and str(s.get("conclusion") or "").lower() == "success"
-        and gate_step not in str(s.get("name") or "")
-        and not _is_bookkeeping_step(str(s.get("name") or ""))
-    ]
+    # THE DECLARED NAME, RESOLVED ONCE. Round 9 BLOCKER: this matched by bare
+    # substring and then PRINTED THE MATCHED STEP as the declared alternative, so
+    # the receipt read `executed its declared alternative(s) ['Jest (portal) -
+    # snapshot freshness report']` while both DECLARED alternatives concluded
+    # `skipped`. `Jest (portal) - snapshot freshness report` is declared nowhere.
+    # The sentence asserted that a declared alternative ran; the code had
+    # established only that SOME step containing a declared name ran. That is
+    # word-for-word the R7 lie `_declared_gate_ran` was fixed for in round 5, and
+    # it was not carried across. `ran_instead` now reports the DECLARED name.
+    ran_instead: list[str] = []
+    for alt in alternatives:
+        alt_name = str(alt)
+        if gate_step and gate_step in alt_name:
+            continue
+        matches, ambiguous = steps_named(alt_name, steps)
+        if matches is None:
+            return False, (
+                f"its declared alternative {alt_name!r} cannot be resolved: {ambiguous}"
+            )
+        usable = [
+            s for s in matches
+            if gate_step not in str(s.get("name") or "")
+            and not _is_bookkeeping_step(str(s.get("name") or ""))
+        ]
+        if not usable:
+            continue
+        concluded = {str(s.get("conclusion") or "?").lower() for s in usable}
+        if concluded == {"success"}:
+            ran_instead.append(alt_name)
+        elif "success" in concluded:
+            return False, (
+                f"its declared alternative {alt_name!r} resolved to {len(usable)} steps "
+                f"concluding {sorted(concluded)} - a MIXED outcome cannot show the "
+                "alternative ran"
+            )
     if not ran_instead:
         return False, (
             f"none of its declared alternative(s) {list(alternatives)} concluded "

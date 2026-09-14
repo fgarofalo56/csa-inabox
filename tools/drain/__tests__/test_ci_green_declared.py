@@ -794,28 +794,58 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
         # visible and CANNOT make an UNDER-declared one visible: an output
         # nobody declared is not in the list being walked. Round 6's blocker was
         # an undeclared `portal` on this exact row; round 7 fixed the DATA and
-        # built no instrument to keep it true, so `policy.json` asserts "an
+        # built no instrument to keep it true, so `policy.json` asserted "an
         # under-declared row is now a refusal, not a silent pass" while deleting
         # four lines from a row still passed every test and flipped a
         # portal-only merge from refused to excused.
         #
         # So: walk WORKFLOW -> DECLARED. Every output the job actually GATES ON
-        # must be declared. Scoped to the detector's own step id, because a job
-        # may read outputs of other steps that gate nothing this row is about.
-        detector = job.index(f"name: {row['gate_step']}")
-        id_match = re.search(r"\n\s+id:\s*([A-Za-z0-9_-]+)", job[detector:])
-        assert id_match is not None, (
-            f"{name}: its gate step {row['gate_step']!r} has no `id:`, so what it "
-            "emits cannot be traced to the `if:` conditions that read it"
+        # must be declared.
+        #
+        # ROUND 9 BLOCKER: round 8 resolved the detector by
+        # `job.index(f"name: {gate_step}")` -- the FIRST hit, and a PREFIX match.
+        # A step named `Detect console changes (portal half)` sitting before the
+        # real detector made this sweep the WRONG step's outputs, so an
+        # undeclared output went unseen with 396 tests green and a false
+        # `ok=True` receipt behind it. That step name is not invented: it is the
+        # verbatim counterexample in `_declared_gate_ran`'s own docstring, and
+        # THAT function matches `gate_step` as a substring across every step. The
+        # instrument and the decision disagreed about which steps are detectors.
+        #
+        # Resolved STRUCTURALLY now, not positionally: every step whose `name`
+        # contains `gate_step` (the decision side's own semantics), each one's
+        # `id` read off the parsed step mapping rather than from the text after a
+        # `name:` line, and the outputs unioned across all of them. Positional
+        # parsing is what this package's own memory warns about, and it then took
+        # three rounds to find "not the idioms I thought of".
+        detectors = [
+            s for s in _job_steps(text, row["job"])
+            if row["gate_step"] in str(s.get("name") or "")
+        ]
+        assert detectors, (
+            f"{name}: no step in job {row['job']!r} has a name containing its "
+            f"declared gate step {row['gate_step']!r}"
         )
-        detector_id = id_match.group(1)
-        gated_on = set(re.findall(
-            rf"steps\.{re.escape(detector_id)}\.outputs\.([A-Za-z0-9_-]+)", job))
+        detector_ids = []
+        for s in detectors:
+            step_id = s.get("id")
+            why_id = (
+                f"{name}: the step {str(s.get('name'))!r} matches its declared gate "
+                f"step but its parsed `id` is {step_id!r}, so the `if:` conditions "
+                "that read its outputs cannot be traced to it"
+            )
+            assert isinstance(step_id, str), why_id
+            assert step_id.strip(), why_id
+            detector_ids.append(step_id)
+        gated_on = set()
+        for step_id in detector_ids:
+            gated_on |= set(re.findall(
+                rf"steps\.{re.escape(step_id)}\.outputs\.([A-Za-z0-9_-]+)", job))
         declared_names = {spec["output"] for spec in row["outputs"]}
         assert gated_on, (
-            f"{name}: no step in its job block is gated on "
-            f"`steps.{detector_id}.outputs.*` - the detector's shape changed, and "
-            "a row describing outputs nothing reads is not a scope declaration"
+            f"{name}: no step in its job block is gated on the outputs of "
+            f"{detector_ids} - the detector's shape changed, and a row describing "
+            "outputs nothing reads is not a scope declaration"
         )
         assert gated_on <= declared_names, (
             f"{name}: its job gates work on {sorted(gated_on - declared_names)}, "
@@ -1044,6 +1074,32 @@ def test_the_required_context_snapshot_is_current():
         "in the snapshot but not live": sorted(snapshot - live),
         "refresh": "python tools/drain/merge_gate.py --refresh-required-contexts",
     }
+
+
+def _job_steps(workflow_text: str, job_key: str) -> list[dict]:
+    """The parsed step mappings of one job, by STRUCTURE rather than by position.
+
+    ROUND 9. The drift guard used to find the detector's `id:` with a regex over
+    the text FOLLOWING its `name:` line. That is order-dependent and
+    idiom-dependent, and an independent reviewer broke it five ways with valid
+    YAML: `id:` written before `name:`, a quoted `id: 'changed'`, and a sibling
+    step whose name merely EXTENDS the declared one placed earlier in the job.
+    The last of those reopened round 6's under-declaration hole with the whole
+    suite green.
+
+    Parsing the document removes the entire class: a step's `id` is the `id` key
+    of its own mapping, whatever order the keys are in and however it is quoted.
+
+    Note `yaml.safe_load` turns a workflow's bare `on:` key into `True` (YAML 1.1
+    booleans). Harmless here -- only `jobs` is read -- but it is why this does
+    not assert on the top-level key set.
+    """
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    jobs = (doc or {}).get("jobs") or {}
+    steps = (jobs.get(job_key) or {}).get("steps") or []
+    return [s for s in steps if isinstance(s, dict)]
 
 
 def _repo_root():
