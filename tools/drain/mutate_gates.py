@@ -758,6 +758,63 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # -- the SINGLE RESOLVER, which round 9 added and left unobserved ---------
+    # Round 10. An independent reviewer built a sandbox of the same shape as this
+    # one and ran three arms over `steps_named`. ALL THREE SURVIVED the 397-test
+    # suite: no test named the function, no arm touched it, and the round-9 diff
+    # added no regression case for the exploit it was written for. That is the
+    # THIRD round running where a fix shipped without an instrument -- round 8
+    # fixed the data and built none, round 9 fixed the logic and built none. The
+    # bug changes shape each round; the meta-defect did not.
+    (
+        ("X1 exact-match-wins is DELETED, so a declared name resolves to every "
+         "step that merely CONTAINS it again - round 9's blocker verbatim"),
+        "gates.py",
+        ('    exact = [s for s in steps if str(s.get("name") or "") == wanted]\n'
+         "    if exact:\n"
+         '        return exact, ""\n'),
+        "",
+    ),
+    (
+        ("X2 the ambiguity refusal is DELETED, so several loose matches and no "
+         "exact hit silently returns ALL of them - the fail-closed control this "
+         "resolver exists to add"),
+        "gates.py",
+        "    if len(loose) > 1:",
+        "    if False:",
+    ),
+    (
+        ("X3 the resolver returns only the FIRST exact match - the `[:1]` "
+         "population narrowing this file records twice as the arm shape that "
+         "lives, because a one-element slice still answers right whenever the "
+         "fixture happens to order the interesting element first"),
+        "gates.py",
+        "    if exact:\n        return exact, \"\"",
+        "    if exact:\n        return exact[:1], \"\"",
+    ),
+    (
+        ("X4 one declared NAME resolving to steps that disagree stops refusing, "
+         "so a DUPLICATE step name drops the output from the scope question - "
+         "round 8's blocker restored where round 9 closed only the extending name"),
+        "gates.py",
+        "            if len(mine) > 1:",
+        "            if False:",
+    ),
+    (
+        ("X5 an output may declare its own DETECTOR as a gated step, which "
+         "always runs - so that output is never 'unrun' and its scope is never "
+         "compared, by a one-line policy edit"),
+        "gates.py",
+        "            if gate_step and gate_step in str(wanted):",
+        "            if False:",
+    ),
+    (
+        ("X6 an output may declare runner BOOKKEEPING as a gated step, same "
+         "shape, different vocabulary"),
+        "gates.py",
+        "            if _is_bookkeeping_step(str(wanted)):",
+        "            if False:",
+    ),
     # -- the DELEGATED infra scope's two guards, added round 8 with no arms ---
     # Round 9. An independent reviewer grepped this file for `resolve_infra_ere`
     # and `top_level_dirs_agree` and found NOTHING: two guards were added to the
@@ -809,6 +866,36 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         "    if at_merge is None or today is None:\n        return False",
         "    if at_merge is None or today is None:\n        return True",
+    ),
+    # ROUND 10: three mutations of these same two guards SURVIVED E1-E6, found
+    # by an independent reviewer. All three are an EXIT CODE stopping being read
+    # -- the shape where a subprocess that failed is treated as one that answered
+    # -- and the second is round 9's own fixture-conflation defect (one fixture
+    # satisfying both halves of a check) one function further down, inside the
+    # guard round 9 added arms for.
+    (
+        ("E7 `resolve_infra_ere` stops reading the DERIVER's exit code, so a "
+         "crashed deriver's partial stdout becomes the delegated scope"),
+        "merge_gate.py",
+        "    if out.returncode != 0:\n        return None\n    ere = out.stdout.strip()",
+        "    ere = out.stdout.strip()",
+    ),
+    (
+        ("E8 `dirs()` stops reading `git ls-tree`'s exit code, so a failed "
+         "listing reads as an EMPTY tree - and an empty `at_merge` subtracts to "
+         "nothing, which AGREES"),
+        "merge_gate.py",
+        ("        if out.returncode != 0:\n            return None\n"
+         "        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}"),
+        "        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}",
+    ),
+    (
+        ("E9 `dirs()` returns an EMPTY SET instead of None for an empty "
+         "listing, so the caller's `is None` check passes and the comparison "
+         "runs against nothing"),
+        "merge_gate.py",
+        "        return found or None",
+        "        return found",
     ),
     # Round 8, found by BOTH independent reviewers by different methods. Every
     # policy arm above targets `review.escalate_to_two_when_path_contains`; not
@@ -1766,19 +1853,34 @@ EXPECTED_SANDBOX_SKIPS = (
 )
 
 
-def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> set[str] | None:
-    """Which tests SKIPPED in the sandbox, as `file.py::name`. None if unreadable.
+def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | None:
+    """Which tests SKIPPED in the sandbox and HOW MANY. None if unreadable.
 
-    Parsed from a verbose re-run rather than counted, because "2 skipped" is
-    equally satisfied by the WRONG two -- and the whole point of pinning this is
-    that a guard silently reverting to SKIP must be visible. `-rs` names only the
-    file and line, so it cannot answer this; `-v` names the test.
+    Returns BOTH the nodeids and pytest's own count, because neither alone is
+    sufficient and round 10 proved it:
 
-    `-q` IS STRIPPED, not merely overridden. pytest sums verbosity flags, so
+      - a COUNT alone cannot say WHICH two skipped, so a guard reverting to SKIP
+        while another stopped skipping nets to zero. That is why round 9 replaced
+        the count with names.
+      - NAMES alone cannot see a skip pytest never attributes to a nodeid. An
+        independent reviewer module-skipped `test_merge_gate.py`: 56 tests
+        vanished, the control stayed rc=0, the deselect delta still held, and
+        this returned EXACTLY the expected two -- so the runner printed
+        `SKIPS 2 pinned`, a positive claim that was false. A module-level skip is
+        reported in the summary and against no test id at all.
+
+    So both are read and the caller checks both. pytest's `-v` line format is
+    `<file>::<test> SKIPPED (reason)`; nodeids may contain SPACES when a test is
+    parametrised over this receipt's own vocabulary (`Jest (portal)`), which the
+    previous `(\\S+)` pattern dropped SILENTLY -- under-reporting, so the wrong
+    set could still equal the expected one. Matched non-greedily up to the
+    status word instead.
+
+    `-q` IS STRIPPED, not merely overridden: pytest SUMS verbosity flags, so
     `[*cmd, "-v"]` against a cmd already carrying `-q` nets ZERO and prints no
-    per-test lines at all. That returned an empty skip set on the first run and
-    the control refused -- correctly, and it is why this reads the flag list
-    rather than appending to it.
+    per-test lines at all. That returned an empty set on its first run and the
+    control refused -- correctly, and it is why this reads the flag list rather
+    than appending to it.
     """
     verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
     out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox)
@@ -1786,10 +1888,16 @@ def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> set[str] | None:
         return None
     ids = set()
     for line in out.stdout.splitlines():
-        m = re.match(r"(\S+\.py)::(\S+?)\s+SKIPPED", line.strip())
+        m = re.match(r"(\S+\.py)::(.+?)\s+SKIPPED", line.rstrip())
         if m:
-            ids.add(f"{Path(m.group(1)).name}::{m.group(2)}")
-    return ids
+            ids.add(f"{Path(m.group(1)).name}::{m.group(2).strip()}")
+    counted = re.search(r"(\d+) skipped", out.stdout)
+    if counted is None:
+        # No "N skipped" in the summary means pytest reported none. Zero is a
+        # real answer here; an unreadable summary is not, and `-v` always prints
+        # one, so the distinction is between "0" and "we could not run".
+        return ids, 0
+    return ids, int(counted.group(1))
 
 
 def main() -> int:
@@ -1912,18 +2020,29 @@ def main() -> int:
         # that shells out to `node` and the one that calls `gh api`, both keyed
         # on `_repo_root()` so they stay offline in the sandbox. A THIRD skip
         # means a guard has silently stopped guarding.
-        skipped_ids = _skipped_nodeids(sandbox, cmd)
-        if skipped_ids is None:
+        skips = _skipped_nodeids(sandbox, cmd)
+        if skips is None:
             print("REFUSING -- could not read the sandbox skip set, so a guard "
                   "that reverted to SKIP would be invisible")
             return 2
+        skipped_ids, skipped_count = skips
         if sorted(skipped_ids) != sorted(EXPECTED_SANDBOX_SKIPS):
             print(f"REFUSING -- sandbox skips are {sorted(skipped_ids)}, expected "
                   f"{sorted(EXPECTED_SANDBOX_SKIPS)}. A test that skips here cannot "
                   "kill anything, so every arm it guards would score KILLED on the "
                   "other tests regardless of the mutation.")
             return 2
-        print(f"SKIPS     {len(skipped_ids)} pinned: {', '.join(sorted(skipped_ids))}")
+        # AND THE COUNT MUST AGREE WITH THE NAMES. Round 10: a module-level skip
+        # is attributed to NO test id, so the names alone read as expected while
+        # 56 tests silently stopped running. pytest's own summary is the only
+        # place that discrepancy shows.
+        if skipped_count != len(EXPECTED_SANDBOX_SKIPS):
+            print(f"REFUSING -- pytest reports {skipped_count} skipped but only "
+                  f"{len(skipped_ids)} are attributable to a test id. The "
+                  "difference is a module- or collection-level skip, which "
+                  "removes tests from every arm without naming one.")
+            return 2
+        print(f"SKIPS     {skipped_count} pinned: {', '.join(sorted(skipped_ids))}")
         # ...and the DESELECT must have removed exactly one test. pytest accepts
         # a nodeid that matches nothing in silence, so a typo here would put the
         # meta-test back in the decision path and every arm would score KILLED

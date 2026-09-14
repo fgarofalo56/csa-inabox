@@ -1089,3 +1089,49 @@ def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch)
 
     monkeypatch.setattr(merge_gate.subprocess, "run", fake)
     assert merge_gate.resolve_infra_ere("deadbeef") is None
+
+
+# --------------------------------------------------------------------------
+# ROUND 10: three mutations of these two guards SURVIVED the E1-E6 arms, found
+# by an independent reviewer. All three are an EXIT CODE stopping being read --
+# a subprocess that FAILED treated as one that ANSWERED -- and each needs a
+# fixture where the failing call still produces OUTPUT, which the round-9
+# fixtures did not have. One fixture satisfying both halves of a check is the
+# same conflation round 9 fixed one function further up.
+# --------------------------------------------------------------------------
+
+def test_a_crashed_deriver_with_partial_output_is_not_the_delegated_scope(monkeypatch):
+    """Kills E7. The rc check and the shape check were both satisfied by the
+    same fixture (rc=0 AND clean stdout), so dropping the rc check changed
+    nothing observable. A deriver that crashed halfway still has stdout."""
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n", rc=1))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_a_failed_ls_tree_with_output_does_not_read_as_an_empty_tree(monkeypatch):
+    """Kills E8. An empty `at_merge` subtracts to nothing, and nothing AGREES --
+    so a failed listing treated as an empty one silently permits the narrowing
+    this guard exists to refuse."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(
+                returncode=128, stdout="tools\nscripts\n", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+
+def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch):
+    """Kills E9. `found or None` is what makes an empty listing UNREADABLE
+    rather than an answer; returning the bare set lets the caller's `is None`
+    check pass and then compare against nothing."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None

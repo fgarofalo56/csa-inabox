@@ -224,8 +224,16 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
     for name, steps in alts.items():
         row = scope_rows.get(name)
         assert isinstance(row, dict), f"{name}: an alternative needs a scope row"
-        job = _job_block((root / row["workflow"]).read_text(encoding="utf-8"), row["job"])
+        text = (root / row["workflow"]).read_text(encoding="utf-8")
+        job = _job_block(text, row["job"])
         assert job is not None, f"{name}: no job block in {row['workflow']}"
+        # THE PARSED STEPS, which is what every resolution below uses. Round 10:
+        # the existence check was a bare `f"name: {step}" in job` over the whole
+        # job TEXT -- satisfied by a `run:` body, a YAML comment, or a DECOY step
+        # whose name merely extends the declared one. Both halves of this guard
+        # now read the same parse the decision function reads.
+        parsed = _job_steps(text, row["job"])
+        assert parsed, f"{name}: job {row['job']!r} parsed to no steps"
         assert steps, f"{name}: empty alternative list"
 
         # The output that gates the PRIMARY, read off the row rather than
@@ -238,8 +246,15 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
             f"{name}: no declared output gates its primary step(s) {primary[name]}"
         )
         for step in steps:
-            assert f"name: {step}" in job, (
-                f"{name}: declared alternative {step!r} does not exist in its job"
+            resolved, why_res = gates.steps_named(step, parsed)
+            assert resolved is not None, (
+                f"{name}: declared alternative {step!r} is ambiguous in its job: "
+                f"{why_res}"
+            )
+            assert len(resolved) == 1, (
+                f"{name}: declared alternative {step!r} resolves to "
+                f"{len(resolved)} steps in its job, so which one the declaration "
+                "means cannot be decided"
             )
             # AN ALTERNATIVE MAY NOT BE THE GATE STEP. Alternatives are matched
             # as substrings against the job's steps and the detector ALWAYS
@@ -256,7 +271,7 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
                 f"{name}: alternative {step!r} IS the gate step, which always runs - "
                 "declaring it would make the substantive-step rule vacuous"
             )
-            gate = _gate_of(job, step)
+            gate = _gate_of(parsed, step)
             assert gate is not None, (
                 f"{name}: alternative {step!r} could not be located as a step in its "
                 "own job block, so its gate cannot be read - fail closed"
@@ -296,26 +311,41 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
             )
 
 
-def _gate_of(job: str, step_name: str) -> str | None:
-    """The `if:` expression attached to a named step.
+def _gate_of(steps: list[dict], step_name: str) -> str | None:
+    """The `if:` expression attached to a named step, resolved STRUCTURALLY.
 
-    `""` when the step exists and carries no gate, and `None` when the step
-    could not be located at all -- which the caller treats as a failure. They
-    used to be the same value, so a step this regex could not find was
-    indistinguishable from an unconditional one and both satisfied a `not in`
-    assertion. The existence check in the caller is indentation-agnostic while
-    this is not, so the two CAN disagree; the disagreement must be loud.
+    `""` when the step exists and carries no gate, `None` when the declaration
+    cannot be resolved to exactly one step -- which the caller treats as a
+    failure.
+
+    ROUND 10 BLOCKER. This was the SIXTH place resolving a declared step name,
+    and the last one still doing first-hit PREFIX matching over the job's TEXT.
+    Round 9 moved the guard's DETECTOR half onto the parse and left this, the
+    ALTERNATIVES half of the same test, on a regex -- so the two halves of one
+    guard disagreed with each other and with `gates.steps_named`.
+
+    An independent reviewer produced exactly the decoration this guard exists to
+    refuse: a decoy step `Jest (portal) - snapshot freshness report` inserted
+    BEFORE the real `Jest (portal)`, and the real one demoted to the primary's
+    own output. The regex read the DECOY's `if:` and passed; the decision
+    function read the real step. Full suite 394 passed before and after.
+
+        DECISION  gates.steps_named('Jest (portal)') -> the real step, gated on
+                  the PRIMARY's output (so the alternative is decoration)
+        GUARD     _gate_of(text, 'Jest (portal)')    -> the DECOY's `if:`
+
+    So it resolves through `gates.steps_named` now -- exact-match-wins, refusing
+    an ambiguous pool -- against the PARSED step mappings, and reads `if` off the
+    mapping rather than regexing the text after a `name:` line. That also closes
+    the reviewer's related question for free: a bare `name:` substring assertion
+    over the whole job text is satisfied by a `run:` body or a YAML comment, the
+    shape this repo already has a memory for (#4467).
     """
-    import re as _re
-
-    m = _re.search(
-        r"^      - name: " + _re.escape(step_name) + r".*?$(.*?)(?=^      - name: |\Z)",
-        job, _re.MULTILINE | _re.DOTALL,
-    )
-    if m is None:
+    matches, _why = gates.steps_named(step_name, steps)
+    if not matches or len(matches) != 1:
         return None
-    gate = _re.search(r"^        if: (.+)$", m.group(1), _re.MULTILINE)
-    return gate.group(1) if gate else ""
+    gate = matches[0].get("if")
+    return "" if gate is None else str(gate)
 
 
 def test_negative_control_a_declared_alternative_that_ran_is_work_not_an_excuse():
@@ -655,7 +685,11 @@ def test_negative_control_an_alternative_that_failed_is_not_work_done():
     ok, why = gates.alternative_accounted_for(
         "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], POLICY)
     assert not ok
-    assert "concluded success" in why
+    # THE REASON SPECIFIC TO THIS SCENARIO. Round 10 (R7): this used to assert
+    # the generic "concluded success", which the gate-step control below
+    # asserted too -- so both passed on a sentence that was false for one of
+    # them. A refusal reason that fits every refusal distinguishes none of them.
+    assert "concluded ['failure'], not success" in why, why
 
 
 def test_negative_control_the_gate_step_cannot_be_declared_as_its_own_alternative():
@@ -687,7 +721,11 @@ def test_negative_control_the_gate_step_cannot_be_declared_as_its_own_alternativ
     ok, why = gates.alternative_accounted_for(
         "next build (node 20)", job, ["tools/drain/gates.py"], planted)
     assert not ok
-    assert "concluded success" in why
+    # AND THE REASON IS THE DETECTOR, not "did not conclude success". The
+    # detector DID conclude success -- `_declared_gate_ran` established that
+    # forty lines earlier -- so the old message asserted the opposite of what
+    # the code had just proved (R7).
+    assert "IS the change detector" in why, why
 
 
 def test_the_infra_ere_fixture_still_matches_the_deriver():
@@ -1396,3 +1434,119 @@ def test_negative_control_a_scope_skip_refuses_an_all_declaration():
     ok, why = gates.scope_untouched_at_merge("Repo Hygiene", job, MERGED_FILES, planted)
     assert not ok
     assert "never for \"ALL\"" in why
+
+
+# ---------------------------------------------------------------------------
+# ROUND 10: the single resolver, which round 9 added and left UNOBSERVED.
+#
+# An independent reviewer ran three arms over `steps_named` in a sandbox of the
+# same shape as the matrix and ALL THREE SURVIVED the 397-test suite. No test
+# named the function; no arm touched it; the round-9 diff added no regression
+# case for the exploit it was written for. That is the third round running where
+# a fix shipped without an instrument -- round 8 fixed the DATA and built none,
+# round 9 fixed the LOGIC and built none.
+# ---------------------------------------------------------------------------
+
+def _steps(*pairs):
+    return [{"name": n, "conclusion": c} for n, c in pairs]
+
+
+def test_the_resolver_prefers_the_exact_step_over_one_that_merely_extends_it():
+    """Kills X1. Round 9's exploit: `Jest (portal)` must not also resolve to
+    `Jest (portal) - snapshot freshness report`, because the two disagree and
+    the caller then drops the output from the scope question entirely."""
+    steps = _steps(("Jest (portal)", "skipped"),
+                   ("Jest (portal) - snapshot freshness report", "success"))
+    matches, why = gates.steps_named("Jest (portal)", steps)
+    assert matches is not None, why
+    assert [s["name"] for s in matches] == ["Jest (portal)"]
+    assert [s["conclusion"] for s in matches] == ["skipped"]
+
+
+def test_the_resolver_refuses_several_loose_matches_with_no_exact_hit():
+    """Kills X2. The fail-closed control the resolver exists to add: several
+    near-misses and nothing named exactly that cannot say which was meant."""
+    steps = _steps(("Jest (portal) - a", "success"), ("Jest (portal) - b", "skipped"))
+    matches, why = gates.steps_named("Jest (portal)", steps)
+    assert matches is None
+    assert "NONE is named exactly that" in why, why
+
+    # CONTROL: a single loose match is still accepted, or this test would pass
+    # under a mutant that refuses every substring match.
+    one, _ = gates.steps_named("Jest (portal)", _steps(("Jest (portal) - a", "success")))
+    assert one is not None
+    assert len(one) == 1
+
+
+def test_the_resolver_returns_every_exact_match_not_just_the_first():
+    """Kills X3. GitHub Actions permits two steps in one job to share a `name`
+    (steps are a list, not a map). Returning only the first hides the second,
+    and the second is what the duplicate-name attack adds."""
+    steps = _steps(("Docs link check", "skipped"), ("Docs link check", "success"))
+    matches, _ = gates.steps_named("Docs link check", steps)
+    assert matches is not None
+    assert len(matches) == 2, [s["conclusion"] for s in matches]
+
+
+def test_blocker_a_duplicate_step_name_does_not_drop_the_output_from_the_question():
+    """Kills X4. ROUND 10 BLOCKER, and round 8's blocker restored by a duplicate
+    name where round 9 closed only the extending one.
+
+    One added step named EXACTLY `Docs link check`, concluded success, pools with
+    the real skipped one. Before the fix `all(c == "skipped")` came back False,
+    `docs` was silently removed from `asked`, and its scope was never compared --
+    so a merge carrying `docs/adr/0001.md` was accepted with "1 declared scope(s)
+    checked" out of 3.
+    """
+    planted = copy.deepcopy(POLICY)
+    row = planted["receipts"]["ci_green_rule"]["scope_paths"]["next build (node 20)"]
+    row["outputs"].append(
+        {"output": "docs", "paths": ["docs/**"], "gates": ["Docs link check"]})
+    base = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+        {"name": "Docs link check", "conclusion": "skipped"},
+        {"name": "Type-check (portal)", "conclusion": "success"},
+        {"name": "Jest (portal)", "conclusion": "success"},
+    ]
+    files = ["portal/react-webapp/App.tsx", "docs/adr/0001.md"]
+
+    # CONTROL: refused, because `docs/adr/0001.md` is inside a declared scope
+    # whose gated step skipped.
+    job = {"name": "next build (node 20)", "conclusion": "success", "steps": base}
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, files, planted)
+    assert not ok, why
+    assert "MATCHES" in why, why
+
+    # EXPLOIT: one added step with a DUPLICATE name must not launder it.
+    dup = {"name": "next build (node 20)", "conclusion": "success",
+           "steps": [*base, {"name": "Docs link check", "conclusion": "success"}]}
+    ok2, why2 = gates.alternative_accounted_for(
+        "next build (node 20)", dup, files, planted)
+    assert not ok2, "a duplicate step name laundered a matching declared scope"
+    assert "one declared name cannot say whether its own work ran" in why2, why2
+
+
+def test_an_output_may_not_declare_its_own_detector_or_bookkeeping_as_gated_work():
+    """Kills X5 and X6. `ran_instead` refuses both; this caller -- whose answer
+    decides WHICH SCOPES GET COMPARED -- refused neither, so a single policy line
+    exempted an output's scope on the alternative route while the excuse route
+    refused the byte-identical job."""
+    steps = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+        {"name": "Set up job", "conclusion": "success"},
+        {"name": "Type-check (portal)", "conclusion": "success"},
+        {"name": "Jest (portal)", "conclusion": "success"},
+    ]
+    for gated, needle in [("Detect console changes", "its own change DETECTOR"),
+                          ("Set up job", "runner BOOKKEEPING")]:
+        planted = copy.deepcopy(POLICY)
+        row = planted["receipts"]["ci_green_rule"]["scope_paths"]["next build (node 20)"]
+        row["outputs"].append(
+            {"output": "docs", "paths": ["docs/**"], "gates": [gated]})
+        asked, why = gates._outputs_whose_work_did_not_run(
+            "next build (node 20)", row, steps)
+        assert asked is None, f"{gated!r} was accepted as gated work"
+        assert needle in why, why

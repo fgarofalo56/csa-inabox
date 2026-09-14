@@ -2550,6 +2550,7 @@ def _outputs_whose_work_did_not_run(
             f"the declared scope for {name!r} carries no non-empty `outputs` list, "
             "so which outputs gated unrun work cannot be decided"
         )
+    gate_step = str(row.get("gate_step") or "")
     asked: list[str] = []
     for spec in outputs:
         if not isinstance(spec, dict):
@@ -2563,6 +2564,29 @@ def _outputs_whose_work_did_not_run(
             )
         conclusions: list[str] = []
         for wanted in gated:
+            # A DECLARED GATE MAY NOT BE THE DETECTOR OR RUNNER BOOKKEEPING.
+            # Round 10: `ran_instead` refuses both and this, the caller whose
+            # answer decides WHICH SCOPES GET COMPARED, refused neither -- so one
+            # policy line naming `Detect console changes` or `Set up job` as an
+            # output's `gates` exempted that output's scope on the alternative
+            # route while the excuse route refused the byte-identical job. The
+            # detector always runs, so an output gated on it is never "unrun";
+            # bookkeeping is not this job's work at all. `_merged_files_outside_
+            # scope` already validates shape on EVERY entry for the same reason:
+            # a row is the authority or it is not.
+            if gate_step and gate_step in str(wanted):
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate "
+                    f"{wanted!r}, which is its own change DETECTOR - the detector "
+                    "always runs, so that output could never be shown to have had "
+                    "nothing to do"
+                )
+            if _is_bookkeeping_step(str(wanted)):
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate "
+                    f"{wanted!r}, which is runner BOOKKEEPING and not this job's "
+                    "work - it cannot evidence whether that output's work ran"
+                )
             matches, ambiguous = steps_named(str(wanted), steps)
             if matches is None:
                 # ROUND 9 BLOCKER. This used to resolve a mixed-outcome match in
@@ -2581,12 +2605,26 @@ def _outputs_whose_work_did_not_run(
                     "which is absent from this job - the row cannot say whether that "
                     "output's work ran"
                 )
-            conclusions += [str(s.get("conclusion") or "?").lower() for s in matches]
-        if not conclusions:
-            return None, (
-                f"declared output {out!r} of {name!r} resolved to no steps at all, so "
-                "whether its work ran cannot be decided"
-            )
+            # ONE NAME, ONE ANSWER. Round 10 BLOCKER: `steps_named` returns EVERY
+            # exact match and GitHub Actions permits two steps in a job to share a
+            # `name` (steps are a list, not a map). A duplicate `Docs link check`
+            # -- one skipped, one success -- pooled below, `all(skipped)` came back
+            # False, and the output was dropped from the question with its scope
+            # never compared. That is round 8's blocker restored by a DUPLICATE
+            # name where round 9 closed only the EXTENDING name.
+            #
+            # Distinct from, and deliberately not disturbing, the rule below: two
+            # DIFFERENT declared steps that disagree means part of this output's
+            # work ran, and excluding it is correct. One NAME that disagrees with
+            # itself is undecidable.
+            mine = {str(s.get("conclusion") or "?").lower() for s in matches}
+            if len(mine) > 1:
+                return None, (
+                    f"declared output {out!r} of {name!r} gates {wanted!r}, which "
+                    f"resolved to {len(matches)} steps concluding {sorted(mine)} - "
+                    "one declared name cannot say whether its own work ran"
+                )
+            conclusions += sorted(mine)
         # ALL SKIPPED -> ask its scope. ANY step of its work ran -> exclude it,
         # because its scope SHOULD match and that is why the work ran. The
         # ambiguity round 9 closed is one NAME matching several STEPS, resolved
@@ -2595,6 +2633,11 @@ def _outputs_whose_work_did_not_run(
         # ran, and excluding it is the same answer as for a clean run. Refusing
         # here instead was an over-correction that broke the control proving
         # every declared alternative is consulted, not just the first.
+        #
+        # `conclusions` cannot be empty here: `gated` is non-empty (checked
+        # above) and every iteration either returns or appends exactly one. Round
+        # 10 removed an `if not conclusions` guard from this spot -- it could not
+        # fire, and a guard that cannot fire reads as a control and is not one.
         if all(c == "skipped" for c in conclusions):
             asked.append(str(out))
     return asked, ""
@@ -2926,21 +2969,41 @@ def alternative_accounted_for(
     # word-for-word the R7 lie `_declared_gate_ran` was fixed for in round 5, and
     # it was not carried across. `ran_instead` now reports the DECLARED name.
     ran_instead: list[str] = []
+    # WHY EACH ONE WAS NOT COUNTED, so the refusal below can say. Round 10 (R7):
+    # both `continue`s here were silent and the refusal then attributed every
+    # outcome to "did not conclude success" -- including an alternative the code
+    # had just established DID succeed (the gate-step case, whose success
+    # `_declared_gate_ran` proved forty lines earlier) and one that was simply
+    # ABSENT. `steps_named`'s own docstring says an absent step is a different
+    # finding from an undecidable one "and each caller words it differently";
+    # this caller did not word it at all.
+    not_counted: list[str] = []
     for alt in alternatives:
         alt_name = str(alt)
         if gate_step and gate_step in alt_name:
+            not_counted.append(
+                f"{alt_name!r} IS the change detector, which always runs, so it "
+                "cannot stand in for skipped work"
+            )
             continue
         matches, ambiguous = steps_named(alt_name, steps)
         if matches is None:
             return False, (
                 f"its declared alternative {alt_name!r} cannot be resolved: {ambiguous}"
             )
+        if not matches:
+            not_counted.append(f"{alt_name!r} is absent from this job")
+            continue
         usable = [
             s for s in matches
             if gate_step not in str(s.get("name") or "")
             and not _is_bookkeeping_step(str(s.get("name") or ""))
         ]
         if not usable:
+            not_counted.append(
+                f"{alt_name!r} resolved only to the detector or to runner "
+                "bookkeeping, which is not this job's work"
+            )
             continue
         concluded = {str(s.get("conclusion") or "?").lower() for s in usable}
         if concluded == {"success"}:
@@ -2951,10 +3014,14 @@ def alternative_accounted_for(
                 f"concluding {sorted(concluded)} - a MIXED outcome cannot show the "
                 "alternative ran"
             )
+        else:
+            not_counted.append(
+                f"{alt_name!r} concluded {sorted(concluded)}, not success"
+            )
     if not ran_instead:
         return False, (
-            f"none of its declared alternative(s) {list(alternatives)} concluded "
-            "success in this job"
+            f"none of its declared alternative(s) {list(alternatives)} is shown to "
+            f"have run: {'; '.join(not_counted)}"
         )
     return True, (
         f"skipped its primary step(s) {list(declared_primary)} and executed its "
