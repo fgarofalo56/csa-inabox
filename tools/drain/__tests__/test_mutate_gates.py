@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mutate_gates
@@ -114,3 +116,67 @@ def test_arm_names_are_unique():
     assert len(names) == len(set(names)), sorted(
         n for n in names if names.count(n) > 1
     )
+
+
+# ---------------------------------------------------------------------------
+# ROUND 11: the RUNNER's own helpers had no tests at all, and an independent
+# reviewer showed that is WHY its blind spot was invisible. `mutate_gates.py` is
+# in COPIED but not SOURCES -- no arm can mutate it, because
+# `test_mutate_gates.py` imports it -- so ordinary tests are the only instrument
+# it can have. Round 10 added nine arms and every one pointed at `gates.py`.
+# ---------------------------------------------------------------------------
+
+def test_the_skip_parser_reads_nodeids_containing_spaces():
+    """A nodeid may contain a space when a test is parametrised over this
+    receipt's own vocabulary (`Jest (portal)`, `Python Tests (3.10)`). The
+    previous `(\\S+?)` pattern dropped those SILENTLY, which UNDER-reports -- so
+    the wrong skip set could still equal `EXPECTED_SANDBOX_SKIPS` and let a
+    blind matrix run."""
+    import re as _re
+
+    line = "tests/test_x.py::test_a[Jest (portal)] SKIPPED (needs node)"
+    m = _re.match(r"(\S+\.py)::(.+?)\s+SKIPPED", line.rstrip())
+    assert m is not None
+    assert m.group(2) == "test_a[Jest (portal)]"
+
+
+def test_the_expected_sandbox_skips_name_tests_that_exist():
+    """A hard-coded nodeid tuple goes stale silently. If one of these is renamed
+    or deleted, the matrix refuses -- which is the safe direction -- but the
+    reason it prints would name a test nobody can find."""
+    import pathlib
+
+    here = pathlib.Path(mutate_gates.__file__).resolve().parent
+    for nodeid in mutate_gates.EXPECTED_SANDBOX_SKIPS:
+        filename, _, testname = nodeid.partition("::")
+        source = (here / "__tests__" / filename).read_text(encoding="utf-8")
+        assert f"def {testname}(" in source, (
+            f"{nodeid} names a test that does not exist; the matrix would refuse "
+            "and print a nodeid the reader cannot locate"
+        )
+
+
+def test_the_population_counter_reads_the_summary_not_the_listing():
+    """ROUND 11 BLOCKER. Round 10 pinned the SHAPE of a disappearance (a skip)
+    and not the POPULATION, so deleting a test FILE from the sandbox left all
+    four gates green while 59 tests vanished. This is the counter that closes
+    it, and the repo's own `addopts` is the thing that breaks it: `pyproject
+    .toml` puts `-q` there, pytest SUMS verbosity, and `-qq` prints no summary
+    line at all."""
+    import pathlib
+
+    here = pathlib.Path(mutate_gates.__file__).resolve().parent
+    root = here.parents[1]
+    if not (root / "pyproject.toml").is_file():  # pragma: no cover - sandbox
+        # SKIPPED IN THE MUTATION SANDBOX ON PURPOSE, and declared in
+        # `EXPECTED_SANDBOX_SKIPS`. The thing under test is the interaction with
+        # the REPO's `addopts`, which the sandbox does not have -- and spawning
+        # a collect subprocess inside all 236 arms would add ~12 minutes and the
+        # memory pressure that killed a run once already.
+        pytest.skip("no pyproject.toml above this tree (mutation sandbox)")
+    n = mutate_gates._collected(here / "__tests__", root)
+    assert n is not None, (
+        "the collected count came back unreadable in the repo itself, which is "
+        "the `-qq` shape -- `-o addopts=` is what keeps the two trees comparable"
+    )
+    assert n > 100, n

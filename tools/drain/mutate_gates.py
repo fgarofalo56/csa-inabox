@@ -758,7 +758,64 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
-    # -- the SINGLE RESOLVER, which round 9 added and left unobserved ---------
+    # -- SIX survivors an independent reviewer found in round 11 -------------
+    # Round 10 shipped nine arms and every one pointed at `gates.py`'s scope
+    # selection. The reviewer wrote their own arms over `ran_instead` and
+    # `_primary_steps_all_skipped` and six survived the 230-arm matrix. Q12 is
+    # the sharpest: it reverts round 10's OWN R7 fix -- the "absent" reason going
+    # back to the untrue "did not conclude success" -- with the suite green.
+    (
+        ("Q8 the MIXED-outcome refusal in `ran_instead` is deleted, so an "
+         "alternative resolving to steps that disagree counts as having run"),
+        "gates.py",
+        '        elif "success" in concluded:',
+        "        elif False:",
+    ),
+    (
+        ("Q9 `usable` stops filtering runner BOOKKEEPING, so a `Post ...` step "
+         "stands in as the declared alternative"),
+        "gates.py",
+        ('            and not _is_bookkeeping_step(str(s.get("name") or ""))\n'
+         "        ]\n        if not usable:"),
+        "        ]\n        if not usable:",
+    ),
+    (
+        ("Q11 the ABSENT branch in `ran_instead` is deleted entirely, so an "
+         "alternative that is not in the job is indistinguishable from one that "
+         "ran and failed"),
+        "gates.py",
+        ('            not_counted.append(f"{alt_name!r} is absent from this job")\n'
+         "            continue"),
+        "            continue",
+    ),
+    (
+        ("Q12 the ABSENT reason reverts VERBATIM to the sentence round 10 "
+         "removed for being untrue about a step nobody read a conclusion from"),
+        "gates.py",
+        'not_counted.append(f"{alt_name!r} is absent from this job")',
+        'not_counted.append(f"{alt_name!r} did not conclude success")',
+    ),
+    (
+        ("Q13 the only-detector/bookkeeping reason reverts to the generic "
+         "sentence, so two different findings read identically"),
+        "gates.py",
+        ('                f"{alt_name!r} resolved only to the detector or to runner "\n'
+         '                "bookkeeping, which is not this job\'s work"'),
+        '                f"{alt_name!r} did not conclude success"',
+    ),
+    (
+        ("Q15 the HOLLOW-primary precondition consults only the FIRST resolved "
+         "step -- it gates BOTH routes, and `[:1]` is fail-OPEN: a duplicate "
+         "primary that RAN reads as cleanly hollow"),
+        "gates.py",
+        ("        off = [\n"
+         '            str(s.get("conclusion") or "?")\n'
+         "            for s in matches"),
+        ("        off = [\n"
+         '            str(s.get("conclusion") or "?")\n'
+         "            for s in matches[:1]"),
+    ),
+    # -- the SINGLE RESOLVER, which round 9 added and left unobserved ----------
     # Round 10. An independent reviewer built a sandbox of the same shape as this
     # one and ran three arms over `steps_named`. ALL THREE SURVIVED the 397-test
     # suite: no test named the function, no arm touched it, and the round-9 diff
@@ -1850,7 +1907,35 @@ def _passed_count(stdout: str) -> int:
 EXPECTED_SANDBOX_SKIPS = (
     "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
     "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
+    "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
 )
+
+
+def _collected(tests_dir: Path, cwd: Path) -> int | None:
+    """How many tests pytest COLLECTS in a tree. None when it cannot say.
+
+    The population check round 11 added. `--collect-only -q` prints one line per
+    test and a trailing summary; the summary is parsed rather than the lines, so
+    a change in pytest's line format cannot silently under-count.
+
+    `-o addopts=` NEUTRALISES the repo's own pytest config, and that is
+    load-bearing rather than tidiness: `pyproject.toml` puts `-q` in `addopts`,
+    pytest SUMS verbosity flags, so a second `-q` here nets `-qq` and the summary
+    line this parses is never printed. The sandbox has no `pyproject.toml`, so
+    without the override the two trees are measured by different rules and the
+    repo side silently returns None. An independent reviewer recorded that
+    behaviour one round earlier as a false alarm to avoid chasing; it was the
+    first thing this hit.
+    """
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tests_dir), "--collect-only", "-q",
+         "-o", "addopts=", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if out.returncode != 0:
+        return None
+    m = re.search(r"(\d+) tests? collected", out.stdout)
+    return int(m.group(1)) if m else None
 
 
 def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | None:
@@ -2043,6 +2128,31 @@ def main() -> int:
                   "removes tests from every arm without naming one.")
             return 2
         print(f"SKIPS     {skipped_count} pinned: {', '.join(sorted(skipped_ids))}")
+        # AND THE POPULATION ITSELF. Round 11 BLOCKER: round 10 pinned the SHAPE
+        # of a disappearance (a skip) and not the POPULATION. An independent
+        # reviewer deleted `__tests__/test_merge_gate.py` from the sandbox copy:
+        # the population fell 402 -> 343 and ALL FOUR gates still passed --
+        # control rc=0, the names EXACTLY `EXPECTED_SANDBOX_SKIPS`, the count
+        # exactly 2, the deselect delta intact -- and `main()` returned 0. A
+        # renamed file, `--ignore`, a `collect_ignore`, or an inherited
+        # `PYTEST_ADDOPTS=--deselect` all restore round 10's own blocker.
+        #
+        # So the sandbox's collected test count is compared against the REPO's.
+        # They must agree: the sandbox is a copy, and a copy that collects fewer
+        # tests is not the suite this matrix claims to have run.
+        here_n = _collected(HERE / "__tests__", HERE)
+        there_n = _collected(sandbox / "__tests__", sandbox)
+        if here_n is None or there_n is None:
+            print("REFUSING -- could not collect one of the two trees, so the "
+                  "sandbox population cannot be shown to match the repo's")
+            return 2
+        if here_n != there_n:
+            print(f"REFUSING -- the sandbox collects {there_n} tests and this "
+                  f"checkout collects {here_n}. Tests that VANISH do not skip, "
+                  "so neither the skip names nor the skip count can see them, "
+                  "and every arm would then be scored against a smaller suite.")
+            return 2
+        print(f"POPULATION {there_n} collected, matching this checkout")
         # ...and the DESELECT must have removed exactly one test. pytest accepts
         # a nodeid that matches nothing in silence, so a typo here would put the
         # meta-test back in the decision path and every arm would score KILLED

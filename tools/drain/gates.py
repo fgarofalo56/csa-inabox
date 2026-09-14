@@ -2499,7 +2499,19 @@ def _primary_steps_all_skipped(
             'a scope skip is only meaningful for a NAMED step, never for "ALL"'
         )
     for wanted in declared_steps:
-        matches = [s for s in steps if wanted in str(s.get("name") or "")]
+        # THROUGH THE SHARED RESOLVER. Round 11: this was the SEVENTH place
+        # resolving a declared step name by raw substring, and the one that
+        # gates BOTH routes -- "the primary must be cleanly HOLLOW" is the
+        # precondition the excuse and the alternative share. An independent
+        # reviewer showed a `[:1]` narrowing of it is fail-OPEN (a decoy that
+        # SKIPPED, ahead of a primary that RAN, reads as hollow) and that no arm
+        # pointed at it. Exact-match-wins ignores the decoy outright; an
+        # ambiguous pool refuses.
+        matches, ambiguous = steps_named(str(wanted), steps)
+        if matches is None:
+            return False, (
+                f"its declared step {wanted!r} cannot be resolved: {ambiguous}"
+            )
         if not matches:
             return False, f"its declared step {wanted!r} is absent from this job"
         off = [
@@ -2625,21 +2637,43 @@ def _outputs_whose_work_did_not_run(
                     "one declared name cannot say whether its own work ran"
                 )
             conclusions += sorted(mine)
-        # ALL SKIPPED -> ask its scope. ANY step of its work ran -> exclude it,
-        # because its scope SHOULD match and that is why the work ran. The
-        # ambiguity round 9 closed is one NAME matching several STEPS, resolved
-        # in `steps_named` above; an output legitimately gating two DIFFERENT
-        # declared steps that disagree is a job where part of that output's work
-        # ran, and excluding it is the same answer as for a clean run. Refusing
-        # here instead was an over-correction that broke the control proving
-        # every declared alternative is consulted, not just the first.
+        # ALL SKIPPED -> ask its scope. ALL RAN -> exclude it, because its scope
+        # SHOULD match and that is why the work ran. MIXED -> REFUSE.
         #
-        # `conclusions` cannot be empty here: `gated` is non-empty (checked
-        # above) and every iteration either returns or appends exactly one. Round
-        # 10 removed an `if not conclusions` guard from this spot -- it could not
-        # fire, and a guard that cannot fire reads as a control and is not one.
+        # ROUND 11 BLOCKER, and a correction of round 10. Round 10 wrote this
+        # refusal, saw it break the control proving every declared alternative is
+        # consulted, and backed it out as an "over-correction". THE TEST WAS
+        # WRONG, not the refusal. Measured in the real workflow: `Jest (portal)`
+        # and `Type-check (portal)` carry the IDENTICAL condition
+        # (`fiab-console-ci.yml:297` and `:302`, both
+        # `steps.changed.outputs.portal == 'true'`), so they CANNOT disagree. The
+        # fixture that produced a mixed outcome was describing an impossible job,
+        # and treating that state as "part of its work ran, so exclude it" is
+        # fail-OPEN: an independent reviewer drove a merge of
+        # `portal/react-webapp/src/App.tsx` with `Jest (portal)` SKIPPED and
+        # `Type-check (portal)` RUN, and the portal scope -- which MATCHED -- was
+        # never asked. Round 8's blocker through a third door, on the one
+        # required context that is the portal's only blocking check.
+        #
+        # So a declaration whose steps disagree cannot say whether that output's
+        # work ran, exactly as one NAME that disagrees with itself cannot. Both
+        # refuse. What must NOT refuse is the ordinary two-output job where one
+        # output's work all ran and another's all skipped -- that is the
+        # population this route exists for, and it is unaffected.
         if all(c == "skipped" for c in conclusions):
             asked.append(str(out))
+        elif "skipped" in conclusions and "success" in conclusions:
+            return None, (
+                f"declared output {out!r} of {name!r} gates {list(gated)}, which "
+                f"concluded {sorted(set(conclusions))} - its own declared steps "
+                "disagree about whether that output was true, so whether its work "
+                "ran cannot be read off the declaration"
+            )
+        # EVERYTHING ELSE IS EXCLUDED: every step ran, or the ones that did not
+        # skip FAILED. A failed step is work that ran and did not succeed, which
+        # `ran_instead` reports in those words -- a truer sentence than "its
+        # steps disagree", and the reason this refusal is scoped to the
+        # skipped-vs-succeeded shape rather than to any disagreement.
     return asked, ""
 
 

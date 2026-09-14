@@ -625,18 +625,30 @@ def test_negative_control_every_declared_alternative_is_consulted_not_just_the_f
             {"name": "Set up job", "conclusion": "success"},
             {"name": "Detect console changes", "conclusion": "success"},
             {"name": "Build (next build)", "conclusion": "skipped"},
-            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "success"},
             {"name": "Type-check (portal)", "conclusion": "success"},
             {"name": "Complete job", "conclusion": "success"},
         ],
     }
     # A portal-only merge: outside the PRIMARY's (`console`) scope, which is why
     # the primary skipped, and inside the alternative's, which is why it ran.
+    #
+    # ROUND 11: BOTH portal steps succeed here, because in the real workflow they
+    # carry the IDENTICAL condition (`fiab-console-ci.yml:297` and `:302`) and so
+    # cannot disagree. The previous fixture had one skipped and one succeeded --
+    # an impossible job -- and round 10 backed a CORRECT refusal out of
+    # `_outputs_whose_work_did_not_run` because this test failed against it. A
+    # fixture describing a state the workflow cannot reach is not a control; it
+    # is a licence.
+    #
+    # It still kills R2A1 (`alternatives[:1]`): with only the first consulted the
+    # message names `Jest (portal)` alone and the assertion below fails.
     portal_only = ["portal/react-webapp/src/App.tsx"]
     ok, why = gates.alternative_accounted_for(
         "next build (node 20)", job, portal_only, POLICY)
     assert ok, why
-    assert "Type-check (portal)" in why
+    assert "Jest (portal)" in why, why
+    assert "Type-check (portal)" in why, why
 
 
 def test_negative_control_a_failed_work_step_still_counts_as_work():
@@ -856,8 +868,12 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
         # `name:` line, and the outputs unioned across all of them. Positional
         # parsing is what this package's own memory warns about, and it then took
         # three rounds to find "not the idioms I thought of".
+        parsed_steps = _job_steps(text, row["job"])
+        assert parsed_steps, (
+            f"{name}: job {row['job']!r} parsed to no steps"
+        )
         detectors = [
-            s for s in _job_steps(text, row["job"])
+            s for s in parsed_steps
             if row["gate_step"] in str(s.get("name") or "")
         ]
         assert detectors, (
@@ -905,9 +921,24 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
             assert isinstance(gated, list), (name, spec)
             assert gated, (name, spec)
             for step in gated:
-                assert f"name: {step}" in job, (
+                # THROUGH THE SAME RESOLVER THE DECISION USES. Round 11, found
+                # by BOTH reviewers: this was a bare `name: <step>` SUBSTRING
+                # over the job's TEXT -- satisfied by a `run:` body, by a YAML
+                # comment (#4467's shape), and by a DECOY step whose name merely
+                # extends the declared one. So the guard and
+                # `_outputs_whose_work_did_not_run` could resolve the same
+                # declaration to DIFFERENT steps, which is the one-side-of-a-
+                # symmetry defect this package names repeatedly. The round-10
+                # comment claimed this shape was "gone"; it was gone from
+                # `_gate_of` and still here, and the claim has been corrected.
+                resolved, why_res = gates.steps_named(step, parsed_steps)
+                assert resolved is not None, (
                     f"{name}: output {spec['output']!r} claims to gate {step!r}, "
-                    "which is not a step in its own job block"
+                    f"which is ambiguous in its own job: {why_res}"
+                )
+                assert len(resolved) == 1, (
+                    f"{name}: output {spec['output']!r} claims to gate {step!r}, "
+                    f"which resolves to {len(resolved)} steps in its own job block"
                 )
 
             if spec["paths"] == gates.ON_PUSH_PATHS:
@@ -1550,3 +1581,128 @@ def test_an_output_may_not_declare_its_own_detector_or_bookkeeping_as_gated_work
             "next build (node 20)", row, steps)
         assert asked is None, f"{gated!r} was accepted as gated work"
         assert needle in why, why
+
+
+# ---------------------------------------------------------------------------
+# ROUND 11: SIX mutations of these functions survived the 230-arm matrix, found
+# by an independent reviewer who wrote their own arms. Every test below exists
+# to kill one of them. Round 10's commit said it "adds nine instruments" and all
+# nine pointed at the same two functions; these reach the ones it missed.
+# ---------------------------------------------------------------------------
+
+def test_an_alternative_resolving_to_steps_that_disagree_is_refused():
+    """Kills Q8. Two steps named EXACTLY the same, one success and one skipped,
+    cannot show the declared alternative ran -- and `steps_named` returns both,
+    so the MIXED branch is the only thing that refuses.
+
+    The alternative here is NOT in any output's `gates`, which is what makes the
+    branch reachable: an alternative that IS gated work is refused earlier, by
+    `_outputs_whose_work_did_not_run`'s own duplicate-name guard.
+    """
+    planted = copy.deepcopy(POLICY)
+    planted["receipts"]["ci_green_rule"]["alternatives"]["next build (node 20)"] = [
+        "Lint (next lint)"
+    ]
+    job = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Lint (next lint)", "conclusion": "success"},
+            {"name": "Lint (next lint)", "conclusion": "skipped"},
+        ],
+    }
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["tools/drain/gates.py"], planted)
+    assert not ok, why
+    assert "MIXED outcome cannot show the alternative ran" in why, why
+
+
+def test_a_bookkeeping_step_cannot_stand_in_as_a_declared_alternative():
+    """Kills Q9. `usable` filters runner bookkeeping; without it a declared
+    alternative that resolves only to a `Post ...` step counts as work done."""
+    planted = copy.deepcopy(POLICY)
+    planted["receipts"]["ci_green_rule"]["alternatives"]["next build (node 20)"] = [
+        "Post Use Node.js 20"
+    ]
+    job = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Post Use Node.js 20", "conclusion": "success"},
+        ],
+    }
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["tools/drain/gates.py"], planted)
+    assert not ok, why
+    assert "runner bookkeeping" in why, why
+
+
+def test_each_reason_an_alternative_was_not_counted_is_stated_specifically():
+    """Kills Q11, Q12 and Q13 -- the three `not_counted` reasons round 10 added
+    and asserted nowhere, so the ABSENT one could revert VERBATIM to the untrue
+    'did not conclude success' with the suite green.
+
+    R7: an error must not state as fact something the code did not establish.
+    """
+    base = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+        {"name": "Type-check (portal)", "conclusion": "skipped"},
+        {"name": "Jest (portal)", "conclusion": "skipped"},
+    ]
+    cases = [
+        ("Storybook (portal)", None, "is absent from this job"),
+        ("Post Use Node.js 20", {"name": "Post Use Node.js 20",
+                                 "conclusion": "success"},
+         "runner bookkeeping"),
+        ("Detect console changes", None, "IS the change detector"),
+    ]
+    for alt, extra, needle in cases:
+        planted = copy.deepcopy(POLICY)
+        planted["receipts"]["ci_green_rule"]["alternatives"][
+            "next build (node 20)"] = [alt]
+        steps = [*base, extra] if extra else list(base)
+        job = {"name": "next build (node 20)", "conclusion": "success",
+               "steps": steps}
+        ok, why = gates.alternative_accounted_for(
+            "next build (node 20)", job, ["tools/drain/gates.py"], planted)
+        assert not ok, (alt, why)
+        assert needle in why, (alt, why)
+        # AND NOT the sentence round 10 removed for being untrue.
+        assert "concluded success in this job" not in why, (alt, why)
+
+
+def test_the_hollow_primary_precondition_consults_every_resolved_step():
+    """Kills Q15. `_primary_steps_all_skipped` gates BOTH routes, and a `[:1]`
+    narrowing of it is fail-OPEN: a decoy that SKIPPED ahead of a primary that
+    RAN would read as cleanly hollow.
+
+    Exact-match-wins makes the decoy irrelevant; the duplicate-name shape is
+    what still needs every match consulted.
+    """
+    steps = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+        {"name": "Build (next build)", "conclusion": "success"},
+    ]
+    ok, why = gates._primary_steps_all_skipped(
+        "next build (node 20)", steps, POLICY)
+    assert not ok, "a duplicate primary that RAN read as cleanly hollow"
+    assert "rather than `skipped`" in why, why
+
+    # CONTROL: a decoy whose name merely EXTENDS the primary is ignored, so the
+    # genuine hollow case still passes.
+    decoyed = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build) - bundle report", "conclusion": "success"},
+        {"name": "Build (next build)", "conclusion": "skipped"},
+    ]
+    ok2, why2 = gates._primary_steps_all_skipped(
+        "next build (node 20)", decoyed, POLICY)
+    assert ok2, why2
