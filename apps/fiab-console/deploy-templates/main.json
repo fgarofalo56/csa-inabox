@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13308905003240021383"
+      "templateHash": "12568104472017816672"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18024623767376366909"
+              "templateHash": "8881426451244798359"
             }
           },
           "definitions": {
@@ -9243,7 +9243,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "11557966085795411378"
+                      "templateHash": "17481407951671984552"
                     }
                   },
                   "parameters": {
@@ -9333,7 +9333,7 @@
                             "name": "D8",
                             "workloadProfileType": "D8",
                             "minimumCount": 0,
-                            "maximumCount": 10
+                            "maximumCount": 3
                           }
                         ],
                         "vnetConfiguration": {
