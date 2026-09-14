@@ -29,6 +29,7 @@ matrix is exactly what they looked like:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -756,6 +757,37 @@ ARMS: list[tuple[str, str, str, str]] = [
         "policy.json",
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
+    ),
+    # -- the RECEIPT's own data, which no arm reached for three rounds --------
+    # Round 8, found by BOTH independent reviewers by different methods. Every
+    # policy arm above targets `review.escalate_to_two_when_path_contains`; not
+    # one touched `receipts.ci_green_rule`, so `killed=213 survived=0` was
+    # silent about the entire round-7 data restructure. Deleting an output is
+    # the mutation that reproduces round 6's blocker verbatim, and it left
+    # `391 passed` untouched.
+    (
+        ("R17 the `portal` output drops out of the `next build (node 20)` scope "
+         "row -- round 6's blocker verbatim: that job is the portal's ONLY "
+         "blocking check, so a portal-only merge whose grep did not fire is "
+         "excused with 'there was nothing for it to do'"),
+        "policy.json",
+        (',\n            {\n              "output": "portal",\n'
+         '              "paths": ["portal/react-webapp/**", '
+         '".github/workflows/fiab-console-ci.yml"],\n'
+         '              "gates": ["Jest (portal)", "Type-check (portal)"]\n'
+         "            }"),
+        "",
+    ),
+    (
+        ("R18 the `infra` output drops out of the `vitest (node 20)` scope row "
+         "-- the COMPUTED shape, whose scope is named in no literal list, so an "
+         "under-declared row here is invisible in review as well as in CI"),
+        "policy.json",
+        (',\n            {\n              "output": "infra",\n'
+         '              "paths": "derive-infra-reading-suites.mjs --ere",\n'
+         '              "gates": ["Run vitest (infra-reading suites only)"]\n'
+         "            }"),
+        "",
     ),
     # R6 and R9 mutate `gates.py` and die on `test_policy.py` calling
     # `review_requirement` DIRECTLY -- so they prove the FUNCTION honours the
@@ -1683,6 +1715,41 @@ def main() -> int:
             shutil.copy2(HERE / name, sandbox / name)
         shutil.copytree(HERE / "__tests__", sandbox / "__tests__",
                         ignore=shutil.ignore_patterns("__pycache__"))
+        # THE WORKFLOWS THE POLICY ROWS NAME. Round 8: the drift guard that ties
+        # `scope_paths` to the producing workflow SKIPPED here, because the
+        # sandbox had no `.github/workflows` for it to read. A guard that skips
+        # where the mutants live cannot kill anything, so an arm deleting a
+        # declared output SURVIVED silently -- and under-declaration is exactly
+        # the failure mode that has now shipped twice.
+        #
+        # Read the row rather than hard-coding two filenames: a new row naming a
+        # third workflow must not lose its coverage by omission here, which is
+        # the same "a number in prose nothing enforces" defect one level up.
+        # NOT `scripts/ci`, deliberately -- `_repo_root()` keys on that too, and
+        # supplying it would un-skip the tests that shell out to `node` and
+        # `gh api` on all 213 arms.
+        wf_dir = sandbox / ".github" / "workflows"
+        wf_dir.mkdir(parents=True)
+        rows = (json.loads((HERE / "policy.json").read_text(encoding="utf-8"))
+                .get("receipts", {}).get("ci_green_rule", {})
+                .get("scope_paths", {}))
+        wanted = {
+            row["workflow"] for name, row in rows.items()
+            if not name.startswith("_") and isinstance(row, dict) and row.get("workflow")
+        }
+        if not wanted:
+            print("no scope_paths row names a workflow - the drift guard would "
+                  "skip in the sandbox and score every arm KILLED regardless of "
+                  "the mutation", file=sys.stderr)
+            return 1
+        for rel in sorted(wanted):
+            src = ROOT / rel
+            if not src.is_file():
+                print(f"policy.json names {rel}, which does not exist - refusing "
+                      "to run a matrix whose drift guard cannot read it",
+                      file=sys.stderr)
+                return 1
+            shutil.copy2(src, wf_dir / Path(rel).name)
         # NORMALIZE TO LF before matching. `newline=""` preserves whatever the
         # working tree has, `core.autocrlf=true` is set on this machine and no
         # `.gitattributes` rule covers `tools/`, so a fresh clone checks these

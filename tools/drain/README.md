@@ -210,13 +210,29 @@ one predicate, asking two different questions:
   ran the *other half* of its own declared work. It requires the gate step to
   have succeeded, the primary step to be cleanly skipped, a declared
   `alternatives` step to have succeeded, and the merged files to fall outside
-  the scope of the **primary's** output only — the one whose `gates` list names
-  that step — never outside every output, which an alternative that ran matches
-  by construction.
+  the scope of **every output whose work did not run** — never outside every
+  output, which an alternative that ran matches by construction.
 
-The #3783 defect is still refused, now by the branch that can see it: a job
-whose detector matched a merged file and which then ran no work at all is
-granted neither route.
+Round 8 moved that last clause. It used to read "the **primary's** output only",
+which is selection by *identity*, and identity and outcome are the same set only
+while a row has exactly two outputs. With a third — declared correctly, gating a
+step that skipped, with a merged file inside its scope — the excuse branch
+refused the job and the alternative branch accepted it, because that output
+gated neither the primary nor the alternative and so was never asked. Selection
+is by outcome for that reason.
+
+The #3783 defect is refused by whichever branch can see it: a job whose detector
+matched a merged file, where the work that output gates did not run, is granted
+neither route. Read that as the general form — an earlier draft said "and which
+then ran no work **at all**", and that qualifier was the hole.
+
+**An output nobody declared is never asked**, so the receipt is only as honest
+as `policy.json`'s `outputs` list is complete. That completeness is enforced in
+two places rather than asserted: the drift guard walks *workflow → declared* as
+well as declared → workflow, failing when a job gates work on an output no row
+names; and mutation arms R17/R18 delete a declared output and must be killed.
+Both reviewers in round 8 found this missing, by different methods, and round 6
+had already shipped the same defect once.
 
 The difference between a `on.push.paths` filter and a shell-step filter is where
 GitHub lets you write a filter, not how much the merge was checked. Treating the

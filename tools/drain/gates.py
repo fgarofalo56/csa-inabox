@@ -2463,6 +2463,67 @@ def _primary_steps_all_skipped(
     return True, ""
 
 
+def _outputs_whose_work_did_not_run(
+    name: str, row: dict, steps: list[dict],
+) -> tuple[list[str] | None, str]:
+    """Which declared outputs gated work that did NOT run?
+
+    ROUND 8 BLOCKER 1, and it is round 6's blocker rebuilt one output over.
+    `alternative_accounted_for` used to narrow the scope question by IDENTITY --
+    "the outputs that gate the PRIMARY step" -- and those are not the same set as
+    "the outputs whose work did not run" the moment a job carries a third output.
+
+    An independent reviewer drove the real `next build (node 20)` row plus a
+    third declared output `docs` (gating `Docs link check`, which SKIPPED) with
+    `docs/adr/0001.md` in the merge. The excuse branch refused the job in those
+    words; the alternative branch accepted it, because `docs` gates neither the
+    primary nor the alternative and so was never asked. Declaring the output
+    CORRECTLY did not protect it -- which matters, because "declare every
+    work-gating output" is the entire remedy round 7 chose for round 6.
+
+    So selection is by OUTCOME: an output is asked when every step it gates
+    concluded `skipped`. An output whose gated steps RAN is excluded, and that
+    exclusion is the one this route exists for -- the alternative's own scope
+    SHOULD match a merged file, because that is WHY it ran. Asking it would
+    rebuild round 4's defect, where `infra`'s ERE contains `tools/` and so
+    matches every drain PR by construction.
+
+    Returns `(None, why)` when an output's gated step cannot be found in the job
+    at all. That is an ambiguous declaration, not an absent one, and this fails
+    closed rather than silently dropping the output from the question.
+    """
+    outputs = row.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        return None, (
+            f"the declared scope for {name!r} carries no non-empty `outputs` list, "
+            "so which outputs gated unrun work cannot be decided"
+        )
+    asked: list[str] = []
+    for spec in outputs:
+        if not isinstance(spec, dict):
+            return None, f"a declared output of {name!r} is {spec!r}, not an object"
+        out = spec.get("output")
+        gated = spec.get("gates")
+        if not isinstance(gated, list) or not gated:
+            return None, (
+                f"declared output {out!r} of {name!r} does not name the steps it "
+                "`gates`, so whether its work ran cannot be decided"
+            )
+        conclusions: list[str] = []
+        for wanted in gated:
+            matches = [s for s in steps if str(wanted) in str(s.get("name") or "")]
+            if not matches:
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate {wanted!r}, "
+                    "which is absent from this job - the row cannot say whether that "
+                    "output's work ran"
+                )
+            conclusions += [str(s.get("conclusion") or "?").lower() for s in matches]
+        if all(c == "skipped" for c in conclusions):
+            asked.append(str(out))
+    return asked, ""
+
+
 def _output_scope_hits(
     spec, files: list[str],
     push_trigger: PushTrigger | None, infra_ere: str | None,
@@ -2575,22 +2636,28 @@ def _merged_files_outside_scope(
     under-declared row is a refusal rather than a silent pass, which is the
     direction this whole receipt is specified to fail in.
 
-    `only_gating` NARROWS THE QUESTION TO THE OUTPUTS THAT GATE THOSE STEPS, and
-    getting this wrong re-breaks the receipt rather than merely weakening it.
+    `only_gating` is a list of OUTPUT NAMES and narrows the question to them.
+    Getting this wrong re-breaks the receipt rather than merely weakening it.
     The two routes ask genuinely different questions:
 
       excuse       nothing ran, so EVERY output must have been false, so no
                    output's scope may match. `only_gating=None`.
-      alternative  the PRIMARY's output was false and ANOTHER output was true.
-                   Only the primary's scope may not match -- the alternative's
-                   scope SHOULD match, because that is WHY it ran.
+      alternative  some of this job's work ran and some did not. Every output
+                   whose work did NOT run must have a clear scope; an output
+                   whose work RAN is excluded, because its scope SHOULD match --
+                   that is WHY it ran.
 
-    Asking every output on the alternative route makes `ci-green` unobtainable
-    for the exact class it closes, which is round 4's defect rebuilt: `infra`'s
-    ERE contains `tools/` and `PRPs/`, so every drain PR matches it, and vitest
-    -- whose infra suite genuinely runs on those PRs -- would be refused for
-    having done the work. Both reviewers asked for the primary's scope
-    specifically; this is that, made explicit rather than implied.
+    ROUND 8: the alternative used to narrow to "the outputs that gate the
+    PRIMARY step", which is selection by IDENTITY. Selection is by OUTCOME --
+    see `_outputs_whose_work_did_not_run` -- because a job with a THIRD output
+    whose gated step skipped and whose scope matched was accepted here while the
+    excuse branch refused the byte-identical job.
+
+    Asking every output on the alternative route would instead make `ci-green`
+    unobtainable for the exact class it closes, which is round 4's defect
+    rebuilt: `infra`'s ERE contains `tools/` and `PRPs/`, so every drain PR
+    matches it, and vitest -- whose infra suite genuinely runs on those PRs --
+    would be refused for having done the work.
 
     A scope that MATCHES a merged file is a FAILURE, loudly: that is a change
     detector that missed a change (#3783), and it is the defect this must never
@@ -2610,26 +2677,47 @@ def _merged_files_outside_scope(
             "cannot be shown to exclude anything"
         )
     selected, described = [], []
+    seen: set[str] = set()
     for spec in outputs:
         if not isinstance(spec, dict):
             return False, (
                 f"a declared output of {name!r} is {spec!r}, not an object"
             )
+        # SHAPE ON EVERY ENTRY, BEFORE SELECTING. Round 8: `gates` was validated
+        # on every output but `output` and `paths` only on the SELECTED ones, so
+        # a malformed non-selected entry refused on one route and passed on the
+        # other, and a DUPLICATE output name passed on both. A row is the
+        # authority or it is not; it cannot be the authority only where the
+        # question happens to land.
+        out = spec.get("output")
+        if not isinstance(out, str) or not out.strip():
+            return False, (
+                f"a declared output of {name!r} has no `output` name ({out!r}), so "
+                "its scope cannot be attributed to anything the detector emits"
+            )
+        if out in seen:
+            return False, (
+                f"declared output {out!r} of {name!r} appears more than once - the "
+                "row cannot say which of the two scopes is that output's"
+            )
+        seen.add(out)
+        if not spec.get("paths"):
+            return False, (
+                f"declared output {out!r} of {name!r} declares no `paths`, so it "
+                "cannot be shown to exclude any merged file"
+            )
         gated = spec.get("gates")
         if not isinstance(gated, list) or not gated:
             return False, (
-                f"declared output {spec.get('output')!r} of {name!r} does not name the "
+                f"declared output {out!r} of {name!r} does not name the "
                 "steps it `gates`, so it cannot be matched to a substantive step"
             )
-        if only_gating is None:
-            selected.append(spec)
-            continue
-        if any(w in g or g in w for g in gated for w in only_gating):
+        if only_gating is None or out in only_gating:
             selected.append(spec)
     if only_gating is not None and not selected:
         return False, (
-            f"no declared output of {name!r} gates its substantive step(s) "
-            f"{list(only_gating)} - the row cannot say which detector decided them"
+            f"no declared output of {name!r} gates work that was skipped "
+            f"({list(only_gating)}) - the row cannot say which detector decided it"
         )
     for spec in selected:
         hits, detail = _output_scope_hits(spec, files, push_trigger, infra_ere)
@@ -2690,8 +2778,13 @@ def alternative_accounted_for(
       the context -- switching the substantive-step rule off entirely, with a
       one-line edit to `policy.json` and no test failing.
     - the primary must be cleanly HOLLOW. `_primary_steps_all_skipped` refuses a
-      primary that failed or was cancelled, and `context_did_its_work` refuses an
-      AMBIGUOUS declaration before either route is reached.
+      primary that failed or was cancelled, and it is also what refuses an
+      AMBIGUOUS declaration -- `context_is_accounted_for` reaches BOTH routes
+      whenever the substantive-step check came back false, so nothing upstream
+      has already filtered one out. Round 8 note: this docstring used to credit
+      `context_did_its_work` with that refusal. Same outcome, wrong stated
+      reason, in a file whose whole thesis is that the stated reason IS the
+      control.
     """
     alternatives = (
         policy.get("receipts", {})
@@ -2733,21 +2826,33 @@ def alternative_accounted_for(
             f"the substantive-step declaration for {name!r} is {declared_primary!r}; "
             "an alternative is only meaningful for a NAMED primary step"
         )
-    # ONLY THE PRIMARY'S OUTPUT. The alternative's own scope SHOULD match a
-    # merged file -- that is why it ran -- so asking every output here would
-    # refuse exactly the population this route exists to serve.
+    # EVERY OUTPUT WHOSE WORK DID NOT RUN, not "the primary's output". Round 8
+    # BLOCKER 1: those two sets diverge the moment a job carries a third output,
+    # and the alternative route accepted a matching scope on one the excuse
+    # route refused. The alternative's OWN output is excluded because its work
+    # ran -- its scope SHOULD match, which is why it ran.
+    unrun, unrun_why = _outputs_whose_work_did_not_run(name, row, steps)
+    if unrun is None:
+        return False, unrun_why
     clear, scope_why = _merged_files_outside_scope(
-        name, row, files, push_trigger, infra_ere, only_gating=list(declared_primary))
+        name, row, files, push_trigger, infra_ere, only_gating=unrun)
     if not clear:
         return False, scope_why
 
     gate_step = str(row.get("gate_step") or "")
+    # SAME DEFINITION OF "A STEP THAT RAN" AS THE EXCUSE BRANCH. Round 8 note:
+    # `did_run` filtered bookkeeping and this did not, so the two halves of what
+    # the docstring calls one predicate disagreed about what a work step is.
+    # Here the filter is the CONSERVATIVE direction -- it can only remove a
+    # candidate alternative, never add one -- which is the opposite of its
+    # effect in `did_run`, where a misread name excuses a job that worked.
     ran_instead = [
         str(s.get("name") or "")
         for s in steps
         if any(alt in str(s.get("name") or "") for alt in alternatives)
         and str(s.get("conclusion") or "").lower() == "success"
         and gate_step not in str(s.get("name") or "")
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
     ]
     if not ran_instead:
         return False, (

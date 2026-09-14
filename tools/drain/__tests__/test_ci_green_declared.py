@@ -210,9 +210,9 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
     step -- an "alternative" behind the same `if:` can never run when the
     primary does not, so declaring one would be decoration.
     """
-    root = _repo_root()
-    if root is None:  # pragma: no cover - mutation sandbox
-        pytest.skip("workflow tree not reachable from here (mutation sandbox)")
+    root = _workflow_root()
+    if root is None:  # pragma: no cover - no workflow tree here
+        pytest.skip("workflow tree not reachable from here")
     alts = {
         name: steps
         for name, steps in POLICY["receipts"]["ci_green_rule"]["alternatives"].items()
@@ -275,6 +275,21 @@ def test_every_declared_alternative_exists_and_is_gated_differently():
                     "output as the primary step, so it can never run when the "
                     "primary does not"
                 )
+            # AND IT MUST BE GATED ON A DECLARED OUTPUT. Round 8: asserting only
+            # that the primary's output is ABSENT leaves "gated on something
+            # nobody declared" passing. An alternative gated on an undeclared
+            # output is then accepted with that output's scope never examined --
+            # the same hole as the undeclared output itself, reached from the
+            # other side. Requiring the gate to NAME a declared output closes
+            # both, and it is what makes `_outputs_whose_work_did_not_run` able
+            # to reason about this step at all.
+            declared_here = {spec["output"] for spec in row["outputs"]}
+            named = {out for out in declared_here if f"outputs.{out}" in gate}
+            assert named, (
+                f"{name}: alternative {step!r} is gated on {gate!r}, which names "
+                f"none of its row's declared outputs {sorted(declared_here)} - so "
+                "the scope that decided it is not one this receipt ever checks"
+            )
         for step in primary[name]:
             assert step not in steps, (
                 f"{name}: {step!r} is declared as both primary and alternative"
@@ -383,7 +398,7 @@ def test_blocker_an_alternative_cannot_launder_a_detector_that_missed_a_change()
     assert route == ""
 
 
-def test_blocker_the_alternative_route_asks_only_the_primarys_scope():
+def test_blocker_the_alternative_route_excludes_outputs_whose_work_ran():
     """The other half of the same blocker, and the one that re-breaks the
     receipt if it is got wrong.
 
@@ -393,6 +408,9 @@ def test_blocker_the_alternative_route_asks_only_the_primarys_scope():
     20)` on every drain merge for the crime of having done the work. That is
     round 4's "unobtainable for the exact class it closes", rebuilt inside the
     fix for round 5.
+
+    ROUND 8: the exclusion is by OUTCOME (its gated step RAN), not by identity
+    (it is not the primary). See the third-output control below for why.
     """
     job = _job(
         "vitest (node 20)",
@@ -415,6 +433,57 @@ def test_blocker_the_alternative_route_asks_only_the_primarys_scope():
         "the fixture no longer distinguishes the two questions, so this test "
         "would pass under a mutant that asks every output"
     )
+
+
+def test_blocker_a_third_outputs_matching_scope_is_not_laundered_by_the_alternative():
+    """ROUND 8 BLOCKER 1. Selecting by IDENTITY ("the outputs that gate the
+    primary") and selecting by OUTCOME ("the outputs whose work did not run")
+    are the same set for a two-output row and diverge the moment there is a
+    third -- and the divergence is in the excusing direction.
+
+    An independent reviewer drove the real `next build (node 20)` row plus a
+    third declared output `docs`, gating a `Docs link check` that SKIPPED, with
+    `docs/adr/0001.md` in the merge. The excuse branch refused the job ("2 work
+    step(s) RAN anyway"); the alternative branch ACCEPTED it, because `docs`
+    gates neither the primary nor the alternative and so was never asked.
+
+    That is the #3783 shape -- a change detector that missed a change -- on a
+    correctly DECLARED output. "Declare every work-gating output" was the whole
+    remedy round 7 chose for round 6, so a route that does not ask the declared
+    output undoes it.
+    """
+    planted = copy.deepcopy(POLICY)
+    row = planted["receipts"]["ci_green_rule"]["scope_paths"]["next build (node 20)"]
+    row["outputs"].append({
+        "output": "docs",
+        "paths": ["docs/**"],
+        "gates": ["Docs link check"],
+    })
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Docs link check", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "success"},
+            {"name": "Jest (portal)", "conclusion": "success"},
+        ],
+    }
+    files = ["portal/react-webapp/App.tsx", "docs/adr/0001.md"]
+
+    ok, why = gates.alternative_accounted_for(
+        "next build (node 20)", job, files, planted)
+    assert not ok, "a THIRD output whose gated step skipped and whose scope matched"
+    assert "docs" in why, why
+    assert "MATCHES" in why, why
+
+    # THE CONTROL THIS PAIRS WITH: the same job, same policy, with nothing in
+    # the merge that `docs` covers, is still ACCEPTED. Otherwise this test would
+    # pass under a mutant that simply refuses the route outright.
+    ok2, why2 = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["portal/react-webapp/App.tsx"], planted)
+    assert ok2, why2
 
 
 def test_negative_control_a_skipped_alternative_is_not_work():
@@ -606,10 +675,17 @@ def test_negative_control_the_gate_step_cannot_be_declared_as_its_own_alternativ
         "steps": [
             {"name": "Detect console changes", "conclusion": "success"},
             {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "skipped"},
         ],
     }
+    # A merge inside NO declared scope, so the gate-step exclusion is the only
+    # thing left that can refuse this. Round 8: with a `portal/` file here the
+    # refusal came from the scope check instead -- correctly, since portal's
+    # steps are skipped -- and the control this test exists for was never
+    # reached. A negative control that passes for the wrong reason is not one.
     ok, why = gates.alternative_accounted_for(
-        "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], planted)
+        "next build (node 20)", job, ["tools/drain/gates.py"], planted)
     assert not ok
     assert "concluded success" in why
 
@@ -683,9 +759,9 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
     """
     import re
 
-    root = _repo_root()
-    if root is None:  # pragma: no cover - mutation sandbox
-        pytest.skip("workflow tree not reachable from here (mutation sandbox)")
+    root = _workflow_root()
+    if root is None:  # pragma: no cover - no workflow tree here
+        pytest.skip("workflow tree not reachable from here")
     rows = {
         name: row
         for name, row in POLICY["receipts"]["ci_green_rule"]["scope_paths"].items()
@@ -711,6 +787,43 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
         )
         assert row["gate_step"] in job, (
             f"{name}: its declared gate step is not in ITS OWN job block"
+        )
+
+        # ---- THE MISSING DIRECTION (round 8 BLOCKER, found by BOTH reviewers)
+        # Everything below walks DECLARED -> WORKFLOW, which makes a STALE row
+        # visible and CANNOT make an UNDER-declared one visible: an output
+        # nobody declared is not in the list being walked. Round 6's blocker was
+        # an undeclared `portal` on this exact row; round 7 fixed the DATA and
+        # built no instrument to keep it true, so `policy.json` asserts "an
+        # under-declared row is now a refusal, not a silent pass" while deleting
+        # four lines from a row still passed every test and flipped a
+        # portal-only merge from refused to excused.
+        #
+        # So: walk WORKFLOW -> DECLARED. Every output the job actually GATES ON
+        # must be declared. Scoped to the detector's own step id, because a job
+        # may read outputs of other steps that gate nothing this row is about.
+        detector = job.index(f"name: {row['gate_step']}")
+        id_match = re.search(r"\n\s+id:\s*([A-Za-z0-9_-]+)", job[detector:])
+        assert id_match is not None, (
+            f"{name}: its gate step {row['gate_step']!r} has no `id:`, so what it "
+            "emits cannot be traced to the `if:` conditions that read it"
+        )
+        detector_id = id_match.group(1)
+        gated_on = set(re.findall(
+            rf"steps\.{re.escape(detector_id)}\.outputs\.([A-Za-z0-9_-]+)", job))
+        declared_names = {spec["output"] for spec in row["outputs"]}
+        assert gated_on, (
+            f"{name}: no step in its job block is gated on "
+            f"`steps.{detector_id}.outputs.*` - the detector's shape changed, and "
+            "a row describing outputs nothing reads is not a scope declaration"
+        )
+        assert gated_on <= declared_names, (
+            f"{name}: its job gates work on {sorted(gated_on - declared_names)}, "
+            f"which `policy.json` does not declare (it declares "
+            f"{sorted(declared_names)}). An UNDECLARED output is never asked, so "
+            "the excuse route would report 'there was nothing for it to do' about "
+            "a merge whose work that output gated and skipped - #3783, which is "
+            "the defect this receipt exists to refuse."
         )
 
         # EVERY DECLARED OUTPUT, not just the first. Round 6 BLOCKER: a row
@@ -934,11 +1047,38 @@ def test_the_required_context_snapshot_is_current():
 
 
 def _repo_root():
-    """The checkout this package lives in, or None when it is not reachable.
+    """The FULL checkout this package lives in, or None when out of tree.
 
-    Walks UP looking for `.github/workflows` rather than counting `parents[3]`,
-    because the mutation runner copies this package to a temp dir outside the
-    repo and a fixed index silently resolves to somewhere else entirely.
+    Walks UP looking for `.github/workflows` AND `scripts/ci` rather than
+    counting `parents[3]`, because the mutation runner copies this package to a
+    temp dir outside the repo and a fixed index silently resolves to somewhere
+    else entirely.
+
+    ROUND 8: `scripts/ci` is half of the marker precisely so this stays None in
+    the mutation sandbox. The sandbox now carries the workflow files the drift
+    guard needs (see `_workflow_root`), and keying BOTH helpers on
+    `.github/workflows` would have un-skipped the two tests below that shell out
+    to `node` and to `gh api` -- the second firing a network request on every
+    one of 213 arms, each able to turn a KILLED into an ERROR for a reason that
+    has nothing to do with the mutation. That is the tautology this package has
+    already been burned by twice; the marker is what keeps it closed.
+    """
+    import pathlib
+
+    for candidate in pathlib.Path(__file__).resolve().parents:
+        if (candidate / ".github" / "workflows").is_dir() and (
+                candidate / "scripts" / "ci").is_dir():
+            return candidate
+    return None
+
+
+def _workflow_root():
+    """The tree holding `.github/workflows`, in the repo OR in the sandbox.
+
+    The drift guards need the workflow YAML and nothing else. Separating that
+    from `_repo_root` is what lets them run inside the mutation sandbox, which
+    is what makes a `policy.json` arm killable -- a guard that skips where the
+    mutants live scores every arm KILLED regardless of the mutation.
     """
     import pathlib
 

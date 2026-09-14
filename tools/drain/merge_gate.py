@@ -799,7 +799,7 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
     }
 
 
-def resolve_infra_ere() -> str | None:
+def resolve_infra_ere(merged_sha: str | None = None) -> str | None:
     """The ERE `fiab-console-ci.yml`'s vitest detector greps its `infra` half on.
 
     Resolved HERE and injected, for the same reason `push_trigger` is: `gates.py`
@@ -812,6 +812,26 @@ def resolve_infra_ere() -> str | None:
     corroborate), which is the same direction the workflow itself takes when the
     deriver breaks: it builds everything rather than guessing which subset is
     safe to skip.
+
+    ROUND 8, two findings, both in the EXCUSING direction:
+
+    1. SHAPE. `stdout.strip() or None` accepted anything non-empty. A warning
+       line, a newline, then the real ERE is a VALID regex: it compiles, raises
+       nothing, matches no path, and the excuse is granted. Empty refuses and an
+       uncompilable pattern refuses; the one shape that is neither was the one
+       that silently excused. Today's deriver sends every diagnostic to stderr
+       and writes a single 152-byte line, so this was not reachable through its
+       own code -- it was one `console.log` away, in a file nothing under
+       `tools/drain/` owns. So the shape is now asserted: ONE line, anchored.
+
+    2. TWO CLOCKS. The deriver enumerates directories from the WORKING TREE's
+       `HEAD` while `push_trigger` is read from the merged commit. If today's
+       tree is NARROWER -- a top-level directory has since been removed -- a
+       file that was in the infra scope at merge falls outside it now, `hits`
+       comes back empty, and a merge that did have infra work is excused. So
+       when the caller knows the merged sha, the two directory sets are compared
+       and a divergence REFUSES rather than quietly answering from the wrong
+       clock. Measured at the time of writing: identical, 29 vs 29.
     """
     try:
         out = subprocess.run(
@@ -822,7 +842,53 @@ def resolve_infra_ere() -> str | None:
         return None
     if out.returncode != 0:
         return None
-    return out.stdout.strip() or None
+    ere = out.stdout.strip()
+    if not ere or "\n" in ere or not ere.startswith("^("):
+        # Not the deriver's declared shape. A delegated scope arriving in an
+        # unexpected shape must be None, never a regex that matches nothing.
+        return None
+    if merged_sha and not _top_level_dirs_agree(merged_sha):
+        return None
+    return ere
+
+
+def _top_level_dirs_agree(merged_sha: str) -> bool:
+    """Could today's tree have produced a NARROWER infra ERE than the merge's?
+
+    The deriver builds its alternatives by walking the working tree's `HEAD`, so
+    a top-level directory that existed at the merged sha and has since been
+    removed can drop out of the scope. A file under it would then read as
+    outside the infra scope, `hits` would come back empty, and a merge that DID
+    have infra work would be excused. That is the only direction that matters:
+    today's tree having MORE directories can widen the scope, and a wider scope
+    can refuse but never excuse.
+
+    Compares `git ls-tree -d --name-only` at the two shas -- NOT the merged sha
+    against the ERE's own alternatives. Those are different sets by design: the
+    deriver emits only the directories its infra-reading suites actually read
+    (18 of the 29 top-level directories at the time of writing), so comparing
+    against the ERE would refuse every receipt. Caught here by measurement
+    before it reached the census.
+
+    Fails CLOSED on any error: "cannot be shown to agree" is not "agree".
+    """
+    def dirs(ref: str) -> set[str] | None:
+        try:
+            out = subprocess.run(
+                ["git", "ls-tree", "-d", "--name-only", ref],
+                capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}
+        return found or None
+
+    at_merge, today = dirs(merged_sha), dirs("HEAD")
+    if at_merge is None or today is None:
+        return False
+    return not (at_merge - today)
 
 
 def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
@@ -835,7 +901,7 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) 
         merged_sha=data["merged"],
         trees_identical=data["trees_identical"],
         policy=policy,
-        infra_ere=resolve_infra_ere(),
+        infra_ere=resolve_infra_ere(data["merged"]),
     )
     if as_json:
         print(json.dumps({

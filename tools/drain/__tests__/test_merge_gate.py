@@ -978,3 +978,96 @@ def test_the_job_join_keeps_the_job_that_ran_less_on_a_duplicate(monkeypatch):
     monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
     assert merge_gate._jobs_by_name("owner/repo", [1, 2])["vitest (node 20)"] is hollow
     assert merge_gate._jobs_by_name("owner/repo", [2, 1])["vitest (node 20)"] is hollow
+
+
+# --------------------------------------------------------------------------
+# The DELEGATED infra scope. Round 8, both findings in the EXCUSING direction.
+# --------------------------------------------------------------------------
+
+def _fake_run(stdout: str, rc: int = 0):
+    def run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
+    return run
+
+
+REAL_ERE = r"^(\.claude|\.github|PRPs|scripts|tools)/"
+
+
+def test_a_contaminated_but_compilable_ere_is_refused_not_accepted(monkeypatch):
+    """ROUND 8. `stdout.strip() or None` accepted anything non-empty.
+
+    Empty stdout refuses and an UNCOMPILABLE pattern refuses. The one shape that
+    is neither -- a warning line, a newline, then the real ERE -- is a VALID
+    regex: it compiles, raises nothing, matches no path, and the excuse route
+    then returns ok=True. The only stdout shape with no guard was the one that
+    silently excused.
+
+    Not reachable through today's deriver (every diagnostic goes to stderr and
+    stdout is one line), which is why an independent reviewer filed it as
+    should-fix rather than a blocker. It was one `console.log` away, in a file
+    nothing under `tools/drain/` owns.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run",
+                        _fake_run(f"warning: could not stat foo\n{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+    # NEGATIVE CONTROL: the clean shape still resolves, or this test would pass
+    # under a mutant that simply returns None always.
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() == REAL_ERE
+
+
+def test_an_unanchored_ere_is_refused(monkeypatch):
+    """A single line that is not the deriver's declared shape is still not it.
+
+    A delegated scope arriving in an unexpected shape must be None, never a
+    regex that happens to compile and match nothing.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run("no suites found\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
+        monkeypatch):
+    """ROUND 8, the TWO CLOCKS: the deriver walks the working tree's HEAD while
+    `push_trigger` is pinned to the merged sha.
+
+    If today's tree is NARROWER, a file that was in the infra scope at merge
+    falls outside it now, `hits` comes back empty, and a merge that DID have
+    infra work is excused. Present-day narrowing is the excusing direction, so
+    it refuses; today's tree having MORE directories only widens the scope, and
+    a wider scope can refuse but never excuse.
+    """
+    trees = {
+        "MERGED": "tools\nscripts\nretired-dir\n",
+        "HEAD": "tools\nscripts\n",
+    }
+
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout=trees[args[-1]], stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+    # WIDER today is fine -- and this is the control that stops the fix above
+    # from simply refusing everything. My first draft compared the merged sha's
+    # directories against the ERE's own ALTERNATIVES, which are a different set
+    # by design (18 of 29 at the time of writing), so it returned None on every
+    # receipt and would have refused `vitest (node 20)` on every merge.
+    trees["HEAD"] = "tools\nscripts\nretired-dir\nbrand-new\n"
+    assert merge_gate._top_level_dirs_agree("MERGED") is True
+    assert merge_gate.resolve_infra_ere("MERGED") == REAL_ERE
+
+
+def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch):
+    """"Cannot be shown to agree" is not "agree"."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate.resolve_infra_ere("deadbeef") is None
