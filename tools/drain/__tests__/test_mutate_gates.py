@@ -17,6 +17,8 @@ raises inside `load_policy` at import.
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 import sys
 
 import pytest
@@ -126,18 +128,96 @@ def test_arm_names_are_unique():
 # it can have. Round 10 added nine arms and every one pointed at `gates.py`.
 # ---------------------------------------------------------------------------
 
-def test_the_skip_parser_reads_nodeids_containing_spaces():
+def test_the_skip_parser_reads_nodeids_containing_spaces(tmp_path):
     """A nodeid may contain a space when a test is parametrised over this
-    receipt's own vocabulary (`Jest (portal)`, `Python Tests (3.10)`). The
-    previous `(\\S+?)` pattern dropped those SILENTLY, which UNDER-reports -- so
-    the wrong skip set could still equal `EXPECTED_SANDBOX_SKIPS` and let a
-    blind matrix run."""
-    import re as _re
+    receipt's own vocabulary (`Jest (portal)`, `Python Tests (3.10)`). A `(\\S+?)`
+    pattern drops those SILENTLY, which UNDER-reports -- so the wrong skip set
+    could still equal `EXPECTED_SANDBOX_SKIPS` and let a blind matrix run.
 
-    line = "tests/test_x.py::test_a[Jest (portal)] SKIPPED (needs node)"
-    m = _re.match(r"(\S+\.py)::(.+?)\s+SKIPPED", line.rstrip())
-    assert m is not None
-    assert m.group(2) == "test_a[Jest (portal)]"
+    ROUND 12: this test used to RE-TYPE the regex in its own body and never call
+    `_skipped_nodeids`, so reverting the real pattern left it green. An
+    independent reviewer caught it. A test that restates the implementation is
+    not an instrument -- it is the implementation, twice.
+    """
+    suite = tmp_path / "__tests__"
+    suite.mkdir()
+    (suite / "test_spaces.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.parametrize('case', ['Jest (portal)', 'plain'])\n"
+        "def test_a(case):\n"
+        "    pytest.skip('needs node')\n",
+        encoding="utf-8",
+    )
+    cmd = [sys.executable, "-m", "pytest", str(suite), "-q",
+           "-o", "addopts=", "-p", "no:cacheprovider"]
+    got = mutate_gates._skipped_nodeids(tmp_path, cmd)
+    assert got is not None
+    ids, count = got
+    assert count == 2, got
+    assert "test_spaces.py::test_a[Jest (portal)]" in ids, sorted(ids)
+
+
+def test_the_skip_count_comes_from_pytest_not_from_the_names(tmp_path):
+    """ROUND 10's blocker, now with an instrument. A module-level skip is
+    attributed to NO test id, so a count DERIVED from the names cannot see it --
+    which is how 56 vanished tests once passed every gate. The count must come
+    from pytest's own summary."""
+    suite = tmp_path / "__tests__"
+    suite.mkdir()
+    (suite / "test_modskip.py").write_text(
+        "import pytest\n"
+        "pytest.skip('whole module', allow_module_level=True)\n"
+        "def test_a():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    (suite / "test_ok.py").write_text("def test_b():\n    pass\n", encoding="utf-8")
+    cmd = [sys.executable, "-m", "pytest", str(suite), "-q",
+           "-o", "addopts=", "-p", "no:cacheprovider"]
+    got = mutate_gates._skipped_nodeids(tmp_path, cmd)
+    assert got is not None
+    ids, count = got
+    assert ids == set(), ids
+    assert count == 1, (
+        "a module-level skip must be COUNTED even though it names no test id; "
+        f"got {count}"
+    )
+
+
+def test_the_population_counter_reads_the_selected_count_not_the_total(tmp_path):
+    """ROUND 12 BLOCKER. With anything deselected pytest prints
+    `354/413 tests collected (59 deselected)`, and reading the right-hand number
+    makes an inherited `PYTEST_ADDOPTS='-k ...'` invisible: both trees report the
+    total while a smaller suite runs."""
+    suite = tmp_path / "__tests__"
+    suite.mkdir()
+    (suite / "test_two.py").write_text(
+        "def test_keep():\n    pass\n\ndef test_drop():\n    pass\n",
+        encoding="utf-8",
+    )
+    assert mutate_gates._collected(suite, tmp_path) == 2
+
+    env = dict(os.environ, PYTEST_ADDOPTS='-k "not drop"')
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", str(suite), "--collect-only", "-q",
+         "-o", "addopts=", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, cwd=tmp_path, env=env,
+    )
+    assert "1/2 tests collected" in out.stdout, out.stdout
+    m = re.search(r"(?:(\d+)/)?(\d+) tests? collected", out.stdout)
+    assert int(m.group(1) or m.group(2)) == 1, (
+        "the SELECTED count is the one that will execute"
+    )
+
+
+def test_the_population_counter_fails_closed_when_it_cannot_say(tmp_path):
+    """`None`, not `0`. Returning zero would make `main()` print
+    `POPULATION 0 collected, matching this checkout` for two broken trees."""
+    suite = tmp_path / "__tests__"
+    suite.mkdir()
+    (suite / "test_broken.py").write_text("import nonexistent_module_xyz\n",
+                                          encoding="utf-8")
+    assert mutate_gates._collected(suite, tmp_path) is None
 
 
 def test_the_expected_sandbox_skips_name_tests_that_exist():

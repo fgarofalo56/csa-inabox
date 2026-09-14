@@ -2660,20 +2660,40 @@ def _outputs_whose_work_did_not_run(
         # refuse. What must NOT refuse is the ordinary two-output job where one
         # output's work all ran and another's all skipped -- that is the
         # population this route exists for, and it is unaffected.
-        if all(c == "skipped" for c in conclusions):
+        # THE WHOLE TABLE, NOT ONE ROW OF IT. Round 12 BLOCKER: round 11 refused
+        # `skipped`+`success` and EXCLUDED everything else, and an independent
+        # reviewer drove `Jest (portal)=failure` + `Type-check (portal)=success`
+        # on the UNMODIFIED real policy row with `portal/react-webapp/src/App.tsx`
+        # merged: `ok=True`, the portal scope MATCHED and was never asked, while
+        # the portal's blocking test step had FAILED. `cancelled`, `timed_out`
+        # and an unknown conclusion all behaved the same way. Same defect, through
+        # the failure door.
+        #
+        # Round 11's stated reason for excluding a failure -- that `ran_instead`
+        # refuses it one sentence later -- is FALSE, and the reviewer measured
+        # that too: `ran_instead` BUILDS "concluded ['failure'], not success" and
+        # DISCARDS it whenever a sibling alternative succeeded, and for an output
+        # whose gated steps are not declared alternatives it never iterates them
+        # at all. A comment asserting a mechanism the code does not have is the
+        # exact R7 defect this package exists to refuse, written into the
+        # justification for an R7 fix.
+        #
+        # So: ASK when every step skipped. EXCLUDE only when every step
+        # SUCCEEDED -- that is the alternative that ran, whose scope should
+        # match, which is the population this route exists for. REFUSE anything
+        # else. "Not shown to have succeeded" is not "shown to have run".
+        outcomes = set(conclusions)
+        if outcomes == {"skipped"}:
             asked.append(str(out))
-        elif "skipped" in conclusions and "success" in conclusions:
+        elif outcomes == {"success"}:
+            pass  # its work ran and passed; its scope is expected to match
+        else:
             return None, (
                 f"declared output {out!r} of {name!r} gates {list(gated)}, which "
-                f"concluded {sorted(set(conclusions))} - its own declared steps "
-                "disagree about whether that output was true, so whether its work "
-                "ran cannot be read off the declaration"
+                f"concluded {sorted(outcomes)} - neither 'every step skipped' nor "
+                "'every step succeeded', so whether that output's work ran cannot "
+                "be read off the declaration"
             )
-        # EVERYTHING ELSE IS EXCLUDED: every step ran, or the ones that did not
-        # skip FAILED. A failed step is work that ran and did not succeed, which
-        # `ran_instead` reports in those words -- a truer sentence than "its
-        # steps disagree", and the reason this refusal is scoped to the
-        # skipped-vs-succeeded shape rather than to any disagreement.
     return asked, ""
 
 

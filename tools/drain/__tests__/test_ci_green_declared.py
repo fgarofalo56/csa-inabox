@@ -681,27 +681,107 @@ def test_negative_control_an_alternative_that_failed_is_not_work_done():
     `cancelled` as executed, which is harmless for a primary inside a green job
     and is NOT harmless for an alternative: it would report a FAILED step as the
     work this context did instead of its primary.
+
+    ROUND 12: this fixture WAS a licence by round 11's own definition, and an
+    independent reviewer caught it forty lines below the one round 11 rewrote
+    for the same reason. It had `Jest (portal)=failure` with `Type-check
+    (portal)=skipped` -- but Type-check runs FIRST (`fiab-console-ci.yml:296`
+    against `:301`), and an explicit `if:` implies `success()`, so a failure in
+    Jest cannot skip a step that already ran. The reachable ordering is the
+    reverse, and it is now the first case below.
+
+    BOTH refusal paths are driven, because they are different code:
+      1. the output's own steps did not all succeed and did not all skip, which
+         `_outputs_whose_work_did_not_run` refuses before the route is reached;
+      2. a declared alternative OUTSIDE any output's `gates` that failed, which
+         only `ran_instead` can refuse.
     """
-    job = {
+    reachable = {
         "name": "next build (node 20)",
         "conclusion": "success",
         "steps": [
             {"name": "Set up job", "conclusion": "success"},
             {"name": "Detect console changes", "conclusion": "success"},
             {"name": "Build (next build)", "conclusion": "skipped"},
-            {"name": "Jest (portal)", "conclusion": "failure"},
-            {"name": "Type-check (portal)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "failure"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
             {"name": "Complete job", "conclusion": "success"},
         ],
     }
     ok, why = gates.alternative_accounted_for(
-        "next build (node 20)", job, ["portal/react-webapp/src/App.tsx"], POLICY)
+        "next build (node 20)", reachable,
+        ["portal/react-webapp/src/App.tsx"], POLICY)
     assert not ok
+    assert "neither 'every step skipped' nor 'every step succeeded'" in why, why
+
+    # 2. THE `ran_instead` PATH. The alternative is not gated work, so the
+    # outputs resolve cleanly and the failure is the only thing left to refuse.
+    planted = copy.deepcopy(POLICY)
+    planted["receipts"]["ci_green_rule"]["alternatives"]["next build (node 20)"] = [
+        "Lint (next lint)"
+    ]
+    job = {
+        "name": "next build (node 20)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Lint (next lint)", "conclusion": "failure"},
+        ],
+    }
+    ok2, why2 = gates.alternative_accounted_for(
+        "next build (node 20)", job, ["tools/drain/gates.py"], planted)
+    assert not ok2
     # THE REASON SPECIFIC TO THIS SCENARIO. Round 10 (R7): this used to assert
     # the generic "concluded success", which the gate-step control below
     # asserted too -- so both passed on a sentence that was false for one of
     # them. A refusal reason that fits every refusal distinguishes none of them.
-    assert "concluded ['failure'], not success" in why, why
+    assert "concluded ['failure'], not success" in why2, why2
+
+
+def test_blocker_a_failed_gated_step_does_not_excuse_its_outputs_scope():
+    """ROUND 12 BLOCKER. Round 11 narrowed the refusal to `skipped`+`success`
+    and EXCLUDED everything else, so a FAILED step read as "work that ran" and
+    its output's scope was never compared.
+
+    Driven by an independent reviewer on the UNMODIFIED real policy row: the
+    portal scope MATCHED a merged file and was never asked, while the portal's
+    blocking test step had failed. `cancelled`, `timed_out` and an unknown
+    conclusion all behaved identically, which is why the rule is now the whole
+    table rather than one row of it.
+    """
+    for bad in ("failure", "cancelled", "timed_out", None):
+        job = {
+            "name": "next build (node 20)", "conclusion": "success",
+            "steps": [
+                {"name": "Detect console changes", "conclusion": "success"},
+                {"name": "Build (next build)", "conclusion": "skipped"},
+                {"name": "Jest (portal)", "conclusion": bad},
+                {"name": "Type-check (portal)", "conclusion": "success"},
+            ],
+        }
+        ok, why = gates.alternative_accounted_for(
+            "next build (node 20)", job,
+            ["portal/react-webapp/src/App.tsx"], POLICY)
+        assert not ok, f"{bad!r} let a matching portal scope go unasked: {why}"
+        assert "cannot be read off the declaration" in why, (bad, why)
+
+    # CONTROL: every gated step SUCCEEDING is still excluded, or this refuses
+    # the population the route exists for.
+    good = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "success"},
+            {"name": "Type-check (portal)", "conclusion": "success"},
+        ],
+    }
+    ok2, why2 = gates.alternative_accounted_for(
+        "next build (node 20)", good, ["portal/react-webapp/src/App.tsx"], POLICY)
+    assert ok2, why2
 
 
 def test_negative_control_the_gate_step_cannot_be_declared_as_its_own_alternative():
@@ -1706,3 +1786,57 @@ def test_the_hollow_primary_precondition_consults_every_resolved_step():
     ok2, why2 = gates._primary_steps_all_skipped(
         "next build (node 20)", decoyed, POLICY)
     assert ok2, why2
+
+
+def test_an_output_mixing_skipped_and_succeeded_refuses_for_that_reason():
+    """Kills W2. Widening `outcomes == {"skipped"}` to `"skipped" in outcomes`
+    still refuses this job -- via the #3783 scope message instead -- so only an
+    assertion on the REASON can tell the two apart. A refusal reached by the
+    wrong route is a coincidence, not a control.
+    """
+    job = {
+        "name": "next build (node 20)", "conclusion": "success",
+        "steps": [
+            {"name": "Detect console changes", "conclusion": "success"},
+            {"name": "Build (next build)", "conclusion": "skipped"},
+            {"name": "Jest (portal)", "conclusion": "skipped"},
+            {"name": "Type-check (portal)", "conclusion": "success"},
+        ],
+    }
+    asked, why = gates._outputs_whose_work_did_not_run(
+        "next build (node 20)", gates._scope_row("next build (node 20)", POLICY),
+        job["steps"])
+    assert asked is None, asked
+    assert "cannot be read off the declaration" in why, why
+
+
+def test_an_absent_primary_step_is_refused_not_tolerated():
+    """Kills W3. `_primary_steps_all_skipped` is the precondition BOTH routes
+    share, so a declaration naming a step no longer in the job must refuse --
+    tolerating it reads a job with no primary at all as cleanly hollow.
+    """
+    steps = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Jest (portal)", "conclusion": "skipped"},
+    ]
+    ok, why = gates._primary_steps_all_skipped(
+        "next build (node 20)", steps, POLICY)
+    assert not ok
+    assert "is absent from this job" in why, why
+
+
+def test_an_ambiguous_primary_step_is_refused_not_reduced():
+    """Kills W4. Several loose matches and no exact hit cannot say which step
+    the declaration means -- which is exactly what round 11's `steps_named`
+    migration of this function was written to close, and what no arm covered.
+    """
+    steps = [
+        {"name": "Detect console changes", "conclusion": "success"},
+        {"name": "Build (next build) - bundle report", "conclusion": "skipped"},
+        {"name": "Build (next build) - size check", "conclusion": "success"},
+    ]
+    ok, why = gates._primary_steps_all_skipped(
+        "next build (node 20)", steps, POLICY)
+    assert not ok
+    assert "cannot be resolved" in why, why
+    assert "NONE is named exactly that" in why, why

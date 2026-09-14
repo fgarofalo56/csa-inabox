@@ -758,6 +758,43 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # -- ROUND 12: the round-11 fix, and two more fail-open survivors --------
+    # Both reviewers converged: the round-11 rule was WRONG (one row of a
+    # six-row table) and had NO ARM. Mutating its refusal to `elif False:`
+    # survived the whole suite. That is the fourth round running where a fix
+    # shipped unobserved, so these three exist before anything else does.
+    (
+        ("W1 the whole-table refusal collapses, so an output whose steps neither "
+         "all skipped nor all succeeded is EXCLUDED and its scope never asked - "
+         "a FAILED portal step then excuses a matching portal scope"),
+        "gates.py",
+        '        elif outcomes == {"success"}:',
+        "        elif True:",
+    ),
+    (
+        ("W2 the `all skipped` arm widens to `any skipped`, so an output with "
+         "ONE skipped step among successes is asked as though nothing ran"),
+        "gates.py",
+        '        if outcomes == {"skipped"}:',
+        '        if "skipped" in outcomes:',
+    ),
+    (
+        ("W3 an ABSENT primary stops refusing in `_primary_steps_all_skipped` - "
+         "the precondition BOTH routes share, so a declaration naming a step no "
+         "longer in the job reads as cleanly hollow"),
+        "gates.py",
+        '            return False, f"its declared step {wanted!r} is absent from this job"',
+        "            continue",
+    ),
+    (
+        ("W4 an AMBIGUOUS primary stops refusing there, which is precisely what "
+         "round 11's `steps_named` migration was written to close"),
+        "gates.py",
+        ("        matches, ambiguous = steps_named(str(wanted), steps)\n"
+         "        if matches is None:"),
+        ("        matches, ambiguous = steps_named(str(wanted), steps)\n"
+         "        if False:"),
+    ),
     # -- SIX survivors an independent reviewer found in round 11 -------------
     # Round 10 shipped nine arms and every one pointed at `gates.py`'s scope
     # selection. The reviewer wrote their own arms over `ran_instead` and
@@ -1934,8 +1971,18 @@ def _collected(tests_dir: Path, cwd: Path) -> int | None:
     )
     if out.returncode != 0:
         return None
-    m = re.search(r"(\d+) tests? collected", out.stdout)
-    return int(m.group(1)) if m else None
+    m = re.search(r"(?:(\d+)/)?(\d+) tests? collected", out.stdout)
+    if m is None:
+        return None
+    # THE SELECTED COUNT, NOT THE TOTAL. Round 12 BLOCKER: with anything
+    # deselected, pytest prints `354/413 tests collected (59 deselected)` and
+    # `(\d+) tests? collected` takes the 413. Under an inherited
+    # `PYTEST_ADDOPTS='-k "not merge_gate"'` both trees then report 413, the
+    # check passes, and the control plus every arm run 354 -- which is the
+    # blind-run this check was added to close, and which a comment in `main()`
+    # named as closed while it was not. The left-hand number is what will
+    # actually execute.
+    return int(m.group(1) or m.group(2))
 
 
 def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | None:
@@ -2136,6 +2183,14 @@ def main() -> int:
         # exactly 2, the deselect delta intact -- and `main()` returned 0. A
         # renamed file, `--ignore`, a `collect_ignore`, or an inherited
         # `PYTEST_ADDOPTS=--deselect` all restore round 10's own blocker.
+        #
+        # ROUND 12: the `PYTEST_ADDOPTS` case was NOT closed by the first version
+        # of this check, though this comment said it was. `_collected` read the
+        # TOTAL out of `354/413 tests collected (59 deselected)`, so both trees
+        # reported 413 while 354 ran. It reads the SELECTED count now. An
+        # independent reviewer measured that; the claim above is corrected rather
+        # than quietly patched, because a comment asserting a closed hole is the
+        # same defect one level up.
         #
         # So the sandbox's collected test count is compared against the REPO's.
         # They must agree: the sandbox is a copy, and a copy that collects fewer
