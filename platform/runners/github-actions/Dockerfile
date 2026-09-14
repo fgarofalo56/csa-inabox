@@ -54,12 +54,21 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # while loading shared libraries" until it's installed explicitly (observed
 # live 2026-08-15: every job on this image that shells to pnpm, including the
 # base loom-ui-verify smoke suite, failed within seconds of Setup pnpm).
+#
+# The second group (make .. python3-dev) was added 2026-09-12 when the repo's CI
+# started moving onto this runner. MEASURED by
+# .github/workflows/loom-aca-runner-capability-probe.yml on the live job, not
+# guessed: `make`, `pip3`, `pwsh`, `dotnet`, `go`, `dbt` and `docker` were all
+# absent, and `make` alone breaks every gate in the repo, because `make validate`
+# IS the entry point (CLAUDE.md: "make validate runs dev-loop/gates/validate-all.ps1").
 RUN set -euo pipefail; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl jq git unzip gnupg lsb-release apt-transport-https \
         sudo libicu70 liblttng-ust1 libssl3 zlib1g libatomic1 acl \
-        software-properties-common; \
+        software-properties-common \
+        make build-essential python3-pip python3-venv python3-dev \
+        zip rsync openssh-client; \
     rm -rf /var/lib/apt/lists/*
 
 # --- Azure CLI (Microsoft apt repo) + az bicep ----------------------------
@@ -73,10 +82,53 @@ RUN set -euo pipefail; \
         > /etc/apt/sources.list.d/azure-cli.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends azure-cli; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- bicep, on the PATH, not inside somebody's home -------------------------
+# `az bicep install` writes the binary under $AZURE_CONFIG_DIR, which defaults
+# to the invoking user's ~/.azure. Installed as root during the build it lands
+# in /root/.azure, which the non-root `runner` user cannot read — so the image
+# SHIPPED a bicep the runner could not execute, and the live capability probe
+# returned, on a step it nonetheless labelled PRESENT:
+#
+#     bicep  ERROR: Bicep CLI not found. Install it now by running "az bicep install".
+#
+# That is the Playwright/PLAYWRIGHT_BROWSERS_PATH mistake one tool along.
+#
+# THE OBVIOUS FIX IS A TRAP, AND IT WAS MEASURED, NOT REASONED ABOUT. Pinning
+# `ENV AZURE_CONFIG_DIR=/opt/azure` + `chmod -R a+rX` makes the directory
+# READABLE but not WRITABLE, and `az` WRITES there on every invocation
+# (telemetry, command index, logs). The next probe run came back with `az`
+# itself broken — "The command failed with an unexpected error" — i.e. the
+# remedy was strictly worse than the defect: bicep missing became the whole
+# Azure CLI missing.
+#
+# So the binary goes somewhere a PATH lookup finds it and nobody needs write
+# access to, and AZURE_CONFIG_DIR is left alone at its per-user default.
+# AZURE_BICEP_USE_BINARY_FROM_PATH is the documented switch for exactly this.
+ENV AZURE_BICEP_USE_BINARY_FROM_PATH=true
+RUN set -euo pipefail; \
+    BICEP_VER="$(curl -fsSL https://api.github.com/repos/Azure/bicep/releases/latest | jq -r .tag_name)"; \
+    test -n "$BICEP_VER" -a "$BICEP_VER" != "null"; \
+    curl -fsSL -o /usr/local/bin/bicep \
+        "https://github.com/Azure/bicep/releases/download/${BICEP_VER}/bicep-linux-x64"; \
+    chmod a+rx /usr/local/bin/bicep; \
+    bicep --version
+
+# --- PowerShell (pwsh) ------------------------------------------------------
+# `PowerShell Lint` is one of the 15 REQUIRED status contexts, and
+# dev-loop/gates/validate-all.ps1 — the program behind `make validate` — is
+# PowerShell. A runner without pwsh cannot carry either.
+RUN set -euo pipefail; \
+    AZ_DIST="$(lsb_release -cs)"; \
+    curl -fsSL -o /tmp/pmc.deb \
+        "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"; \
+    dpkg -i /tmp/pmc.deb; \
+    rm -f /tmp/pmc.deb; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends powershell; \
     rm -rf /var/lib/apt/lists/*; \
-    # Pre-install the bicep CLI into the image so `az bicep build` works offline.
-    az bicep install; \
-    az bicep version
+    pwsh --version
 
 # --- gh CLI (GitHub apt repo) ---------------------------------------------
 RUN set -euo pipefail; \
@@ -99,10 +151,32 @@ RUN set -euo pipefail; \
     node --version; pnpm --version
 
 # --- non-root runner user --------------------------------------------------
+#
+# PARITY WITH ubuntu-latest, and it is not cosmetic. A GitHub-hosted runner's
+# `runner` user has PASSWORDLESS SUDO and a WRITABLE /usr/local/bin, and
+# workflows across this repo assume both. Measured on the first migrated CI run:
+#
+#     Secret Scan / Install gitleaks -> failure
+#     curl ... | tar -xz -C /usr/local/bin gitleaks
+#
+# `Secret Scan` is one of the fifteen REQUIRED contexts, so without this the
+# migration blocks every PR in the repo. The alternative -- editing ~100
+# workflows to install into $HOME -- is the same fix written a hundred times and
+# would diverge from the hosted runner the moment anyone adds a step.
+#
+# This is not a privilege escalation worth worrying about: the job's own code
+# already runs as `runner` inside an EPHEMERAL container that is destroyed after
+# one job, so root inside it reaches nothing `runner` could not already reach.
+# The real boundary is the container and the fork-PR approval policy, not this.
 RUN set -euo pipefail; \
     useradd -m -d /home/runner -s /bin/bash runner; \
     mkdir -p /home/runner/actions-runner; \
-    chown -R runner:runner /home/runner
+    chown -R runner:runner /home/runner; \
+    echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner; \
+    chmod 0440 /etc/sudoers.d/runner; \
+    visudo -c; \
+    chown root:runner /usr/local/bin /usr/local/lib; \
+    chmod 0775 /usr/local/bin /usr/local/lib
 
 WORKDIR /home/runner/actions-runner
 
@@ -140,6 +214,58 @@ RUN set -euo pipefail; \
     chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 
+# --- Rust toolchain --------------------------------------------------------
+# `ubuntu-latest` ships rustup preinstalled and three jobs assume it:
+# `cargo build + test (engine-only)`, `(default (engine + azure))` and
+# `cargo build --release (the profile the image ships)`. Measured on the first
+# migrated run: `rustup: command not found`, rc=127.
+#
+# Installed to a SHARED location, not $HOME, for the same reason bicep is: a
+# root-time install under /root/.cargo is invisible to the job user.
+ENV RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:$PATH
+RUN set -euo pipefail; \
+    curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable --no-modify-path; \
+    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"; \
+    rustup --version; \
+    cargo --version
+
+# --- tell self-sizing tools the CGROUP's size, not the NODE's ---------------
+#
+# THE ROOT CAUSE OF THE TIMEOUT CANCELLATIONS, and it is not obvious from the
+# symptom. This PR's own capability probe, run inside the job, reports:
+#
+#     cpus   : 8       <- the D8 NODE
+#     memory : 31Gi    <- the D8 NODE
+#
+# while the container's cgroup is 4 vCPU / 16 GiB. `nproc`, libuv, jest, vitest,
+# pnpm, cargo and Next.js all size their worker pools from what they observe, so
+# every one of them span up 8 workers onto 4 cores. The fleet came out 2-3x
+# slower than ubuntu-latest and four REQUIRED contexts were CANCELLED at exactly
+# their `timeout-minutes` -- `next build` missed by 35 seconds.
+#
+# Raising `replicaTimeout` (done, 9600s) stops ACA killing the replica; it does
+# NOT stop GitHub cancelling the job at its own cap, and it does not make the
+# over-subscription go away. These variables do, by telling each toolchain the
+# number it should have measured.
+#
+# Keep in step with the `cpu` param of gh-runner-job.bicep. Wrong-way drift here
+# is silent: too high re-creates the over-subscription, too low wastes cores.
+# EVERY VARIABLE BELOW IS ONE A REAL TOOL READS. The first draft of this block
+# also set `JEST_WORKERS` and `LOOM_RUNNER_VCPU` -- Jest has no such variable
+# (it takes `--maxWorkers`), and nothing anywhere reads the second. Shipping
+# them would have been the unconsulted-key defect this repo keeps finding, in
+# the fix for a different one. Jest's worker count must be passed at the call
+# site; it is not settable from here.
+ENV UV_THREADPOOL_SIZE=4
+ENV NODE_OPTIONS="--max-old-space-size=12288"
+ENV VITEST_MAX_THREADS=4
+ENV VITEST_MIN_THREADS=1
+ENV CARGO_BUILD_JOBS=4
+ENV MAKEFLAGS="-j4"
+ENV PYTEST_XDIST_AUTO_NUM_WORKERS=4
+
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
 # Strip CRLF: a Windows checkout (core.autocrlf) can hand the build context an
 # entrypoint.sh with \r\n line endings — the container then dies at start with
@@ -149,5 +275,34 @@ COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.
 RUN sed -i 's/\r$//' /home/runner/actions-runner/entrypoint.sh; \
     chmod +x /home/runner/actions-runner/entrypoint.sh
 
-USER runner
+USER root
+# RUN AS ROOT, DELIBERATELY, AND THIS IS NOT THE CONVENIENT CHOICE -- it is the
+# only one the platform allows. Operator decision 2026-09-12, on this
+# measurement from the first migrated CI run:
+#
+#     sudo: The "no new privileges" flag is set, which prevents sudo from
+#     running as root.
+#
+# Azure Container Apps sets `no_new_privs` on the container, so a setuid binary
+# can NEVER elevate there. `sudo` is therefore structurally impossible on these
+# runners -- a platform limit like the absent Docker daemon, not a missing
+# package -- and 13 `sudo apt-get` calls across 7 workflows depend on it
+# (unixodbc for the dbt/transform runners, the Rust toolchain, the Bicep CLI).
+#
+# When the process is ALREADY root, sudo does not need to change uid, so it
+# succeeds and every one of those workflows runs unmodified and identically to
+# `ubuntu-latest`. The alternative -- rewriting 13 call sites -- diverges from
+# the hosted runner permanently, and the next person to add a `sudo` step
+# breaks CI with a confusing error.
+#
+# WHY THIS IS AN ACCEPTABLE POSTURE, stated rather than assumed: the job's code
+# already has full control of this container as `runner`, the replica is
+# EPHEMERAL (one job, then destroyed), and the security boundary is the
+# container plus the fork-PR approval policy -- tightened to
+# `all_external_contributors` as part of this migration -- not the in-container
+# uid. Root here reaches nothing `runner` could not already reach.
+#
+# The runner agent refuses to run as root unless this is set, and that refusal
+# exists for the bare-metal case it does not apply to here.
+ENV RUNNER_ALLOW_RUNASROOT=1
 ENTRYPOINT ["/home/runner/actions-runner/entrypoint.sh"]

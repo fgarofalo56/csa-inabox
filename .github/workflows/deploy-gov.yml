@@ -121,7 +121,7 @@ env:
 jobs:
   validate:
     name: Validate Templates
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -147,7 +147,7 @@ jobs:
 
   what-if:
     name: What-If Analysis
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     needs: validate
     environment: ${{ github.event.inputs.environment }}
@@ -220,7 +220,7 @@ jobs:
 
   deploy:
     name: Deploy to ${{ github.event.inputs.environment }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     needs: what-if
     if: github.event.inputs.what_if == 'false'
@@ -412,7 +412,7 @@ jobs:
     name: What this run actually did
     needs: [validate, what-if, deploy]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 

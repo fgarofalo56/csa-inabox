@@ -151,7 +151,7 @@ env:
 jobs:
   precheck:
     name: Verify Gov secrets are configured
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -208,7 +208,7 @@ jobs:
   # merely change what the image phase does.
   pause-declaration:
     name: Is the GCC-High estate DECLARED paused?
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     outputs:
       declared: ${{ steps.read.outputs.declared_paused }}
     steps:
@@ -259,7 +259,7 @@ jobs:
     # Teardown step below refuses on either half.
     needs: [precheck, pause-declaration, build-gov-images]
     if: always() && needs.precheck.outputs.configured == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval
     # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).

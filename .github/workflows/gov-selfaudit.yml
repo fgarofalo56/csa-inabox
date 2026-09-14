@@ -37,7 +37,7 @@ env:
 jobs:
   audit:
     name: Gov self-audit (gates + exercise)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - name: Azure login (Gov sub) — deploy SP

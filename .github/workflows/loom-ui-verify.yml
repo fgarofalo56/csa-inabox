@@ -107,7 +107,7 @@ jobs:
   # ---------------------------------------------------------------------------
   queue-watchdog:
     name: 'Queue watchdog (bounded wait for the in-VNet runner)'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 25
     permissions:
       actions: read

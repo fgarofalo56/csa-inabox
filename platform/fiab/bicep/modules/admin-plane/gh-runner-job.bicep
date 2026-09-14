@@ -51,8 +51,17 @@ param location string
 @description('Container Apps managed-environment (CAE) resource id — the console VNet-integrated env.')
 param environmentId string
 
-@description('uami-loom-console resource id — used for ACR pull + the runner image az login.')
+@description('DEPRECATED for this module - kept only so an existing caller does not break. The runner MUST NOT carry the console identity; see runnerUamiId. Referenced now only by githubPatKeyVaultSecretUri, which resolves the PAT at DEPLOY time, outside any job.')
 param consoleUamiId string
+
+@description('''uami-loom-ci - the runner's OWN least-privilege identity, and the boundary this module depends on.
+
+MEASURED 2026-09-13, which is why this parameter exists. The runner used to carry `uami-loom-console-centralus`: 53 role assignments including **Contributor at SUBSCRIPTION scope**, **Role Based Access Control Administrator** on this resource group, and **Key Vault Secrets Officer** on kv-loom. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into the job, so ANY job step could assume that identity. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands back this job's own `github-pat` secret - and RBAC Administrator grants exactly the roleAssignments/write that Contributor notActions deny, i.e. self-promotion to Owner. On a PUBLIC repo, where an approved fork PR runs arbitrary code here.
+
+Removing the PAT from the process environment did NOT fix that; it closed the smaller door. Two independent reviewers demonstrated the recovery path separately.
+
+uami-loom-ci holds ONE role assignment: AcrPull on this registry, which is the only thing the runner needs to start. Add a grant only when a specific job proves it needs one, and record why here.''')
+param runnerUamiId string
 
 @description('ACR login server, e.g. acrloomk6mvh5sm6z7do.azurecr.io.')
 param acrLoginServer string
@@ -81,8 +90,8 @@ param runnerNamePrefix string = 'loom-aca'
 @description('Pending-run count that maps to one job execution.')
 param targetWorkflowQueueLength int = 1
 
-@description('Max concurrent job executions per polling interval.')
-param maxExecutions int = 5
+@description('Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30), together with the D8 profile ceiling of 3 nodes, to bound fleet cost at roughly a third of an unbounded ceiling. Raise both together if PRs start queueing.')
+param maxExecutions int = 8
 
 @description('Min executions. 0 = scale-to-zero.')
 @minValue(0)
@@ -91,14 +100,17 @@ param minExecutions int = 0
 @description('Scaler polling interval (seconds).')
 param pollingInterval int = 30
 
-@description('Max seconds a runner replica may execute before it is terminated.')
-param replicaTimeout int = 1800
+@description('Max seconds a runner replica may execute before it is terminated. MUST exceed the longest `timeout-minutes` of any job that targets this fleet, or ACA kills the replica mid-job and the check reports CANCELLED - indistinguishable from a human cancel. Measured 2026-09-13: 40 job definitions declare 40-150 minutes, the longest being deploy-fiab-il5 and dr-drill at 150. 9600s = 160 minutes leaves headroom over that maximum.')
+param replicaTimeout int = 9600
 
-@description('vCPU per runner replica.')
-param cpu string = '1.0'
+@description('vCPU per runner replica. Matches the 4 vCPU of a GitHub-hosted ubuntu-latest runner; the workflows are written against that and the caps assume it.')
+param cpu string = '4.0'
 
-@description('Memory per runner replica (e.g. 2.0Gi).')
-param memory string = '2.0Gi'
+@description('Memory per runner replica. 16Gi matches ubuntu-latest. NOT arbitrary: at 2.0Gi the console `next build` was OOM-killed after ~4.5 minutes with no error message, and fiab-console-ci.yml sets NODE_OPTIONS=--max-old-space-size=6144, which alone exceeds a 2Gi container.')
+param memory string = '16.0Gi'
+
+@description('Container Apps workload profile. The heavy jobs (next build, vitest, the Python matrix) do not fit the Consumption profile, so this fleet runs on the dedicated D8 profile that the environment already provisions and which scales to zero.')
+param workloadProfileName string = 'D8'
 
 @description('GitHub PAT value (repo-scoped). Supply via a pipeline @secure() variable. Leave empty when using githubPatKeyVaultSecretUri.')
 @secure()
@@ -122,6 +134,11 @@ var patSecret = empty(githubPatKeyVaultSecretUri)
       {
         name: 'github-pat'
         keyVaultUrl: githubPatKeyVaultSecretUri
+        // DELIBERATELY the console identity, and the ONLY remaining use of it
+        // here. A Key Vault-backed ACA secret is resolved by the PLATFORM at
+        // deploy/update time, not by job code, so this grant never reaches a
+        // job. The runner identity must NOT hold Key Vault access: that is
+        // precisely the capability that made the old arrangement escalatable.
         identity: consoleUamiId
       }
     ]
@@ -135,11 +152,13 @@ resource runnerJob 'Microsoft.App/jobs@2025-02-02-preview' = {
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${consoleUamiId}': {}
+      // EXACTLY ONE, and it is NOT the console's. See runnerUamiId.
+      '${runnerUamiId}': {}
     }
   }
   properties: {
     environmentId: environmentId
+    workloadProfileName: workloadProfileName
     configuration: {
       triggerType: 'Event'
       replicaTimeout: replicaTimeout
@@ -176,7 +195,8 @@ resource runnerJob 'Microsoft.App/jobs@2025-02-02-preview' = {
       registries: [
         {
           server: acrLoginServer
-          identity: consoleUamiId
+          // The runner's own identity, which holds AcrPull and nothing else.
+          identity: runnerUamiId
         }
       ]
       secrets: patSecret

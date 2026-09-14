@@ -20,7 +20,7 @@ env:
 
 jobs:
   attempt-grants:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - name: Azure login (limitlessdata_deploy SP)
         uses: azure/login@v2

@@ -39,7 +39,7 @@ env:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # A probe that hangs is not a pass. Without this the job inherits GitHub's
     # 6-hour default and a wedged fetch reads as "still running" all day.
     timeout-minutes: 20

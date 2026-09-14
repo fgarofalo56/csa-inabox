@@ -49,7 +49,7 @@ env:
 jobs:
   detect-changes:
     name: Detect Changed Verticals
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     if: github.event_name == 'push'
     outputs:
@@ -76,7 +76,7 @@ jobs:
 
   deploy:
     name: Deploy ${{ matrix.vertical }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     needs: [detect-changes]
     if: |

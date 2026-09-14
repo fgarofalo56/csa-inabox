@@ -34,7 +34,7 @@ permissions:
 jobs:
   consolidate:
     name: 'Nightly memory consolidation'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - name: Trigger consolidation

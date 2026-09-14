@@ -21,7 +21,7 @@ env:
 jobs:
   provision:
     name: Provision Databricks SQL warehouse (Gov)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Azure Gov Login

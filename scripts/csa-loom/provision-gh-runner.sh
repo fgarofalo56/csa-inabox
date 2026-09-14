@@ -11,8 +11,14 @@
 #   The job runs in the console's VNet-integrated Container Apps environment
 #   (peered to the DLZ), so CI build/roll/UAT can reach PE-only resources (lake,
 #   Purview, ADF, Synapse, the private ACR/KV) that a cloud GitHub runner can't.
-#   It reuses the CONSOLE UAMI for ACR pull + `az login --identity`, so CI auth
-#   == the same identity the console runs as.
+#
+#   IT DOES NOT REUSE THE CONSOLE UAMI, and the header used to say it did:
+#   "It reuses the CONSOLE UAMI for ACR pull + az login, so CI auth == the same
+#   identity the console runs as." That WAS true and it was the vulnerability —
+#   see RUNNER_UAMI_ID below. The runner carries uami-loom-ci, which holds
+#   AcrPull and nothing else, so `az login --identity` in a job buys almost
+#   nothing. A job that genuinely needs a PE-only resource needs an explicit
+#   grant to THAT identity, recorded with the reason.
 #
 # NOTE: This does NOT reduce Anthropic API spend. It only moves GitHub Actions
 #   *compute* in-VNet (and to scale-to-zero ACA). LLM usage is unaffected.
@@ -59,7 +65,44 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 RUNNER_IMAGE="${ACR}/gh-aca-runner:${IMAGE_TAG}"
 
 # Console UAMI (reused for ACR pull + az login). Resource id + clientId.
-CONSOLE_UAMI_ID="${CONSOLE_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-console-centralus}"
+# The runner's OWN least-privilege identity. NOT the console's.
+#
+# THIS LINE USED TO SAY uami-loom-console-centralus, AND THAT WAS THE
+# VULNERABILITY. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into
+# the job, so whatever identity the job carries can be assumed by ANY job step.
+# The console identity holds 53 role assignments (measured 2026-09-13):
+# Contributor at SUBSCRIPTION scope, Role Based Access Control Administrator on
+# the admin RG, Key Vault Secrets Officer on kv-loom, Reader at the management
+# group. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands
+# back this job's own github-pat secret - and RBAC Administrator grants exactly
+# the roleAssignments/write that Contributor's notActions deny. On a PUBLIC
+# repo, where an approved fork PR runs arbitrary code here.
+#
+# uami-loom-ci holds ONE assignment: AcrPull on the Loom ACR. Add a grant only
+# when a specific job PROVES it needs one.
+#
+# Two independent reviewers found the old arrangement separately. Re-pointing
+# this variable at the console identity re-opens it.
+RUNNER_UAMI_ID="${RUNNER_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-ci}"
+
+# REFUSE to provision with the console identity, however it was supplied. A
+# comment is not a control: without this, one stale env var or one copy-pasted
+# command silently restores subscription Contributor to CI.
+case "$RUNNER_UAMI_ID" in
+  *uami-loom-console*)
+    cat >&2 <<'IDERR'
+[provision-gh-runner][FATAL] RUNNER_UAMI_ID names the CONSOLE identity.
+
+  That identity holds Contributor at SUBSCRIPTION scope and RBAC Administrator
+  on the admin resource group, and Container Apps lets any job step assume it.
+  Giving it to the runner is the exact exposure removed on 2026-09-13.
+
+  Use uami-loom-ci (AcrPull only), or create a new least-privilege identity and
+  grant it precisely what the failing job proved it needs.
+IDERR
+    exit 1
+    ;;
+esac
 
 # GitHub target (repo scope).
 GH_OWNER="${GH_OWNER:-fgarofalo56}"
@@ -69,14 +112,26 @@ RUNNER_NAME_PREFIX="${RUNNER_NAME_PREFIX:-loom-aca}"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"   # GH Enterprise: set to your API URL
 
 # KEDA github-runner scaler knobs.
+#
+# THESE DEFAULTS ARE MEASURED, NOT CHOSEN, and the previous ones were the cause
+# of a real blocker: at CPU=1.0 / MEMORY=2.0Gi the console `next build` was
+# OOM-killed after ~4.5 minutes with no error message (fiab-console-ci.yml sets
+# NODE_OPTIONS=--max-old-space-size=6144, which alone exceeds a 2Gi container),
+# and at REPLICA_TIMEOUT=1800 ACA killed replicas mid-job so four REQUIRED
+# contexts reported CANCELLED - indistinguishable from a human cancel. 40 job
+# definitions declare timeout-minutes of 40-150.
+#
+# Keep these in step with platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep.
+# They diverged once, and a reviewer read the bicep and correctly measured a
+# fleet that no longer existed.
 SCALE_LABELS="${SCALE_LABELS:-loom-aca}"             # only count runs requesting these labels
 TARGET_QUEUE_LEN="${TARGET_QUEUE_LEN:-1}"            # 1 pending run -> 1 execution
-MAX_EXECUTIONS="${MAX_EXECUTIONS:-5}"
+MAX_EXECUTIONS="${MAX_EXECUTIONS:-8}"                # operator cap, with a 3-node D8 ceiling
 MIN_EXECUTIONS="${MIN_EXECUTIONS:-0}"                # scale-to-zero
 POLLING_INTERVAL="${POLLING_INTERVAL:-30}"
-REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-1800}"
-CPU="${CPU:-1.0}"
-MEMORY="${MEMORY:-2.0Gi}"
+REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-9600}"           # 160 min > the longest job cap (150)
+CPU="${CPU:-4.0}"                                    # matches ubuntu-latest
+MEMORY="${MEMORY:-16.0Gi}"                           # matches ubuntu-latest
 
 # Runner image build pins (passed through to the Dockerfile ARGs).
 RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"
@@ -263,8 +318,8 @@ else
     --secrets "github-pat=${GITHUB_PAT}" \
     --env-vars "${ENV_PAIRS[@]}" \
     --registry-server "$ACR" \
-    --registry-identity "$CONSOLE_UAMI_ID" \
-    --mi-user-assigned "$CONSOLE_UAMI_ID" \
+    --registry-identity "$RUNNER_UAMI_ID" \
+    --mi-user-assigned "$RUNNER_UAMI_ID" \
     -o none
 fi
 

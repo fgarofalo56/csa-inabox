@@ -21,7 +21,7 @@ env:
 jobs:
   teardown:
     name: Teardown CSA Loom resources in Commercial
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     if: github.event.inputs.confirm == 'DELETE'
     steps:
       - uses: actions/checkout@v7.0.1
