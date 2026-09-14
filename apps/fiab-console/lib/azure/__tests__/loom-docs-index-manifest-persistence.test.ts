@@ -62,7 +62,14 @@ vi.mock('@/lib/azure/cosmos-client', () => {
     items: {
       create: async (d: any) => { items.set(d.id, d); return { resource: d }; },
       upsert: async (d: any) => {
-        if ((globalThis as any).__cosmosRefuses) throw new Error('cosmos unreachable');
+        // `true` = the whole store is down. A STRING = refuse just that id, so a
+        // test can fail the record's own write without also failing the chunk
+        // and manifest writes that put the run on the Cosmos backend in the
+        // first place (the cosmos→ai-search direction of the fallback).
+        const refuse = (globalThis as any).__cosmosRefuses;
+        if (refuse === true || (typeof refuse === 'string' && d.id === refuse)) {
+          throw new Error('cosmos unreachable');
+        }
         items.set(d.id, d);
         return { resource: d };
       },
@@ -90,6 +97,10 @@ const { encodeFiles, decodeFiles, SEARCH_MAX_TERM_BYTES, MANIFEST_SHARD_CHARS, M
 
 /** Keys whose write the harness should force-reject (failure-injection). */
 const rejectKeys = new Set<string>();
+/** Reject every CHUNK write while still accepting the `__meta__` documents —
+ *  the shape that drives `reindex` off AI Search and onto the Cosmos backend
+ *  without also blinding the record-keeping under test. */
+let rejectChunkWrites = false;
 let docs = new Map<string, any>();
 
 function indexAction(action: any): { key: string; status: boolean; errorMessage: string | null; statusCode: number } {
@@ -100,6 +111,9 @@ function indexAction(action: any): { key: string; status: boolean; errorMessage:
   }
   if (rejectKeys.has(key)) {
     return { key, status: false, errorMessage: 'Injected rejection for this key.', statusCode: 400 };
+  }
+  if (rejectChunkWrites && action.kind !== '__meta__') {
+    return { key, status: false, errorMessage: 'Injected rejection: chunk writes refused.', statusCode: 503 };
   }
   // THE REAL CEILING — measured against a live service, not inferred from code.
   for (const [field, value] of Object.entries(action)) {
@@ -144,6 +158,7 @@ function respond(url: string, init?: any): Response {
 beforeEach(() => {
   docs = new Map();
   rejectKeys.clear();
+  rejectChunkWrites = false;
   (globalThis as any).__cosmosDocs?.clear();
   delete (globalThis as any).__cosmosRefuses;
   process.env.LOOM_AI_SEARCH_SERVICE = 'search-emulated';
@@ -332,6 +347,78 @@ describe('the last-run record on the AI Search path (#4497)', () => {
     const fallback = (globalThis as any).__cosmosDocs.get(LAST_RUN_KEY);
     expect(fallback).toBeTruthy();
     expect(JSON.parse(fallback.content).jobId).toBe('job-fallback');
+
+    // …and it must be READABLE. Asserting the raw store contents alone is what
+    // let the read-side gap survive: `loadLastRun` took a single backend, so a
+    // record the fallback successfully wrote to Cosmos was invisible to every
+    // consumer — `lastRun: null`, indistinguishable from never written, which is
+    // the one thing this record exists to tell apart. Read it back through the
+    // real consumer, not the fixture.
+    const f = await corpusFreshness();
+    expect(f.backend).toBe('ai-search'); // the read crossed stores, it did not switch backend
+    expect(f.lastRun?.jobId).toBe('job-fallback');
+    expect(f.lastRun?.outcome).toBe('succeeded');
+  }, 120_000);
+
+  it('prefers the NEWER record when the fallback wrote past a stale primary', async () => {
+    // First-answer-wins would fail this. The primary answers — with the OLDER
+    // record — so a read that stops at the first store reports a superseded run
+    // as "the last run". That is a wrong fact stated confidently, in the very
+    // record whose job is to explain a failure.
+    const first = await reindex({ jobId: 'job-older-on-ai-search' });
+    expect(first.ok).toBe(true);
+    expect(docs.has(LAST_RUN_KEY)).toBe(true);
+
+    rejectKeys.add(LAST_RUN_KEY); // now AI Search refuses; the record falls to Cosmos
+    const second = await reindex({ jobId: 'job-newer-on-cosmos' });
+    expect(second.ok).toBe(true);
+
+    // Both stores hold a record, and they disagree.
+    expect(JSON.parse(docs.get(LAST_RUN_KEY).content).jobId).toBe('job-older-on-ai-search');
+    const cosmos = JSON.parse((globalThis as any).__cosmosDocs.get(LAST_RUN_KEY).content);
+    expect(cosmos.jobId).toBe('job-newer-on-cosmos');
+    expect(Date.parse(cosmos.finishedAt)).toBeGreaterThan(
+      Date.parse(JSON.parse(docs.get(LAST_RUN_KEY).content).finishedAt),
+    );
+
+    expect((await corpusFreshness()).lastRun?.jobId).toBe('job-newer-on-cosmos');
+  }, 240_000);
+
+  it('the COSMOS→AI Search direction — a cosmos-backed run whose record Cosmos refuses', async () => {
+    // Reviewer 2's FINDING 5. `saveLastRun` picks its order from the backend:
+    // `['ai-search','cosmos']` or `['cosmos','ai-search']`. Every case above
+    // enters through the FIRST of those, so replacing the second with a bare
+    // `['cosmos']` left the whole file green — the cosmos-backed arm's fallback
+    // was asserted by its symmetry with the other arm, not measured.
+    //
+    // Reaching it needs a run that ENDS on Cosmos while AI Search is still
+    // configured and writable: refuse the chunk batch, and `reindexInner` falls
+    // back (the `if (!r.ok)` arm of `runFull` in `loom-docs-index.ts`, which
+    // pushes to Cosmos and calls `persist('cosmos', …)`), so
+    // `result.backend === 'cosmos'`
+    // and `reindex()` hands `saveLastRun` the cosmos order. Then refuse the
+    // record's own key in Cosmos, and only the second store can take it.
+    //
+    // Measured, not reasoned: with `['cosmos']` in place of `['cosmos',
+    // 'ai-search']` this file runs 14 ✓ / 1 ×, and the × is this test —
+    // `AssertionError: expected undefined to be truthy` on the AI Search doc
+    // below. In that same run the other 14 all stayed green, so this case is
+    // the only thing in the file that can see the difference.
+    rejectChunkWrites = true;
+    (globalThis as any).__cosmosRefuses = LAST_RUN_KEY;
+
+    const r = await reindex({ jobId: 'job-cosmos-record-refused' });
+    expect(r.backend).toBe('cosmos'); // the fallback the rest of the run took
+
+    expect((globalThis as any).__cosmosDocs.has(LAST_RUN_KEY)).toBe(false); // Cosmos really refused
+    const doc = docs.get(LAST_RUN_KEY);
+    expect(doc).toBeTruthy(); // …and AI Search caught it
+    const run = JSON.parse(doc.content);
+    expect(run.jobId).toBe('job-cosmos-record-refused');
+    expect(run.backend).toBe('cosmos'); // the record still names where the RUN went
+
+    // Readable through the real consumer, not just present in the fixture.
+    expect((await corpusFreshness()).lastRun?.jobId).toBe('job-cosmos-record-refused');
   }, 120_000);
 
   it('a total outage of both stores warns and still returns the rebuild', async () => {

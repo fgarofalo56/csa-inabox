@@ -926,12 +926,12 @@ async function saveLastRun(
     failures.join('; '));
 }
 
-/** Read the last rebuild attempt any replica recorded. Null when absent or
- *  unreadable — this is corroborating detail beside a freshness state that has
- *  already been decided, so it never needs to distinguish the two. */
-async function loadLastRun(backend: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
+/** Read the last-run record out of ONE store. Null when absent or unreadable —
+ *  this is corroborating detail beside a freshness state that has already been
+ *  decided, so it never needs to distinguish the two. */
+async function readLastRunFrom(store: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
   try {
-    if (backend === 'ai-search') {
+    if (store === 'ai-search') {
       const svc = searchServiceName();
       if (!svc) return null;
       const tok = await searchToken();
@@ -946,6 +946,45 @@ async function loadLastRun(backend: 'ai-search' | 'cosmos'): Promise<CorpusLastR
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the last rebuild attempt any replica recorded, from EITHER store.
+ *
+ * It must walk the same two stores `saveLastRun` writes to, or the fallback it
+ * performs is unreadable and buys nothing. That was the shape of the original
+ * defect in miniature: the write survived a single-store outage and the read
+ * did not, so the record existed and the poller still saw `lastRun: null` —
+ * indistinguishable from never having been written, which is the one thing the
+ * durable record exists to tell apart.
+ *
+ * Both stores can legitimately hold a record: the fallback writes to the other
+ * backend while a stale copy from an earlier, healthier run sits in the primary.
+ * So this is NOT first-answer-wins — it takes the one with the newer
+ * `finishedAt`. An unparseable or absent timestamp loses to a comparable one,
+ * and when neither is comparable the primary backend wins, matching the store
+ * `saveLastRun` tries first.
+ *
+ * Both reads are issued unconditionally and concurrently rather than consulting
+ * the second store only when the first comes back empty: a primary that answers
+ * can still be answering with an OLDER record than the fallback wrote, and a
+ * short-circuit would return it as "the last run". The extra round trip is small
+ * beside the source-tree stat walk `corpusFreshness` performs on every call, and
+ * an unconfigured or unreachable store costs one caught rejection.
+ */
+async function loadLastRun(backend: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
+  const other: 'ai-search' | 'cosmos' = backend === 'ai-search' ? 'cosmos' : 'ai-search';
+  const [primary, secondary] = await Promise.all([
+    readLastRunFrom(backend),
+    readLastRunFrom(other),
+  ]);
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const at = (r: CorpusLastRun): number => {
+    const t = Date.parse(String((r as any)?.finishedAt ?? ''));
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  return at(secondary) > at(primary) ? secondary : primary;
 }
 
 async function saveManifest(
@@ -1075,16 +1114,20 @@ export type CorpusFreshnessState = 'fresh' | 'stale' | 'never-indexed' | 'unknow
  * The outcome of the LAST rebuild attempt, persisted where every replica can
  * read it.
  *
- * WHY THIS EXISTS (roll 34648534467, 2026-09-11). `reindex()` correctly fails
- * when the manifest cannot be persisted — but it recorded that failure ONLY in
- * `startReindexJob()`'s in-memory job state, which is scoped to the replica
- * that ran it. Front Door session affinity is Disabled and the console runs
- * 2-6 replicas, so a poll almost never lands on that replica: every other one
- * answers `job=idle` with an unchanged manifest. The roll's reindex step
- * therefore polled for 912 seconds, read `stale`/`idle` 55 times, and failed
- * with "NOTHING WAS OBSERVED RUNNING" — which is true about what it saw and
- * says nothing about what happened. The failure was not silent on the replica
- * that had it; it was silent everywhere it could be read.
+ * WHY THIS EXISTS (roll 34648534467, 2026-09-11). `reindex()` records its
+ * outcome — succeeded, failed, or thrown — ONLY in `startReindexJob()`'s
+ * in-memory job state, which is scoped to the replica that ran it. Front Door
+ * session affinity is Disabled and the console runs 2-6 replicas, so a poll
+ * almost never lands on that replica: every other one answers `job=idle` with
+ * whatever manifest it can read. The roll's reindex step polled for 912
+ * seconds, read `stale`/`idle` 55 times, and failed with "NOTHING WAS OBSERVED
+ * RUNNING" — which is true about what it saw and says nothing about what
+ * happened.
+ *
+ * Note what that leaves unresolved: whether that rebuild failed is still
+ * unknown, and it is unknowable from the outside, because the only place an
+ * outcome was written was a field no other replica can read. The defect is the
+ * unknowability, not a failure we can point at.
  *
  * So the attempt's outcome goes in the SAME durable store as the manifest, and
  * is written on the failure path too -- including when the manifest write is
@@ -1132,7 +1175,7 @@ export interface CorpusFreshness {
   lastRun: CorpusLastRun | null;
 }
 
-/** Placeholder build stamps that are NOT commits.
+/** A build stamp is a commit only if it has the SHAPE of one.
  *
  * `Dockerfile:41` and `:96` both declare `ARG LOOM_BUILD_SHA=unknown`, so any
  * image built without `--build-arg` ships the literal string `unknown` in that
@@ -1142,18 +1185,54 @@ export interface CorpusFreshness {
  * exists to catch a stale index. Measured by a reviewer with otherwise
  * identical inputs: the commit path said `fresh (built from this revision
  * (unknown))` where the stat path said `stale`.
- */
-const PLACEHOLDER_COMMITS = new Set(['unknown', 'none', 'null', 'undefined', 'dev', 'local', 'head']);
+ *
+ * This matches the SHAPE rather than enumerating spellings, because a spelling
+ * list only rejects the placeholders someone thought to write down: an earlier
+ * revision of this guard listed seven, and `n/a`, `dirty`, `<none>` and a bare
+ * branch name all sailed through it. Every other build-stamp parser in this
+ * repo already keys on shape -- `lib/admin/estate-fleet.ts:141` and
+ * `lib/admin/deploy-status.ts:272` are this same regex, character for
+ * character, and `scripts/ci/__fixtures__/build-markers.json:128` is the
+ * fixture that records `unknown` as unparseable and says every parser must drop
+ * it. This was the one that did not.
+ *
+ * It is a third private copy, which is duplication worth naming rather than
+ * hiding: `estate-fleet.ts:141` EXPORTS its `GIT_OBJECT_ID`, so a shared import
+ * is available. `deploy-status.ts:272` already declined it and kept a local
+ * copy, and this file follows that precedent rather than reaching from
+ * `lib/azure` into `lib/admin` -- a dependency direction nothing else here
+ * takes. Consolidating all three belongs in its own change, not in a roll fix.
+ *
+ * The accepted width is 7-40 hex, which covers every value the repo actually
+ * stamps. Counted, not estimated -- `grep -rn "LOOM_BUILD_SHA=" .github/workflows`
+ * returns exactly six build-args, and they split three and three:
+ *
+ *   40 hex, `${{ github.sha }}`   build-fiab-images-acr-tasks.yml:447
+ *                                 full-app-deploy-commercial.yml:613
+ *                                 publish-ghcr-images.yml:111
+ *    8 hex, `--short=8 HEAD`      console-bluegreen-roll.yml:375  (SHA set :275)
+ *                                 gov-console-roll.yml:442        (SHA set :293)
+ *                                 gov-build-images.yml:449    (SHA_TAG set :299)
+ *
+ * Both roll workflows are single-job, so the assignment above each build-arg is
+ * the value it passes. 8 and 40 are both inside [7,40], so this has no false
+ * negatives on any image the repo can currently produce. */
+const GIT_OBJECT_ID = /^[0-9a-f]{7,40}$/i;
+
+function isBuildCommit(value: string): boolean {
+  return GIT_OBJECT_ID.test(value);
+}
 
 /** The staged source commit / build SHA, when the image genuinely stamps one.
  *
- * Returns null for a placeholder, which routes freshness back to the stat
- * comparison -- weaker across replicas, but weaker in the SAFE direction: it
+ * Returns null for anything that is not commit-shaped, which routes freshness
+ * back to the stat comparison -- weaker across replicas, but weaker in the SAFE
+ * direction: a replica-local fingerprint compared against a shared manifest
  * over-reports `stale` rather than under-reporting it. */
 function currentSourceCommit(): string | null {
   const raw = (process.env.LOOM_BUILD_SHA || '').trim();
   if (!raw) return null;
-  if (PLACEHOLDER_COMMITS.has(raw.toLowerCase())) return null;
+  if (!isBuildCommit(raw)) return null;
   return raw;
 }
 
@@ -1195,16 +1274,36 @@ export function evaluateFreshness(
   }
   if (!manifest) return { state: 'never-indexed', reason: 'The Help Copilot corpus has never been indexed in this backend.' };
 
-  // BOTH sides are filtered, not just the live one. `currentSourceCommit()`
-  // rejects placeholders at the source, but `manifest.sourceCommit` is
+  // BOTH sides are filtered, not just the live one. `manifest.sourceCommit` is
   // PERSISTED DATA -- a manifest written by an image built without
   // `--build-arg LOOM_BUILD_SHA` carries the literal `unknown` forever, and it
-  // outlives the image that wrote it. Filtering only the live value would let
-  // an old manifest reintroduce the false green this guard exists to stop.
+  // outlives the image that wrote it.
+  //
+  // Be precise about what the indexed-side filter buys, because an earlier
+  // revision of this comment had it backwards. It does NOT stop a false green:
+  // filtering only the live side already does that, since `unknown` on both
+  // sides blanks `currentCommit` and short-circuits to the stat path before the
+  // commit comparison can engage. What the indexed-side filter changes is the
+  // MIXED case -- a real sha live, `unknown` in the manifest -- and it changes
+  // it toward `fresh`: unfiltered, that pair compares unequal and reports
+  // `stale`; filtered, it falls through to the stat comparison, which reports
+  // `fresh` when the fingerprints match. Measured, not argued: the case is
+  // `the MIXED case — a real sha live, a placeholder in the manifest — falls to
+  // stat, and that is a WEAKENING`, in
+  // `__tests__/loom-docs-index-incremental.test.ts`.
+  //
+  // That is deliberate, and it is the same rule the live side follows. `unknown`
+  // is not a revision, so diffing it against one asserts a comparison the code
+  // cannot make -- it would report "built from unknown, serving abc12345" as if
+  // that were a revision gap, when the only thing established is that one image
+  // did not stamp. Falling back to the stat fingerprint is the designed
+  // no-commits-available path, and it is real evidence: the manifest's
+  // `path:size:mtime` hash matching this replica's is what the guard used before
+  // commits were recorded at all.
   const live = (opts?.currentCommit ?? '').trim();
   const indexed = (manifest.sourceCommit ?? '').trim();
-  const currentCommit = PLACEHOLDER_COMMITS.has(live.toLowerCase()) ? '' : live;
-  const indexedCommit = PLACEHOLDER_COMMITS.has(indexed.toLowerCase()) ? '' : indexed;
+  const currentCommit = isBuildCommit(live) ? live : '';
+  const indexedCommit = isBuildCommit(indexed) ? indexed : '';
   if (currentCommit && indexedCommit) {
     if (currentCommit !== indexedCommit) {
       return {

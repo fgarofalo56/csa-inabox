@@ -1080,6 +1080,70 @@ test('#4497 a durable last-run FAILURE ends the wait immediately, naming the cau
   );
 });
 
+test('#4498 the two sanitizers agree — an id carrying the field separator still correlates with itself', async () => {
+  // Reviewer 2's NIT. In `reindex-loom-docs.sh`, the POST side's inline
+  // `process.stdout.write(... .replace(...))` and the poll side's `clean()`
+  // helper both strip `[\r\n|]+` from the jobId, but they were replacing it
+  // with DIFFERENT things — `""` and `" "` — so the same id read on the two
+  // sides produced two different strings and the
+  // `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation could never be true. The
+  // whole #4497 correlation would go quiet: a durable failure of OUR OWN job
+  // stops being attributed and the roll grinds to its attempt ceiling and
+  // reports a timeout instead of the recorded cause.
+  //
+  // (Symbols, not line numbers, deliberately: both citations here were written
+  // as `:NNN` and both had drifted by twelve lines before this comment was
+  // finished, because the comment ITSELF moved the code it pointed at.)
+  //
+  // Today's console cannot produce this id — `lib/azure/reindex-job.ts` mints
+  // it with `crypto.randomUUID()` — so this is the guard, not a live repro. It is worth
+  // holding because the poll-side comment already states the rule the POST side
+  // was breaking: these values come from a remote service, so "this field
+  // cannot contain a pipe" is an assumption about data we do not control.
+  const piped = 'job|with|separators';
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: piped } }),
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: 'the failure this run must own',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: piped,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      // Attributed: it stops on the record rather than polling to the ceiling.
+      assert.equal(res.status, 1, out);
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /the failure this run must own/);
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+      // Measured, not reasoned. Reverting the POST side's
+      // `replace(/[\r\n|]+/g, " ")` back to `replace(/[\r\n|]+/g, "")`
+      // and re-running JUST this test gives 0 ✓ / 1 ×, a real AssertionError:
+      //   `4 !== 1` on the poll count, with the log showing
+      //   `job=jobwithseparators` from the POST against
+      //   `jobId: "job|with|separators"` in the record — the two never compare
+      //   equal, the `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation never
+      //   fires, and the run grinds to its 4-attempt ceiling and prints
+      //   `NOTHING WAS OBSERVED RUNNING`.
+      // Note which assertion did NOT fire: `res.status` was 1 either way. The
+      // exit code does not discriminate here — an attributed failure and a
+      // timeout both exit 1 — so the poll count and the message are what carry
+      // the measurement.
+    },
+  );
+});
+
 test('#4497 a last-run failure from ANOTHER job does not fail a healthy rebuild', async () => {
   // The record is durable, so it outlives the run that wrote it — and the
   // console serves every replica, so it may describe a rebuild this script never

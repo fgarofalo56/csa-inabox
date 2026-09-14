@@ -351,8 +351,23 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
       // observed — `job.state` is the ANSWERING REPLICA's view, so `idle` can
       // also mean the poll simply never landed on the worker, and this says so
       // rather than asserting nothing ran anywhere.
+      // #4498 — AN UNREADABLE BODY IS NOT A STALE INDEX (deploy-integrity R7).
+      // `state` falls back to 'unknown' when no poll returned a body this could
+      // parse a `freshness.state` out of. The sentence below used to convert
+      // that into `"the index is stale and no rebuild was seen"` — a claim
+      // about the CORPUS manufactured out of a failure to read anything at all,
+      // and one that sends the reader at the rebuild when the defect is in the
+      // poll. Branch on it FIRST: an unread freshness state is still a refusal
+      // (nothing proves the index is fresh) but it is a different next step.
+      const unreadable = state === 'unknown';
       const idle = job === 'idle' || job === 'unknown';
-      const which = idle
+      const which = unreadable
+        ? ' THE FRESHNESS STATE WAS NEVER READ: no poll returned a body carrying a ' +
+          '`freshness.state`, so nothing here establishes whether the corpus is stale, fresh, or ' +
+          'mid-rebuild — only that it was never OBSERVED fresh, which is why this still refuses. ' +
+          `The job state read ${job} over the same polls. Look at the poll path first — the URL, ` +
+          'the HTTP status, and whether the response body was JSON — not at the rebuild\'s duration.'
+        : idle
         ? ' NOTHING WAS OBSERVED RUNNING: every replica this poll reached reported ' +
           `job=${job}, so this is "the index is stale and no rebuild was seen", NOT "a rebuild ran ` +
           'long". Note the replica caveat — `job.state` is only the answering replica\'s view, so ' +
@@ -360,14 +375,22 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
           'visible for the whole wait.'
         : ` A rebuild was reported IN FLIGHT for the whole wait (job=${job}) — this is a slow or ` +
           'stuck rebuild, not an absent one.';
+      // The closing clause carries the same obligation. "Proceeding would
+      // measure a STALE index" is only TRUE where a poll actually read `stale`;
+      // on the unreadable path it would assert the very fact that was never
+      // established, one sentence after admitting it was not.
+      const why = unreadable
+        ? ' A timeout is a REFUSAL, not a pass: proceeding would measure an index this step never ' +
+          'confirmed fresh, which is the exact failure it exists to prevent. Failing loud.'
+        : ' A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is ' +
+          'the exact failure this step exists to prevent. Failing loud.';
       return {
         verdict: 'fail',
         level: 'error',
         message:
           `loom-docs reindex did NOT reach a fresh state within ${waited}${polls} — ${detail}.` +
           which +
-          ' A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is the ' +
-          'exact failure this step exists to prevent. Failing loud.',
+          why,
       };
     }
     case 'unreachable':

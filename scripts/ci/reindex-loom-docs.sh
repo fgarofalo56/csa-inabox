@@ -234,11 +234,24 @@ do_post() {
   # start mark cannot be missed. Empty when the POST was not answered by the
   # console -- in which case the record check below simply never fires, which
   # is the correct fail-closed behaviour: no identity, no claim.
+  #
+  # The substitution must be the SAME one the poll's own `clean()` helper
+  # applies (` `, not `""`). Both sides sanitize, but they were sanitizing
+  # differently, so an id carrying a pipe would be compared as `abcdef` here
+  # against `abc def` there and could never equal itself — the
+  # `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation in the durable-record
+  # check would silently stop firing and a durable failure of OUR job would
+  # read as a timeout.
+  # Reviewer 2's NIT on #4498. Not reachable from today's console —
+  # `lib/azure/reindex-job.ts:118` mints the id with `crypto.randomUUID()` — but
+  # the poll's own comment states the standard this side was not meeting: these
+  # values come from a remote service, so "this field cannot contain a pipe" is
+  # an assumption about data we do not control.
   POST_JOB_ID=$(node -e '
     const fs = require("node:fs");
     let j = {};
     try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
-    process.stdout.write(j && j.jobId ? String(j.jobId).replace(/[\r\n|]+/g, "") : "");
+    process.stdout.write(j && j.jobId ? String(j.jobId).replace(/[\r\n|]+/g, " ") : "");
   ' "$POST_BODY_FILE" 2>/dev/null || true)
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
   head -c 800 "$POST_BODY_FILE" || true
@@ -558,12 +571,27 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # fixing a different one. `job.state` is readable whatever freshness says: the
   # two fields fail independently.
   #
-  # That branch is now GONE rather than reordered. Its body was
-  # `IDLE_STREAK=0; continue`, which leaves exactly the state the `else` below
-  # already produces for any non-`stale` reading — provably equivalent to its own
-  # absence, so no fixture could distinguish it and no mutation of it could be
-  # killed. The `[ "$FRESH" = "stale" ]` guard below is what actually keeps
-  # `unknown` out of the streak, and it is tested directly.
+  # That branch is now GONE rather than reordered, because it was a DEFECT and
+  # not merely dead code. Its body was `IDLE_STREAK=0; continue`, and the
+  # `continue` is the whole problem: it skips the latch on the very next line.
+  # The `else` further down restores `IDLE_STREAK=0` for any non-`stale`
+  # reading, so the streak bookkeeping is indeed unchanged — but that `else`
+  # never touches SAW_RUNNING, so nothing downstream recovers the sighting the
+  # `continue` stepped over.
+  #
+  # Measured, not reasoned: re-inserting the branch verbatim above this line
+  # turns exactly ONE shell test RED — `#4497 a job=running sighting
+  # counts even when that poll could not read freshness` — with the assertion
+  # `a rebuild WAS observed running, so "never observed" would be refuted by the
+  # log above it`, over a log carrying `poll: freshness=unknown job=running`
+  # followed by `TRIGGER REFUSED`. Deleting it restores `main`'s behaviour, and
+  # that test is what pins it. The `[ "$FRESH" = "stale" ]` guard below is what
+  # keeps `unknown` out of the streak, and it is tested directly.
+  #
+  # The "exactly ONE" is a claim about the whole suite, so name the population it
+  # was measured over: the 43 tests this file held at the time. It now holds 44 —
+  # the 44th is the POST/poll sanitizer test added later in this same PR, which
+  # was not in that population and does not reach this branch.
   if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
 
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────

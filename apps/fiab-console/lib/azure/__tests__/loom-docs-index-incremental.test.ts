@@ -207,10 +207,14 @@ describe('evaluateFreshness (G2)', () => {
       { statFingerprint: 'built-then', sourceCommit: 'dcabe1dd02af' },
       { currentCommit: 'unknown' },
     ).state).toBe('stale');
-    // Case-insensitively, and for the other placeholders the same ARG pattern
-    // produces. Falling back to stat is weaker across replicas but weaker in
-    // the SAFE direction: it over-reports stale rather than under-reporting it.
-    for (const placeholder of ['UNKNOWN', 'none', 'null', 'undefined', 'dev', 'local', 'HEAD']) {
+    // Case-insensitively, and for placeholders no spelling list enumerated.
+    // The guard keys on the SHAPE of a git object id, so `n/a`, `dirty`,
+    // `<none>`, a branch name and a too-short hex string are all rejected
+    // without anyone having had to think of them first.
+    for (const placeholder of [
+      'UNKNOWN', 'none', 'null', 'undefined', 'dev', 'local', 'HEAD',
+      'n/a', 'dirty', '<none>', 'main', 'refs/heads/main', 'latest', 'abcdef',
+    ]) {
       expect(evaluateFreshness(
         'changed-now',
         { statFingerprint: 'built-then', sourceCommit: placeholder },
@@ -223,6 +227,50 @@ describe('evaluateFreshness (G2)', () => {
       { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' },
       { currentCommit: 'dcabe1dd02af' },
     ).state).toBe('fresh');
+    // Both stamped widths the repo actually produces are commits: Commercial
+    // stamps `${{ github.sha }}` (40 hex), Gov stamps `--short=8` (8 hex).
+    expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'a'.repeat(40) }, {
+      currentCommit: 'b'.repeat(40),
+    }).reason).toContain('aaaaaaaaaaaa');
+    expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'deadbeef' }, {
+      currentCommit: 'cafed00d',
+    }).reason).toContain('deadbeef');
+  });
+
+  it('the MIXED case — a real sha live, a placeholder in the manifest — falls to stat, and that is a WEAKENING', () => {
+    // Reviewer 2's FINDING 4. Every case in the test above has a DIFFERING stat
+    // fingerprint, so all of them reach `stale` down the stat path whether or
+    // not the indexed side is filtered — the assertions could not tell the two
+    // behaviours apart, and the code comment justifying the indexed-side filter
+    // claimed a protection it does not provide.
+    //
+    // This is the case that discriminates: stat MATCHES, so the stat path says
+    // `fresh`, and only the commit path could say otherwise.
+    const statMatches = { statFingerprint: 'same-stat', sourceCommit: 'unknown' };
+    const mixed = evaluateFreshness('same-stat', statMatches, { currentCommit: 'abc12345' });
+    expect(mixed.state).toBe('fresh');
+    expect(mixed.reason).toBe('The indexed corpus matches the staged docs.');
+    // Measured, so the direction is on record: WITHOUT the indexed-side filter
+    // this same input compares `unknown` against `abc12345`, reports `stale`,
+    // and names `unknown` as a revision it is not. Filtering moves the verdict
+    // toward `fresh`. That is the trade this code takes deliberately — a
+    // non-commit is not comparable to a commit, and the stat fingerprint is the
+    // designed fallback — but it is a weakening, not the false-green protection
+    // the old comment claimed.
+    //
+    // The safe direction is preserved where it matters: change the docs and the
+    // stat no longer matches, so the same mixed pair reds.
+    expect(evaluateFreshness('docs-changed', statMatches, { currentCommit: 'abc12345' }).state)
+      .toBe('stale');
+    // And the live-side filter alone still stops the original false green:
+    // `unknown` on BOTH sides never engages the commit comparison.
+    const bothPlaceholder = evaluateFreshness(
+      'docs-changed',
+      { statFingerprint: 'built-then', sourceCommit: 'unknown' },
+      { currentCommit: 'unknown' },
+    );
+    expect(bothPlaceholder.state).toBe('stale');
+    expect(bothPlaceholder.reason).not.toContain('unknown');
   });
 });
 

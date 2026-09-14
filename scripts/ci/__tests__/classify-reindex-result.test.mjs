@@ -218,6 +218,46 @@ test('poll: timeout is a REFUSAL, never a pass', () => {
   assert.match(r.message, /REFUSAL/i);
 });
 
+/**
+ * #4498 — AN UNREADABLE BODY IS NOT A STALE INDEX (deploy-integrity R7).
+ *
+ * `freshness.state` falls back to 'unknown' when no poll returned a body the
+ * classifier could parse it out of. The timeout branch used to read that as
+ * `job=unknown` → idle and emit «this is "the index is stale and no rebuild was
+ * seen"» — a claim about the CORPUS assembled from having read nothing, which
+ * points the reader at the rebuild when the defect is in the poll path.
+ *
+ * MUTATION-PROOF: delete the `unreadable` branch and the old stale-index
+ * sentence comes back, so the negative assertion below goes RED. Keep BOTH
+ * halves — the positive one alone would survive a branch that also asserted
+ * staleness, and the refusal assertion keeps "we do not know" from softening
+ * into a pass.
+ */
+test('poll: timeout on an UNREADABLE body does not claim the index is stale', () => {
+  const r = classifyReindexPoll({ outcome: 'timeout', waitedSeconds: 900, body: '' });
+  assert.equal(r.verdict, 'fail'); // not knowing is still a refusal
+  assert.match(r.message, /REFUSAL/);
+  assert.match(r.message, /FRESHNESS STATE WAS NEVER READ/);
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /NOTHING WAS OBSERVED RUNNING/);
+});
+
+/** The counterfactual: a body that DID carry `stale` still gets the stale
+ *  sentence. Without this, deleting the idle branch entirely would pass. */
+test('poll: timeout on a body that READ stale/idle keeps the stale-index finding', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ ok: true, job: { state: 'idle' }, freshness: { state: 'stale' } }),
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NOTHING WAS OBSERVED RUNNING/);
+  assert.match(r.message, /the index is stale/i);
+  assert.match(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /FRESHNESS STATE WAS NEVER READ/);
+});
+
 test('poll: unreachable over Front Door → tolerate (transient)', () => {
   const r = classifyReindexPoll({ outcome: 'unreachable', body: '' });
   assert.equal(r.verdict, 'tolerate');
