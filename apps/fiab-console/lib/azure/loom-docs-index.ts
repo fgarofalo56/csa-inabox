@@ -71,6 +71,15 @@ import {
   type DocChunk,
   type ManifestFileEntry,
 } from './loom-docs-corpus';
+import {
+  AI_SEARCH_CANDIDATE_WINDOW,
+  RETRIEVAL_OVERFETCH,
+  bm25IndexFor,
+  rankChunks,
+  resetDocsRankerCache,
+  type DocHit,
+} from './docs-corpus-ranker';
+import { currentSourceCommit, isBuildCommit, sameCommit } from './build-stamp';
 
 // ---------- Types ----------
 
@@ -79,10 +88,12 @@ import {
 // `DocChunk` from this module keeps working unchanged.
 export type { DocChunk };
 
-export interface DocHit extends DocChunk {
-  /** 0..1 normalized relevance */
-  score: number;
-}
+// `DocHit` is produced by the corpus ranker, so it is DECLARED in
+// ./docs-corpus-ranker and re-exported here — same treatment as `DocChunk`
+// above, and every existing importer keeps working unchanged.
+export type { DocHit };
+export { AI_SEARCH_CANDIDATE_WINDOW, resetDocsRankerCache } from './docs-corpus-ranker';
+
 
 // ---------- Credentials / config ----------
 
@@ -352,17 +363,57 @@ async function searchSearch(query: string, top: number, kind?: DocChunk['kind'])
 
 // ---------- Cosmos fallback backend ----------
 
+/**
+ * The corpus container handle, memoised for the life of the process.
+ *
+ * WHY MEMOISE (#4498 round 4) — `createIfNotExists` is a CONTROL-PLANE call,
+ * and without this memo every `helpCorpusContainer()` issued one. That lands on
+ * a POLL: `corpusFreshness` is what the roll's reindex step waits on, looping
+ * for up to ~15 minutes, and it also backs `/admin/readiness` and
+ * `/api/admin/performance/retrieval-stats` per request.
+ *
+ * It was not even once per poll on the Cosmos backend only. `loadLastRun` reads
+ * BOTH stores unconditionally — deliberately, and for a reason argued at its
+ * own doc comment — so a deployment running the AI Search backend, which never
+ * stores a corpus chunk in Cosmos, still took a Cosmos control-plane round trip
+ * on every poll. That is the cost this PR would otherwise have added to the very
+ * path it exists to make reliable.
+ *
+ * The precedent is `ensure()` in `cosmos-client.ts`, memoised by `_ensured` for
+ * exactly this reason. This memo holds the PROMISE rather than the resolved
+ * handle, so concurrent callers share one in-flight call instead of racing two;
+ * `COSMOS_CONTAINER_ID` is a module constant, so there is no key to vary on. A
+ * rejection CLEARS the memo — caching a failure would convert one transient
+ * Cosmos error into a permanently corpus-less process.
+ */
+let _corpusContainer: Promise<Container> | null = null;
+
+/** Drop the memoised handle. Tests only — see `__testInternals`. */
+function __resetCorpusContainerForTests(): void {
+  _corpusContainer = null;
+}
+
 async function helpCorpusContainer(): Promise<Container> {
+  if (_corpusContainer) return _corpusContainer;
   // Re-use the cosmos-client singleton via copilotSessionsContainer's `ensure()`
   // by piggy-backing on the same database. We could expose a generic builder
   // but inlining keeps the diff small and reuses connection + auth.
-  const cs = await copilotSessionsContainer();
-  const db = (cs as any).database; // @azure/cosmos exposes database off Container
-  const { container } = await db.containers.createIfNotExists({
-    id: COSMOS_CONTAINER_ID,
-    partitionKey: { paths: ['/kind'] },
+  const pending = (async () => {
+    const cs = await copilotSessionsContainer();
+    const db = (cs as any).database; // @azure/cosmos exposes database off Container
+    const { container } = await db.containers.createIfNotExists({
+      id: COSMOS_CONTAINER_ID,
+      partitionKey: { paths: ['/kind'] },
+    });
+    return container as Container;
+  })();
+  _corpusContainer = pending;
+  // Only clear if THIS attempt is still the memoised one — a retry may already
+  // have replaced it by the time this rejection settles.
+  pending.catch(() => {
+    if (_corpusContainer === pending) _corpusContainer = null;
   });
-  return container;
+  return pending;
 }
 
 async function pushChunksToCosmos(chunks: DocChunk[]): Promise<{ ok: boolean; uploaded: number; error?: string }> {
@@ -408,143 +459,6 @@ async function deleteChunksFromCosmos(
   } catch (e: any) {
     return { ok: false, deleted: 0, error: e?.message || String(e) };
   }
-}
-
-// ---------- Cosmos-fallback ranking (issue #2585 P0) ----------
-
-/**
- * BM25 needs corpus-wide statistics (document frequency, mean chunk length), so
- * unlike the per-chunk `rankSubstring` it cannot be evaluated one row at a time.
- * The index is therefore built once per corpus SNAPSHOT and reused across
- * queries: building it over the ~50k-chunk corpus costs ~850 ms, ranking against
- * it costs microseconds because the postings walk touches only the query's own
- * terms instead of scanning every chunk.
- *
- * Cache key = chunk count + an order-independent hash of the chunk ids, so a
- * reindex (new/removed/renamed chunks) invalidates it automatically without a
- * process restart, and Cosmos returning rows in a different order does not.
- * Content-only edits that keep every id stable are picked up on the next
- * `resetDocsRankerCache()` (called by `reindex`) or process roll.
- */
-let bm25Cache: { signature: string; index: Bm25Index } | null = null;
-
-/** FNV-1a over one id — cheap, and combined order-independently below. */
-function idHash(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-function corpusSignature(chunks: DocChunk[]): string {
-  let sum = 0;
-  let xor = 0;
-  for (const c of chunks) {
-    const h = idHash(c.id || c.path);
-    sum = (sum + h) >>> 0;
-    xor ^= h;
-  }
-  return `${chunks.length}:${sum}:${xor >>> 0}`;
-}
-
-/**
- * Drop the memoised BM25 index AND the memoised corpus statistics (called after
- * a reindex; exported for tests). Both are snapshots of a corpus that has just
- * changed, so they have to fall together — dropping only one would leave the AI
- * Search re-rank scoring fresh chunks against stale document frequencies.
- */
-export function resetDocsRankerCache(): void {
-  bm25Cache = null;
-  resetCorpusStatsCache();
-}
-
-function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
-  const signature = corpusSignature(chunks);
-  if (bm25Cache && bm25Cache.signature === signature) return bm25Cache.index;
-  const index = buildBm25Index(chunks);
-  bm25Cache = { signature, index };
-  return index;
-}
-
-/**
- * How many candidates to pull before per-document diversification trims back to
- * `top`. Without an over-fetch the diversifier has nothing to backfill from and
- * is a no-op.
- */
-const RETRIEVAL_OVERFETCH = 4;
-
-/**
- * How wide a candidate window to pull from AI Search before the shared ranker
- * re-orders it (#2929). AI Search's `simple`/`any` scoring decides only which
- * documents are CANDIDATES here — NOT their final order — so this must be wide
- * enough that a specific gold document (buried by AI Search under same-named
- * siblings) is still inside the window for `rankChunks` to surface. 100 covers
- * the observed miss (`parity/lakehouse.md` sat well below AI Search's top ~32,
- * giving hit-rate ~0.07); it is never smaller than the diversification
- * over-fetch. AI Search caps `top` at 1000, so this is comfortably in range.
- */
-export const AI_SEARCH_CANDIDATE_WINDOW = 100;
-
-/**
- * The ONE ranking pipeline both retrieval backends run (issue #2585 ranker,
- * wired to the AI Search path for #2929). Given a set of candidate chunks it
- * returns the top `top` as DocHits under BM25 (IDF · TF-saturation · length
- * normalisation) + the surface boost + source-class weighting — identical
- * knobs, identical code — normalised to the documented 0..1 `DocHit.score`.
- *
- * Extracted from `searchCosmos` so the AI Search path can REUSE it verbatim
- * rather than re-sorting AI Search's short returned window by a multiplier: for
- * the SAME candidate documents the two backends now produce the SAME ordering,
- * so the offline-measured Cosmos numbers (measure-retrieval.mjs, ~0.83) carry
- * to the live AI Search path.
- *
- * `buildIndex` is injectable ONLY so the Cosmos path can keep its
- * corpus-signature memoiser (`bm25IndexFor`): it always ranks the SAME full
- * ~50k-chunk corpus, so the ~850 ms index build must be amortised across
- * queries. The AI Search path ranks a small, per-query candidate window, so it
- * uses the default fresh `buildBm25Index` — there is nothing stable to cache
- * and a per-window build is microseconds.
- */
-function rankChunks(
-  resources: DocChunk[],
-  query: string,
-  top: number,
-  opts: {
-    bm25: boolean;
-    surfaceTerms?: readonly string[];
-    sourceWeights: boolean;
-    /**
-     * #2970 — corpus-wide BM25 statistics. MUST be supplied when `resources` is
-     * a query-selected subset (the AI Search candidate window); omitted on the
-     * Cosmos path, whose index already covers the whole corpus.
-     */
-    corpusStats?: Bm25CorpusStats | null;
-  },
-  buildIndex: (chunks: DocChunk[]) => Bm25Index = buildBm25Index,
-): DocHit[] {
-  if (opts.bm25 === false) {
-    // Kill-switch path — byte-identical to the pre-#2585 ranker.
-    return resources
-      .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, top);
-  }
-  const index = buildIndex(resources);
-  const ranked = bm25Rank(index, query, top, {
-    surfaceTerms: opts.surfaceTerms,
-    surfaceBoost: opts.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
-    // #2585 P2 — rank published product docs above the engineering ledger.
-    sourceWeights: opts.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
-    corpusStats: opts.corpusStats ?? null,
-  });
-  // Normalise to the 0..1 `DocHit.score` contract (BM25 is unbounded above and
-  // only comparable within one result set) — citations and the Copilot tool
-  // render this number.
-  const max = ranked.length > 0 ? ranked[0].score : 1;
-  return ranked.map((r) => ({ ...resources[r.index], score: max > 0 ? r.score / max : 0 }));
 }
 
 async function searchCosmos(
@@ -968,9 +882,14 @@ async function readLastRunFrom(store: 'ai-search' | 'cosmos'): Promise<CorpusLas
  * Both reads are issued unconditionally and concurrently rather than consulting
  * the second store only when the first comes back empty: a primary that answers
  * can still be answering with an OLDER record than the fallback wrote, and a
- * short-circuit would return it as "the last run". The extra round trip is small
- * beside the source-tree stat walk `corpusFreshness` performs on every call, and
- * an unconfigured or unreachable store costs one caught rejection.
+ * short-circuit would return it as "the last run". What the extra round trip
+ * costs is stated as a SHAPE, not a measurement — an earlier revision of this
+ * paragraph said it was "small beside the source-tree stat walk `corpusFreshness`
+ * performs", which reads as measured and was only reasoned, and comparing the two
+ * would need a live estate. Established: it is a single point read by document
+ * id, on a memoised container handle (see `helpCorpusContainer`), so it carries
+ * no control-plane call; and an unconfigured or unreachable store costs one
+ * caught rejection, not a retry loop.
  */
 async function loadLastRun(backend: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
   const other: 'ai-search' | 'cosmos' = backend === 'ai-search' ? 'cosmos' : 'ai-search';
@@ -1175,67 +1094,6 @@ export interface CorpusFreshness {
   lastRun: CorpusLastRun | null;
 }
 
-/** A build stamp is a commit only if it has the SHAPE of one.
- *
- * `Dockerfile:41` and `:96` both declare `ARG LOOM_BUILD_SHA=unknown`, so any
- * image built without `--build-arg` ships the literal string `unknown` in that
- * env var. Treating it as a revision is not a cosmetic bug: two such replicas
- * "agree", the commit comparison engages, and freshness reports FRESH over a
- * corpus whose staged docs have changed -- a false green on the one gate that
- * exists to catch a stale index. Measured by a reviewer with otherwise
- * identical inputs: the commit path said `fresh (built from this revision
- * (unknown))` where the stat path said `stale`.
- *
- * This matches the SHAPE rather than enumerating spellings, because a spelling
- * list only rejects the placeholders someone thought to write down: an earlier
- * revision of this guard listed seven, and `n/a`, `dirty`, `<none>` and a bare
- * branch name all sailed through it. Every other build-stamp parser in this
- * repo already keys on shape -- `lib/admin/estate-fleet.ts:141` and
- * `lib/admin/deploy-status.ts:272` are this same regex, character for
- * character, and `scripts/ci/__fixtures__/build-markers.json:128` is the
- * fixture that records `unknown` as unparseable and says every parser must drop
- * it. This was the one that did not.
- *
- * It is a third private copy, which is duplication worth naming rather than
- * hiding: `estate-fleet.ts:141` EXPORTS its `GIT_OBJECT_ID`, so a shared import
- * is available. `deploy-status.ts:272` already declined it and kept a local
- * copy, and this file follows that precedent rather than reaching from
- * `lib/azure` into `lib/admin` -- a dependency direction nothing else here
- * takes. Consolidating all three belongs in its own change, not in a roll fix.
- *
- * The accepted width is 7-40 hex, which covers every value the repo actually
- * stamps. Counted, not estimated -- `grep -rn "LOOM_BUILD_SHA=" .github/workflows`
- * returns exactly six build-args, and they split three and three:
- *
- *   40 hex, `${{ github.sha }}`   build-fiab-images-acr-tasks.yml:447
- *                                 full-app-deploy-commercial.yml:613
- *                                 publish-ghcr-images.yml:111
- *    8 hex, `--short=8 HEAD`      console-bluegreen-roll.yml:375  (SHA set :275)
- *                                 gov-console-roll.yml:442        (SHA set :293)
- *                                 gov-build-images.yml:449    (SHA_TAG set :299)
- *
- * Both roll workflows are single-job, so the assignment above each build-arg is
- * the value it passes. 8 and 40 are both inside [7,40], so this has no false
- * negatives on any image the repo can currently produce. */
-const GIT_OBJECT_ID = /^[0-9a-f]{7,40}$/i;
-
-function isBuildCommit(value: string): boolean {
-  return GIT_OBJECT_ID.test(value);
-}
-
-/** The staged source commit / build SHA, when the image genuinely stamps one.
- *
- * Returns null for anything that is not commit-shaped, which routes freshness
- * back to the stat comparison -- weaker across replicas, but weaker in the SAFE
- * direction: a replica-local fingerprint compared against a shared manifest
- * over-reports `stale` rather than under-reporting it. */
-function currentSourceCommit(): string | null {
-  const raw = (process.env.LOOM_BUILD_SHA || '').trim();
-  if (!raw) return null;
-  if (!isBuildCommit(raw)) return null;
-  return raw;
-}
-
 /** Pure freshness evaluation from the current fingerprints + the manifest.
  *
  * `manifestError` is the READ failing, which is not the same fact as there
@@ -1305,7 +1163,7 @@ export function evaluateFreshness(
   const currentCommit = isBuildCommit(live) ? live : '';
   const indexedCommit = isBuildCommit(indexed) ? indexed : '';
   if (currentCommit && indexedCommit) {
-    if (currentCommit !== indexedCommit) {
+    if (!sameCommit(currentCommit, indexedCommit)) {
       return {
         state: 'stale',
         reason: `The index was built from ${indexedCommit.slice(0, 12)} and this revision serves ${currentCommit.slice(0, 12)}.`,
@@ -1585,4 +1443,7 @@ export const __testInternals = {
   // `undefined` to restore the real bundled-corpus source.
   setCorpusStatsForTests,
   localCorpusStats,
+  // #4498 round 4 — drop the memoised corpus-container handle. A memo that
+  // survives between cases would let one case's Cosmos stub answer the next.
+  __resetCorpusContainerForTests,
 };

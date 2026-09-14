@@ -258,6 +258,86 @@ test('poll: timeout on a body that READ stale/idle keeps the stale-index finding
   assert.doesNotMatch(r.message, /FRESHNESS STATE WAS NEVER READ/);
 });
 
+/**
+ * #4498 round 4 — THE ROUND-3 FIX WAS ITSELF AN R7 VIOLATION, ON AN INPUT
+ * NEITHER TEST ABOVE COULD PRODUCE.
+ *
+ * Round 3 discriminated on the VALUE `'unknown'`. That value has two producers:
+ * the `?? 'unknown'` fallback (nothing parsed — the test above) and a fully
+ * parsed body whose `freshness.state` IS `'unknown'`, which is what
+ * `evaluateFreshness` returns when `manifestError` is set — a branch THIS SAME
+ * PR added. The two tests above use `body: ''` and a `stale` body, so both stay
+ * GREEN with the defect present: 42/42 passed while a real poll would print
+ * "no poll returned a body carrying a `freshness.state`" on the same line as
+ * `indexedChunks=51079 backend=ai-search`.
+ *
+ * MUTATION-PROOF: revert `neverRead` to `state === 'unknown'` and this goes RED
+ * on the NEVER-READ assertion. The `AI Search 503` assertion is the second half
+ * and it is not redundant — a branch that correctly stayed quiet about the poll
+ * path but still dropped `freshness.reason` would pass the first assertion
+ * alone, and the reason is the only string naming what actually broke.
+ */
+test('poll: timeout on a PARSED body whose freshness.state is literally unknown blames the manifest store, not the poll', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    attempts: 60,
+    body: JSON.stringify({
+      backend: 'ai-search',
+      job: { state: 'idle' },
+      freshness: {
+        state: 'unknown',
+        reason: 'The corpus manifest could not be READ (AI Search 503 on help-corpus-manifest).',
+        indexedChunkCount: 51079,
+      },
+    }),
+  });
+  assert.equal(r.verdict, 'fail'); // not knowing is still a refusal
+  assert.match(r.message, /REFUSAL/);
+  // The body WAS read. Saying otherwise is the R7 defect.
+  assert.doesNotMatch(r.message, /NEVER READ/i);
+  assert.doesNotMatch(r.message, /no poll returned a body/i);
+  // It must carry the cause it was handed, not discard it.
+  assert.match(r.message, /AI Search 503/);
+  assert.match(r.message, /COULD NOT READ ITS OWN MANIFEST/);
+  // …and must not manufacture a corpus claim it never established.
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+});
+
+/**
+ * #4498 round 4, adjacent R7 case: a `never-indexed` corpus is not a STALE one.
+ * The idle arm printed "the index is stale and no rebuild was seen" over a body
+ * that said the index had never been built — and round 3's own test pinned that
+ * wording by asserting `/the index is stale/i` for this very input class.
+ */
+test('poll: timeout on a NEVER-INDEXED body does not call the corpus stale', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ job: { state: 'idle' }, freshness: { state: 'never-indexed' } }),
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NOTHING WAS OBSERVED RUNNING/); // still the idle finding
+  assert.match(r.message, /NEVER been indexed/i);
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /NEVER READ/i); // it WAS read
+});
+
+/** The detail line carried the same conflation: an unparsed body printed
+ *  `freshness=unknown`, which reads as "the body said unknown". */
+test('poll: detail distinguishes a body that was never read from one that said unknown', () => {
+  const never = classifyReindexPoll({ outcome: 'timeout', waitedSeconds: 900, body: '' });
+  assert.match(never.message, /freshness=<never-read>/);
+  const said = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ freshness: { state: 'unknown' }, job: { state: 'idle' } }),
+  });
+  assert.match(said.message, /freshness=unknown\b/);
+});
+
 test('poll: unreachable over Front Door → tolerate (transient)', () => {
   const r = classifyReindexPoll({ outcome: 'unreachable', body: '' });
   assert.equal(r.verdict, 'tolerate');

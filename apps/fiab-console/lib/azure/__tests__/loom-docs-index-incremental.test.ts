@@ -227,14 +227,57 @@ describe('evaluateFreshness (G2)', () => {
       { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' },
       { currentCommit: 'dcabe1dd02af' },
     ).state).toBe('fresh');
-    // Both stamped widths the repo actually produces are commits: Commercial
-    // stamps `${{ github.sha }}` (40 hex), Gov stamps `--short=8` (8 hex).
+    // Both stamped widths the repo actually produces are commits. Round 4: this
+    // comment used to say "Commercial stamps 40 hex, Gov stamps --short=8",
+    // which names the wrong axis. The split is by PRODUCER, not by cloud —
+    // `console-bluegreen-roll.yml:15` serves "Commercial + Gov" off a `cloud:`
+    // input and stamps 8 hex for both, so Commercial serves either width.
     expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'a'.repeat(40) }, {
       currentCommit: 'b'.repeat(40),
     }).reason).toContain('aaaaaaaaaaaa');
     expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'deadbeef' }, {
       currentCommit: 'cafed00d',
     }).reason).toContain('deadbeef');
+  });
+
+  it('an ABBREVIATED stamp of the same commit is not a revision gap (8-hex vs 40-hex)', () => {
+    // Round 4, reviewer 2 NIT 8 + my own SHOULD-FIX 4, which converged on one
+    // defect. `currentCommit !== indexedCommit` is only correct if every
+    // producer stamps the same width, and three stamp 40 hex while three stamp
+    // `--short=8`. Crucially the split is NOT by cloud: the blue/green roll
+    // serves Commercial AND Gov off one `cloud:` input and stamps 8 hex for
+    // both, while the Commercial image build stamps 40 hex. A blue/green roll
+    // therefore puts mixed-width replicas side by side BY CONSTRUCTION.
+    //
+    // MUTATION-PROOF: the stat fingerprints are made to DIFFER on purpose. If
+    // they matched, the stat path would return `fresh` on its own and this test
+    // would pass with the commit comparison still broken — the exact blindness
+    // reviewer 2 caught in the test above. Reaching `fresh` here is only
+    // possible through the commit path, so reverting `sameCommit` to `!==`
+    // turns this red.
+    const long = 'deadbeef' + 'c'.repeat(32);
+    const abbreviated = evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'deadbeef',
+    }, { currentCommit: long });
+    expect(abbreviated.state).toBe('fresh');
+    // ...and symmetrically, whichever side happens to be the short one.
+    expect(evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: long,
+    }, { currentCommit: 'deadbeef' }).state).toBe('fresh');
+    // `GIT_OBJECT_ID` carries the `i` flag, so a stamp is accepted in either
+    // case and the two producers need not agree on it.
+    expect(evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'DEADBEEF',
+    }, { currentCommit: long }).state).toBe('fresh');
+    // A genuinely different revision is STILL stale — the prefix rule must not
+    // have bought its tolerance by going blind. `deadbeef` vs `deadbee0`
+    // differ in the last nibble of the shortest form, the tightest miss the
+    // 7-hex floor admits.
+    const different = evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'deadbee0' + 'c'.repeat(32),
+    }, { currentCommit: long });
+    expect(different.state).toBe('stale');
+    expect(different.reason).toContain('deadbee0');
   });
 
   it('the MIXED case — a real sha live, a placeholder in the manifest — falls to stat, and that is a WEAKENING', () => {

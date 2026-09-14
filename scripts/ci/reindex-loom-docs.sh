@@ -235,18 +235,15 @@ do_post() {
   # console -- in which case the record check below simply never fires, which
   # is the correct fail-closed behaviour: no identity, no claim.
   #
-  # The substitution must be the SAME one the poll's own `clean()` helper
-  # applies (` `, not `""`). Both sides sanitize, but they were sanitizing
-  # differently, so an id carrying a pipe would be compared as `abcdef` here
-  # against `abc def` there and could never equal itself — the
-  # `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation in the durable-record
-  # check would silently stop firing and a durable failure of OUR job would
-  # read as a timeout.
-  # Reviewer 2's NIT on #4498. Not reachable from today's console —
-  # `lib/azure/reindex-job.ts:118` mints the id with `crypto.randomUUID()` — but
-  # the poll's own comment states the standard this side was not meeting: these
-  # values come from a remote service, so "this field cannot contain a pipe" is
-  # an assumption about data we do not control.
+  # The substitution must be the SAME one the poll's `clean()` helper applies
+  # (` `, not `""`). The two sides were sanitizing differently, so an id carrying
+  # a pipe compared as `abcdef` here against `abc def` there, could never equal
+  # itself, and the `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation below would
+  # silently stop firing — a durable failure of OUR job reading as a timeout.
+  # Reviewer 2's nit on #4498: not reachable from today's console
+  # (`startReindexJob` in `lib/azure/reindex-job.ts` mints the id with
+  # `crypto.randomUUID()`), but the value arrives from a remote service, so "it
+  # cannot contain a pipe" is an assumption about data we do not control.
   POST_JOB_ID=$(node -e '
     const fs = require("node:fs");
     let j = {};

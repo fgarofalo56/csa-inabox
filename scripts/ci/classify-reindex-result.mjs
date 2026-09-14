@@ -282,11 +282,18 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
     parsed = null;
   }
   const waited = Number.isFinite(Number(waitedSeconds)) ? `${Number(waitedSeconds)}s` : 'the cap';
-  const state = parsed?.freshness?.state ?? 'unknown';
+  // #4498 round 4 — KEEP THE RAW READ. `?? 'unknown'` has TWO producers (see
+  // the timeout arm): nothing parsed, and a parsed body whose `freshness.state`
+  // is literally `'unknown'`. Every consumer that needs to tell those apart
+  // reads `parsedState`; `state` stays for display only.
+  const parsedState = parsed?.freshness?.state;
+  const state = parsedState ?? 'unknown';
   const job = parsed?.job?.state ?? 'unknown';
   const chunks = parsed?.freshness?.indexedChunkCount;
+  // The detail line carried the same conflation: an unparsed body printed
+  // `freshness=unknown`, which reads as "the body said unknown".
   const detail =
-    `freshness=${state} job=${job}` +
+    `freshness=${parsedState === undefined ? '<never-read>' : state} job=${job}` +
     (Number.isFinite(chunks) ? ` indexedChunks=${chunks}` : '') +
     (parsed?.backend ? ` backend=${parsed.backend}` : '');
 
@@ -352,24 +359,56 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
       // also mean the poll simply never landed on the worker, and this says so
       // rather than asserting nothing ran anywhere.
       // #4498 — AN UNREADABLE BODY IS NOT A STALE INDEX (deploy-integrity R7).
-      // `state` falls back to 'unknown' when no poll returned a body this could
-      // parse a `freshness.state` out of. The sentence below used to convert
-      // that into `"the index is stale and no rebuild was seen"` — a claim
-      // about the CORPUS manufactured out of a failure to read anything at all,
-      // and one that sends the reader at the rebuild when the defect is in the
-      // poll. Branch on it FIRST: an unread freshness state is still a refusal
-      // (nothing proves the index is fresh) but it is a different next step.
-      const unreadable = state === 'unknown';
+      // The sentence below used to convert a missing `freshness.state` into
+      // `"the index is stale and no rebuild was seen"` — a claim about the
+      // CORPUS manufactured out of a failure to read anything at all, and one
+      // that sends the reader at the rebuild when the defect is in the poll.
+      //
+      // ROUND 4 — THE ROUND-3 REMEDY WAS ITSELF AN R7 VIOLATION, AND A WORSE
+      // ONE. It discriminated on the VALUE `'unknown'`, which has TWO
+      // producers: the `?? 'unknown'` fallback (nothing parsed) AND a fully
+      // parsed body whose `freshness.state` IS `'unknown'` — the state
+      // `evaluateFreshness` returns when `manifestError` is set, added by this
+      // same PR, and reachable from the real poll (`reindex-loom-docs.sh`
+      // passes the live last-poll body; the route fills it from
+      // `corpusFreshness()`). On that second input it printed "no poll returned
+      // a body carrying a `freshness.state`" on the SAME LINE as
+      // `indexedChunks=51079 backend=ai-search` — values only a parsed body can
+      // supply — and discarded `freshness.reason`, the one string naming the
+      // actual cause. Three false statements where the defect it replaced made
+      // one. Discriminate on PRESENCE, never on the sentinel's value.
+      const neverRead = parsedState === undefined;
+      const corpusUnknown = parsedState === 'unknown';
+      const reason = typeof parsed?.freshness?.reason === 'string' ? parsed.freshness.reason.trim() : '';
       const idle = job === 'idle' || job === 'unknown';
-      const which = unreadable
+      const which = neverRead
         ? ' THE FRESHNESS STATE WAS NEVER READ: no poll returned a body carrying a ' +
           '`freshness.state`, so nothing here establishes whether the corpus is stale, fresh, or ' +
           'mid-rebuild — only that it was never OBSERVED fresh, which is why this still refuses. ' +
           `The job state read ${job} over the same polls. Look at the poll path first — the URL, ` +
           'the HTTP status, and whether the response body was JSON — not at the rebuild\'s duration.'
+        : corpusUnknown
+        ? ' THE CONSOLE COULD NOT READ ITS OWN MANIFEST: a poll DID return a parsed body and it ' +
+          'reported `freshness.state=unknown`, which is the console saying the freshness CHECK could ' +
+          'not run — not that the corpus is stale. Nothing here establishes the corpus state either ' +
+          'way, only that it was never OBSERVED fresh, which is why this still refuses. ' +
+          (reason
+            ? `The body's own reason: ${reason} `
+            : 'The body carried no `freshness.reason`, which is itself a defect — an `unknown` state ' +
+              'that does not say WHY is unactionable. ') +
+          'The poll path is NOT the suspect here; it worked. Look at the manifest store — AI Search / ' +
+          'Cosmos reachability from the console, and the console identity\'s RBAC on it.'
         : idle
         ? ' NOTHING WAS OBSERVED RUNNING: every replica this poll reached reported ' +
-          `job=${job}, so this is "the index is stale and no rebuild was seen", NOT "a rebuild ran ` +
+          `job=${job}, so this is "${
+            parsedState === 'never-indexed'
+              ? // #4498 round 4 — a `never-indexed` corpus is not a STALE one. The
+                // old wording printed "the index is stale" over a body that said
+                // the index had never been built, and round 3's own test pinned
+                // that wording for exactly this input.
+                'the corpus has NEVER been indexed in this backend and no rebuild was seen'
+              : 'the index is stale and no rebuild was seen'
+          }", NOT "a rebuild ran ` +
           'long". Note the replica caveat — `job.state` is only the answering replica\'s view, so ' +
           'this does not establish that no job ran anywhere. It does establish that none was ' +
           'visible for the whole wait.'
@@ -377,13 +416,14 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
           'stuck rebuild, not an absent one.';
       // The closing clause carries the same obligation. "Proceeding would
       // measure a STALE index" is only TRUE where a poll actually read `stale`;
-      // on the unreadable path it would assert the very fact that was never
+      // on every other path it would assert the very fact that was never
       // established, one sentence after admitting it was not.
-      const why = unreadable
-        ? ' A timeout is a REFUSAL, not a pass: proceeding would measure an index this step never ' +
-          'confirmed fresh, which is the exact failure it exists to prevent. Failing loud.'
-        : ' A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is ' +
-          'the exact failure this step exists to prevent. Failing loud.';
+      const why =
+        parsedState === 'stale'
+          ? ' A timeout is a REFUSAL, not a pass: proceeding would measure a STALE index, which is ' +
+            'the exact failure this step exists to prevent. Failing loud.'
+          : ' A timeout is a REFUSAL, not a pass: proceeding would measure an index this step never ' +
+            'confirmed fresh, which is the exact failure it exists to prevent. Failing loud.';
       return {
         verdict: 'fail',
         level: 'error',

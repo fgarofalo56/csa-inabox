@@ -1091,9 +1091,14 @@ test('#4498 the two sanitizers agree — an id carrying the field separator stil
   // stops being attributed and the roll grinds to its attempt ceiling and
   // reports a timeout instead of the recorded cause.
   //
-  // (Symbols, not line numbers, deliberately: both citations here were written
-  // as `:NNN` and both had drifted by twelve lines before this comment was
-  // finished, because the comment ITSELF moved the code it pointed at.)
+  // (Symbols, not line numbers, deliberately: both citations here were first
+  // written as `:NNN` and both had drifted before this comment was finished,
+  // because the comment ITSELF moved the code it pointed at. Round 4 note: the
+  // drift was stated here as "twelve lines" and it was thirteen — a wrong
+  // number inside the very comment arguing that `:NNN` citations rot, which is
+  // the argument making its own case. The count is gone rather than corrected:
+  // re-pinning it would be the same mistake a third time, and the claim that
+  // survives measurement is simply that it drifted.)
   //
   // Today's console cannot produce this id — `lib/azure/reindex-job.ts` mints
   // it with `crypto.randomUUID()` — so this is the guard, not a live repro. It is worth
