@@ -115,7 +115,7 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 | kind | closes | how it is obtained |
 |---|---|---|
-| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green; every one that cannot is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
+| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green **and executed its declared substantive step** — or skipped it with the merged files provably outside its declared scope; every context that cannot run there is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
 | `deploy-run` | deploy-path | a run whose deploy job **executed steps** against a live subscription |
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
@@ -170,6 +170,47 @@ rename case is resolved by **workflow identity** at the merged sha. An alias
 table would be one conditional `name:` expression away from being wrong,
 silently.
 
+**A green conclusion is not evidence the check did its WORK**, and fixing that
+nearly made the receipt unobtainable for the only class it closes. `policy.json`
+declares, per context, the step that IS the check
+(`receipts.ci_green_rule.substantive_steps`), and a context concluding SUCCESS
+with that step `skipped` fails. Correct — and it took the receipt to **0 of 2**
+on the population it serves, because `next build (node 20)` and
+`vitest (node 20)` gate their work behind an **in-job change detector**, and a
+guard/test-only PR by construction does not touch `apps/fiab-console`. Both
+drain merges in the window, #4483 and #4488, returned NOT GREEN for exactly
+those two.
+
+That is this file's own thesis one branch along, so the answer is the same
+measurement rather than an exception: `receipts.ci_green_rule.scope_paths`
+declares each such context's **scope**, read off the producing workflow's own
+detector, and the skip is excused only when the merged commit's changed files —
+the same list the on-push detector computes for itself — fall outside it. The
+state is reported as `scope-untouched-at-merge`, never folded into
+`green-at-merge`. Every unanswered question fails closed: no declared row, a
+gate step that is absent or did not succeed, a declared step that concluded
+anything other than `skipped`, an empty changed-file list. And a scope that
+**matches** a merged file is a FAILURE, loudly — that is a detector that missed
+a change (#3783), which is the defect this must never launder.
+
+The difference between a `on.push.paths` filter and a shell-step filter is where
+GitHub lets you write a filter, not how much the merge was checked. Treating the
+first as structural and the second as hollow was the asymmetry.
+
+**It is not only the console.** Measured on #4401, a console-only merge:
+`Python Tests (3.10|3.11|3.12)` hit the same wall — `test.yml` is path-filtered
+out at the merged sha, and its PR-head job skipped `Run pytest with coverage`
+behind *its* in-job detector. Same family, one workflow over. Those three rows
+declare their scope as the string `"on.push.paths"` rather than a copy of it,
+because `test.yml`'s detector does not carry a path list at all: it delegates to
+`scripts/ci/python_trigger_scope.py`, which parses `on.push.paths` **out of
+`test.yml`**, and that file's own comment says *"ONE list … READ OUT OF THIS
+FILE — not a second copy of it that has to be kept in agreement by review."*
+Copying those fifteen globs into `policy.json` would build exactly the second
+copy it refuses to have. So the row points at the trigger this receipt already
+parses, and `test_the_declared_scope_matches_the_workflows_own_change_detector`
+asserts the delegation itself rather than a list.
+
 ```bash
 python tools/drain/merge_gate.py --ci-green-receipt <PR>   # GREEN / NOT GREEN, per context
 ```
@@ -182,6 +223,16 @@ over **zero items** — the #4451 shape — is *not visible* to this gate. It
 detects a required context that concluded SKIPPED, and says so in those words.
 Detecting green-over-nothing needs a population source this API does not have,
 and is an owed capability, not a claim.
+
+**And a `scope-untouched-at-merge` says nothing about coverage.** It says a
+context's declared scope excluded every merged file — which is true, and is
+*also* true when the repo has no required context covering what the PR changed
+at all. Measured over the 12 most recent merges: the `apps/loom-vscode` and
+`apps/loom-mcp` dependency bumps score **5** scope-untouched contexts each,
+because none of the fifteen required contexts builds those packages. That is a
+gap in the required set, not in the receipt, and the receipt is not the place to
+fix it — but a reader counting states should know which of the two they are
+looking at.
 
 **How a receipt actually gets recorded, and the gap in it.** `record_receipt()`
 and `transition(CLOSED)` have **no production caller**. `tick.py` writes only
@@ -378,8 +429,8 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 325 tests across every module
-python tools/drain/mutate_gates.py           # 168 arms, must be 168 KILLED
+python -m pytest tools/drain/__tests__ -q    # 377 tests across every module
+python tools/drain/mutate_gates.py           # 204 arms, must be 204 KILLED
 ```
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
@@ -395,6 +446,17 @@ the hard way:
   comment, scan only the last commit, scan only the first line, exempt fenced
   code, take a `startswith` fast path. A filter placed INSIDE the predicate beats
   a contract written about the predicate. Those are arms `N*`.
+- **The same lesson, ignored one round later.** The author of the declared-step
+  rule wrote arms that weakened its *checks*; the reviewer wrote six that
+  narrowed its *populations* — `matches[:1]`, `work[:50]`, one reason per
+  receipt, one run per job join, a fallback to the PR-head job — and **all six
+  survived**. Having recorded the lesson above is not the same as applying it.
+  Those are arms `CB4h`–`CB4k`, `CB14`, `P13`.
+- **A kill that does not depend on the arm is not a kill.** The sandbox is a
+  copy in a temp dir, so a test that reads a repo file it does not copy raises
+  in *every* arm and scores every one KILLED. Three did, briefly. `COPIED` is
+  the fix for a package file; a test that needs the wider tree skips when the
+  tree is not reachable.
 
 The harness mutates a **copy in a temp dir outside the repo**. It used to write
 the mutation into the tracked `gates.py` and restore it in a `finally` — which
@@ -466,8 +528,9 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 168 mutation arms against a sandbox copy; must be 168 KILLED |
+| `mutate_gates.py` | 204 mutation arms against a sandbox copy; must be 204 KILLED |
+| `required_contexts.json` | snapshot of `main`'s required contexts, so the declaration check can assert SET equality offline (`merge_gate.py --refresh-required-contexts`) |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 325 tests; a negative control for every decision function |
+| `__tests__/` | 377 tests; a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

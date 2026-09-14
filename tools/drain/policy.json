@@ -121,6 +121,40 @@
         "guardrails": "ALL",
         "vitest (node 20)": ["Run vitest (with istanbul coverage floor)"],
         "changelog parser can read every commit message": ["Check every changelog-bound commit message"]
+      },
+      "_scope_paths": "#4487 round 4. The substantive-step rule made `ci-green` UNOBTAINABLE FOR THE EXACT CLASS IT CLOSES: a guard/test-only PR by construction does not touch apps/fiab-console, so `next build (node 20)` and `vitest (node 20)` correctly skip their work behind an in-job change detector and conclude SUCCESS - and both drain merges in the window, #4483 and #4488, returned NOT GREEN for exactly those two. 0 for 2 on the population the receipt serves, which is #4487's own thesis one branch along. The receipt already excuses a PATH-FILTERED workflow by applying its declared filter to the merged commit's changed files; this is the SAME measurement for a filter that lives in a shell step instead of in on.push.paths, and the difference between those two is where GitHub lets you write a filter, not how much the merge was checked. `paths` are GitHub filter-pattern globs, read off the producing workflow's own change detector; __tests__/test_ci_green_declared.py fails if they drift from it. A context with no row here CANNOT reach the excuse at all, and a row whose scope MATCHES a merged file is a FAILURE, not an excuse - that is a detector that missed a change (#3783), which is the defect this must never launder.",
+      "scope_paths": {
+        "next build (node 20)": {
+          "workflow": ".github/workflows/fiab-console-ci.yml",
+          "gate_step": "Detect console changes",
+          "output": "console",
+          "paths": ["apps/fiab-console/**", ".github/workflows/fiab-console-ci.yml"]
+        },
+        "vitest (node 20)": {
+          "workflow": ".github/workflows/fiab-console-ci.yml",
+          "gate_step": "Detect console changes",
+          "output": "console",
+          "paths": ["apps/fiab-console/**", ".github/workflows/fiab-console-ci.yml"]
+        },
+        "_python_tests": "Same family, different shape, and it is the reason `paths` may be the STRING \"on.push.paths\". test.yml's `Detect Python-relevant changes` does not carry its own path list: it delegates to scripts/ci/python_trigger_scope.py, which parses on.push.paths OUT OF test.yml - and that file's own comment says 'ONE list ... READ OUT OF THIS FILE - not a second copy of it that has to be kept in agreement by review'. Copying those 15 globs here would create precisely that second copy. So the row points at the trigger the receipt ALREADY parses, which is drift-free by construction. Measured on PR #4401 (console-only): test.yml is path-filtered out at the merged sha AND its PR-head job skipped `Run pytest with coverage` behind the same list, so all three legs returned FAIL under round 4's first draft - the console blocker one family over.",
+        "Python Tests (3.10)": {
+          "workflow": ".github/workflows/test.yml",
+          "gate_step": "Detect Python-relevant changes",
+          "output": "run",
+          "paths": "on.push.paths"
+        },
+        "Python Tests (3.11)": {
+          "workflow": ".github/workflows/test.yml",
+          "gate_step": "Detect Python-relevant changes",
+          "output": "run",
+          "paths": "on.push.paths"
+        },
+        "Python Tests (3.12)": {
+          "workflow": ".github/workflows/test.yml",
+          "gate_step": "Detect Python-relevant changes",
+          "output": "run",
+          "paths": "on.push.paths"
+        }
       }
     }
   },

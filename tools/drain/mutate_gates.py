@@ -54,7 +54,13 @@ SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory
 #: the copy made the CONTROL fail to collect, which is the instrument working:
 #: rc=2 before any arm ran, and the run refused rather than scoring 128 arms
 #: against a suite that was not there.
-COPIED = [*SOURCES, "mutate_gates.py"]
+#:
+#: `required_contexts.json` is here for the same reason and was learned the same
+#: way: without it three tests raised `FileNotFoundError` in EVERY arm, so every
+#: arm scored KILLED on a failure that had nothing to do with the mutation. A
+#: kill that does not depend on the arm is a tautology, not evidence -- the
+#: shape recorded in `csa_loom_a_meta_test_inside_the_mutation_sandbox_makes_killed_a_tautology`.
+COPIED = [*SOURCES, "mutate_gates.py", "required_contexts.json"]
 
 # (name, file, needle, replacement) -- each needle is a defect that shipped, or
 # one an independent reviewer demonstrated the suite could not see.
@@ -1037,14 +1043,14 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "P11 a policy read via a LOCAL ALIAS is invisible to the allow-list scan",
         "gates.py",
-        "            if re.search(alias, sources):",
+        "            if re.search(alias, flat):",
         "            if False:",
     ),
     (
         "P10 the section half of the policy-read scan rejects `.get(` again",
         "gates.py",
-        '            pattern = (r"(?:\\[|\\.get\\()\\s*[\\"\']" + re.escape(section)',
-        '            pattern = (r"\\[\\s*[\\"\']" + re.escape(section)',
+        '            step = r"(?:\\[|\\.get\\()\\s*[\\"\']{}[\\"\']"',
+        '            step = r"\\[\\s*[\\"\']{}[\\"\']"',
     ),
     (
         "G11 the below-window scan takes a PREFIX CUT, losing a straddling token",
@@ -1057,17 +1063,33 @@ ARMS: list[tuple[str, str, str, str]] = [
         # `policy`, so the arm was a no-op and survived on that alone. Skip the
         # bare-key branch entirely, which is the hole as it actually was.
         "P9 the allow-list scan skips BARE keys again, so `repo` can be moved out",
-        # The anchor carries the NEXT line's comment, because the bare
-        # `partition(".")` + `if sub:` shape now occurs TWICE in this file and
-        # `replace(old, new, 1)` took the first -- so the arm mutated a
-        # different function and SURVIVED. An ambiguous anchor is a mutation
-        # aimed somewhere other than where it reads.
+        # The anchor carries the NEXT line's comment, because the depth test now
+        # occurs in more than one walker and `replace(old, new, 1)` took the
+        # first -- so the arm mutated a different function and SURVIVED. An
+        # ambiguous anchor is a mutation aimed somewhere other than where it reads.
         "gates.py",
-        ('        section, _, sub = dotted.partition(".")\n        if sub:\n'
-         "            # A SECTIONED key is read as"),
-        ('        section, _, sub = dotted.partition(".")\n        if not sub:\n'
-         "            continue\n        if sub:\n"
-         "            # A SECTIONED key is read as"),
+        ('        parts = dotted.split(".")\n        if len(parts) > 1:\n'
+         "            # THE CHAIN, TO ANY DEPTH."),
+        ('        parts = dotted.split(".")\n        if len(parts) == 1:\n'
+         "            continue\n        if len(parts) > 1:\n"
+         "            # THE CHAIN, TO ANY DEPTH."),
+    ),
+    (
+        ("P15 the policy-read scan stops collapsing whitespace, so a chained read "
+         "written across LINES - this package's own house style - reads as unread"),
+        "gates.py",
+        '    flat = re.sub(r"\\s+", " ", sources)',
+        "    flat = sources",
+    ),
+    (
+        ("P14 the allow-list scan partitions on the FIRST dot again, so a "
+         "THREE-deep control can be moved onto it undetected"),
+        "gates.py",
+        ("            chain = step.format(re.escape(parts[0])) + \"\".join(\n"
+         '                r"[^\\n]{0,20}?" + step.format(re.escape(part)) '
+         "for part in parts[1:]\n            )"),
+        ('            chain = step.format(re.escape(parts[0])) + r"[^\\n]{0,20}?" '
+         '+ step.format(re.escape(".".join(parts[1:])))'),
     ),
     (
         "G10 a blocking token below the window is dropped in silence again",
@@ -1108,15 +1130,24 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "P4 the policy contract covers only the two gate sections again",
         "gates.py",
-        "        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):\n            continue\n        if key in OPERATOR_DOCUMENTATION:\n            continue",
-        "        continue",
+        ("            if dotted not in OTHER_IMPLEMENTED_BY and "
+         "dotted not in OPERATOR_DOCUMENTATION:\n                missing.append(dotted)"),
+        "            pass",
     ),
     (
-        ("P12 a dict-valued top-level key exempts every sub-key under it again, "
+        ("P12 a dict-valued key exempts every sub-key under it again, "
          "so an unread `receipts.*` is structurally unreachable"),
         "gates.py",
-        "        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):",
-        "        if key in OTHER_IMPLEMENTED_BY:",
+        "                walk(value, dotted)",
+        "                pass",
+    ),
+    (
+        ("P13 the policy-key walk stops at TWO levels again, so a three-deep "
+         "unread key is structurally unmissable - the round-4 blocker"),
+        "gates.py",
+        '            dotted = f"{prefix}.{key}" if prefix else key',
+        ('            dotted = f"{prefix}.{key}" if prefix else key\n'
+         '            if prefix and "." in prefix:\n                continue'),
     ),
     (
         "P2 the policy mapping accepts a name that resolves to nothing",
@@ -1253,8 +1284,28 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB1 a PR-head green that did NOT execute its declared substantive step "
          "is deferrable again (the test.yml pull_request shape)"),
         "gates.py",
-        "    ran, evidence = context_did_its_work(item.name, item.head_job, policy)\n    if not ran:",
-        "    ran, evidence = context_did_its_work(item.name, item.head_job, policy)\n    if False:",
+        ("    ran, evidence, scope_skip = context_is_accounted_for(\n"
+         "        item.name, item.head_job, merged_changed_files, policy,\n"
+         "        push_trigger=item.push_trigger,\n"
+         "    )\n    if not ran:"),
+        ("    ran, evidence, scope_skip = context_is_accounted_for(\n"
+         "        item.name, item.head_job, merged_changed_files, policy,\n"
+         "        push_trigger=item.push_trigger,\n"
+         "    )\n    if False:"),
+    ),
+    (
+        ("SC9 an UNREPRESENTABLE pattern in a declared scope propagates out of "
+         "the gate instead of failing closed - a crash, not a refusal"),
+        "gates.py",
+        "    except UnsupportedPatternError as exc:\n        return False, (",
+        "    except UnsupportedPatternError as exc:\n        return True, (",
+    ),
+    (
+        ("SC8 a DELEGATED scope resolves to an empty path list instead of failing "
+         "closed, so `on.push.paths` excuses every skip under it"),
+        "gates.py",
+        "        if push_trigger is None or not push_trigger.paths:",
+        "        if False:",
     ),
     (
         "CB2 `job_executed` stops fail-closing on absent step data",
@@ -1291,8 +1342,20 @@ ARMS: list[tuple[str, str, str, str]] = [
          "branch that carries 14 of 15 contexts, and the defect both reviewers "
          "found one branch along from the deferral one"),
         "gates.py",
-        "        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)\n        if not did_work:",
-        "        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)\n        if False:",
+        ("        did_work, evidence, scope_skip = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy\n"
+         "        )\n        if not did_work:"),
+        ("        did_work, evidence, scope_skip = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy\n"
+         "        )\n        if False:"),
+    ),
+    (
+        ("CB4h green-at-merge falls back to the PR-HEAD job when no merged job "
+         "was read - the `pull_request` hollow shape standing in for the merge. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "            item.name, item.merged_job, merged_changed_files, policy",
+        "            item.name, item.merged_job or item.head_job, merged_changed_files, policy",
     ),
     (
         ("CB4c an UNDECLARED context stops failing closed, so adding a required "
@@ -1305,8 +1368,32 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4d the declared step is matched but its SKIPPED state is ignored - "
          "presence of the step, rather than its execution, decides"),
         "gates.py",
-        "        elif not any(ran(s) for s in matches):",
-        "        elif False:",
+        "        if len(skipped) == len(matches):\n            hollow.append(wanted)",
+        "        if False:\n            hollow.append(wanted)",
+    ),
+    (
+        ("CB4i only the FIRST step matching a declared substring decides, so a "
+         "declaration that matches several steps is satisfied by any one of them. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "        skipped = [s for s in matches if not ran(s)]",
+        "        skipped = [s for s in matches[:1] if not ran(s)]",
+    ),
+    (
+        ("CB4j the ALL rule inspects only the first 50 work steps, so the "
+         "158-step context it was written for is unchecked past step 50. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "        skipped = [s for s in work if not ran(s)]",
+        "        skipped = [s for s in work[:50] if not ran(s)]",
+    ),
+    (
+        ("CB4k only the FIRST failing context contributes a reason, so a receipt "
+         "under-reports what is wrong with it. An independent reviewer wrote "
+         "this arm and it SURVIVED"),
+        "gates.py",
+        '            reasons.append(f"{result.name}: {result.detail}")',
+        '            reasons[:0] = [f"{result.name}: {result.detail}"][: 1 - len(reasons)]',
     ),
     (
         ("CB4e a STALE declaration (step absent from the job) passes instead of "
@@ -1388,6 +1475,73 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "                return True, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
         "                return False, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
+    ),
+
+    # -----------------------------------------------------------------------
+    # SC* -- the SCOPE-UNTOUCHED branch (#4487 round 4).
+    #
+    # This branch is an EXCUSE, and an excuse is the most dangerous kind of code
+    # in this package: every weakening of it turns a check that ran nothing into
+    # a green receipt. So it is mutated harder than the rule it excuses.
+    # -----------------------------------------------------------------------
+    (
+        ("SC1 the scope excuse stops reading the merged files, so ANY skip is "
+         "excused as 'nothing in scope changed'"),
+        "gates.py",
+        "    hits = sorted({f for f in files if _any_match(tuple(paths), [f])})",
+        "    hits = []",
+    ),
+    (
+        ("SC2 the gate step's own conclusion stops being checked, so a job whose "
+         "DETECTOR was itself skipped excuses its skipped work"),
+        "gates.py",
+        ('    if not any(\n        str(s.get("conclusion") or "").lower() == "success" '
+         "for s in detectors\n    ):"),
+        "    if False:",
+    ),
+    (
+        ("SC3 a context with no declared scope BORROWS another context's, so the "
+         "excuse stops being per-context at all"),
+        "gates.py",
+        "    row = rows.get(name)",
+        "    row = rows.get(name) or next(iter(rows.values()), None)",
+    ),
+    (
+        ("SC4 an EMPTY merged changed-file list is excused instead of refused, so "
+         "an unreadable diff reads as 'nothing in scope changed'"),
+        "gates.py",
+        '    if not files:\n        return False, (',
+        '    if False:\n        return False, (',
+    ),
+    (
+        ("SC5 a declared step that FAILED counts as a scope skip, so a red step "
+         "is laundered into an excused one"),
+        "gates.py",
+        "        if off:\n            return False, (",
+        "        if False:\n            return False, (",
+    ),
+    (
+        ("SC6 the gate step's ABSENCE stops failing closed, so a stale "
+         "declaration excuses a skip it cannot explain"),
+        "gates.py",
+        "    if not detectors:\n        return False, (",
+        "    if not detectors:\n        return True, (",
+    ),
+    (
+        ('SC7 the scope excuse accepts an "ALL" declaration, for which no single '
+         "step can be named as the one that was scope-skipped"),
+        "gates.py",
+        "    if not isinstance(declared_steps, list) or not declared_steps:\n        return False, (",
+        "    if not isinstance(declared_steps, list) or not declared_steps:\n        return True, (",
+    ),
+    (
+        ("CB14 the job join reads only the FIRST workflow run, so a context "
+         "published by a second run of the same sha has no steps and the receipt "
+         "fails on 'no job record' - or, with a permissive branch, passes on one. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "merge_gate.py",
+        "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
+        "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
     ),
 ]
 

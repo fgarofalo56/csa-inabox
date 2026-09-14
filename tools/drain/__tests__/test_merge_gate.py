@@ -929,3 +929,52 @@ def test_a_concurrent_open_alone_is_not_a_finding():
     ok, why = gates.issue_set_audit([1, 2, 3], [1, 2, 9], [3])
     assert ok, why
     assert "concurrently" in why
+
+
+# ---------------------------------------------------------------------------
+# The job join -- `merge_gate.py` is in SOURCES but no arm pointed at this
+# ---------------------------------------------------------------------------
+
+
+def test_the_job_join_reads_every_workflow_run_of_the_sha(monkeypatch):
+    """Arm CB14: `run_ids[:1]`.
+
+    An independent reviewer wrote this arm and it SURVIVED, because every test
+    of the receipt hands `gates` a job dict directly and nothing exercised the
+    PRODUCER that builds the name -> job map. One sha carries many workflow runs
+    -- this repo publishes its 15 required contexts from five workflows -- so
+    reading only the first run leaves most contexts with no job record at all,
+    and "no job record was read for it" is indistinguishable from a genuine
+    absence.
+
+    That is the same class of defect the CB* arms exist for: the pure function
+    was mutated to death while the program deciding its inputs was not.
+    """
+    runs = {
+        11: ({"name": "Python Lint", "conclusion": "success", "steps": []},),
+        22: ({"name": "next build (node 20)", "conclusion": "success", "steps": []},),
+        33: ({"name": "guardrails", "conclusion": "success", "steps": []},),
+    }
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    joined = merge_gate._jobs_by_name("owner/repo", [11, 22, 33])
+    assert set(joined) == {"Python Lint", "next build (node 20)", "guardrails"}
+
+
+def test_the_job_join_keeps_the_job_that_ran_less_on_a_duplicate(monkeypatch):
+    """The other half of the same function: a green re-run must not hide a
+    sibling that ran nothing. Without this, the arm above could be killed by
+    making the join take the LAST run instead of every run."""
+    hollow = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "skipped"}],
+    }
+    real = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "success"}],
+    }
+    runs = {1: (real,), 2: (hollow,)}
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    assert merge_gate._jobs_by_name("owner/repo", [1, 2])["vitest (node 20)"] is hollow
+    assert merge_gate._jobs_by_name("owner/repo", [2, 1])["vitest (node 20)"] is hollow

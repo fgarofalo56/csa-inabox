@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_ci_green import (
     MERGED_SHA,
     POLICY,
+    TEST_YML_PATHS,
     _ev,
     _green,
     _hollow_job,
@@ -105,8 +106,64 @@ def test_negative_control_a_change_detection_step_does_not_count_as_having_run()
     assert not ran
     assert "10 of its 11 work step(s) are SKIPPED" in why
     assert "Run pytest with coverage" in why or "Lint with ruff" in why
-    receipt = _receipt([_path_filtered("Python Tests (3.10)", head_job=gated)])
+
+    # THE RECEIPT HALF USES `Python Lint`, and the swap is the point rather than
+    # a convenience. Round 4 gave `Python Tests (3.x)` a DELEGATED scope: its
+    # in-job detector reads its OWN workflow's `on.push.paths`, so for that
+    # context "the workflow could not run at the merged sha" and "the step could
+    # not run at the head" are ONE fact about ONE list, and a fixture cannot
+    # separate them -- hand it a matching trigger and the deferral branch is
+    # never reached (it fails earlier, correctly, with "SHOULD have run there");
+    # hand it a non-matching one and the skip is genuinely explained.
+    #
+    # `Python Lint` has no scope row at all -- `validate.yml` lints
+    # unconditionally -- so it is the context where a hollow head job is exactly
+    # what this test says it is: a green that ran only its gate step, deferrable
+    # under the old rule and refused under this one.
+    hollow_lint = {
+        "name": "Python Lint",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect changes", "conclusion": "success"},
+            {"name": "Lint Python files", "conclusion": "skipped"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    receipt = _receipt([_path_filtered("Python Lint", head_job=hollow_lint)])
     assert not receipt.ok
+    assert any("Lint Python files" in r for r in receipt.reasons)
+    assert any("not a result to defer to" in r for r in receipt.reasons)
+    assert any("no change-detection scope is DECLARED" in r for r in receipt.reasons)
+
+
+def test_a_delegated_scope_cannot_excuse_a_skip_the_trigger_contradicts():
+    """The half the fixture above cannot express, measured directly.
+
+    For a DELEGATED scope the deferral branch and the scope branch read the same
+    list, so the only way a delegated context reaches the head with a matching
+    trigger is if the workflow SHOULD have run and did not -- which is a
+    different, earlier failure. This asserts that earlier refusal explicitly, so
+    the pair of branches cannot both be relaxed without a test noticing.
+    """
+    gated = {
+        "name": "Python Tests (3.10)",
+        "conclusion": "success",
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            {"name": "Detect Python-relevant changes", "conclusion": "success"},
+            {"name": "Run pytest with coverage", "conclusion": "skipped"},
+            {"name": "Complete job", "conclusion": "success"},
+        ],
+    }
+    receipt = _receipt([
+        _path_filtered("Python Tests (3.10)", head_job=gated,
+                       push_trigger=gates.PushTrigger(present=True,
+                                                      paths=TEST_YML_PATHS)),
+    ])
+    assert not receipt.ok
+    assert any("SHOULD have run there" in r for r in receipt.reasons)
+    assert any("not a structural absence" in r for r in receipt.reasons)
 
 
 def test_the_execution_rule_is_all_not_any_and_the_distribution_says_so():
@@ -279,19 +336,45 @@ def test_negative_control_a_rename_whose_sibling_job_failed():
 def test_the_rename_message_names_the_sibling_it_actually_observed():
     """R7: the receipt may not assert a cause it did not establish. The old
     message said "published under a different name by X" from a run conclusion
-    alone; this one quotes the job it actually found and what that job did."""
+    alone; this one quotes the job it actually found and what that job did.
+
+    THE SIBLING CARRIES THE CONTEXT'S OWN DECLARED STEP, because a rename in
+    this repo is a conditional job `name:` over an IDENTICAL step list
+    (`commit-message-parses.yml:103` renames the job; `:337` is the step, and it
+    is spelled the same on both events). The fixture used to invent
+    `"scan the range"`, which described a state GitHub does not produce and
+    which only passed while this branch asked `job_executed` -- a DIFFERENT
+    question from the one every other branch asks. Two predicates over one
+    question is what produced the original hole, so the branch now uses
+    `context_is_accounted_for` like its siblings and the fixture has to be real.
+    """
     receipt = _receipt([
         _ev("changelog parser can read every commit message",
             workflow_path=".github/workflows/commit-message-parses.yml",
             merged_workflow_run=_push_run(),
             merged_workflow_jobs=(_job("changelog parser can read what landed on main",
-                                       steps=("scan the range",)),)),
+                                       steps=("Check every changelog-bound commit message parses",)),)),
     ])
     assert receipt.ok, receipt.reasons
     detail = receipt.by_state("renamed-at-merge")[0].detail
     assert "'changelog parser can read what landed on main'" in detail
-    assert "executed 1 of 1 work step(s)" in detail
+    assert "Check every changelog-bound commit message" in detail
     assert "on `push` at the merged sha" in detail
+
+
+def test_negative_control_a_rename_whose_sibling_lacks_the_declared_step():
+    """The other side of the fixture change above: a sibling that ran SOMETHING
+    is not a sibling that ran THIS context's work. Without this, the rename
+    branch would accept any busy job in the workflow as a stand-in."""
+    receipt = _receipt([
+        _ev("changelog parser can read every commit message",
+            workflow_path=".github/workflows/commit-message-parses.yml",
+            merged_workflow_run=_push_run(),
+            merged_workflow_jobs=(_job("some other job in the same workflow",
+                                       steps=("scan the range",)),)),
+    ])
+    assert not receipt.ok
+    assert any("executed anything" in r for r in receipt.reasons)
 
 
 # ---------------------------------------------------------------------------

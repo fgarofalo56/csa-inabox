@@ -10,7 +10,7 @@ note exists so the next reader does not trust a freshness the program does not
 provide. **Re-read the FIRST TASK section against `--status` before pasting** —
 it was stale once already, naming work that had since been done.
 
-Last hand-updated: 2026-09-13.
+Last hand-updated: 2026-09-13 (re-checked against live state: PR #4491 round 4, #4492 open and CI_RUNNER unset).
 
 ---
 
@@ -64,22 +64,31 @@ Scope and autonomy are already decided — do not re-ask them:
 FIRST TASK, before draining anything else — check each against live state, because
 this list is hand-maintained and was stale once already:
 
-  1. #4487 (W0) — PR #4491 is OPEN and BLOCKED on its third round of independent
-     review. The `ci-green` receipt was redefined and two blockers fixed, but the
-     re-review found the same defect ONE BRANCH ALONG: `green-at-merge` in
-     `gates.py` still accepts a check conclusion alone, without asking whether
-     the job EXECUTED anything — and that branch carries 14 of 15 contexts on a
-     typical PR. It is live: PR #4488 returns `RECEIPT: GREEN` while `next build
-     (node 20)` concluded success with 12 of 17 steps skipped. Also open on that
-     PR: `_is_bookkeeping_step` misclassifies six real step names (`Post HIGH
-     findings to PR`) in the EXCUSING direction, and six reviewer-written
-     mutation arms survived. Until this lands, NO guard/test-only issue can reach
-     a terminal state, so it gates the whole drain.
+  1. #4487 (W0) — PR #4491 is OPEN and on its FOURTH round of independent review.
+     Rounds 1-3 are closed; round 4 raised three more and they are fixed at head
+     `PLACEHOLDER_HEAD`. What round 4 found, because the shape keeps recurring:
+     the depth fix to `policy_keys_without_implementation` was applied at two
+     levels and the walk needed three (it is now unbounded, in all THREE
+     walkers); and the substantive-step rule — correct in itself — made
+     `ci-green` UNOBTAINABLE for the very class it closes, because a
+     guard/test-only PR does not touch `apps/fiab-console` and the console
+     contexts skip their work behind an in-job change detector. Measured before
+     the fix: 4 of the 12 most recent merges could take the receipt; after, 12
+     of 12, with every excused context named and its scope corroborated against
+     the merged commit's own file list. Until this lands, NO guard/test-only
+     issue can reach a terminal state, so it gates the whole drain.
   2. #4468's remainder — port `unblock-git.py` and `preflight-casedrop.py` out of
      `temp/` into `tools/drain` with tests, then close #4468 on its own checklist.
-  3. PR #4492 (CI runners) may still be open. It moves CI onto in-VNet Azure
-     Container Apps runners behind the `CI_RUNNER` repo variable, which IS SET —
-     so CI already runs there. If the fleet misbehaves, the whole rollback is
+  3. PR #4492 (CI runners) is still OPEN, head `3d3f6124`, MERGEABLE, no posted
+     verdicts. It moves CI onto in-VNet Azure Container Apps runners behind a
+     `CI_RUNNER` repo variable. **That variable is NOT set** — measured
+     2026-09-13, `gh variable list` returns 11 names and `CI_RUNNER` is not one
+     of them, and the last 6 workflow runs all ran on GitHub-hosted
+     `ubuntu-latest` (runner names `GitHub Actions 10003205xx`). So CI is NOT on
+     the Azure fleet and nothing has moved off GitHub-hosted minutes. An earlier
+     revision of this file said the variable "IS SET — so CI already runs there",
+     which was the second time this hand-maintained section stated something the
+     live state contradicted. Once it IS merged and set, the whole rollback is
      `gh variable delete CI_RUNNER`. Do not merge it without two posted verdicts.
 
 Both #4487 and #4468 are W0 — finish the gate before trusting it.
@@ -102,7 +111,7 @@ kickoff block names:
 
 | # | what | why it matters |
 |---|---|---|
-| **#4487** | `ci-green` names an unobtainable measurement | 10 of 15 required contexts can run at a merged sha; `validate.yml`'s `push:` trigger is path-filtered and one job is renamed on push. Until this is fixed no guard/test-only issue can close. |
+| **#4487** | `ci-green` named an unobtainable measurement, twice | first "green at the merged sha", which only 10 of 15 required contexts can satisfy; then, after the substantive-step rule closed the hollow-green hole, a definition no guard/test-only merge could satisfy either — 4 of the 12 most recent merges could take the receipt. PR #4491, round 4, fixes the second. |
 | **#4468** | `unblock-git.py` (502 lines) and `preflight-casedrop.py` still untracked | the drain leans on the first across every merge, and it is one `rm -rf` from gone — the issue's own thesis |
 | **#4485** | five residual review findings | all non-blocking, all measured, none a live defect today |
 
@@ -113,8 +122,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 300 pass
-python tools/drain/mutate_gates.py       # 155 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # 378 pass
+python tools/drain/mutate_gates.py       # 205 KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 

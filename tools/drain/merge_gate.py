@@ -20,6 +20,7 @@ this output.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -465,6 +466,52 @@ def required_contexts(repo: str) -> list[str]:
             "and an unmeasurable gate is NO-GO, not a pass."
         )
     return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+REQUIRED_SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "required_contexts.json")
+
+
+def refresh_required_contexts(repo: str) -> int:
+    """Re-read branch protection into `required_contexts.json`.
+
+    The snapshot exists so `test_every_required_context_of_this_repo_is_declared`
+    can assert SET EQUALITY offline -- and that test is what
+    `gates.DATA_NOT_NAMESPACE` names as the instrument checking the rows of
+    `substantive_steps`, which is what lets the policy-key walk stop there. An
+    instrument that only runs with a network is not one a stop can rest on, so
+    the equality runs against this file and a SECOND test compares this file to
+    the live API whenever `gh` is reachable.
+
+    Writing it is deliberately a command rather than a silent auto-update: a
+    snapshot that refreshes itself cannot drift, and cannot report drift either.
+    """
+    contexts = required_contexts(repo)
+    if not contexts:
+        raise SystemExit(
+            "branch protection returned NO required contexts - refusing to write an "
+            "empty snapshot, which would make the declaration check vacuous"
+        )
+    with open(REQUIRED_SNAPSHOT, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    before = doc.get("contexts") or []
+    doc["contexts"] = contexts
+    doc["measured"] = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+    doc["source"] = f"repos/{repo}/branches/main/protection/required_status_checks"
+    with open(REQUIRED_SNAPSHOT, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle, indent=2)
+        handle.write("\n")
+    added = sorted(set(contexts) - set(before))
+    gone = sorted(set(before) - set(contexts))
+    print(f"wrote {len(contexts)} required context(s) to {REQUIRED_SNAPSHOT}")
+    if added:
+        print(f"  ADDED  : {added}\n  -> declare each in policy.json "
+              "receipts.ci_green_rule.substantive_steps, read off a real green run")
+    if gone:
+        print(f"  REMOVED: {gone}\n  -> delete each from substantive_steps and scope_paths")
+    if not added and not gone:
+        print("  no change")
+    return 0
 
 
 def collect(repo: str, number: int) -> dict:
@@ -1058,10 +1105,17 @@ def main() -> int:
                              "required context that CAN run at the merged sha is green, and "
                              "every one that cannot is named with its reason and its "
                              "PR-head result over an identical tree")
+    parser.add_argument("--refresh-required-contexts", action="store_true",
+                        help="re-read branch protection into required_contexts.json, the "
+                             "offline snapshot the declaration check asserts equality "
+                             "against")
     args = parser.parse_args()
 
     policy = gates.load_policy(POLICY_PATH)
     repo = policy["repo"]
+
+    if args.refresh_required_contexts:
+        return refresh_required_contexts(repo)
 
     # #4487. The receipt is a PROGRAM, for the same reason the merge gates are:
     # a definition with no caller is prose, and the old one named a measurement

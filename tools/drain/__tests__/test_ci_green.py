@@ -112,7 +112,13 @@ def _ev(name, **kw):
     return gates.ContextEvidence(name=name, **kw)
 
 
-def _path_filtered(name, *, head_green=True, head_job=None):
+#: `test.yml`'s `on.push.paths`, abridged to the entries `MERGED_FILES` exercises.
+#: The real file lists 15; these three are enough to make the trigger MATCH the
+#: tools-only merge, which is the property every fixture using it depends on.
+TEST_YML_PATHS = ("**.py", "tools/**", "pyproject.toml")
+
+
+def _path_filtered(name, *, head_green=True, head_job=None, push_trigger=None):
     """A context that structurally could not run at the merged sha."""
     return _ev(
         name,
@@ -121,7 +127,8 @@ def _path_filtered(name, *, head_green=True, head_job=None):
         head_check=_green(name) if head_green else {"name": name, "conclusion": "FAILURE"},
         head_job=head_job if head_job is not None else _job(name),
         merged_workflow_run=None,
-        push_trigger=gates.parse_push_trigger(VALIDATE_YML),
+        push_trigger=(push_trigger if push_trigger is not None
+                      else gates.parse_push_trigger(VALIDATE_YML)),
     )
 
 

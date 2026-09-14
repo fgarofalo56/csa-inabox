@@ -267,6 +267,7 @@ OTHER_IMPLEMENTED_BY = {
     "receipts.human-only": "gates.receipt_satisfies",
     "receipts.ci_green_rule": "gates.ci_green_receipt",
     "receipts.ci_green_rule.substantive_steps": "gates.context_did_its_work",
+    "receipts.ci_green_rule.scope_paths": "gates.scope_untouched_at_merge",
     "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
     "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
     "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
@@ -296,6 +297,16 @@ OPERATOR_DOCUMENTATION = {
     # -- and it only became VISIBLE once a dict-valued top-level key stopped
     # exempting its sub-keys.
     "receipts.g1_assertion_rule",
+    # The human-readable SPECIFICATION of `ci_green_receipt`. The control is the
+    # function; this prose is what a reviewer reads to check the function against
+    # its contract, and no code subscripts it. Newly VISIBLE (not newly unread)
+    # once the walk stopped halting at two levels -- these four sat under a
+    # declared parent and so were structurally unreachable, which is the hole an
+    # independent reviewer walked through at three deep.
+    "receipts.ci_green_rule.definition",
+    "receipts.ci_green_rule.absence_is_excused_only_when",
+    "receipts.ci_green_rule.fails_closed_on",
+    "receipts.ci_green_rule.not_proven_by_this_receipt",
     "review.writer_is_never_the_reviewer",
     "scope.target", "scope.definition_of_done",
     "wip.serialize_on_shared_checkout",
@@ -307,6 +318,26 @@ OPERATOR_DOCUMENTATION = {
 }
 
 
+#: Declared keys whose VALUE is DATA the implementation consumes wholesale --
+#: a table, not a namespace of further policy keys. The walk STOPS at these and
+#: treats them as leaves, because the alternative is demanding a `gates.py`
+#: declaration for every row of a data table.
+#:
+#: A stop here is only honest if some OTHER named instrument checks the rows,
+#: and each entry says which. Nothing may be added without that sentence.
+DATA_NOT_NAMESPACE = {
+    "receipts.ci_green_rule.substantive_steps":
+        "rows are checked against live branch protection by "
+        "__tests__/test_ci_green_declared.py (set EQUALITY, so a stale or "
+        "invented context name fails), and an undeclared context fails closed "
+        "at runtime in gates.context_did_its_work",
+    "receipts.ci_green_rule.scope_paths":
+        "rows are checked against the producing workflow's own change detector "
+        "by __tests__/test_ci_green_declared.py, and a context without a row "
+        "cannot reach the scope-untouched branch at all",
+}
+
+
 def policy_keys_without_implementation(policy: dict) -> list[str]:
     """Every key in the policy that no function consults and no list excuses.
 
@@ -314,44 +345,53 @@ def policy_keys_without_implementation(policy: dict) -> list[str]:
     are documentation by convention and are exempt; everything else must appear
     in an `*_IMPLEMENTED_BY` mapping or in `OPERATOR_DOCUMENTATION`, which is
     how "this one addresses the operator" stops being an unwritten assumption.
+
+    WALKS TO ANY DEPTH, and it took three rounds to get there because each fix
+    closed one level and left the next. A top-level declaration used to exempt
+    every sub-key under it, and an independent reviewer disproved this
+    function's own advertised contract by planting `receipts.totally_unread_rule`:
+    the suite stayed green because `receipts` is declared at the top level and
+    the branch short-circuited before the sub-key walk. That was fixed at TWO
+    levels -- and the same reviewer then planted
+    `receipts.ci_green_rule.totally_unread_rule` at three, which this function
+    could not see either, on the very PR that made `ci_green_rule` a nested
+    dict and so made three-deep the most likely place for a new key.
+
+    So the depth is now unbounded rather than incremented, and the two sibling
+    walkers were fixed with it -- `assert_policy_matches_code`'s
+    implemented->declared loop and `_documentation_keys_that_are_actually_read`'s
+    subscript scan, which partitioned on the FIRST dot and so could never match
+    a three-level read. Fixing one direction and leaving the other is the
+    one-side-of-a-symmetry defect this package keeps producing; all three
+    directions are the symmetry.
     """
     sectioned = {
         "merge_gate": MERGE_GATE_IMPLEMENTED_BY,
         "verdict_parsing": VERDICT_PARSING_IMPLEMENTED_BY,
     }
-    missing = []
-    for key, value in policy.items():
-        if key.startswith("_"):
-            continue
-        if key in sectioned:
-            for sub in value:
-                if not sub.startswith("_") and sub not in sectioned[key]:
-                    missing.append(f"{key}.{sub}")
-            continue
-        # A TOP-LEVEL DECLARATION USED TO EXEMPT EVERY SUB-KEY UNDER IT, and an
-        # independent reviewer disproved this function's own advertised contract
-        # by planting `receipts.totally_unread_rule`: the suite stayed green and
-        # `assert_policy_matches_code` passed, because `receipts` is declared at
-        # the top level and this branch short-circuited before the sub-key walk.
-        # So "a key with no implementation" was STRUCTURALLY UNREACHABLE for
-        # exactly the section this module had just added a key to -- the hole
-        # being reported as closed by the change that widened it.
-        #
-        # A dict-valued key now still walks its sub-keys. Scalar top-level keys
-        # (`repo`) are unchanged.
-        if key in OTHER_IMPLEMENTED_BY and not isinstance(value, dict):
-            continue
-        if key in OPERATOR_DOCUMENTATION:
-            continue
-        if isinstance(value, dict):
-            for sub in value:
-                dotted = f"{key}.{sub}"
-                if (not sub.startswith("_")
-                        and dotted not in OTHER_IMPLEMENTED_BY
-                        and dotted not in OPERATOR_DOCUMENTATION):
-                    missing.append(dotted)
-            continue
-        missing.append(key)
+    missing: list[str] = []
+
+    def walk(node: dict, prefix: str) -> None:
+        for key, value in node.items():
+            if key.startswith("_"):
+                continue
+            dotted = f"{prefix}.{key}" if prefix else key
+            if dotted in sectioned:
+                for sub in value:
+                    if not sub.startswith("_") and sub not in sectioned[dotted]:
+                        missing.append(f"{dotted}.{sub}")
+                continue
+            # A dict is a NAMESPACE and is descended into -- the key itself
+            # never has to be declared, only its leaves. Unless it is declared
+            # DATA, in which case it is the leaf and its rows are somebody
+            # else's contract.
+            if isinstance(value, dict) and dotted not in DATA_NOT_NAMESPACE:
+                walk(value, dotted)
+                continue
+            if dotted not in OTHER_IMPLEMENTED_BY and dotted not in OPERATOR_DOCUMENTATION:
+                missing.append(dotted)
+
+    walk(policy, "")
     return sorted(missing)
 
 
@@ -478,27 +518,45 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
         if p.name != "mutate_gates.py"
     )
     found = []
+    # WHITESPACE-COLLAPSED, because a chained read is routinely written across
+    # LINES and a gap of `[^\n]{0,20}` cannot cross one. This package's own read
+    # of `receipts.ci_green_rule.substantive_steps` is three lines of `.get(...)`
+    # in the house style, so the scan would have reported that key unread no
+    # matter how deep the walk went -- a depth fix that leaves the pattern
+    # unable to see the shape it was widened for. Collapsing errs toward
+    # FLAGGING (the gap could bridge two adjacent statements), and flagging is
+    # the safe direction here: it says "this prose key looks read", which a
+    # maintainer resolves by declaring it implemented.
+    flat = re.sub(r"\s+", " ", sources)
     for dotted in OPERATOR_DOCUMENTATION:
-        section, _, sub = dotted.partition(".")
-        if sub:
-            # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
-            # chain, so the sub-key's own spelling cannot collide with anything.
-            #
+        parts = dotted.split(".")
+        if len(parts) > 1:
+            # THE CHAIN, TO ANY DEPTH. This used to `partition` on the FIRST
+            # dot and treat the remainder as ONE sub-key, so a three-level entry
+            # searched the sources for the literal `"ci_green_rule.definition"`
+            # and could never match. That is a FALSE NEGATIVE in the direction
+            # that matters: a three-deep control could be moved onto the
+            # operator-documentation allow-list while a function still read it,
+            # which is precisely the allow-list becoming an off switch. Same
+            # depth defect as the two sibling walkers, third instance.
+            step = r"(?:\[|\.get\()\s*[\"']{}[\"']"
+            chain = step.format(re.escape(parts[0])) + "".join(
+                r"[^\n]{0,20}?" + step.format(re.escape(part)) for part in parts[1:]
+            )
             # ...but a read split ACROSS TWO STATEMENTS is not a chain: bind the
-            # section to a local first, then subscript the local on the next
-            # line. The bridge cannot span that, so `review.*` keys could be moved
-            # onto the operator-documentation allow-list undetected while
-            # `review_requirement` still read them. The local-alias form is
-            # matched separately, keyed to the SECTION NAME as a receiver --
-            # which is the spelling that makes an alias readable in the first
-            # place.
-            alias = (r"\b" + re.escape(section) + r"\s*(?:\[|\.get\()\s*[\"']"
-                     + re.escape(sub) + r"[\"']")
-            if re.search(alias, sources):
+            # parent to a local first, then subscript the local on the next
+            # line. The chain cannot span that, so `review.*` keys could be moved
+            # onto the allow-list undetected while `review_requirement` still
+            # read them. The local-alias form is matched separately, keyed to the
+            # IMMEDIATE PARENT as a receiver -- which is the spelling that makes
+            # an alias readable in the first place.
+            alias = (r"\b" + re.escape(parts[-2]) + r"\s*(?:\[|\.get\()\s*[\"']"
+                     + re.escape(parts[-1]) + r"[\"']")
+            if re.search(alias, flat):
                 found.append(dotted)
                 continue
             #
-            # BOTH halves accept `.get(`, not just the sub half. The asymmetry
+            # BOTH halves accept `.get(`, not just the last. The asymmetry
             # missed `policy.get("wip", {})["max_lanes"]` -- and `.get(` is this
             # package's dominant spelling (seven occurrences, including the
             # two-level `policy.get("receipts", {}).get(...)`), so a future read
@@ -506,16 +564,15 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
             # control be moved onto the allow-list undetected. The hole these
             # checks exist to close, reopened by a refactor that looks like its
             # neighbours.
-            pattern = (r"(?:\[|\.get\()\s*[\"']" + re.escape(section) + r"[\"']"
-                       r"[^\n]{0,20}?(?:\[|\.get\()\s*[\"']" + re.escape(sub) + r"[\"']")
+            pattern = chain
         else:
             # A TOP-LEVEL key must be rooted at a policy dict. `repo` is read by
             # three modules as `policy["repo"]`; the ledger's `raw.get("schema")`
             # is keyed to `raw` and so does not match, which is what lets bare
             # names be covered at all.
             pattern = (r"(?:policy|POLICY|cfg)\s*(?:\[|\.get\()\s*[\"']"
-                       + re.escape(section) + r"[\"']")
-        if re.search(pattern, sources):
+                       + re.escape(parts[0]) + r"[\"']")
+        if re.search(pattern, flat):
             found.append(dotted)
     return found
 
@@ -1839,11 +1896,19 @@ def _one_context(
         # Live at the time it was found: PR #4488 returned RECEIPT: GREEN while
         # `next build (node 20)` concluded success with `Build (next build)`
         # SKIPPED behind a change-detection gate.
-        did_work, evidence = context_did_its_work(item.name, item.merged_job, policy)
+        did_work, evidence, scope_skip = context_is_accounted_for(
+            item.name, item.merged_job, merged_changed_files, policy
+        )
         if not did_work:
             return ContextResult(
                 item.name, "FAIL",
                 f"green at the merged sha ({verdict}), but {evidence}",
+            )
+        if scope_skip:
+            return ContextResult(
+                item.name, "scope-untouched-at-merge",
+                f"green at the merged sha ({verdict}); it skipped its declared work, and "
+                f"{evidence}",
             )
         return ContextResult(
             item.name, "green-at-merge",
@@ -1858,7 +1923,10 @@ def _one_context(
         )
 
     if item.merged_workflow_run is not None:
-        return _renamed_at_merge(item, merged_sha=merged_sha)
+        return _renamed_at_merge(
+            item, merged_sha=merged_sha,
+            merged_changed_files=merged_changed_files, policy=policy,
+        )
 
     if item.push_trigger is None:
         return ContextResult(
@@ -1907,13 +1975,22 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
-    ran, evidence = context_did_its_work(item.name, item.head_job, policy)
+    ran, evidence, scope_skip = context_is_accounted_for(
+        item.name, item.head_job, merged_changed_files, policy,
+        push_trigger=item.push_trigger,
+    )
     if not ran:
         return ContextResult(
             item.name, "FAIL",
             f"structurally absent at the merged sha ({why}), and its PR-head run is green "
             f"but {evidence} - a check that executed nothing is not a result to defer to; "
             f"dispatch {item.workflow_path} at the merged sha instead",
+        )
+    if scope_skip:
+        return ContextResult(
+            item.name, "scope-untouched-at-merge",
+            f"structurally absent at the merged sha ({why}); green on the PR head over an "
+            f"identical tree, where it skipped its declared work, and {evidence}",
         )
     return ContextResult(
         item.name, "deferred-to-head",
@@ -1997,13 +2074,29 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
             "non-empty list of step names"
         )
 
-    missing, hollow = [], []
+    missing, hollow, ambiguous = [], [], []
     for wanted in rule:
+        # EVERY matching step, and EVERY one of them must have run. This used to
+        # be `any(ran(s) for s in matches)`, and an independent reviewer's
+        # mutation arm truncated the match list to `[:1]` and SURVIVED: with
+        # `any`, one running step satisfied a declaration no matter how many
+        # others matched and skipped, so narrowing the population was
+        # unobservable. A filter placed INSIDE the predicate beats a contract
+        # written about the predicate -- which is the whole lesson of the `N*`
+        # arms. `all` makes the size of the match set load-bearing, so a
+        # truncation changes an answer and a test can see it.
         matches = [s for s in work if wanted in str(s.get("name") or "")]
         if not matches:
             missing.append(wanted)
-        elif not any(ran(s) for s in matches):
+            continue
+        skipped = [s for s in matches if not ran(s)]
+        if len(skipped) == len(matches):
             hollow.append(wanted)
+        elif skipped:
+            ambiguous.append(
+                f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
+                "are SKIPPED"
+            )
     if missing:
         return False, (
             f"the declared step(s) {missing} are ABSENT from this job - the declaration "
@@ -2014,7 +2107,218 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
             f"its declared substantive step(s) {hollow} were SKIPPED - the check "
             "concluded green having not done the thing it is required for"
         )
+    if ambiguous:
+        return False, (
+            "a declaration matched several steps with a MIXED outcome, so which one "
+            f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
+            "the declaration name exactly one step"
+        )
     return True, f"executed its declared substantive step(s) {list(rule)}"
+
+
+#: A `scope_paths` row may declare its scope to BE the producing workflow's own
+#: `on.push.paths` rather than a copy of it. Used where the workflow's in-job
+#: detector parses that key out of the file itself, so a second list in
+#: `policy.json` would be the drift the workflow explicitly refuses to carry.
+ON_PUSH_PATHS = "on.push.paths"
+
+
+def context_is_accounted_for(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+) -> tuple[bool, str, bool]:
+    """ONE question -- is this green check accounted for? -- asked in one place.
+
+    Returns `(ok, evidence, was_a_scope_skip)`.
+
+    A green check is accounted for when it EXECUTED its declared substantive
+    step, or when it skipped that step and the skip is corroborated by the
+    merged commit's own file list falling outside the context's declared scope.
+
+    Every branch of the receipt goes through here. Three of them used to ask the
+    question with three different predicates -- `green-at-merge` and
+    `deferred-to-head` called `context_did_its_work` while `_renamed_at_merge`
+    called `job_executed` -- and "two predicates over the same question" is
+    exactly the shape that produced the original hole: the deferral branch was
+    fixed, the green-at-merge branch was not, and a reviewer found it one round
+    later. A single entry point is not tidiness; it is what makes "fixed on one
+    side only" impossible to write.
+    """
+    did, evidence = context_did_its_work(name, job, policy)
+    if did:
+        return True, evidence, False
+    excused, why = scope_untouched_at_merge(
+        name, job, changed_files, policy, push_trigger=push_trigger)
+    if excused:
+        return True, why, True
+    return False, f"{evidence}. Nor is that a scope skip: {why}", False
+
+
+def scope_untouched_at_merge(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+) -> tuple[bool, str]:
+    """Was the substantive step skipped because this context's SCOPE did not change?
+
+    #4487 round 4. `context_did_its_work` correctly refuses a check that
+    concluded green having skipped the step that IS the check -- and that made
+    `ci-green` UNOBTAINABLE FOR THE EXACT CLASS IT CLOSES. A guard/test-only PR
+    is by construction one that does not touch `apps/fiab-console`, so
+    `next build (node 20)` and `vitest (node 20)` correctly skip their build and
+    test steps behind an in-job change detector and conclude SUCCESS. Measured:
+    both drain merges in the window, #4483 and #4488 -- the two PRs this receipt
+    exists for, including the harness's own merge -- returned NOT GREEN for
+    exactly those two contexts, 0 for 2 on the population it serves.
+
+    That is #4487's own thesis reproduced one branch along: a definition the
+    topology cannot satisfy leaves every guard/test-only issue unclosable, or
+    somebody quietly accepts. The receipt excused a PATH-FILTERED workflow and
+    refused the structurally identical IN-JOB change-detection skip -- the only
+    difference being whether the filter lives in `on.push.paths` or in a shell
+    step, which is a fact about where GitHub lets you write a filter, not about
+    how much the merge was checked.
+
+    So this is the same measurement the path-filter branch takes, against the
+    same population. `push_event_runs` proves a workflow could not have run by
+    applying its DECLARED filter to the merged commit's changed files; this
+    proves a step could not have run by applying its DECLARED scope to the same
+    list. `merge_gate` reads that list with `git show --name-only <merged>`,
+    which is the very range the on-push detector computes for itself
+    (`HEAD~1...HEAD`), so this corroborates the detector against its own input
+    rather than trusting its output.
+
+    It is an EXCUSE, never a shortcut, and every unanswered question fails
+    closed:
+
+    - no declared row for the context -> no excuse. An undeclared context
+      cannot reach this branch at all.
+    - the gate step is absent from the job, or did not run, or did not conclude
+      success -> we do not know why the substantive step skipped.
+    - a declared substantive step concluded anything other than `skipped`
+      (failed, cancelled, absent) -> that is not a scope skip.
+    - the merged changed-file list is empty -> nothing to measure against.
+    - ANY changed file matches the declared scope -> FAIL, loudly. The detector
+      skipped work it should have done, which is the #3783 shape and a real
+      defect rather than an excuse.
+    """
+    rows = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("scope_paths", {})
+    )
+    row = rows.get(name)
+    if not isinstance(row, dict):
+        return False, (
+            f"no change-detection scope is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.scope_paths), so its skip cannot be excused "
+            "as a scope skip"
+        )
+    gate_step = str(row.get("gate_step") or "")
+    paths = row.get("paths")
+    if paths == ON_PUSH_PATHS:
+        # THE DETECTOR READS THE WORKFLOW'S OWN `on.push.paths`, so there is no
+        # second list to drift. `test.yml`'s `Detect Python-relevant changes`
+        # delegates to `scripts/ci/python_trigger_scope.py`, which parses that
+        # very key out of the file -- its own comment says "ONE list ... READ OUT
+        # OF THIS FILE - not a second copy of it that has to be kept in agreement
+        # by review". Copying those 15 globs into `policy.json` would create
+        # exactly the second copy that file refuses to have.
+        #
+        # This is the SAME predicate `push_event_runs` applies one branch up, and
+        # that is the point rather than a circularity: one list governs both
+        # whether the workflow could run at the merged sha and whether the step
+        # could run at the head, because the workflow was written that way.
+        if push_trigger is None or not push_trigger.paths:
+            return False, (
+                f"{name!r} declares its scope as the producing workflow's "
+                "`on.push.paths`, and that trigger could not be read here - fail "
+                "closed rather than assume it excludes anything"
+            )
+        paths = list(push_trigger.paths)
+    if not gate_step or not isinstance(paths, list) or not paths:
+        return False, (
+            f"the declared scope for {name!r} is {row!r}, which is missing a "
+            "`gate_step` or a non-empty `paths` list"
+        )
+
+    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+        return False, "no job record was read for it, so its skip cannot be explained"
+    steps = [s for s in job["steps"] if isinstance(s, dict)]
+
+    detectors = [s for s in steps if gate_step in str(s.get("name") or "")]
+    if not detectors:
+        return False, (
+            f"its declared gate step {gate_step!r} is ABSENT from this job - the "
+            "declaration is stale, or this is not the job it describes"
+        )
+    if not any(
+        str(s.get("conclusion") or "").lower() == "success" for s in detectors
+    ):
+        got = ", ".join(str(s.get("conclusion") or "?") for s in detectors)
+        return False, (
+            f"its declared gate step {gate_step!r} concluded {got} rather than "
+            "success, so nothing establishes WHY the work was skipped"
+        )
+
+    declared_steps = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+    if not isinstance(declared_steps, list) or not declared_steps:
+        return False, (
+            f"the substantive-step declaration for {name!r} is {declared_steps!r}; "
+            'a scope skip is only meaningful for a NAMED step, never for "ALL"'
+        )
+    for wanted in declared_steps:
+        matches = [s for s in steps if wanted in str(s.get("name") or "")]
+        if not matches:
+            return False, f"its declared step {wanted!r} is absent from this job"
+        off = [
+            str(s.get("conclusion") or "?")
+            for s in matches
+            if str(s.get("conclusion") or "").lower() != "skipped"
+        ]
+        if off:
+            return False, (
+                f"its declared step {wanted!r} concluded {', '.join(off)} rather "
+                "than `skipped`, so this is not a scope skip"
+            )
+
+    files = [str(f) for f in (changed_files or []) if str(f).strip()]
+    if not files:
+        return False, (
+            "the merged commit's changed-file list is empty, so the declared scope "
+            "cannot be shown to exclude anything"
+        )
+    # AN UNREPRESENTABLE PATTERN IS AN UNANSWERED QUESTION, and `glob_matches`
+    # RAISES on one rather than guessing -- so without this the excuse branch
+    # would propagate an exception out of a gate whose entire contract is to fail
+    # closed. `push_event_runs` has the same guard one branch up and resolves it
+    # in the REFUSING direction (the workflow "runs", so the absence is not
+    # excused); the refusing direction here is "not a scope skip".
+    try:
+        hits = sorted({f for f in files if _any_match(tuple(paths), [f])})
+    except UnsupportedPatternError as exc:
+        return False, (
+            f"its declared scope contains {str(exc)!r}, which this translator "
+            "cannot represent faithfully - a scope that cannot be evaluated "
+            "excuses nothing"
+        )
+    if hits:
+        shown = ", ".join(hits[:3])
+        more = f", +{len(hits) - 3} more" if len(hits) > 3 else ""
+        return False, (
+            f"its declared scope {list(paths)} MATCHES {len(hits)} merged file(s) "
+            f"({shown}{more}) and the work was skipped anyway - that is a change "
+            "detector that missed a change, not a scope skip"
+        )
+    return True, (
+        f"its declared gate step {gate_step!r} ran and none of the {len(files)} "
+        f"merged file(s) is inside its declared scope {list(paths)}, so there was "
+        "nothing for it to do"
+    )
 
 
 def job_executed(job: dict | None) -> tuple[bool, str]:
@@ -2093,7 +2397,9 @@ def _is_bookkeeping_step(name: str) -> bool:
     return any(lowered.startswith(prefix) or prefix in lowered for prefix in _BOOKKEEPING)
 
 
-def _renamed_at_merge(item: ContextEvidence, *, merged_sha: str) -> ContextResult:
+def _renamed_at_merge(
+    item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict
+) -> ContextResult:
     """The per-event RENAME case, on evidence rather than on a green run.
 
     THE FIRST VERSION OF THIS WAS A WEAKENING and both independent reviewers
@@ -2115,7 +2421,13 @@ def _renamed_at_merge(item: ContextEvidence, *, merged_sha: str) -> ContextResul
     3. it concluded SUCCESS,
     4. its job list is non-empty and the required context is genuinely ABSENT
        from it (that is what makes this a rename rather than a missing job),
-    5. the sibling job that stands in concluded success and EXECUTED steps.
+    5. the sibling job that stands in concluded success and is ACCOUNTED FOR by
+       `context_is_accounted_for` -- the same predicate every other branch uses.
+       It used to call `job_executed` instead, which asked a DIFFERENT question
+       ("every work step ran") about the same thing, and two predicates over one
+       question is the shape that produced the original hole. The sibling is the
+       renamed job, so it carries the same STEPS and the context's own
+       declaration applies to it unchanged.
 
     Every one of those fails closed, and the message names the sibling actually
     observed instead of asserting one exists.
@@ -2160,9 +2472,12 @@ def _renamed_at_merge(item: ContextEvidence, *, merged_sha: str) -> ContextResul
             f"the {where} run DOES carry a job named {item.name!r}, so this is not a "
             "rename - the context is absent for some other reason",
         )
-    ran = [(j, job_executed(j)) for j in jobs]
+    ran = [
+        (j, context_is_accounted_for(item.name, j, merged_changed_files, policy))
+        for j in jobs
+    ]
     usable = [
-        (j, ev) for j, (ok, ev) in ran
+        (j, ev) for j, (ok, ev, _scope) in ran
         if ok and str(j.get("conclusion") or "").lower() == "success"
     ]
     if not usable:
