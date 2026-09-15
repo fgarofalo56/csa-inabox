@@ -20,6 +20,7 @@ this output.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -467,6 +468,52 @@ def required_contexts(repo: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+REQUIRED_SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "required_contexts.json")
+
+
+def refresh_required_contexts(repo: str) -> int:
+    """Re-read branch protection into `required_contexts.json`.
+
+    The snapshot exists so `test_every_required_context_of_this_repo_is_declared`
+    can assert SET EQUALITY offline -- and that test is what
+    `gates.DATA_NOT_NAMESPACE` names as the instrument checking the rows of
+    `substantive_steps`, which is what lets the policy-key walk stop there. An
+    instrument that only runs with a network is not one a stop can rest on, so
+    the equality runs against this file and a SECOND test compares this file to
+    the live API whenever `gh` is reachable.
+
+    Writing it is deliberately a command rather than a silent auto-update: a
+    snapshot that refreshes itself cannot drift, and cannot report drift either.
+    """
+    contexts = required_contexts(repo)
+    if not contexts:
+        raise SystemExit(
+            "branch protection returned NO required contexts - refusing to write an "
+            "empty snapshot, which would make the declaration check vacuous"
+        )
+    with open(REQUIRED_SNAPSHOT, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    before = doc.get("contexts") or []
+    doc["contexts"] = contexts
+    doc["measured"] = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+    doc["source"] = f"repos/{repo}/branches/main/protection/required_status_checks"
+    with open(REQUIRED_SNAPSHOT, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle, indent=2)
+        handle.write("\n")
+    added = sorted(set(contexts) - set(before))
+    gone = sorted(set(before) - set(contexts))
+    print(f"wrote {len(contexts)} required context(s) to {REQUIRED_SNAPSHOT}")
+    if added:
+        print(f"  ADDED  : {added}\n  -> declare each in policy.json "
+              "receipts.ci_green_rule.substantive_steps, read off a real green run")
+    if gone:
+        print(f"  REMOVED: {gone}\n  -> delete each from substantive_steps and scope_paths")
+    if not added and not gone:
+        print("  no change")
+    return 0
+
+
 def collect(repo: str, number: int) -> dict:
     """Everything the gates need, read once."""
     pr = gh_json(
@@ -550,6 +597,365 @@ def collect(repo: str, number: int) -> dict:
         "changed_files": changed_files,
         "required": required_contexts(repo),
     }
+
+
+def _flat_check_runs(repo: str, sha: str) -> tuple[list[dict], int]:
+    """Every check-run published at `sha`, plus the API's own `total_count`.
+
+    `total_count` is read from the API rather than derived from `len(runs)`,
+    because it is what `gates.classify_missing` needs to tell "nothing was ever
+    created here" from "the page I read happened to be empty".
+    """
+    pages = gh_json(
+        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
+         "--paginate", "--slurp"],
+        f"check-runs at {sha[:12]}",
+    )
+    assert isinstance(pages, list)
+    runs: list[dict] = []
+    total = 0
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        total = max(total, int(page.get("total_count") or 0))
+        runs.extend(page.get("check_runs") or [])
+    return runs, max(total, len(runs))
+
+
+def _workflow_runs(repo: str, sha: str) -> list[dict]:
+    pages = gh_json(
+        ["gh", "api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100",
+         "--paginate", "--slurp"],
+        f"workflow runs at {sha[:12]}",
+    )
+    assert isinstance(pages, list)
+    runs: list[dict] = []
+    for page in pages:
+        if isinstance(page, dict):
+            runs.extend(page.get("workflow_runs") or [])
+    return runs
+
+
+def _run_ids(runs) -> list:
+    return [r.get("id") for r in runs if isinstance(r, dict) and r.get("id")]
+
+
+def _jobs_of_run(repo: str, run_id) -> tuple[dict, ...]:
+    """Every job of one workflow run, WITH its steps.
+
+    Steps are the whole point: a job that concluded SUCCESS with every
+    substantive step `skipped` measured nothing, and `statusCheckRollup` cannot
+    see that. The jobs API can. This used to return bare NAMES, which the
+    receipt then read only to PRINT -- evidence gathered and discarded.
+    """
+    pages = gh_paginated(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+        f"jobs of run {run_id}",
+    )
+    jobs: list[dict] = []
+    for page in pages:
+        if isinstance(page, dict):
+            jobs.extend(j for j in (page.get("jobs") or []) if isinstance(j, dict))
+    return tuple(jobs)
+
+
+def _jobs_by_name(repo: str, run_ids) -> dict[str, dict]:
+    """Job NAME -> the job, across several runs, worst-first on ties.
+
+    A check-run's name IS its job's name, which is how a context is joined back
+    to the steps that produced it. On a duplicate the one that executed LESS
+    wins, so a green re-run cannot hide a sibling that ran nothing.
+    """
+    out: dict[str, dict] = {}
+    for run_id in run_ids:
+        for job in _jobs_of_run(repo, run_id):
+            name = str(job.get("name") or "")
+            if not name:
+                continue
+            prior = out.get(name)
+            if prior is None or (
+                gates.job_executed(job)[0] is False and gates.job_executed(prior)[0] is True
+            ):
+                out[name] = job
+    return out
+
+
+def collect_ci_green_evidence(repo: str, number: int) -> dict:
+    """Measure everything `gates.ci_green_receipt` decides on, for a MERGED PR.
+
+    #4487. Nothing here maps a context to a producer by SPELLING. The producer
+    is traced at the PR HEAD -- the event where the context demonstrably ran --
+    through `check_suite_id`, which is 1:1 with an Actions workflow run, and the
+    rename case is then resolved by that same workflow identity at the merged
+    sha. An alias table would be one conditional `name:` expression away from
+    being wrong, silently.
+    """
+    pr = gh_json(
+        ["gh", "pr", "view", str(number), "--repo", repo, "--json",
+         "number,title,state,baseRefName,headRefOid,mergeCommit"],
+        f"PR #{number}",
+    )
+    assert isinstance(pr, dict)
+    if pr.get("state") != "MERGED" or not (pr.get("mergeCommit") or {}).get("oid"):
+        raise SystemExit(
+            f"#{number} is {pr.get('state')}, not MERGED - `ci-green` is a receipt about a "
+            "MERGED sha, and there is no merged sha to measure."
+        )
+    merged = pr["mergeCommit"]["oid"]
+    head = pr["headRefOid"]
+    branch = pr["baseRefName"]
+
+    for sha in (merged, head):
+        rc, _, err = sh(["git", "fetch", "--quiet", "origin", sha])
+        if rc != 0:
+            print(f"WARNING: git fetch {sha[:12]} failed: {err[:200]}", file=sys.stderr)
+
+    merged_checks, merged_total = _flat_check_runs(repo, merged)
+    head_checks, _ = _flat_check_runs(repo, head)
+    merged_by_name = gates.worst_by_name(merged_checks)
+    head_by_name = gates.worst_by_name(head_checks)
+
+    # check_suite_id -> workflow path, on BOTH shas.
+    head_path_by_suite = {
+        r.get("check_suite_id"): r.get("path") for r in _workflow_runs(repo, head)
+    }
+    merged_runs = _workflow_runs(repo, merged)
+
+    # The producer of each context, traced at the head.
+    suite_of_head_check = {
+        (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
+    }
+    #: PR-head check-run id -> the job behind it, so the receipt can ask whether
+    #: a green check EXECUTED anything. `statusCheckRollup` carries no
+    #: population; `steps[].conclusion` on the jobs API does.
+    head_job_by_name = _jobs_by_name(repo, _run_ids(_workflow_runs(repo, head)))
+    #: The same, at the MERGED sha. `green-at-merge` needs it for exactly the
+    #: reason the deferral branch needs the head one: a green conclusion is not
+    #: evidence the check did its work.
+    merged_job_by_name = _jobs_by_name(repo, _run_ids(merged_runs))
+
+    rc, out, err = sh(["git", "show", "--name-only", "--pretty=format:", merged])
+    if rc != 0:
+        raise SystemExit(
+            f"cannot read the changed files of {merged[:12]} (rc={rc}): {err[:300]}\n"
+            "Without them a path filter cannot be shown to exclude anything, and an "
+            "unmeasurable receipt is NOT a receipt."
+        )
+    changed_files = [line.strip() for line in out.splitlines() if line.strip()]
+
+    trees = []
+    for sha in (merged, head):
+        rc, out, _ = sh(["git", "rev-parse", f"{sha}^{{tree}}"])
+        trees.append(out.strip() if rc == 0 else "")
+    trees_identical = bool(trees[0]) and trees[0] == trees[1]
+
+    required = required_contexts(repo)
+    evidence = []
+    jobs_cache: dict[int, tuple[dict, ...]] = {}
+    trigger_cache: dict[str, gates.PushTrigger | None] = {}
+    for name in required:
+        merged_check = merged_by_name.get(name)
+        workflow_path = head_path_by_suite.get(suite_of_head_check.get(name))
+        merged_run = None
+        merged_jobs: tuple[dict, ...] = ()
+        trigger = None
+        if merged_check is None and workflow_path:
+            # `gates.select_merged_run` -- the `push` run of this workflow AT
+            # this sha. NOT "the newest run of that path", which is what this
+            # used to do: a single sha carries many runs per path across
+            # `push`, `schedule` and `check_suite`, so a cron could supply the
+            # rename evidence for a `push` that went red.
+            merged_run = gates.select_merged_run(merged_runs, workflow_path, merged)
+            if merged_run is not None:
+                run_id = merged_run.get("id")
+                if run_id not in jobs_cache:
+                    jobs_cache[run_id] = _jobs_of_run(repo, run_id)
+                merged_jobs = jobs_cache[run_id]
+            else:
+                if workflow_path not in trigger_cache:
+                    rc, out, _ = sh(["git", "show", f"{merged}:{workflow_path}"])
+                    trigger_cache[workflow_path] = (
+                        gates.parse_push_trigger(out) if rc == 0 else None
+                    )
+                trigger = trigger_cache[workflow_path]
+        evidence.append(
+            gates.ContextEvidence(
+                name=name,
+                workflow_path=workflow_path,
+                merged_check=merged_check,
+                head_check=head_by_name.get(name),
+                merged_workflow_run=merged_run,
+                merged_workflow_jobs=merged_jobs,
+                head_job=head_job_by_name.get(name),
+                merged_job=merged_job_by_name.get(name),
+                push_trigger=trigger,
+            )
+        )
+
+    return {
+        "pr": pr, "merged": merged, "head": head, "branch": branch,
+        "evidence": evidence, "merged_total_count": merged_total,
+        "changed_files": changed_files, "trees_identical": trees_identical,
+    }
+
+
+def resolve_infra_ere(merged_sha: str | None = None) -> str | None:
+    """The ERE `fiab-console-ci.yml`'s vitest detector greps its `infra` half on.
+
+    Resolved HERE and injected, for the same reason `push_trigger` is: `gates.py`
+    stays a pure decision module that a test can drive both ways, and the one
+    list lives where the workflow puts it rather than in a copy in
+    `policy.json`. The workflow computes it with the identical command.
+
+    Returns None on any failure -- a missing `node`, a non-zero exit, an empty
+    line. The caller fails CLOSED on None (it refuses to excuse a skip it cannot
+    corroborate), which is the same direction the workflow itself takes when the
+    deriver breaks: it builds everything rather than guessing which subset is
+    safe to skip.
+
+    ROUND 8, two findings, both in the EXCUSING direction:
+
+    1. SHAPE. `stdout.strip() or None` accepted anything non-empty. A warning
+       line, a newline, then the real ERE is a VALID regex: it compiles, raises
+       nothing, matches no path, and the excuse is granted. Empty refuses and an
+       uncompilable pattern refuses; the one shape that is neither was the one
+       that silently excused. Today's deriver sends every diagnostic to stderr
+       and writes a single 152-byte line, so this was not reachable through its
+       own code -- it was one `console.log` away, in a file nothing under
+       `tools/drain/` owns. So the shape is now asserted: ONE line, anchored.
+
+    2. TWO CLOCKS. The deriver enumerates directories from the WORKING TREE's
+       `HEAD` while `push_trigger` is read from the merged commit. If today's
+       tree is NARROWER -- a top-level directory has since been removed -- a
+       file that was in the infra scope at merge falls outside it now, `hits`
+       comes back empty, and a merge that did have infra work is excused. So
+       when the caller knows the merged sha, the two directory sets are compared
+       and a divergence REFUSES rather than quietly answering from the wrong
+       clock. Measured at the time of writing: identical, 29 vs 29.
+    """
+    try:
+        out = subprocess.run(
+            ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    ere = out.stdout.strip()
+    if not ere or "\n" in ere or not ere.startswith("^("):
+        # Not the deriver's declared shape. A delegated scope arriving in an
+        # unexpected shape must be None, never a regex that matches nothing.
+        return None
+    if merged_sha and not _top_level_dirs_agree(merged_sha):
+        return None
+    return ere
+
+
+def _top_level_dirs_agree(merged_sha: str) -> bool:
+    """Could today's tree have produced a NARROWER infra ERE than the merge's?
+
+    The deriver builds its alternatives by walking the working tree's `HEAD`, so
+    a top-level directory that existed at the merged sha and has since been
+    removed can drop out of the scope. A file under it would then read as
+    outside the infra scope, `hits` would come back empty, and a merge that DID
+    have infra work would be excused. That is the only direction that matters:
+    today's tree having MORE directories can widen the scope, and a wider scope
+    can refuse but never excuse.
+
+    Compares `git ls-tree -d --name-only` at the two shas -- NOT the merged sha
+    against the ERE's own alternatives. Those are different sets by design: the
+    deriver emits only the directories its infra-reading suites actually read
+    (18 of the 29 top-level directories at the time of writing), so comparing
+    against the ERE would refuse every receipt. Caught here by measurement
+    before it reached the census.
+
+    WHAT THIS DOES NOT COVER, stated because an independent reviewer measured it
+    rather than left as an implied guarantee: the ERE's alternatives are the
+    top-level directory set INTERSECTED with the directories the console's
+    vitest suites reference, and those suites are read from the working tree.
+    Deleting or refactoring the last suite that reads `docs/` narrows the
+    emitted ERE with `ls-tree` UNCHANGED, and the deriver's own documentation
+    records exactly that shadow for `docs`, `content`, `notebooks` and
+    `packages`. So this closes ONE of the deriver's two narrowing mechanisms.
+    Closing the other means comparing the emitted ERE across the two shas, which
+    needs the merged tree checked out; until then the limit is disclosed here
+    rather than overstated.
+
+    Fails CLOSED on any error: "cannot be shown to agree" is not "agree". Note
+    the consequence on a host whose object store lacks the merged sha -- the
+    `infra` half becomes uncorroborable and `vitest (node 20)` cannot take the
+    excuse there. That is the safe direction, but it is "unobtainable for the
+    class it serves" if it ever becomes common; fetch the sha rather than
+    loosening this.
+    """
+    def dirs(ref: str) -> set[str] | None:
+        try:
+            out = subprocess.run(
+                ["git", "ls-tree", "-d", "--name-only", ref],
+                capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}
+        return found or None
+
+    at_merge, today = dirs(merged_sha), dirs("HEAD")
+    if at_merge is None or today is None:
+        return False
+    return not (at_merge - today)
+
+
+def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
+    data = collect_ci_green_evidence(repo, number)
+    receipt = gates.ci_green_receipt(
+        data["evidence"],
+        merged_total_count=data["merged_total_count"],
+        merged_changed_files=data["changed_files"],
+        merged_branch=data["branch"],
+        merged_sha=data["merged"],
+        trees_identical=data["trees_identical"],
+        policy=policy,
+        infra_ere=resolve_infra_ere(data["merged"]),
+    )
+    if as_json:
+        print(json.dumps({
+            "pr": number,
+            "merged_sha": data["merged"],
+            "head_sha": data["head"],
+            "ok": receipt.ok,
+            "summary": receipt.summary,
+            "trees_identical": data["trees_identical"],
+            "contexts": [
+                {"name": c.name, "state": c.state, "detail": c.detail}
+                for c in receipt.contexts
+            ],
+            "reasons": list(receipt.reasons),
+        }, indent=1))
+        return 0 if receipt.ok else 1
+
+    print(f"# ci-green receipt - {repo}#{number}")
+    print(f"  merged sha : {data['merged']}")
+    print(f"  PR head    : {data['head']}  (tree "
+          f"{'IDENTICAL' if data['trees_identical'] else 'DIFFERS'})")
+    print(f"  changed    : {len(data['changed_files'])} file(s) at the merged sha")
+    print()
+    for context in receipt.contexts:
+        mark = "ok  " if context.ok else "FAIL"
+        print(f"  [{mark}] {context.name}")
+        print(f"         {context.state}: {context.detail}")
+    print()
+    print(f"RECEIPT: {receipt.summary}")
+    for reason in receipt.reasons:
+        print(f"  - {reason}")
+    if receipt.ok:
+        print()
+        print("Record it against the item with receipt_kind='ci-green', "
+              f"receipt_ref='{data['merged']}', and set receipt_taken_under to the item's "
+              "effective_receipt_class - see README 'If you hand-edit a receipt'.")
+    return 0 if receipt.ok else 1
 
 
 def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
@@ -804,10 +1210,28 @@ def main() -> int:
     parser.add_argument("--allow-close", default="",
                         help="issue numbers this merge is ALLOWED to auto-close; anything "
                              "else the keyword scan finds is a NO-GO")
+    parser.add_argument("--ci-green-receipt", type=int, metavar="PR",
+                        help="#4487: take the `ci-green` receipt for a MERGED PR - every "
+                             "required context that CAN run at the merged sha is green, and "
+                             "every one that cannot is named with its reason and its "
+                             "PR-head result over an identical tree")
+    parser.add_argument("--refresh-required-contexts", action="store_true",
+                        help="re-read branch protection into required_contexts.json, the "
+                             "offline snapshot the declaration check asserts equality "
+                             "against")
     args = parser.parse_args()
 
     policy = gates.load_policy(POLICY_PATH)
     repo = policy["repo"]
+
+    if args.refresh_required_contexts:
+        return refresh_required_contexts(repo)
+
+    # #4487. The receipt is a PROGRAM, for the same reason the merge gates are:
+    # a definition with no caller is prose, and the old one named a measurement
+    # the CI topology cannot produce.
+    if args.ci_green_receipt is not None:
+        return print_ci_green_receipt(repo, args.ci_green_receipt, args.json, policy)
 
     # Gate 7 -- the before/after audit. Run AFTER merging, with the issue-number
     # list this tool wrote before it. The scan is PREVENTION and this is
