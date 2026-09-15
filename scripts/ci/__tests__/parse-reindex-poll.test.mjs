@@ -120,7 +120,13 @@ test('parser: a non-integer indexedChunkCount is dropped rather than echoed', ()
  * exits non-zero would take that decision away from it.
  */
 test('parser: unreadable and non-JSON bodies read as unknown, not as an error', () => {
-  const missing = parsePollFile(path.join(os.tmpdir(), 'no-such-reindex-body-4498.json'));
+  // The missing path is built under a mkdtempSync dir rather than as a constant
+  // name under os.tmpdir(): `check-temp-artifact-safety.mjs` rejects the latter
+  // (two concurrent runs would collide on it), and it is a required context, so
+  // the constant-name form failed `guardrails` when this file was added. The dir
+  // exists; only the file inside it does not, which is what the test needs.
+  const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reindex-poll-'));
+  const missing = parsePollFile(path.join(missingDir, 'no-such-reindex-body-4498.json'));
   assert.equal(missing, 'unknown|unknown|||||');
 
   const garbage = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'reindex-poll-')), 'body.json');

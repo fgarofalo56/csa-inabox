@@ -935,7 +935,20 @@ test('#4498 formatAnnotation redacts through the SHARED module, not a private co
   assert.ok(!out.includes(sig), `SAS signature reached the annotation: ${out}`);
   assert.match(out, /sig=\[redacted\]/);
   // Two-sided: the operator still has to be able to act on it.
-  assert.match(out, /loomstg\.blob\.core\.windows\.net/);
+  //
+  // Exact substring rather than a host regex. CodeQL reads a partial-host
+  // pattern as an incomplete-URL-sanitization sink (js/incomplete-url-substring
+  // -sanitization) — "arbitrary hosts may come before or after it" — and raised
+  // a HIGH alert on the `/loomstg\.blob\.core\.windows\.net/` form here. It is
+  // an assertion and not a sanitiser, so the alert is a false positive in
+  // substance, but this is a public repo and a new high alert is not worth
+  // carrying for a weaker assertion: `includes` of the full URL is strictly
+  // more specific than the host regex it replaces. Same fix, same reason, as
+  // `reindex-loom-docs.test.mjs:1200-1206`.
+  assert.ok(
+    out.includes('https://loomstg.blob.core.windows.net/c/m.json'),
+    `expected the manifest URL to survive redaction, got: ${out}`,
+  );
 });
 
 test('#4498 a newline in the REMOTE freshness.reason reaches stdout as one line', () => {

@@ -104,6 +104,85 @@ export function pollFields(parsed) {
 }
 
 /**
+ * The POST side of the SAME sanitizer, for the jobId the trigger response hands
+ * back. It exists so `reindex-loom-docs.sh` can stop carrying its own copy.
+ *
+ * ROUND 9 (review finding N2). `do_post` had an inline `node -e` that applied
+ * `String(j.jobId).replace(/[\r\n|]+/g, " ")` — the separator strip, WITHOUT
+ * `redactSecrets` — while its own comment asserted it was "the SAME one the
+ * poll's `clean()` helper applies". It was not, and the divergence was already
+ * live. This is the exact drift the round-6 extraction was performed to end:
+ * one importer and one hand-copied clone of a security control.
+ *
+ * Two things broke, both measured. A credential-shaped id (a JWT) redacts to
+ * `[redacted-jwt]` on the poll side and passes through verbatim here, so
+ * `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` can never match and the durable-record
+ * correlation silently stops firing — a recorded failure of OUR job reads as a
+ * timeout, which is the #4497 symptom this PR exists to remove. And `:254`
+ * echoes the raw value to stdout, which on a `loom-roll-and-validate` run is a
+ * public Actions log, so the unredacted remote string was also being PUBLISHED.
+ *
+ * The existing correlation test passed only because its fixture,
+ * `job|with|separators`, is the one shape where the two sides agree —
+ * `redactSecrets` leaves it untouched. A credential-shaped fixture is now
+ * asserted alongside it; without one, the clone would simply drift again.
+ *
+ * @param {string} p file holding the trigger-response body
+ * @returns {string} the sanitized jobId, or '' when there is none
+ */
+export function postJobId(p) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    parsed = {};
+  }
+  const j = parsed && typeof parsed === 'object' ? parsed : {};
+  return j.jobId ? clean(String(j.jobId)) : '';
+}
+
+/**
+ * The trigger-response body, redacted, for the diagnostic dump in `do_post`.
+ *
+ * ROUND 9 (review finding N7, promoted from nit to defect by measurement).
+ * `do_post` printed the raw body with `head -c 800`. That is a REMOTE-supplied
+ * document on a path whose stdout is a PUBLIC Actions log on a
+ * `loom-roll-and-validate` run, and it sat one line BELOW the `job=` echo that
+ * N2's fix had just taught to redact. So the boundary was decorative on this
+ * surface: the sanitized id was printed, and then the same value was republished
+ * verbatim by the next statement. Measured, with the round-9 correlation test:
+ *
+ *   reindex POST … -> HTTP 202 job=job with sig=[redacted]      <- redacted
+ *   {"ok":true,…,"jobId":"job|with|sig=not-a-real-secret-value"} <- raw, next line
+ *
+ * A reviewer had called this pre-existing and therefore out of scope. It is
+ * pre-existing, and it still undoes a fix this PR makes, which is the thing that
+ * decides scope.
+ *
+ * REDACT THEN TRUNCATE, never the reverse — the same ordering argument as
+ * `lastRun.error` above. Slicing first can cut a credential below a rule's
+ * length bound so it no longer matches, publishing the head of a key instead of
+ * `[redacted]`.
+ *
+ * This is NOT a proof the dump is secret-free. It covers the shapes
+ * `redact-secrets.mjs` knows; an unanticipated one passes through. The 800-char
+ * bound limits the blast radius, it does not close it.
+ *
+ * @param {string} p file holding the trigger-response body
+ * @param {number} [limit] bytes to keep after redaction
+ * @returns {string}
+ */
+export function redactBodyFile(p, limit = 800) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch {
+    return '';
+  }
+  return redactSecrets(raw).slice(0, limit);
+}
+
+/**
  * @param {string} path file holding the poll body; unreadable or non-JSON is an
  *   empty object, exactly as the inline parser treated it — a poll that returned
  *   no usable body must read as "unknown", never as a hard failure here, because
@@ -124,8 +203,18 @@ export function parsePollFile(path) {
 // them positionally with `IFS='|' read -r`. `pathToFileURL` rather than a
 // hand-built `file://` string: this runs on Windows too, where a drive letter
 // does not survive naive concatenation.
+//
+// `--post <file>` selects the jobId sanitizer instead, `--body <file>` the
+// redacted body dump. One entry point, so the shell cannot reach one of these
+// helpers without the others being in the same file and the same test suite.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.stdout.write(parsePollFile(process.argv[2]));
+  if (process.argv[2] === '--post') {
+    process.stdout.write(postJobId(process.argv[3]));
+  } else if (process.argv[2] === '--body') {
+    process.stdout.write(redactBodyFile(process.argv[3]));
+  } else {
+    process.stdout.write(parsePollFile(process.argv[2]));
+  }
 }
 
 export default parsePollFile;

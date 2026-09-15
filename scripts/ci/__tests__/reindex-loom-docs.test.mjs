@@ -1149,6 +1149,83 @@ test('#4498 the two sanitizers agree — an id carrying the field separator stil
   );
 });
 
+test('#4498 round 9 — the two sanitizers agree on a REDACTED id too, not only on the one they both leave alone', async () => {
+  // ROUND 9 REVIEW, FINDING N2. The test above passes under a POST side that
+  // does not redact at all, because its fixture — `job|with|separators` — is
+  // precisely the shape `redactSecrets` leaves untouched. Both sides only had to
+  // agree on the separator strip for it to go green, and that is what round 8's
+  // hand-copied clone did: separator strip, no `redactSecrets`, while its own
+  // comment claimed it was "the SAME one the poll's `clean()` helper applies".
+  // A test asserting "the two sanitizers agree" that exercises only the half
+  // where they agree is the weak-mutation shape — it cannot fail for the reason
+  // it is named after.
+  //
+  // This fixture must pass through a REDACTION rule, so the two sides disagree
+  // unless both call `redactSecrets`. It is deliberately NOT credential-shaped:
+  // `redact-secrets.mjs:48` keys on the `sig=` KEYWORD, not on the value's
+  // entropy, so a plainly-fake dictionary-word value triggers the rule while
+  // staying well under any secret scanner's entropy floor. A JWT-shaped fixture
+  // would redact just as well and would red-line `Secret Scan` on every open PR
+  // in the repo — see #4507 for what that costs.
+  //
+  // Measured: with the POST side reverted to the round-8 clone
+  // (`String(j.jobId).replace(/[\r\n|]+/g, " ")`, no redaction), this test gives
+  //   `4 !== 1` on the poll count, the log showing
+  //   `job=job with sig=not-a-real-secret-value` from the POST against
+  //   `job with sig=[redacted]` from the poll — never equal, correlation dead,
+  //   run grinds to its ceiling. The test above stays GREEN under that same
+  //   mutation, which is exactly why this one exists.
+  const redacted = 'job|with|sig=not-a-real-secret-value';
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: redacted } }),
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: 'the redacted-id failure this run must own',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: redacted,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /the redacted-id failure this run must own/);
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+      // The PUBLICATION half, and it is a separate defect from the correlation
+      // one — `do_post` writes the id to stdout, which on a
+      // `loom-roll-and-validate` run is a public Actions log.
+      //
+      // This assertion covers TWO surfaces, and it failed on the second one the
+      // first time it ran, which is why the `head -c 800` dump changed with it.
+      // The `job=` echo redacted correctly; the raw body dump on the NEXT LINE
+      // republished the same value verbatim:
+      //
+      //   reindex POST … -> HTTP 202 job=job with sig=[redacted]      <- fixed
+      //   {"ok":true,…,"jobId":"job|with|sig=not-a-real-secret-value"} <- raw
+      //
+      // A redaction undone by the following statement is not a redaction, so
+      // `!out.includes(...)` is asserted over the WHOLE output rather than over
+      // the echo line. Narrowing it to the echo would have let the leak stand
+      // and reported the fix as complete.
+      assert.ok(
+        !out.includes('sig=not-a-real-secret-value'),
+        'the UNREDACTED remote jobId reached the log: ' + out,
+      );
+      assert.match(out, /job=job with sig=\[redacted\]/);
+    },
+  );
+});
+
 test('#4498 round 5 — a credential inside the remote error is REDACTED before it reaches the public Actions log', async () => {
   // BLOCKER 1b, reviewer 2. `lastRun.error` is remote-supplied: the console
   // stores whatever string the failing replica produced, and the

@@ -174,7 +174,11 @@ FATAL="${FATAL:-true}"
 
 POST_BODY_FILE="$(mktemp)"
 POLL_BODY_FILE="$(mktemp)"
-trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE"' EXIT
+# The parser's stderr, captured rather than discarded — see `do_post`. Separate
+# from the body file so a parse failure cannot overwrite the response it failed
+# to read, which is the one thing that would explain it.
+POST_ERR_FILE="$(mktemp)"
+trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE" "$POST_ERR_FILE"' EXIT
 
 emit() { [ -n "${GITHUB_OUTPUT:-}" ] && printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; return 0; }
 
@@ -223,6 +227,7 @@ fi
 # is a log sentence that described the wrong thing, that is the same defect.
 do_post() {
   : > "$POST_BODY_FILE"
+  : > "$POST_ERR_FILE"
   CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $INTERNAL_TOKEN" \
     -H 'Content-Type: application/json' \
@@ -236,23 +241,37 @@ do_post() {
   # console -- in which case the record check below simply never fires, which
   # is the correct fail-closed behaviour: no identity, no claim.
   #
-  # The substitution must be the SAME one the poll's `clean()` helper applies
-  # (` `, not `""`). The two sides were sanitizing differently, so an id carrying
-  # a pipe compared as `abcdef` here against `abc def` there, could never equal
-  # itself, and the `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation below would
-  # silently stop firing — a durable failure of OUR job reading as a timeout.
-  # Reviewer 2's nit on #4498: not reachable from today's console
-  # (`startReindexJob` in `lib/azure/reindex-job.ts` mints the id with
-  # `crypto.randomUUID()`), but the value arrives from a remote service, so "it
-  # cannot contain a pipe" is an assumption about data we do not control.
-  POST_JOB_ID=$(node -e '
-    const fs = require("node:fs");
-    let j = {};
-    try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
-    process.stdout.write(j && j.jobId ? String(j.jobId).replace(/[\r\n|]+/g, " ") : "");
-  ' "$POST_BODY_FILE" 2>/dev/null || true)
+  # The substitution must be the SAME one the poll's `clean()` helper applies,
+  # so this SHELLS OUT TO THAT HELPER rather than restating it. Round 8 carried
+  # an inline `node -e` here that stripped the separator but did NOT redact, while
+  # this comment claimed the two sides matched. They did not: a credential-shaped
+  # id redacts on the poll side and passed through verbatim here, so
+  # `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` below could never match, the correlation
+  # silently stopped firing, and a durable failure of OUR job read as a timeout —
+  # the #4497 symptom, restored by the fix meant to remove it. The raw remote
+  # value also reached the echo below, which on a roll run is a PUBLIC log.
+  #
+  # No `2>/dev/null`: if this parse fails, its stderr is the only thing that says
+  # why, and `deploy-integrity.md` R7 exists because a discarded stderr once
+  # turned "I could not reach the registry" into "the tag does not exist". `|| true`
+  # stays — an unparseable body must leave the id EMPTY and fail closed, not abort
+  # the run — but the failure is now visible rather than silent.
+  POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE" || true)
+  if [ ! -s "$POST_BODY_FILE" ] || [ -z "$POST_JOB_ID" ]; then
+    if [ -s "$POST_ERR_FILE" ]; then
+      echo "reindex POST: could not read a jobId from the response body:"
+      head -c 400 "$POST_ERR_FILE"
+      echo ""
+    fi
+  fi
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
-  head -c 800 "$POST_BODY_FILE" || true
+  # REDACTED, not raw. This dumped the remote body verbatim with `head -c 800`,
+  # one line below the `job=` echo that redacts — so the same value was sanitized
+  # and then immediately republished, and on a roll run that stdout is a PUBLIC
+  # Actions log. Measured in the round-9 correlation test before this changed.
+  # Redaction happens in `$PARSER` (redact THEN truncate; see its docblock), so
+  # there is still exactly one definition of what a credential looks like.
+  node "$PARSER" --body "$POST_BODY_FILE" || true
   echo ""
 }
 
@@ -566,9 +585,12 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # keeps `unknown` out of the streak, and it is tested directly.
   #
   # The "exactly ONE" is a claim about the whole suite, so name the population it
-  # was measured over: the 43 tests this file held at the time. It now holds 44 —
-  # the 44th is the POST/poll sanitizer test added later in this same PR, which
-  # was not in that population and does not reach this branch.
+  # was measured over: the 43 tests this file held at the time. It now holds 46 —
+  # the three added later in this same PR are the POST/poll sanitizer test, its
+  # credential-shaped counterpart from round 9, and the parse-failure disclosure
+  # test. None of them was in that population and none reaches this branch.
+  # (Round 9 review finding N6: this line has now said 44 while the file held 45.
+  # If you add a test here, re-measure with `grep -c '^test(' ` — do not increment.)
   if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
 
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────
