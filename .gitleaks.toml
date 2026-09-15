@@ -61,14 +61,25 @@ regexes = [
     # and `AccountKey=` values out of the surfaces that publish a remote error —
     # stdout (`reindex-loom-docs.sh`) and the `::error::` annotation
     # (`classify-reindex-result.mjs`). Proving that requires a fixture shaped
-    # like the real thing, so these are base64 blobs and they trip the
-    # generic-api-key entropy heuristic (4.72-4.87) even though they are not
-    # random: each decodes to an English sentence saying so.
+    # like the real thing, so these are base64 blobs — not random, though: each
+    # decodes to an English sentence saying so.
     #
     #   YW5ub3Rhd...  -> "annotation-signature-must-not-publish"
     #   QW5ub3Rhd...  -> "AnnotationAccountKeyDoNotPublish=="
     #   Zm9yYmlkZ...  -> "forbidden-signature-value-do-not-publish"
     #   QWNjb3VudE...  -> "AccountKeyThatMustNotReachTheLog=="
+    #
+    # THREE of the four are reported today, as 5 findings across 3 files from 2
+    # commits at entropies 4.72-4.87. The fourth — `YW5ub3Rhd...`, entropy
+    # 4.551272 — produces NO finding at this version. An earlier draft of this
+    # comment said that was because it sits "below the entropy threshold"; that
+    # is measurably wrong and the measurement is cheap to repeat: the SAME
+    # literal at the SAME 4.551272 fires when the assignment reads `const key =`
+    # and is silent when it reads `const sig =`. What decides it is
+    # `generic-api-key`'s KEYWORD requirement, not the entropy number. So the
+    # fourth entry is allowlisted not because it is reported but because it is
+    # the paired fixture of one that is — keep it, or a later variable rename
+    # re-opens the hole with no diff to this file to explain why.
     #
     # These are ANCHORED exact literals (`^...$`), not a path and not a shape.
     # The anchors are load-bearing and were added after review MEASURED that
