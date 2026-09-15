@@ -147,7 +147,35 @@ jobs:
     # would take it OUT of the required set until branch protection is updated
     # in the same change -- a guard that silently stops blocking, which is worse
     # than a slow one.
-    timeout-minutes: 30
+    #
+    # 30 WAS NOT ENOUGH EITHER, AND THE ARGUMENT ABOVE PREDICTED IT. Three more
+    # cancellations, the last one fully instrumented -- job 104280343412, head
+    # ff4562eca21:
+    #
+    #   job     06:42:25 .. 07:12:42  = 30m17s  CANCELLED at the wall
+    #   setup   06:42:25 .. 06:51:36  =  9m11s
+    #   matrix  06:51:36 .. 07:12:38  = 21m02s  cut off mid-run
+    #
+    #   CONTROL rc=0  430 passed, 3 skipped, 1 deselected in 5.47s
+    #   225 arm executions, 220 distinct ids, EVERY ONE killed, zero survivors
+    #   5.48 s/arm -- i.e. exactly the CONTROL suite runtime, because each arm
+    #   re-runs the whole suite
+    #   240 arms are declared; it reached 220 and ran out of clock
+    #
+    #   240 x 5.48s = 21.9 min matrix + 9.2 min setup = 31.1 min vs a 30 wall
+    #
+    # ~4% over, which is the same coin-flip margin the 15-minute ceiling died
+    # at. The guard is WORKING -- 220/220 killed. What ran out was the budget,
+    # and a job that exceeds `timeout-minutes` reports as `cancelled` rather
+    # than `failure`, so it reads as a flake three times over.
+    #
+    # 45 is chosen for HEADROOM, not for fit: ~45% above today's 31.1 min, so
+    # the next arm or two does not re-open this. Do not treat it as a ceiling to
+    # grow into. The real fix is to stop paying a whole suite per arm -- most
+    # arms are killed by a handful of named assertions -- and that is tracked
+    # separately, because narrowing an arm's test selection is precisely how a
+    # GREEN arm becomes ambiguous between "blind test" and "wrong subset".
+    timeout-minutes: 45
     env:
       # This job builds ONE environment out of ~22 INDEPENDENT pip resolutions
       # (the pyproject extras, then 20 per-domain requirements.txt, then
