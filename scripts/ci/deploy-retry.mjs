@@ -608,21 +608,39 @@ export function formatAnnotation(level, message) {
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
   //
-  // `%` IS ESCAPED FIRST, AND THAT ORDER IS THE WHOLE FIX. The runner's
-  // `unescapeData` decodes `%25`, `%0D` and `%0A` back to `%`, CR and LF before
-  // it parses the command. An encoder that escapes the line terminators but not
-  // the percent sign is therefore NOT INJECTIVE: the three literal characters
-  // `%0A` arriving inside `message` survive to the runner, are decoded to a real
-  // newline, and everything after them is parsed as a workflow command line this
-  // script did not write. `message` is composed from ARM deployment error text,
-  // which in a brownfield deploy carries caller-supplied resource names and
-  // parameter values — so the input is remote-influenced, not repo-authored, and
-  // the log it lands in is public. Escaping `%` AFTER the newline substitution
-  // would re-escape the escape (`%0A` -> `%250A`) and break every real newline,
-  // so the order is load-bearing in both directions and is pinned by a test.
+  // `\r\n|\r|\n` RATHER THAN `\r?\n`, AND THAT IS THE MORE SEVERE HALF. The old
+  // alternation did not match a LONE CR, so a bare CR inside `message` reached
+  // the runner unescaped. The runner reads our stdout with
+  // `StreamReader.ReadLine()` (`ProcessInvoker.cs:513`), which terminates a line
+  // on CR, LF *and* CRLF — so that CR genuinely SPLIT our one annotation into
+  // two physical lines, and `ActionCommandManager.cs:70` parses every line it is
+  // handed. The text after the CR was therefore parsed as a workflow command
+  // this script did not write. Escaping all three forms closes that.
   //
-  // `\r\n|\r|\n` rather than `\r?\n`: the old alternation did not match a LONE
-  // CR, which reaches the runner unescaped and is a line terminator there too.
+  // `%` IS ESCAPED FIRST, AND THAT ORDER IS LOAD-BEARING IN BOTH DIRECTIONS.
+  // `unescapeData` (`ActionCommand.cs:111`) decodes `%0D` -> CR, `%0A` -> LF and
+  // `%25` -> `%`, with **`%25` LAST** — so an encoder is injective only if it
+  // escapes `%` FIRST. Escape it AFTER the newline substitution and it
+  // re-escapes its own escape (`%0A` -> `%250A`), breaking every real newline.
+  // Escape it not at all and the three literal characters `%0A` arriving inside
+  // `message` survive to the runner and are decoded into a real newline.
+  //
+  // What that second case IS, precisely — because an earlier draft of this
+  // comment overstated it: the decode runs INSIDE the parse, on an ALREADY
+  // DELIMITED line, and `ExecutionContext.cs:855` writes the decoded text to the
+  // log without it ever re-entering `TryProcessCommand`. A decoded `%0A` thus
+  // yields ONE annotation whose body contains caller-chosen text that READS as a
+  // second `::error::` line: log forgery (CWE-117) in a public log, NOT a second
+  // parsed command. The lone CR above forges a command; this forges the log.
+  //
+  // Both matter here because `message` is composed from ARM deployment error
+  // text, which on a brownfield deploy carries caller-supplied resource names
+  // and parameter values — remote-influenced input, public log. Both orderings
+  // are pinned, by DIFFERENT witnesses: an exact-equality assertion on the
+  // formatted line kills the escape-`%`-last mutant, and only a fixture whose
+  // INPUT contains the literal characters `%0A` kills the no-escape-at-all
+  // mutant — that mutant emits a byte-identical line for every input the first
+  // assertion uses.
   const escaped = safe.split('%').join('%25');
   return `::${level}::${escaped.replace(/\r\n|\r|\n/g, '%0A')}\n`;
 }
