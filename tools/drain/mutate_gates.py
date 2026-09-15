@@ -51,7 +51,7 @@ ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "operating_point.py", "policy.json"]
+           "operating_point.py", "policy.json", "complete.py"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -1966,6 +1966,206 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
         "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
+    ),
+
+    # -- complete.py: the module that CLOSES ISSUES UNATTENDED --------------
+    # Every arm here is a way the harness could close something it had not
+    # established. They exist because this module has the widest blast radius
+    # in the package and, until now, nothing in the matrix pointed at it.
+    (
+        ("CP1 human-only auto-closes, so the one class whose receipt IS a "
+         "person's judgement is certified by the harness instead"),
+        "complete.py",
+        '        False, "",\n        "human-only: an operator receipt is a person\'s judgement and is never "',
+        '        True, "auto-approved",\n        "human-only: an operator receipt is a person\'s judgement and is never "',
+    ),
+    (
+        ("CP2 the reopen guard stops guarding, so an item a PERSON reopened "
+         "after the claiming PR merged is closed again by the sweep"),
+        "complete.py",
+        "        if rejected:",
+        "        if False:",
+    ),
+    (
+        ("CP3 evidence with an EMPTY ref is accepted, so a close records nothing "
+         "a reader could follow back to re-check it"),
+        "complete.py",
+        "    if found.ok and not found.ref.strip():",
+        "    if False:",
+    ),
+    (
+        ("CP4 an adapter that RAISED is no longer marked a fault, collapsing "
+         "'the tool is broken' back into 'the evidence says no'"),
+        "complete.py",
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {detail}"[:300],\n            fault=True)',
+        '            False, "", f"adapter for {kind!r} raised {type(exc).__name__}: {detail}"[:300],\n            fault=False)',
+    ),
+    (
+        ("CP5 a FAULT falls through to the no-evidence branch, so a broken "
+         "adapter moves the item to AWAITING_RECEIPT - a state claim the code "
+         "did not establish (R7)"),
+        "complete.py",
+        "        if found.fault:",
+        "        if False:",
+    ),
+    (
+        ("CP6 the fault breaker never trips, so a structurally dead adapter "
+         "prints a refusal for every item and the sweep exits 0 having drained "
+         "nothing - the green-dashboard outcome"),
+        "complete.py",
+        "CONSECUTIVE_FAULT_LIMIT = 3",
+        "CONSECUTIVE_FAULT_LIMIT = 10_000",
+    ),
+    (
+        ("CP7 the fault streak becomes CUMULATIVE rather than consecutive, so a "
+         "merely flaky run aborts as though it were broken"),
+        "complete.py",
+        "        faults[kind] = 0  # a reply that was ABOUT the item clears the streak",
+        "        pass  # a reply that was ABOUT the item clears the streak",
+    ),
+    (
+        ("CP8 the PR reference is read from the FIRST `(#N)` rather than the "
+         "last, so `fix(ci): guard ... (#3338) (#4371)` binds the item to the "
+         "ISSUE number it fixes as though that were its PR"),
+        "complete.py",
+        '_TRAILING_PR_RE = re.compile(r"\\(#(\\d+)\\)\\s*$")',
+        '_TRAILING_PR_RE = re.compile(r"\\(#(\\d+)\\)")',
+    ),
+    (
+        ("CP9 --dry-run writes, so the command whose entire contract is 'gather "
+         "and print, change nothing' closes issues"),
+        "complete.py",
+        "        if dry_run:",
+        "        if False:",
+    ),
+    (
+        ("CP10 the sweep no longer refuses without a receipts map, so every "
+         "close runs with no KIND to validate against"),
+        "complete.py",
+        "    if not receipts:",
+        "    if False:",
+    ),
+    (
+        ("CP11 PROSE decides again - the #3883 defect exactly: a publication "
+         "guard that deliberately over-matches is reused as a completion "
+         "oracle, and a PR body saying 'Deliberately NOT closed' closes it"),
+        "complete.py",
+        ("    if isinstance(item.pr, int) and item.pr > 0:\n"
+         "        # The BOUND PR's own merge time. Not the prose map's -- see\n"
+         "        # `bound_pr_merged_at` for the two failures that came from reading\n"
+         "        # prose here, one inert and one that closed an item a person reopened.\n"
+         "        when, refused = bound_pr_merged_at(repo, item.pr)"),
+        ("    _hit = index.prose.get(item.number)\n"
+         "    if _hit:\n"
+         '        return _hit[0], _hit[1], f"claimed by PR #{_hit[0]}"\n'
+         "    if isinstance(item.pr, int) and item.pr > 0:\n"
+         "        when, refused = bound_pr_merged_at(repo, item.pr)"),
+    ),
+    (
+        ("CP12 NEEDS_AUDIT becomes completable, so an item that LEFT GitHub or "
+         "disagreed with it is closed by the sweep rather than answered first"),
+        "complete.py",
+        "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT)",
+        "COMPLETABLE = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, ledger.NEEDS_AUDIT)",
+    ),
+
+    # -- round 2 of complete.py: the defects TWO REVIEWERS measured ---------
+    # Every arm below corresponds to a finding that was DEMONSTRATED against
+    # the previous head, not reasoned about. They are here because the first
+    # twelve arms all died and the module was still wrong -- an arm set proves
+    # only what it points at, and none of them pointed inside the one adapter
+    # with a live producer, at the exception its only caller actually raises,
+    # or at a sweep short enough that the breaker cannot fire.
+    (
+        ("CP13 a REFUSED ci-green receipt is returned as evidence, so an item "
+         "closes on a merged sha whose CI was RED"),
+        "complete.py",
+        "    if not receipt.ok:",
+        "    if False:",
+    ),
+    (
+        ("CP14 a green receipt over an UNKNOWN sha is accepted, so the close "
+         "cites `PR #N @ ` -- a reference with no target"),
+        "complete.py",
+        "    if not sha:",
+        "    if False:",
+    ),
+    (
+        ("CP15 the evidence ref stops naming the sha it was taken at, so the "
+         "audit trail of an unattended close cannot be re-run"),
+        "complete.py",
+        'return Evidence(True, f"PR #{pr} @ {sha}", f"ci-green at {sha}: {receipt.summary}")',
+        'return Evidence(True, f"PR #{pr}", f"ci-green at {sha}: {receipt.summary}")',
+    ),
+    (
+        ("CP16 --dry-run writes on the NO-EVIDENCE path -- the path a first dry "
+         "run over a real queue takes for almost every item"),
+        "complete.py",
+        "            if not dry_run and item.state != AWAITING_RECEIPT:",
+        "            if item.state != AWAITING_RECEIPT:",
+    ),
+    (
+        ("CP17 the aggregate dead-adapter check is removed, so `--limit 1` "
+         "against a structurally dead adapter exits 0 -- and `--limit 1` is the "
+         "first live run this module's own docs recommend"),
+        "complete.py",
+        ("    dead = [k for k, n in attempts.items()\n"
+         "            if n > 0 and fault_total.get(k, 0) >= n]"),
+        "    dead = []",
+    ),
+    (
+        ("CP18 SystemExit stops being caught as a fault -- the exception the ONE "
+         "live adapter actually raises, which kills the sweep mid-loop"),
+        "complete.py",
+        "    except (Exception, SystemExit) as exc:  # a fault is a REFUSAL, never evidence",
+        "    except Exception as exc:  # a fault is a REFUSAL, never evidence",
+    ),
+    (
+        ("CP19 the BOUND item's merge time is read from the prose map again, so "
+         "the 296 of 301 items prose does not mention are skipped forever"),
+        "complete.py",
+        "        when, refused = bound_pr_merged_at(repo, item.pr)",
+        ("        _hit = index.prose.get(item.number)\n"
+         "        when, refused = (_hit[1] if _hit else \"\"), \"no prose entry\""),
+    ),
+    (
+        ("CP20 --bind stops rejecting 0, so one typo stores a real binding to "
+         "PR #0 and every later correction is refused as 'already bound'"),
+        "complete.py",
+        "        if issue <= 0 or pr <= 0:",
+        "        if False:",
+    ),
+    (
+        ("CP21 the closing map loses its VETO, so a transposed digit binds an "
+         "item to an unrelated PR and closes it on that PR's green CI"),
+        "complete.py",
+        "            if claim and claim[0] != pr:",
+        "            if False:",
+    ),
+    (
+        ("CP22 a merged-PR list truncated at the ceiling is accepted, so the map "
+         "silently describes the newest slice of history and its veto shrugs"),
+        "complete.py",
+        "    if len(raw) >= ceiling:",
+        "    if False:",
+    ),
+    (
+        ("CP23 the close is announced BEFORE it is saved, so anything that ends "
+         "the sweep early prints `CLOSED` for items that never reached disk"),
+        "complete.py",
+        ("        led.save()\n"
+         '        print(f"  #{item.number:<5} {klass:<20} CLOSED {kind} {found.ref}")'),
+        '        print(f"  #{item.number:<5} {klass:<20} CLOSED {kind} {found.ref}")',
+    ),
+    (
+        ("CP24 an adapter reporting evidence with an EMPTY ref is downgraded from "
+         "a fault to a plain refusal, so a plainly broken adapter moves every "
+         "item to AWAITING_RECEIPT and exits 0"),
+        "complete.py",
+        ('            "receipt with no reference cannot be re-checked, so it is not one",\n'
+         "            fault=True,"),
+        ('            "receipt with no reference cannot be re-checked, so it is not one",\n'
+         "            fault=False,"),
     ),
 ]
 
