@@ -641,8 +641,25 @@ export function formatAnnotation(level, message) {
   // INPUT contains the literal characters `%0A` kills the no-escape-at-all
   // mutant — that mutant emits a byte-identical line for every input the first
   // assertion uses.
+  //
+  // CR -> `%0D` AND LF -> `%0A`, SEPARATELY, because this function claims to be
+  // INJECTIVE and the previous form was not. `\r\n|\r|\n` -> `'%0A'` collapsed
+  // THREE distinct inputs onto one output: "a\nb", "a\rb" and "a\r\nb" all
+  // produced `::error::a%0Ab`, so the runner's own inverse could not reconstruct
+  // which had been sent. Review measured it — 2 of 10 round-trip fixtures failed
+  // to reconstruct, both CR-bearing — and the test that was supposed to pin
+  // injectivity instead ENFORCED the loss, because it built its expected value
+  // by applying this function's own lossy map to the input. An oracle derived
+  // from the mutant cannot witness the mutant: substituting this correct mapping
+  // turned that suite RED with `actual` showing a perfect round-trip.
+  //
+  // This pair is the runner's own canonical mapping (`ActionCommand.cs:20-22`
+  // `_escapeDataMappings`), which is what `unescapeData` inverts, so CRLF now
+  // round-trips as `%0D%0A`. It is exactly as safe: `%0D` contains no raw CR,
+  // so nothing a terminator could do survives into the runner's line splitter.
+  // Safety was never the gap — the false claim of injectivity was.
   const escaped = safe.split('%').join('%25');
-  return `::${level}::${escaped.replace(/\r\n|\r|\n/g, '%0A')}\n`;
+  return `::${level}::${escaped.replace(/\r/g, '%0D').replace(/\n/g, '%0A')}\n`;
 }
 
 /**

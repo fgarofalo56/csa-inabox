@@ -792,7 +792,10 @@ test('MUTATION-VISIBLE — EVERY annotation level is redacted, not just `error`'
 test('formatAnnotation keeps its other contracts: one line, and never blank', () => {
   const multi = formatAnnotation('error', 'line one\nline two\r\nline three');
   assert.equal(multi.split('\n').length, 2, 'a multi-line message must render as ONE annotation');
-  assert.match(multi, /line one%0Aline two%0Aline three/);
+  // The LF encodes as `%0A` and the CRLF as `%0D%0A` — the runner's own mapping.
+  // This fixture previously expected `%0A` for BOTH, which is what made it the
+  // third casualty when review substituted the injective encoder (round 3).
+  assert.match(multi, /line one%0Aline two%0D%0Aline three/);
   // A non-string must not silently become a blank `::error::` — redact() returns
   // '' for a non-string, which is why String() comes first.
   assert.match(formatAnnotation('error', { toString: () => 'an object message' }), /an object message/);
@@ -804,9 +807,20 @@ test('formatAnnotation keeps its other contracts: one line, and never blank', ()
 // runs `unescapeData`, which decodes `%0D` -> CR, `%0A` -> LF and `%25` -> `%`,
 // in that order — `%25` LAST, because it is the inverse of an encoder that
 // escapes `%` FIRST. An encoder that escapes the line terminators but not the
-// percent sign is therefore not injective, and the three literal characters
-// `%0A` inside a message become a real newline in the runner's view: everything
-// after them is parsed as a command line this script never wrote.
+// percent sign is therefore not injective: the three literal characters `%0A`
+// inside a message decode to a real newline in the runner's view.
+//
+// WHAT THAT SECOND CASE IS, PRECISELY — an earlier version of this block
+// overstated it, and the source comment was corrected before this one was.
+// The decode runs INSIDE the parse, on an ALREADY DELIMITED line
+// (`ProcessInvoker.cs:513` splits on CR/LF/CRLF first, `ActionCommandManager.cs:70`
+// parses per line), and `ExecutionContext.cs:855` writes the decoded text to the
+// log without it ever re-entering `TryProcessCommand`. So a decoded `%0A` yields
+// ONE annotation whose body READS as a second `::error::` line — log forgery
+// (CWE-117) in a public log, NOT a second parsed command. The terminator that
+// genuinely forges a parsed command is a LONE CR, because the split happens
+// before the decode. Both are closed here; they are not the same severity, and
+// this block used to claim the weaker one was the stronger.
 //
 // `message` is composed from ARM deployment error text. In a brownfield deploy
 // ARM echoes caller-supplied resource names and parameter values into it, so the
@@ -831,6 +845,11 @@ test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes bac
     'real newline\nand a real CRLF\r\nand a LONE CR\rtail',
     '%',
     '%%0A%',
+    // Round 3 (review). The three terminator forms must stay DISTINGUISHABLE —
+    // see the collision note on the equality assertion below.
+    'a\nb',
+    'a\rb',
+    'a\r\nb',
   ];
 
   for (const message of messages) {
@@ -844,12 +863,35 @@ test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes bac
     assert.doesNotMatch(payload, /[\r\n]/, `a raw line terminator survived encoding of ${JSON.stringify(message)}`);
 
     // And the runner reconstructs EXACTLY what went in — no more, no less.
+    //
+    // ROUND 3 (review BLOCKER). This compared against
+    // `message.replace(/\r\n|\r|\n/g, '\n')` — the implementation's OWN lossy
+    // map applied to the input. An oracle derived from the mutant cannot witness
+    // the mutant: the encoder collapsed CR, LF and CRLF onto `%0A`, this line
+    // normalised the expectation to match, and the test named INJECTIVE passed
+    // over a non-injective encoder. Worse than blind — substituting the runner's
+    // canonical CR->`%0D` / LF->`%0A` mapping, which IS injective, turned this
+    // suite RED with `actual` showing a perfect round-trip and the failure
+    // message reading "the encoder is not injective".
+    //
+    // Compared against `message` unnormalised now, which is what the test's name
+    // has claimed all along.
     assert.equal(
       unescapeData(payload),
-      message.replace(/\r\n|\r|\n/g, '\n'),
+      message,
       `the encoder is not injective for ${JSON.stringify(message)} — the runner sees something the caller did not send`,
     );
   }
+
+  // The collision the old oracle hid, stated directly: three distinct inputs
+  // must not share one encoding. Under `\r\n|\r|\n` -> '%0A' all three produced
+  // `::error::a%0Ab` and this assertion fails.
+  const encodings = ['a\nb', 'a\rb', 'a\r\nb'].map((m) => formatAnnotation('error', m));
+  assert.equal(
+    new Set(encodings).size,
+    3,
+    `the three terminator forms collided onto ${JSON.stringify(encodings)} — the encoder is not injective`,
+  );
 });
 
 test('the escape ORDER is pinned in both directions', () => {
@@ -864,8 +906,14 @@ test('the escape ORDER is pinned in both directions', () => {
   // direction, which a one-sided test would let through.
   assert.match(formatAnnotation('error', 'a\nb'), /^::error::a%0Ab\n$/);
 
-  // A LONE CR is a terminator to the runner too. `\r?\n` did not match it.
-  assert.match(formatAnnotation('error', 'a\rb'), /^::error::a%0Ab\n$/);
+  // A LONE CR is a terminator to the runner too — `\r?\n` did not match it, and
+  // that is the case that genuinely forges a PARSED command. It encodes to
+  // `%0D`, not `%0A`: the runner's own mapping, and the reason the three
+  // terminator forms stay distinguishable (round 3 review).
+  assert.match(formatAnnotation('error', 'a\rb'), /^::error::a%0Db\n$/);
+
+  // CRLF is the pair, in order.
+  assert.match(formatAnnotation('error', 'a\r\nb'), /^::error::a%0D%0Ab\n$/);
 });
 
 // ── THE RUN LOG IS A DIFFERENT SURFACE FROM THE ANNOTATION (#3829 round 5) ────
