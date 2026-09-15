@@ -936,14 +936,21 @@ test('#4498 formatAnnotation redacts through the SHARED module, not a private co
   assert.match(out, /sig=\[redacted\]/);
   // Two-sided: the operator still has to be able to act on it.
   //
-  // Exact substring rather than a host regex. CodeQL reads a partial-host
-  // pattern as an incomplete-URL-sanitization sink (js/incomplete-url-substring
-  // -sanitization) — "arbitrary hosts may come before or after it" — and raised
-  // a HIGH alert on the `/loomstg\.blob\.core\.windows\.net/` form here. It is
-  // an assertion and not a sanitiser, so the alert is a false positive in
-  // substance, but this is a public repo and a new high alert is not worth
-  // carrying for a weaker assertion: `includes` of the full URL is strictly
-  // more specific than the host regex it replaces. Same fix, same reason, as
+  // Exact substring rather than a host regex. CodeQL raised **alert #1055**,
+  // rule **`js/regex/missing-regexp-anchor`** ("Missing regular expression
+  // anchor"), HIGH, on the `/loomstg\.blob\.core\.windows\.net/` form that was
+  // here — "arbitrary hosts may come before or after it".
+  //
+  // The rule id matters and an earlier version of this comment got it wrong: it
+  // said `js/incomplete-url-substring-sanitization`, which is a real but
+  // DIFFERENT rule, so anyone grepping the alert id to find out whether it had
+  // been handled would have come up empty. Round 10 measured the recorded id
+  // off the alert itself.
+  //
+  // This is an assertion, not a sanitiser, so the alert is a false positive in
+  // substance — but this is a public repo, a new HIGH is not worth carrying,
+  // and `includes` of the full URL is strictly more specific than the host
+  // regex it replaces. Same fix and same reason as
   // `reindex-loom-docs.test.mjs:1200-1206`.
   assert.ok(
     out.includes('https://loomstg.blob.core.windows.net/c/m.json'),

@@ -1226,6 +1226,41 @@ test('#4498 round 9 — the two sanitizers agree on a REDACTED id too, not only 
   );
 });
 
+test('#4498 round 10 — a POST body with no jobId DISCLOSES that, and claims nothing about why', async () => {
+  // ROUND 10 REVIEW, FINDING N3. The round-9 disclosure block claimed "the
+  // failure is now visible rather than silent". It was not. `postJobId` catches
+  // its own read/parse errors, so garbage JSON, an empty body, a body with no
+  // `jobId`, and a missing file all exit 0 with ZERO bytes of stderr — measured,
+  // all four — and the block was gated on `[ -s "$POST_ERR_FILE" ]`, so it never
+  // fired for any of them. The one path that DID reach it (node failing to
+  // start) printed "could not read a jobId from the response body", asserting a
+  // cause it had not established: the body was never read at all. R7, committed
+  // by the fix for R7.
+  //
+  // The two cases are now separate and each says only what is known. This test
+  // pins the one that actually happens: the parser ran cleanly and found no id.
+  //
+  // A 202 with no `jobId` is not hypothetical — it is what an edge refusal
+  // looks like, and it is exactly when the durable-record correlation must NOT
+  // fire, because there is no identity to correlate on.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      // The disclosure fired, and it names only what was established.
+      assert.match(out, /the response body carried no readable jobId/, out);
+      // It does NOT assert the parser failed — it did not.
+      assert.doesNotMatch(out, /the jobId parser FAILED/, out);
+      // And it does not claim the body was unreadable; it was read fine.
+      assert.doesNotMatch(out, /could not read a jobId from the response body/, out);
+      // No id means no `job=` on the POST line — fail closed, no fabricated id.
+      assert.doesNotMatch(out, /-> HTTP 202 job=/, out);
+    },
+  );
+});
+
 test('#4498 round 5 — a credential inside the remote error is REDACTED before it reaches the public Actions log', async () => {
   // BLOCKER 1b, reviewer 2. `lastRun.error` is remote-supplied: the console
   // stores whatever string the failing replica produced, and the

@@ -222,7 +222,14 @@ test('#3876 — the six real publication scripts are clean under the WIDENED enu
     ['.github/scripts/deploy-notify-failure.mjs', ['formatStdout', 'formatStderr'], []],
     ['scripts/csa-loom/converge-role-assignment.mjs', ['formatStdout'], []],
     ['scripts/ci/classify-reindex-result.mjs', ['formatAnnotation'], []],
-    ['scripts/ci/parse-reindex-poll.mjs', ['parsePollFile'], []],
+    // Round 9 gave this module two more CLI modes, each with its own stdout
+    // write, and round 10 caught that this column was not updated with them —
+    // so the guard THIS PR built went red on a file THIS PR owns, in the one
+    // suite that exists to notice a new unbounded publication surface. Both new
+    // names are genuine redacting boundaries (`postJobId` and `redactBodyFile`
+    // each route through `redact-secrets.mjs`), so enrolling them records a
+    // fact rather than silencing a complaint.
+    ['scripts/ci/parse-reindex-poll.mjs', ['parsePollFile', 'postJobId', 'redactBodyFile'], []],
   ];
   let total = 0;
   for (const [rel, boundaries, declaredInherited] of subjects) {

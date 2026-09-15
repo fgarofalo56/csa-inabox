@@ -251,18 +251,42 @@ do_post() {
   # the #4497 symptom, restored by the fix meant to remove it. The raw remote
   # value also reached the echo below, which on a roll run is a PUBLIC log.
   #
-  # No `2>/dev/null`: if this parse fails, its stderr is the only thing that says
-  # why, and `deploy-integrity.md` R7 exists because a discarded stderr once
-  # turned "I could not reach the registry" into "the tag does not exist". `|| true`
-  # stays — an unparseable body must leave the id EMPTY and fail closed, not abort
-  # the run — but the failure is now visible rather than silent.
+  # No `2>/dev/null`: `deploy-integrity.md` R7 exists because a discarded stderr
+  # once turned "I could not reach the registry" into "the tag does not exist".
+  # `|| true` stays — an unparseable body must leave the id EMPTY and fail
+  # closed, not abort the run.
+  #
+  # ROUND 10 (finding N3). The first version of this block claimed "the failure
+  # is now visible rather than silent", and that was FALSE for the failure class
+  # it named. `postJobId` catches its own read/parse errors, so garbage JSON, an
+  # empty body, a body with no `jobId`, and a missing file all exit 0 with
+  # ZERO bytes of stderr — measured, all four. The block never fired for any of
+  # them. And on the one path where stderr IS non-empty (node itself failing to
+  # start, e.g. a missing module) it printed "could not read a jobId from the
+  # response body", which is a cause it had not established: the body was never
+  # read at all. That is the exact R7 shape the comment cited as its own
+  # justification, committed by the fix for it.
+  #
+  # So the two cases are now disclosed SEPARATELY, each saying only what is
+  # known. Non-empty stderr means the PARSER failed; an empty id with clean
+  # stderr means the body carried no readable jobId — which is the case that
+  # actually happens.
   POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE" || true)
-  if [ ! -s "$POST_BODY_FILE" ] || [ -z "$POST_JOB_ID" ]; then
-    if [ -s "$POST_ERR_FILE" ]; then
-      echo "reindex POST: could not read a jobId from the response body:"
-      head -c 400 "$POST_ERR_FILE"
-      echo ""
-    fi
+  if [ -s "$POST_ERR_FILE" ]; then
+    # The parser itself failed. Its stderr is node's own diagnostic, not a
+    # remote document — but it is still stdout on a PUBLIC roll log, and this
+    # file is `.sh`, which `extract-security-graph.mjs` lists in
+    # PUBLICATION_UNMODELED and therefore cannot see. Round 10 (NEW-3) flagged
+    # the raw `head -c 400` here as the same shape N7 had just removed one line
+    # below. Routed through the same redactor, bounded the same way.
+    echo "reindex POST: the jobId parser FAILED — its stderr follows (the response body was not read):"
+    node "$PARSER" --body "$POST_ERR_FILE" || true
+    echo ""
+  elif [ -z "$POST_JOB_ID" ]; then
+    # Parser ran cleanly and found nothing. Say that, and nothing more: a body
+    # with no `jobId` is normal on an edge refusal, and asserting a cause here
+    # is what R7 forbids.
+    echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
   fi
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
   # REDACTED, not raw. This dumped the remote body verbatim with `head -c 800`,
@@ -585,12 +609,20 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # keeps `unknown` out of the streak, and it is tested directly.
   #
   # The "exactly ONE" is a claim about the whole suite, so name the population it
-  # was measured over: the 43 tests this file held at the time. It now holds 46 —
-  # the three added later in this same PR are the POST/poll sanitizer test, its
-  # credential-shaped counterpart from round 9, and the parse-failure disclosure
-  # test. None of them was in that population and none reaches this branch.
-  # (Round 9 review finding N6: this line has now said 44 while the file held 45.
-  # If you add a test here, re-measure with `grep -c '^test(' ` — do not increment.)
+  # was measured over: the 43 tests this file held at the time. It now holds 47.
+  # The four added later in this same PR, identified by diffing `^test(` lines
+  # commit-by-commit rather than from memory:
+  #   b18cdfb  the two sanitizers agree (an id carrying the field separator)
+  #   0876fe8  round 5 — a credential inside the remote error is REDACTED
+  #   f58e9da  round 9 — the two sanitizers agree on a REDACTED id too
+  #   round 10 the POST parse-failure disclosure
+  # None was in that population and none reaches this branch.
+  #
+  # (Round 9 finding N6 said 44 while the file held 45. Round 10 then found the
+  # CORRECTED version naming a "parse-failure disclosure test" that did not
+  # exist — a wrong measurement replaced by a wrong inventory, in the comment
+  # arguing that counts here rot. The test now exists, and the list above was
+  # derived by diff. Re-measure with `grep -c '^test('` — never increment.)
   if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
 
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────
