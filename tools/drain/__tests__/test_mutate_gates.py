@@ -491,7 +491,8 @@ def test_the_exit_code_refuses_when_the_buckets_do_not_add_up():
         killed=5, survived=0, skipped=0, errored=0, total=9, tree_intact=True
     )
     assert code == 1
-    assert "scored 5" in why and "9" in why
+    assert "scored 5" in why
+    assert "9" in why
 
 
 def test_the_exit_code_refuses_a_tree_that_changed_under_the_run():
@@ -512,9 +513,9 @@ def test_the_exit_code_refuses_any_arm_that_did_not_die():
     distinguishes them -- and a mutation run proved no test could kill it.
     """
     for kwargs in (
-        dict(killed=8, survived=1, skipped=0, errored=0),
-        dict(killed=8, survived=0, skipped=1, errored=0),
-        dict(killed=8, survived=0, skipped=0, errored=1),
+        {"killed": 8, "survived": 1, "skipped": 0, "errored": 0},
+        {"killed": 8, "survived": 0, "skipped": 1, "errored": 0},
+        {"killed": 8, "survived": 0, "skipped": 0, "errored": 1},
     ):
         code, why = mutate_gates._exit_code(total=9, tree_intact=True, **kwargs)
         assert code == 1, kwargs
@@ -532,16 +533,16 @@ def test_the_exit_code_is_zero_only_when_every_arm_died_over_an_intact_tree():
 
 def _preamble_kwargs(**overrides):
     """A passing preamble, so each test below changes exactly one thing."""
-    base = dict(
-        control_rc=0,
-        skipped_ids=list(mutate_gates.EXPECTED_SANDBOX_SKIPS),
-        skipped_count=len(mutate_gates.EXPECTED_SANDBOX_SKIPS),
-        here_n=425,
-        there_n=425,
-        with_meta_rc=0,
-        selected_with=422,
-        selected_without=421,
-    )
+    base = {
+        "control_rc": 0,
+        "skipped_ids": list(mutate_gates.EXPECTED_SANDBOX_SKIPS),
+        "skipped_count": len(mutate_gates.EXPECTED_SANDBOX_SKIPS),
+        "here_n": 425,
+        "there_n": 425,
+        "with_meta_rc": 0,
+        "selected_with": 422,
+        "selected_without": 421,
+    }
     base.update(overrides)
     return base
 
@@ -555,17 +556,17 @@ def test_the_preamble_admits_a_clean_run():
 
 
 @pytest.mark.parametrize(
-    "overrides, needle",
+    ("overrides", "needle"),
     [
-        (dict(control_rc=1), "control is not green"),
-        (dict(skipped_ids=None, skipped_count=None), "could not read the sandbox skip set"),
-        (dict(skipped_ids=["some_other.py::test_x"]), "sandbox skips are"),
-        (dict(skipped_count=57), "attributable to a test id"),
-        (dict(here_n=None), "could not collect one of the two trees"),
-        (dict(there_n=None), "could not collect one of the two trees"),
-        (dict(there_n=366), "Tests that VANISH do not skip"),
-        (dict(with_meta_rc=1), "the nodeid is not implicated"),
-        (dict(selected_with=421), "did not remove exactly one passing test"),
+        ({"control_rc": 1}, "control is not green"),
+        ({"skipped_ids": None, "skipped_count": None}, "could not read the sandbox skip set"),
+        ({"skipped_ids": ["some_other.py::test_x"]}, "sandbox skips are"),
+        ({"skipped_count": 57}, "attributable to a test id"),
+        ({"here_n": None}, "could not collect one of the two trees"),
+        ({"there_n": None}, "could not collect one of the two trees"),
+        ({"there_n": 366}, "Tests that VANISH do not skip"),
+        ({"with_meta_rc": 1}, "the nodeid is not implicated"),
+        ({"selected_with": 421}, "did not remove exactly one passing test"),
     ],
 )
 def test_each_preamble_gate_has_a_negative_case(overrides, needle):
@@ -594,5 +595,6 @@ def test_the_passed_count_sentinel_is_minus_one_and_not_zero():
     ok, why = mutate_gates._preamble_verdict(
         **_preamble_kwargs(selected_with=-1, selected_without=-1)
     )
-    assert ok is False and "did not remove exactly one passing test" in why
+    assert ok is False
+    assert "did not remove exactly one passing test" in why
 
