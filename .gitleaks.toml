@@ -53,6 +53,36 @@ regexes = [
     # apps/fiab-console/lib/components/nav-collapse.tsx). A client-side storage
     # key string, never a credential; trips the generic-api-key entropy heuristic.
     '''loom\.nav\.sections\.collapsed\.v1''',
+
+    # #4498 redaction fixtures. `scripts/ci/redact-secrets.mjs` strips SAS `sig=`
+    # and `AccountKey=` values out of the two surfaces that publish a remote
+    # error — stdout (`reindex-loom-docs.sh`) and the `::error::` annotation
+    # (`classify-reindex-result.mjs`). Proving that requires a fixture shaped
+    # like the real thing, so these are base64 blobs and they trip the
+    # generic-api-key entropy heuristic (4.72-4.87) even though they are not
+    # random: each decodes to an English sentence saying so.
+    #
+    #   YW5ub3Rhd...  -> "annotation-signature-must-not-publish"
+    #   QW5ub3Rhd...  -> "AnnotationAccountKeyDoNotPublish=="
+    #   Zm9yYmlkZ...  -> "forbidden-signature-value-do-not-publish"
+    #   QWNjb3VudE...  -> "AccountKeyThatMustNotReachTheLog=="
+    #
+    # These are EXACT literals, not a path or a shape: allowlisting them cannot
+    # mask a real credential, because a real credential is a different string.
+    # A path allowlist over `scripts/ci/__tests__/` was rejected for that reason
+    # — that directory is exactly where a real value could be pasted by mistake.
+    # Lowering their entropy would not have worked: gitleaks scans full history
+    # (`fetch-depth: 0`) and pins each finding to the commit that introduced the
+    # line, so a later commit cannot clear one.
+    #
+    # gitleaks 8.21.2 flagged the last THREE of these at 0876fe82f21 (entropies
+    # 4.871388 / 4.794252 / 4.724543). The first is listed as well because it is
+    # the same fixture pair in the same test and differs only in landing below
+    # the rule's threshold at this version — not because it was ever reported.
+    '''YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA''',
+    '''QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ''',
+    '''Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA''',
+    '''QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ''',
 ]
 
 paths = [

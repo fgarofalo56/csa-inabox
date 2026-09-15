@@ -40,6 +40,7 @@ import path from 'node:path';
 
 import {
   closingParen,
+  forbiddenPublishers,
   streamBindings,
   streamWrites,
   stripComments,
@@ -192,16 +193,27 @@ test('#3876 — the shared control carries all four bypasses and its counts are 
   );
 });
 
-test('#3876 — the four real publication scripts are clean under the WIDENED enumerator', () => {
+test('#3876 — the six real publication scripts are clean under the WIDENED enumerator', () => {
   // The point of widening a guard is the estate it now covers. Asserting the
   // control alone would prove the matcher works and say nothing about whether
   // the files it guards pass it.
+  //
+  // #4498 round 6 added the last two rows, and the classifier could not simply
+  // be listed: run over it beforehand this loop reported `unboundedWrites: 0`
+  // AND `streamWrites: 0`. The zero was a POPULATION, not a verdict — both of
+  // its publications were `console.log`, which no `process.stdout.write`
+  // matcher can see. Enrolling it took converting those two calls into one
+  // bounded `process.stdout.write(formatAnnotation(...))`. That is why the
+  // `>= 1` and the forbidden-publisher assertions below are both here: either
+  // one alone lets a file join this list while publishing invisibly.
   const root = path.resolve(import.meta.dirname, '..', '..', '..');
   const subjects = [
     ['scripts/ci/deploy-arm-errors.mjs', ['formatStdout', 'formatStderr', 'unredactedByDesign']],
     ['scripts/ci/deploy-retry.mjs', ['formatAnnotation', 'formatStderr', 'unredactedByDesign']],
     ['.github/scripts/deploy-notify-failure.mjs', ['formatStdout', 'formatStderr']],
     ['scripts/csa-loom/converge-role-assignment.mjs', ['formatStdout']],
+    ['scripts/ci/classify-reindex-result.mjs', ['formatAnnotation']],
+    ['scripts/ci/parse-reindex-poll.mjs', ['parsePollFile']],
   ];
   let total = 0;
   for (const [rel, boundaries] of subjects) {
@@ -212,10 +224,20 @@ test('#3876 — the four real publication scripts are clean under the WIDENED en
     total += writes.length;
     assert.ok(writes.length >= 1, `${rel} enumerated ZERO writes — the matcher drifted, it did not stop publishing`);
     assert.deepEqual(
+      forbiddenPublishers(src).map((f) => `${f.line}: ${f.hit} (${f.why})`),
+      [],
+      `${rel} publishes through a shape this lane's structural assertions cannot see`,
+    );
+    assert.deepEqual(
       unboundedWrites(src, boundaries).map((w) => `${w.line}: ${w.accessPath}: ${w.arg.split('\n')[0]}`),
       [],
       `${rel} publishes to a stream without the whole expression crossing a boundary (#3876)`,
     );
   }
-  assert.ok(total >= 10, `expected >=10 real stream writes across the four scripts, found ${total}`);
+  // A coarse backstop against a matcher that stops counting across the board;
+  // the per-file `>= 1` above is the sharp instrument. Measured 17 at
+  // `0876fe82f21` + this round's conversion — a count is only a fact with the
+  // commit it was taken at attached, so the floor is set below it deliberately
+  // rather than pinned to it.
+  assert.ok(total >= 12, `expected >=12 real stream writes across the six scripts, found ${total}`);
 });

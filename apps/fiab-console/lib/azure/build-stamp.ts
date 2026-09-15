@@ -5,15 +5,26 @@
  * WHY THIS IS ITS OWN MODULE (#4498 round 4)
  * ------------------------------------------
  * Split out of `loom-docs-index.ts`, which this PR's round-4 commentary had
- * pushed to 1509 LOC -- back over the 1500-line threshold in
+ * pushed to 1509 LOC -- back over the `WARN_THRESHOLD` of 1500 in
  * `scripts/ci/check-file-size.mjs` that round 4's FIRST split
  * (`docs-corpus-ranker.ts`) had just brought it under, at 1462. Both figures
  * are **as measured during the split**, at intermediate tree states that no
- * longer exist; neither is re-derivable from any commit on this branch. Only
- * the final 1449 is, and `check-file-size.mjs` is what confirms it. Re-reddening the
- * very guard a split was performed to fix is not a case for an allowlist entry:
- * that guard's escalation policy names splitting by bounded context as the
- * preferred fix and treats an entry as an exception request.
+ * longer exist; neither is re-derivable from any commit on this branch.
+ *
+ * RETRACTION (round 6). Round 5 wrote "Only the final 1449 is, and
+ * `check-file-size.mjs` is what confirms it." 1449 was never final. It is the
+ * count at `47bc2a24f58`, the commit the split landed in; round 5's own
+ * commentary then added 23 lines, and at `0876fe82f21` the file is **1472**.
+ * Re-measured 2026-09-14 with `git show <sha>:<path> | wc -l` at both commits.
+ * A count is only a fact with the commit it was taken at attached -- which is
+ * the same obligation `deploy-integrity` R7 puts on an error string, applied to
+ * a number in a comment. Both figures are re-derivable; neither is "the final"
+ * one while the branch is still taking rounds. Both are under 1500, which is
+ * the only property this paragraph ever needed to establish.
+ *
+ * Re-reddening the very guard a split was performed to fix is not a case for an
+ * allowlist entry: that guard's escalation policy names splitting by bounded
+ * context as the preferred fix and treats an entry as an exception request.
  *
  * Shaving the prose down to land on exactly 1500 was the other option and was
  * rejected. It satisfies the number rather than the rule, leaves zero headroom,

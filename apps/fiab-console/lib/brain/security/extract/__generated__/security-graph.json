@@ -16902,7 +16902,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:bracket:139",
+                "id": "stdout:bracket:140",
                 "surface": "stdout",
                 "accessPath": "bracket",
                 "wholeExpressionBounded": false,
@@ -36184,21 +36184,11 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/classify-reindex-result.mjs",
-            "declaredSinkCount": 2,
+            "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:599",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:600",
-                "surface": "console",
+                "id": "stdout:member:724",
+                "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -38311,6 +38301,29 @@
               {
                 "id": "console:member:158",
                 "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/parse-reindex-poll.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/parse-reindex-poll.mjs",
+            "declaredSinkCount": 1,
+            "sinks": [
+              {
+                "id": "stdout:member:104",
+                "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -49528,6 +49541,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
+          "codeModuleId": "code:scripts/ci/parse-reindex-poll.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/reconcile-policy.mjs#module",
           "codeModuleId": "code:scripts/ci/reconcile-policy.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -49801,10 +49819,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-15T00:08:40.206Z",
-      "commit": "7af2ba51a2aba67943997d80bdb59bbdc61165ab",
-      "inputsDigest": "adde47c779d04fc0",
-      "filesScanned": 2105,
+      "generatedAt": "2026-09-15T01:18:26.971Z",
+      "commit": "0876fe82f21c8dc2b595b14222a0c215bef18c1b",
+      "inputsDigest": "0e45725fd1ae30be",
+      "filesScanned": 2107,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -49813,8 +49831,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 407,
-          "nodesEmitted": 234
+          "filesMatched": 409,
+          "nodesEmitted": 235
         }
       ],
       "skipped": [
@@ -50576,7 +50594,7 @@
         },
         {
           "subject": "scripts/ci/classify-reindex-result.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/codeql-scan-liveness.mjs",
@@ -50673,6 +50691,10 @@
         {
           "subject": "scripts/ci/neutralize-release-close-keywords.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/parse-reindex-poll.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reconcile-policy.mjs",

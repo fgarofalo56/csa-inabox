@@ -1,8 +1,8 @@
 /**
  * Redact credential-shaped substrings from text that is about to be PUBLISHED.
  *
- * WHY THIS IS A SHARED MODULE (#4498 round 5)
- * -------------------------------------------
+ * WHY THIS IS A SHARED MODULE (#4498 round 5, corrected round 6)
+ * -------------------------------------------------------------
  * The durable last-run record (#4497) carries a REMOTE-SUPPLIED `error` string:
  * whatever the failing console replica chose to store. It is read on TWO
  * independent paths, and both of them publish:
@@ -14,9 +14,17 @@
  * Both land in a PUBLIC GitHub Actions log in a PUBLIC repo, and an annotation
  * is a publication surface in its own right, not a copy of stdout. Round 5's
  * first attempt redacted only path 1; the test written to prove it caught path 2
- * still emitting the raw value. That is why this is one module and not two
- * copies: a second copy is how the two paths drift apart again, and this repo
- * already has #4503 open for exactly that shape.
+ * still emitting the raw value.
+ *
+ * RETRACTION (round 6). Round 5 wrote here that this being one module "and not
+ * two copies" was what stopped the two paths drifting apart. That was FALSE when
+ * it was written. Path 1 did not import this module at all — the shell carried a
+ * hand-copied verbatim duplicate of all four rules inside an inline `node -e`,
+ * so there were one importer and one clone: precisely the shape the sentence
+ * claimed to have prevented. It is true now, and only because round 6 extracted
+ * `parse-reindex-poll.mjs`, which path 1 shells out to and which imports this.
+ * Both publication paths now resolve to the definitions below, so a tightening
+ * here reaches both.
  *
  * WHAT THIS IS NOT
  * ----------------
@@ -38,10 +46,19 @@ export function redactSecrets(value) {
     // Bounded by the separators that end a query param or a connection-string
     // segment, so only the VALUE is eaten and the key name survives.
     .replace(/(sig=|AccountKey=|SharedAccessKey=|password=|pwd=)[^\s&;",]+/gi, '$1[redacted]')
-    // An Azure Functions key. Length-bounded so a `code=404` in an ordinary
-    // HTTP error stays readable -- redacting that would cost diagnosis and buy
-    // nothing.
-    .replace(/(code=)[A-Za-z0-9._~+/=-]{20,}/gi, '$1[redacted]')
+    // An Azure Functions key, which only ever arrives as a query parameter.
+    // ANCHORED to `?` or `&` (#4498 round 6): unanchored, `(code=)` also matches
+    // the tail of `errorcode=`/`statuscode=`/`exitcode=`, so a long diagnostic
+    // token in any of those was being eaten as if it were a key. Length-bounded
+    // as well, so a `code=404` in an ordinary HTTP error stays readable --
+    // redacting that would cost diagnosis and buy nothing.
+    //
+    // This is deliberately NARROWER than what it replaced, and the narrowing is
+    // the point rather than a side effect: a `code=` that is not in query-string
+    // position is not a Functions key, and this estate mints none. A key in some
+    // other position would pass through -- which is the standing disclaimer
+    // above, not a new hole opened here.
+    .replace(/([?&]code=)[A-Za-z0-9._~+/=-]{20,}/gi, '$1[redacted]')
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]')
     // A JWT in any position, including one not introduced by `Bearer`.
     .replace(/eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g, '[redacted-jwt]');

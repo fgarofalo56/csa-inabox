@@ -150,6 +150,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASSIFIER="$HERE/classify-reindex-result.mjs"
+PARSER="$HERE/parse-reindex-poll.mjs"
 
 CONSOLE_URL="${CONSOLE_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
@@ -286,53 +287,12 @@ get_status() {
   if [ "$GCODE" = "000" ]; then
     return 0
   fi
-  STATES=$(node -e '
-    const fs = require("node:fs");
-    let j = {};
-    try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
-    const f = (j.freshness && j.freshness.state) || "unknown";
-    const s = (j.job && j.job.state) || "unknown";
-    const c = j.freshness && Number.isFinite(j.freshness.indexedChunkCount)
-      ? String(j.freshness.indexedChunkCount)
-      : "";
-    // The DURABLE last-run record (#4497). Written by every replica into the
-    // same store as the manifest, so a failure that happened on a replica this
-    // poll will never reach is still readable here.
-    const lr = (j.freshness && j.freshness.lastRun) || null;
-    const lo = lr && lr.outcome ? String(lr.outcome) : "";
-    const lf = lr && lr.finishedAt ? String(lr.finishedAt) : "";
-    const lj = lr && lr.jobId ? String(lr.jobId) : "";
-    // EVERY field is stripped of the separator and of newlines, not just the
-    // error. A pipe anywhere in any of them shifts every later field by one,
-    // and these values come from a remote service -- so "this field cannot
-    // contain a pipe" is an assumption about data we do not control.
-    // NOTE: no apostrophes in this block. It is inside a single-quoted shell
-    // string, so one would close the quote and bash would parse the rest of
-    // the JavaScript as shell.
-    const clean = (v) => String(v).replace(/[\r\n|]+/g, " ");
-    // `lr.error` is REMOTE-SUPPLIED -- it is whatever string the freshness
-    // endpoint chose to store in the durable last-run record -- and the
-    // rebuild_failed branch below echoes it to stdout. On a
-    // `loom-roll-and-validate` run that stdout is a PUBLIC Actions log in a
-    // PUBLIC repo. A backend error that quotes the request URL or a connection
-    // string would publish the credential inside it, and no amount of caution
-    // on THIS side changes what the remote decided to put in the string.
-    //
-    // Redacted by SHAPE. This list is NOT a proof of safety and must not be
-    // read as one: it covers the credential forms this estate actually mints
-    // -- a SAS `sig=`, an `AccountKey=`, a function `code=`, a `Bearer` token
-    // and a JWT -- and nothing else. An unanticipated shape still reaches the
-    // log. The 300-char truncation below bounds the blast radius; it does not
-    // close it. The durable record not storing secrets in the first place is
-    // the real fix, and that fix does not live in this script.
-    const redact = (v) => String(v)
-      .replace(/(sig=|AccountKey=|SharedAccessKey=|password=|pwd=)[^\s&;",]+/gi, "$1[redacted]")
-      .replace(/(code=)[A-Za-z0-9._~+/=-]{20,}/gi, "$1[redacted]")
-      .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]")
-      .replace(/eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g, "[redacted-jwt]");
-    const le = lr && lr.error ? clean(redact(lr.error)).slice(0, 300) : "";
-    process.stdout.write([f, s, c, lo, lf, le, lj].map(clean).join("|"));
-  ' "$POLL_BODY_FILE")
+  # Seven pipe-joined fields from ONE parser that IMPORTS `redact-secrets.mjs`.
+  # This used to be an inline `node -e` carrying a hand-copied duplicate of every
+  # redaction regex in that module — two copies of a security control, which is
+  # exactly the drift the module's own docblock claimed to prevent. See
+  # `parse-reindex-poll.mjs` for why it moved.
+  STATES=$(node "$PARSER" "$POLL_BODY_FILE")
   # Seven fields. Read positionally into named vars -- `${STATES%%|*}` style
   # trimming does not extend past two fields. `le` is placed second-to-last
   # rather than last so a truncated error cannot swallow the jobId.

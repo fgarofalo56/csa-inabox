@@ -1197,8 +1197,14 @@ test('#4498 round 5 — a credential inside the remote error is REDACTED before 
       assert.match(out, /sig=\[redacted\]/, out);
       assert.match(out, /AccountKey=\[redacted\]/, out);
       // SURVIVED — the operator can still act on it. The host, the container,
-      // the status code and the cause are all still readable.
-      assert.match(out, /loomstg\.blob\.core\.windows\.net/, out);
+      // the status code and the cause are all still readable. Exact substring
+      // rather than a host regex: CodeQL #1054 read the partial-host pattern as
+      // an incomplete-URL-sanitization sink, and pinning the whole URL asserts
+      // strictly more — the path survived too, not just the domain.
+      assert.ok(
+        out.includes('https://loomstg.blob.core.windows.net/corpus/manifest.json'),
+        out,
+      );
       assert.match(out, /403 Forbidden/, out);
       assert.match(out, /manifest PUT/, out);
     },

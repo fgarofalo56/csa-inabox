@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyReindexResult, classifyReindexPoll } from '../classify-reindex-result.mjs';
+import { classifyReindexResult, classifyReindexPoll, formatAnnotation } from '../classify-reindex-result.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, '..', 'classify-reindex-result.mjs');
@@ -214,8 +214,11 @@ test('poll: job failed → fail loud', () => {
  * That test covers both paths through the shell; this one pins the classifier
  * directly, so the guard cannot be lost by a change to the shell alone.
  *
- * MUTATION-PROOF: drop the `redactSecrets(...)` wrapper from the `why`
- * assignment in the `rebuild_failed` arm and the first two assertions go RED.
+ * MUTATION-PROOF: make `redactVerdict()` in the module under test return its
+ * argument unchanged and the first two assertions go RED. Round 5 pinned this
+ * to a `redactSecrets(...)` wrapper on the `why` assignment in the
+ * `rebuild_failed` arm; round 6 removed that wrapper, because redacting one
+ * field by hand is what left the other eight sites raw.
  *
  * Two-sided on purpose. Redaction that ate the diagnosis would be its own
  * defect: this arm exists to tell an operator WHY the rebuild failed, and a
@@ -246,11 +249,89 @@ test('#4498 round 5 — a credential in the remote error is redacted out of the 
   assert.match(r.message, /sig=\[redacted\]/);
   assert.match(r.message, /AccountKey=\[redacted\]/);
   // The diagnosis SURVIVES — host, status, and operation all still readable.
-  assert.match(r.message, /loomstg\.blob\.core\.windows\.net/);
+  // Exact-substring, not a regex: CodeQL #1053 read the partial host pattern as
+  // an incomplete-URL-sanitization sink, and the full URL is the stronger
+  // assertion anyway — it pins the path, not just the domain.
+  assert.ok(
+    r.message.includes('https://loomstg.blob.core.windows.net/help/manifest.json'),
+    r.message,
+  );
   assert.match(r.message, /403 Forbidden/);
   assert.match(r.message, /manifest PUT/);
   // And this is still the durable-record arm, not some other branch.
   assert.match(r.message, /reindex FAILED on the replica that ran it/);
+});
+
+/**
+ * #4498 round 6 — THE BOUNDARY, NOT THE FIELD.
+ *
+ * Round 5 redacted exactly ONE of the sites that interpolate a remote string
+ * into a verdict message, and the same edit ADDED another raw one: it began
+ * printing `freshness.reason` — a console-supplied string — in the `timeout`
+ * arm's `unknown` branch, with no redaction. Neither arm exercised here carries
+ * a `redactSecrets` call of its own; both are covered because `redactVerdict()`
+ * wraps the exported contract, the way `deploy-retry.mjs` redacts at its write
+ * boundary rather than per field.
+ *
+ * MUTATION-PROOF: make `redactVerdict()` return its argument unchanged and BOTH
+ * cases go RED — as does the round-5 test above. That is the point of moving
+ * the redaction: one boundary now carries every site, so one mutation kills
+ * every redaction assertion in this file rather than one arm's.
+ *
+ * Two-sided, like the round-5 test: a redaction that ate the diagnosis would be
+ * its own defect, so each case also asserts the operator-actionable part of the
+ * message survived.
+ */
+test('#4498 round 6 — the arms round 5 left raw are redacted by the boundary, and their diagnoses survive', () => {
+  // The same allowlisted fixtures the round-5 test uses. They decode to English
+  // sentences saying they must not be published; reusing them keeps this file's
+  // `.gitleaks.toml` allowlist to the four literals already justified there.
+  const sig = 'YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA';
+  const key = 'QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ';
+
+  // (a) `job.error`, the `failed` arm. Remote-supplied, never redacted by round 5.
+  const failed = classifyReindexPoll({
+    outcome: 'failed',
+    body: JSON.stringify({
+      ok: true,
+      job: {
+        state: 'failed',
+        error: `manifest PUT to https://loomstg.blob.core.windows.net/help/manifest.json?sig=${sig} failed: 403 Forbidden (AccountKey=${key})`,
+      },
+      freshness: { state: 'stale' },
+    }),
+  });
+  assert.equal(failed.verdict, 'fail');
+  assert.ok(!failed.message.includes(sig), `SAS signature reached the annotation: ${failed.message}`);
+  assert.ok(!failed.message.includes(key), `account key reached the annotation: ${failed.message}`);
+  assert.match(failed.message, /sig=\[redacted\]/);
+  assert.match(failed.message, /AccountKey=\[redacted\]/);
+  // The diagnosis survives, and it is still the reindex-failed arm.
+  assert.match(failed.message, /403 Forbidden/);
+  assert.match(failed.message, /loom-docs reindex FAILED/);
+
+  // (b) `freshness.reason`, the `timeout` arm's `unknown` branch — the site
+  // round 5's OWN fix introduced, unredacted, in the file where it closed one.
+  const timedOut = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 600,
+    body: JSON.stringify({
+      ok: true,
+      job: { state: 'idle' },
+      freshness: {
+        state: 'unknown',
+        reason: `manifest HEAD failed: 403 Forbidden (AccountKey=${key}) via ?sig=${sig}`,
+      },
+    }),
+  });
+  assert.equal(timedOut.verdict, 'fail');
+  assert.ok(!timedOut.message.includes(sig), `SAS signature reached the annotation: ${timedOut.message}`);
+  assert.ok(!timedOut.message.includes(key), `account key reached the annotation: ${timedOut.message}`);
+  assert.match(timedOut.message, /sig=\[redacted\]/);
+  assert.match(timedOut.message, /AccountKey=\[redacted\]/);
+  // The reason still reaches the operator, and this is still the unknown branch.
+  assert.match(timedOut.message, /manifest HEAD failed/);
+  assert.match(timedOut.message, /COULD NOT READ ITS OWN MANIFEST/);
 });
 
 /**
@@ -788,4 +869,81 @@ test('poll CLI: a malformed POST_CODES list is dropped whole, not partially echo
   // than were made and understate the failure.
   assert.doesNotMatch(res.stdout, /HTTP 504, no application body/);
   assert.match(res.stdout, /\(no application body\)/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4498 round 6 — `formatAnnotation`, the publication boundary.
+//
+// These exist because the two `console.log` calls this replaced were INVISIBLE
+// to the structural guard in `_publication-surfaces.mjs`: run over this script
+// beforehand, `streamWrites` enumerated ZERO, so `unboundedWrites` reported
+// "no unbounded writes" over an empty population. The conversion is what makes
+// the file enrollable in `publication-surface-bypasses.test.mjs`; these pin the
+// two properties that enrollment does NOT check — the exact bytes, and that a
+// remote-supplied newline cannot open a line this script did not write.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('#4498 formatAnnotation emits the same bytes the console.log pair did', () => {
+  // `console.log(s)` wrote `s` plus one `\n`. `reindex-loom-docs.sh` never
+  // captures this stdout (it reads only the exit code), so no consumer would
+  // have caught a drift here — which is exactly why it is pinned.
+  assert.equal(formatAnnotation('notice', 'reindex accepted'), 'reindex accepted\n');
+  assert.equal(formatAnnotation('error', 'it failed'), '::error::it failed\n');
+  assert.equal(formatAnnotation('warning', 'slow'), '::warning::slow\n');
+});
+
+test('#4498 a newline in the message cannot FORGE a second annotation', () => {
+  // The runner parses `::error::` at the start of a log line. A remote string
+  // containing a newline could therefore emit a workflow command this script
+  // never issued.
+  const out = formatAnnotation('notice', 'all good\n::error::the index is corrupt');
+  assert.equal(out.indexOf('\n'), out.length - 1, `more than one line: ${JSON.stringify(out)}`);
+  assert.match(out, /%0A::error::/);
+});
+
+test('#4498 every line-break flavour collapses to exactly one %0A', () => {
+  // CRLF must not become two escapes, and a lone CR must not survive: a bare
+  // `\r` lets a terminal renderer overwrite the line already printed.
+  assert.equal(formatAnnotation('error', 'a\r\nb'), '::error::a%0Ab\n');
+  assert.equal(formatAnnotation('error', 'a\rb'), '::error::a%0Ab\n');
+  assert.equal(formatAnnotation('error', 'a\nb'), '::error::a%0Ab\n');
+});
+
+test('#4498 formatAnnotation redacts through the SHARED module, not a private copy', () => {
+  // MUTATION-PROOF. Swap `redactSecrets` here for an identity function and this
+  // goes RED. The fixture is the allowlisted #4498 literal — it decodes to an
+  // English sentence saying it must not be published.
+  const sig = 'Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA';
+  const out = formatAnnotation('error', `manifest PUT failed: https://loomstg.blob.core.windows.net/c/m.json?sig=${sig}`);
+  assert.ok(!out.includes(sig), `SAS signature reached the annotation: ${out}`);
+  assert.match(out, /sig=\[redacted\]/);
+  // Two-sided: the operator still has to be able to act on it.
+  assert.match(out, /loomstg\.blob\.core\.windows\.net/);
+});
+
+test('#4498 a newline in the REMOTE freshness.reason reaches stdout as one line', () => {
+  // The site this closes is `:390`: `freshness.reason` is written by the failing
+  // console replica and was `.trim()`ed only — never passed through
+  // `firstLine()` like every other remote interpolation on this path. End to
+  // end through the real CLI, because the unit assertions above would still pass
+  // if `main()` bypassed the boundary.
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'timeout',
+      POLL_BODY: JSON.stringify({
+        freshness: { state: 'unknown', reason: 'manifest unreadable\n::error::FORGED ANNOTATION' },
+      }),
+      POLL_WAITED_S: '900',
+      POLL_ATTEMPTS: '30',
+    },
+  });
+  const lines = res.stdout.split('\n').filter((l) => l !== '');
+  assert.equal(lines.length, 1, `the remote reason opened a line: ${JSON.stringify(res.stdout)}`);
+  assert.doesNotMatch(res.stdout, /\n::error::FORGED/);
+  // The text still arrives — contained, not dropped. Losing the operator's one
+  // string naming the cause would trade an R7 defect for a different one.
+  assert.match(res.stdout, /manifest unreadable%0A::error::FORGED ANNOTATION/);
 });

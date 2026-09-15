@@ -66,10 +66,11 @@
  * for the second (#4373).
  */
 import { pathToFileURL } from 'node:url';
-// #4498 round 5. `lastRun.error` is remote-supplied and this module embeds it in
-// a `::error::` annotation — a PUBLIC publication surface in a PUBLIC repo, and
-// a separate one from the stdout `reindex-loom-docs.sh` redacts. Shared module,
-// not a second copy: the two paths must not drift.
+// #4498 round 6. Remote-supplied strings reach this module's messages on NINE
+// sites, not one. Round 5 redacted a single one of them by hand and its own edit
+// opened another. Redaction is therefore applied to the ASSEMBLED message, at
+// `redactVerdict()` and at the stream writes in `main()` — see the docblock on
+// `redactVerdict` for why field-by-field cannot converge.
 import { redactSecrets } from './redact-secrets.mjs';
 
 /**
@@ -99,7 +100,7 @@ const GATEWAY_CODES = new Set([502, 503, 504]);
  * @param {{ code: number|string, body?: string }} input
  * @returns {{ verdict: 'ok'|'accepted'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexResult({ code, body }) {
+function classifyReindexResultImpl({ code, body }) {
   const n = Number.parseInt(String(code), 10);
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
@@ -278,7 +279,7 @@ export function classifyReindexResult({ code, body }) {
  * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, idleStreak?: number|string, postCode?: number|string, postCodes?: string, postAttempts?: number|string }} input
  * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
  */
-export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, idleStreak, postCode, postCodes, postAttempts }) {
+function classifyReindexPollImpl({ outcome, body, waitedSeconds, attempts, idleStreak, postCode, postCodes, postAttempts }) {
   const raw = typeof body === 'string' ? body : '';
   let parsed = null;
   try {
@@ -334,7 +335,9 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
       // alongside is a second thing that can disagree with the first.
       const lastRun = parsed?.freshness?.lastRun ?? null;
       const when = lastRun?.finishedAt ? ` at ${lastRun.finishedAt}` : '';
-      const why = lastRun?.error ? redactSecrets(firstLine(String(lastRun.error))) : '';
+      // NOT redacted here. Redacting this one field by hand is precisely what
+      // round 5 did, and it left the other eight sites raw — see `redactVerdict`.
+      const why = lastRun?.error ? firstLine(String(lastRun.error)) : '';
       const commit = lastRun?.sourceCommit ? ` (revision ${String(lastRun.sourceCommit).slice(0, 12)})` : '';
       return {
         verdict: 'fail',
@@ -540,6 +543,60 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
   }
 }
 
+/**
+ * THE redaction boundary for this module (#4498 round 6).
+ *
+ * NINE sites interpolate a remote-supplied string into a verdict message:
+ * `job.error`, `freshness.lastRun.error`, `freshness.reason`, `parsed.error`
+ * (reached through `summarize`), and five `firstLine(raw)` reads on the HTTP
+ * arms. The console stores those strings in a durable last-run record, this
+ * repo is PUBLIC, and both `main()` sinks publish to a workflow log — so a SAS
+ * `sig=` or an `AccountKey=` that reached the record reaches the log.
+ *
+ * Round 5 redacted exactly ONE of the nine, at the `lastRun.error` read, and
+ * the SAME edit introduced a new unredacted one (`freshness.reason`). That is
+ * the failure mode field-by-field redaction always has: the site set is open,
+ * so covering today's members does not cover the one added next round. The
+ * precedent is already recorded at `scripts/ci/deploy-retry.mjs:618-626`, where
+ * round 2 covered a stream field by field and left four interpolations raw.
+ *
+ * So redaction is applied ONCE, to the ASSEMBLED message, at the two places a
+ * message can leave this module: here (the exported contract) and the stream
+ * writes in `main()`. A tenth arm is covered the moment it is written, without
+ * its author needing to know this file has a secret-handling problem.
+ *
+ * This does NOT make the output secret-free, and no caller may describe it that
+ * way. `redact-secrets.mjs` matches the credential FORMS this estate mints; an
+ * unanticipated shape passes through untouched. This is containment at the
+ * publication boundary — the only thing this module controls. The durable fix
+ * is for the console to stop storing the value in the first place.
+ */
+function redactVerdict(v) {
+  return { ...v, message: redactSecrets(v.message) };
+}
+
+/**
+ * POST-mode entry point. Input shape and per-arm semantics are documented on
+ * `classifyReindexResultImpl`; this wrapper exists only to apply the boundary.
+ *
+ * @param {{ code: number|string, body?: string }} input
+ * @returns {{ verdict: 'ok'|'accepted'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
+ */
+export function classifyReindexResult(input) {
+  return redactVerdict(classifyReindexResultImpl(input));
+}
+
+/**
+ * Poll-mode entry point. Input shape and per-arm semantics are documented on
+ * `classifyReindexPollImpl`; this wrapper exists only to apply the boundary.
+ *
+ * @param {{ outcome: string, body?: string, waitedSeconds?: number|string, attempts?: number|string, idleStreak?: number|string, postCode?: number|string, postCodes?: string, postAttempts?: number|string }} input
+ * @returns {{ verdict: 'ok'|'tolerate'|'fail', level: 'notice'|'warning'|'error', message: string }}
+ */
+export function classifyReindexPoll(input) {
+  return redactVerdict(classifyReindexPollImpl(input));
+}
+
 /** Compact one-line summary of a ReindexResult-shaped body. */
 function summarize(parsed) {
   if (!parsed || typeof parsed !== 'object') return '';
@@ -578,6 +635,62 @@ function statusCodesOnly(value) {
   return /^[0-9,]*$/.test(s) ? s : '';
 }
 
+/**
+ * The publication boundary for this script's two stdout sinks (#4498 round 6).
+ *
+ * WHY A FUNCTION AND NOT TWO `console.log`s
+ * -----------------------------------------
+ * `scripts/ci/__tests__/_publication-surfaces.mjs` enumerates stream writes and
+ * asserts each one crosses a NAMED boundary. Run over this file before this
+ * change, it reported `unboundedWrites: 0` -- which reads as "clean" and was
+ * not. It was a ZERO POPULATION: `streamWrites` found 0 writes here, because
+ * `console.log` never goes near `process.stdout.write`. That module's own
+ * `FORBIDDEN_PUBLISHERS` names this exact case as the one that matters in
+ * practice, since every structural assertion in that lane is blind to it. So
+ * this file could not be ENROLLED in the guard without the conversion below;
+ * enrolling it as-is would have gone red on `writes.length >= 1` and on the
+ * forbidden-publisher check, and enrolling it silently would have added a
+ * subject the guard cannot see.
+ *
+ * WHAT IT ADDS BEYOND THE MOVE
+ * ----------------------------
+ * Newline containment, which the `console.log` pair did not have and which
+ * closes a real hole. `freshness.reason` at `:390` is REMOTE-SUPPLIED -- the
+ * failing console replica writes it -- and is `.trim()`ed only, unlike every
+ * other remote interpolation on this path, which goes through `firstLine()`. A
+ * `\n` in it reached the public Actions log verbatim, and a log line the remote
+ * controls can FORGE a workflow command: `\n::error::…` is parsed by the runner
+ * as a second annotation this script never emitted. `parse-reindex-poll.mjs`'s
+ * `clean()` strips `[\r\n|]+` for exactly this reason; this side did not. One
+ * boundary closes it for every arm at once rather than per-interpolation.
+ *
+ * The escape is `%0A`, matching `deploy-retry.mjs:606-611`. On the `::level::`
+ * arm the runner DECODES it, so a multi-line remediation still renders as one
+ * multi-line annotation. On the bare `notice` arm nothing decodes it and it
+ * renders literally -- stated rather than glossed: a visible `%0A` is the
+ * honest outcome, and it is still preferable to a raw newline, which would let
+ * the remote string open a line this script did not write.
+ *
+ * BYTES. `console.log(s)` writes `s` plus one `\n`, so the trailing newline
+ * here is not decoration -- without it this would silently change the emission.
+ * `reindex-loom-docs.sh` never captures this stdout (`:319`, `:383`, `:669`
+ * read only the exit code), so the shell cannot detect a format change either
+ * way; that makes the byte-for-byte match a property to PIN in a test rather
+ * than one any consumer would catch.
+ *
+ * @param {string} level `notice` for a bare line, otherwise a workflow-command name
+ * @param {string} message the text to publish, redacted and line-contained here
+ * @returns {string} exactly one output line, newline included
+ */
+export function formatAnnotation(level, message) {
+  // Redact BEFORE escaping: the rules in `redact-secrets.mjs` are bounded by
+  // `[^\s&;",]+`, so a newline still terminates a credential value here. Escape
+  // first and `%0A` would fall inside that class and be swallowed by the match.
+  const safe = redactSecrets(message);
+  const oneLine = String(safe).replace(/\r\n|\r|\n/g, '%0A');
+  return level === 'notice' ? `${oneLine}\n` : `::${level}::${oneLine}\n`;
+}
+
 function main() {
   const mode = process.env.MODE ?? 'post';
   const { verdict, level, message } =
@@ -596,8 +709,19 @@ function main() {
           code: process.env.HTTP_CODE ?? process.argv[2] ?? '',
           body: process.env.RESP_BODY ?? '',
         });
-  if (level === 'notice') console.log(message);
-  else console.log(`::${level}::${message}`);
+  // The SECOND application of the boundary, at the stream write itself.
+  //
+  // Redundant today, and deliberately so: `main()` only ever receives a message
+  // that `redactVerdict()` already passed. It is kept for two reasons. First, it
+  // is what gives this sink a NON-NULL boundary in the security graph —
+  // `publications.ts` records the named callee of a stream write, and a null
+  // boundary is exactly why they went uncounted. Second, it covers any future
+  // caller that reaches a sink from an `…Impl` directly, bypassing the contract.
+  //
+  // Re-applying the rules to already-redacted text is a no-op: `sig=[redacted]`
+  // re-matches to itself, `[redacted]` is too short for the `code=` `{20,}`
+  // bound, and `[redacted-jwt]` does not start with `eyJ`.
+  process.stdout.write(formatAnnotation(level, message));
   // 0 = proceed, 1 = fail the step, 75 = INDETERMINATE, go poll (EX_TEMPFAIL).
   // reindex-loom-docs.sh keys on 75 explicitly; any other non-zero is a failure
   // there, so a typo in this mapping fails the step rather than skipping it.
