@@ -16743,7 +16743,7 @@
             "declaredSinkCount": 4,
             "sinks": [
               {
-                "id": "inherited-fd:spawn-stdio:1003",
+                "id": "inherited-fd:spawn-stdio:1051",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16753,7 +16753,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:1008",
+                "id": "inherited-fd:spawn-stdio:1056",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16763,7 +16763,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:1009",
+                "id": "inherited-fd:spawn-stdio:1057",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16773,7 +16773,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:1010",
+                "id": "inherited-fd:spawn-stdio:1058",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -36791,7 +36791,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:673",
+                "id": "stdout:member:690",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36801,7 +36801,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:677",
+                "id": "stderr:member:694",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36811,7 +36811,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:731",
+                "id": "stderr:member:748",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36821,7 +36821,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:988",
+                "id": "stderr:member:1005",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36831,7 +36831,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:1001",
+                "id": "stderr:member:1018",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36851,7 +36851,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:861",
+                "id": "inherited-fd:spawn-stdio:878",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -49801,9 +49801,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-15T05:43:17.978Z",
-      "commit": "b1822f6e3f69416d840085035544d1a041e4fc65",
-      "inputsDigest": "88fada3515b73d10",
+      "generatedAt": "2026-09-15T07:10:21.756Z",
+      "commit": "38b4702395f5a69831e086433753116256a52516",
+      "inputsDigest": "811f0ec2d06e2e0f",
       "filesScanned": 2104,
       "scanScopes": [
         {
