@@ -798,6 +798,76 @@ test('formatAnnotation keeps its other contracts: one line, and never blank', ()
   assert.match(formatAnnotation('error', { toString: () => 'an object message' }), /an object message/);
 });
 
+// ── THE ENCODER MUST BE INJECTIVE (GHSA-9cv3-6cpm-975m) ──────────────────────
+//
+// The runner does not print a workflow command, it PARSES one. Before parsing it
+// runs `unescapeData`, which decodes `%0D` -> CR, `%0A` -> LF and `%25` -> `%`,
+// in that order — `%25` LAST, because it is the inverse of an encoder that
+// escapes `%` FIRST. An encoder that escapes the line terminators but not the
+// percent sign is therefore not injective, and the three literal characters
+// `%0A` inside a message become a real newline in the runner's view: everything
+// after them is parsed as a command line this script never wrote.
+//
+// `message` is composed from ARM deployment error text. In a brownfield deploy
+// ARM echoes caller-supplied resource names and parameter values into it, so the
+// input is remote-influenced, and the log is public.
+//
+// This is modelled rather than asserted on the encoded string alone, because a
+// substring assertion cannot distinguish "escaped correctly" from "escaped twice".
+// Round-tripping through the runner's own inverse is the only check that fails
+// for BOTH directions of the ordering mistake.
+
+/** The runner's inverse, in the runner's order. `%25` last, deliberately. */
+function unescapeData(s) {
+  return s.replace(/%0D/g, '\r').replace(/%0A/g, '\n').replace(/%25/g, '%');
+}
+
+test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes back to the input', () => {
+  const messages = [
+    'plain text with no metacharacters',
+    'literal percent-oh-a: %0A::error::forged annotation',
+    'a literal percent sign: 100% complete',
+    'already-encoded-looking: %25 and %0D and %0A',
+    'real newline\nand a real CRLF\r\nand a LONE CR\rtail',
+    '%',
+    '%%0A%',
+  ];
+
+  for (const message of messages) {
+    const line = formatAnnotation('error', message);
+    assert.ok(line.startsWith('::error::'), 'the level prefix must survive');
+    assert.ok(line.endsWith('\n'), 'the annotation must be newline-terminated');
+
+    // ONE command line: the payload carries no raw terminator the runner could
+    // split on. This is the property the forgery attacks.
+    const payload = line.slice('::error::'.length, -1);
+    assert.doesNotMatch(payload, /[\r\n]/, `a raw line terminator survived encoding of ${JSON.stringify(message)}`);
+
+    // And the runner reconstructs EXACTLY what went in — no more, no less.
+    assert.equal(
+      unescapeData(payload),
+      message.replace(/\r\n|\r|\n/g, '\n'),
+      `the encoder is not injective for ${JSON.stringify(message)} — the runner sees something the caller did not send`,
+    );
+  }
+});
+
+test('the escape ORDER is pinned in both directions', () => {
+  // `%` FIRST: a literal `%0A` must reach the runner as `%250A`, which decodes
+  // back to the literal. If `%` were escaped AFTER the newline substitution this
+  // would read `%0A` and forge a line.
+  assert.match(formatAnnotation('error', '%0A'), /^::error::%250A\n$/);
+
+  // ...and not one step further: a REAL newline must reach the runner as `%0A`,
+  // NOT `%250A`. Escaping `%` after the substitution re-escapes the escape and
+  // breaks every genuine multi-line remediation — the failure mode in the other
+  // direction, which a one-sided test would let through.
+  assert.match(formatAnnotation('error', 'a\nb'), /^::error::a%0Ab\n$/);
+
+  // A LONE CR is a terminator to the runner too. `\r?\n` did not match it.
+  assert.match(formatAnnotation('error', 'a\rb'), /^::error::a%0Ab\n$/);
+});
+
 // ── THE RUN LOG IS A DIFFERENT SURFACE FROM THE ANNOTATION (#3829 round 5) ────
 //
 // Guarding `::error::` does NOT cover a raw byte landing in the log. Round 2

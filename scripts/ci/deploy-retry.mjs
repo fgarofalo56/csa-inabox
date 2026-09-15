@@ -607,7 +607,24 @@ export function formatAnnotation(level, message) {
   const safe = redactedLine(message);
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
-  return `::${level}::${safe.replace(/\r?\n/g, '%0A')}\n`;
+  //
+  // `%` IS ESCAPED FIRST, AND THAT ORDER IS THE WHOLE FIX. The runner's
+  // `unescapeData` decodes `%25`, `%0D` and `%0A` back to `%`, CR and LF before
+  // it parses the command. An encoder that escapes the line terminators but not
+  // the percent sign is therefore NOT INJECTIVE: the three literal characters
+  // `%0A` arriving inside `message` survive to the runner, are decoded to a real
+  // newline, and everything after them is parsed as a workflow command line this
+  // script did not write. `message` is composed from ARM deployment error text,
+  // which in a brownfield deploy carries caller-supplied resource names and
+  // parameter values — so the input is remote-influenced, not repo-authored, and
+  // the log it lands in is public. Escaping `%` AFTER the newline substitution
+  // would re-escape the escape (`%0A` -> `%250A`) and break every real newline,
+  // so the order is load-bearing in both directions and is pinned by a test.
+  //
+  // `\r\n|\r|\n` rather than `\r?\n`: the old alternation did not match a LONE
+  // CR, which reaches the runner unescaped and is a line terminator there too.
+  const escaped = safe.split('%').join('%25');
+  return `::${level}::${escaped.replace(/\r\n|\r|\n/g, '%0A')}\n`;
 }
 
 /**
