@@ -36791,7 +36791,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:655",
+                "id": "stdout:member:673",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36801,7 +36801,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:659",
+                "id": "stderr:member:677",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36811,7 +36811,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:713",
+                "id": "stderr:member:731",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36821,7 +36821,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:970",
+                "id": "stderr:member:988",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36831,7 +36831,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:983",
+                "id": "stderr:member:1001",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36851,7 +36851,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:843",
+                "id": "inherited-fd:spawn-stdio:861",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -49801,9 +49801,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-15T03:13:18.164Z",
-      "commit": "b1d4a68ccfde88bfbe1546751dcbdfbe8bf9eeb6",
-      "inputsDigest": "0a2b2c5d074a19a8",
+      "generatedAt": "2026-09-15T05:43:17.978Z",
+      "commit": "b1822f6e3f69416d840085035544d1a041e4fc65",
+      "inputsDigest": "88fada3515b73d10",
       "filesScanned": 2104,
       "scanScopes": [
         {
