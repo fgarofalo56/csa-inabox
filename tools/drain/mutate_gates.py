@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -2267,7 +2268,8 @@ def _exit_code(
     skipped: int,
     errored: int,
     total: int,
-    tree_intact: bool,
+    before: str,
+    after: str,
 ) -> tuple[int, str]:
     """The run's exit status, and the sentence that justifies it.
 
@@ -2285,6 +2287,15 @@ def _exit_code(
     so disabling it changed no output for any input and no test could kill it.
     An un-killable arm is evidence about the arm. The two are one check now:
     reachable, and killed by a mutation in either direction.
+
+    ROUND 16: this takes the two DIGESTS, not a `tree_intact` bool. It used to
+    take the bool, and `main()` computed it inline as `before == after` -- which
+    put the comparison in the one function no test calls. A reviewer mutated
+    that call site to `tree_intact=True` and NOTHING went red: the sandbox
+    escape this whole check exists to catch became invisible, because the
+    predicate lived outside the tested surface. Taking the operands instead of
+    the verdict moves the comparison in here, where a test can reach it. The
+    call site now has no decision left to mutate.
     """
     scored = killed + survived + skipped + errored
     if total == 0:
@@ -2294,7 +2305,7 @@ def _exit_code(
         return 1, (f"scored {scored} arms but the matrix declares {total}. A run "
                    "that did not evaluate every arm is not a run, whatever its "
                    "buckets say.")
-    if not tree_intact:
+    if before != after:
         return 1, ("the TRACKED TREE CHANGED during the run - an arm wrote outside "
                    "its sandbox, so no result from this run can be trusted")
     if killed != total:
@@ -2360,6 +2371,96 @@ def _preamble_verdict(
         return False, ("the deselect did not remove exactly one passing test, so "
                        "the nodeid is wrong")
     return True, ""
+
+
+def _run_arms(
+    arms: list[tuple[str, str, str, str]],
+    originals: dict[str, str],
+    run: Callable[[str, str], tuple[int, str]],
+) -> tuple[int, int, int, int]:
+    """Dispatch every arm and bucket the outcomes: (killed, survived, skipped, errored).
+
+    ROUND 16, and this extraction is the whole point of the round. Round 15 put
+    the three DECISIONS (`_score`, `_exit_code`, `_preamble_verdict`) into pure
+    functions and the arm-kill rate went from 1-of-15 to 8-of-10. The nine that
+    still survived were every one of them in the DISPATCH -- the loop that
+    decides WHICH bucket a decision lands in, and whether the loop reaches the
+    decision at all. A reviewer set the score to a constant `"killed"` at the
+    call site and the runner printed `all 247 arms KILLED, tracked tree
+    untouched` and exited 0 having measured nothing. `_exit_code` cannot see
+    that: it is handed the counters, and the counters were consistent. A liar
+    that keeps its books balanced is invisible to an auditor who only checks
+    the books.
+
+    The dispatch was unobservable because it lived in `main()`, which nothing
+    but `__main__` calls -- so there is no input at which a test could watch it.
+    The fix is not more assertions; it is giving the loop a seam. `run` does
+    every side effect (write the mutant, run the suite, restore the file) and
+    returns only `(returncode, stdout)`, so this function is pure over its
+    arguments and a fake `run` can drive all four buckets from a test.
+
+    What stays outside: the sandbox, the subprocess, the restore. What moves in:
+    the anchor checks, the scoring call, and the counting -- i.e. everything an
+    arm could corrupt while leaving the totals self-consistent.
+    """
+    killed = survived = skipped = errored = 0
+    for name, filename, old, new in arms:
+        source = originals[filename]
+        if old not in source:
+            print(f"  SKIP     {name:<72} anchor not found in {filename}")
+            skipped += 1
+            continue
+        # AN AMBIGUOUS ANCHOR IS A MUTATION AIMED SOMEWHERE ELSE.
+        # `replace(old, new, 1)` takes the FIRST occurrence, so when a
+        # refactor made one arm's needle match twice, the arm silently
+        # mutated a different function and reported SURVIVED -- a blind spot
+        # that was really a misfire. A reviewer audits for this by hand
+        # every round; the runner should not need one.
+        if source.count(old) > 1:
+            print(f"  SKIP     {name:<72} anchor matches {source.count(old)}x "
+                  f"in {filename} - AMBIGUOUS, would mutate the first")
+            skipped += 1
+            continue
+        returncode, stdout = run(filename, source.replace(old, new, 1))
+        # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
+        # comment records the consequence: a mutation that was a
+        # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106
+        # real kills. Nothing had been measured -- the suite never ran -- and
+        # the repair was made to that arm rather than to the scorer, so the
+        # next arm of that shape would have read the same way. Arms that
+        # edit `policy.json` are the likeliest to reproduce it: a malformed
+        # edit raises inside `load_policy` at import time.
+        #
+        # A kill is rc=1 AND a pytest failure line AND no ERROR line.
+        #
+        # ROUND 14: the last conjunct is new, and it was wrong before it was
+        # missing. `_FAILURE_MARKERS` carried the bare string
+        # `AssertionError`, which is TRACEBACK vocabulary rather than
+        # SUMMARY vocabulary -- so a run with rc=1, `1 error` and ZERO
+        # failed scored KILLED on the strength of a traceback from a suite
+        # that never decided the arm. An independent reviewer measured it.
+        # A mutant that breaks the instrument has not been caught by it.
+        errored_out = _reports_an_error(stdout)
+        outcome = _score(returncode, stdout)
+        if outcome == "killed":
+            print(f"  KILLED   {name:<72} rc={returncode}")
+            killed += 1
+        elif outcome == "survived":
+            print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
+            survived += 1
+        else:
+            # "NOT A KILL" is all this branch knows. It does NOT know the
+            # suite failed to run: rc=2 is a collection error, where that is
+            # true, but rc=1 with `1 error` and no `failed` is a fixture
+            # raising at RUNTIME, where the suite did run. Asserting the
+            # stronger claim would be the R7 error this package spends its
+            # budget on.
+            tail = (stdout.strip().splitlines() or [""])[-1]
+            print(f"  ERROR    {name:<72} rc={returncode}  <-- NOT A KILL: "
+                  f"exited non-zero with no pytest failure line: {tail[:60]}"
+                  f"{' (an ERROR line was reported)' if errored_out else ''}")
+            errored += 1
+    return killed, survived, skipped, errored
 
 
 def main() -> int:
@@ -2548,10 +2649,20 @@ def main() -> int:
         # tested per refusal; what stays here is the I/O and the extra dump.
         #
         # The gathering is no longer short-circuited, so a red control costs one
-        # extra suite run (~6s against a 22-minute matrix) before it refuses.
-        # That is the price of having the decision in one place instead of four,
-        # and the refusal ORDER inside `_preamble_verdict` still reports the
-        # control first, so the diagnosis a reader sees is unchanged.
+        # extra suite run before it refuses. ROUND 16: that cost was written
+        # here as "~6s" and it was not measured -- it was estimated, in a file
+        # whose entire subject is the difference. Two independent measurements
+        # of the same thing disagree with it and with each other: a reviewer
+        # measured 36.9s, and two timed runs on the authoring workstation gave
+        # 16s and 18s. The spread is real (runner vs workstation, cold vs warm
+        # import cache) and neither number is "the" answer, so both are recorded
+        # rather than averaged into a false precision.
+        #
+        # What survives either measurement is the conclusion: one suite run
+        # against a ~22-minute matrix is noise, and it buys the decision being
+        # in one tested place instead of four untested ones. The refusal ORDER
+        # inside `_preamble_verdict` still reports the control first, so the
+        # diagnosis a reader sees is unchanged.
         ok, why = _preamble_verdict(
             control_rc=control.returncode,
             skipped_ids=skipped_ids,
@@ -2575,66 +2686,20 @@ def main() -> int:
                 print(f"the deselect nodeid is: {deselect}")
             return 2
 
-        killed = survived = skipped = errored = 0
-        for name, filename, old, new in ARMS:
-            source = originals[filename]
-            if old not in source:
-                print(f"  SKIP     {name:<72} anchor not found in {filename}")
-                skipped += 1
-                continue
-            # AN AMBIGUOUS ANCHOR IS A MUTATION AIMED SOMEWHERE ELSE.
-            # `replace(old, new, 1)` takes the FIRST occurrence, so when a
-            # refactor made one arm's needle match twice, the arm silently
-            # mutated a different function and reported SURVIVED -- a blind spot
-            # that was really a misfire. A reviewer audits for this by hand
-            # every round; the runner should not need one.
-            if source.count(old) > 1:
-                print(f"  SKIP     {name:<72} anchor matches {source.count(old)}x "
-                      f"in {filename} - AMBIGUOUS, would mutate the first")
-                skipped += 1
-                continue
-            _write_lf(sandbox / filename, source.replace(old, new, 1))
-            run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
-                                 env=_clean_env())
-            _write_lf(sandbox / filename, source)
-            # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
-            # comment records the consequence: a mutation that was a
-            # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106
-            # real kills. Nothing had been measured -- the suite never ran -- and
-            # the repair was made to that arm rather than to the scorer, so the
-            # next arm of that shape would have read the same way. Arms that
-            # edit `policy.json` are the likeliest to reproduce it: a malformed
-            # edit raises inside `load_policy` at import time.
-            #
-            # A kill is rc=1 AND a pytest failure line AND no ERROR line.
-            #
-            # ROUND 14: the last conjunct is new, and it was wrong before it was
-            # missing. `_FAILURE_MARKERS` carried the bare string
-            # `AssertionError`, which is TRACEBACK vocabulary rather than
-            # SUMMARY vocabulary -- so a run with rc=1, `1 error` and ZERO
-            # failed scored KILLED on the strength of a traceback from a suite
-            # that never decided the arm. An independent reviewer measured it.
-            # A mutant that breaks the instrument has not been caught by it.
-            errored_out = _reports_an_error(run.stdout)
-            outcome = _score(run.returncode, run.stdout)
-            if outcome == "killed":
-                print(f"  KILLED   {name:<72} rc={run.returncode}")
-                killed += 1
-            elif outcome == "survived":
-                print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
-                survived += 1
-            else:
-                # "NOT A KILL" is all this branch knows. It does NOT know the
-                # suite failed to run: rc=2 is a collection error, where that is
-                # true, but rc=1 with `1 error` and no `failed` is a fixture
-                # raising at RUNTIME, where the suite did run. Asserting the
-                # stronger claim would be the R7 error this package spends its
-                # budget on.
-                tail = (run.stdout.strip().splitlines() or [""])[-1]
-                print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL: "
-                      f"exited non-zero with no pytest failure line: {tail[:60]}"
-                      f"{' (an ERROR line was reported)' if errored_out else ''}")
-                errored += 1
+        # THE ONLY SIDE EFFECTS IN THE ARM LOOP, isolated so the loop itself is
+        # testable. Write the mutant, run the suite, put the file back --
+        # unconditionally, so a raising subprocess cannot leave the sandbox
+        # holding a mutated source that the NEXT arm would then measure against.
+        def _run(filename: str, mutated: str) -> tuple[int, str]:
+            _write_lf(sandbox / filename, mutated)
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      cwd=sandbox, env=_clean_env())
+            finally:
+                _write_lf(sandbox / filename, originals[filename])
+            return proc.returncode, proc.stdout
+
+        killed, survived, skipped, errored = _run_arms(ARMS, originals, _run)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -2643,9 +2708,23 @@ def main() -> int:
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
           f"of {len(ARMS)} arms")
+    # WHAT IS STILL UNOBSERVED HERE, stated rather than left for the next
+    # reviewer to rediscover. Round 16 moved the arm loop into `_run_arms` and
+    # the tree comparison into `_exit_code`, so both are now driven by tests.
+    # What remains in `main()` is WIRING: which variable is passed to which
+    # parameter, and that the return value is returned. A mutation that swapped
+    # `after=after` for `after=before` would still not be caught, because
+    # nothing calls `main()` except `__main__`.
+    #
+    # That surface is strictly smaller than it was -- it holds no decisions, only
+    # argument passing -- but it is not zero, and calling it zero would be the
+    # same overclaim this package exists to prevent. Closing it needs a `main()`
+    # smoke test, which costs a full control-suite run (16-18s measured) plus a
+    # sandbox build for every invocation; that is a real trade and it has not
+    # been made. Recorded as a known gap, not as coverage.
     code, why = _exit_code(
         killed=killed, survived=survived, skipped=skipped, errored=errored,
-        total=len(ARMS), tree_intact=(before == after),
+        total=len(ARMS), before=before, after=after,
     )
     if code != 0:
         print(f"REFUSING -- {why}")

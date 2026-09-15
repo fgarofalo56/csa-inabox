@@ -491,9 +491,12 @@ jobs:
       # the leg a version-gated API breaks on first. Running it on all three
       # legs would triple the job's dominant cost: this step alone measured 396s
       # of a 918s job on 2026-09-14, which is also why `timeout-minutes` above
-      # is 30. An earlier version of this comment called it "a ~90s job" and
+      # is 45. An earlier version of this comment called it "a ~90s job" and
       # used that to argue the tripling was cheap — the estimate was an order of
-      # magnitude stale, in the file where the timeout lives.
+      # magnitude stale, in the file where the timeout lives. A later version
+      # then said the timeout was 30 after it had already been raised to 45,
+      # which is the same defect one round on: a comment describing a number
+      # that sits eight lines above it, and disagreeing with it.
       - name: Drain mutation matrix (every arm must be KILLED)
         if: steps.relevant.outputs.run == 'true' && matrix.python-version == '3.10'
         run: python tools/drain/mutate_gates.py

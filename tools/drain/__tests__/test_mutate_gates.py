@@ -464,6 +464,23 @@ def test_the_scorer_separates_a_kill_from_a_suite_that_never_decided():
     assert mutate_gates._score(
         1, "E       AssertionError: boom\n1 error in 1.83s\n"
     ) == "not-evaluated", "a run that errored decided nothing, whatever its traceback says"
+    # ROUND 16, on a reviewer's prescription. The two above pin rc=2 and the
+    # error-only shape, but neither reaches the AND that joins the conjuncts:
+    # dropping `not _reports_an_error(...)` from `_score` left both green,
+    # because in one the rc is already wrong and in the other there is no
+    # failure line to combine with. These two do reach it.
+    #
+    # The first is the MIXED summary -- a failure line AND an error line in the
+    # same run. That is a suite which decided some tests and not this arm, and
+    # it is the only input where the error conjunct changes the answer on its
+    # own. The second is rc=1 with NO summary at all: a run that produced no
+    # verdict text cannot have reported a failure, so it cannot be a kill.
+    assert mutate_gates._score(
+        1, "1 failed, 1 error, 420 passed in 9.9s\n"
+    ) == "not-evaluated", "a run that also ERRORED did not decide this arm, even with a failure line"
+    assert mutate_gates._score(1, "") == "not-evaluated", (
+        "no summary text at all is not a pytest failure, whatever the rc says"
+    )
 
 
 def test_the_scorer_does_not_call_a_clean_exit_a_kill_on_output_alone():
@@ -479,7 +496,7 @@ def test_the_exit_code_refuses_a_matrix_that_evaluated_nothing():
     """`ARMS[:0]` printed `killed=0 ... of 0 arms` and exited 0 -- green over
     nothing, which is the `steps=0` shape this repo refuses everywhere else."""
     code, why = mutate_gates._exit_code(
-        killed=0, survived=0, skipped=0, errored=0, total=0, tree_intact=True
+        killed=0, survived=0, skipped=0, errored=0, total=0, before="d0", after="d0"
     )
     assert code == 1
     assert "EMPTY" in why
@@ -488,7 +505,7 @@ def test_the_exit_code_refuses_a_matrix_that_evaluated_nothing():
 def test_the_exit_code_refuses_when_the_buckets_do_not_add_up():
     """The partition identity, asserted rather than implied."""
     code, why = mutate_gates._exit_code(
-        killed=5, survived=0, skipped=0, errored=0, total=9, tree_intact=True
+        killed=5, survived=0, skipped=0, errored=0, total=9, before="d0", after="d0"
     )
     assert code == 1
     assert "scored 5" in why
@@ -498,9 +515,18 @@ def test_the_exit_code_refuses_when_the_buckets_do_not_add_up():
 def test_the_exit_code_refuses_a_tree_that_changed_under_the_run():
     """`tracked tree untouched` is the sentence this issue has been closed on
     fourteen times, and it had no negative case anywhere: nothing in a run
-    writes to `HERE`, so `before != after` was never exhibited failing."""
+    writes to `HERE`, so `before != after` was never exhibited failing.
+
+    ROUND 16: this now passes the two DIGESTS rather than a precomputed bool.
+    While the parameter was `tree_intact`, the `before == after` comparison sat
+    in `main()` -- untested by construction -- and a reviewer's mutation to
+    `tree_intact=True` at that call site went unnoticed by every test here.
+    The check is only as good as the least-tested link between the digests and
+    the verdict, and that link is now inside the function under test.
+    """
     code, why = mutate_gates._exit_code(
-        killed=9, survived=0, skipped=0, errored=0, total=9, tree_intact=False
+        killed=9, survived=0, skipped=0, errored=0, total=9,
+        before="d0", after="CHANGED",
     )
     assert code == 1
     assert "TRACKED TREE CHANGED" in why
@@ -517,7 +543,9 @@ def test_the_exit_code_refuses_any_arm_that_did_not_die():
         {"killed": 8, "survived": 0, "skipped": 1, "errored": 0},
         {"killed": 8, "survived": 0, "skipped": 0, "errored": 1},
     ):
-        code, why = mutate_gates._exit_code(total=9, tree_intact=True, **kwargs)
+        code, why = mutate_gates._exit_code(
+            total=9, before="d0", after="d0", **kwargs
+        )
         assert code == 1, kwargs
         assert "not every arm died" in why
         assert "killed=8 of 9" in why, "the breakdown must survive the merge"
@@ -525,10 +553,148 @@ def test_the_exit_code_refuses_any_arm_that_did_not_die():
 
 def test_the_exit_code_is_zero_only_when_every_arm_died_over_an_intact_tree():
     code, why = mutate_gates._exit_code(
-        killed=9, survived=0, skipped=0, errored=0, total=9, tree_intact=True
+        killed=9, survived=0, skipped=0, errored=0, total=9, before="d0", after="d0"
     )
     assert code == 0
     assert "all 9 arms KILLED" in why
+
+
+# --------------------------------------------------------------------------
+# THE DISPATCH. Round 15 made the three decisions testable and the kill rate
+# went 1-of-15 to 8-of-10; every one of the nine survivors that remained was in
+# the LOOP, not in a decision. The loop lived in `main()`, which nothing but
+# `__main__` calls, so no input could reach it and no assertion could watch it.
+# A reviewer pinned `outcome = "killed"` at the call site and the runner printed
+# `all 247 arms KILLED` and exited 0 having measured nothing -- `_exit_code`
+# saw only the counters, and the counters were internally consistent.
+#
+# `_run_arms` takes `run` as an argument, so these drive it with a fake and
+# assert on the buckets. The fake also RECORDS what it was asked to execute,
+# because "the right bucket" and "the right mutant" are different claims and an
+# arm that corrupts the second while preserving the first is exactly the shape
+# that survived.
+# --------------------------------------------------------------------------
+
+def _fake_run(script):
+    """A `run` that replays canned (rc, stdout) per call and records its inputs.
+
+    `script` is a list of (returncode, stdout). `calls` accumulates the
+    `(filename, mutated_source)` each invocation was handed.
+    """
+    calls = []
+
+    def run(filename, mutated):
+        calls.append((filename, mutated))
+        return script[len(calls) - 1]
+
+    run.calls = calls
+    return run
+
+
+def test_the_dispatch_routes_each_outcome_to_its_own_bucket():
+    """One arm per bucket, and the counts must not be interchangeable.
+
+    This is the test the nine surviving dispatch arms had no equivalent of.
+    Swapping `killed += 1` for `survived += 1`, or returning the tuple in a
+    different order, changes this assertion.
+    """
+    arms = [
+        ("kills", "f.py", "AAA", "aaa"),
+        ("survives", "f.py", "BBB", "bbb"),
+        ("errors", "f.py", "CCC", "ccc"),
+    ]
+    originals = {"f.py": "AAA BBB CCC\n"}
+    run = _fake_run([
+        (1, "FAILED t.py::t - assert 0\n1 failed, 424 passed in 9.9s\n"),
+        (0, "425 passed in 20.1s\n"),
+        (2, "E   SyntaxError: invalid syntax\n1 error during collection\n"),
+    ])
+
+    killed, survived, skipped, errored = mutate_gates._run_arms(arms, originals, run)
+
+    assert (killed, survived, skipped, errored) == (1, 1, 0, 1), (
+        "each outcome belongs to exactly one bucket, and the ORDER of the "
+        "returned tuple is part of the contract. rc=2 is ERRORED, not SKIPPED: "
+        "the arm was executed and failed to be decided, which is a different "
+        "claim from never having been executed at all"
+    )
+    assert len(run.calls) == 3, "every arm with a matching anchor must be executed"
+
+
+def test_the_dispatch_skips_a_missing_anchor_without_running_the_suite():
+    """A zero-match anchor is NOT-RUN, never a kill.
+
+    The measured failure this guards: six arms reported `anchor matched 0x`
+    against a CRLF worktree, and had the loop scored them rather than skipping
+    them, the matrix would have claimed evidence it never gathered.
+    """
+    arms = [("no such anchor", "f.py", "NOT PRESENT", "x")]
+    run = _fake_run([])
+
+    killed, survived, skipped, errored = mutate_gates._run_arms(
+        arms, {"f.py": "AAA\n"}, run
+    )
+
+    assert (killed, survived, skipped, errored) == (0, 0, 1, 0)
+    assert run.calls == [], "a skipped arm must not consume a suite run"
+
+
+def test_the_dispatch_skips_an_ambiguous_anchor_rather_than_mutating_the_first():
+    """`replace(old, new, 1)` takes the FIRST match, so a needle that matches
+    twice mutates something the arm did not name -- and once reported SURVIVED
+    for a function it never touched. Ambiguity is a skip, not a guess."""
+    arms = [("ambiguous", "f.py", "DUP", "x")]
+    run = _fake_run([])
+
+    killed, survived, skipped, errored = mutate_gates._run_arms(
+        arms, {"f.py": "DUP and DUP\n"}, run
+    )
+
+    assert (killed, survived, skipped, errored) == (0, 0, 1, 0)
+    assert run.calls == [], "an ambiguous arm must not consume a suite run"
+
+
+def test_the_dispatch_hands_the_runner_the_mutated_source_not_the_original():
+    """The bucket can be right while the mutant is wrong.
+
+    An arm that drops `.replace(...)` and passes `source` through unchanged
+    would still produce a green suite and score SURVIVED -- a truthful-looking
+    bucket over a mutation that never happened. Only the recorded input catches
+    it.
+
+    NOT asserted here, deliberately: that `replace(old, new, 1)` replaces only
+    the FIRST occurrence. Writing this test found that the count argument is an
+    EQUIVALENT MUTANT by construction -- the ambiguity guard immediately above
+    it refuses any source where `old` occurs more than once, so every source
+    that reaches the replace has exactly one occurrence and `replace(old, new)`
+    is indistinguishable from `replace(old, new, 1)`. The first draft of this
+    test used `"TARGET stays TARGET"` as the fixture and was SKIPPED as
+    ambiguous, which is how the guard proved the point. The `1` stays because it
+    documents intent and costs nothing; no test can kill it, and per this
+    package's own rule an un-killable arm is evidence about the arm rather than
+    a gap in the suite.
+    """
+    arms = [("replaces the anchor", "f.py", "TARGET", "REPLACED")]
+    originals = {"f.py": "before TARGET after\n"}
+    run = _fake_run([(0, "425 passed in 20.1s\n")])
+
+    mutate_gates._run_arms(arms, originals, run)
+
+    assert run.calls == [("f.py", "before REPLACED after\n")], (
+        "the runner must receive the source with the anchor replaced and "
+        "everything around it intact"
+    )
+    assert originals["f.py"] == "before TARGET after\n", (
+        "the dispatch must not mutate the originals it was lent"
+    )
+
+
+def test_the_dispatch_over_an_empty_matrix_scores_nothing():
+    """Zero arms is zero of every bucket -- it is `_exit_code` that refuses the
+    empty matrix, and it can only do so if the dispatch reports it honestly
+    instead of, say, defaulting a counter to the total."""
+    killed, survived, skipped, errored = mutate_gates._run_arms([], {}, _fake_run([]))
+    assert (killed, survived, skipped, errored) == (0, 0, 0, 0)
 
 
 def _preamble_kwargs(**overrides):
