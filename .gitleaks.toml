@@ -15,7 +15,10 @@ useDefault = true
 description = "False-positive allowlist for public reference identifiers."
 
 # Allowlisted regexes — these patterns are matched against the leaked secret
-# value (case-insensitive). Azure built-in role definition IDs are public,
+# value as UNANCHORED substrings unless the entry itself anchors with ^...$
+# (gitleaks 8.21.2 compiles them with a bare `regexp.MustCompile` and tests
+# `re.FindString(secret) != ""`, so there is no implicit anchoring and no
+# implicit case-insensitivity). Azure built-in role definition IDs are public,
 # documented identifiers (NOT secrets) and they trip the generic-api-key
 # entropy heuristic.
 regexes = [
@@ -55,34 +58,56 @@ regexes = [
     '''loom\.nav\.sections\.collapsed\.v1''',
 
     # #4498 redaction fixtures. `scripts/ci/redact-secrets.mjs` strips SAS `sig=`
-    # and `AccountKey=` values out of the two surfaces that publish a remote
-    # error — stdout (`reindex-loom-docs.sh`) and the `::error::` annotation
+    # and `AccountKey=` values out of the surfaces that publish a remote error —
+    # stdout (`reindex-loom-docs.sh`) and the `::error::` annotation
     # (`classify-reindex-result.mjs`). Proving that requires a fixture shaped
-    # like the real thing, so these are base64 blobs and they trip the
-    # generic-api-key entropy heuristic (4.72-4.87) even though they are not
-    # random: each decodes to an English sentence saying so.
+    # like the real thing, so these are base64 blobs — not random, though: each
+    # decodes to an English sentence saying so.
     #
     #   YW5ub3Rhd...  -> "annotation-signature-must-not-publish"
     #   QW5ub3Rhd...  -> "AnnotationAccountKeyDoNotPublish=="
     #   Zm9yYmlkZ...  -> "forbidden-signature-value-do-not-publish"
     #   QWNjb3VudE...  -> "AccountKeyThatMustNotReachTheLog=="
     #
-    # These are EXACT literals, not a path or a shape: allowlisting them cannot
-    # mask a real credential, because a real credential is a different string.
-    # A path allowlist over `scripts/ci/__tests__/` was rejected for that reason
-    # — that directory is exactly where a real value could be pasted by mistake.
+    # THREE of the four are reported today, as 5 findings across 3 files from 2
+    # commits at entropies 4.72-4.87. The fourth — `YW5ub3Rhd...`, entropy
+    # 4.551272 — produces NO finding at this version. An earlier draft of this
+    # comment said that was because it sits "below the entropy threshold"; that
+    # is measurably wrong and the measurement is cheap to repeat: the SAME
+    # literal at the SAME 4.551272 fires when the assignment reads `const key =`
+    # and is silent when it reads `const sig =`. What decides it is
+    # `generic-api-key`'s KEYWORD requirement, not the entropy number. So the
+    # fourth entry is allowlisted not because it is reported but because it is
+    # the paired fixture of one that is — keep it, or a later variable rename
+    # re-opens the hole with no diff to this file to explain why.
+    #
+    # These are ANCHORED exact literals (`^...$`), not a path and not a shape.
+    # The anchors are load-bearing and were added after review MEASURED that
+    # they are not: `allowlist.regexes` is an UNANCHORED substring match, so
+    # the unanchored form also suppressed a longer synthetic key that merely
+    # CONTAINED one of these values. Anchored, that superset is flagged again
+    # while the real fixture stays suppressed — verified both ways against
+    # gitleaks 8.21.2. Do not add an entry here without `^...$`.
+    #
+    # A path allowlist over `scripts/ci/__tests__/` was rejected separately —
+    # that directory is exactly where a real value could be pasted by mistake.
     # Lowering their entropy would not have worked: gitleaks scans full history
     # (`fetch-depth: 0`) and pins each finding to the commit that introduced the
     # line, so a later commit cannot clear one.
     #
-    # gitleaks 8.21.2 flagged the last THREE of these at 0876fe82f21 (entropies
-    # 4.871388 / 4.794252 / 4.724543). The first is listed as well because it is
-    # the same fixture pair in the same test and differs only in landing below
-    # the rule's threshold at this version — not because it was ever reported.
-    '''YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA''',
-    '''QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ''',
-    '''Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA''',
-    '''QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ''',
+    # WHY THIS IS ON `main` AND NOT ONLY ON THE BRANCH THAT ADDED THE FIXTURES.
+    # `validate.yml:191` runs `gitleaks detect --source . --config .gitleaks.toml`
+    # after a `fetch-depth: 0` checkout. `detect` scans git HISTORY, and the
+    # config it reads is the CHECKED-OUT BRANCH'S. So a branch carrying both the
+    # fixtures and the allowlist is green, while every OTHER branch fetches those
+    # same objects and scans them against a config that has never heard of them.
+    # The allowlist living only beside the fixtures therefore turned `Secret Scan`
+    # — a required context — red on every open PR in the repo except the one that
+    # introduced them. It has to be on the default branch to do its job.
+    '''^YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA$''',
+    '''^QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ$''',
+    '''^Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA$''',
+    '''^QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ$''',
 ]
 
 paths = [
