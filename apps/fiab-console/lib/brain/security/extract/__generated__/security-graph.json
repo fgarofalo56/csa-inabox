@@ -38329,10 +38329,30 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/parse-reindex-poll.mjs",
-            "declaredSinkCount": 1,
+            "declaredSinkCount": 3,
             "sinks": [
               {
-                "id": "stdout:member:128",
+                "id": "stdout:member:212",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:214",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:216",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49829,9 +49849,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-15T03:58:08.678Z",
-      "commit": "8e1e6f151bb1394593603facf738187b01c89f05",
-      "inputsDigest": "c661420ec9a1d6ad",
+      "generatedAt": "2026-09-15T06:25:53.722Z",
+      "commit": "0ddebdd24adbc9e40a4511a19fb64d58c269c06f",
+      "inputsDigest": "2a54e3ad4007ce6f",
       "filesScanned": 2108,
       "scanScopes": [
         {
@@ -50704,7 +50724,7 @@
         },
         {
           "subject": "scripts/ci/parse-reindex-poll.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 3). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reconcile-policy.mjs",
@@ -50928,7 +50948,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2438 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2440 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
