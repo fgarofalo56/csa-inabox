@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyReindexResult, classifyReindexPoll } from '../classify-reindex-result.mjs';
+import { classifyReindexResult, classifyReindexPoll, formatAnnotation } from '../classify-reindex-result.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, '..', 'classify-reindex-result.mjs');
@@ -200,6 +200,141 @@ test('poll: job failed → fail loud', () => {
 });
 
 /**
+ * #4498 round 5 — THE ANNOTATION IS ITS OWN PUBLICATION SURFACE.
+ *
+ * `lastRun.error` is REMOTE-SUPPLIED: whatever the failing console replica chose
+ * to store in the durable record. This module embeds it in a `::error::`
+ * workflow annotation, which lands in a PUBLIC Actions log in a PUBLIC repo.
+ *
+ * This test exists because round 5's FIRST redaction attempt missed this path
+ * entirely. It redacted the shell's `$LAST_ERROR` echo and stopped there, on the
+ * reasoning that both consumers print "the same string" — they do not, they are
+ * two independent readers of the same remote field, and the end-to-end test in
+ * `reindex-loom-docs.test.mjs` caught this one still emitting the raw value.
+ * That test covers both paths through the shell; this one pins the classifier
+ * directly, so the guard cannot be lost by a change to the shell alone.
+ *
+ * MUTATION-PROOF: make `redactVerdict()` in the module under test return its
+ * argument unchanged and the first two assertions go RED. Round 5 pinned this
+ * to a `redactSecrets(...)` wrapper on the `why` assignment in the
+ * `rebuild_failed` arm; round 6 removed that wrapper, because redacting one
+ * field by hand is what left the other eight sites raw.
+ *
+ * Two-sided on purpose. Redaction that ate the diagnosis would be its own
+ * defect: this arm exists to tell an operator WHY the rebuild failed, and a
+ * message reduced to `[redacted]` sends the next investigation nowhere.
+ */
+test('#4498 round 5 — a credential in the remote error is redacted out of the ::error:: annotation, and the diagnosis survives', () => {
+  const sig = 'YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA';
+  const key = 'QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ';
+  const r = classifyReindexPoll({
+    outcome: 'rebuild_failed',
+    body: JSON.stringify({
+      ok: true,
+      freshness: {
+        state: 'stale',
+        lastRun: {
+          jobId: 'j-1',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: `manifest PUT to https://loomstg.blob.core.windows.net/help/manifest.json?sig=${sig} failed: 403 Forbidden (AccountKey=${key})`,
+        },
+      },
+    }),
+  });
+
+  assert.equal(r.verdict, 'fail');
+  // The credentials are GONE.
+  assert.ok(!r.message.includes(sig), `SAS signature reached the annotation: ${r.message}`);
+  assert.ok(!r.message.includes(key), `account key reached the annotation: ${r.message}`);
+  assert.match(r.message, /sig=\[redacted\]/);
+  assert.match(r.message, /AccountKey=\[redacted\]/);
+  // The diagnosis SURVIVES — host, status, and operation all still readable.
+  // Exact-substring, not a regex: CodeQL #1053 read the partial host pattern as
+  // an incomplete-URL-sanitization sink, and the full URL is the stronger
+  // assertion anyway — it pins the path, not just the domain.
+  assert.ok(
+    r.message.includes('https://loomstg.blob.core.windows.net/help/manifest.json'),
+    r.message,
+  );
+  assert.match(r.message, /403 Forbidden/);
+  assert.match(r.message, /manifest PUT/);
+  // And this is still the durable-record arm, not some other branch.
+  assert.match(r.message, /reindex FAILED on the replica that ran it/);
+});
+
+/**
+ * #4498 round 6 — THE BOUNDARY, NOT THE FIELD.
+ *
+ * Round 5 redacted exactly ONE of the sites that interpolate a remote string
+ * into a verdict message, and the same edit ADDED another raw one: it began
+ * printing `freshness.reason` — a console-supplied string — in the `timeout`
+ * arm's `unknown` branch, with no redaction. Neither arm exercised here carries
+ * a `redactSecrets` call of its own; both are covered because `redactVerdict()`
+ * wraps the exported contract, the way `deploy-retry.mjs` redacts at its write
+ * boundary rather than per field.
+ *
+ * MUTATION-PROOF: make `redactVerdict()` return its argument unchanged and BOTH
+ * cases go RED — as does the round-5 test above. That is the point of moving
+ * the redaction: one boundary now carries every site, so one mutation kills
+ * every redaction assertion in this file rather than one arm's.
+ *
+ * Two-sided, like the round-5 test: a redaction that ate the diagnosis would be
+ * its own defect, so each case also asserts the operator-actionable part of the
+ * message survived.
+ */
+test('#4498 round 6 — the arms round 5 left raw are redacted by the boundary, and their diagnoses survive', () => {
+  // The same allowlisted fixtures the round-5 test uses. They decode to English
+  // sentences saying they must not be published; reusing them keeps this file's
+  // `.gitleaks.toml` allowlist to the four literals already justified there.
+  const sig = 'YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA';
+  const key = 'QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ';
+
+  // (a) `job.error`, the `failed` arm. Remote-supplied, never redacted by round 5.
+  const failed = classifyReindexPoll({
+    outcome: 'failed',
+    body: JSON.stringify({
+      ok: true,
+      job: {
+        state: 'failed',
+        error: `manifest PUT to https://loomstg.blob.core.windows.net/help/manifest.json?sig=${sig} failed: 403 Forbidden (AccountKey=${key})`,
+      },
+      freshness: { state: 'stale' },
+    }),
+  });
+  assert.equal(failed.verdict, 'fail');
+  assert.ok(!failed.message.includes(sig), `SAS signature reached the annotation: ${failed.message}`);
+  assert.ok(!failed.message.includes(key), `account key reached the annotation: ${failed.message}`);
+  assert.match(failed.message, /sig=\[redacted\]/);
+  assert.match(failed.message, /AccountKey=\[redacted\]/);
+  // The diagnosis survives, and it is still the reindex-failed arm.
+  assert.match(failed.message, /403 Forbidden/);
+  assert.match(failed.message, /loom-docs reindex FAILED/);
+
+  // (b) `freshness.reason`, the `timeout` arm's `unknown` branch — the site
+  // round 5's OWN fix introduced, unredacted, in the file where it closed one.
+  const timedOut = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 600,
+    body: JSON.stringify({
+      ok: true,
+      job: { state: 'idle' },
+      freshness: {
+        state: 'unknown',
+        reason: `manifest HEAD failed: 403 Forbidden (AccountKey=${key}) via ?sig=${sig}`,
+      },
+    }),
+  });
+  assert.equal(timedOut.verdict, 'fail');
+  assert.ok(!timedOut.message.includes(sig), `SAS signature reached the annotation: ${timedOut.message}`);
+  assert.ok(!timedOut.message.includes(key), `account key reached the annotation: ${timedOut.message}`);
+  assert.match(timedOut.message, /sig=\[redacted\]/);
+  assert.match(timedOut.message, /AccountKey=\[redacted\]/);
+  // The reason still reaches the operator, and this is still the unknown branch.
+  assert.match(timedOut.message, /manifest HEAD failed/);
+  assert.match(timedOut.message, /COULD NOT READ ITS OWN MANIFEST/);
+});
+
+/**
  * MUTATION-PROOF (the load-bearing one). Make the poller treat a timeout as
  * success — i.e. change the 'timeout' branch to `verdict:'ok'` (or to
  * 'tolerate') — and this test goes RED. A timeout is a refusal: silently
@@ -216,6 +351,126 @@ test('poll: timeout is a REFUSAL, never a pass', () => {
   assert.equal(r.level, 'error');
   assert.match(r.message, /600s/);
   assert.match(r.message, /REFUSAL/i);
+});
+
+/**
+ * #4498 — AN UNREADABLE BODY IS NOT A STALE INDEX (deploy-integrity R7).
+ *
+ * `freshness.state` falls back to 'unknown' when no poll returned a body the
+ * classifier could parse it out of. The timeout branch used to read that as
+ * `job=unknown` → idle and emit «this is "the index is stale and no rebuild was
+ * seen"» — a claim about the CORPUS assembled from having read nothing, which
+ * points the reader at the rebuild when the defect is in the poll path.
+ *
+ * MUTATION-PROOF: delete the `unreadable` branch and the old stale-index
+ * sentence comes back, so the negative assertion below goes RED. Keep BOTH
+ * halves — the positive one alone would survive a branch that also asserted
+ * staleness, and the refusal assertion keeps "we do not know" from softening
+ * into a pass.
+ */
+test('poll: timeout on an UNREADABLE body does not claim the index is stale', () => {
+  const r = classifyReindexPoll({ outcome: 'timeout', waitedSeconds: 900, body: '' });
+  assert.equal(r.verdict, 'fail'); // not knowing is still a refusal
+  assert.match(r.message, /REFUSAL/);
+  assert.match(r.message, /FRESHNESS STATE WAS NEVER READ/);
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /NOTHING WAS OBSERVED RUNNING/);
+});
+
+/** The counterfactual: a body that DID carry `stale` still gets the stale
+ *  sentence. Without this, deleting the idle branch entirely would pass. */
+test('poll: timeout on a body that READ stale/idle keeps the stale-index finding', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ ok: true, job: { state: 'idle' }, freshness: { state: 'stale' } }),
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NOTHING WAS OBSERVED RUNNING/);
+  assert.match(r.message, /the index is stale/i);
+  assert.match(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /FRESHNESS STATE WAS NEVER READ/);
+});
+
+/**
+ * #4498 round 4 — THE ROUND-3 FIX WAS ITSELF AN R7 VIOLATION, ON AN INPUT
+ * NEITHER TEST ABOVE COULD PRODUCE.
+ *
+ * Round 3 discriminated on the VALUE `'unknown'`. That value has two producers:
+ * the `?? 'unknown'` fallback (nothing parsed — the test above) and a fully
+ * parsed body whose `freshness.state` IS `'unknown'`, which is what
+ * `evaluateFreshness` returns when `manifestError` is set — a branch THIS SAME
+ * PR added. The two tests above use `body: ''` and a `stale` body, so both stay
+ * GREEN with the defect present: 42/42 passed while a real poll would print
+ * "no poll returned a body carrying a `freshness.state`" on the same line as
+ * `indexedChunks=51079 backend=ai-search`.
+ *
+ * MUTATION-PROOF: revert `neverRead` to `state === 'unknown'` and this goes RED
+ * on the NEVER-READ assertion. The `AI Search 503` assertion is the second half
+ * and it is not redundant — a branch that correctly stayed quiet about the poll
+ * path but still dropped `freshness.reason` would pass the first assertion
+ * alone, and the reason is the only string naming what actually broke.
+ */
+test('poll: timeout on a PARSED body whose freshness.state is literally unknown blames the manifest store, not the poll', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    attempts: 60,
+    body: JSON.stringify({
+      backend: 'ai-search',
+      job: { state: 'idle' },
+      freshness: {
+        state: 'unknown',
+        reason: 'The corpus manifest could not be READ (AI Search 503 on help-corpus-manifest).',
+        indexedChunkCount: 51079,
+      },
+    }),
+  });
+  assert.equal(r.verdict, 'fail'); // not knowing is still a refusal
+  assert.match(r.message, /REFUSAL/);
+  // The body WAS read. Saying otherwise is the R7 defect.
+  assert.doesNotMatch(r.message, /NEVER READ/i);
+  assert.doesNotMatch(r.message, /no poll returned a body/i);
+  // It must carry the cause it was handed, not discard it.
+  assert.match(r.message, /AI Search 503/);
+  assert.match(r.message, /COULD NOT READ ITS OWN MANIFEST/);
+  // …and must not manufacture a corpus claim it never established.
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+});
+
+/**
+ * #4498 round 4, adjacent R7 case: a `never-indexed` corpus is not a STALE one.
+ * The idle arm printed "the index is stale and no rebuild was seen" over a body
+ * that said the index had never been built — and round 3's own test pinned that
+ * wording by asserting `/the index is stale/i` for this very input class.
+ */
+test('poll: timeout on a NEVER-INDEXED body does not call the corpus stale', () => {
+  const r = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ job: { state: 'idle' }, freshness: { state: 'never-indexed' } }),
+  });
+  assert.equal(r.verdict, 'fail');
+  assert.match(r.message, /NOTHING WAS OBSERVED RUNNING/); // still the idle finding
+  assert.match(r.message, /NEVER been indexed/i);
+  assert.doesNotMatch(r.message, /the index is stale/i);
+  assert.doesNotMatch(r.message, /measure a STALE index/i);
+  assert.doesNotMatch(r.message, /NEVER READ/i); // it WAS read
+});
+
+/** The detail line carried the same conflation: an unparsed body printed
+ *  `freshness=unknown`, which reads as "the body said unknown". */
+test('poll: detail distinguishes a body that was never read from one that said unknown', () => {
+  const never = classifyReindexPoll({ outcome: 'timeout', waitedSeconds: 900, body: '' });
+  assert.match(never.message, /freshness=<never-read>/);
+  const said = classifyReindexPoll({
+    outcome: 'timeout',
+    waitedSeconds: 900,
+    body: JSON.stringify({ freshness: { state: 'unknown' }, job: { state: 'idle' } }),
+  });
+  assert.match(said.message, /freshness=unknown\b/);
 });
 
 test('poll: unreachable over Front Door → tolerate (transient)', () => {
@@ -614,4 +869,118 @@ test('poll CLI: a malformed POST_CODES list is dropped whole, not partially echo
   // than were made and understate the failure.
   assert.doesNotMatch(res.stdout, /HTTP 504, no application body/);
   assert.match(res.stdout, /\(no application body\)/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #4498 round 6 — `formatAnnotation`, the publication boundary.
+//
+// These exist because the two `console.log` calls this replaced were INVISIBLE
+// to the structural guard in `_publication-surfaces.mjs`: run over this script
+// beforehand, `streamWrites` enumerated ZERO, so `unboundedWrites` reported
+// "no unbounded writes" over an empty population. The conversion is what makes
+// the file enrollable in `publication-surface-bypasses.test.mjs`; these pin the
+// two properties that enrollment does NOT check — the exact bytes, and that a
+// remote-supplied newline cannot open a line this script did not write.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('#4498 formatAnnotation emits the same bytes the console.log pair did', () => {
+  // `console.log(s)` wrote `s` plus one `\n`. `reindex-loom-docs.sh` never
+  // captures this stdout (it reads only the exit code), so no consumer would
+  // have caught a drift here — which is exactly why it is pinned.
+  assert.equal(formatAnnotation('notice', 'reindex accepted'), 'reindex accepted\n');
+  assert.equal(formatAnnotation('error', 'it failed'), '::error::it failed\n');
+  assert.equal(formatAnnotation('warning', 'slow'), '::warning::slow\n');
+});
+
+test('#4498 a newline in the message cannot FORGE a second annotation', () => {
+  // The runner parses `::error::` at the start of a log line. A remote string
+  // containing a newline could therefore emit a workflow command this script
+  // never issued.
+  const out = formatAnnotation('notice', 'all good\n::error::the index is corrupt');
+  assert.equal(out.indexOf('\n'), out.length - 1, `more than one line: ${JSON.stringify(out)}`);
+  assert.match(out, /%0A::error::/);
+});
+
+test('#4498 every line-break flavour collapses to exactly one %0A', () => {
+  // CRLF must not become two escapes, and a lone CR must not survive: a bare
+  // `\r` lets a terminal renderer overwrite the line already printed.
+  assert.equal(formatAnnotation('error', 'a\r\nb'), '::error::a%0Ab\n');
+  assert.equal(formatAnnotation('error', 'a\rb'), '::error::a%0Ab\n');
+  assert.equal(formatAnnotation('error', 'a\nb'), '::error::a%0Ab\n');
+});
+
+test('#4498 round 8 `%` is escaped FIRST, so the encoding is INJECTIVE', () => {
+  // TWO ordering mistakes, and they need DIFFERENT witnesses. Escaping `%`
+  // LAST turns `a\nb` into `a%250Ab` — the exact-equality assertions above
+  // already kill that. Not escaping `%` AT ALL is invisible to every one of
+  // them, because no fixture above contains a literal `%`, so they pass
+  // unchanged under that mutant. This one does not: without the escape the
+  // three characters `%0A` in a REMOTE string emerge byte-identical to a real
+  // newline. That cannot forge a command — the runner splits stdout into lines
+  // before it decodes — but it can still open a line break inside an annotation
+  // this script did not write, which is the claim the boundary exists to make
+  // false.
+  assert.equal(formatAnnotation('error', '%0A'), '::error::%250A\n');
+  assert.equal(formatAnnotation('error', '%25'), '::error::%2525\n');
+  // The bare arm has NO decoder, so escaping there would corrupt a real `%`.
+  assert.equal(formatAnnotation('notice', 'chunks 50% rebuilt'), 'chunks 50% rebuilt\n');
+});
+
+test('#4498 formatAnnotation redacts through the SHARED module, not a private copy', () => {
+  // MUTATION-PROOF. Swap `redactSecrets` here for an identity function and this
+  // goes RED. The fixture is the allowlisted #4498 literal — it decodes to an
+  // English sentence saying it must not be published.
+  const sig = 'Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA';
+  const out = formatAnnotation('error', `manifest PUT failed: https://loomstg.blob.core.windows.net/c/m.json?sig=${sig}`);
+  assert.ok(!out.includes(sig), `SAS signature reached the annotation: ${out}`);
+  assert.match(out, /sig=\[redacted\]/);
+  // Two-sided: the operator still has to be able to act on it.
+  //
+  // Exact substring rather than a host regex. CodeQL raised **alert #1055**,
+  // rule **`js/regex/missing-regexp-anchor`** ("Missing regular expression
+  // anchor"), HIGH, on the `/loomstg\.blob\.core\.windows\.net/` form that was
+  // here — "arbitrary hosts may come before or after it".
+  //
+  // The rule id matters and an earlier version of this comment got it wrong: it
+  // said `js/incomplete-url-substring-sanitization`, which is a real but
+  // DIFFERENT rule, so anyone grepping the alert id to find out whether it had
+  // been handled would have come up empty. Round 10 measured the recorded id
+  // off the alert itself.
+  //
+  // This is an assertion, not a sanitiser, so the alert is a false positive in
+  // substance — but this is a public repo, a new HIGH is not worth carrying,
+  // and `includes` of the full URL is strictly more specific than the host
+  // regex it replaces. Same fix and same reason as
+  // `reindex-loom-docs.test.mjs:1200-1206`.
+  assert.ok(
+    out.includes('https://loomstg.blob.core.windows.net/c/m.json'),
+    `expected the manifest URL to survive redaction, got: ${out}`,
+  );
+});
+
+test('#4498 a newline in the REMOTE freshness.reason reaches stdout as one line', () => {
+  // The site this closes is `:390`: `freshness.reason` is written by the failing
+  // console replica and was `.trim()`ed only — never passed through
+  // `firstLine()` like every other remote interpolation on this path. End to
+  // end through the real CLI, because the unit assertions above would still pass
+  // if `main()` bypassed the boundary.
+  const res = spawnSync(process.execPath, [SCRIPT], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MODE: 'poll',
+      POLL_OUTCOME: 'timeout',
+      POLL_BODY: JSON.stringify({
+        freshness: { state: 'unknown', reason: 'manifest unreadable\n::error::FORGED ANNOTATION' },
+      }),
+      POLL_WAITED_S: '900',
+      POLL_ATTEMPTS: '30',
+    },
+  });
+  const lines = res.stdout.split('\n').filter((l) => l !== '');
+  assert.equal(lines.length, 1, `the remote reason opened a line: ${JSON.stringify(res.stdout)}`);
+  assert.doesNotMatch(res.stdout, /\n::error::FORGED/);
+  // The text still arrives — contained, not dropped. Losing the operator's one
+  // string naming the cause would trade an R7 defect for a different one.
+  assert.match(res.stdout, /manifest unreadable%0A::error::FORGED ANNOTATION/);
 });

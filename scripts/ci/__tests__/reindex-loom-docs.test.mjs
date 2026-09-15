@@ -1029,3 +1029,580 @@ test('#4373 the poll that MOVED the chunk count restarts the streak at 1, not 0'
     },
   );
 });
+
+// ── THE DURABLE LAST-RUN RECORD (#4497) ─────────────────────────────────────
+// Roll 34648534467 (2026-09-11) polled for 912s across 55 polls, read
+// `stale`/`idle` every time, and failed with "NOTHING WAS OBSERVED RUNNING".
+// That sentence was true about what the poll saw and silent about what had
+// happened: `reindex()` had already failed and recorded it in the in-memory job
+// state of the ONE replica that ran it. With Front Door session affinity
+// Disabled and 2-6 replicas, no poll was ever going to land there.
+
+/** A poll body carrying the durable last-run record any replica can read. */
+function pollBodyWithLastRun({ freshness, job = 'idle', chunks = 51079, lastRun }) {
+  const body = pollBody({ freshness, job, chunks });
+  body.freshness.lastRun = lastRun;
+  return body;
+}
+
+test('#4497 a durable last-run FAILURE ends the wait immediately, naming the cause', async () => {
+  await withServer(
+    () => ACCEPTED,
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-11T04:12:00Z',
+          error: 'Corpus indexed, but the freshness manifest could not be persisted to ai-search: 403 Forbidden',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+          // The id the 202 handed back. This is what makes the record OURS.
+          jobId: 'j-1',
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      // It must stop on the RECORD, not grind to the attempt ceiling. That is
+      // the whole value of the change: 912s of silence becomes one poll.
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /manifest could not be persisted/);
+      assert.match(out, /NOT a timeout/);
+      // And it must not describe itself as the thing it is not.
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+    },
+  );
+});
+
+test('#4498 the two sanitizers agree — an id carrying the field separator still correlates with itself', async () => {
+  // Reviewer 2's NIT. In `reindex-loom-docs.sh`, the POST side's inline
+  // `process.stdout.write(... .replace(...))` and the poll side's `clean()`
+  // helper both strip `[\r\n|]+` from the jobId, but they were replacing it
+  // with DIFFERENT things — `""` and `" "` — so the same id read on the two
+  // sides produced two different strings and the
+  // `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation could never be true. The
+  // whole #4497 correlation would go quiet: a durable failure of OUR OWN job
+  // stops being attributed and the roll grinds to its attempt ceiling and
+  // reports a timeout instead of the recorded cause.
+  //
+  // (Symbols, not line numbers, deliberately: both citations here were first
+  // written as `:NNN` and both had drifted before this comment was finished,
+  // because the comment ITSELF moved the code it pointed at. Round 4 note: the
+  // drift was stated here as "twelve lines" and it was thirteen — a wrong
+  // number inside the very comment arguing that `:NNN` citations rot, which is
+  // the argument making its own case. The count is gone rather than corrected:
+  // re-pinning it would be the same mistake a third time, and the claim that
+  // survives measurement is simply that it drifted.)
+  //
+  // Today's console cannot produce this id — `lib/azure/reindex-job.ts` mints
+  // it with `crypto.randomUUID()` — so this is the guard, not a live repro. It is worth
+  // holding because the poll-side comment already states the rule the POST side
+  // was breaking: these values come from a remote service, so "this field
+  // cannot contain a pipe" is an assumption about data we do not control.
+  const piped = 'job|with|separators';
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: piped } }),
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: 'the failure this run must own',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: piped,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      // Attributed: it stops on the record rather than polling to the ceiling.
+      assert.equal(res.status, 1, out);
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /the failure this run must own/);
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+      // Measured, not reasoned. Reverting the POST side's
+      // `replace(/[\r\n|]+/g, " ")` back to `replace(/[\r\n|]+/g, "")`
+      // and re-running JUST this test gives 0 ✓ / 1 ×, a real AssertionError:
+      //   `4 !== 1` on the poll count, with the log showing
+      //   `job=jobwithseparators` from the POST against
+      //   `jobId: "job|with|separators"` in the record — the two never compare
+      //   equal, the `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` correlation never
+      //   fires, and the run grinds to its 4-attempt ceiling and prints
+      //   `NOTHING WAS OBSERVED RUNNING`.
+      // Note which assertion did NOT fire: `res.status` was 1 either way. The
+      // exit code does not discriminate here — an attributed failure and a
+      // timeout both exit 1 — so the poll count and the message are what carry
+      // the measurement.
+    },
+  );
+});
+
+test('#4498 round 9 — the two sanitizers agree on a REDACTED id too, not only on the one they both leave alone', async () => {
+  // ROUND 9 REVIEW, FINDING N2. The test above passes under a POST side that
+  // does not redact at all, because its fixture — `job|with|separators` — is
+  // precisely the shape `redactSecrets` leaves untouched. Both sides only had to
+  // agree on the separator strip for it to go green, and that is what round 8's
+  // hand-copied clone did: separator strip, no `redactSecrets`, while its own
+  // comment claimed it was "the SAME one the poll's `clean()` helper applies".
+  // A test asserting "the two sanitizers agree" that exercises only the half
+  // where they agree is the weak-mutation shape — it cannot fail for the reason
+  // it is named after.
+  //
+  // This fixture must pass through a REDACTION rule, so the two sides disagree
+  // unless both call `redactSecrets`. It is deliberately NOT credential-shaped:
+  // `redact-secrets.mjs:48` keys on the `sig=` KEYWORD, not on the value's
+  // entropy, so a plainly-fake dictionary-word value triggers the rule while
+  // staying well under any secret scanner's entropy floor. A JWT-shaped fixture
+  // would redact just as well and would red-line `Secret Scan` on every open PR
+  // in the repo — see #4507 for what that costs.
+  //
+  // Measured: with the POST side reverted to the round-8 clone
+  // (`String(j.jobId).replace(/[\r\n|]+/g, " ")`, no redaction), this test gives
+  //   `4 !== 1` on the poll count, the log showing
+  //   `job=job with sig=not-a-real-secret-value` from the POST against
+  //   `job with sig=[redacted]` from the poll — never equal, correlation dead,
+  //   run grinds to its ceiling. The test above stays GREEN under that same
+  //   mutation, which is exactly why this one exists.
+  const redacted = 'job|with|sig=not-a-real-secret-value';
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: redacted } }),
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: 'the redacted-id failure this run must own',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: redacted,
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.equal(counts().gets, 1, 'expected to stop on the first poll: ' + out);
+      assert.match(out, /reindex FAILED on the replica that ran it/);
+      assert.match(out, /the redacted-id failure this run must own/);
+      assert.doesNotMatch(out, /NOTHING WAS OBSERVED RUNNING/);
+      // The PUBLICATION half, and it is a separate defect from the correlation
+      // one — `do_post` writes the id to stdout, which on a
+      // `loom-roll-and-validate` run is a public Actions log.
+      //
+      // This assertion covers TWO surfaces, and it failed on the second one the
+      // first time it ran, which is why the `head -c 800` dump changed with it.
+      // The `job=` echo redacted correctly; the raw body dump on the NEXT LINE
+      // republished the same value verbatim:
+      //
+      //   reindex POST … -> HTTP 202 job=job with sig=[redacted]      <- fixed
+      //   {"ok":true,…,"jobId":"job|with|sig=not-a-real-secret-value"} <- raw
+      //
+      // A redaction undone by the following statement is not a redaction, so
+      // `!out.includes(...)` is asserted over the WHOLE output rather than over
+      // the echo line. Narrowing it to the echo would have let the leak stand
+      // and reported the fix as complete.
+      assert.ok(
+        !out.includes('sig=not-a-real-secret-value'),
+        'the UNREDACTED remote jobId reached the log: ' + out,
+      );
+      assert.match(out, /job=job with sig=\[redacted\]/);
+    },
+  );
+});
+
+test('#4498 round 11 — a parser that exits 0 with a WARNING on stderr is NOT reported as a failure', async () => {
+  // ROUND 11, found INDEPENDENTLY BY BOTH REVIEWERS. Round 10 keyed its first
+  // branch on `[ -s "$POST_ERR_FILE" ]` — "the parser wrote bytes to stderr" —
+  // and claimed "the parser FAILED … the response body was not read". Those are
+  // different predicates, and the exit status that answers the question was
+  // discarded by a `|| true` on the same line.
+  //
+  // No source mutation is needed to prove it. `NODE_OPTIONS` alone makes node
+  // emit an ExperimentalWarning to stderr while exiting 0 and returning the id,
+  // so the round-10 wording produced three false assertions contradicted one
+  // line later by the script's own `job=` output. Any node build that starts
+  // warning here flips it on with no code change.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-warn-1' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        NODE_OPTIONS: '--experimental-loader=data:text/javascript,',
+      });
+      const out = res.stdout + res.stderr;
+      // It succeeded, so it must NOT be called a failure...
+      assert.doesNotMatch(out, /the jobId parser EXITED/, out);
+      assert.doesNotMatch(out, /the response body was not read/, out);
+      // ...the stderr is still disclosed, saying only what is true...
+      assert.match(out, /exited 0 but wrote to stderr; the id below is still valid/, out);
+      // ...and the id it returned is USED, which is the half that makes the
+      // round-10 wording actively misleading rather than merely wrong.
+      assert.match(out, /-> HTTP 202 job=j-warn-1/, out);
+    },
+  );
+});
+
+test('#4498 round 11 — a parser that CANNOT START is named as such, and its bytes are WITHHELD rather than published raw', async () => {
+  // ROUND 11, the second half of the same finding. Round 10 dumped the stderr
+  // with `node "$PARSER" --body` — the same module the branch had just declared
+  // broken — so on the ONE path the branch exists for, the dump printed nothing
+  // and "its stderr follows" was false. Worse, that invocation did not redirect
+  // its OWN stderr, so node's raw diagnostic reached the public log anyway:
+  // N7's shape re-instantiated by the statement doing the sanitizing.
+  //
+  // `--require` of a missing module makes node fail to start, so BOTH the parse
+  // and the redactor fail the same way — which is exactly the condition that
+  // has to fail closed. A bare module name, not a path: `--require=/some/path`
+  // gets MSYS path-converted on Windows and then split on the space in
+  // "C:/Program Files", so the test ends up asserting about a different error
+  // than it meant to. Measured while writing this.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-dead' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        NODE_OPTIONS: '--require=nonexistent-module-xyz',
+      });
+      const out = res.stdout + res.stderr;
+      // Named for what it is, with the status rather than a proxy for it.
+      assert.match(out, /the jobId parser EXITED \d+/, out);
+      // FAILS CLOSED: bytes withheld, and the withholding itself disclosed.
+      assert.match(out, /WITHHELD rather than published raw/, out);
+      // The round-10 claim that is now false must not reappear.
+      assert.doesNotMatch(out, /its stderr follows/, out);
+
+      // SCOPE, STATED HONESTLY. This asserts that the PARSER's stderr is not
+      // published raw — the two sites round 11 fixes (`do_post` and the poll
+      // loop). It does NOT assert that the log is free of node tracebacks,
+      // because `NODE_OPTIONS` breaks EVERY node invocation, including the
+      // three `node "$CLASSIFIER"` calls, which are still unredirected.
+      //
+      // That is a real third site of the same shape and it is disclosed rather
+      // than quietly fixed: the classifier emits its annotations on STDOUT and
+      // writes nothing to stderr by design (measured: zero
+      // `process.stderr.write` / `console.error` in that module), so bytes
+      // landing there mean node itself crashed — but two of its three call
+      // sites sit inside control flow whose exit status decides a verdict, and
+      // restructuring them belongs in its own change, not a rider on an R7 fix.
+      // Under a globally-broken node the parser is silent and the classifier
+      // is not; that asymmetry is the finding, and it is written down.
+    },
+  );
+});
+
+test('#4498 round 10 — a POST body with no jobId DISCLOSES that, and claims nothing about why', async () => {
+  // ROUND 10 REVIEW, FINDING N3. The round-9 disclosure block claimed "the
+  // failure is now visible rather than silent". It was not. `postJobId` catches
+  // its own read/parse errors, so garbage JSON, an empty body, a body with no
+  // `jobId`, and a missing file all exit 0 with ZERO bytes of stderr — measured,
+  // all four — and the block was gated on `[ -s "$POST_ERR_FILE" ]`, so it never
+  // fired for any of them. The one path that DID reach it (node failing to
+  // start) printed "could not read a jobId from the response body", asserting a
+  // cause it had not established: the body was never read at all. R7, committed
+  // by the fix for R7.
+  //
+  // The two cases are now separate and each says only what is known. This test
+  // pins the one that actually happens: the parser ran cleanly and found no id.
+  //
+  // A 202 with no `jobId` is not hypothetical — it is what an edge refusal
+  // looks like, and it is exactly when the durable-record correlation must NOT
+  // fire, because there is no identity to correlate on.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      // The disclosure fired, and it names only what was established.
+      assert.match(out, /the response body carried no readable jobId/, out);
+      // It does NOT assert the parser failed — it did not.
+      assert.doesNotMatch(out, /the jobId parser FAILED/, out);
+      // And it does not claim the body was unreadable; it was read fine.
+      assert.doesNotMatch(out, /could not read a jobId from the response body/, out);
+      // No id means no `job=` on the POST line — fail closed, no fabricated id.
+      assert.doesNotMatch(out, /-> HTTP 202 job=/, out);
+    },
+  );
+});
+
+test('#4498 round 5 — a credential inside the remote error is REDACTED before it reaches the public Actions log', async () => {
+  // BLOCKER 1b, reviewer 2. `lastRun.error` is remote-supplied: the console
+  // stores whatever string the failing replica produced, and the
+  // `rebuild_failed` branch echoes it to stdout. On `loom-roll-and-validate`
+  // that stdout is a PUBLIC Actions log in a PUBLIC repo, so a backend error
+  // quoting the request URL publishes the SAS token inside it.
+  //
+  // This is the estate's real error shape — a 403 persisting the manifest,
+  // which is exactly the failure #4497 exists to surface — with the storage URL
+  // the backend would quote. The assertions are two-sided on purpose: the
+  // secret must be GONE, and the diagnosis must SURVIVE. A redactor that eats
+  // the whole message satisfies the first and defeats the entire #4497 change.
+  const secret = 'Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA';
+  const accountKey = 'QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ';
+  await withServer(
+    () => ACCEPTED,
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error:
+            'manifest PUT to https://loomstg.blob.core.windows.net/corpus/manifest.json'
+            + '?sv=2024-11-04&sig=' + secret
+            + ' returned 403 Forbidden (conn: AccountName=loomstg;AccountKey=' + accountKey + ';)',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+          jobId: 'j-1',
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      // The record was attributed to us, so the error genuinely reached stdout.
+      // Without this the test could pass by the branch never running at all.
+      assert.match(out, /reindex FAILED on the replica that ran it/, out);
+      assert.match(out, /last-run record: job j-1 FAILED/, out);
+      // GONE — neither credential value appears anywhere in the output.
+      assert.ok(!out.includes(secret), 'SAS signature reached the log: ' + out);
+      assert.ok(!out.includes(accountKey), 'account key reached the log: ' + out);
+      assert.match(out, /sig=\[redacted\]/, out);
+      assert.match(out, /AccountKey=\[redacted\]/, out);
+      // SURVIVED — the operator can still act on it. The host, the container,
+      // the status code and the cause are all still readable. Exact substring
+      // rather than a host regex: CodeQL #1054 read the partial-host pattern as
+      // an incomplete-URL-sanitization sink, and pinning the whole URL asserts
+      // strictly more — the path survived too, not just the domain.
+      assert.ok(
+        out.includes('https://loomstg.blob.core.windows.net/corpus/manifest.json'),
+        out,
+      );
+      assert.match(out, /403 Forbidden/, out);
+      assert.match(out, /manifest PUT/, out);
+    },
+  );
+});
+
+test('#4497 a last-run failure from ANOTHER job does not fail a healthy rebuild', async () => {
+  // The record is durable, so it outlives the run that wrote it — and the
+  // console serves every replica, so it may describe a rebuild this script never
+  // started (a scheduled refresh, an admin button press, this script's own POST
+  // retry). Correlating on the jobId the 202 returned settles it: the record is
+  // about our attempt or it is not.
+  //
+  // This replaced a wall-clock comparison against the script's start mark, which
+  // could not make that distinction at all: it missed a sub-second failure that
+  // landed before the mark, and it let an unrelated concurrent run's failure red
+  // a healthy rebuild. A guard that fires on someone else's evidence is worse
+  // than no guard.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 2 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          // NEWER than ours, so no timestamp rule could exclude it — only the id.
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'a DIFFERENT rebuild, on another replica, failed',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: 'some-other-job',
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.match(res.stdout, /COMPLETE/);
+    },
+  );
+});
+
+test('#4497 a last-run failure with NO jobId is not attributed to us', async () => {
+  // A console image that predates the jobId field records the outcome without
+  // one. Treating a record we cannot attribute as ours would fail every roll
+  // against such an image on the first stale poll — the guard must fail closed
+  // toward WAITING, not toward failing.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 2 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'recorded by an image that did not carry job ids',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: null,
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.match(res.stdout, /COMPLETE/);
+    },
+  );
+});
+
+test('#4497 a last-run failure is not attributed to us when the POST gave no jobId', async () => {
+  // The other side of the same coin: the POST was refused at the edge (504), so
+  // this script holds no id to correlate against. An empty POST_JOB_ID must
+  // never match an empty LAST_JOB_ID into a "that failure was ours" claim —
+  // `[ "" = "" ]` is true in shell, and that is exactly how a correlation check
+  // degrades into no check at all.
+  await withServer(
+    () => EDGE_504,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 3 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2099-01-01T00:00:00Z',
+          error: 'someone else rebuild failed',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 0,
+          jobId: null,
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 0, out);
+      assert.doesNotMatch(out, /reindex FAILED on the replica that ran it/);
+    },
+  );
+});
+
+test('#4497 a last-run SUCCESS never ends the wait early', async () => {
+  // Only `failed` is terminal here. A success record says A rebuild finished,
+  // not that the corpus is fresh, so freshness remains the completion signal.
+  await withServer(
+    () => ACCEPTED,
+    (n) => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: n >= 3 ? 'fresh' : 'stale',
+        lastRun: {
+          outcome: 'succeeded',
+          finishedAt: '2026-09-11T04:12:00Z',
+          error: null,
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+          jobId: 'j-1',
+        },
+      }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url);
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+      assert.ok(counts().gets >= 3, 'expected to keep polling to freshness, got ' + counts().gets);
+    },
+  );
+});
+
+/**
+ * ── #4497 — AN UNREADABLE POLL IS NOT A `stale`/`idle` OBSERVATION ───────────
+ *
+ * The first version of this test was VACUOUS, and a reviewer proved it: it
+ * fixed every poll at `unknown`, so the streak stayed 0 under the shipped code
+ * AND under the code with the `unknown` handling deleted. It asserted a
+ * property no fixture in it could violate.
+ *
+ * This is the discriminating fixture. Threshold 3, four polls, and exactly one
+ * of them — poll 3 — reads `unknown` while the chunk count holds:
+ *
+ *   FRESH = "stale"  (shipped):   1, 2, 0, 1  -> does NOT rename
+ *   FRESH != "fresh" (the defect): 1, 2, 3, 4 -> renames at poll 3
+ *
+ * MUTATION-PROOF: widen that equality to `[ "$FRESH" != "fresh" ]` and this
+ * reds — `TRIGGER REFUSED … the LAST 3 polls read stale/idle` would be printed
+ * over a run in which one of those three polls read nothing at all (R7).
+ */
+test('#4497 an unreadable poll breaks the idle streak instead of counting toward it', async () => {
+  await withServer(
+    () => EDGE_504,
+    // GET 1 = pre-retry probe; polls are GETs 2..5. Poll 3 (GET 4) is the
+    // manifest read that failed. The count is constant throughout, so the
+    // streak's own `-n`/unchanged conditions are satisfied on every poll and
+    // the ONLY thing that can break the run is the freshness equality.
+    (n) => ({
+      status: 200,
+      body: pollBody({ freshness: n === 4 ? 'unknown' : 'stale', job: 'idle', chunks: 51079 }),
+    }),
+    async (url, counts) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.equal(counts().gets, 5, '1 pre-retry probe + 4 polls');
+      assert.match(out, /freshness=unknown/, 'the unreadable poll is in the log');
+      assert.doesNotMatch(
+        out,
+        /TRIGGER REFUSED/,
+        'the trailing stale/idle run is 1 — poll 3 read nothing, so it cannot be counted',
+      );
+      assert.match(out, /did NOT reach a fresh state/, 'it is an ordinary ceiling timeout');
+    },
+  );
+});
+
+/**
+ * ── #4497 — `unknown` STILL LETS THE SAW_RUNNING LATCH RUN ───────────────────
+ *
+ * The regression a reviewer caught in the previous revision: an `unknown`
+ * branch placed ABOVE the latch `continue`d past it, so a poll that printed
+ * `freshness=unknown job=running` could end in "the rebuild was never OBSERVED
+ * to be accepted or running" — contradicted by a line in the same log. The two
+ * fields fail independently and `job.state` is readable whatever freshness says.
+ */
+test('#4497 a job=running sighting counts even when that poll could not read freshness', async () => {
+  await withServer(
+    () => EDGE_504,
+    // Poll 1 sees the rebuild while the manifest read is failing; every later
+    // poll reads stale/idle and the streak clears the threshold of 3.
+    (n) => (n === 2
+      ? { status: 200, body: pollBody({ freshness: 'unknown', job: 'running', chunks: 51079 }) }
+      : { status: 200, body: pollBody({ freshness: 'stale', job: 'idle', chunks: 51079 }) }),
+    async (url) => {
+      const res = await runScript(url, { REFUSED_IDLE_POLLS: '3', POLL_MAX_ATTEMPTS: '4' });
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      assert.match(out, /poll: HTTP 200 freshness=unknown job=running/);
+      assert.doesNotMatch(
+        out,
+        /TRIGGER REFUSED/,
+        'a rebuild WAS observed running, so "never observed" would be refuted by the log above it',
+      );
+    },
+  );
+});

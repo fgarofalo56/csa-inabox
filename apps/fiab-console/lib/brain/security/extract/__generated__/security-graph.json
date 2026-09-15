@@ -16899,16 +16899,26 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-            "declaredSinkCount": 1,
+            "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "stdout:bracket:139",
+                "id": "stdout:bracket:141",
                 "surface": "stdout",
                 "accessPath": "bracket",
                 "wholeExpressionBounded": false,
                 "boundary": null,
                 "unredactedByDesign": false,
                 "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "inherited-fd:spawn-stdio:220",
+                "surface": "inherited-fd",
+                "accessPath": "spawn-stdio",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": true,
                 "childProvenRedacting": null
               }
             ]
@@ -36184,21 +36194,11 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/classify-reindex-result.mjs",
-            "declaredSinkCount": 2,
+            "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "console:member:502",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:503",
-                "surface": "console",
+                "id": "stdout:member:769",
+                "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -38311,6 +38311,49 @@
               {
                 "id": "console:member:158",
                 "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              }
+            ]
+          }
+        },
+        {
+          "id": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
+          "kind": "publication",
+          "provenance": "declared",
+          "label": "scripts/ci/parse-reindex-poll.mjs",
+          "facet": {
+            "kind": "publication",
+            "module": "scripts/ci/parse-reindex-poll.mjs",
+            "declaredSinkCount": 3,
+            "sinks": [
+              {
+                "id": "stdout:member:212",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:214",
+                "surface": "stdout",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "stdout:member:216",
+                "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -49528,6 +49571,11 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
+          "nodeId": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
+          "codeModuleId": "code:scripts/ci/parse-reindex-poll.mjs",
+          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
+        },
+        {
           "nodeId": "sec:publication:scripts/ci/reconcile-policy.mjs#module",
           "codeModuleId": "code:scripts/ci/reconcile-policy.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -49801,10 +49849,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-11T19:14:02.347Z",
-      "commit": "8806f842939d26c5fc878cf6116f6e5d3d6aee77",
-      "inputsDigest": "eba3ee74267b4100",
-      "filesScanned": 2104,
+      "generatedAt": "2026-09-15T16:46:53.989Z",
+      "commit": "0b90004997660d6ccbbba6803af6d348cfe5da16",
+      "inputsDigest": "19452bafcc6eb909",
+      "filesScanned": 2108,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -49813,8 +49861,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 406,
-          "nodesEmitted": 234
+          "filesMatched": 410,
+          "nodesEmitted": 235
         }
       ],
       "skipped": [
@@ -49996,7 +50044,7 @@
         },
         {
           "subject": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/python-cve-floors.test.mjs",
@@ -50576,7 +50624,7 @@
         },
         {
           "subject": "scripts/ci/classify-reindex-result.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/codeql-scan-liveness.mjs",
@@ -50673,6 +50721,10 @@
         {
           "subject": "scripts/ci/neutralize-release-close-keywords.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+        },
+        {
+          "subject": "scripts/ci/parse-reindex-poll.mjs",
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 3). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reconcile-policy.mjs",
@@ -50896,7 +50948,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2438 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2440 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }

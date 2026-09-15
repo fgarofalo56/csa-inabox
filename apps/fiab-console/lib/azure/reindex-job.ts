@@ -110,7 +110,7 @@ export interface StartReindexJobOutcome {
  * `run` is injected so tests exercise the state machine without touching AI
  * Search / Cosmos.
  */
-export function startReindexJob(run: () => Promise<ReindexResult>): StartReindexJobOutcome {
+export function startReindexJob(run: (jobId: string) => Promise<ReindexResult>): StartReindexJobOutcome {
   if (job.state === 'running' && job.promise) {
     return { jobId: job.jobId!, startedAt: job.startedAt!, alreadyRunning: true };
   }
@@ -148,7 +148,12 @@ export function startReindexJob(run: () => Promise<ReindexResult>): StartReindex
 
   const promise = (async () => {
     try {
-      const result = await run();
+      // The jobId is handed to the runner so the DURABLE last-run record it
+      // writes can be correlated with the `jobId` this POST returns to the
+      // caller. Without it a poller can only correlate on time, and a
+      // wall-clock comparison both misses sub-second failures and lets an
+      // unrelated concurrent run's failure red a healthy one.
+      const result = await run(jobId);
       finish({
         state: result.ok ? 'succeeded' : 'failed',
         result,
