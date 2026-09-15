@@ -178,7 +178,40 @@ POLL_BODY_FILE="$(mktemp)"
 # from the body file so a parse failure cannot overwrite the response it failed
 # to read, which is the one thing that would explain it.
 POST_ERR_FILE="$(mktemp)"
-trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE" "$POST_ERR_FILE"' EXIT
+# The REDACTOR's own stderr. Separate again, and never published: when the
+# redactor is what failed, its diagnostic is the same bytes we are declining to
+# publish, so printing it would defeat the withholding one line above.
+REDACT_ERR_FILE="$(mktemp)"
+trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE" "$POST_ERR_FILE" "$REDACT_ERR_FILE"' EXIT
+
+# ── THE ONLY WAY BYTES FROM A FILE REACH STDOUT ─────────────────────────────
+# ROUND 11 (both reviewers, independently). The round-10 dump was
+# `node "$PARSER" --body "$f" || true`, which has two defects on the one path it
+# was written for -- a parser that cannot start:
+#
+#   1. THE REDACTOR IS THE FAILING SUBJECT. `--body` runs the same module the
+#      branch above has just declared broken, so the dump printed NOTHING and
+#      "its stderr follows" was false. Measured with a parser copy that cannot
+#      load: the line appeared, the next line was empty.
+#   2. THE RAW TRACE WAS PUBLISHED ANYWAY. That invocation did not redirect its
+#      OWN stderr, so node's diagnostic went straight to this script's stderr --
+#      the same public Actions log -- three times over. N7's shape ("sanitized,
+#      then republished verbatim by the next statement") re-instantiated by the
+#      statement doing the sanitizing.
+#
+# So this FAILS CLOSED: if the redactor cannot run, the bytes are WITHHELD and
+# the withholding is disclosed with its size. Suppressing evidence silently
+# would be the other half of R7; saying that we suppressed it, and how much, is
+# not.
+_dump_redacted() {
+  _dump_out=""
+  if _dump_out=$(node "$PARSER" --body "$1" 2> "$REDACT_ERR_FILE"); then
+    printf '%s\n' "$_dump_out"
+  else
+    printf '%s\n' "(the redactor could not run, so $(wc -c < "$1" | tr -d ' ') byte(s) are WITHHELD rather than published raw. Its own stderr is $(wc -c < "$REDACT_ERR_FILE" | tr -d ' ') byte(s) and is deliberately not printed, because on this path it is the same failure.)"
+  fi
+  echo ""
+}
 
 emit() { [ -n "${GITHUB_OUTPUT:-}" ] && printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; return 0; }
 
@@ -228,6 +261,7 @@ fi
 do_post() {
   : > "$POST_BODY_FILE"
   : > "$POST_ERR_FILE"
+  : > "$REDACT_ERR_FILE"
   CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $INTERNAL_TOKEN" \
     -H 'Content-Type: application/json' \
@@ -267,21 +301,37 @@ do_post() {
   # read at all. That is the exact R7 shape the comment cited as its own
   # justification, committed by the fix for it.
   #
-  # So the two cases are now disclosed SEPARATELY, each saying only what is
-  # known. Non-empty stderr means the PARSER failed; an empty id with clean
-  # stderr means the body carried no readable jobId — which is the case that
-  # actually happens.
-  POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE" || true)
-  if [ -s "$POST_ERR_FILE" ]; then
-    # The parser itself failed. Its stderr is node's own diagnostic, not a
-    # remote document — but it is still stdout on a PUBLIC roll log, and this
-    # file is `.sh`, which `extract-security-graph.mjs` lists in
-    # PUBLICATION_UNMODELED and therefore cannot see. Round 10 (NEW-3) flagged
-    # the raw `head -c 400` here as the same shape N7 had just removed one line
-    # below. Routed through the same redactor, bounded the same way.
-    echo "reindex POST: the jobId parser FAILED — its stderr follows (the response body was not read):"
-    node "$PARSER" --body "$POST_ERR_FILE" || true
-    echo ""
+  # So the three cases are now disclosed SEPARATELY, each saying only what is
+  # known, and each keyed on the fact that establishes it.
+  #
+  # ROUND 11 (both reviewers, independently). Round 10 keyed the first branch on
+  # `[ -s "$POST_ERR_FILE" ]` -- "the parser wrote bytes to stderr" -- while
+  # CLAIMING "the parser FAILED … the response body was not read". Those are
+  # different predicates, and the exit status that actually answers the question
+  # was thrown away by a `|| true` on the same line. Demonstrated on the
+  # UNMUTATED tree with nothing but an env var:
+  #
+  #   NODE_OPTIONS="--experimental-loader=data:text/javascript," ...
+  #   reindex POST: the jobId parser FAILED — its stderr follows (the response body was not read):
+  #   (node:89144) ExperimentalWarning: `--experimental-loader` may be removed …
+  #   reindex POST … -> HTTP 202 job=j-1        <-- exited 0, DID read the body, returned the id
+  #
+  # Three false assertions, contradicted one line later by this script's own
+  # output. Any node build that emits an ExperimentalWarning or a
+  # DeprecationWarning here flips it on with no code change, and `NODE_OPTIONS`
+  # is already set elsewhere in this repo's CI. R7, committed by the fix for R7
+  # -- the same move round 9 made, which is why the predicate is now the status.
+  PRC=0
+  POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE") || PRC=$?
+  if [ "$PRC" -ne 0 ]; then
+    echo "reindex POST: the jobId parser EXITED $PRC — the response body was not read. Its stderr:"
+    _dump_redacted "$POST_ERR_FILE"
+  elif [ -s "$POST_ERR_FILE" ]; then
+    # It SUCCEEDED and wrote to stderr. Warnings live here. Say only that, and
+    # say that the id below is still good -- the round-10 wording claimed the
+    # opposite of both.
+    echo "reindex POST: the jobId parser exited 0 but wrote to stderr; the id below is still valid. Its stderr:"
+    _dump_redacted "$POST_ERR_FILE"
   elif [ -z "$POST_JOB_ID" ]; then
     # Parser ran cleanly and found nothing. Say that, and nothing more: a body
     # with no `jobId` is normal on an edge refusal, and asserting a cause here
@@ -295,8 +345,7 @@ do_post() {
   # Actions log. Measured in the round-9 correlation test before this changed.
   # Redaction happens in `$PARSER` (redact THEN truncate; see its docblock), so
   # there is still exactly one definition of what a credential looks like.
-  node "$PARSER" --body "$POST_BODY_FILE" || true
-  echo ""
+  _dump_redacted "$POST_BODY_FILE"
 }
 
 # ── ONE GET, PARSED ONCE ────────────────────────────────────────────────────
@@ -335,7 +384,18 @@ get_status() {
   # redaction regex in that module — two copies of a security control, which is
   # exactly the drift the module's own docblock claimed to prevent. See
   # `parse-reindex-poll.mjs` for why it moved.
-  STATES=$(node "$PARSER" "$POLL_BODY_FILE")
+  # STDERR CAPTURED, NOT PUBLISHED. Round 11 (reviewer 2, S2): the POST-side
+  # invocation captures and redacts its parser's stderr while THIS one did
+  # neither, so a parser that cannot start wrote node's raw diagnostic straight
+  # to a PUBLIC Actions log -- once per poll, up to 60 times. The round-10
+  # comment claimed the boundary was closed on this file; it covered one of the
+  # two invocations. Disclosed ONCE, on the first poll that hits it, because 60
+  # copies of the same traceback is not 60 times the information.
+  STATES=$(node "$PARSER" "$POLL_BODY_FILE" 2> "$REDACT_ERR_FILE") || true
+  if [ -s "$REDACT_ERR_FILE" ] && [ "${POLL_PARSER_STDERR_SEEN:-}" != "true" ]; then
+    POLL_PARSER_STDERR_SEEN=true
+    echo "poll: the poll parser wrote $(wc -c < "$REDACT_ERR_FILE" | tr -d ' ') byte(s) to stderr; WITHHELD rather than published raw (it may be the redactor itself). Fields below read 'unknown' if it could not parse."
+  fi
   # Seven fields. Read positionally into named vars -- `${STATES%%|*}` style
   # trimming does not extend past two fields. `le` is placed second-to-last
   # rather than last so a truncated error cannot swallow the jobId.

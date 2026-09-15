@@ -1226,6 +1226,86 @@ test('#4498 round 9 — the two sanitizers agree on a REDACTED id too, not only 
   );
 });
 
+test('#4498 round 11 — a parser that exits 0 with a WARNING on stderr is NOT reported as a failure', async () => {
+  // ROUND 11, found INDEPENDENTLY BY BOTH REVIEWERS. Round 10 keyed its first
+  // branch on `[ -s "$POST_ERR_FILE" ]` — "the parser wrote bytes to stderr" —
+  // and claimed "the parser FAILED … the response body was not read". Those are
+  // different predicates, and the exit status that answers the question was
+  // discarded by a `|| true` on the same line.
+  //
+  // No source mutation is needed to prove it. `NODE_OPTIONS` alone makes node
+  // emit an ExperimentalWarning to stderr while exiting 0 and returning the id,
+  // so the round-10 wording produced three false assertions contradicted one
+  // line later by the script's own `job=` output. Any node build that starts
+  // warning here flips it on with no code change.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-warn-1' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        NODE_OPTIONS: '--experimental-loader=data:text/javascript,',
+      });
+      const out = res.stdout + res.stderr;
+      // It succeeded, so it must NOT be called a failure...
+      assert.doesNotMatch(out, /the jobId parser EXITED/, out);
+      assert.doesNotMatch(out, /the response body was not read/, out);
+      // ...the stderr is still disclosed, saying only what is true...
+      assert.match(out, /exited 0 but wrote to stderr; the id below is still valid/, out);
+      // ...and the id it returned is USED, which is the half that makes the
+      // round-10 wording actively misleading rather than merely wrong.
+      assert.match(out, /-> HTTP 202 job=j-warn-1/, out);
+    },
+  );
+});
+
+test('#4498 round 11 — a parser that CANNOT START is named as such, and its bytes are WITHHELD rather than published raw', async () => {
+  // ROUND 11, the second half of the same finding. Round 10 dumped the stderr
+  // with `node "$PARSER" --body` — the same module the branch had just declared
+  // broken — so on the ONE path the branch exists for, the dump printed nothing
+  // and "its stderr follows" was false. Worse, that invocation did not redirect
+  // its OWN stderr, so node's raw diagnostic reached the public log anyway:
+  // N7's shape re-instantiated by the statement doing the sanitizing.
+  //
+  // `--require` of a missing module makes node fail to start, so BOTH the parse
+  // and the redactor fail the same way — which is exactly the condition that
+  // has to fail closed. A bare module name, not a path: `--require=/some/path`
+  // gets MSYS path-converted on Windows and then split on the space in
+  // "C:/Program Files", so the test ends up asserting about a different error
+  // than it meant to. Measured while writing this.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-dead' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        NODE_OPTIONS: '--require=nonexistent-module-xyz',
+      });
+      const out = res.stdout + res.stderr;
+      // Named for what it is, with the status rather than a proxy for it.
+      assert.match(out, /the jobId parser EXITED \d+/, out);
+      // FAILS CLOSED: bytes withheld, and the withholding itself disclosed.
+      assert.match(out, /WITHHELD rather than published raw/, out);
+      // The round-10 claim that is now false must not reappear.
+      assert.doesNotMatch(out, /its stderr follows/, out);
+
+      // SCOPE, STATED HONESTLY. This asserts that the PARSER's stderr is not
+      // published raw — the two sites round 11 fixes (`do_post` and the poll
+      // loop). It does NOT assert that the log is free of node tracebacks,
+      // because `NODE_OPTIONS` breaks EVERY node invocation, including the
+      // three `node "$CLASSIFIER"` calls, which are still unredirected.
+      //
+      // That is a real third site of the same shape and it is disclosed rather
+      // than quietly fixed: the classifier emits its annotations on STDOUT and
+      // writes nothing to stderr by design (measured: zero
+      // `process.stderr.write` / `console.error` in that module), so bytes
+      // landing there mean node itself crashed — but two of its three call
+      // sites sit inside control flow whose exit status decides a verdict, and
+      // restructuring them belongs in its own change, not a rider on an R7 fix.
+      // Under a globally-broken node the parser is silent and the classifier
+      // is not; that asymmetry is the finding, and it is written down.
+    },
+  );
+});
+
 test('#4498 round 10 — a POST body with no jobId DISCLOSES that, and claims nothing about why', async () => {
   // ROUND 10 REVIEW, FINDING N3. The round-9 disclosure block claimed "the
   // failure is now visible rather than silent". It was not. `postJobId` catches
