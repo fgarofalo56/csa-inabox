@@ -2207,6 +2207,161 @@ def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | No
     return ids, int(counted.group(1))
 
 
+#: ---------------------------------------------------------------------------
+#: THE RUNNER'S THREE DECISIONS, EXTRACTED SO THEY CAN BE MEASURED.
+#:
+#: ROUND 15, from an independent reviewer who built the only instrument that can
+#: see this file: a byte copy of `tools/drain` under `temp/`, one hand mutation
+#: of THIS module per run, and the ordinary suite over it. Fifteen mutations of
+#: the runner; **fourteen SURVIVED**. The one kill was `_clean_env`'s
+#: `PYTEST_ADDOPTS` strip -- round 13's own fix, which has a test.
+#:
+#: That is the whole finding, and it is not about any single line: the runner's
+#: HELPERS are instrumented (`_reports_a_failure`, `_collected`,
+#: `_skipped_nodeids`, `digest_tree` all have tests) and the runner's DECISIONS
+#: are not. `main()` is called by nothing but `__main__`, so every refusal, the
+#: scoring conjunction and the exit rule were unreachable from any test. Arms
+#: that SURVIVED included "any non-zero rc is a kill", "a survivor is counted as
+#: a kill", "no arm is ever run", "the population gate is off" and "exit code
+#: always zero" -- i.e. the sentences this package's receipts are quoted on.
+#:
+#: The fix is not more prose. It is to move each decision OUT of `main()` into a
+#: pure function with no I/O, so a test can state the input and read the verdict.
+#: `main()` keeps the printing and the subprocesses; these three keep the
+#: judgement.
+
+
+def _score(returncode: int, stdout: str) -> str:
+    """One arm's outcome: 'killed', 'survived' or 'not-evaluated'.
+
+    A KILL IS rc=1 **AND** A PYTEST FAILURE LINE **AND** NO ERROR LINE. Each
+    conjunct is load-bearing and each was wrong at some point:
+
+    - rc alone scored a `SyntaxError` collection crash (rc=2, suite never ran)
+      as a kill, beside 106 real ones;
+    - the failure line alone once keyed on the bare string `AssertionError`,
+      which is TRACEBACK vocabulary that a collection ERROR prints too, so a
+      run with rc=1, `1 error` and ZERO failed read as a kill;
+    - dropping the error conjunct re-opens exactly that.
+
+    `rc == 0` is a survivor regardless of what the output says: a suite that
+    exited clean did not kill the arm, and no marker changes that.
+
+    Everything else is NOT-EVALUATED, which is deliberately weaker than "the
+    suite failed to run" -- rc=2 is a collection error where that is true, but
+    rc=1 with `1 error` is a fixture raising at RUNTIME, where the suite did
+    run. Asserting the stronger claim is the R7 error this package spends its
+    budget on.
+    """
+    if returncode == 1 and _reports_a_failure(stdout) and not _reports_an_error(stdout):
+        return "killed"
+    if returncode == 0:
+        return "survived"
+    return "not-evaluated"
+
+
+def _exit_code(
+    *,
+    killed: int,
+    survived: int,
+    skipped: int,
+    errored: int,
+    total: int,
+    tree_intact: bool,
+) -> tuple[int, str]:
+    """The run's exit status, and the sentence that justifies it.
+
+    Ordered most-fundamental first, because each later question is meaningless
+    if an earlier one fails. An EMPTY matrix is checked before the partition:
+    `ARMS[:0]` produced `killed=0 survived=0 skipped=0 errored=0 of 0 arms` and
+    exited 0 -- green over nothing, the `steps=0` shape this repo refuses
+    everywhere else.
+
+    `killed != total` is the LAST question and it is asked ONCE. An earlier
+    draft asked `survived or skipped or errored` and then `killed != total`
+    separately, on a reviewer's wording. Measured: the second was an EQUIVALENT
+    MUTANT -- with the partition identity already checked above, `scored ==
+    total` and zero survivors together imply `killed == total` arithmetically,
+    so disabling it changed no output for any input and no test could kill it.
+    An un-killable arm is evidence about the arm. The two are one check now:
+    reachable, and killed by a mutation in either direction.
+    """
+    scored = killed + survived + skipped + errored
+    if total == 0:
+        return 1, ("the matrix is EMPTY, and an empty matrix cannot be evidence "
+                   "about anything")
+    if scored != total:
+        return 1, (f"scored {scored} arms but the matrix declares {total}. A run "
+                   "that did not evaluate every arm is not a run, whatever its "
+                   "buckets say.")
+    if not tree_intact:
+        return 1, ("the TRACKED TREE CHANGED during the run - an arm wrote outside "
+                   "its sandbox, so no result from this run can be trusted")
+    if killed != total:
+        return 1, (f"not every arm died: killed={killed} of {total} "
+                   f"(survived={survived} skipped={skipped} errored={errored})")
+    return 0, f"all {total} arms KILLED, tracked tree untouched"
+
+
+def _preamble_verdict(
+    *,
+    control_rc: int,
+    skipped_ids: list[str] | tuple[str, ...] | None,
+    skipped_count: int | None,
+    here_n: int | None,
+    there_n: int | None,
+    with_meta_rc: int,
+    selected_with: int,
+    selected_without: int,
+) -> tuple[bool, str]:
+    """Do the four preamble gates admit this run? (ok, reason-if-not).
+
+    Every one of these refusals was unreachable from a test: a reviewer turned
+    each gate OFF in turn -- skip-names, skip-count, population, control-rc --
+    and the suite stayed green on all four. The control-rc gate had no coverage
+    of any kind, anywhere.
+
+    `skipped_ids is None` means the skip set could not be READ, which is not the
+    same as it being empty, and is refused separately for that reason.
+
+    The with-meta gate carries its own diagnosis rather than folding into the
+    deselect one: a BROKEN ANCHOR -- the ordinary event on a refactor -- makes
+    the with-meta run RED, and the two were once a single message that named
+    "the nodeid is wrong" about a nodeid that was correct.
+    """
+    if control_rc != 0:
+        return False, "control is not green; nothing below would mean anything"
+    if skipped_ids is None or skipped_count is None:
+        return False, ("could not read the sandbox skip set, so a guard that "
+                       "reverted to SKIP would be invisible")
+    if sorted(skipped_ids) != sorted(EXPECTED_SANDBOX_SKIPS):
+        return False, (f"sandbox skips are {sorted(skipped_ids)}, expected "
+                       f"{sorted(EXPECTED_SANDBOX_SKIPS)}. A test that skips here "
+                       "cannot kill anything, so every arm it guards would score "
+                       "KILLED on the other tests regardless of the mutation.")
+    if skipped_count != len(EXPECTED_SANDBOX_SKIPS):
+        return False, (f"pytest reports {skipped_count} skipped but only "
+                       f"{len(skipped_ids)} are attributable to a test id. The "
+                       "difference is a module- or collection-level skip, which "
+                       "removes tests from every arm without naming one.")
+    if here_n is None or there_n is None:
+        return False, ("could not collect one of the two trees, so the sandbox "
+                       "population cannot be shown to match the repo's")
+    if here_n != there_n:
+        return False, (f"the sandbox collects {there_n} tests and this checkout "
+                       f"collects {here_n}. Tests that VANISH do not skip, so "
+                       "neither the skip names nor the skip count can see them, "
+                       "and every arm would then be scored against a smaller suite.")
+    if with_meta_rc != 0:
+        return False, ("the unmutated suite is RED with the anchor meta-test "
+                       "SELECTED. An arm's needle no longer matches the source; "
+                       "the nodeid is not implicated.")
+    if selected_with != selected_without + 1:
+        return False, ("the deselect did not remove exactly one passing test, so "
+                       "the nodeid is wrong")
+    return True, ""
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -2320,10 +2475,6 @@ def main() -> int:
                                  env=_clean_env())
         tail = (control.stdout.strip().splitlines() or [""])[-1]
         print(f"CONTROL rc={control.returncode}  {tail[:70]}")
-        if control.returncode != 0:
-            print("REFUSING -- control is not green; nothing below would mean anything")
-            print(control.stdout[-3000:])
-            return 2
         # AND THE SKIP SET IS PINNED. Round 9, found by an independent reviewer:
         # the control asserted rc and the deselect delta and nothing else, so a
         # test that started SKIPPING was invisible -- it is not a failure, and it
@@ -2337,28 +2488,11 @@ def main() -> int:
         # on `_repo_root()` so they stay offline in the sandbox. A THIRD skip
         # means a guard has silently stopped guarding.
         skips = _skipped_nodeids(sandbox, cmd)
-        if skips is None:
-            print("REFUSING -- could not read the sandbox skip set, so a guard "
-                  "that reverted to SKIP would be invisible")
-            return 2
-        skipped_ids, skipped_count = skips
-        if sorted(skipped_ids) != sorted(EXPECTED_SANDBOX_SKIPS):
-            print(f"REFUSING -- sandbox skips are {sorted(skipped_ids)}, expected "
-                  f"{sorted(EXPECTED_SANDBOX_SKIPS)}. A test that skips here cannot "
-                  "kill anything, so every arm it guards would score KILLED on the "
-                  "other tests regardless of the mutation.")
-            return 2
-        # AND THE COUNT MUST AGREE WITH THE NAMES. Round 10: a module-level skip
-        # is attributed to NO test id, so the names alone read as expected while
-        # 56 tests silently stopped running. pytest's own summary is the only
-        # place that discrepancy shows.
-        if skipped_count != len(EXPECTED_SANDBOX_SKIPS):
-            print(f"REFUSING -- pytest reports {skipped_count} skipped but only "
-                  f"{len(skipped_ids)} are attributable to a test id. The "
-                  "difference is a module- or collection-level skip, which "
-                  "removes tests from every arm without naming one.")
-            return 2
-        print(f"SKIPS     {skipped_count} pinned: {', '.join(sorted(skipped_ids))}")
+        skipped_ids, skipped_count = skips if skips is not None else (None, None)
+        if skipped_ids is not None:
+            print(f"SKIPS     {skipped_count} pinned: {', '.join(sorted(skipped_ids))}")
+        else:
+            print("SKIPS     UNREADABLE")
         # AND THE POPULATION ITSELF. Round 11 BLOCKER: round 10 pinned the SHAPE
         # of a disappearance (a skip) and not the POPULATION. An independent
         # reviewer deleted `__tests__/test_merge_gate.py` from the sandbox copy:
@@ -2388,17 +2522,9 @@ def main() -> int:
         # tests is not the suite this matrix claims to have run.
         here_n = _collected(HERE / "__tests__", HERE)
         there_n = _collected(sandbox / "__tests__", sandbox)
-        if here_n is None or there_n is None:
-            print("REFUSING -- could not collect one of the two trees, so the "
-                  "sandbox population cannot be shown to match the repo's")
-            return 2
-        if here_n != there_n:
-            print(f"REFUSING -- the sandbox collects {there_n} tests and this "
-                  f"checkout collects {here_n}. Tests that VANISH do not skip, "
-                  "so neither the skip names nor the skip count can see them, "
-                  "and every arm would then be scored against a smaller suite.")
-            return 2
-        print(f"POPULATION {there_n} collected, matching this checkout")
+        # NEUTRAL WORDING. This used to print "matching this checkout" BEFORE the
+        # comparison had been made, which is a claim rather than a reading.
+        print(f"POPULATION here={here_n} there={there_n}")
         # ...and the DESELECT must have removed exactly one test. pytest accepts
         # a nodeid that matches nothing in silence, so a typo here would put the
         # meta-test back in the decision path and every arm would score KILLED
@@ -2414,23 +2540,39 @@ def main() -> int:
         selected_without = _passed_count(control.stdout)
         print(f"DESELECT  {selected_with} -> {selected_without} tests "
               f"(the anchor meta-test must not decide an arm)")
-        # TWO CONDITIONS, TWO DIAGNOSES. They were one message, and it named
-        # the WRONG cause for the commoner of the two: a BROKEN ANCHOR -- the
-        # ordinary event on a refactor, which this package records happening
-        # four times in one commit -- makes the with-meta run RED, and the run
-        # then announced "the nodeid is wrong" about a nodeid that was correct,
-        # while discarding the one output carrying the real answer. R7, in the
-        # file whose sibling declares "never discarding stderr".
-        if with_meta.returncode != 0:
-            print("REFUSING -- the unmutated suite is RED with the anchor "
-                  "meta-test SELECTED. An arm's needle no longer matches the "
-                  "source; the nodeid is not implicated. The failure names the "
-                  "arm:")
-            print(with_meta.stdout[-2000:])
-            return 2
-        if selected_with != selected_without + 1:
-            print("REFUSING -- the deselect did not remove exactly one passing test, "
-                  f"so the nodeid is wrong: {deselect}")
+        # ONE DECISION, IN ONE TESTABLE PLACE. Every refusal above used to be an
+        # `if` in `main()`, and `main()` is called by nothing but `__main__` --
+        # so a reviewer turned each of the four gates OFF in turn and the suite
+        # stayed green on all four. The control-rc gate had no coverage of any
+        # kind. The conditions now live in `_preamble_verdict`, which is pure and
+        # tested per refusal; what stays here is the I/O and the extra dump.
+        #
+        # The gathering is no longer short-circuited, so a red control costs one
+        # extra suite run (~6s against a 22-minute matrix) before it refuses.
+        # That is the price of having the decision in one place instead of four,
+        # and the refusal ORDER inside `_preamble_verdict` still reports the
+        # control first, so the diagnosis a reader sees is unchanged.
+        ok, why = _preamble_verdict(
+            control_rc=control.returncode,
+            skipped_ids=skipped_ids,
+            skipped_count=skipped_count,
+            here_n=here_n,
+            there_n=there_n,
+            with_meta_rc=with_meta.returncode,
+            selected_with=selected_with,
+            selected_without=selected_without,
+        )
+        if not ok:
+            print(f"REFUSING -- {why}")
+            # The output carrying the real answer, for the two gates that have
+            # one. Discarding it was itself an R7 defect in an earlier round.
+            if control.returncode != 0:
+                print(control.stdout[-3000:])
+            elif with_meta.returncode != 0:
+                print("The failure names the arm:")
+                print(with_meta.stdout[-2000:])
+            elif selected_with != selected_without + 1:
+                print(f"the deselect nodeid is: {deselect}")
             return 2
 
         killed = survived = skipped = errored = 0
@@ -2474,15 +2616,11 @@ def main() -> int:
             # that never decided the arm. An independent reviewer measured it.
             # A mutant that breaks the instrument has not been caught by it.
             errored_out = _reports_an_error(run.stdout)
-            failed_a_test = (
-                run.returncode == 1
-                and _reports_a_failure(run.stdout)
-                and not errored_out
-            )
-            if failed_a_test:
+            outcome = _score(run.returncode, run.stdout)
+            if outcome == "killed":
                 print(f"  KILLED   {name:<72} rc={run.returncode}")
                 killed += 1
-            elif run.returncode == 0:
+            elif outcome == "survived":
                 print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
                 survived += 1
             else:
@@ -2494,7 +2632,8 @@ def main() -> int:
                 # budget on.
                 tail = (run.stdout.strip().splitlines() or [""])[-1]
                 print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL: "
-                      f"exited non-zero with no pytest failure line: {tail[:60]}")
+                      f"exited non-zero with no pytest failure line: {tail[:60]}"
+                      f"{' (an ERROR line was reported)' if errored_out else ''}")
                 errored += 1
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
@@ -2504,21 +2643,13 @@ def main() -> int:
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
           f"of {len(ARMS)} arms")
-    # EVERY ARM MUST HAVE BEEN SCORED. Round 14: this did not check that the
-    # buckets ADD UP, so `ARMS[:0]` exited 0 over zero arms -- a matrix that
-    # ran nothing reporting success. `test.yml` claims this enforcement; the
-    # code only implied it.
-    scored = killed + survived + skipped + errored
-    if scored != len(ARMS):
-        print(f"REFUSING -- scored {scored} arms but the matrix declares "
-              f"{len(ARMS)}. A run that did not evaluate every arm is not a "
-              "run, whatever its buckets say.")
-        return 1
-    if not ARMS:
-        print("REFUSING -- the matrix is EMPTY, and an empty matrix cannot be "
-              "evidence about anything")
-        return 1
-    return 1 if (survived or skipped or errored or before != after) else 0
+    code, why = _exit_code(
+        killed=killed, survived=survived, skipped=skipped, errored=errored,
+        total=len(ARMS), tree_intact=(before == after),
+    )
+    if code != 0:
+        print(f"REFUSING -- {why}")
+    return code
 
 
 if __name__ == "__main__":

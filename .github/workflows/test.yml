@@ -160,16 +160,23 @@ jobs:
     #   225 arm executions, 220 distinct ids, EVERY ONE killed, zero survivors
     #   5.48 s/arm -- i.e. exactly the CONTROL suite runtime, because each arm
     #   re-runs the whole suite
-    #   240 arms are declared; it reached 220 and ran out of clock
+    #   247 arms are declared; it reached 220 and ran out of clock
     #
-    #   240 x 5.48s = 21.9 min matrix + 9.2 min setup = 31.1 min vs a 30 wall
+    #   247 x 5.48s = 22.6 min matrix + 9.2 min setup = 31.8 min vs a 30 wall
     #
-    # ~4% over, which is the same coin-flip margin the 15-minute ceiling died
+    # THAT ARM COUNT WAS FIRST WRITTEN AS 240 AND WAS WRONG -- it came from a
+    # grep over the arm literals, which undercounts. `len(ARMS)` is the only
+    # authority and it reads 247 at this head (an independent reviewer measured
+    # 243 at d39907a5421, and four arms have landed since; both are right at
+    # their own sha). Corrected here, in the comment that exists because a
+    # number in prose nothing enforces is how this job ran out of clock twice.
+    #
+    # ~6% over, which is the same coin-flip margin the 15-minute ceiling died
     # at. The guard is WORKING -- 220/220 killed. What ran out was the budget,
     # and a job that exceeds `timeout-minutes` reports as `cancelled` rather
     # than `failure`, so it reads as a flake three times over.
     #
-    # 45 is chosen for HEADROOM, not for fit: ~45% above today's 31.1 min, so
+    # 45 is chosen for HEADROOM, not for fit: ~41% above today's 31.8 min, so
     # the next arm or two does not re-open this. Do not treat it as a ceiling to
     # grow into. The real fix is to stop paying a whole suite per arm -- most
     # arms are killed by a handful of named assertions -- and that is tracked

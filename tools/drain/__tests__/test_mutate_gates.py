@@ -420,3 +420,179 @@ def test_the_clean_env_strips_both_variables(monkeypatch):
     assert "PYTEST_ADDOPTS" not in env
     assert "PYTEST_PLUGINS" not in env
     assert "PATH" in env, "it must still be a usable environment"
+
+
+# ---------------------------------------------------------------------------
+# THE RUNNER'S DECISIONS (round 15)
+#
+# An independent reviewer built the only instrument that can see this file -- a
+# byte copy of `tools/drain` under `temp/`, one hand mutation of the runner per
+# run, the ordinary suite over it -- and ran fifteen mutations of
+# `mutate_gates.py`. FOURTEEN SURVIVED. The single kill was `_clean_env`'s
+# `PYTEST_ADDOPTS` strip, i.e. the one runner behaviour that already had a test.
+#
+# Among the survivors: "any non-zero rc is a kill", "a survivor is counted as a
+# kill", "no arm is ever run", "the population gate is off", "the control-rc
+# gate is off", "exit code always zero", "the digest hashes nothing". Those are
+# the sentences every round of this issue has been closed on.
+#
+# The cause was structural, not an oversight: the decisions lived inside
+# `main()`, and `main()` is called by nothing but `__main__`. These tests exist
+# because the decisions now live in three pure functions that a test can reach.
+# One test per refusal -- a gate with no negative case is a gate nobody has
+# seen fail.
+
+
+def test_the_scorer_separates_a_kill_from_a_suite_that_never_decided():
+    """The four shapes a run can take, and only the second is a kill.
+
+    The third and fourth are the ones that have actually gone wrong here. rc=2
+    is a collection crash -- the suite never ran, so the arm was not evaluated,
+    and scoring it KILLED is how a `SyntaxError` arm once sat among 106 real
+    kills. rc=1 with `1 error` and ZERO failed is a fixture raising at RUNTIME:
+    the suite ran but the arm still was not decided, and it read as a kill
+    because the marker list carried the bare traceback word `AssertionError`.
+    """
+    assert mutate_gates._score(0, "425 passed in 20.1s\n") == "survived"
+    assert mutate_gates._score(
+        1, "FAILED __tests__/test_f.py::test_bad - assert 0\n1 failed, 424 passed in 9.9s\n"
+    ) == "killed"
+    assert mutate_gates._score(
+        2, "E   SyntaxError: invalid syntax\n1 error during collection\n"
+    ) == "not-evaluated"
+    # The measured misclassification: a traceback word with no failure summary.
+    assert mutate_gates._score(
+        1, "E       AssertionError: boom\n1 error in 1.83s\n"
+    ) == "not-evaluated", "a run that errored decided nothing, whatever its traceback says"
+
+
+def test_the_scorer_does_not_call_a_clean_exit_a_kill_on_output_alone():
+    """rc=0 is a survivor no matter what the text contains.
+
+    Guards the arm that reverted the conjunction to `rc != 0`, and the one that
+    dropped the output half. Both SURVIVED the suite before this existed.
+    """
+    assert mutate_gates._score(0, "1 failed, 424 passed\n") == "survived"
+
+
+def test_the_exit_code_refuses_a_matrix_that_evaluated_nothing():
+    """`ARMS[:0]` printed `killed=0 ... of 0 arms` and exited 0 -- green over
+    nothing, which is the `steps=0` shape this repo refuses everywhere else."""
+    code, why = mutate_gates._exit_code(
+        killed=0, survived=0, skipped=0, errored=0, total=0, tree_intact=True
+    )
+    assert code == 1
+    assert "EMPTY" in why
+
+
+def test_the_exit_code_refuses_when_the_buckets_do_not_add_up():
+    """The partition identity, asserted rather than implied."""
+    code, why = mutate_gates._exit_code(
+        killed=5, survived=0, skipped=0, errored=0, total=9, tree_intact=True
+    )
+    assert code == 1
+    assert "scored 5" in why and "9" in why
+
+
+def test_the_exit_code_refuses_a_tree_that_changed_under_the_run():
+    """`tracked tree untouched` is the sentence this issue has been closed on
+    fourteen times, and it had no negative case anywhere: nothing in a run
+    writes to `HERE`, so `before != after` was never exhibited failing."""
+    code, why = mutate_gates._exit_code(
+        killed=9, survived=0, skipped=0, errored=0, total=9, tree_intact=False
+    )
+    assert code == 1
+    assert "TRACKED TREE CHANGED" in why
+
+
+def test_the_exit_code_refuses_any_arm_that_did_not_die():
+    """One check, not two. An earlier draft asked `survived or skipped or
+    errored` and then `killed != total` separately; the second was an EQUIVALENT
+    MUTANT -- with the partition identity already enforced above it, no input
+    distinguishes them -- and a mutation run proved no test could kill it.
+    """
+    for kwargs in (
+        dict(killed=8, survived=1, skipped=0, errored=0),
+        dict(killed=8, survived=0, skipped=1, errored=0),
+        dict(killed=8, survived=0, skipped=0, errored=1),
+    ):
+        code, why = mutate_gates._exit_code(total=9, tree_intact=True, **kwargs)
+        assert code == 1, kwargs
+        assert "not every arm died" in why
+        assert "killed=8 of 9" in why, "the breakdown must survive the merge"
+
+
+def test_the_exit_code_is_zero_only_when_every_arm_died_over_an_intact_tree():
+    code, why = mutate_gates._exit_code(
+        killed=9, survived=0, skipped=0, errored=0, total=9, tree_intact=True
+    )
+    assert code == 0
+    assert "all 9 arms KILLED" in why
+
+
+def _preamble_kwargs(**overrides):
+    """A passing preamble, so each test below changes exactly one thing."""
+    base = dict(
+        control_rc=0,
+        skipped_ids=list(mutate_gates.EXPECTED_SANDBOX_SKIPS),
+        skipped_count=len(mutate_gates.EXPECTED_SANDBOX_SKIPS),
+        here_n=425,
+        there_n=425,
+        with_meta_rc=0,
+        selected_with=422,
+        selected_without=421,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_the_preamble_admits_a_clean_run():
+    """The positive control. Without it, every refusal below could be produced
+    by a function that refuses everything."""
+    ok, why = mutate_gates._preamble_verdict(**_preamble_kwargs())
+    assert ok is True, why
+    assert why == ""
+
+
+@pytest.mark.parametrize(
+    "overrides, needle",
+    [
+        (dict(control_rc=1), "control is not green"),
+        (dict(skipped_ids=None, skipped_count=None), "could not read the sandbox skip set"),
+        (dict(skipped_ids=["some_other.py::test_x"]), "sandbox skips are"),
+        (dict(skipped_count=57), "attributable to a test id"),
+        (dict(here_n=None), "could not collect one of the two trees"),
+        (dict(there_n=None), "could not collect one of the two trees"),
+        (dict(there_n=366), "Tests that VANISH do not skip"),
+        (dict(with_meta_rc=1), "the nodeid is not implicated"),
+        (dict(selected_with=421), "did not remove exactly one passing test"),
+    ],
+)
+def test_each_preamble_gate_has_a_negative_case(overrides, needle):
+    """One row per refusal. A reviewer turned four of these gates OFF in turn --
+    skip-names, skip-count, population and control-rc -- and the suite stayed
+    green on all four, because the conditions were `if`s inside `main()` and
+    nothing calls `main()`.
+
+    `control_rc` is the one that had no coverage of any kind, anywhere.
+    """
+    ok, why = mutate_gates._preamble_verdict(**_preamble_kwargs(**overrides))
+    assert ok is False, f"{overrides} should have been refused"
+    assert needle in why, f"{overrides} refused with the wrong reason: {why}"
+
+
+def test_the_passed_count_sentinel_is_minus_one_and_not_zero():
+    """The -1 is load-bearing: the deselect gate asks
+    `selected_with == selected_without + 1`, and two summary-less runs both
+    reading 0 would satisfy nothing while two reading -1 cannot accidentally
+    satisfy it either. 0 would make `1 == 0 + 1` true against a run that never
+    reported a count.
+    """
+    assert mutate_gates._passed_count("no summary line here at all\n") == -1
+    assert mutate_gates._passed_count("421 passed in 9.9s\n") == 421
+    # And the gate it protects cannot be satisfied by two unreadable runs.
+    ok, why = mutate_gates._preamble_verdict(
+        **_preamble_kwargs(selected_with=-1, selected_without=-1)
+    )
+    assert ok is False and "did not remove exactly one passing test" in why
+
