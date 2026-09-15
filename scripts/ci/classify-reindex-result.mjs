@@ -664,20 +664,22 @@ function statusCodesOnly(value) {
  * `clean()` strips `[\r\n|]+` for exactly this reason; this side did not. One
  * boundary closes it for every arm at once rather than per-interpolation.
  *
- * The escape is `%0A`, as in `deploy-retry.mjs:606-611`. On the `::level::` arm
+ * The escape is `%0A`, as in `deploy-retry.mjs`'s `formatAnnotation`. A SYMBOL,
+ * not a line range: a line number in another file is a claim this file cannot
+ * keep true, and #4504 was opened because one went stale exactly this way. On
+ * the `::level::` arm
  * the runner DECODES it, so a multi-line remediation still renders as one
  * multi-line annotation. On the bare `notice` arm nothing decodes it and it
  * renders literally -- stated rather than glossed: a visible `%0A` is the
  * honest outcome, and it is still preferable to a raw newline, which would let
  * the remote string open a line this script did not write.
  *
- * WHERE THIS DELIBERATELY DIVERGES FROM THAT PRECEDENT (round 7). This function
- * also escapes `%` to `%25` on the command arm; `deploy-retry.mjs:610` does not,
- * and a repo-wide `grep -rn "%25" scripts/` returns ZERO hits. That gap is
- * estate-wide and pre-existing, and it is NOT fixed here because
- * `deploy-retry.mjs` is not in this change's declared files -- it is filed
- * instead. Copying a precedent's bug to stay consistent with it would be the
- * wrong reading of "match the surrounding code".
+ * WHERE THIS GOES BEYOND A BARE TERMINATOR ESCAPE (round 7, revised round 8).
+ * This function also escapes `%` to `%25`, on the command arm only. That is not
+ * cosmetic and it is not consistency with a sibling -- it is the whole of what
+ * makes the encoding INJECTIVE, and the argument for it belongs beside the code
+ * that performs it rather than in this header: see the comment above
+ * `const escaped` below, and the round-8 test that pins it.
  *
  * BYTES. `console.log(s)` writes `s` plus one `\n`, so the trailing newline
  * here is not decoration -- without it this would silently change the emission.

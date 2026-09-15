@@ -909,6 +909,23 @@ test('#4498 every line-break flavour collapses to exactly one %0A', () => {
   assert.equal(formatAnnotation('error', 'a\nb'), '::error::a%0Ab\n');
 });
 
+test('#4498 round 8 `%` is escaped FIRST, so the encoding is INJECTIVE', () => {
+  // TWO ordering mistakes, and they need DIFFERENT witnesses. Escaping `%`
+  // LAST turns `a\nb` into `a%250Ab` — the exact-equality assertions above
+  // already kill that. Not escaping `%` AT ALL is invisible to every one of
+  // them, because no fixture above contains a literal `%`, so they pass
+  // unchanged under that mutant. This one does not: without the escape the
+  // three characters `%0A` in a REMOTE string emerge byte-identical to a real
+  // newline. That cannot forge a command — the runner splits stdout into lines
+  // before it decodes — but it can still open a line break inside an annotation
+  // this script did not write, which is the claim the boundary exists to make
+  // false.
+  assert.equal(formatAnnotation('error', '%0A'), '::error::%250A\n');
+  assert.equal(formatAnnotation('error', '%25'), '::error::%2525\n');
+  // The bare arm has NO decoder, so escaping there would corrupt a real `%`.
+  assert.equal(formatAnnotation('notice', 'chunks 50% rebuilt'), 'chunks 50% rebuilt\n');
+});
+
 test('#4498 formatAnnotation redacts through the SHARED module, not a private copy', () => {
   // MUTATION-PROOF. Swap `redactSecrets` here for an identity function and this
   // goes RED. The fixture is the allowlisted #4498 literal — it decodes to an
