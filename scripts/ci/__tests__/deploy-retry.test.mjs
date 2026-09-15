@@ -876,7 +876,7 @@ test('MUTATION-VISIBLE — the ESCAPE is INJECTIVE: the runner decodes back to t
     //
     // WHY `redactedLine(message)` AND NOT `message`, WHICH IS THE ROUND-4
     // BLOCKER. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
-    // maps every GUID to `<guid>` deliberately. Comparing against the raw
+    // maps GUIDs IT MATCHES to `<guid>` deliberately. Comparing against the raw
     // message therefore asserts that redaction does not happen — so this line
     // went RED on CORRECT behaviour for any realistic ARM fixture, with a
     // message claiming "the runner sees something the caller did not send"

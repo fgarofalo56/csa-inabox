@@ -649,7 +649,7 @@ export function formatAnnotation(level, message) {
   //
   // "THE ESCAPE", NOT "THIS FUNCTION" — round 4 review, and the distinction is
   // not pedantry. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
-  // maps every GUID to `<guid>` on purpose, so the FUNCTION is many-to-one and
+  // maps GUIDs IT MATCHES to `<guid>` on purpose, so the FUNCTION is many-to-one and
   // provably not injective:
   //
   //   formatAnnotation('error','1111…-…-1111') === "::error::<guid>\n"
