@@ -38,16 +38,33 @@ import { pathToFileURL } from 'node:url';
 import { redactSecrets } from './redact-secrets.mjs';
 
 /**
- * EVERY field is stripped of the separator and of newlines, not just the error.
- * A pipe anywhere in any of them shifts every later field by one, and these
- * values come from a remote service — so "this field cannot contain a pipe" is
- * an assumption about data we do not control.
+ * THE BOUNDARY. Every field is redacted AND stripped of the separator, not just
+ * the error.
+ *
+ * ROUND 7 (review finding). Round 6 redacted exactly ONE of the seven fields --
+ * `lastRun.error` -- and let the other six through raw, while enrolling this file
+ * in `publication-surface-bypasses.test.mjs` with `parsePollFile` named as its
+ * boundary. The guard went green: it checks that a write crosses a function
+ * called a boundary, never that the boundary BOUNDS. Three credentials planted
+ * in `job.state`, `lastRun.outcome` and `lastRun.jobId` reached stdout, and
+ * `reindex-loom-docs.sh:535` prints two of those on the same line as the
+ * redacted one. The reasoning in the round-6 docblock below -- "whatever string
+ * the endpoint chose to store" -- was always true of every sibling field; it was
+ * applied to one of them.
+ *
+ * REDACT PER FIELD, NOT OVER THE JOIN. Redacting `fields.join('|')` would be a
+ * different bug: the rules in `redact-secrets.mjs` are bounded by `[^\s&;",]+`,
+ * and `|` is INSIDE that class, so a credential at the end of field N swallows
+ * the separator and eats field N+1 -- the field-shifting failure this function
+ * exists to prevent. Redaction happens per value, before the join, and the
+ * separator strip runs after it (`[redacted]` contains no pipe, so the order is
+ * safe in that direction).
  *
  * @param {unknown} v
  * @returns {string}
  */
 function clean(v) {
-  return String(v).replace(/[\r\n|]+/g, ' ');
+  return redactSecrets(String(v)).replace(/[\r\n|]+/g, ' ');
 }
 
 /**
@@ -75,7 +92,14 @@ export function pollFields(parsed) {
   // PUBLIC repo. A backend error quoting the request URL or a connection string
   // would publish the credential inside it, and no amount of caution on THIS
   // side changes what the remote decided to put in the string.
-  const le = lr && lr.error ? clean(redactSecrets(lr.error)).slice(0, 300) : '';
+  //
+  // This field is the only one that is TRUNCATED, so it redacts here as well as
+  // in `clean` — and it must, because the order matters in one direction only:
+  // redact THEN slice. Slicing first can cut a credential below the rule's
+  // length bound and leave a fragment that no longer matches, publishing the
+  // head of a key instead of `[redacted]`. Re-redacting in `clean` is a no-op
+  // (the rules are idempotent); slicing an unredacted value is not.
+  const le = lr && lr.error ? redactSecrets(String(lr.error)).slice(0, 300) : '';
   return [f, s, c, lo, lf, le, lj].map(clean);
 }
 

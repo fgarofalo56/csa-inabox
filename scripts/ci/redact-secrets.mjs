@@ -46,19 +46,30 @@ export function redactSecrets(value) {
     // Bounded by the separators that end a query param or a connection-string
     // segment, so only the VALUE is eaten and the key name survives.
     .replace(/(sig=|AccountKey=|SharedAccessKey=|password=|pwd=)[^\s&;",]+/gi, '$1[redacted]')
-    // An Azure Functions key, which only ever arrives as a query parameter.
-    // ANCHORED to `?` or `&` (#4498 round 6): unanchored, `(code=)` also matches
-    // the tail of `errorcode=`/`statuscode=`/`exitcode=`, so a long diagnostic
-    // token in any of those was being eaten as if it were a key. Length-bounded
-    // as well, so a `code=404` in an ordinary HTTP error stays readable --
-    // redacting that would cost diagnosis and buy nothing.
+    // An Azure Functions key. The problem this rule has to solve twice over:
+    // unanchored, `(code=)` also matches the TAIL of `errorcode=`/`statuscode=`/
+    // `exitcode=`, eating a long diagnostic token as if it were a key.
     //
-    // This is deliberately NARROWER than what it replaced, and the narrowing is
-    // the point rather than a side effect: a `code=` that is not in query-string
-    // position is not a Functions key, and this estate mints none. A key in some
-    // other position would pass through -- which is the standing disclaimer
-    // above, not a new hole opened here.
-    .replace(/([?&]code=)[A-Za-z0-9._~+/=-]{20,}/gi, '$1[redacted]')
+    // ROUND 7 CORRECTION. Round 6 solved that by anchoring to `[?&]`, i.e. by
+    // requiring query-string position. That was a REGRESSION, caught in review
+    // before it merged: it silently dropped redaction from `code=KEY`,
+    // ` code=KEY`, `(code=KEY)` and `AZURE_FUNC code=KEY` -- all four of which a
+    // remote service can put in an error string, and one of which is the exact
+    // shape this lane's own fixture uses (`403 Forbidden (AccountKey=...)`).
+    //
+    // Round 6 also justified the anchor in prose: "a `code=` that is not in
+    // query-string position is not a Functions key, and this estate mints none."
+    // RETRACTED. That is a universal about text a REMOTE service composes, not
+    // about URLs this estate builds, and it was never established. Per
+    // `deploy-integrity.md` R7 the code does not get to assert what it did not
+    // measure -- least of all to justify publishing more.
+    //
+    // The correct instrument is a LEFT BOUNDARY, not a required prefix: reject a
+    // preceding identifier character, which is what makes `errorcode=` different
+    // from `code=`, and say nothing about position. Length-bounded as before, so
+    // a `code=404` in an ordinary HTTP error stays readable -- redacting that
+    // would cost diagnosis and buy nothing.
+    .replace(/(?<![A-Za-z0-9_])(code=)[A-Za-z0-9._~+/=-]{20,}/gi, '$1[redacted]')
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]')
     // A JWT in any position, including one not introduced by `Bearer`.
     .replace(/eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g, '[redacted-jwt]');

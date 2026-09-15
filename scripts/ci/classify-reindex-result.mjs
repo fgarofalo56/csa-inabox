@@ -664,15 +664,30 @@ function statusCodesOnly(value) {
  * `clean()` strips `[\r\n|]+` for exactly this reason; this side did not. One
  * boundary closes it for every arm at once rather than per-interpolation.
  *
- * The escape is `%0A`, matching `deploy-retry.mjs:606-611`. On the `::level::`
- * arm the runner DECODES it, so a multi-line remediation still renders as one
+ * The escape is `%0A`, as in `deploy-retry.mjs:606-611`. On the `::level::` arm
+ * the runner DECODES it, so a multi-line remediation still renders as one
  * multi-line annotation. On the bare `notice` arm nothing decodes it and it
  * renders literally -- stated rather than glossed: a visible `%0A` is the
  * honest outcome, and it is still preferable to a raw newline, which would let
  * the remote string open a line this script did not write.
  *
+ * WHERE THIS DELIBERATELY DIVERGES FROM THAT PRECEDENT (round 7). This function
+ * also escapes `%` to `%25` on the command arm; `deploy-retry.mjs:610` does not,
+ * and a repo-wide `grep -rn "%25" scripts/` returns ZERO hits. That gap is
+ * estate-wide and pre-existing, and it is NOT fixed here because
+ * `deploy-retry.mjs` is not in this change's declared files -- it is filed
+ * instead. Copying a precedent's bug to stay consistent with it would be the
+ * wrong reading of "match the surrounding code".
+ *
  * BYTES. `console.log(s)` writes `s` plus one `\n`, so the trailing newline
  * here is not decoration -- without it this would silently change the emission.
+ * The match is byte-for-byte FOR STRING MESSAGES, which is the narrower claim
+ * round 7 substitutes for round 6's unqualified one: `console.log` applies
+ * `util.inspect` to a lone non-string argument, so it renders `null` as `null`,
+ * an object as `{ a: 1 }` and an `Error` as its full stack, where `String()`
+ * gives `null`, `[object Object]` and `Error: boom`. Every runtime arm passes a
+ * string, so nothing live differs -- but the claim had been broader than what
+ * was measured, and a claim is only as wide as its evidence.
  * `reindex-loom-docs.sh` never captures this stdout (`:319`, `:383`, `:669`
  * read only the exit code), so the shell cannot detect a format change either
  * way; that makes the byte-for-byte match a property to PIN in a test rather
@@ -683,12 +698,40 @@ function statusCodesOnly(value) {
  * @returns {string} exactly one output line, newline included
  */
 export function formatAnnotation(level, message) {
+  // `String()` FIRST, before redaction (round 7). `deploy-retry.mjs:595-600`
+  // carries this guard and states why in its own words -- so that a future arm
+  // "cannot turn a classified failure into a blank `::error::`". Round 6 named
+  // that function as its model and dropped the guard: `redactSecrets` coerces
+  // `null`/`undefined` to `''`, so `::error::\n` was reachable. A blank
+  // annotation is a worse failure than the one it was reporting.
+  const safe = redactSecrets(String(message));
   // Redact BEFORE escaping: the rules in `redact-secrets.mjs` are bounded by
   // `[^\s&;",]+`, so a newline still terminates a credential value here. Escape
   // first and `%0A` would fall inside that class and be swallowed by the match.
-  const safe = redactSecrets(message);
-  const oneLine = String(safe).replace(/\r\n|\r|\n/g, '%0A');
-  return level === 'notice' ? `${oneLine}\n` : `::${level}::${oneLine}\n`;
+  //
+  // `%` FIRST, then the line breaks (round 7). The runner's `unescapeData`
+  // decodes `%25`, `%0D` and `%0A` in workflow-command data, which is why
+  // `@actions/core`'s `escapeData` escapes `%` ahead of everything else. Without
+  // it the escape is NOT INJECTIVE: a remote string containing the three literal
+  // characters `%0A` produced bytes identical to one containing a real newline,
+  // so the remote could still inject a line break into the RENDERED annotation.
+  // It could not forge a command -- the runner splits stdout into lines before
+  // decoding, and there is still exactly one line -- but "cannot forge" is not
+  // "cannot inject", and the round-6 docblock drew only the first conclusion.
+  //
+  // Command arm ONLY. On the bare `notice` arm nothing decodes, so `%25` would
+  // render literally and corrupt a legitimate `%` in a message.
+  const escaped = level === 'notice' ? safe : safe.split('%').join('%25');
+  const oneLine = escaped.replace(/\r\n|\r|\n/g, '%0A');
+  if (level === 'notice') {
+    // The bare arm writes a whole log line, so a message that BEGINS `::` is a
+    // workflow command needing no newline at all. Unreachable today -- every
+    // notice arm prefixes `loom-docs reindex ` -- but the site set is open, and
+    // this file's own `redactVerdict` docblock argues that covering today's
+    // members does not cover the one added next round. Enforced, not assumed.
+    return `${oneLine.startsWith('::') ? ` ${oneLine}` : oneLine}\n`;
+  }
+  return `::${level}::${oneLine}\n`;
 }
 
 function main() {
