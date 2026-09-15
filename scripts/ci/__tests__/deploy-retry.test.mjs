@@ -853,10 +853,12 @@ test('MUTATION-VISIBLE — the ESCAPE is INJECTIVE: the runner decodes back to t
     'a\nb',
     'a\rb',
     'a\r\nb',
-    // ROUND 4 (review BLOCKER). A REALISTIC ARM MESSAGE — the input class this
+    // ROUND 4 (review BLOCKER). REALISTIC ARM MESSAGES — the input class this
     // whole boundary exists for, and the one the previous oracle could not
-    // accept. `redact()` maps it to `<guid>`, so comparing against the RAW
-    // message fails here on correct code.
+    // accept. `redact()` rewrites both, and NOT to the same token: the first
+    // becomes `<guid>`, the second `<redacted>` (the `/subscriptions/` rule
+    // runs first and consumes the id before the GUID rule can see it). Either
+    // way, comparing against the RAW message fails here on correct code.
     'ARM: deployment loomdep-11111111-2222-3333-4444-555555555555 failed',
     '/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-loom',
   ];
@@ -876,12 +878,13 @@ test('MUTATION-VISIBLE — the ESCAPE is INJECTIVE: the runner decodes back to t
     //
     // WHY `redactedLine(message)` AND NOT `message`, WHICH IS THE ROUND-4
     // BLOCKER. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
-    // maps GUIDs IT MATCHES to `<guid>` deliberately. Comparing against the raw
-    // message therefore asserts that redaction does not happen — so this line
-    // went RED on CORRECT behaviour for any realistic ARM fixture, with a
-    // message claiming "the runner sees something the caller did not send"
-    // about output the caller's own redaction policy chose to send. R7, in the
-    // assertion written to enforce R7.
+    // deliberately rewrites ids to shared tokens — `<guid>`, or `<redacted>`
+    // for one inside a `/subscriptions/` or `/tenants/` path. Comparing against
+    // the raw message therefore asserts that redaction does not happen — so
+    // this line went RED on CORRECT behaviour for any realistic ARM fixture,
+    // with a message claiming "the runner sees something the caller did not
+    // send" about output the caller's own redaction policy chose to send. R7,
+    // in the assertion written to enforce R7.
     //
     // ROUND 3 had the mirror-image defect: it compared against
     // `message.replace(/\r\n|\r|\n/g, '\n')` — the implementation's own
