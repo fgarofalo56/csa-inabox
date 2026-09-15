@@ -37,6 +37,10 @@ import {
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
 import { classify, classifyLeaves, TAXONOMY } from '../deploy-classify.mjs';
+// The REDACTION half of `formatAnnotation`. Imported so the round-trip oracle
+// below can state the real contract: the runner decodes back to the REDACTED
+// message, not to the caller's raw one. See the round-4 note on that test.
+import { redactedLine } from '../_azure-redact.mjs';
 import {
   streamWrites,
   stripComments,
@@ -836,7 +840,7 @@ function unescapeData(s) {
   return s.replace(/%0D/g, '\r').replace(/%0A/g, '\n').replace(/%25/g, '%');
 }
 
-test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes back to the input', () => {
+test('MUTATION-VISIBLE — the ESCAPE is INJECTIVE: the runner decodes back to the REDACTED message', () => {
   const messages = [
     'plain text with no metacharacters',
     'literal percent-oh-a: %0A::error::forged annotation',
@@ -845,11 +849,16 @@ test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes bac
     'real newline\nand a real CRLF\r\nand a LONE CR\rtail',
     '%',
     '%%0A%',
-    // Round 3 (review). The three terminator forms must stay DISTINGUISHABLE —
-    // see the collision note on the equality assertion below.
+    // Round 3 (review). The three terminator forms must stay DISTINGUISHABLE.
     'a\nb',
     'a\rb',
     'a\r\nb',
+    // ROUND 4 (review BLOCKER). A REALISTIC ARM MESSAGE — the input class this
+    // whole boundary exists for, and the one the previous oracle could not
+    // accept. `redact()` maps it to `<guid>`, so comparing against the RAW
+    // message fails here on correct code.
+    'ARM: deployment loomdep-11111111-2222-3333-4444-555555555555 failed',
+    '/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-loom',
   ];
 
   for (const message of messages) {
@@ -862,48 +871,68 @@ test('MUTATION-VISIBLE — formatAnnotation is INJECTIVE: the runner decodes bac
     const payload = line.slice('::error::'.length, -1);
     assert.doesNotMatch(payload, /[\r\n]/, `a raw line terminator survived encoding of ${JSON.stringify(message)}`);
 
-    // And the runner reconstructs EXACTLY what went in — no more, no less.
+    // And the runner reconstructs EXACTLY the REDACTED message — no more, no
+    // less.
     //
-    // ROUND 3 (review BLOCKER). This compared against
-    // `message.replace(/\r\n|\r|\n/g, '\n')` — the implementation's OWN lossy
-    // map applied to the input. An oracle derived from the mutant cannot witness
-    // the mutant: the encoder collapsed CR, LF and CRLF onto `%0A`, this line
-    // normalised the expectation to match, and the test named INJECTIVE passed
-    // over a non-injective encoder. Worse than blind — substituting the runner's
-    // canonical CR->`%0D` / LF->`%0A` mapping, which IS injective, turned this
-    // suite RED with `actual` showing a perfect round-trip and the failure
-    // message reading "the encoder is not injective".
+    // WHY `redactedLine(message)` AND NOT `message`, WHICH IS THE ROUND-4
+    // BLOCKER. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
+    // maps every GUID to `<guid>` deliberately. Comparing against the raw
+    // message therefore asserts that redaction does not happen — so this line
+    // went RED on CORRECT behaviour for any realistic ARM fixture, with a
+    // message claiming "the runner sees something the caller did not send"
+    // about output the caller's own redaction policy chose to send. R7, in the
+    // assertion written to enforce R7.
     //
-    // Compared against `message` unnormalised now, which is what the test's name
-    // has claimed all along.
+    // ROUND 3 had the mirror-image defect: it compared against
+    // `message.replace(/\r\n|\r|\n/g, '\n')` — the implementation's own
+    // UNINTENDED lossy map — so it could not witness the mutant. Round 4
+    // ignored a DIFFERENT, INTENTIONAL lossy stage and fired on correct code.
+    // Same family both times: the oracle was not an independent statement of
+    // the contract. It is now, and the contract is that the ESCAPE is
+    // injective over whatever `redactedLine` produces.
     assert.equal(
       unescapeData(payload),
-      message,
-      `the encoder is not injective for ${JSON.stringify(message)} — the runner sees something the caller did not send`,
+      redactedLine(message),
+      `the ESCAPE is not injective for ${JSON.stringify(message)} — the runner sees something the redactor did not emit`,
     );
   }
+});
 
-  // The collision the old oracle hid, stated directly: three distinct inputs
-  // must not share one encoding. Under `\r\n|\r|\n` -> '%0A' all three produced
-  // `::error::a%0Ab` and this assertion fails.
+test('MUTATION-VISIBLE — the three terminator forms do not collide', () => {
+  // ROUND 4 (review). This lived INSIDE the round-trip test above and had ZERO
+  // kill power there: it is strictly implied by the three equality assertions
+  // that precede it in the same loop — `unescapeData` is a function, so three
+  // distinct decoded results force three distinct encodings — and
+  // `assert.equal` throws, so under the mutant it was written for the kill
+  // landed on the equality and this line was never reached. Measured: deleting
+  // it changed nothing, `fail 3` either way, same three tests, byte-identical.
+  //
+  // In its OWN test it discriminates, because nothing throws first: under the
+  // round-3 lossy collapse the set size measures 1, and under `\r?\n` it
+  // measures 2.
   const encodings = ['a\nb', 'a\rb', 'a\r\nb'].map((m) => formatAnnotation('error', m));
   assert.equal(
     new Set(encodings).size,
     3,
-    `the three terminator forms collided onto ${JSON.stringify(encodings)} — the encoder is not injective`,
+    `the three terminator forms collided onto ${JSON.stringify(encodings)} — the escape is not injective`,
   );
 });
 
 test('the escape ORDER is pinned in both directions', () => {
   // `%` FIRST: a literal `%0A` must reach the runner as `%250A`, which decodes
-  // back to the literal. If `%` were escaped AFTER the newline substitution this
-  // would read `%0A` and forge a line.
+  // back to the literal.
+  //
+  // WHICH MUTANT THIS KILLS, corrected in round 4: it kills the
+  // NO-`%`-ESCAPE-AT-ALL mutant, which emits `::error::%0A` and forges a line.
+  // It does NOT kill the escape-`%`-LAST mutant — that one emits `%250A` here,
+  // identically to correct code, and this assertion passes. The previous
+  // comment claimed the opposite, which is the same conflation the round-2
+  // commit was written to remove.
   assert.match(formatAnnotation('error', '%0A'), /^::error::%250A\n$/);
 
-  // ...and not one step further: a REAL newline must reach the runner as `%0A`,
-  // NOT `%250A`. Escaping `%` after the substitution re-escapes the escape and
-  // breaks every genuine multi-line remediation — the failure mode in the other
-  // direction, which a one-sided test would let through.
+  // ...and THIS is the one that kills escape-`%`-LAST: a REAL newline must
+  // reach the runner as `%0A`, NOT `%250A`. Escaping `%` after the substitution
+  // re-escapes the escape and breaks every genuine multi-line remediation.
   assert.match(formatAnnotation('error', 'a\nb'), /^::error::a%0Ab\n$/);
 
   // A LONE CR is a terminator to the runner too — `\r?\n` did not match it, and

@@ -608,10 +608,12 @@ export function formatAnnotation(level, message) {
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
   //
-  // `\r\n|\r|\n` RATHER THAN `\r?\n`, AND THAT IS THE MORE SEVERE HALF. The old
-  // alternation did not match a LONE CR, so a bare CR inside `message` reached
-  // the runner unescaped. The runner reads our stdout with
-  // `StreamReader.ReadLine()` (`ProcessInvoker.cs:513`), which terminates a line
+  // CR -> `%0D` AND LF -> `%0A`, RATHER THAN `\r?\n`, AND THAT IS THE MORE
+  // SEVERE HALF. The old alternation did not match a LONE CR, so a bare CR
+  // inside `message` reached the runner unescaped. The runner reads our stdout
+  // with `StreamReader.ReadLine()` (`src/Runner.Sdk/ProcessInvoker.cs:513` —
+  // the path matters, there are two files of that name and the
+  // `src/Runner.Common` one is 329 lines long), which terminates a line
   // on CR, LF *and* CRLF — so that CR genuinely SPLIT our one annotation into
   // two physical lines, and `ActionCommandManager.cs:70` parses every line it is
   // handed. The text after the CR was therefore parsed as a workflow command
@@ -642,8 +644,24 @@ export function formatAnnotation(level, message) {
   // mutant — that mutant emits a byte-identical line for every input the first
   // assertion uses.
   //
-  // CR -> `%0D` AND LF -> `%0A`, SEPARATELY, because this function claims to be
-  // INJECTIVE and the previous form was not. `\r\n|\r|\n` -> `'%0A'` collapsed
+  // CR -> `%0D` AND LF -> `%0A`, SEPARATELY, because THE ESCAPE claims to be
+  // INJECTIVE and the previous form was not.
+  //
+  // "THE ESCAPE", NOT "THIS FUNCTION" — round 4 review, and the distinction is
+  // not pedantry. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
+  // maps every GUID to `<guid>` on purpose, so the FUNCTION is many-to-one and
+  // provably not injective:
+  //
+  //   formatAnnotation('error','1111…-…-1111') === "::error::<guid>\n"
+  //   formatAnnotation('error','2222…-…-2222') === "::error::<guid>\n"
+  //
+  // What must be injective — and what the security property actually needs — is
+  // the ESCAPE stage, over whatever `redactedLine` emits. Redaction losing
+  // information is the point; the escape losing information is the defect.
+  // Rounds 2 and 3 were each blocked for shipping a claim measurement
+  // contradicted, so stating this one loosely would have been the third.
+  //
+  // `\r\n|\r|\n` -> `'%0A'` collapsed
   // THREE distinct inputs onto one output: "a\nb", "a\rb" and "a\r\nb" all
   // produced `::error::a%0Ab`, so the runner's own inverse could not reconstruct
   // which had been sent. Review measured it — 2 of 10 round-trip fixtures failed
