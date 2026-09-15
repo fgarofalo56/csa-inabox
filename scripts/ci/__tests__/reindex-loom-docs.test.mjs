@@ -1250,10 +1250,63 @@ test('#4498 round 11 — a parser that exits 0 with a WARNING on stderr is NOT r
       assert.doesNotMatch(out, /the jobId parser EXITED/, out);
       assert.doesNotMatch(out, /the response body was not read/, out);
       // ...the stderr is still disclosed, saying only what is true...
-      assert.match(out, /exited 0 but wrote to stderr; the id below is still valid/, out);
+      assert.match(out, /exited 0 but wrote to stderr/, out);
+      // ...and it must NOT claim anything about the id, which is a different
+      // question with a different answer (round 16 review — see the 2x2 test
+      // below for the cell where the round-11 wording was measurably false).
+      assert.doesNotMatch(out, /the id below is still valid/, out);
       // ...and the id it returned is USED, which is the half that makes the
       // round-10 wording actively misleading rather than merely wrong.
       assert.match(out, /-> HTTP 202 job=j-warn-1/, out);
+      // The id IS present, so the correlation disclosure must stay silent.
+      assert.doesNotMatch(out, /carried no readable jobId/, out);
+    },
+  );
+});
+
+test('#4498 round 16 — stderr AND no jobId: the cell neither earlier test could reach', async () => {
+  // THE TWO TESTS THAT EXIST EACH HOLD FIXED THE VARIABLE THE OTHER VARIES, so
+  // the one cell where round 11's sentence is false was untested BY
+  // CONSTRUCTION — a reviewer's finding, and the structural reason no amount of
+  // re-reading either test would have caught it:
+  //
+  //                       | jobId present      | jobId absent
+  //   ----------------------------------------------------------------
+  //   stderr written      | round-11 test      | *** THIS TEST ***
+  //   stderr silent       | happy path         | round-10 test
+  //
+  // In that cell round 11 printed "the id below is still valid" — a claim about
+  // $POST_JOB_ID, on a branch whose test is the SIZE OF A DIFFERENT FILE — and
+  // the script refuted itself one line later with `job=unknown`. Because that
+  // `elif` sat above the empty-id branch it also SWALLOWED the round-10
+  // disclosure, so the line telling the operator the durable-record correlation
+  // is dead for this attempt never printed at all.
+  //
+  // Both halves are asserted here: the false claim must be gone, and the
+  // suppressed disclosure must be back.
+  await withServer(
+    // 202 ACCEPTED carrying NO jobId — a real shape on an edge refusal.
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        NODE_OPTIONS: '--experimental-loader=data:text/javascript,',
+      });
+      const out = res.stdout + res.stderr;
+      // The parser DID succeed, so it is not a failure...
+      assert.doesNotMatch(out, /the jobId parser EXITED/, out);
+      // ...its stderr is disclosed...
+      assert.match(out, /exited 0 but wrote to stderr/, out);
+      // ...it does NOT assert an id it never looked at...
+      assert.doesNotMatch(out, /the id below is still valid/, out);
+      // ...the round-10 disclosure is NOT swallowed by the stderr branch...
+      assert.match(out, /carried no readable jobId/, out);
+      // ...and the script's own next line agrees with what it just said: the
+      // POST echo carries NO `job=` suffix. Asserted against that line
+      // specifically — a bare /job=/ over the whole output is a false failure,
+      // because the ACCEPTED banner prints `job=unknown` and the poll line
+      // prints `job=idle`, neither of which is the POST echo's claim.
+      assert.doesNotMatch(out, /-> HTTP 202 job=/, out);
     },
   );
 });

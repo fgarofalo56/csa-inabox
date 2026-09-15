@@ -323,19 +323,33 @@ do_post() {
   # -- the same move round 9 made, which is why the predicate is now the status.
   PRC=0
   POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE") || PRC=$?
+  # TWO INDEPENDENT QUESTIONS, ASKED SEPARATELY. Round 11 made them one `if`
+  # chain and the second branch then asserted something it never measured:
+  # "the id below is still valid" is a claim about $POST_JOB_ID, and that
+  # branch's test is `[ -s "$POST_ERR_FILE" ]` — the size of a DIFFERENT file.
+  # A parser that exits 0, emits a warning, and finds no jobId made the script
+  # print that the id was valid and then print `job=unknown` on the very next
+  # line, refuting itself. Worse, sitting above the empty-id branch it SWALLOWED
+  # the round-10 disclosure, so the one line telling the operator the #4497
+  # durable-record correlation is dead for this attempt never appeared.
+  #
+  # Neither test implies the other: stderr is about DIAGNOSTIC NOISE, the id is
+  # about CORRELATION VIABILITY. Chaining them with `elif` asserts they are
+  # mutually exclusive, which is exactly the thing that was false. R7, committed
+  # by the fix for R7 — the third time on this branch.
   if [ "$PRC" -ne 0 ]; then
     echo "reindex POST: the jobId parser EXITED $PRC — the response body was not read. Its stderr:"
     _dump_redacted "$POST_ERR_FILE"
   elif [ -s "$POST_ERR_FILE" ]; then
-    # It SUCCEEDED and wrote to stderr. Warnings live here. Say only that, and
-    # say that the id below is still good -- the round-10 wording claimed the
-    # opposite of both.
-    echo "reindex POST: the jobId parser exited 0 but wrote to stderr; the id below is still valid. Its stderr:"
+    # It SUCCEEDED and wrote to stderr. Warnings live here. Say ONLY that —
+    # whether an id came back is the next question's business, not this one's.
+    echo "reindex POST: the jobId parser exited 0 but wrote to stderr. Its stderr:"
     _dump_redacted "$POST_ERR_FILE"
-  elif [ -z "$POST_JOB_ID" ]; then
-    # Parser ran cleanly and found nothing. Say that, and nothing more: a body
-    # with no `jobId` is normal on an edge refusal, and asserting a cause here
-    # is what R7 forbids.
+  fi
+  # ASKED UNCONDITIONALLY, because "there is no id" is the exact condition under
+  # which the correlation cannot fire — whatever the parser's exit status was and
+  # whatever it wrote to stderr.
+  if [ -z "$POST_JOB_ID" ]; then
     echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
   fi
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
