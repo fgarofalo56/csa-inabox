@@ -200,6 +200,60 @@ test('poll: job failed → fail loud', () => {
 });
 
 /**
+ * #4498 round 5 — THE ANNOTATION IS ITS OWN PUBLICATION SURFACE.
+ *
+ * `lastRun.error` is REMOTE-SUPPLIED: whatever the failing console replica chose
+ * to store in the durable record. This module embeds it in a `::error::`
+ * workflow annotation, which lands in a PUBLIC Actions log in a PUBLIC repo.
+ *
+ * This test exists because round 5's FIRST redaction attempt missed this path
+ * entirely. It redacted the shell's `$LAST_ERROR` echo and stopped there, on the
+ * reasoning that both consumers print "the same string" — they do not, they are
+ * two independent readers of the same remote field, and the end-to-end test in
+ * `reindex-loom-docs.test.mjs` caught this one still emitting the raw value.
+ * That test covers both paths through the shell; this one pins the classifier
+ * directly, so the guard cannot be lost by a change to the shell alone.
+ *
+ * MUTATION-PROOF: drop the `redactSecrets(...)` wrapper from the `why`
+ * assignment in the `rebuild_failed` arm and the first two assertions go RED.
+ *
+ * Two-sided on purpose. Redaction that ate the diagnosis would be its own
+ * defect: this arm exists to tell an operator WHY the rebuild failed, and a
+ * message reduced to `[redacted]` sends the next investigation nowhere.
+ */
+test('#4498 round 5 — a credential in the remote error is redacted out of the ::error:: annotation, and the diagnosis survives', () => {
+  const sig = 'YW5ub3RhdGlvbi1zaWduYXR1cmUtbXVzdC1ub3QtcHVibGlzaA';
+  const key = 'QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ';
+  const r = classifyReindexPoll({
+    outcome: 'rebuild_failed',
+    body: JSON.stringify({
+      ok: true,
+      freshness: {
+        state: 'stale',
+        lastRun: {
+          jobId: 'j-1',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error: `manifest PUT to https://loomstg.blob.core.windows.net/help/manifest.json?sig=${sig} failed: 403 Forbidden (AccountKey=${key})`,
+        },
+      },
+    }),
+  });
+
+  assert.equal(r.verdict, 'fail');
+  // The credentials are GONE.
+  assert.ok(!r.message.includes(sig), `SAS signature reached the annotation: ${r.message}`);
+  assert.ok(!r.message.includes(key), `account key reached the annotation: ${r.message}`);
+  assert.match(r.message, /sig=\[redacted\]/);
+  assert.match(r.message, /AccountKey=\[redacted\]/);
+  // The diagnosis SURVIVES — host, status, and operation all still readable.
+  assert.match(r.message, /loomstg\.blob\.core\.windows\.net/);
+  assert.match(r.message, /403 Forbidden/);
+  assert.match(r.message, /manifest PUT/);
+  // And this is still the durable-record arm, not some other branch.
+  assert.match(r.message, /reindex FAILED on the replica that ran it/);
+});
+
+/**
  * MUTATION-PROOF (the load-bearing one). Make the poller treat a timeout as
  * success — i.e. change the 'timeout' branch to `verdict:'ok'` (or to
  * 'tolerate') — and this test goes RED. A timeout is a refusal: silently

@@ -1149,6 +1149,62 @@ test('#4498 the two sanitizers agree — an id carrying the field separator stil
   );
 });
 
+test('#4498 round 5 — a credential inside the remote error is REDACTED before it reaches the public Actions log', async () => {
+  // BLOCKER 1b, reviewer 2. `lastRun.error` is remote-supplied: the console
+  // stores whatever string the failing replica produced, and the
+  // `rebuild_failed` branch echoes it to stdout. On `loom-roll-and-validate`
+  // that stdout is a PUBLIC Actions log in a PUBLIC repo, so a backend error
+  // quoting the request URL publishes the SAS token inside it.
+  //
+  // This is the estate's real error shape — a 403 persisting the manifest,
+  // which is exactly the failure #4497 exists to surface — with the storage URL
+  // the backend would quote. The assertions are two-sided on purpose: the
+  // secret must be GONE, and the diagnosis must SURVIVE. A redactor that eats
+  // the whole message satisfies the first and defeats the entire #4497 change.
+  const secret = 'Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA';
+  const accountKey = 'QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ';
+  await withServer(
+    () => ACCEPTED,
+    () => ({
+      status: 200,
+      body: pollBodyWithLastRun({
+        freshness: 'stale',
+        lastRun: {
+          outcome: 'failed',
+          finishedAt: '2026-09-14T00:00:00Z',
+          error:
+            'manifest PUT to https://loomstg.blob.core.windows.net/corpus/manifest.json'
+            + '?sv=2024-11-04&sig=' + secret
+            + ' returned 403 Forbidden (conn: AccountName=loomstg;AccountKey=' + accountKey + ';)',
+          sourceCommit: 'dcabe1dd02af4a20',
+          backend: 'ai-search',
+          chunkCount: 51079,
+          jobId: 'j-1',
+        },
+      }),
+    }),
+    async (url) => {
+      const res = await runScript(url);
+      const out = res.stdout + res.stderr;
+      assert.equal(res.status, 1, out);
+      // The record was attributed to us, so the error genuinely reached stdout.
+      // Without this the test could pass by the branch never running at all.
+      assert.match(out, /reindex FAILED on the replica that ran it/, out);
+      assert.match(out, /last-run record: job j-1 FAILED/, out);
+      // GONE — neither credential value appears anywhere in the output.
+      assert.ok(!out.includes(secret), 'SAS signature reached the log: ' + out);
+      assert.ok(!out.includes(accountKey), 'account key reached the log: ' + out);
+      assert.match(out, /sig=\[redacted\]/, out);
+      assert.match(out, /AccountKey=\[redacted\]/, out);
+      // SURVIVED — the operator can still act on it. The host, the container,
+      // the status code and the cause are all still readable.
+      assert.match(out, /loomstg\.blob\.core\.windows\.net/, out);
+      assert.match(out, /403 Forbidden/, out);
+      assert.match(out, /manifest PUT/, out);
+    },
+  );
+});
+
 test('#4497 a last-run failure from ANOTHER job does not fail a healthy rebuild', async () => {
   // The record is durable, so it outlives the run that wrote it — and the
   // console serves every replica, so it may describe a rebuild this script never

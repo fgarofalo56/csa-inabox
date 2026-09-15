@@ -36187,7 +36187,7 @@
             "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "console:member:594",
+                "id": "console:member:599",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36197,7 +36197,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:595",
+                "id": "console:member:600",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49801,10 +49801,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-14T23:18:21.868Z",
-      "commit": "47bc2a24f58f17897012f5753f612de7633642b1",
-      "inputsDigest": "0830fb02f8df5e18",
-      "filesScanned": 2104,
+      "generatedAt": "2026-09-15T00:08:40.206Z",
+      "commit": "7af2ba51a2aba67943997d80bdb59bbdc61165ab",
+      "inputsDigest": "adde47c779d04fc0",
+      "filesScanned": 2105,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -49813,7 +49813,7 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 406,
+          "filesMatched": 407,
           "nodesEmitted": 234
         }
       ],

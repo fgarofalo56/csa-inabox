@@ -310,7 +310,27 @@ get_status() {
     // string, so one would close the quote and bash would parse the rest of
     // the JavaScript as shell.
     const clean = (v) => String(v).replace(/[\r\n|]+/g, " ");
-    const le = lr && lr.error ? clean(lr.error).slice(0, 300) : "";
+    // `lr.error` is REMOTE-SUPPLIED -- it is whatever string the freshness
+    // endpoint chose to store in the durable last-run record -- and the
+    // rebuild_failed branch below echoes it to stdout. On a
+    // `loom-roll-and-validate` run that stdout is a PUBLIC Actions log in a
+    // PUBLIC repo. A backend error that quotes the request URL or a connection
+    // string would publish the credential inside it, and no amount of caution
+    // on THIS side changes what the remote decided to put in the string.
+    //
+    // Redacted by SHAPE. This list is NOT a proof of safety and must not be
+    // read as one: it covers the credential forms this estate actually mints
+    // -- a SAS `sig=`, an `AccountKey=`, a function `code=`, a `Bearer` token
+    // and a JWT -- and nothing else. An unanticipated shape still reaches the
+    // log. The 300-char truncation below bounds the blast radius; it does not
+    // close it. The durable record not storing secrets in the first place is
+    // the real fix, and that fix does not live in this script.
+    const redact = (v) => String(v)
+      .replace(/(sig=|AccountKey=|SharedAccessKey=|password=|pwd=)[^\s&;",]+/gi, "$1[redacted]")
+      .replace(/(code=)[A-Za-z0-9._~+/=-]{20,}/gi, "$1[redacted]")
+      .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[redacted]")
+      .replace(/eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g, "[redacted-jwt]");
+    const le = lr && lr.error ? clean(redact(lr.error)).slice(0, 300) : "";
     process.stdout.write([f, s, c, lo, lf, le, lj].map(clean).join("|"));
   ' "$POLL_BODY_FILE")
   # Seven fields. Read positionally into named vars -- `${STATES%%|*}` style

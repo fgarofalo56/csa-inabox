@@ -7,7 +7,10 @@
  * Split out of `loom-docs-index.ts`, which this PR's round-4 commentary had
  * pushed to 1509 LOC -- back over the 1500-line threshold in
  * `scripts/ci/check-file-size.mjs` that round 4's FIRST split
- * (`docs-corpus-ranker.ts`) had just brought it under, at 1462. Re-reddening the
+ * (`docs-corpus-ranker.ts`) had just brought it under, at 1462. Both figures
+ * are **as measured during the split**, at intermediate tree states that no
+ * longer exist; neither is re-derivable from any commit on this branch. Only
+ * the final 1449 is, and `check-file-size.mjs` is what confirms it. Re-reddening the
  * very guard a split was performed to fix is not a case for an allowlist entry:
  * that guard's escalation policy names splitting by bounded context as the
  * preferred fix and treats an entry as an exception request.
@@ -20,15 +23,23 @@
  * This is a real bounded context rather than a convenient 100 lines: storage and
  * retrieval (what `loom-docs-index` owns) do not care what a commit is, and
  * NOTHING here imports from `lib/azure`. It is also the home the consolidation
- * in #4499 needs -- `GIT_OBJECT_ID` is currently declared four times across this
+ * in #4503 needs -- `GIT_OBJECT_ID` is currently declared four times across this
  * app, and a `lib/azure` module that neither reaches into `lib/admin` nor is
  * reached from it is where the shared copy can land without a cycle.
  *
  * `sameCommit` is NEW in this PR and under review; it is named here rather than
  * moved quietly, because a reviewer's verdict is pinned to the head it measured.
+ * Its only call site, `evaluateFreshness`, also had its comparison swapped from
+ * `currentCommit !== indexedCommit` to `!sameCommit(currentCommit, indexedCommit)`
+ * -- a BEHAVIOUR change, not motion, and the change this module exists to make.
+ *
  * `GIT_OBJECT_ID`, `isBuildCommit` and `currentSourceCommit` move byte-for-byte
- * (extracted by script, not retyped); the only edits are the four `export`
- * keywords and one corrected copy-count, both called out in the round-4 message.
+ * in their CODE (extracted by script, not retyped); the only code edits are the
+ * four `export` keywords. Their COMMENTS are not byte-for-byte: round 4 also
+ * rewrote two paragraphs below -- the copy-count correction, and the "Round 4
+ * correction" paragraph retracting a false universal. Round 4's message said
+ * "the only edits are ... one corrected copy-count", which covered the second
+ * rewrite and not the first; that sentence is retracted in round 5's message.
  */
 
 /** A build stamp is a commit only if it has the SHAPE of one.
@@ -62,8 +73,9 @@
  * sentinel's VALUE rather than its SHAPE, so it drops `unknown` and admits
  * `n/a`, `dirty` and a bare branch name. It is named here rather than quietly
  * softened into "the lib/admin parsers" because a future reader consolidating
- * these copies needs to know that one of them still has the bug. Fixing it is
- * out of scope for a roll fix; the claim is corrected now, the code is not.
+ * these copies needs to know that one of them still has the bug. That parser is
+ * **#4499**; fixing it is out of scope for a roll fix, so the claim is corrected
+ * now and the code is not.
  *
  * Counted, not recalled: `GIT_OBJECT_ID` is declared FOUR times in this app.
  * `lib/admin/estate-fleet.ts:141` EXPORTS it, so a shared import is available;
@@ -72,7 +84,10 @@
  * a private copy. This module is the fourth. An earlier revision of this
  * paragraph said "a third private copy" while naming only two sites -- the
  * right number over the wrong set, which is the same miscount-in-a-comment
- * this PR has now made twice. Consolidating all four is #4499, not a roll fix.
+ * this PR has now made twice. Consolidating all four is **#4503**, not a roll
+ * fix. Round 4 cited #4499 for this and was wrong -- #4499 is the
+ * `readBuildMarker` value-vs-shape defect above and does not mention
+ * `GIT_OBJECT_ID`; #4503 was filed in round 5 so the citation resolves.
  *
  * The accepted width is 7-40 hex, which covers every value the repo actually
  * stamps. Counted, not estimated -- `grep -rn "LOOM_BUILD_SHA=" .github/workflows`
@@ -117,10 +132,19 @@ export function isBuildCommit(value: string): boolean {
  * cosmetic -- the roll's own reindex gate reads this state, so it would refuse
  * a correctly-indexed corpus and time out.
  *
- * Prefix comparison is exactly git's own abbreviation rule. It is applied only
- * to values `isBuildCommit` already bounded to 7-40 hex, so the shortest
- * possible prefix is 7 hex (28 bits); git uses the same floor for the same
- * reason. `GIT_OBJECT_ID` carries the `i` flag, so the case fold is required
+ * Prefix comparison follows git's abbreviation convention: an abbreviated object
+ * name is a prefix of the full one, so a prefix match is the right test for
+ * "same commit, different abbreviation". It is NOT git's full rule -- git also
+ * requires the prefix to be UNAMBIGUOUS within a specific repository's object
+ * store, which this function has no access to and does not check. Two different
+ * commits sharing a 7-hex prefix would compare equal here. That is accepted:
+ * the inputs are two stamps of the SAME deployment, and the alternative -- the
+ * string inequality this replaced -- fabricates a revision gap on every
+ * abbreviation mismatch, which is the louder and more frequent error.
+ *
+ * It is applied only to values `isBuildCommit` already bounded to 7-40 hex, so
+ * the shortest possible prefix is 7 hex (28 bits); git uses the same floor.
+ * `GIT_OBJECT_ID` carries the `i` flag, so the case fold is required
  * rather than defensive -- a stamp is accepted in either case and the two
  * producers need not agree on it. */
 export function sameCommit(a: string, b: string): boolean {

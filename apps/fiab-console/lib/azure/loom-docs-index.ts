@@ -42,32 +42,20 @@ import { copilotSessionsContainer } from './cosmos-client';
 import { recordRetrieval } from '@/lib/perf/retrieval-metrics';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import {
-  buildBm25Index,
-  bm25Rank,
   diversifyByDocument,
-  rankSubstring,
   surfaceTopicTerms,
   DEFAULT_MAX_CHUNKS_PER_DOC,
-  DEFAULT_SURFACE_BOOST,
-  DEFAULT_SOURCE_WEIGHTS,
-  type Bm25CorpusStats,
-  type Bm25Index,
 } from './docs-ranker';
 import {
   collectSources,
   corpusSourceCount,
   detectRoots,
   docKey,
-  docsUrlForPath,
   enumerateSourceFiles,
   hashContent,
   localCorpusStats,
-  resetCorpusStatsCache,
   setCorpusStatsForTests,
   statFingerprint,
-  summarizeSource,
-  walkMarkdown,
-  walkSource,
   type DocChunk,
   type ManifestFileEntry,
 } from './loom-docs-corpus';
@@ -385,6 +373,16 @@ async function searchSearch(query: string, top: number, kind?: DocChunk['kind'])
  * `COSMOS_CONTAINER_ID` is a module constant, so there is no key to vary on. A
  * rejection CLEARS the memo — caching a failure would convert one transient
  * Cosmos error into a permanently corpus-less process.
+ *
+ * THE TRADE-OFF, stated rather than discovered later: `auto-bind-by-default.md`
+ * §3 wants a binding to re-heal when its backing object is deleted out of band,
+ * and before this memo every call re-ran `createIfNotExists` and would have
+ * re-created a deleted `help-corpus`. Now the process holds a stale handle until
+ * it rolls. Accepted for two reasons — `saveManifest` throws on the dead handle
+ * and `persist` folds that to `ok:false`, so a reindex fails LOUDLY rather than
+ * silently indexing nowhere; and `cosmos-client.ts`'s `_ensured` already sets
+ * this precedent for 60+ containers, so this is the existing bargain, not a new
+ * one.
  */
 let _corpusContainer: Promise<Container> | null = null;
 
@@ -394,12 +392,30 @@ function __resetCorpusContainerForTests(): void {
 }
 
 async function helpCorpusContainer(): Promise<Container> {
+  // DELIBERATELY ABOVE THE MEMO CHECK (#4498 round 5, reviewer finding).
+  // `copilotSessionsContainer()` is the only production path into `ensure()` in
+  // `cosmos-client.ts`, and `ensure()` opens with `await injectCosmosFault()`
+  // under a comment saying that placement exists so an armed fault injects on
+  // EVERY container accessor and not just the first. Round 4 put this memo in
+  // FRONT of that chokepoint, which re-opened the hole: a chaos run over the
+  // corpus/last-run path would have injected on poll one and served every later
+  // poll from the memo, reporting resilience it never measured. Inert in
+  // production — `injectCosmosFault` is a no-op unless the harness is armed and
+  // `LOOM_DEPENDENCY_CHAOS_ENABLED` is set — and it costs nothing to keep,
+  // because `ensure()` short-circuits on `_ensured` and issues no control-plane
+  // call after the first. The saving the memo exists for is `createIfNotExists`,
+  // which is still memoised below.
+  //
+  // The await here does not re-open a double-create race. Two concurrent first
+  // callers both suspend on this line, but whichever resumes first runs from the
+  // check to `_corpusContainer = pending` with no await in between, so the
+  // install is atomic and the second caller observes it.
+  const cs = await copilotSessionsContainer();
   if (_corpusContainer) return _corpusContainer;
   // Re-use the cosmos-client singleton via copilotSessionsContainer's `ensure()`
   // by piggy-backing on the same database. We could expose a generic builder
   // but inlining keeps the diff small and reuses connection + auth.
   const pending = (async () => {
-    const cs = await copilotSessionsContainer();
     const db = (cs as any).database; // @azure/cosmos exposes database off Container
     const { container } = await db.containers.createIfNotExists({
       id: COSMOS_CONTAINER_ID,
@@ -409,7 +425,14 @@ async function helpCorpusContainer(): Promise<Container> {
   })();
   _corpusContainer = pending;
   // Only clear if THIS attempt is still the memoised one — a retry may already
-  // have replaced it by the time this rejection settles.
+  // have replaced it by the time this rejection settles. The identity check is a
+  // NO-OP in production and is not claimed otherwise: installing a replacement
+  // requires the memo to be falsy, which only this catch produces, so no
+  // production ordering reaches it holding a different promise. It is
+  // load-bearing only for `__resetCorpusContainerForTests()`, which can null the
+  // memo mid-flight. A reviewer mutated the guard away and the suite stayed
+  // green; that is a weak mutation, not a blind test, and the honest fix is to
+  // say so here rather than add a test that would only exercise the test hook.
   pending.catch(() => {
     if (_corpusContainer === pending) _corpusContainer = null;
   });

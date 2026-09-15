@@ -66,6 +66,11 @@
  * for the second (#4373).
  */
 import { pathToFileURL } from 'node:url';
+// #4498 round 5. `lastRun.error` is remote-supplied and this module embeds it in
+// a `::error::` annotation — a PUBLIC publication surface in a PUBLIC repo, and
+// a separate one from the stdout `reindex-loom-docs.sh` redacts. Shared module,
+// not a second copy: the two paths must not drift.
+import { redactSecrets } from './redact-secrets.mjs';
 
 /**
  * Honest infra-gate signals — a "not configured / not provisioned" body.
@@ -329,7 +334,7 @@ export function classifyReindexPoll({ outcome, body, waitedSeconds, attempts, id
       // alongside is a second thing that can disagree with the first.
       const lastRun = parsed?.freshness?.lastRun ?? null;
       const when = lastRun?.finishedAt ? ` at ${lastRun.finishedAt}` : '';
-      const why = lastRun?.error ? firstLine(String(lastRun.error)) : '';
+      const why = lastRun?.error ? redactSecrets(firstLine(String(lastRun.error))) : '';
       const commit = lastRun?.sourceCommit ? ` (revision ${String(lastRun.sourceCommit).slice(0, 12)})` : '';
       return {
         verdict: 'fail',
