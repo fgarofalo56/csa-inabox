@@ -16899,16 +16899,26 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-            "declaredSinkCount": 1,
+            "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "stdout:bracket:140",
+                "id": "stdout:bracket:141",
                 "surface": "stdout",
                 "accessPath": "bracket",
                 "wholeExpressionBounded": false,
                 "boundary": null,
                 "unredactedByDesign": false,
                 "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "inherited-fd:spawn-stdio:220",
+                "surface": "inherited-fd",
+                "accessPath": "spawn-stdio",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": true,
                 "childProvenRedacting": null
               }
             ]
@@ -36187,7 +36197,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:member:724",
+                "id": "stdout:member:769",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -38322,7 +38332,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:member:104",
+                "id": "stdout:member:128",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49819,10 +49829,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-15T01:18:26.971Z",
-      "commit": "0876fe82f21c8dc2b595b14222a0c215bef18c1b",
-      "inputsDigest": "0e45725fd1ae30be",
-      "filesScanned": 2107,
+      "generatedAt": "2026-09-15T03:58:08.678Z",
+      "commit": "8e1e6f151bb1394593603facf738187b01c89f05",
+      "inputsDigest": "c661420ec9a1d6ad",
+      "filesScanned": 2108,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -49831,7 +49841,7 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 409,
+          "filesMatched": 410,
           "nodesEmitted": 235
         }
       ],
@@ -50014,7 +50024,7 @@
         },
         {
           "subject": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/python-cve-floors.test.mjs",
