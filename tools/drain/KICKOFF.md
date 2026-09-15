@@ -10,7 +10,7 @@ note exists so the next reader does not trust a freshness the program does not
 provide. **Re-read the FIRST TASK section against `--status` before pasting** —
 it was stale once already, naming work that had since been done.
 
-Last hand-updated: 2026-09-13 (re-checked against live state: PR #4491 round 5; #4492 PARKED as draft — the migration premise did not hold, see its thread).
+Last hand-updated: 2026-09-15 (re-checked against live state: PR #4491 on round 16; #4492 PARKED as draft — the migration premise did not hold, see its thread). This line read "2026-09-13 … round 5" for eleven rounds, three lines below the warning that it goes stale — which is the warning demonstrating itself. A reviewer caught it. Prefer `--status` over this line; it is hand-maintained and will be wrong again.
 
 ---
 
@@ -64,9 +64,10 @@ Scope and autonomy are already decided — do not re-ask them:
 FIRST TASK, before draining anything else — check each against live state, because
 this list is hand-maintained and was stale once already:
 
-  1. #4487 (W0) — PR #4491 is OPEN and on its FIFTH round of independent review.
-     Rounds 1-4 are closed. Read the PR's own comments for the live state rather
-     than trusting a sha written here; every round so far found its blocker
+  1. #4487 (W0) — PR #4491 is OPEN and has reached its SIXTEENTH round of
+     independent review. Read the PR's own comments for the live state rather
+     than trusting a sha or a round number written here — this entry said
+     "FIFTH" for eleven rounds. Every round so far found its blocker
      INSIDE the previous round's fix, which is the pattern to expect. Round 5's
      were: a sibling gate step could answer for a skipped detector (`any()` over
      a substring-matched population), and a job with TWO work-gating outputs was

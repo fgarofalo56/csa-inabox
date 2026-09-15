@@ -1898,6 +1898,30 @@ def _one_context(
                 item.name, "FAIL",
                 "SKIPPED at the merged sha - a required context that ran nothing is not a pass",
             )
+        # KNOWN DISAGREEMENT, RECORDED RATHER THAN DEFERRED SILENTLY (#4491
+        # round 16 review, finding 6). This branch decides green NEGATIVELY --
+        # "not RED, not INCOMPLETE, not SKIPPED" -- while the deferral branch
+        # ~80 lines below asks `verdict != "SUCCESS"` POSITIVELY. The two
+        # vocabularies agree on every conclusion except one:
+        #
+        #   NEUTRAL  ->  green here, refused there.
+        #
+        # A reviewer demonstrated it end to end; the receipt literally prints
+        # `green at the merged sha (NEUTRAL)`. `neutral` is the Checks API's
+        # "ran, made no determination", which is the exact shape this package
+        # refuses everywhere else, and the string `neutral` appears nowhere in
+        # `tools/drain/` -- not in policy.json, not in a test, not in an arm. So
+        # it is undocumented, untested and unarmed.
+        #
+        # NOT CHANGED IN THIS ROUND, and the reason is scope rather than
+        # disagreement: refusing NEUTRAL here makes the gate STRICTER, which is
+        # the direction this package normally moves, but it changes the merge
+        # verdict for every PR the harness gates while three are mid-flight
+        # against it. A semantics change to the instrument, made by the author
+        # of the work the instrument is judging, is not something to slip into a
+        # round that exists to fix stale numbers. Tracked separately with the
+        # measurement, and the two predicates over one question are named here
+        # so the next reader does not have to re-derive the contradiction.
         # A GREEN CONCLUSION IS NOT EVIDENCE THE CHECK DID ITS WORK, and this
         # branch carries 14 of 15 contexts on a typical PR. It used to return a
         # pass on the conclusion alone -- the same defect the deferral branch
@@ -2109,7 +2133,7 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     # in-progress job whose declared step had already succeeded was accepted,
     # and `merge_gate`'s job join PREFERS that job in both input orders.
     unfinished = [
-        str(s.get("name") or "?") for s in work if step_conclusion(s) is None
+        str(s.get("name") or "?") for s in work if not step_has_concluded(s)
     ]
     if unfinished:
         return False, (
@@ -2264,6 +2288,42 @@ def context_is_accounted_for(
     later. A single entry point is not tidiness; it is what makes "fixed on one
     side only" impossible to write.
 
+    AND IT IS NOT YET TRUE OF THE JOB'S OWN CONCLUSION (#4491 round 16 review,
+    finding 5). Round 14 added a job-level conclusion check -- refuse a job that
+    did not conclude, refuse one that concluded non-`success` -- and it landed
+    on ONE of the three routes. Route 1 `context_did_its_work` reads it (`:2080`,
+    refusing `None` at `:2081` and non-success at `:2086`); route 2
+    `scope_untouched_at_merge` and route 3 `alternative_accounted_for` read no
+    job-level conclusion at all. A reviewer demonstrated it against the real
+    unmodified `next build (node 20)` policy row:
+
+        job.conclusion='success'   -> ok=True route='scope-untouched-at-merge'
+        job.conclusion='failure'   -> ok=True route='scope-untouched-at-merge'
+        job.conclusion='cancelled' -> ok=True route='scope-untouched-at-merge'
+        job.conclusion=None        -> ok=True route='scope-untouched-at-merge'
+
+    So this docstring's own claim -- that a single entry point makes "fixed on
+    one side only" impossible -- is exactly what round 14 then wrote, one level
+    up from where round 13 wrote it. The paragraph above describes the defect
+    the paragraph is in.
+
+    The `None` row is the one that matters, because `merge_gate._jobs_by_name`
+    deliberately prefers "the one that executed LESS", so an in-progress
+    duplicate wins the join -- which is the documented input rounds 13 and 14
+    exist for. End-to-end reachability is LOW (an in-progress job usually
+    publishes an in-progress check-run, and `worst_by_name` scores it INCOMPLETE
+    first), but that is a coincidence of the rollup, not a control, and this
+    package does not rest a stop on a coincidence.
+
+    NOT FIXED IN THIS ROUND, deliberately and for the same reason as the NEUTRAL
+    disagreement recorded at `_one_context`: the remedy is either three lines in
+    each route or lifting the job-verdict read into THIS function, and both
+    change what the merge gate accepts while three PRs are mid-flight against
+    it. Changing the instrument's verdict, authored by the same hand as the work
+    it is judging, does not belong in a round convened to correct stale numbers.
+    Recorded with its measurement so the next reader inherits the finding rather
+    than the silence.
+
     THE ORDER OF 2 AND 3 IS NOT ARBITRARY and neither may skip the other's
     question. Round 5 put the alternative inside `context_did_its_work`, which
     receives no `changed_files`, so route 2 returned a pass before route 3's
@@ -2388,7 +2448,7 @@ def scope_untouched_at_merge(
         for s in steps
         if s not in detectors
         and not _is_bookkeeping_step(str(s.get("name") or ""))
-        and step_conclusion(s) is None
+        and not step_has_concluded(s)
     ]
     if unfinished:
         return False, (
@@ -2510,7 +2570,22 @@ def step_conclusion(step: dict) -> str | None:
 
 
 def step_has_concluded(step: dict) -> bool:
-    """Has this step reached a conclusion at all? The negation is a refusal."""
+    """Has this step reached a conclusion at all? The negation is a refusal.
+
+    ROUND 16: now CALLED, at all three sites that had inlined it. It was added
+    in round 15 with zero production callers and exactly two test assertions --
+    decorative code, which this package's own rule refuses in the same breath as
+    it refuses an unconsulted policy key ("an unconsulted definition is prose,
+    not a control"). A reviewer caught it and offered the choice: delete it, or
+    call it where `step_conclusion(x) is None` was already written out.
+
+    Wiring won over deleting because the three sites were spelling the same
+    concept three times and none of them named it. The substitution is
+    behaviour-identical by construction -- `not step_has_concluded(s)` IS
+    `step_conclusion(s) is None`, the body is that expression -- so this does not
+    move the gate's verdict, which matters in a round that deliberately declined
+    to move it anywhere else.
+    """
     return step_conclusion(step) is not None
 
 
@@ -2731,10 +2806,16 @@ def _outputs_whose_work_did_not_run(
         # ROUND 11 BLOCKER, and a correction of round 10. Round 10 wrote this
         # refusal, saw it break the control proving every declared alternative is
         # consulted, and backed it out as an "over-correction". THE TEST WAS
-        # WRONG, not the refusal. Measured in the real workflow: `Jest (portal)`
-        # and `Type-check (portal)` carry the IDENTICAL condition
-        # (`fiab-console-ci.yml:297` and `:302`, both
-        # `steps.changed.outputs.portal == 'true'`), so they CANNOT disagree. The
+        # WRONG, not the refusal. Measured in the real workflow: `Type-check
+        # (portal)` and `Jest (portal)` carry the IDENTICAL condition
+        # (`fiab-console-ci.yml:297` and `:302` respectively, both
+        # `steps.changed.outputs.portal == 'true'`), so they CANNOT disagree.
+        # (Round 16: the two names were listed in the opposite order to their
+        # two line numbers. The substantive claim was true and both citations
+        # resolved, so nothing downstream was wrong -- but a citation a reader
+        # cannot follow without re-deriving it is the defect this file spends
+        # its budget on. A reviewer caught it; re-read both lines before
+        # editing.) The
         # fixture that produced a mixed outcome was describing an impossible job,
         # and treating that state as "part of its work ran, so exclude it" is
         # fail-OPEN: an independent reviewer drove a merge of
@@ -3230,7 +3311,7 @@ def job_executed(job: dict | None) -> tuple[bool, str]:
     # SKIPPED" about a step that was QUEUED -- an R7-false sentence feeding a
     # wrong route choice.
     unfinished = [
-        step for step in substantive if step_conclusion(step) is None
+        step for step in substantive if not step_has_concluded(step)
     ]
     if unfinished:
         names = ", ".join(str(s.get("name") or "?") for s in unfinished[:4])

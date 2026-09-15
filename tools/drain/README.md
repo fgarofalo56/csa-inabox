@@ -475,9 +475,11 @@ python tools/drain/mutate_gates.py           # every arm must be KILLED
 ```
 
 Neither total is written down here on purpose. Both move — the arm count went
-155 → 205 → 209 → 213 inside #4487 alone — and a number in prose that nothing
-enforces goes stale silently, which is the same defect this package exists to
-refuse. Each command prints its own total and **fails closed**:
+155 → 205 → 209 → 213 → 247 across #4487 and #4491 — and a number in prose that
+nothing enforces goes stale silently, which is the same defect this package
+exists to refuse. (That series itself stopped at 213 for five rounds while the
+count kept climbing, which is the defect demonstrating itself inside the
+sentence describing it.) Each command prints its own total and **fails closed**:
 `mutate_gates.py` exits non-zero on any survivor, skip, error, or a sandbox
 whose file set changed under it.
 

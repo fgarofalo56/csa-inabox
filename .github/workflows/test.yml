@@ -157,12 +157,20 @@ jobs:
     #   matrix  06:51:36 .. 07:12:38  = 21m02s  cut off mid-run
     #
     #   CONTROL rc=0  430 passed, 3 skipped, 1 deselected in 5.47s
-    #   225 arm executions, 220 distinct ids, EVERY ONE killed, zero survivors
+    #   225 arm executions, 225 distinct ids, EVERY ONE killed, zero survivors
     #   5.48 s/arm -- i.e. exactly the CONTROL suite runtime, because each arm
     #   re-runs the whole suite
-    #   247 arms are declared; it reached 220 and ran out of clock
+    #   247 arms are declared; it reached 225 and ran out of clock
     #
     #   247 x 5.48s = 22.6 min matrix + 9.2 min setup = 31.8 min vs a 30 wall
+    #
+    # THE 225 WAS WRITTEN AS 220 IN THREE PLACES HERE, AND WAS WRONG IN ALL
+    # THREE -- including "220 distinct ids", which was wrong about the count AND
+    # about there being a gap between executions and ids. Re-measured from the
+    # cited job's own log: 225 lines matching `KILLED   `, 225 distinct arm-id
+    # tokens, zero duplicates, zero BLIND SPOT, zero NOT A KILL, zero SKIP. A
+    # reviewer measured it first and I reproduced it before editing. This is the
+    # second stale number in this block; see the 240 note below.
     #
     # THAT ARM COUNT WAS FIRST WRITTEN AS 240 AND WAS WRONG -- it came from a
     # grep over the arm literals, which undercounts. `len(ARMS)` is the only
@@ -172,14 +180,23 @@ jobs:
     # number in prose nothing enforces is how this job ran out of clock twice.
     #
     # ~6% over, which is the same coin-flip margin the 15-minute ceiling died
-    # at. The guard is WORKING -- 220/220 killed. What ran out was the budget,
+    # at. The guard is WORKING -- 225/225 killed. What ran out was the budget,
     # and a job that exceeds `timeout-minutes` reports as `cancelled` rather
     # than `failure`, so it reads as a flake three times over.
     #
-    # 45 is chosen for HEADROOM, not for fit: ~41% above today's 31.8 min, so
-    # the next arm or two does not re-open this. Do not treat it as a ceiling to
-    # grow into. The real fix is to stop paying a whole suite per arm -- most
-    # arms are killed by a handful of named assertions -- and that is tracked
+    # 45 is chosen for HEADROOM, not for fit. The 31.8 min above is a FLOOR, not
+    # "today": it was measured at ff4562eca21, and round 15 then added 18 tests
+    # and zero arms (the sandbox control went 434 -> 452 collected). Every arm
+    # re-runs the whole suite, so per-arm cost moved while the arm count did
+    # not. PROJECTED, not measured -- scaling by two warm local runs on the same
+    # box (22.92s here / 21.53s there = 1.065): ~5.86 s/arm, 247 x 5.86 = ~24.1
+    # min matrix + 9.2 min setup = ~33.3 min against the 45 wall, i.e. ~35%
+    # headroom rather than the ~41% a reader would compute from the floor.
+    # Either figure clears; the point of naming both is that the smaller one is
+    # the honest one, and it went stale ONE COMMIT after it was written, inside
+    # this same PR. Do not treat 45 as a ceiling to grow into. The real fix is
+    # to stop paying a whole suite per arm -- most arms are killed by a handful
+    # of named assertions -- and that is tracked
     # separately, because narrowing an arm's test selection is precisely how a
     # GREEN arm becomes ambiguous between "blind test" and "wrong subset".
     timeout-minutes: 45
