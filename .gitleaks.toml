@@ -127,6 +127,25 @@ regexes = [
     # allowlist entry does, and if this file lands without the fixture's commit
     # (or the fixture lands without this entry) main inherits the red.
     '''^A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0$''',
+    # #4498 rounds 17-18 — the straddle fixture for `redactBodyFile` (800-char
+    # bound) and `pollFields` (300-char bound), in
+    # scripts/ci/__tests__/parse-reindex-poll.test.mjs. 38 synthetic characters,
+    # entropy 5.25, same purpose as the entry above: long enough to span a
+    # truncation boundary and inside the `code=` rule's class, which is what
+    # proves truncate-before-redact publishes a fragment. Not a credential.
+    #
+    # ADDED ONE ROUND LATE, AND THE RULE IT BROKE IS WRITTEN SIX LINES UP.
+    # "It must merge with the commit it covers" was recorded when the entry
+    # above landed; round 17 then added a NEW high-entropy fixture without
+    # pairing it with a config entry, and round 18 reused the same value, so it
+    # is in history twice. `Secret Scan` was green at `001b6e85314` and red on
+    # both pushes after.
+    #
+    # Changing the fixture now would NOT fix it: `gitleaks detect` walks
+    # history, so every value ever committed stays reachable. Allowlisting the
+    # committed values is the only remedy; de-entropying a future fixture avoids
+    # the next one.
+    '''^Zq7Rt2Wm9Xk4Lp6Vn8Jd3Hs5Fg1Ba0CeYuIoPw$''',
 ]
 
 paths = [
