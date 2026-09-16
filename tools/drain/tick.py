@@ -484,11 +484,21 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
        from `conclusion` so an in-progress run is refused as unfinished rather
        than as failed -- two different states, and rounding them together is how
        a still-running job gets read as a verdict.
-    4. **Where the kind declares a required STEP, that step must itself have
-       concluded success.** This is `receipts.g1_assertion_rule` in code: for
-       `g1-browser` the capture step is SKIPPED when `target_route` is blank, so
-       a smoke-only run is green having captured nothing. Checking the run alone
-       would accept exactly the vacuous case the rule exists to exclude.
+    4. **Where the kind declares required STEPS, every one of them must itself
+       have concluded success.** This is `receipts.g1_assertion_rule` in code,
+       and it applies to EVERY run-backed kind rather than to one of them: the
+       first version wired it to `g1-browser` alone, which closed the defect at
+       its label and left it open at two other sites. Measured on real history
+       -- 2 of the last 25 successful `loom-roll-and-validate` runs carry
+       `Roll image + validate live URL` = skipped with steps=0, and
+       `cloud-parity.md` names that shape exactly: a green run whose deploy job
+       was skipped at 0 steps is not a receipt. A skipped JOB reports no steps,
+       so requiring a step INSIDE it catches the skipped-job case and the
+       skipped-step case through one mechanism.
+
+       A kind with NO declared steps is REFUSED rather than waved through. An
+       empty requirement would mean "any green run of this workflow will do",
+       which is the run-level check this whole branch exists to replace.
     """
     producers = policy.get("receipt_producers", {})
     expected = producers.get(kind)
@@ -516,27 +526,93 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
             f"run concluded {run.get('conclusion')!r}, not success"
         )
 
-    required_step = (policy.get("receipt_required_steps", {}) or {}).get(kind)
-    if required_step:
-        steps = [
-            step
-            for job in (run.get("jobs") or [])
-            for step in (job.get("steps") or [])
-            if step.get("name") == required_step
-        ]
-        if not steps:
+    required_steps = (policy.get("receipt_required_steps", {}) or {}).get(kind)
+    if not required_steps:
+        raise ReceiptRefused(
+            f"receipt kind {kind!r} declares no required steps in "
+            "policy.receipt_required_steps, so a green run of its producer could be "
+            "green over nothing - refusing rather than accepting a run-level check"
+        )
+
+    by_name: dict[str, list[dict]] = {}
+    for job in (run.get("jobs") or []):
+        for step in (job.get("steps") or []):
+            by_name.setdefault(str(step.get("name")), []).append(step)
+
+    for required in required_steps:
+        found = by_name.get(required) or []
+        if not found:
             raise ReceiptRefused(
-                f"the run never ran the step {required_step!r}, which is what actually "
-                f"captures a {kind} receipt - a green run without it captured nothing"
+                f"the run never ran the step {required!r}, which is part of what "
+                f"actually establishes a {kind} receipt - a green run without it did "
+                "not do the work (a SKIPPED job reports no steps at all)"
             )
-        bad = [s for s in steps if s.get("conclusion") != "success"]
+        bad = [s for s in found if s.get("conclusion") != "success"]
         if bad:
             raise ReceiptRefused(
-                f"the step {required_step!r} concluded "
+                f"the step {required!r} concluded "
                 f"{bad[0].get('conclusion')!r}, not success"
             )
 
-    return str(run.get("url") or run.get("databaseId"))
+    sha = run.get("headSha")
+    ref = str(run.get("url") or run.get("databaseId"))
+    return f"{ref} (headSha {sha})" if sha else ref
+
+
+def _pr_references_item(repo: str, pr_number: int, item: int) -> None:
+    """Refuse unless PR #pr_number actually NAMES this item. Raises or returns None.
+
+    THE BINDING CHECK, and the first version of this feature did not have one:
+    it disclosed "this does not verify the evidence is ABOUT the item" and left
+    it there. A reviewer showed that disclosure was OVERSTATED for the `--from-pr`
+    path by closing an EPIC on a PR that references it nowhere -- so the
+    limitation was real but the remedy was cheap and already in the package.
+
+    Both surfaces are read, because neither alone is an oracle:
+
+    - `closingIssuesReferences` is the API's own view, and it is NOT complete --
+      it has read empty while a squash commit closed an issue, which is why
+      `merge_gate` reports it BESIDE its own scan rather than trusting it.
+    - `gates.referenced_issues` scans the body and the commit trail and is
+      verb-agnostic, so it sees `Refs #N` -- which is how nearly every PR in
+      this repo names the item it is work on, and which carries no closing verb.
+
+    This is WEAKER than `Item.pr` (#4489) and is not a substitute for it: a PR
+    that references an item is not necessarily that item's lane. It is strictly
+    better than nothing, which is what was here before.
+    """
+    pr = gh_json_local(
+        ["gh", "pr", "view", str(pr_number), "--repo", repo,
+         "--json", "body,commits,closingIssuesReferences"],
+        f"PR #{pr_number} references",
+    )
+    closing = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
+    messages = [
+        (c.get("messageHeadline", "") + "\n" + c.get("messageBody", ""))
+        for c in (pr.get("commits") or [])
+    ]
+    mentioned = gates.referenced_issues(pr.get("body") or "", messages, repo)
+    if item not in set(closing) | set(mentioned):
+        raise ReceiptRefused(
+            f"PR #{pr_number} does not reference #{item} anywhere - not in "
+            f"closingIssuesReferences {closing}, not in its body, not in its commit "
+            "trail. A receipt measured from a PR that never names the item is a "
+            "receipt about a different piece of work."
+        )
+
+
+def gh_json_local(args: list[str], what: str) -> dict:
+    """`sh` + JSON, kept here so this module does not depend on merge_gate for it."""
+    rc, out, err = sh(args)
+    if rc != 0:
+        raise ReceiptRefused(f"cannot read {what} (rc={rc}): {err[:200]}")
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefused(f"unparseable {what}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ReceiptRefused(f"unexpected shape for {what}")
+    return parsed
 
 
 def record_receipt_from_evidence(
@@ -564,15 +640,19 @@ def record_receipt_from_evidence(
     between that and this is that every fact recorded here was read back from
     GitHub by this function.
 
-    WHAT THIS DOES NOT ESTABLISH, stated because a receipt that overstates
-    itself is worse than none. It verifies the evidence is REAL, of the right
-    KIND, and that it PASSED. It does NOT verify the evidence is ABOUT this
-    item: nothing here stops a green roll being recorded against a second
-    deploy-path item it never touched. The operator supplies that pairing, and
-    the harness cannot check it today because `Item.pr` has no writer -- which
-    is #4489, and is exactly the corroboration it exists to add. Until then the
-    binding is a claim, and this docstring is where that is admitted rather
-    than in a reviewer's comment.
+    WHAT THIS DOES AND DOES NOT ESTABLISH about the BINDING -- that the evidence
+    is ABOUT this item -- stated precisely, because the first version of this
+    docstring overstated the gap and a reviewer proved it by closing an EPIC on
+    a PR that references it nowhere:
+
+    - `--from-pr` IS bound: `_pr_references_item` refuses unless the PR names
+      the item in `closingIssuesReferences`, its body, or its commit trail.
+      Weaker than `Item.pr` (#4489) -- a PR that references an item is not
+      necessarily that item's lane -- but no longer absent.
+    - `--from-run` is NOT bound, and cannot be from here: a workflow run carries
+      no issue reference at all. Nothing stops a green roll being recorded
+      against a second deploy-path item it never touched. That one genuinely
+      waits on #4489.
     """
     item = led.items.get(number)
     if item is None:
@@ -598,6 +678,7 @@ def record_receipt_from_evidence(
             )
         import merge_gate  # local: only this path needs it, and it imports gates
 
+        _pr_references_item(repo, from_pr, number)
         data = merge_gate.collect_ci_green_evidence(repo, from_pr)
         receipt = gates.ci_green_receipt(
             data["evidence"],
@@ -626,8 +707,20 @@ def record_receipt_from_evidence(
         ref = verify_run_backed_receipt(kind, run, policy)
         detail = f"{run.get('workflowName')} run {from_run} concluded success"
 
+    # RESTORE ON REFUSAL. `record_receipt` sets three fields and `transition`
+    # can still refuse afterwards (R2 compares the stamped class at the
+    # decision), which would leave the item carrying a receipt it was refused
+    # on. `main()` does not save on that path, so it is not reachable from the
+    # CLI today -- but "unreachable from the one caller I wrote" is exactly the
+    # kind of latency this package keeps finding years later, and an in-memory
+    # `Ledger` can be saved by a different caller in the same process.
+    before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
     led.record_receipt(number, kind, ref)
-    led.transition(number, CLOSED, f"receipt verified by tick: {detail}")
+    try:
+        led.transition(number, CLOSED, f"receipt verified by tick: {detail}")
+    except Exception:
+        (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) = before
+        raise
     return f"#{number} closed on a {kind} receipt - {detail}"
 
 

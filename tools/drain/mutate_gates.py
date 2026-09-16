@@ -2079,12 +2079,20 @@ ARMS: list[tuple[str, str, str, str]] = [
     # code". These arms are what keeps the new writer instrumented -- each was
     # measured RED against its named test on a sandbox copy before being added.
     (
-        ("RW1 the required-STEP check collapses, so a SMOKE-ONLY loom-ui-verify "
-         "run - green, with the capture step SKIPPED because target_route was "
-         "blank - is accepted as a G1 receipt having captured nothing at all"),
+        ("RW1 a required step that is ABSENT stops being refused, so a green run "
+         "that skipped the work - a smoke-only loom-ui-verify, or a roll whose "
+         "job was skipped at 0 steps - is accepted as a receipt over nothing"),
         "tick.py",
-        '    required_step = (policy.get("receipt_required_steps", {}) or {}).get(kind)',
-        "    required_step = None",
+        "        if not found:\n            raise ReceiptRefused(",
+        "        if False:\n            raise ReceiptRefused(",
+    ),
+    (
+        ("RW1b the required-steps map resolves to nothing, so every run-backed "
+         "kind silently degrades to a RUN-LEVEL check - the exact shape that "
+         "wired this defect to one of three kinds in the first place"),
+        "tick.py",
+        '    required_steps = (policy.get("receipt_required_steps", {}) or {}).get(kind)',
+        "    required_steps = [] if kind else None",
     ),
     (
         ("RW2 the workflow-identity check collapses, so a green run of ANY "

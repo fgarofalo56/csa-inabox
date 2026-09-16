@@ -267,6 +267,8 @@ OTHER_IMPLEMENTED_BY = {
     "receipt_producers.deploy-run": "tick.verify_run_backed_receipt",
     "receipt_required_steps": "tick.verify_run_backed_receipt",
     "receipt_required_steps.g1-browser": "tick.verify_run_backed_receipt",
+    "receipt_required_steps.deploy-run": "tick.verify_run_backed_receipt",
+    "receipt_required_steps.estate": "tick.verify_run_backed_receipt",
     # EACH CLASS DECLARED INDIVIDUALLY, now that a dict-valued top-level key no
     # longer exempts its sub-keys. `receipt_satisfies` looks each of these up by
     # name, so they are read, not prose -- and spelling them out is what makes

@@ -98,8 +98,17 @@
   },
 
   "receipt_required_steps": {
-    "_": "A STEP that must itself have concluded success, over and above the run. `receipts.g1_assertion_rule` requires the receipt to key on something ONLY a success path can produce, and a green RUN does not satisfy that for g1-browser: the capture step is SKIPPED when `target_route` is blank, so a smoke-only run concludes success having captured nothing at all. The step is blocking (its `continue-on-error` was removed in #2875) and `scripts/csa-loom/e2e-receipt.mjs` exits 2 on UNREACHABLE and 3 on SESSION REJECTED - so 'this step concluded success' is unreachable from an error path, which is the property the rule asks to be NAMED. A kind absent here is run-level only.",
-    "g1-browser": "Capture browser-E2E receipt (optional)"
+    "_": "STEPS that must themselves have concluded success, over and above the run. ALL of them, and a kind with an empty list is refused rather than waved through. `receipts.g1_assertion_rule` requires the receipt to key on something ONLY a success path can produce, and a green RUN does not satisfy that for ANY of these kinds - which is the whole finding: the first version of this map wired the check to `g1-browser` alone and left `deploy-run` and `estate` run-level, closing the defect at its label instead of at its site. MEASURED: 2 of the last 25 successful `loom-roll-and-validate` runs carry `Roll image + validate live URL` = skipped, steps=0 (34575500655, 34573457723), and `cloud-parity.md` names that exact shape - 'a green run whose deploy job was skipped at 0 steps is not a receipt'. A skipped JOB reports no steps at all, so requiring a step INSIDE it catches the skipped-job case and the skipped-step case with one mechanism. Every step name here was read off a real green run, never guessed.",
+    "g1-browser": [
+      "Capture browser-E2E receipt (optional)"
+    ],
+    "deploy-run": [
+      "Roll Container App to new image",
+      "Validate live URL"
+    ],
+    "estate": [
+      "Start (or adopt) a synthetic-monitor execution + poll to completion"
+    ]
   },
 
   "receipts": {

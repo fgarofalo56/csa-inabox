@@ -16,6 +16,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 
@@ -602,8 +603,82 @@ def test_blocker_a_smoke_only_run_is_green_and_captured_nothing():
 
     Would pass if the step were present and green; the run here is green.
     """
-    with pytest.raises(tick.ReceiptRefused, match="captured nothing"):
+    with pytest.raises(tick.ReceiptRefused, match="never ran the step"):
         tick.verify_run_backed_receipt("g1-browser", _g1_run(step_name=None), POLICY)
+
+
+def _roll_run(*, job_conclusion="success", steps=True):
+    """A `loom-roll-and-validate` run. `steps=False` is the REAL vacuous shape:
+    a successful run whose roll job is SKIPPED with zero steps -- measured on
+    34575500655 and 34573457723, 2 of the last 25 successful runs."""
+    job = {"name": "Roll image + validate live URL", "conclusion": job_conclusion}
+    job["steps"] = [
+        {"name": "Roll Container App to new image", "conclusion": "success"},
+        {"name": "Validate live URL", "conclusion": "success"},
+    ] if steps else []
+    return {
+        "databaseId": 34575500655, "workflowName": "loom-roll-and-validate",
+        "status": "completed", "conclusion": "success",
+        "url": "https://example.invalid/runs/345", "headSha": "abc123def456",
+        "jobs": [job],
+    }
+
+
+def test_blocker_a_green_roll_whose_job_was_skipped_is_green_over_nothing():
+    """MEASURED ON REAL HISTORY, and the defect an independent reviewer found:
+    the first version of this feature wired `receipt_required_steps` to
+    `g1-browser` alone and left `deploy-run` run-level, so it closed the defect
+    at its LABEL and left it open at its other SITES.
+
+    2 of the last 25 successful `loom-roll-and-validate` runs carry
+    `Roll image + validate live URL` = skipped with steps=0 (34575500655,
+    34573457723). Nothing rolled, nothing validated -- and `cloud-parity.md`
+    names this shape in terms: "a green run whose deploy job was skipped at 0
+    steps is not [a receipt]".
+
+    A skipped JOB reports no steps at all, so requiring a step INSIDE it is what
+    catches this. Would pass with `steps=True`, which is the positive control
+    immediately below.
+    """
+    with pytest.raises(tick.ReceiptRefused, match="never ran the step"):
+        tick.verify_run_backed_receipt(
+            "deploy-run", _roll_run(job_conclusion="skipped", steps=False), POLICY)
+
+
+def test_positive_control_a_real_roll_establishes_a_deploy_run_receipt():
+    """The control for the test above: the SAME workflow, same run conclusion,
+    differing only in whether the roll job actually ran its steps."""
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    assert "345" in ref
+
+
+def test_the_receipt_ref_names_the_commit_that_was_deployed():
+    """`headSha` was fetched and never read, so a deploy-run receipt recorded the
+    run without recording WHICH COMMIT it put live -- and 'which sha is live' is
+    the question `deploy-integrity.md` R3 exists to answer."""
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    assert "abc123def456" in ref
+
+
+def test_a_kind_with_no_required_steps_is_refused_not_waved_through():
+    """An empty requirement would mean 'any green run of this workflow will do',
+    which is the run-level check this branch exists to replace. Fails closed so
+    that adding a producer without naming its load-bearing steps cannot quietly
+    re-open the vacuous-green hole."""
+    thin = copy.deepcopy(POLICY)
+    thin["receipt_required_steps"] = {"_": "x"}
+    with pytest.raises(tick.ReceiptRefused, match="no required steps"):
+        tick.verify_run_backed_receipt("g1-browser", _g1_run(), thin)
+
+
+def test_every_run_backed_kind_declares_required_steps():
+    """THE REGRESSION GUARD for the finding itself. The defect was not a missing
+    check -- it was a check wired to one of three kinds. This asserts the map is
+    total over the producers, so adding a fourth producer without its steps
+    fails here rather than in production."""
+    producers = {k for k in POLICY["receipt_producers"] if not k.startswith("_")}
+    required = {k for k in POLICY["receipt_required_steps"] if not k.startswith("_")}
+    assert producers == required, f"run-backed kinds without required steps: {producers - required}"
 
 
 def test_the_capture_step_must_have_concluded_success_not_merely_appeared():
