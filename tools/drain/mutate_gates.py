@@ -2004,8 +2004,20 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     # -- FINDING 5 (#4518): the job-conclusion check, lifted to ALL THREE -----
     # routes. U2/U3 above cover route 1's own copy, which stays because
-    # `context_did_its_work` is a public predicate called directly by the
-    # suite. These three cover the all-routes gate in `context_is_accounted_
+    # `context_did_its_work` is a public predicate called directly by the suite
+    # (14 direct call sites in `test_ci_green_declared.py`, measured -- an
+    # earlier draft of this said 15 without counting).
+    #
+    # DISCLOSED, because a reviewer measured it and it cuts against keeping the
+    # copy: route 1's copy is DEAD IN THE COMPOSED PATH. Deleting it scores
+    # identically on all 150 real contexts and all 8 synthetic rows, because the
+    # all-routes gate below now refuses first. It is retained only for the
+    # standalone predicate, and the two copies have ALREADY diverged in order
+    # and message -- the same drift class this change exists to close, one level
+    # down. Tracked as #4527 rather than restructured mid-review, because
+    # extracting the shared helper deletes the very lines U2/U3 anchor on.
+    #
+    # These three cover the all-routes gate in `context_is_accounted_
     # for`, and each is killed ONLY by a job that route 1 would never see --
     # one that the scope-skip or alternative route would otherwise accept.
     (

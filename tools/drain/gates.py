@@ -2292,8 +2292,9 @@ def context_is_accounted_for(
     is what the check below the docstring now fixes. Round 14 added a job-level
     conclusion check -- refuse a job that did not conclude, refuse one that
     concluded non-`success` -- and it landed
-    on ONE of the three routes. Route 1 `context_did_its_work` reads it (`:2080`,
-    refusing `None` at `:2081` and non-success at `:2086`); route 2
+    on ONE of the three routes. Route 1 `context_did_its_work` reads it (the
+    `step_conclusion` call and the two refusals immediately below it, in this
+    file); route 2
     `scope_untouched_at_merge` and route 3 `alternative_accounted_for` read no
     job-level conclusion at all -- and STILL DO NOT, deliberately: the check is
     asked once, here, rather than copied into each of them, because three copies
