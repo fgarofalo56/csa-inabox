@@ -1919,7 +1919,7 @@ def _one_context(
         # verdict for every PR the harness gates while three are mid-flight
         # against it. A semantics change to the instrument, made by the author
         # of the work the instrument is judging, is not something to slip into a
-        # round that exists to fix stale numbers. Tracked separately with the
+        # round that exists to fix stale numbers. Tracked as issue #4518 with the
         # measurement, and the two predicates over one question are named here
         # so the next reader does not have to re-derive the contradiction.
         # A GREEN CONCLUSION IS NOT EVIDENCE THE CHECK DID ITS WORK, and this
@@ -2322,7 +2322,10 @@ def context_is_accounted_for(
     it. Changing the instrument's verdict, authored by the same hand as the work
     it is judging, does not belong in a round convened to correct stale numbers.
     Recorded with its measurement so the next reader inherits the finding rather
-    than the silence.
+    than the silence, and tracked as issue #4518 -- a reviewer filtered all 400
+    open issues and found that an earlier "tracked separately" here named
+    nothing, which is an unconsulted claim in a tracked file: the defect class
+    this package exists to refuse, written into its own deferral.
 
     THE ORDER OF 2 AND 3 IS NOT ARBITRARY and neither may skip the other's
     question. Round 5 put the alternative inside `context_did_its_work`, which
