@@ -2463,6 +2463,48 @@ def _run_arms(
     return killed, survived, skipped, errored
 
 
+def _exit_args(
+    *,
+    counts: tuple[int, int, int, int],
+    arms: list[tuple[str, str, str, str]],
+    before: str,
+    after: str,
+) -> dict:
+    """The WIRING between the run's results and `_exit_code`, made testable.
+
+    ROUND 19, on a reviewer's measurement and their remedy. Round 16 recorded
+    `main()`'s wiring as a known gap and costed closing it at "a full control
+    run plus a sandbox build per invocation". That was wrong: the gap is
+    argument passing, and argument passing does not need a smoke test, it needs
+    to not be inside `main()`.
+
+    It also UNDERSTATED the gap. All four wiring mutations survive, and two are
+    not innocuous:
+
+        total=killed     makes BOTH partition refusals vacuously false
+        survived=0       hides survivors from the "not every arm died" refusal
+
+    Either one turns the matrix green over a run that found blind spots, which
+    is the precise failure this package exists to refuse, reachable by editing
+    one keyword in the one function no test calls.
+
+    Taking the COUNTS AS A TUPLE and the ARMS themselves, rather than four
+    integers and a length, is what removes the remaining freedom: there is no
+    longer a place to pass `killed` where `total` belongs, because `total` is
+    derived here from the same list the dispatch consumed. Zero runtime cost.
+    """
+    killed, survived, skipped, errored = counts
+    return {
+        "killed": killed,
+        "survived": survived,
+        "skipped": skipped,
+        "errored": errored,
+        "total": len(arms),
+        "before": before,
+        "after": after,
+    }
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -2746,10 +2788,10 @@ def main() -> int:
     # smoke test, which costs a full control-suite run (16-18s measured) plus a
     # sandbox build for every invocation; that is a real trade and it has not
     # been made. Recorded as a known gap, not as coverage.
-    code, why = _exit_code(
-        killed=killed, survived=survived, skipped=skipped, errored=errored,
-        total=len(ARMS), before=before, after=after,
-    )
+    code, why = _exit_code(**_exit_args(
+        counts=(killed, survived, skipped, errored),
+        arms=ARMS, before=before, after=after,
+    ))
     if code != 0:
         print(f"REFUSING -- {why}")
     return code

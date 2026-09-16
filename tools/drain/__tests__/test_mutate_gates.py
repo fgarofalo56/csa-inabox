@@ -481,6 +481,20 @@ def test_the_scorer_separates_a_kill_from_a_suite_that_never_decided():
     assert mutate_gates._score(1, "") == "not-evaluated", (
         "no summary text at all is not a pytest failure, whatever the rc says"
     )
+    # ROUND 19, and this one pins the rc CONJUNCT, which nothing did. A reviewer
+    # mutated `returncode == 1` to `returncode != 0` and it SURVIVED all 457
+    # tests. The reason is fixture shape, not a missing case: every rc=2 fixture
+    # above ALSO carries an error line, so `not _reports_an_error(...)` answers
+    # first and the rc test is never independently exercised.
+    #
+    # This input is rc=2 with a genuine failure summary and NO error line, so
+    # the rc conjunct is the only thing that can decide it. It is the shape the
+    # conjunct exists for: a collection-time crash that still managed to print a
+    # failure line is a suite that did not evaluate this arm, and scoring it
+    # KILLED is how a `SyntaxError` once sat among 106 real kills.
+    assert mutate_gates._score(
+        2, "FAILED __tests__/test_f.py::test_bad - assert 0\n1 failed, 424 passed in 9.9s\n"
+    ) == "not-evaluated", "rc=2 is not a kill even when the output carries a failure line"
 
 
 def test_the_scorer_does_not_call_a_clean_exit_a_kill_on_output_alone():
@@ -695,6 +709,85 @@ def test_the_dispatch_over_an_empty_matrix_scores_nothing():
     instead of, say, defaulting a counter to the total."""
     killed, survived, skipped, errored = mutate_gates._run_arms([], {}, _fake_run([]))
     assert (killed, survived, skipped, errored) == (0, 0, 0, 0)
+
+
+def test_the_exit_args_wiring_cannot_pass_a_count_where_the_total_belongs():
+    """`main()`'s wiring, now reachable — round 16 disclosed it as a gap.
+
+    A reviewer measured that ALL FOUR wiring mutations survived, and named the
+    two that are not innocuous: `total=killed` makes both partition refusals
+    vacuously false, and `survived=0` hides survivors. Either turns the matrix
+    GREEN over a run that found blind spots, from one keyword in the one
+    function nothing calls.
+
+    Round 16 costed the fix as a `main()` smoke test and deferred it. That was
+    the wrong instrument for the thing: this is argument passing, so it only
+    had to stop living inside `main()`.
+    """
+    args = mutate_gates._exit_args(
+        counts=(7, 1, 2, 0),
+        arms=[("a", "f", "x", "y")] * 10,
+        before="d0",
+        after="d0",
+    )
+    assert args == {
+        "killed": 7, "survived": 1, "skipped": 2, "errored": 0,
+        "total": 10, "before": "d0", "after": "d0",
+    }
+    # TOTAL IS DERIVED, NOT PASSED. This is the assertion that closes the
+    # `total=killed` mutation: the count and the total come from different
+    # objects, so no edit here can make them the same by accident.
+    assert args["total"] != args["killed"]
+
+    # And it composes into a real refusal rather than a shape check.
+    code, why = mutate_gates._exit_code(**args)
+    assert code == 1
+    assert "scored 10 arms but the matrix declares 10" not in why
+    assert "not every arm died" in why
+    assert "killed=7 of 10" in why
+
+
+def test_the_error_line_says_whether_an_error_was_reported(capsys):
+    """The ERROR branch's diagnostic suffix, which no test observed.
+
+    ROUND 19. A reviewer pinned `errored_out = _reports_an_error(stdout)` to
+    `False` and it SURVIVED all 457 tests. It is NOT an equivalent mutant: every
+    COUNT is identical, so any assertion about buckets passes, but the printed
+    line silently loses ` (an ERROR line was reported)` -- the exact diagnostic
+    round 14 was blocked to add, and the one that distinguishes "the suite
+    crashed" from "the suite ran and this arm was not decided".
+
+    A survivor whose only effect is on a message is invisible to a test that
+    reads only return values. This reads the output.
+    """
+    originals = {"f.py": "AAA BBB\n"}
+    run = _fake_run([
+        # rc=1 with an ERROR line and no failure summary: the runtime-fixture
+        # shape. `_score` returns not-evaluated and the suffix must appear.
+        (1, "E       AssertionError: boom\n1 error in 1.83s\n"),
+        # rc=2 with neither: a collection crash that reported no ERROR line, so
+        # the same branch must NOT claim one.
+        (2, "Interrupted: no tests ran\n"),
+    ])
+
+    killed, survived, skipped, errored = mutate_gates._run_arms(
+        [("errored with an error line", "f.py", "AAA", "aaa"),
+         ("errored without one", "f.py", "BBB", "bbb")],
+        originals,
+        run,
+    )
+    assert (killed, survived, skipped, errored) == (0, 0, 0, 2)
+
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if "ERROR    " in ln]
+    assert len(lines) == 2, out
+    assert "(an ERROR line was reported)" in lines[0], (
+        "the arm whose output carried an ERROR line must say so -- this is the "
+        "round-14 diagnostic, and it is the only observable effect of `errored_out`"
+    )
+    assert "(an ERROR line was reported)" not in lines[1], (
+        "the arm whose output carried NO error line must not claim one (R7)"
+    )
 
 
 def _preamble_kwargs(**overrides):
