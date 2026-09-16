@@ -108,6 +108,39 @@ regexes = [
     '''^QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ$''',
     '''^Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA$''',
     '''^QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ$''',
+    # #4498's B1 straddle fixture, in
+    # scripts/ci/__tests__/classify-reindex-result.test.mjs. A 40-character
+    # synthetic value with no meaning: it is long enough to span a 300-character
+    # truncation boundary and matches the `code=` rule's
+    # `[A-Za-z0-9._~+/=-]{20,}` class, which is exactly what the test needs to
+    # prove that truncating BEFORE redacting publishes a credential fragment.
+    # Its entropy (4.82) trips `generic-api-key`. It is not a credential.
+    #
+    # ON MAIN, FOR THE SAME REASON THE FOUR ENTRIES ABOVE ARE. `Secret Scan`
+    # runs `gitleaks detect --source .` over full history while `--config` reads
+    # the CHECKED-OUT branch, so a fixture committed on one branch red-lines
+    # every OTHER open PR until its allowlist entry is on the default branch.
+    # Measured 2026-09-16: the finding pinned to commit `a083241a2fa` on
+    # #4498's branch was failing `Secret Scan` on #4491, which does not contain
+    # that commit and cannot fix it. Landing the entry here is the only remedy
+    # that unblocks both.
+    #
+    # ANCHORED: `allowlist.regexes` compile with a bare `regexp.MustCompile` and
+    # are tested with `re.FindString(secret) != ""`, so there is no implicit
+    # anchoring — an unanchored entry would mask any real credential that merely
+    # CONTAINS this text.
+    '''^A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0$''',
+    # #4498's SECOND straddle fixture, in
+    # scripts/ci/__tests__/parse-reindex-poll.test.mjs — 38 synthetic
+    # characters, entropy 5.25, same job as the one above at the 800-char and
+    # 300-char bounds instead of 300. Committed twice (rounds 17 and 18) before
+    # its allowlist entry existed, which is the same one-round lag this file
+    # keeps recording.
+    #
+    # Landed here for the same reason as its sibling: the finding is reachable
+    # from every PR's full-history scan, so it fails PRs that do not contain it
+    # and cannot fix it. Anchored for the same reason too.
+    '''^Zq7Rt2Wm9Xk4Lp6Vn8Jd3Hs5Fg1Ba0CeYuIoPw$''',
 ]
 
 paths = [
