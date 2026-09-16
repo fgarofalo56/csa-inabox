@@ -127,7 +127,79 @@ jobs:
   python-tests:
     name: Python Tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 WAS NOT ENOUGH, AND IT RAN OUT SILENTLY. A job that exceeds
+    # `timeout-minutes` is reported as `cancelled`, not `failure`, so a REQUIRED
+    # context died against the clock and read as a flake. Measured on #4491's
+    # four heads, same job, same 3.10 leg (the mutation matrix is pinned there):
+    #
+    #   bf9e3450f57  matrix 336s  job 844s   56s of headroom
+    #   003afb915f   matrix 358s  job 878s   22s
+    #   4ba18cfc475  matrix 383s  job 871s   29s
+    #   693a75a9f2c  matrix 396s  job 918s   CANCELLED at the 900s wall
+    #
+    # Not a flake: four monotonic rows into a fixed ceiling. Both multiplicands
+    # grow together -- arms and tests -- because every arm runs the whole suite,
+    # so the curve is superlinear and a re-run at a ~2% margin is a coin flip.
+    # A required context that passes on a coin flip is the "green over nothing"
+    # shape this repo refuses, so the budget is raised rather than retried.
+    #
+    # Raised rather than SPLIT deliberately. Moving the matrix to its own job
+    # would take it OUT of the required set until branch protection is updated
+    # in the same change -- a guard that silently stops blocking, which is worse
+    # than a slow one.
+    #
+    # 30 WAS NOT ENOUGH EITHER, AND THE ARGUMENT ABOVE PREDICTED IT. Three more
+    # cancellations, the last one fully instrumented -- job 104280343412, head
+    # ff4562eca21:
+    #
+    #   job     06:42:25 .. 07:12:42  = 30m17s  CANCELLED at the wall
+    #   setup   06:42:25 .. 06:51:36  =  9m11s
+    #   matrix  06:51:36 .. 07:12:38  = 21m02s  cut off mid-run
+    #
+    #   CONTROL rc=0  430 passed, 3 skipped, 1 deselected in 5.47s
+    #   225 arm executions, 225 distinct ids, EVERY ONE killed, zero survivors
+    #   5.48 s/arm -- i.e. exactly the CONTROL suite runtime, because each arm
+    #   re-runs the whole suite
+    #   247 arms are declared; it reached 225 and ran out of clock
+    #
+    #   247 x 5.48s = 22.6 min matrix + 9.2 min setup = 31.8 min vs a 30 wall
+    #
+    # THE 225 WAS WRITTEN AS 220 IN THREE PLACES HERE, AND WAS WRONG IN ALL
+    # THREE -- including "220 distinct ids", which was wrong about the count AND
+    # about there being a gap between executions and ids. Re-measured from the
+    # cited job's own log: 225 lines matching `KILLED   `, 225 distinct arm-id
+    # tokens, zero duplicates, zero BLIND SPOT, zero NOT A KILL, zero SKIP. A
+    # reviewer measured it first and I reproduced it before editing. This is the
+    # second stale number in this block; see the 240 note below.
+    #
+    # THAT ARM COUNT WAS FIRST WRITTEN AS 240 AND WAS WRONG -- it came from a
+    # grep over the arm literals, which undercounts. `len(ARMS)` is the only
+    # authority and it reads 247 at this head (an independent reviewer measured
+    # 243 at d39907a5421, and four arms have landed since; both are right at
+    # their own sha). Corrected here, in the comment that exists because a
+    # number in prose nothing enforces is how this job ran out of clock twice.
+    #
+    # ~6% over, which is the same coin-flip margin the 15-minute ceiling died
+    # at. The guard is WORKING -- 225/225 killed. What ran out was the budget,
+    # and a job that exceeds `timeout-minutes` reports as `cancelled` rather
+    # than `failure`, so it reads as a flake three times over.
+    #
+    # 45 is chosen for HEADROOM, not for fit. The 31.8 min above is a FLOOR, not
+    # "today": it was measured at ff4562eca21, and round 15 then added 18 tests
+    # and zero arms (the sandbox control went 434 -> 452 collected). Every arm
+    # re-runs the whole suite, so per-arm cost moved while the arm count did
+    # not. PROJECTED, not measured -- scaling by two warm local runs on the same
+    # box (22.92s here / 21.53s there = 1.065): ~5.86 s/arm, 247 x 5.86 = ~24.1
+    # min matrix + 9.2 min setup = ~33.3 min against the 45 wall, i.e. ~35%
+    # headroom rather than the ~41% a reader would compute from the floor.
+    # Either figure clears; the point of naming both is that the smaller one is
+    # the honest one, and it went stale ONE COMMIT after it was written, inside
+    # this same PR. Do not treat 45 as a ceiling to grow into. The real fix is
+    # to stop paying a whole suite per arm -- most arms are killed by a handful
+    # of named assertions -- and that is tracked
+    # separately, because narrowing an arm's test selection is precisely how a
+    # GREEN arm becomes ambiguous between "blind test" and "wrong subset".
+    timeout-minutes: 45
     env:
       # This job builds ONE environment out of ~22 INDEPENDENT pip resolutions
       # (the pyproject extras, then 20 per-domain requirements.txt, then
@@ -415,22 +487,33 @@ jobs:
       # THE MUTATION MATRIX, ON THE OLDEST SUPPORTED PYTHON.
       #
       # `tools/drain/mutate_gates.py` is what certifies that the drain's test
-      # suite is not BLIND: it reintroduces 155 defects that actually happened
-      # and requires the suite to go red on every one. A green suite without it
-      # is ambiguous — it means either the tests discriminate or they do not.
+      # suite is not BLIND: it reintroduces defects that actually happened and
+      # requires the suite to go red on every one. A green suite without it is
+      # ambiguous — it means either the tests discriminate or they do not.
+      # The arm count is deliberately NOT written here: it moves every round
+      # (155 -> 205 -> 209 -> 213 across #4487 alone), and a number in a comment
+      # that nothing checks is the stale-count defect this package keeps finding
+      # in its own files. `mutate_gates.py` prints and enforces its own total.
       #
       # Until now NOTHING RAN IT. `grep -rn mutate_gates .github/workflows/
-      # Makefile` returned nothing, so "155 KILLED" was a number producible only
-      # by hand, on whichever interpreter the author happened to have. That is
-      # how `Path.read_text(newline=...)` — a 3.13-only keyword — shipped in the
-      # runner's own normalisation loop: it ran green on three 3.13 workstations
-      # (mine and both reviewers') and, on this matrix's Pythons, aborted before
-      # scoring a single arm. The control that certifies the gate was the one
-      # control in the package that nothing verified.
+      # Makefile` returned nothing, so "every arm KILLED" was a claim producible
+      # only by hand, on whichever interpreter the author happened to have. That
+      # is how `Path.read_text(newline=...)` — a 3.13-only keyword — shipped in
+      # the runner's own normalisation loop: it ran green on three 3.13
+      # workstations (mine and both reviewers') and, on this matrix's Pythons,
+      # aborted before scoring a single arm. The control that certifies the gate
+      # was the one control in the package that nothing verified.
       #
       # Pinned to 3.10 — the FLOOR `pyproject.toml` declares — because that is
-      # the leg a version-gated API breaks on first, and running it on all three
-      # would triple a ~90s job for no extra signal.
+      # the leg a version-gated API breaks on first. Running it on all three
+      # legs would triple the job's dominant cost: this step alone measured 396s
+      # of a 918s job on 2026-09-14, which is also why `timeout-minutes` above
+      # is 45. An earlier version of this comment called it "a ~90s job" and
+      # used that to argue the tripling was cheap — the estimate was an order of
+      # magnitude stale, in the file where the timeout lives. A later version
+      # then said the timeout was 30 after it had already been raised to 45,
+      # which is the same defect one round on: a comment describing a number
+      # that sits eight lines above it, and disagreeing with it.
       - name: Drain mutation matrix (every arm must be KILLED)
         if: steps.relevant.outputs.run == 'true' && matrix.python-version == '3.10'
         run: python tools/drain/mutate_gates.py

@@ -29,15 +29,23 @@ matrix is exactly what they looked like:
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # LINE BUFFERED, not block buffered. Round 14: redirected to a file this
+    # wrote NOTHING until ~8KB had accumulated, so a run that died partway --
+    # and several did, to memory pressure -- left a zero-byte log and an
+    # unexplainable exit code. A 30-minute instrument whose progress is
+    # invisible until it finishes cannot be diagnosed when it does not.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -54,7 +62,13 @@ SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory
 #: the copy made the CONTROL fail to collect, which is the instrument working:
 #: rc=2 before any arm ran, and the run refused rather than scoring 128 arms
 #: against a suite that was not there.
-COPIED = [*SOURCES, "mutate_gates.py"]
+#:
+#: `required_contexts.json` is here for the same reason and was learned the same
+#: way: without it three tests raised `FileNotFoundError` in EVERY arm, so every
+#: arm scored KILLED on a failure that had nothing to do with the mutation. A
+#: kill that does not depend on the arm is a tautology, not evidence -- the
+#: shape recorded in `csa_loom_a_meta_test_inside_the_mutation_sandbox_makes_killed_a_tautology`.
+COPIED = [*SOURCES, "mutate_gates.py", "required_contexts.json"]
 
 # (name, file, needle, replacement) -- each needle is a defect that shipped, or
 # one an independent reviewer demonstrated the suite could not see.
@@ -751,6 +765,349 @@ ARMS: list[tuple[str, str, str, str]] = [
         '      "portal/"\n',
         '      "apps/fiab-console"\n',
     ),
+    # -- ROUND 14: round 13's fix landed on ONE OF THREE ROUTES --------------
+    # An independent reviewer found the SEVENTH and EIGHTH readers of
+    # `conclusion` still coercing, and a job-level verdict that only
+    # `_renamed_at_merge` had ever read. A receipt is only as good as its
+    # least-asked route.
+    (
+        ("U1 `green-at-merge` stops refusing a job whose work steps have NOT "
+         "CONCLUDED, so an in-progress job whose declared step already "
+         "succeeded is accepted - and the job join PREFERS that job"),
+        "gates.py",
+        ("    if unfinished:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "'),
+    ),
+    (
+        ("U2 `green-at-merge` stops reading the JOB's own verdict, so a job that "
+         "concluded FAILURE is accepted as having executed its declared "
+         "substantive step"),
+        "gates.py",
+        '    if job_verdict != "success":',
+        "    if False:",
+    ),
+    (
+        ("U3 the job-level NOT-CONCLUDED refusal collapses, so a job that is "
+         "still running answers for a merge"),
+        "gates.py",
+        "    if job_verdict is None:",
+        "    if False:",
+    ),
+    (
+        ("U4 `job_executed` -- the SELECTOR that steers the route choice -- "
+         "calls a QUEUED step SKIPPED again, which is both R7-false and the "
+         "wrong route"),
+        "gates.py",
+        ("    if unfinished:\n"
+         "        names = \", \".join(str(s.get(\"name\") or \"?\") for s in unfinished[:4])"),
+        ("    if False:\n"
+         "        names = \", \".join(str(s.get(\"name\") or \"?\") for s in unfinished[:4])"),
+    ),
+    # -- ROUND 13: a step with NO conclusion, and the untested absent-step ----
+    # The most reachable defect this issue has produced -- no mutation, no policy
+    # edit, live production path. `did_run` folded "has not concluded" into "did
+    # not run", so a job with `in_progress` work steps was excused with "no work
+    # step in the job ran". Three more readers were uninstrumented, and the
+    # absent-gated-step refusal had no test at all.
+    (
+        ("V1 the NOT-CONCLUDED refusal collapses, so a job whose work steps are "
+         "still queued or running is excused with 'nothing for it to do' - the "
+         "live fail-open, restored"),
+        "gates.py",
+        ("    if unfinished:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} work step(s) have NOT CONCLUDED "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"{len(unfinished)} work step(s) have NOT CONCLUDED "'),
+    ),
+    (
+        ("V2 `step_conclusion` returns '' instead of None for a step that has "
+         "not concluded, which is how every reader in this module used to fold "
+         "'still running' into 'did not run'"),
+        "gates.py",
+        "    return text or None",
+        "    return text",
+    ),
+    (
+        ("V3 an output may declare a gated step that is ABSENT from the job and "
+         "still be excused - the refusal that had no test, and which accepted a "
+         "portal-only merge with `Type-check (portal)` missing entirely"),
+        "gates.py",
+        ("            if not matches:\n"
+         "                return None, (\n"
+         '                    f"declared output {out!r} of {name!r} claims to gate {wanted!r}, "\n'
+         '                    "which is absent from this job - the row cannot say whether that "\n'
+         '                    "output\'s work ran"\n'
+         "                )"),
+        "            if not matches:\n                continue",
+    ),
+    # -- ROUND 12: the round-11 fix, and two more fail-open survivors --------
+    # Both reviewers converged: the round-11 rule was WRONG (one row of a
+    # six-row table) and had NO ARM. Mutating its refusal to `elif False:`
+    # survived the whole suite. That is the fourth round running where a fix
+    # shipped unobserved, so these three exist before anything else does.
+    (
+        ("W1 the whole-table refusal collapses, so an output whose steps neither "         "all skipped nor all succeeded is EXCLUDED and its scope never asked - "
+         "a FAILED portal step then excuses a matching portal scope"),
+        "gates.py",
+        '        elif outcomes == {"success"}:',
+        "        elif True:",
+    ),
+    (
+        ("W2 the `all skipped` arm widens to `any skipped`, so an output with "
+         "ONE skipped step among successes is asked as though nothing ran"),
+        "gates.py",
+        '        if outcomes == {"skipped"}:',
+        '        if "skipped" in outcomes:',
+    ),
+    (
+        ("W3 an ABSENT primary stops refusing in `_primary_steps_all_skipped` - "
+         "the precondition BOTH routes share, so a declaration naming a step no "
+         "longer in the job reads as cleanly hollow"),
+        "gates.py",
+        '            return False, f"its declared step {wanted!r} is absent from this job"',
+        "            continue",
+    ),
+    (
+        ("W4 an AMBIGUOUS primary stops refusing there, which is precisely what "
+         "round 11's `steps_named` migration was written to close"),
+        "gates.py",
+        ("        matches, ambiguous = steps_named(str(wanted), steps)\n"
+         "        if matches is None:"),
+        ("        matches, ambiguous = steps_named(str(wanted), steps)\n"
+         "        if False:"),
+    ),
+    # -- SIX survivors an independent reviewer found in round 11 -------------
+    # Round 10 shipped nine arms and every one pointed at `gates.py`'s scope
+    # selection. The reviewer wrote their own arms over `ran_instead` and
+    # `_primary_steps_all_skipped` and six survived the 230-arm matrix. Q12 is
+    # the sharpest: it reverts round 10's OWN R7 fix -- the "absent" reason going
+    # back to the untrue "did not conclude success" -- with the suite green.
+    (
+        ("Q8 the MIXED-outcome refusal in `ran_instead` is deleted, so an "
+         "alternative resolving to steps that disagree counts as having run"),
+        "gates.py",
+        '        elif "success" in concluded:',
+        "        elif False:",
+    ),
+    (
+        ("Q9 `usable` stops filtering runner BOOKKEEPING, so a `Post ...` step "
+         "stands in as the declared alternative"),
+        "gates.py",
+        ('            and not _is_bookkeeping_step(str(s.get("name") or ""))\n'
+         "        ]\n        if not usable:"),
+        "        ]\n        if not usable:",
+    ),
+    (
+        ("Q11 the ABSENT branch in `ran_instead` is deleted entirely, so an "
+         "alternative that is not in the job is indistinguishable from one that "
+         "ran and failed"),
+        "gates.py",
+        ('            not_counted.append(f"{alt_name!r} is absent from this job")\n'
+         "            continue"),
+        "            continue",
+    ),
+    (
+        ("Q12 the ABSENT reason reverts VERBATIM to the sentence round 10 "
+         "removed for being untrue about a step nobody read a conclusion from"),
+        "gates.py",
+        'not_counted.append(f"{alt_name!r} is absent from this job")',
+        'not_counted.append(f"{alt_name!r} did not conclude success")',
+    ),
+    (
+        ("Q13 the only-detector/bookkeeping reason reverts to the generic "
+         "sentence, so two different findings read identically"),
+        "gates.py",
+        ('                f"{alt_name!r} resolved only to the detector or to runner "\n'
+         '                "bookkeeping, which is not this job\'s work"'),
+        '                f"{alt_name!r} did not conclude success"',
+    ),
+    (
+        ("Q15 the HOLLOW-primary precondition consults only the FIRST resolved "
+         "step -- it gates BOTH routes, and `[:1]` is fail-OPEN: a duplicate "
+         "primary that RAN reads as cleanly hollow"),
+        "gates.py",
+        ("        off = [\n"
+         '            step_conclusion(s) or "NOT CONCLUDED"\n'
+         "            for s in matches"),
+        ("        off = [\n"
+         '            step_conclusion(s) or "NOT CONCLUDED"\n'
+         "            for s in matches[:1]"),
+    ),
+    # -- the SINGLE RESOLVER, which round 9 added and left unobserved ----------
+    # Round 10. An independent reviewer built a sandbox of the same shape as this
+    # one and ran three arms over `steps_named`. ALL THREE SURVIVED the 397-test
+    # suite: no test named the function, no arm touched it, and the round-9 diff
+    # added no regression case for the exploit it was written for. That is the
+    # THIRD round running where a fix shipped without an instrument -- round 8
+    # fixed the data and built none, round 9 fixed the logic and built none. The
+    # bug changes shape each round; the meta-defect did not.
+    (
+        ("X1 exact-match-wins is DELETED, so a declared name resolves to every "
+         "step that merely CONTAINS it again - round 9's blocker verbatim"),
+        "gates.py",
+        ('    exact = [s for s in steps if str(s.get("name") or "") == wanted]\n'
+         "    if exact:\n"
+         '        return exact, ""\n'),
+        "",
+    ),
+    (
+        ("X2 the ambiguity refusal is DELETED, so several loose matches and no "
+         "exact hit silently returns ALL of them - the fail-closed control this "
+         "resolver exists to add"),
+        "gates.py",
+        "    if len(loose) > 1:",
+        "    if False:",
+    ),
+    (
+        ("X3 the resolver returns only the FIRST exact match - the `[:1]` "
+         "population narrowing this file records twice as the arm shape that "
+         "lives, because a one-element slice still answers right whenever the "
+         "fixture happens to order the interesting element first"),
+        "gates.py",
+        "    if exact:\n        return exact, \"\"",
+        "    if exact:\n        return exact[:1], \"\"",
+    ),
+    (
+        ("X4 one declared NAME resolving to steps that disagree stops refusing, "
+         "so a DUPLICATE step name drops the output from the scope question - "
+         "round 8's blocker restored where round 9 closed only the extending name"),
+        "gates.py",
+        "            if len(mine) > 1:",
+        "            if False:",
+    ),
+    (
+        ("X5 an output may declare its own DETECTOR as a gated step, which "
+         "always runs - so that output is never 'unrun' and its scope is never "
+         "compared, by a one-line policy edit"),
+        "gates.py",
+        "            if gate_step and gate_step in str(wanted):",
+        "            if False:",
+    ),
+    (
+        ("X6 an output may declare runner BOOKKEEPING as a gated step, same "
+         "shape, different vocabulary"),
+        "gates.py",
+        "            if _is_bookkeeping_step(str(wanted)):",
+        "            if False:",
+    ),
+    # -- the DELEGATED infra scope's two guards, added round 8 with no arms ---
+    # Round 9. An independent reviewer grepped this file for `resolve_infra_ere`
+    # and `top_level_dirs_agree` and found NOTHING: two guards were added to the
+    # module the matrix exists to police and neither was mutable. Round 8's own
+    # post-mortem lists "no arm had ever touched `receipts.ci_green_rule`" as a
+    # reason round 6's hole survived -- and that reason had simply moved one file
+    # over. The reviewer then killed the newline half by hand and it SURVIVED,
+    # because the only fixture put the diagnostic BEFORE the ERE where the anchor
+    # check already refuses it.
+    (
+        ("E1 the newline half of the ERE shape check drops, so a deriver that "
+         "prints the ERE and THEN a warning returns a contaminated string that "
+         "compiles, matches nothing, and EXCUSES"),
+        "merge_gate.py",
+        '    if not ere or "\\n" in ere or not ere.startswith("^("):',
+        '    if not ere or not ere.startswith("^("):',
+    ),
+    (
+        ("E2 the ANCHOR half drops, so a single-line diagnostic with no ERE at "
+         "all is accepted as the delegated scope"),
+        "merge_gate.py",
+        '    if not ere or "\\n" in ere or not ere.startswith("^("):',
+        '    if not ere or "\\n" in ere:',
+    ),
+    (
+        ("E3 the two-clocks guard is never consulted, so a receipt answers the "
+         "merged sha's infra scope from TODAY's possibly-narrower tree"),
+        "merge_gate.py",
+        "    if merged_sha and not _top_level_dirs_agree(merged_sha):",
+        "    if False:",
+    ),
+    (
+        ("E4 the two-clocks guard always AGREES - the shape where a guard is "
+         "present, is called, and decides nothing"),
+        "merge_gate.py",
+        "    return not (at_merge - today)",
+        "    return True",
+    ),
+    (
+        ("E5 the two-clocks comparison INVERTS, so it refuses a widening (safe) "
+         "and permits a narrowing (the excusing direction)"),
+        "merge_gate.py",
+        "    return not (at_merge - today)",
+        "    return not (today - at_merge)",
+    ),
+    (
+        ("E6 an unlistable merged tree AGREES instead of failing closed - "
+         "'cannot be shown to agree' silently becoming 'agree'"),
+        "merge_gate.py",
+        "    if at_merge is None or today is None:\n        return False",
+        "    if at_merge is None or today is None:\n        return True",
+    ),
+    # ROUND 10: three mutations of these same two guards SURVIVED E1-E6, found
+    # by an independent reviewer. All three are an EXIT CODE stopping being read
+    # -- the shape where a subprocess that failed is treated as one that answered
+    # -- and the second is round 9's own fixture-conflation defect (one fixture
+    # satisfying both halves of a check) one function further down, inside the
+    # guard round 9 added arms for.
+    (
+        ("E7 `resolve_infra_ere` stops reading the DERIVER's exit code, so a "
+         "crashed deriver's partial stdout becomes the delegated scope"),
+        "merge_gate.py",
+        "    if out.returncode != 0:\n        return None\n    ere = out.stdout.strip()",
+        "    ere = out.stdout.strip()",
+    ),
+    (
+        ("E8 `dirs()` stops reading `git ls-tree`'s exit code, so a failed "
+         "listing reads as an EMPTY tree - and an empty `at_merge` subtracts to "
+         "nothing, which AGREES"),
+        "merge_gate.py",
+        ("        if out.returncode != 0:\n            return None\n"
+         "        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}"),
+        "        found = {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}",
+    ),
+    (
+        ("E9 `dirs()` returns an EMPTY SET instead of None for an empty "
+         "listing, so the caller's `is None` check passes and the comparison "
+         "runs against nothing"),
+        "merge_gate.py",
+        "        return found or None",
+        "        return found",
+    ),
+    # Round 8, found by BOTH independent reviewers by different methods. Every
+    # policy arm above targets `review.escalate_to_two_when_path_contains`; not
+    # one touched `receipts.ci_green_rule`, so `killed=213 survived=0` was
+    # silent about the entire round-7 data restructure. Deleting an output is
+    # the mutation that reproduces round 6's blocker verbatim, and it left
+    # `391 passed` untouched.
+    (
+        ("R17 the `portal` output drops out of the `next build (node 20)` scope "
+         "row -- round 6's blocker verbatim: that job is the portal's ONLY "
+         "blocking check, so a portal-only merge whose grep did not fire is "
+         "excused with 'there was nothing for it to do'"),
+        "policy.json",
+        (',\n            {\n              "output": "portal",\n'
+         '              "paths": ["portal/react-webapp/**", '
+         '".github/workflows/fiab-console-ci.yml"],\n'
+         '              "gates": ["Jest (portal)", "Type-check (portal)"]\n'
+         "            }"),
+        "",
+    ),
+    (
+        ("R18 the `infra` output drops out of the `vitest (node 20)` scope row "
+         "-- the COMPUTED shape, whose scope is named in no literal list, so an "
+         "under-declared row here is invisible in review as well as in CI"),
+        "policy.json",
+        (',\n            {\n              "output": "infra",\n'
+         '              "paths": "derive-infra-reading-suites.mjs --ere",\n'
+         '              "gates": ["Run vitest (infra-reading suites only)"]\n'
+         "            }"),
+        "",
+    ),
     # R6 and R9 mutate `gates.py` and die on `test_policy.py` calling
     # `review_requirement` DIRECTLY -- so they prove the FUNCTION honours the
     # triggers and prove nothing about the caller feeding them. Both were inert
@@ -1037,14 +1394,14 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "P11 a policy read via a LOCAL ALIAS is invisible to the allow-list scan",
         "gates.py",
-        "            if re.search(alias, sources):",
+        "            if re.search(alias, flat):",
         "            if False:",
     ),
     (
         "P10 the section half of the policy-read scan rejects `.get(` again",
         "gates.py",
-        '            pattern = (r"(?:\\[|\\.get\\()\\s*[\\"\']" + re.escape(section)',
-        '            pattern = (r"\\[\\s*[\\"\']" + re.escape(section)',
+        '            step = r"(?:\\[|\\.get\\()\\s*[\\"\']{}[\\"\']"',
+        '            step = r"\\[\\s*[\\"\']{}[\\"\']"',
     ),
     (
         "G11 the below-window scan takes a PREFIX CUT, losing a straddling token",
@@ -1057,17 +1414,33 @@ ARMS: list[tuple[str, str, str, str]] = [
         # `policy`, so the arm was a no-op and survived on that alone. Skip the
         # bare-key branch entirely, which is the hole as it actually was.
         "P9 the allow-list scan skips BARE keys again, so `repo` can be moved out",
-        # The anchor carries the NEXT line's comment, because the bare
-        # `partition(".")` + `if sub:` shape now occurs TWICE in this file and
-        # `replace(old, new, 1)` took the first -- so the arm mutated a
-        # different function and SURVIVED. An ambiguous anchor is a mutation
-        # aimed somewhere other than where it reads.
+        # The anchor carries the NEXT line's comment, because the depth test now
+        # occurs in more than one walker and `replace(old, new, 1)` took the
+        # first -- so the arm mutated a different function and SURVIVED. An
+        # ambiguous anchor is a mutation aimed somewhere other than where it reads.
         "gates.py",
-        ('        section, _, sub = dotted.partition(".")\n        if sub:\n'
-         "            # A SECTIONED key is read as"),
-        ('        section, _, sub = dotted.partition(".")\n        if not sub:\n'
-         "            continue\n        if sub:\n"
-         "            # A SECTIONED key is read as"),
+        ('        parts = dotted.split(".")\n        if len(parts) > 1:\n'
+         "            # THE CHAIN, TO ANY DEPTH."),
+        ('        parts = dotted.split(".")\n        if len(parts) == 1:\n'
+         "            continue\n        if len(parts) > 1:\n"
+         "            # THE CHAIN, TO ANY DEPTH."),
+    ),
+    (
+        ("P15 the policy-read scan stops collapsing whitespace, so a chained read "
+         "written across LINES - this package's own house style - reads as unread"),
+        "gates.py",
+        '    flat = re.sub(r"\\s+", " ", sources)',
+        "    flat = sources",
+    ),
+    (
+        ("P14 the allow-list scan partitions on the FIRST dot again, so a "
+         "THREE-deep control can be moved onto it undetected"),
+        "gates.py",
+        ("            chain = step.format(re.escape(parts[0])) + \"\".join(\n"
+         '                r"[^\\n]{0,20}?" + step.format(re.escape(part)) '
+         "for part in parts[1:]\n            )"),
+        ('            chain = step.format(re.escape(parts[0])) + r"[^\\n]{0,20}?" '
+         '+ step.format(re.escape(".".join(parts[1:])))'),
     ),
     (
         "G10 a blocking token below the window is dropped in silence again",
@@ -1108,8 +1481,24 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "P4 the policy contract covers only the two gate sections again",
         "gates.py",
-        "        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:\n            continue",
-        "        continue",
+        ("            if dotted not in OTHER_IMPLEMENTED_BY and "
+         "dotted not in OPERATOR_DOCUMENTATION:\n                missing.append(dotted)"),
+        "            pass",
+    ),
+    (
+        ("P12 a dict-valued key exempts every sub-key under it again, "
+         "so an unread `receipts.*` is structurally unreachable"),
+        "gates.py",
+        "                walk(value, dotted)",
+        "                pass",
+    ),
+    (
+        ("P13 the policy-key walk stops at TWO levels again, so a three-deep "
+         "unread key is structurally unmissable - the round-4 blocker"),
+        "gates.py",
+        '            dotted = f"{prefix}.{key}" if prefix else key',
+        ('            dotted = f"{prefix}.{key}" if prefix else key\n'
+         '            if prefix and "." in prefix:\n                continue'),
     ),
     (
         "P2 the policy mapping accepts a name that resolves to nothing",
@@ -1129,25 +1518,539 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if lost or dupes or len(placed) != len(want):",
         "    if len(placed) != len(want):",
     ),
+
+    # -- the `ci-green` receipt (#4487) -------------------------------------
+    #
+    # The receipt's whole risk is that it degrades into "absence is excused".
+    # The old definition named a measurement the topology cannot produce, which
+    # left exactly two outcomes: nothing closes, or somebody quietly accepts
+    # 10-of-15. Every arm here re-creates the second one, and the two the issue
+    # asked for by name -- the path-filtered case and the renamed-context case
+    # -- are CG1 and CG2.
+    #
+    # CG3/CG9/CG13 are POPULATION-NARROWING, per this file's second lesson:
+    # they do not weaken a check, they shrink what the check looks at. Those are
+    # the arms that survive an author-written matrix.
+    (
+        ("CG1 a never-created workflow run excuses the absence WITHOUT consulting "
+         "the push trigger (the path-filtered case becomes 'absence is fine')"),
+        "gates.py",
+        "    if runs:",
+        "    if False:",
+    ),
+    (
+        ("CG2 the renamed sibling is accepted whatever its run concluded "
+         "(the renamed-context case stops checking the run)"),
+        "gates.py",
+        'if conclusion != "SUCCESS":',
+        "if False:",
+    ),
+    (
+        "CG3 the receipt judges only the FIRST required context",
+        "gates.py",
+        "    for item in evidence:",
+        "    for item in evidence[:1]:",
+    ),
+    (
+        "CG4 a PR-head result stands in for a merged sha over a DIFFERENT tree",
+        "gates.py",
+        "    if not trees_identical:",
+        "    if False:",
+    ),
+    (
+        "CG5 an untraceable producer stops failing closed",
+        "gates.py",
+        "    if not item.workflow_path:",
+        "    if False:",
+    ),
+    (
+        ("CG6 the glob gets fnmatch semantics, so `*` crosses a `/` and a "
+         "top-level filter looks like it admitted a nested file"),
+        "gates.py",
+        'out.append("[^/]*")',
+        'out.append(".*")',
+    ),
+    (
+        ("CG7 `**/` must consume at least one segment, so `deploy/**/*.bicep` "
+         "stops matching `deploy/x.bicep`"),
+        "gates.py",
+        'out.append("(?:.*/)?")',
+        'out.append(".*/")',
+    ),
+    (
+        ("CG8 the YAML 1.1 `on:`->True key is dropped, so EVERY real workflow "
+         "reads as having no push trigger and every absence is excused at once"),
+        "gates.py",
+        'doc.get("on", doc.get(True))',
+        'doc.get("on")',
+    ),
+    (
+        "CG9 the path filter is applied to only the FIRST changed file",
+        "gates.py",
+        "    files = [f for f in changed_files if f]",
+        "    files = [f for f in changed_files if f][:1]",
+    ),
+    (
+        ("CG10 an EMPTY required set is a green receipt (`all([])` is True, one "
+         "module along from the `drained: true` over 297 open issues)"),
+        "gates.py",
+        "    if not contexts:",
+        "    if False:",
+    ),
+    (
+        ("CG11 a merged sha with ZERO check-runs stops guarding the receipt, so "
+         "every absence is excused one at a time over a commit where nothing ran"),
+        "gates.py",
+        '    if classify_missing(merged_total_count, waiting=False) == "never-created":',
+        "    if False:",
+    ),
+    (
+        ("CG12 an UNMEASURED changed-file set excuses a path filter, so "
+         "'it did not run' is inferred from 'I read no files'"),
+        "gates.py",
+        '        if not files:\n            return True, "no changed files were measured',
+        '        if not files:\n            return False, "no changed files were measured',
+    ),
+    (
+        ("CG13 the shared de-duplication takes the FIRST run for a context name, "
+         "so a green re-run hides one that measured nothing"),
+        "gates.py",
+        "        if prior is None or _check_rank(check) > _check_rank(prior):",
+        "        if prior is None:",
+    ),
+
+    # -- the two blockers from #4491's independent review --------------------
+    #
+    # Both reviewers returned REQUEST-CHANGES, from different angles, and
+    # converged on the same two holes. Reviewer 2 also wrote six arms against
+    # the COLLECTOR -- 216 lines with no tests and no arms -- and FIVE SURVIVED
+    # the full suite, the worst being `trees_identical = True` hardcoded, the
+    # single condition the whole deferral rests on. CG4 killed the consumer in
+    # gates.py; nothing mutated the producer. "168/168 KILLED" was true about
+    # the pure function and not about the program deciding its inputs.
+    #
+    # CB* are those arms, now that the producer's decisions live in tested
+    # functions rather than inline in the collector.
+    (
+        ("CB1 a PR-head green that did NOT execute its declared substantive step "
+         "is deferrable again (the test.yml pull_request shape)"),
+        "gates.py",
+        ("    ran, evidence, route = context_is_accounted_for(\n"
+         "        item.name, item.head_job, merged_changed_files, policy,\n"
+         "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "    )\n    if not ran:"),
+        ("    ran, evidence, route = context_is_accounted_for(\n"
+         "        item.name, item.head_job, merged_changed_files, policy,\n"
+         "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "    )\n    if False:"),
+    ),
+    (
+        ("SC9 an UNREPRESENTABLE pattern in a declared scope propagates out of "
+         "the gate instead of failing closed - a crash, not a refusal"),
+        "gates.py",
+        "    except UnsupportedPatternError as exc:\n        return None, (",
+        "    except UnsupportedPatternError as exc:\n        return [], (",
+    ),
+    (
+        ("SC8 a DELEGATED scope resolves to an empty path list instead of failing "
+         "closed, so `on.push.paths` excuses every skip under it"),
+        "gates.py",
+        "        if push_trigger is None or not push_trigger.paths:",
+        "        if False:",
+    ),
+    (
+        "CB2 `job_executed` stops fail-closing on absent step data",
+        "gates.py",
+        ('    if not isinstance(job, dict):\n'
+         '        return False, "no job record was read for it, so it cannot be shown to have run"\n'
+         '    steps = job.get("steps")\n'
+         '    if not isinstance(steps, list) or not steps:\n'
+         '        return False, "its job record carries no steps, so it cannot be shown to have run"\n'
+         '    substantive = ['),
+        ('    if not isinstance(job, dict):\n'
+         '        return True, "no job record was read for it, so it cannot be shown to have run"\n'
+         '    steps = job.get("steps")\n'
+         '    if not isinstance(steps, list) or not steps:\n'
+         '        return False, "its job record carries no steps, so it cannot be shown to have run"\n'
+         '    substantive = ['),
+    ),
+    (
+        ("CB3 `job_executed` counts runner BOOKKEEPING as work, so a job whose "
+         "real steps were all skipped reads as having run"),
+        "gates.py",
+        "        if isinstance(step, dict) and not _is_bookkeeping_step(str(step.get(\"name\") or \"\"))",
+        "        if isinstance(step, dict)",
+    ),
+    (
+        ("CB4 a SKIPPED declared substantive step counts as executed, so the "
+         "check that concluded green without doing its work passes"),
+        "gates.py",
+        '        return step_conclusion(step) != "skipped"',
+        "        return True",
+    ),
+    (
+        ("CB4b green-at-merge returns a pass on the check CONCLUSION alone - the "
+         "branch that carries 14 of 15 contexts, and the defect both reviewers "
+         "found one branch along from the deferral one"),
+        "gates.py",
+        ("        did_work, evidence, route = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy,\n"
+         "            infra_ere=infra_ere,\n"
+         "        )\n        if not did_work:"),
+        ("        did_work, evidence, route = context_is_accounted_for(\n"
+         "            item.name, item.merged_job, merged_changed_files, policy,\n"
+         "            infra_ere=infra_ere,\n"
+         "        )\n        if False:"),
+    ),
+    (
+        ("CB4h green-at-merge falls back to the PR-HEAD job when no merged job "
+         "was read - the `pull_request` hollow shape standing in for the merge. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "            item.name, item.merged_job, merged_changed_files, policy",
+        "            item.name, item.merged_job or item.head_job, merged_changed_files, policy",
+    ),
+    (
+        ("CB4c an UNDECLARED context stops failing closed, so adding a required "
+         "context silently removes it from the receipt"),
+        "gates.py",
+        "    if name not in declared:\n        return False, (",
+        "    if name not in declared:\n        return True, (",
+    ),
+    (
+        ("CB4d the declared step is matched but its SKIPPED state is ignored - "
+         "presence of the step, rather than its execution, decides"),
+        "gates.py",
+        "        if len(skipped) == len(matches):\n            hollow.append(wanted)",
+        "        if False:\n            hollow.append(wanted)",
+    ),
+    (
+        ("CB4i only the FIRST step matching a declared substring decides, so a "
+         "declaration that matches several steps is satisfied by any one of them. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "        skipped = [s for s in matches if not ran(s)]",
+        "        skipped = [s for s in matches[:1] if not ran(s)]",
+    ),
+    (
+        ("CB4j the ALL rule inspects only the first 50 work steps, so the "
+         "158-step context it was written for is unchecked past step 50. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "gates.py",
+        "        skipped = [s for s in work if not ran(s)]",
+        "        skipped = [s for s in work[:50] if not ran(s)]",
+    ),
+    (
+        ("CB4k only the FIRST failing context contributes a reason, so a receipt "
+         "under-reports what is wrong with it. An independent reviewer wrote "
+         "this arm and it SURVIVED"),
+        "gates.py",
+        '            reasons.append(f"{result.name}: {result.detail}")',
+        '            reasons[:0] = [f"{result.name}: {result.detail}"][: 1 - len(reasons)]',
+    ),
+    (
+        ("CB4e a STALE declaration (step absent from the job) passes instead of "
+         "failing closed, so a renamed step silently stops being checked"),
+        "gates.py",
+        "    if missing:\n        return False, (",
+        "    if missing:\n        return True, (",
+    ),
+    (
+        ("CB4f the ALL rule accepts any number of skipped steps, so guardrails "
+         "and Repo Hygiene stop being checked at all"),
+        "gates.py",
+        "        skipped = [s for s in work if not ran(s)]\n        if skipped:",
+        "        skipped = [s for s in work if not ran(s)]\n        if False:",
+    ),
+    (
+        ("CB4g the policy contract walks only the first level again, so a "
+         "three-deep key the authority does not carry goes unnoticed"),
+        "gates.py",
+        "            if not isinstance(node, dict) or part not in node:\n                absent.append(dotted)",
+        "            if False:\n                absent.append(dotted)",
+    ),
+    (
+        ("CB5 the rename stops requiring the `push` event, so a green cron or "
+         "dispatch supplies the evidence for a push that went red"),
+        "gates.py",
+        '    if event != "push":',
+        "    if False:",
+    ),
+    (
+        "CB6 the rename stops requiring the run to be about the merged commit",
+        "gates.py",
+        "    if not head_sha or (merged_sha and head_sha != merged_sha):",
+        "    if False:",
+    ),
+    (
+        "CB7 an EMPTY job list is evidence of a rename again",
+        "gates.py",
+        "    if not jobs:",
+        "    if False:",
+    ),
+    (
+        ("CB8 a run that DOES carry the required context still counts as a "
+         "rename, asserting a cause the evidence contradicts"),
+        "gates.py",
+        "    if item.name in names:",
+        "    if False:",
+    ),
+    (
+        ("CB9 the standing-in sibling no longer has to have executed anything, "
+         "so the hollow-green hole reopens inside the rename case"),
+        "gates.py",
+        '        if ok and str(j.get("conclusion") or "").lower() == "success"',
+        "        if True",
+    ),
+    (
+        ("CB10 `select_merged_run` takes the NEWEST run of a path regardless of "
+         "event - reviewer 2's attack on the collector, at its new home"),
+        "gates.py",
+        '        and str(run.get("event") or "").lower() == "push"',
+        "        and True",
+    ),
+    (
+        "CB11 `select_merged_run` stops pinning to the merged sha",
+        "gates.py",
+        '        and str(run.get("head_sha") or "") == merged_sha',
+        "        and True",
+    ),
+    (
+        ("CB12 the glob silently treats an unrepresentable pattern as a literal, "
+         "which UNDER-matches - the direction that EXCUSES an absence"),
+        "gates.py",
+        "    if _UNSUPPORTED_GLOB.search(pattern):\n        raise UnsupportedPatternError(pattern)",
+        "    if False:\n        raise UnsupportedPatternError(pattern)",
+    ),
+    (
+        ("CB13 an unrepresentable pattern in a push trigger resolves to "
+         "DID-NOT-RUN instead of RUNS, so it excuses rather than refuses"),
+        "gates.py",
+        "                return True, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
+        "                return False, (\n                    f\"`{label}` contains {pattern!r}, which this translator cannot \"",
+    ),
+
+    # -----------------------------------------------------------------------
+    # SC* -- the SCOPE-UNTOUCHED branch (#4487 round 4).
+    #
+    # This branch is an EXCUSE, and an excuse is the most dangerous kind of code
+    # in this package: every weakening of it turns a check that ran nothing into
+    # a green receipt. So it is mutated harder than the rule it excuses.
+    # -----------------------------------------------------------------------
+    (
+        ("SC1 the scope excuse stops reading the merged files, so ANY skip is "
+         "excused as 'nothing in scope changed'"),
+        "gates.py",
+        "    hits = sorted({f for f in files if _any_match(tuple(paths), [f])})",
+        "    hits = []",
+    ),
+    (
+        ("SC2 the gate step's own conclusion stops being checked, so a job whose "
+         "DETECTOR was itself skipped excuses its skipped work"),
+        "gates.py",
+        "    if off:\n        return False, (\n            f\"its declared gate step {gate_step!r} matches",
+        "    if False:\n        return False, (\n            f\"its declared gate step {gate_step!r} matches",
+    ),
+    (
+        ("SC10 a SIBLING gate step answers for a skipped one - `any()` over a "
+         "SUBSTRING-matched population, which is the round-5 blocker and the same "
+         "any/all asymmetry context_did_its_work had already fixed"),
+        "gates.py",
+        ("        for s in detectors\n"
+         '        if step_conclusion(s) != "success"'),
+        ("        for s in detectors[:0]\n"
+         '        if step_conclusion(s) != "success"'),
+    ),
+    (
+        ("SC11 the scope excuse stops asking whether any work step RAN, so "
+         '"nothing for it to do" is printed about a job that did work'),
+        "gates.py",
+        "    if did_run:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        ("SC12 only the FIRST declared scope pattern is applied, so a merge that "
+         "matches only the SECOND is excused - the #3783 case, laundered"),
+        "gates.py",
+        "        hits = sorted({f for f in files if _any_match(tuple(paths), [f])})",
+        "        hits = sorted({f for f in files if _any_match(tuple(paths[:1]), [f])})",
+    ),
+    (
+        ("CB4l a declared ALTERNATIVE that was SKIPPED counts as work done, so "
+         "the two-output job stops being checked on either half"),
+        "gates.py",
+        '        if concluded == {"success"}:',
+        "        if concluded:",
+    ),
+    # ROUND 6. Four arms an independent reviewer wrote against round 5's new
+    # code, ALL FOUR OF WHICH SURVIVED. The lesson is the one this file records
+    # twice already and the author has now failed to apply three rounds running:
+    # the author mutates the CHECK, the reviewer narrows the POPULATION, and it
+    # is the population narrowing that lives. `[:1]` is the honest shape of an
+    # accident where `[:0]` is not, because a one-element slice still reaches
+    # the right answer on any fixture that happens to order the interesting
+    # element first -- which is exactly why R2A3 survived.
+    (
+        ("R2A1 only the FIRST declared alternative is consulted, so a job whose "
+         "SECOND alternative ran stops being accounted for"),
+        "gates.py",
+        "    for alt in alternatives:",
+        "    for alt in list(alternatives)[:1]:",
+    ),
+    (
+        ("R2A6 alternatives are consulted only when EXACTLY ONE is declared - "
+         "i.e. the feature is deleted for half its declared population, and "
+         "before round 6 no test named `Jest (portal)` at all"),
+        "gates.py",
+        "    if not isinstance(alternatives, list) or not alternatives:",
+        "    if not isinstance(alternatives, list) or len(alternatives) != 1:",
+    ),
+    (
+        ("R2A3 the gate-step all() reads only the FIRST detector - the honest "
+         "narrowing of round 5's own any()->all() blocker fix"),
+        "gates.py",
+        ('        for s in detectors\n'
+         '        if step_conclusion(s) != "success"'),
+        ('        for s in detectors[:1]\n'
+         '        if step_conclusion(s) != "success"'),
+    ),
+    (
+        ("R2A5 a FAILED work step stops counting as work, so the excuse prints "
+         "'nothing for it to do' about a job that ran a step and it failed"),
+        "gates.py",
+        '        and step_conclusion(s) != "skipped"',
+        '        and step_conclusion(s) not in ("skipped", "failure")',
+    ),
+    (
+        ("SC3 a context with no declared scope BORROWS another context's, so the "
+         "excuse stops being per-context at all"),
+        "gates.py",
+        "    return row if isinstance(row, dict) else None",
+        ("    return row if isinstance(row, dict) else next(\n"
+         "        (r for r in (policy.get(\"receipts\", {}).get(\"ci_green_rule\", {})\n"
+         "                     .get(\"scope_paths\", {}) or {}).values()\n"
+         "         if isinstance(r, dict)), None)"),
+    ),
+    (
+        ("SC4 an EMPTY merged changed-file list is excused instead of refused, so "
+         "an unreadable diff reads as 'nothing in scope changed'"),
+        "gates.py",
+        '    if not files:\n        return False, (',
+        '    if False:\n        return False, (',
+    ),
+    (
+        ("SC5 a declared step that FAILED counts as a scope skip, so a red step "
+         "is laundered into an excused one"),
+        "gates.py",
+        "        if off:\n            return False, (",
+        "        if False:\n            return False, (",
+    ),
+    (
+        ("SC6 the gate step's ABSENCE stops failing closed, so a stale "
+         "declaration excuses a skip it cannot explain"),
+        "gates.py",
+        "    if not detectors:\n        return False, (",
+        "    if not detectors:\n        return True, (",
+    ),
+    (
+        ('SC7 the scope excuse accepts an "ALL" declaration, for which no single '
+         "step can be named as the one that was scope-skipped"),
+        "gates.py",
+        "    if not isinstance(declared_steps, list) or not declared_steps:\n        return False, (",
+        "    if not isinstance(declared_steps, list) or not declared_steps:\n        return True, (",
+    ),
+    (
+        ("CB14 the job join reads only the FIRST workflow run, so a context "
+         "published by a second run of the same sha has no steps and the receipt "
+         "fails on 'no job record' - or, with a permissive branch, passes on one. "
+         "An independent reviewer wrote this arm and it SURVIVED"),
+        "merge_gate.py",
+        "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
+        "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
+    ),
 ]
 
 
 def digest_tree(root: Path) -> str:
-    """One digest over every tracked source this harness could possibly touch."""
+    """One digest over every tracked source this harness could possibly touch.
+
+    ROUND 14: this had NO TEST, and `tracked tree untouched: True` -- a line
+    quoted as evidence in every round of this issue -- had never been exhibited
+    printing False. An independent reviewer showed `sorted(SOURCES)[:0]` or a
+    constant return makes the claim vacuous over a real modification of
+    `gates.py`, with the suite green.
+
+    It REFUSES an empty population rather than digesting nothing, because a
+    digest over zero files is a constant, and a constant compares equal to
+    itself for any tree.
+    """
+    if not SOURCES:
+        raise ValueError(
+            "digest_tree over an EMPTY source list would be a constant, and a "
+            "constant makes `tracked tree untouched` true for every tree"
+        )
     sha = hashlib.sha256()
+    seen = 0
     for name in sorted(SOURCES):
         sha.update(name.encode("utf-8"))
         sha.update((root / name).read_bytes())
+        seen += 1
+    if seen != len(SOURCES):  # pragma: no cover - defensive
+        raise ValueError(f"digested {seen} of {len(SOURCES)} sources")
     return sha.hexdigest()
 
 
-#: pytest's own summary vocabulary. A kill must be a TEST that failed, not any
-#: non-zero exit -- see the comment at the scoring branch.
-_FAILURE_MARKERS = ("FAILED", " failed", "failed,", "AssertionError")
+#: pytest's summary line, parsed by COUNT rather than searched by substring.
+#:
+#: ROUND 14, twice. First `_FAILURE_MARKERS` carried the bare string
+#: `AssertionError` -- TRACEBACK vocabulary, which a COLLECTION ERROR also
+#: prints -- so a run with rc=1, `1 error` and ZERO failed scored KILLED. Then
+#: the first fix for that introduced `_ERROR_MARKERS` containing `" error"`,
+#: which matched the SUITE'S OWN ASSERTION TEXT (`assert "no error" in why`) and
+#: scored three real kills as ERROR. The same defect, inside its own repair.
+#:
+#: A substring of the whole stdout can never answer this: the suite's output
+#: contains the vocabulary it is testing. pytest states its verdict in ONE line,
+#: and that line is what gets read.
+_SUMMARY_COUNT_RE = re.compile(
+    r"(\d+)\s+(failed|passed|error|errors|skipped|deselected|xfailed|xpassed)\b"
+)
+
+
+def _summary_counts(stdout: str) -> dict[str, int]:
+    """pytest's own tallies, off its LAST summary line. Empty when it did not say.
+
+    The summary is the last line carrying at least one `<n> <word>` pair from
+    pytest's vocabulary -- `-q` prints e.g. `1 failed, 427 passed in 12.34s`, and
+    a collection failure prints `1 error in 0.40s`. Reading the last such line
+    rather than the whole stream is what stops the suite's own assertion text
+    from voting on its own result.
+    """
+    for line in reversed(stdout.strip().splitlines()):
+        pairs = _SUMMARY_COUNT_RE.findall(line)
+        if pairs:
+            counts: dict[str, int] = {}
+            for n, word in pairs:
+                key = "error" if word == "errors" else word
+                counts[key] = counts.get(key, 0) + int(n)
+            return counts
+    return {}
 
 
 def _reports_a_failure(stdout: str) -> bool:
-    return any(marker in stdout for marker in _FAILURE_MARKERS)
+    """Did a TEST fail? Not: did anything anywhere print something alarming."""
+    return _summary_counts(stdout).get("failed", 0) > 0
+
+
+def _reports_an_error(stdout: str) -> bool:
+    """Did the suite ERROR rather than fail? Then it did not decide this arm.
+
+    A failure is the suite working; an error is the suite not running. Only the
+    first is evidence about a mutation, and a mutant that breaks the instrument
+    has not been caught by it.
+    """
+    counts = _summary_counts(stdout)
+    return counts.get("error", 0) > 0 or "INTERNALERROR" in stdout
 
 
 def _write_lf(path: Path, text: str) -> None:
@@ -1183,6 +2086,425 @@ def _passed_count(stdout: str) -> int:
     return int(match.group(1)) if match else -1
 
 
+#: The tests that MAY skip inside the sandbox, by nodeid, because they reach
+#: outside the copied tree. Both are keyed on `_repo_root()`, which the sandbox
+#: deliberately cannot satisfy: one shells out to `node`, the other calls
+#: `gh api`. Anything else skipping means a guard stopped guarding -- and a
+#: guard that skips where the mutants live cannot kill an arm, so the arms it
+#: covers would score KILLED on unrelated tests regardless of their mutation.
+EXPECTED_SANDBOX_SKIPS = (
+    "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
+    "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
+    "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
+)
+
+
+#: The environment every pytest subprocess here runs under, with the ambient
+#: `PYTEST_ADDOPTS` REMOVED.
+#:
+#: ROUND 13 BLOCKER, and the reason the round-12 "fix" for this did not fix it.
+#: Round 12 made `_collected` read the SELECTED count out of
+#: `354/413 tests collected (59 deselected)` and then asserted, in a comment,
+#: that the inherited-`PYTEST_ADDOPTS` blind run was closed. An independent
+#: reviewer measured it OPEN: the sandbox is a byte copy of this tree running
+#: under the SAME environment, so any `-k` moves BOTH numbers together. Reading
+#: the selected count changed the printed number and never the verdict --
+#: `here_n=360 there_n=360 gate passes: True` while the suite really ran 360 of
+#: 419.
+#:
+#: A comparison cannot detect a variable that perturbs both sides equally. The
+#: only fix is to stop inheriting it, so the matrix runs the suite it names.
+#: That is the THIRD false "this hole is closed" claim in this file's history,
+#: and the note stays because the claim is the defect, not the hole.
+def _clean_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("PYTEST_PLUGINS", None)
+    return env
+
+
+def _collected(tests_dir: Path, cwd: Path) -> int | None:
+    """How many tests pytest COLLECTS in a tree. None when it cannot say.
+
+    The population check round 11 added. `--collect-only -q` prints one line per
+    test and a trailing summary; the summary is parsed rather than the lines, so
+    a change in pytest's line format cannot silently under-count.
+
+    `-o addopts=` NEUTRALISES the repo's own pytest config, and that is
+    load-bearing rather than tidiness: `pyproject.toml` puts `-q` in `addopts`,
+    pytest SUMS verbosity flags, so a second `-q` here nets `-qq` and the summary
+    line this parses is never printed. The sandbox has no `pyproject.toml`, so
+    without the override the two trees are measured by different rules and the
+    repo side silently returns None. An independent reviewer recorded that
+    behaviour one round earlier as a false alarm to avoid chasing; it was the
+    first thing this hit.
+    """
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", str(tests_dir), "--collect-only", "-q",
+         "-o", "addopts=", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, cwd=cwd, env=_clean_env(),
+    )
+    if out.returncode != 0:
+        return None
+    m = re.search(r"(?:(\d+)/)?(\d+) tests? collected", out.stdout)
+    if m is None:
+        return None
+    # THE SELECTED COUNT, NOT THE TOTAL. Round 12 BLOCKER: with anything
+    # deselected, pytest prints `354/413 tests collected (59 deselected)` and
+    # `(\d+) tests? collected` takes the 413. Under an inherited
+    # `PYTEST_ADDOPTS='-k "not merge_gate"'` both trees then report 413, the
+    # check passes, and the control plus every arm run 354 -- which is the
+    # blind-run this check was added to close, and which a comment in `main()`
+    # named as closed while it was not. The left-hand number is what will
+    # actually execute.
+    return int(m.group(1) or m.group(2))
+
+
+def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | None:
+    """Which tests SKIPPED in the sandbox and HOW MANY. None if unreadable.
+
+    Returns BOTH the nodeids and pytest's own count, because neither alone is
+    sufficient and round 10 proved it:
+
+      - a COUNT alone cannot say WHICH two skipped, so a guard reverting to SKIP
+        while another stopped skipping nets to zero. That is why round 9 replaced
+        the count with names.
+      - NAMES alone cannot see a skip pytest never attributes to a nodeid. An
+        independent reviewer module-skipped `test_merge_gate.py`: 56 tests
+        vanished, the control stayed rc=0, the deselect delta still held, and
+        this returned EXACTLY the expected two -- so the runner printed
+        `SKIPS 2 pinned`, a positive claim that was false. A module-level skip is
+        reported in the summary and against no test id at all.
+
+    So both are read and the caller checks both. pytest's `-v` line format is
+    `<file>::<test> SKIPPED (reason)`; nodeids may contain SPACES when a test is
+    parametrised over this receipt's own vocabulary (`Jest (portal)`), which the
+    previous `(\\S+)` pattern dropped SILENTLY -- under-reporting, so the wrong
+    set could still equal the expected one. Matched non-greedily up to the
+    status word instead.
+
+    `-q` IS STRIPPED, not merely overridden: pytest SUMS verbosity flags, so
+    `[*cmd, "-v"]` against a cmd already carrying `-q` nets ZERO and prints no
+    per-test lines at all. That returned an empty set on its first run and the
+    control refused -- correctly, and it is why this reads the flag list rather
+    than appending to it.
+    """
+    verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
+    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox,
+                         env=_clean_env())
+    if out.returncode != 0:
+        return None
+    ids = set()
+    for line in out.stdout.splitlines():
+        m = re.match(r"(\S+\.py)::(.+?)\s+SKIPPED", line.rstrip())
+        if m:
+            ids.add(f"{Path(m.group(1)).name}::{m.group(2).strip()}")
+    counted = re.search(r"(\d+) skipped", out.stdout)
+    if counted is None:
+        # No "N skipped" in the summary means pytest reported none. Zero is a
+        # real answer here; an unreadable summary is not, and `-v` always prints
+        # one, so the distinction is between "0" and "we could not run".
+        return ids, 0
+    return ids, int(counted.group(1))
+
+
+#: ---------------------------------------------------------------------------
+#: THE RUNNER'S THREE DECISIONS, EXTRACTED SO THEY CAN BE MEASURED.
+#:
+#: ROUND 15, from an independent reviewer who built the only instrument that can
+#: see this file: a byte copy of `tools/drain` under `temp/`, one hand mutation
+#: of THIS module per run, and the ordinary suite over it. Fifteen mutations of
+#: the runner; **fourteen SURVIVED**. The one kill was `_clean_env`'s
+#: `PYTEST_ADDOPTS` strip -- round 13's own fix, which has a test.
+#:
+#: That is the whole finding, and it is not about any single line: the runner's
+#: HELPERS are instrumented (`_reports_a_failure`, `_collected`,
+#: `_skipped_nodeids`, `digest_tree` all have tests) and the runner's DECISIONS
+#: are not. `main()` is called by nothing but `__main__`, so every refusal, the
+#: scoring conjunction and the exit rule were unreachable from any test. Arms
+#: that SURVIVED included "any non-zero rc is a kill", "a survivor is counted as
+#: a kill", "no arm is ever run", "the population gate is off" and "exit code
+#: always zero" -- i.e. the sentences this package's receipts are quoted on.
+#:
+#: The fix is not more prose. It is to move each decision OUT of `main()` into a
+#: pure function with no I/O, so a test can state the input and read the verdict.
+#: `main()` keeps the printing and the subprocesses; these three keep the
+#: judgement.
+
+
+def _score(returncode: int, stdout: str) -> str:
+    """One arm's outcome: 'killed', 'survived' or 'not-evaluated'.
+
+    A KILL IS rc=1 **AND** A PYTEST FAILURE LINE **AND** NO ERROR LINE. Each
+    conjunct is load-bearing and each was wrong at some point:
+
+    - rc alone scored a `SyntaxError` collection crash (rc=2, suite never ran)
+      as a kill, beside 106 real ones;
+    - the failure line alone once keyed on the bare string `AssertionError`,
+      which is TRACEBACK vocabulary that a collection ERROR prints too, so a
+      run with rc=1, `1 error` and ZERO failed read as a kill;
+    - dropping the error conjunct re-opens exactly that.
+
+    `rc == 0` is a survivor regardless of what the output says: a suite that
+    exited clean did not kill the arm, and no marker changes that.
+
+    Everything else is NOT-EVALUATED, which is deliberately weaker than "the
+    suite failed to run" -- rc=2 is a collection error where that is true, but
+    rc=1 with `1 error` is a fixture raising at RUNTIME, where the suite did
+    run. Asserting the stronger claim is the R7 error this package spends its
+    budget on.
+    """
+    if returncode == 1 and _reports_a_failure(stdout) and not _reports_an_error(stdout):
+        return "killed"
+    if returncode == 0:
+        return "survived"
+    return "not-evaluated"
+
+
+def _exit_code(
+    *,
+    killed: int,
+    survived: int,
+    skipped: int,
+    errored: int,
+    total: int,
+    before: str,
+    after: str,
+) -> tuple[int, str]:
+    """The run's exit status, and the sentence that justifies it.
+
+    Ordered most-fundamental first, because each later question is meaningless
+    if an earlier one fails. An EMPTY matrix is checked before the partition:
+    `ARMS[:0]` produced `killed=0 survived=0 skipped=0 errored=0 of 0 arms` and
+    exited 0 -- green over nothing, the `steps=0` shape this repo refuses
+    everywhere else.
+
+    `killed != total` is the LAST question and it is asked ONCE. An earlier
+    draft asked `survived or skipped or errored` and then `killed != total`
+    separately, on a reviewer's wording. Measured: the second was an EQUIVALENT
+    MUTANT -- with the partition identity already checked above, `scored ==
+    total` and zero survivors together imply `killed == total` arithmetically,
+    so disabling it changed no output for any input and no test could kill it.
+    An un-killable arm is evidence about the arm. The two are one check now:
+    reachable, and killed by a mutation in either direction.
+
+    ROUND 16: this takes the two DIGESTS, not a `tree_intact` bool. It used to
+    take the bool, and `main()` computed it inline as `before == after` -- which
+    put the comparison in the one function no test calls. A reviewer mutated
+    that call site to `tree_intact=True` and NOTHING went red: the sandbox
+    escape this whole check exists to catch became invisible, because the
+    predicate lived outside the tested surface. Taking the operands instead of
+    the verdict moves the comparison in here, where a test can reach it. The
+    call site now has no decision left to mutate.
+    """
+    scored = killed + survived + skipped + errored
+    if total == 0:
+        return 1, ("the matrix is EMPTY, and an empty matrix cannot be evidence "
+                   "about anything")
+    if scored != total:
+        return 1, (f"scored {scored} arms but the matrix declares {total}. A run "
+                   "that did not evaluate every arm is not a run, whatever its "
+                   "buckets say.")
+    if before != after:
+        return 1, ("the TRACKED TREE CHANGED during the run - an arm wrote outside "
+                   "its sandbox, so no result from this run can be trusted")
+    if killed != total:
+        return 1, (f"not every arm died: killed={killed} of {total} "
+                   f"(survived={survived} skipped={skipped} errored={errored})")
+    return 0, f"all {total} arms KILLED, tracked tree untouched"
+
+
+def _preamble_verdict(
+    *,
+    control_rc: int,
+    skipped_ids: list[str] | tuple[str, ...] | None,
+    skipped_count: int | None,
+    here_n: int | None,
+    there_n: int | None,
+    with_meta_rc: int,
+    selected_with: int,
+    selected_without: int,
+) -> tuple[bool, str]:
+    """Do the four preamble gates admit this run? (ok, reason-if-not).
+
+    Every one of these refusals was unreachable from a test: a reviewer turned
+    each gate OFF in turn -- skip-names, skip-count, population, control-rc --
+    and the suite stayed green on all four. The control-rc gate had no coverage
+    of any kind, anywhere.
+
+    `skipped_ids is None` means the skip set could not be READ, which is not the
+    same as it being empty, and is refused separately for that reason.
+
+    The with-meta gate carries its own diagnosis rather than folding into the
+    deselect one: a BROKEN ANCHOR -- the ordinary event on a refactor -- makes
+    the with-meta run RED, and the two were once a single message that named
+    "the nodeid is wrong" about a nodeid that was correct.
+    """
+    if control_rc != 0:
+        return False, "control is not green; nothing below would mean anything"
+    if skipped_ids is None or skipped_count is None:
+        return False, ("could not read the sandbox skip set, so a guard that "
+                       "reverted to SKIP would be invisible")
+    if sorted(skipped_ids) != sorted(EXPECTED_SANDBOX_SKIPS):
+        return False, (f"sandbox skips are {sorted(skipped_ids)}, expected "
+                       f"{sorted(EXPECTED_SANDBOX_SKIPS)}. A test that skips here "
+                       "cannot kill anything, so every arm it guards would score "
+                       "KILLED on the other tests regardless of the mutation.")
+    if skipped_count != len(EXPECTED_SANDBOX_SKIPS):
+        return False, (f"pytest reports {skipped_count} skipped but only "
+                       f"{len(skipped_ids)} are attributable to a test id. The "
+                       "difference is a module- or collection-level skip, which "
+                       "removes tests from every arm without naming one.")
+    if here_n is None or there_n is None:
+        return False, ("could not collect one of the two trees, so the sandbox "
+                       "population cannot be shown to match the repo's")
+    if here_n != there_n:
+        return False, (f"the sandbox collects {there_n} tests and this checkout "
+                       f"collects {here_n}. Tests that VANISH do not skip, so "
+                       "neither the skip names nor the skip count can see them, "
+                       "and every arm would then be scored against a smaller suite.")
+    if with_meta_rc != 0:
+        return False, ("the unmutated suite is RED with the anchor meta-test "
+                       "SELECTED. An arm's needle no longer matches the source; "
+                       "the nodeid is not implicated.")
+    if selected_with != selected_without + 1:
+        return False, ("the deselect did not remove exactly one passing test, so "
+                       "the nodeid is wrong")
+    return True, ""
+
+
+def _run_arms(
+    arms: list[tuple[str, str, str, str]],
+    originals: dict[str, str],
+    run: Callable[[str, str], tuple[int, str]],
+) -> tuple[int, int, int, int]:
+    """Dispatch every arm and bucket the outcomes: (killed, survived, skipped, errored).
+
+    ROUND 16, and this extraction is the whole point of the round. Round 15 put
+    the three DECISIONS (`_score`, `_exit_code`, `_preamble_verdict`) into pure
+    functions and the arm-kill rate went from 1-of-15 to 8-of-10. The nine that
+    still survived were every one of them in the DISPATCH -- the loop that
+    decides WHICH bucket a decision lands in, and whether the loop reaches the
+    decision at all. A reviewer set the score to a constant `"killed"` at the
+    call site and the runner printed `all 247 arms KILLED, tracked tree
+    untouched` and exited 0 having measured nothing. `_exit_code` cannot see
+    that: it is handed the counters, and the counters were consistent. A liar
+    that keeps its books balanced is invisible to an auditor who only checks
+    the books.
+
+    The dispatch was unobservable because it lived in `main()`, which nothing
+    but `__main__` calls -- so there is no input at which a test could watch it.
+    The fix is not more assertions; it is giving the loop a seam. `run` does
+    every side effect (write the mutant, run the suite, restore the file) and
+    returns only `(returncode, stdout)`, so this function is pure over its
+    arguments and a fake `run` can drive all four buckets from a test.
+
+    What stays outside: the sandbox, the subprocess, the restore. What moves in:
+    the anchor checks, the scoring call, and the counting -- i.e. everything an
+    arm could corrupt while leaving the totals self-consistent.
+    """
+    killed = survived = skipped = errored = 0
+    for name, filename, old, new in arms:
+        source = originals[filename]
+        if old not in source:
+            print(f"  SKIP     {name:<72} anchor not found in {filename}")
+            skipped += 1
+            continue
+        # AN AMBIGUOUS ANCHOR IS A MUTATION AIMED SOMEWHERE ELSE.
+        # `replace(old, new, 1)` takes the FIRST occurrence, so when a
+        # refactor made one arm's needle match twice, the arm silently
+        # mutated a different function and reported SURVIVED -- a blind spot
+        # that was really a misfire. A reviewer audits for this by hand
+        # every round; the runner should not need one.
+        if source.count(old) > 1:
+            print(f"  SKIP     {name:<72} anchor matches {source.count(old)}x "
+                  f"in {filename} - AMBIGUOUS, would mutate the first")
+            skipped += 1
+            continue
+        returncode, stdout = run(filename, source.replace(old, new, 1))
+        # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
+        # comment records the consequence: a mutation that was a
+        # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106
+        # real kills. Nothing had been measured -- the suite never ran -- and
+        # the repair was made to that arm rather than to the scorer, so the
+        # next arm of that shape would have read the same way. Arms that
+        # edit `policy.json` are the likeliest to reproduce it: a malformed
+        # edit raises inside `load_policy` at import time.
+        #
+        # A kill is rc=1 AND a pytest failure line AND no ERROR line.
+        #
+        # ROUND 14: the last conjunct is new, and it was wrong before it was
+        # missing. `_FAILURE_MARKERS` carried the bare string
+        # `AssertionError`, which is TRACEBACK vocabulary rather than
+        # SUMMARY vocabulary -- so a run with rc=1, `1 error` and ZERO
+        # failed scored KILLED on the strength of a traceback from a suite
+        # that never decided the arm. An independent reviewer measured it.
+        # A mutant that breaks the instrument has not been caught by it.
+        errored_out = _reports_an_error(stdout)
+        outcome = _score(returncode, stdout)
+        if outcome == "killed":
+            print(f"  KILLED   {name:<72} rc={returncode}")
+            killed += 1
+        elif outcome == "survived":
+            print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
+            survived += 1
+        else:
+            # "NOT A KILL" is all this branch knows. It does NOT know the
+            # suite failed to run: rc=2 is a collection error, where that is
+            # true, but rc=1 with `1 error` and no `failed` is a fixture
+            # raising at RUNTIME, where the suite did run. Asserting the
+            # stronger claim would be the R7 error this package spends its
+            # budget on.
+            tail = (stdout.strip().splitlines() or [""])[-1]
+            print(f"  ERROR    {name:<72} rc={returncode}  <-- NOT A KILL: "
+                  f"exited non-zero with no pytest failure line: {tail[:60]}"
+                  f"{' (an ERROR line was reported)' if errored_out else ''}")
+            errored += 1
+    return killed, survived, skipped, errored
+
+
+def _exit_args(
+    *,
+    counts: tuple[int, int, int, int],
+    arms: list[tuple[str, str, str, str]],
+    before: str,
+    after: str,
+) -> dict:
+    """The WIRING between the run's results and `_exit_code`, made testable.
+
+    ROUND 19, on a reviewer's measurement and their remedy. Round 16 recorded
+    `main()`'s wiring as a known gap and costed closing it at "a full control
+    run plus a sandbox build per invocation". That was wrong: the gap is
+    argument passing, and argument passing does not need a smoke test, it needs
+    to not be inside `main()`.
+
+    It also UNDERSTATED the gap. All four wiring mutations survive, and two are
+    not innocuous:
+
+        total=killed     makes BOTH partition refusals vacuously false
+        survived=0       hides survivors from the "not every arm died" refusal
+
+    Either one turns the matrix green over a run that found blind spots, which
+    is the precise failure this package exists to refuse, reachable by editing
+    one keyword in the one function no test calls.
+
+    Taking the COUNTS AS A TUPLE and the ARMS themselves, rather than four
+    integers and a length, is what removes the remaining freedom: there is no
+    longer a place to pass `killed` where `total` belongs, because `total` is
+    derived here from the same list the dispatch consumed. Zero runtime cost.
+    """
+    killed, survived, skipped, errored = counts
+    return {
+        "killed": killed,
+        "survived": survived,
+        "skipped": skipped,
+        "errored": errored,
+        "total": len(arms),
+        "before": before,
+        "after": after,
+    }
+
+
 def main() -> int:
     before = digest_tree(HERE)
 
@@ -1195,6 +2517,41 @@ def main() -> int:
             shutil.copy2(HERE / name, sandbox / name)
         shutil.copytree(HERE / "__tests__", sandbox / "__tests__",
                         ignore=shutil.ignore_patterns("__pycache__"))
+        # THE WORKFLOWS THE POLICY ROWS NAME. Round 8: the drift guard that ties
+        # `scope_paths` to the producing workflow SKIPPED here, because the
+        # sandbox had no `.github/workflows` for it to read. A guard that skips
+        # where the mutants live cannot kill anything, so an arm deleting a
+        # declared output SURVIVED silently -- and under-declaration is exactly
+        # the failure mode that has now shipped twice.
+        #
+        # Read the row rather than hard-coding two filenames: a new row naming a
+        # third workflow must not lose its coverage by omission here, which is
+        # the same "a number in prose nothing enforces" defect one level up.
+        # NOT `scripts/ci`, deliberately -- `_repo_root()` keys on that too, and
+        # supplying it would un-skip the tests that shell out to `node` and
+        # `gh api` on all 213 arms.
+        wf_dir = sandbox / ".github" / "workflows"
+        wf_dir.mkdir(parents=True)
+        rows = (json.loads((HERE / "policy.json").read_text(encoding="utf-8"))
+                .get("receipts", {}).get("ci_green_rule", {})
+                .get("scope_paths", {}))
+        wanted = {
+            row["workflow"] for name, row in rows.items()
+            if not name.startswith("_") and isinstance(row, dict) and row.get("workflow")
+        }
+        if not wanted:
+            print("no scope_paths row names a workflow - the drift guard would "
+                  "skip in the sandbox and score every arm KILLED regardless of "
+                  "the mutation", file=sys.stderr)
+            return 1
+        for rel in sorted(wanted):
+            src = ROOT / rel
+            if not src.is_file():
+                print(f"policy.json names {rel}, which does not exist - refusing "
+                      "to run a matrix whose drift guard cannot read it",
+                      file=sys.stderr)
+                return 1
+            shutil.copy2(src, wf_dir / Path(rel).name)
         # NORMALIZE TO LF before matching. `newline=""` preserves whatever the
         # working tree has, `core.autocrlf=true` is set on this machine and no
         # `.gitattributes` rule covers `tools/`, so a fresh clone checks these
@@ -1244,18 +2601,73 @@ def main() -> int:
             "__tests__/test_mutate_gates.py::"
             "test_every_arm_anchor_is_present_and_unique_in_the_current_source"
         )
+        # `-o addopts=` FOR THE SAME REASON `_collected` CARRIES IT. Round 14:
+        # this command lacked it, so an ancestor `pytest.ini` or `tox.ini` above
+        # the sandbox would change what the control and EVERY ARM actually run
+        # while all four preamble gates read identically -- measured at 365
+        # instead of 424, caught only incidentally by the deselect check and
+        # then mis-diagnosed. The env is stripped upstream; config above the
+        # sandbox is the other half of the same hole.
         cmd = [sys.executable, "-m", "pytest", str(sandbox / "__tests__"), "-q",
+               "-o", "addopts=",
                "-p", "no:cacheprovider", "--deselect", deselect]
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
         # every red below is noise and the run proves nothing.
-        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
+        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
+                                 env=_clean_env())
         tail = (control.stdout.strip().splitlines() or [""])[-1]
         print(f"CONTROL rc={control.returncode}  {tail[:70]}")
-        if control.returncode != 0:
-            print("REFUSING -- control is not green; nothing below would mean anything")
-            print(control.stdout[-3000:])
-            return 2
+        # AND THE SKIP SET IS PINNED. Round 9, found by an independent reviewer:
+        # the control asserted rc and the deselect delta and nothing else, so a
+        # test that started SKIPPING was invisible -- it is not a failure, and it
+        # subtracts equally from both `_passed_count` readings, so the delta
+        # still held. That is round 8's OWN defect ("the one test tying rows to
+        # workflows skipped by construction inside the sandbox") left with no
+        # instrument watching it.
+        #
+        # TWO skips are expected here and they are named, not counted: the test
+        # that shells out to `node` and the one that calls `gh api`, both keyed
+        # on `_repo_root()` so they stay offline in the sandbox. A THIRD skip
+        # means a guard has silently stopped guarding.
+        skips = _skipped_nodeids(sandbox, cmd)
+        skipped_ids, skipped_count = skips if skips is not None else (None, None)
+        if skipped_ids is not None:
+            print(f"SKIPS     {skipped_count} pinned: {', '.join(sorted(skipped_ids))}")
+        else:
+            print("SKIPS     UNREADABLE")
+        # AND THE POPULATION ITSELF. Round 11 BLOCKER: round 10 pinned the SHAPE
+        # of a disappearance (a skip) and not the POPULATION. An independent
+        # reviewer deleted `__tests__/test_merge_gate.py` from the sandbox copy:
+        # the population fell 402 -> 343 and ALL FOUR gates still passed --
+        # control rc=0, the names EXACTLY `EXPECTED_SANDBOX_SKIPS`, the count
+        # exactly 2, the deselect delta intact -- and `main()` returned 0. A
+        # renamed file, `--ignore`, a `collect_ignore`, or an inherited
+        # `PYTEST_ADDOPTS=--deselect` all restore round 10's own blocker.
+        #
+        # ROUND 12 said the `PYTEST_ADDOPTS` case was closed by reading the
+        # SELECTED count instead of the total. ROUND 13: it was not, and that
+        # was the SECOND false "closed" claim at this spot. Both trees are the
+        # same copy under the same environment, so any `-k` moves BOTH numbers
+        # together -- reading the selected count changes the printed number and
+        # never the verdict. Measured by an independent reviewer at
+        # `here_n=360 there_n=360 gate passes: True` while the suite really ran
+        # 360 of 419.
+        #
+        # A comparison cannot detect a variable that perturbs both sides
+        # equally. What closes it is `_clean_env()`, which strips the variable
+        # from every pytest subprocess so the matrix runs the suite it names.
+        # This check catches the tree DIFFERENCES; the env is handled upstream
+        # of it, and neither claim covers the other.
+        #
+        # So the sandbox's collected test count is compared against the REPO's.
+        # They must agree: the sandbox is a copy, and a copy that collects fewer
+        # tests is not the suite this matrix claims to have run.
+        here_n = _collected(HERE / "__tests__", HERE)
+        there_n = _collected(sandbox / "__tests__", sandbox)
+        # NEUTRAL WORDING. This used to print "matching this checkout" BEFORE the
+        # comparison had been made, which is a claim rather than a reading.
+        print(f"POPULATION here={here_n} there={there_n}")
         # ...and the DESELECT must have removed exactly one test. pytest accepts
         # a nodeid that matches nothing in silence, so a typo here would put the
         # meta-test back in the decision path and every arm would score KILLED
@@ -1265,83 +2677,95 @@ def main() -> int:
         # trusting rather than measuring.
         with_meta = subprocess.run(
             [c for c in cmd if c not in ("--deselect", deselect)],
-            capture_output=True, text=True, cwd=sandbox,
+            capture_output=True, text=True, cwd=sandbox, env=_clean_env(),
         )
         selected_with = _passed_count(with_meta.stdout)
         selected_without = _passed_count(control.stdout)
         print(f"DESELECT  {selected_with} -> {selected_without} tests "
               f"(the anchor meta-test must not decide an arm)")
-        # TWO CONDITIONS, TWO DIAGNOSES. They were one message, and it named
-        # the WRONG cause for the commoner of the two: a BROKEN ANCHOR -- the
-        # ordinary event on a refactor, which this package records happening
-        # four times in one commit -- makes the with-meta run RED, and the run
-        # then announced "the nodeid is wrong" about a nodeid that was correct,
-        # while discarding the one output carrying the real answer. R7, in the
-        # file whose sibling declares "never discarding stderr".
-        if with_meta.returncode != 0:
-            print("REFUSING -- the unmutated suite is RED with the anchor "
-                  "meta-test SELECTED. An arm's needle no longer matches the "
-                  "source; the nodeid is not implicated. The failure names the "
-                  "arm:")
-            print(with_meta.stdout[-2000:])
-            return 2
-        if selected_with != selected_without + 1:
-            print("REFUSING -- the deselect did not remove exactly one passing test, "
-                  f"so the nodeid is wrong: {deselect}")
+        # ONE DECISION, IN ONE TESTABLE PLACE. Every refusal above used to be an
+        # `if` in `main()`, and `main()` is called by nothing but `__main__` --
+        # so a reviewer turned each of the four gates OFF in turn and the suite
+        # stayed green on all four. The control-rc gate had no coverage of any
+        # kind. The conditions now live in `_preamble_verdict`, which is pure and
+        # tested per refusal; what stays here is the I/O and the extra dump.
+        #
+        # The gathering is no longer short-circuited, so a red control pays for
+        # work whose result it will not use. ROUND 16 WROTE THAT COST AS "one
+        # extra suite run" AND THAT WAS WRONG TOO -- it was the third estimate
+        # in this comment's history, after an unmeasured "~6s" and a reviewer's
+        # own first figure of "roughly three runs", which they then corrected by
+        # measuring. The COMPOSITION is the durable claim, so it is stated
+        # instead of a number:
+        #
+        #   control            full suite run   ALSO run by the old code - not extra
+        #   _skipped_nodeids   full suite run   EXTRA  (`-q` stripped, `-v` added)
+        #   _collected(HERE)   collect-only     EXTRA
+        #   _collected(sandbox) collect-only    EXTRA
+        #   with_meta          full suite run   EXTRA  (the deselect removed)
+        #
+        # So: TWO extra full executions of the suite plus TWO collect-only
+        # passes. Measured once, on the authoring workstation at 51a0ce9d7a1 --
+        # 19.24s + 4.07s + 4.06s + 19.56s = 46.93s, against a 20.32s control.
+        # Scaling by that control against CI's measured 5.50s per arm puts the
+        # extra near 13s on CI; the collect-only passes are import-bound rather
+        # than test-bound, so treat 13s as an order of magnitude, not a
+        # measurement.
+        #
+        # DO NOT RE-ESTIMATE THIS FROM THE STRUCTURE. Every previous figure here
+        # was derived by reasoning about the code rather than by running it, and
+        # all three were wrong. Either re-measure and pin the new number to a
+        # named sha, or quote the composition alone -- which is what actually
+        # decides whether the trade is worth it, and does not rot when the suite
+        # grows (it went 434 -> 452 collected inside this PR).
+        #
+        # Against a ~22-minute matrix any of these figures is noise, and the
+        # trade is the decision living in one tested place instead of four
+        # untested ones. The refusal ORDER inside `_preamble_verdict` still
+        # reports the control first, so the diagnosis a reader sees is unchanged
+        # -- and that clause is EARNED: on a red control `_skipped_nodeids` and
+        # `with_meta` are red too, so `skips` comes back None and the run prints
+        # `SKIPS UNREADABLE`, which would be a misleading first line if the
+        # ordering did not hold. A reviewer drove `_preamble_verdict` with
+        # exactly that input and confirmed it still answers "control is not
+        # green; nothing below would mean anything".
+        ok, why = _preamble_verdict(
+            control_rc=control.returncode,
+            skipped_ids=skipped_ids,
+            skipped_count=skipped_count,
+            here_n=here_n,
+            there_n=there_n,
+            with_meta_rc=with_meta.returncode,
+            selected_with=selected_with,
+            selected_without=selected_without,
+        )
+        if not ok:
+            print(f"REFUSING -- {why}")
+            # The output carrying the real answer, for the two gates that have
+            # one. Discarding it was itself an R7 defect in an earlier round.
+            if control.returncode != 0:
+                print(control.stdout[-3000:])
+            elif with_meta.returncode != 0:
+                print("The failure names the arm:")
+                print(with_meta.stdout[-2000:])
+            elif selected_with != selected_without + 1:
+                print(f"the deselect nodeid is: {deselect}")
             return 2
 
-        killed = survived = skipped = errored = 0
-        for name, filename, old, new in ARMS:
-            source = originals[filename]
-            if old not in source:
-                print(f"  SKIP     {name:<72} anchor not found in {filename}")
-                skipped += 1
-                continue
-            # AN AMBIGUOUS ANCHOR IS A MUTATION AIMED SOMEWHERE ELSE.
-            # `replace(old, new, 1)` takes the FIRST occurrence, so when a
-            # refactor made one arm's needle match twice, the arm silently
-            # mutated a different function and reported SURVIVED -- a blind spot
-            # that was really a misfire. A reviewer audits for this by hand
-            # every round; the runner should not need one.
-            if source.count(old) > 1:
-                print(f"  SKIP     {name:<72} anchor matches {source.count(old)}x "
-                      f"in {filename} - AMBIGUOUS, would mutate the first")
-                skipped += 1
-                continue
-            _write_lf(sandbox / filename, source.replace(old, new, 1))
-            run = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox)
-            _write_lf(sandbox / filename, source)
-            # A NON-ZERO rc IS NOT A KILL. It was scored as one, and R3's own
-            # comment records the consequence: a mutation that was a
-            # `SyntaxError` exited 2 at COLLECTION and printed KILLED beside 106
-            # real kills. Nothing had been measured -- the suite never ran -- and
-            # the repair was made to that arm rather than to the scorer, so the
-            # next arm of that shape would have read the same way. Arms that
-            # edit `policy.json` are the likeliest to reproduce it: a malformed
-            # edit raises inside `load_policy` at import time.
-            #
-            # A kill is rc=1 AND a pytest failure line in the output. Anything
-            # else is its own bucket and fails the run for a DIFFERENT reason,
-            # because "the mutation was never evaluated" and "the suite is
-            # blind" need different fixes.
-            failed_a_test = run.returncode == 1 and _reports_a_failure(run.stdout)
-            if failed_a_test:
-                print(f"  KILLED   {name:<72} rc={run.returncode}")
-                killed += 1
-            elif run.returncode == 0:
-                print(f"  SURVIVED {name:<72} rc=0  <-- BLIND SPOT")
-                survived += 1
-            else:
-                # "NOT A KILL" is all this branch knows. It does NOT know the
-                # suite failed to run: rc=2 is a collection error, where that is
-                # true, but rc=1 with `1 error` and no `failed` is a fixture
-                # raising at RUNTIME, where the suite did run. Asserting the
-                # stronger claim would be the R7 error this package spends its
-                # budget on.
-                tail = (run.stdout.strip().splitlines() or [""])[-1]
-                print(f"  ERROR    {name:<72} rc={run.returncode}  <-- NOT A KILL: "
-                      f"exited non-zero with no pytest failure line: {tail[:60]}")
-                errored += 1
+        # THE ONLY SIDE EFFECTS IN THE ARM LOOP, isolated so the loop itself is
+        # testable. Write the mutant, run the suite, put the file back --
+        # unconditionally, so a raising subprocess cannot leave the sandbox
+        # holding a mutated source that the NEXT arm would then measure against.
+        def _run(filename: str, mutated: str) -> tuple[int, str]:
+            _write_lf(sandbox / filename, mutated)
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      cwd=sandbox, env=_clean_env())
+            finally:
+                _write_lf(sandbox / filename, originals[filename])
+            return proc.returncode, proc.stdout
+
+        killed, survived, skipped, errored = _run_arms(ARMS, originals, _run)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -1350,7 +2774,29 @@ def main() -> int:
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
           f"of {len(ARMS)} arms")
-    return 1 if (survived or skipped or errored or before != after) else 0
+    # WHAT IS STILL UNOBSERVED HERE, restated because round 19 changed it and a
+    # reviewer corrected my summary of what it changed.
+    #
+    # Round 16 recorded this whole block as a known gap. Round 19 extracted
+    # `_exit_args`, which moved TWO of the four shapes into a tested function:
+    # `total` mis-sourcing and `survived` zeroing both die there now.
+    #
+    # THE CALL-SITE EXPRESSIONS BELOW ARE UNCHANGED IN KILL POWER. All four
+    # wiring mutations still survive AT THIS LINE, because nothing calls
+    # `main()`. The accurate statement is narrower than "the wiring is now
+    # testable": two shapes moved inward, the expressions here did not. Saying
+    # "closed" would make the next reader stop looking, which is the whole
+    # failure mode this file is about.
+    #
+    # Both remaining shapes fail closed in production for an independent
+    # reason, so this is disclosure rather than an open defect.
+    code, why = _exit_code(**_exit_args(
+        counts=(killed, survived, skipped, errored),
+        arms=ARMS, before=before, after=after,
+    ))
+    if code != 0:
+        print(f"REFUSING -- {why}")
+    return code
 
 
 if __name__ == "__main__":

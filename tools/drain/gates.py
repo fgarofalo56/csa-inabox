@@ -255,6 +255,27 @@ OTHER_IMPLEMENTED_BY = {
     "wip.max_lanes_hard_ceiling": "tick.select_cycle",
     "ordering.streams": "tick.select_cycle",
     "receipts": "ledger.Ledger.receipt_ok",
+    # EACH CLASS DECLARED INDIVIDUALLY, now that a dict-valued top-level key no
+    # longer exempts its sub-keys. `receipt_satisfies` looks each of these up by
+    # name, so they are read, not prose -- and spelling them out is what makes
+    # an ADDED-but-unread sibling detectable, which is the hole a reviewer
+    # walked through with `receipts.totally_unread_rule`.
+    "receipts.guard-or-test-only": "gates.receipt_satisfies",
+    "receipts.deploy-path": "gates.receipt_satisfies",
+    "receipts.estate-behaviour": "gates.receipt_satisfies",
+    "receipts.ui-surface": "gates.receipt_satisfies",
+    "receipts.human-only": "gates.receipt_satisfies",
+    "receipts.ci_green_rule": "gates.ci_green_receipt",
+    "receipts.ci_green_rule.substantive_steps": "gates.context_did_its_work",
+    "receipts.ci_green_rule.scope_paths": "gates.scope_untouched_at_merge",
+    "receipts.ci_green_rule.alternatives": "gates.alternative_accounted_for",
+    "stop_and_ask.publish_security_advisory": "gates.action_is_permitted",
+    "stop_and_ask.move_live_acr_tags": "gates.action_is_permitted",
+    "stop_and_ask.delete_data_or_schema": "gates.action_is_permitted",
+    "stop_and_ask.force_push_shared_branch": "gates.action_is_permitted",
+    "stop_and_ask.weaken_or_baseline_a_guard": "gates.action_is_permitted",
+    "stop_and_ask.add_trivyignore_entry": "gates.action_is_permitted",
+    "stop_and_ask.use_skip_valve": "gates.action_is_permitted",
     "scope.closed_requires_receipt": "ledger.Ledger.receipt_ok",
     "permitted_unattended": "gates.action_is_permitted",
     "never": "gates.action_is_permitted",
@@ -271,6 +292,22 @@ OTHER_IMPLEMENTED_BY = {
 # from a control that stopped working.
 OPERATOR_DOCUMENTATION = {
     "schema",
+    # Addressed to the agent taking a G1 receipt, not to any function: there is
+    # no program that can decide whether an assertion is reachable from an error
+    # path. Declared rather than claimed, which is the whole point of this list
+    # -- and it only became VISIBLE once a dict-valued top-level key stopped
+    # exempting its sub-keys.
+    "receipts.g1_assertion_rule",
+    # The human-readable SPECIFICATION of `ci_green_receipt`. The control is the
+    # function; this prose is what a reviewer reads to check the function against
+    # its contract, and no code subscripts it. Newly VISIBLE (not newly unread)
+    # once the walk stopped halting at two levels -- these four sat under a
+    # declared parent and so were structurally unreachable, which is the hole an
+    # independent reviewer walked through at three deep.
+    "receipts.ci_green_rule.definition",
+    "receipts.ci_green_rule.absence_is_excused_only_when",
+    "receipts.ci_green_rule.fails_closed_on",
+    "receipts.ci_green_rule.not_proven_by_this_receipt",
     "review.writer_is_never_the_reviewer",
     "scope.target", "scope.definition_of_done",
     "wip.serialize_on_shared_checkout",
@@ -282,6 +319,31 @@ OPERATOR_DOCUMENTATION = {
 }
 
 
+#: Declared keys whose VALUE is DATA the implementation consumes wholesale --
+#: a table, not a namespace of further policy keys. The walk STOPS at these and
+#: treats them as leaves, because the alternative is demanding a `gates.py`
+#: declaration for every row of a data table.
+#:
+#: A stop here is only honest if some OTHER named instrument checks the rows,
+#: and each entry says which. Nothing may be added without that sentence.
+DATA_NOT_NAMESPACE = {
+    "receipts.ci_green_rule.substantive_steps":
+        "rows are checked against live branch protection by "
+        "__tests__/test_ci_green_declared.py (set EQUALITY, so a stale or "
+        "invented context name fails), and an undeclared context fails closed "
+        "at runtime in gates.context_did_its_work",
+    "receipts.ci_green_rule.scope_paths":
+        "rows are checked against the producing workflow's own change detector "
+        "by __tests__/test_ci_green_declared.py, and a context without a row "
+        "cannot reach the scope-untouched branch at all",
+    "receipts.ci_green_rule.alternatives":
+        "rows are checked against the producing workflow by "
+        "__tests__/test_ci_green_declared.py, which requires every named "
+        "alternative step to EXIST in that workflow and to be gated on a "
+        "DIFFERENT output than the primary step it stands in for",
+}
+
+
 def policy_keys_without_implementation(policy: dict) -> list[str]:
     """Every key in the policy that no function consults and no list excuses.
 
@@ -289,31 +351,53 @@ def policy_keys_without_implementation(policy: dict) -> list[str]:
     are documentation by convention and are exempt; everything else must appear
     in an `*_IMPLEMENTED_BY` mapping or in `OPERATOR_DOCUMENTATION`, which is
     how "this one addresses the operator" stops being an unwritten assumption.
+
+    WALKS TO ANY DEPTH, and it took three rounds to get there because each fix
+    closed one level and left the next. A top-level declaration used to exempt
+    every sub-key under it, and an independent reviewer disproved this
+    function's own advertised contract by planting `receipts.totally_unread_rule`:
+    the suite stayed green because `receipts` is declared at the top level and
+    the branch short-circuited before the sub-key walk. That was fixed at TWO
+    levels -- and the same reviewer then planted
+    `receipts.ci_green_rule.totally_unread_rule` at three, which this function
+    could not see either, on the very PR that made `ci_green_rule` a nested
+    dict and so made three-deep the most likely place for a new key.
+
+    So the depth is now unbounded rather than incremented, and the two sibling
+    walkers were fixed with it -- `assert_policy_matches_code`'s
+    implemented->declared loop and `_documentation_keys_that_are_actually_read`'s
+    subscript scan, which partitioned on the FIRST dot and so could never match
+    a three-level read. Fixing one direction and leaving the other is the
+    one-side-of-a-symmetry defect this package keeps producing; all three
+    directions are the symmetry.
     """
     sectioned = {
         "merge_gate": MERGE_GATE_IMPLEMENTED_BY,
         "verdict_parsing": VERDICT_PARSING_IMPLEMENTED_BY,
     }
-    missing = []
-    for key, value in policy.items():
-        if key.startswith("_"):
-            continue
-        if key in sectioned:
-            for sub in value:
-                if not sub.startswith("_") and sub not in sectioned[key]:
-                    missing.append(f"{key}.{sub}")
-            continue
-        if key in OTHER_IMPLEMENTED_BY or key in OPERATOR_DOCUMENTATION:
-            continue
-        if isinstance(value, dict):
-            for sub in value:
-                dotted = f"{key}.{sub}"
-                if (not sub.startswith("_")
-                        and dotted not in OTHER_IMPLEMENTED_BY
-                        and dotted not in OPERATOR_DOCUMENTATION):
-                    missing.append(dotted)
-            continue
-        missing.append(key)
+    missing: list[str] = []
+
+    def walk(node: dict, prefix: str) -> None:
+        for key, value in node.items():
+            if key.startswith("_"):
+                continue
+            dotted = f"{prefix}.{key}" if prefix else key
+            if dotted in sectioned:
+                for sub in value:
+                    if not sub.startswith("_") and sub not in sectioned[dotted]:
+                        missing.append(f"{dotted}.{sub}")
+                continue
+            # A dict is a NAMESPACE and is descended into -- the key itself
+            # never has to be declared, only its leaves. Unless it is declared
+            # DATA, in which case it is the leaf and its rows are somebody
+            # else's contract.
+            if isinstance(value, dict) and dotted not in DATA_NOT_NAMESPACE:
+                walk(value, dotted)
+                continue
+            if dotted not in OTHER_IMPLEMENTED_BY and dotted not in OPERATOR_DOCUMENTATION:
+                missing.append(dotted)
+
+    walk(policy, "")
     return sorted(missing)
 
 
@@ -346,14 +430,25 @@ def assert_policy_matches_code(policy: dict) -> None:
     # mapping claimed an implementation for a key the authority no longer
     # contained. "Undeclared behaviour is as bad as undelivered behaviour" is
     # asserted for the other two sections and was missing here.
+    #
+    # WALKS TO ANY DEPTH. It used to `partition` on the FIRST dot and look the
+    # remainder up as a single key, so a three-level entry like
+    # `receipts.ci_green_rule.substantive_steps` was reported absent even when
+    # the authority carried it -- and, worse, a three-level key the authority
+    # did NOT carry was structurally unmissable in the other direction. That is
+    # the same hole an independent reviewer found at two levels, one level down:
+    # fixing one depth and leaving the next is the one-side-of-a-symmetry defect
+    # this package keeps producing. Measured before changing it: 71 leaf paths,
+    # 19 of them three-or-more levels deep, and ZERO newly unclaimed -- so this
+    # tightens the contract without a cascade.
     absent = []
     for dotted in OTHER_IMPLEMENTED_BY:
-        section, _, sub = dotted.partition(".")
-        if sub:
-            if sub not in policy.get(section, {}):
+        node = policy
+        for part in dotted.split("."):
+            if not isinstance(node, dict) or part not in node:
                 absent.append(dotted)
-        elif section not in policy:
-            absent.append(dotted)
+                break
+            node = node[part]
     if absent:
         raise ValueError(
             f"implemented but not declared in policy.json: {sorted(absent)} - "
@@ -429,27 +524,45 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
         if p.name != "mutate_gates.py"
     )
     found = []
+    # WHITESPACE-COLLAPSED, because a chained read is routinely written across
+    # LINES and a gap of `[^\n]{0,20}` cannot cross one. This package's own read
+    # of `receipts.ci_green_rule.substantive_steps` is three lines of `.get(...)`
+    # in the house style, so the scan would have reported that key unread no
+    # matter how deep the walk went -- a depth fix that leaves the pattern
+    # unable to see the shape it was widened for. Collapsing errs toward
+    # FLAGGING (the gap could bridge two adjacent statements), and flagging is
+    # the safe direction here: it says "this prose key looks read", which a
+    # maintainer resolves by declaring it implemented.
+    flat = re.sub(r"\s+", " ", sources)
     for dotted in OPERATOR_DOCUMENTATION:
-        section, _, sub = dotted.partition(".")
-        if sub:
-            # A SECTIONED key is read as policy["wip"]["max_lanes"] -- match the
-            # chain, so the sub-key's own spelling cannot collide with anything.
-            #
+        parts = dotted.split(".")
+        if len(parts) > 1:
+            # THE CHAIN, TO ANY DEPTH. This used to `partition` on the FIRST
+            # dot and treat the remainder as ONE sub-key, so a three-level entry
+            # searched the sources for the literal `"ci_green_rule.definition"`
+            # and could never match. That is a FALSE NEGATIVE in the direction
+            # that matters: a three-deep control could be moved onto the
+            # operator-documentation allow-list while a function still read it,
+            # which is precisely the allow-list becoming an off switch. Same
+            # depth defect as the two sibling walkers, third instance.
+            step = r"(?:\[|\.get\()\s*[\"']{}[\"']"
+            chain = step.format(re.escape(parts[0])) + "".join(
+                r"[^\n]{0,20}?" + step.format(re.escape(part)) for part in parts[1:]
+            )
             # ...but a read split ACROSS TWO STATEMENTS is not a chain: bind the
-            # section to a local first, then subscript the local on the next
-            # line. The bridge cannot span that, so `review.*` keys could be moved
-            # onto the operator-documentation allow-list undetected while
-            # `review_requirement` still read them. The local-alias form is
-            # matched separately, keyed to the SECTION NAME as a receiver --
-            # which is the spelling that makes an alias readable in the first
-            # place.
-            alias = (r"\b" + re.escape(section) + r"\s*(?:\[|\.get\()\s*[\"']"
-                     + re.escape(sub) + r"[\"']")
-            if re.search(alias, sources):
+            # parent to a local first, then subscript the local on the next
+            # line. The chain cannot span that, so `review.*` keys could be moved
+            # onto the allow-list undetected while `review_requirement` still
+            # read them. The local-alias form is matched separately, keyed to the
+            # IMMEDIATE PARENT as a receiver -- which is the spelling that makes
+            # an alias readable in the first place.
+            alias = (r"\b" + re.escape(parts[-2]) + r"\s*(?:\[|\.get\()\s*[\"']"
+                     + re.escape(parts[-1]) + r"[\"']")
+            if re.search(alias, flat):
                 found.append(dotted)
                 continue
             #
-            # BOTH halves accept `.get(`, not just the sub half. The asymmetry
+            # BOTH halves accept `.get(`, not just the last. The asymmetry
             # missed `policy.get("wip", {})["max_lanes"]` -- and `.get(` is this
             # package's dominant spelling (seven occurrences, including the
             # two-level `policy.get("receipts", {}).get(...)`), so a future read
@@ -457,16 +570,15 @@ def _documentation_keys_that_are_actually_read() -> list[str]:
             # control be moved onto the allow-list undetected. The hole these
             # checks exist to close, reopened by a refactor that looks like its
             # neighbours.
-            pattern = (r"(?:\[|\.get\()\s*[\"']" + re.escape(section) + r"[\"']"
-                       r"[^\n]{0,20}?(?:\[|\.get\()\s*[\"']" + re.escape(sub) + r"[\"']")
+            pattern = chain
         else:
             # A TOP-LEVEL key must be rooted at a policy dict. `repo` is read by
             # three modules as `policy["repo"]`; the ledger's `raw.get("schema")`
             # is keyed to `raw` and so does not match, which is what lets bare
             # names be covered at all.
             pattern = (r"(?:policy|POLICY|cfg)\s*(?:\[|\.get\()\s*[\"']"
-                       + re.escape(section) + r"[\"']")
-        if re.search(pattern, sources):
+                       + re.escape(parts[0]) + r"[\"']")
+        if re.search(pattern, flat):
             found.append(dotted)
     return found
 
@@ -1192,6 +1304,25 @@ def classify_missing(total_count: int, waiting: bool) -> str:
     return "present"
 
 
+def worst_by_name(checks) -> dict[str, dict]:
+    """Context name -> its WORST run. Shared, because two callers need it.
+
+    Two runs can publish the same context name (a re-run, or a matrix leg), and
+    the worst one has to decide: a green twin must never hide a run that
+    measured nothing. `merge_gate` reached into `_check_rank` to rebuild this,
+    which is the same de-duplication written twice and free to drift.
+    """
+    by_name: dict[str, dict] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        prior = by_name.get(name)
+        if prior is None or _check_rank(check) > _check_rank(prior):
+            by_name[name] = check
+    return by_name
+
+
 def classify_checks(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
     """PRP §6 gate 4: every required context present, none RED, none INCOMPLETE.
 
@@ -1205,15 +1336,7 @@ def classify_checks(checks: list[dict], required: list[str]) -> tuple[bool, list
     present and concluded green; the reasons list every failure, because a
     caller that stops at the first one re-runs this loop once per defect.
     """
-    by_name: dict[str, dict] = {}
-    for check in checks:
-        name = check.get("name") or check.get("context") or ""
-        if not name:
-            continue
-        # Two runs can share a context name; the worst one decides.
-        prior = by_name.get(name)
-        if prior is None or _check_rank(check) > _check_rank(prior):
-            by_name[name] = check
+    by_name = worst_by_name(checks)
 
     reasons: list[str] = []
     for name in required:
@@ -1318,6 +1441,2009 @@ def check_is_hollow(name: str, conclusion: str, measured: int | None) -> tuple[b
     if measured == 0:
         return True, f"{name}: green over ZERO items - a pass with no population"
     return False, f"{name}: green over {measured} item(s)"
+
+
+# ---------------------------------------------------------------------------
+# The `ci-green` receipt (#4487)
+# ---------------------------------------------------------------------------
+#
+# The receipt used to read "every required context green AT THE MERGED SHA".
+# That measurement is UNOBTAINABLE for most PRs in this repo, and it was found
+# by trying to take the receipt for the first time -- on the harness's own
+# merge, `a02cd41e6d42` (#4483):
+#
+#     15 required contexts (branch protection)
+#     10 green at the merged sha
+#      5 absent at the merged sha
+#      0 RED
+#
+# None of the five is a failure or a flake:
+#
+#   * four (`Python Lint`, `PowerShell Lint`, `Secret Scan`, `Repo Hygiene`) are
+#     published by `validate.yml`, whose `push:` trigger is PATH-FILTERED to
+#     bicep/deploy/workflow paths. That merge touched `tools/`, `PRPs/`,
+#     `pyproject.toml` and `.gitignore`, so the workflow correctly did not run.
+#     The contexts are NEVER-CREATED at that sha -- not pending, not failing.
+#   * the fifth is a RENAME, not an absence: `commit-message-parses.yml` gives
+#     its job a conditional `name:`, so on `push` it publishes `changelog parser
+#     can read what landed on main` while branch protection requires the
+#     `pull_request` spelling. It ran at the merged sha and was green.
+#
+# A definition the topology cannot satisfy leaves exactly two outcomes: every
+# guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as
+# "green" and the receipt stops meaning what it says. The second is the failure
+# mode this whole toolchain exists to prevent.
+#
+# So the receipt is redefined to something that is both TRUE and TAKEABLE:
+#
+#     every required context that CAN run at the merged sha is green; every one
+#     that cannot is NAMED, with its reason and its result on the PR head over
+#     an IDENTICAL TREE.
+#
+# The load-bearing word is *named*. An absence is only excused when the harness
+# can say WHY, from evidence -- the producing workflow's own trigger, read at
+# the merged sha -- and every branch that cannot say why FAILS CLOSED. A version
+# that excused absence generically would be the "quietly accept 10-of-15"
+# outcome with a function wrapped around it.
+#
+# Nothing here is keyed to a context's SPELLING. The producer of each context is
+# measured at the PR head (where it ran) via the workflow-run/jobs API, and the
+# rename case is resolved by WORKFLOW IDENTITY -- the same workflow ran at the
+# merged sha and concluded green under a different job name. A hardcoded alias
+# list would be one rename away from being wrong, silently, which is the shape
+# of defect this package keeps finding.
+
+
+@dataclass(frozen=True)
+class PushTrigger:
+    """One workflow's `on.push` trigger, as it bears on a merged sha.
+
+    `present` is False when the workflow has no `push` trigger at all, which is
+    itself a complete explanation for a never-created context.
+    """
+
+    present: bool
+    branches: tuple[str, ...] | None = None
+    branches_ignore: tuple[str, ...] | None = None
+    paths: tuple[str, ...] | None = None
+    paths_ignore: tuple[str, ...] | None = None
+
+
+def _as_tuple(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(str(v) for v in value)
+    return None
+
+
+def parse_push_trigger(workflow_yaml: str) -> PushTrigger | None:
+    """Parse `on.push` out of a workflow file. None means "could not read it".
+
+    None and `PushTrigger(present=False)` are DIFFERENT answers and the caller
+    treats them differently: the first is an unanswered question (fail closed),
+    the second is a measured fact that explains an absence. Collapsing them
+    would turn every unparseable workflow into a free pass.
+
+    `on:` is the YAML 1.1 boolean `True` under PyYAML's default resolver, so a
+    reader that only looks up the string key finds NOTHING in every real
+    workflow file and concludes "no push trigger" -- i.e. it would excuse every
+    absence in the repo. Both keys are consulted.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - pyyaml is a declared dependency
+        return None
+    try:
+        doc = yaml.safe_load(workflow_yaml)
+    except Exception:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    triggers = doc.get("on", doc.get(True))
+    if isinstance(triggers, str):
+        return PushTrigger(present=triggers == "push")
+    if isinstance(triggers, list):
+        return PushTrigger(present="push" in triggers)
+    if not isinstance(triggers, dict):
+        return None
+    if "push" not in triggers:
+        return PushTrigger(present=False)
+    push = triggers["push"]
+    if not isinstance(push, dict):
+        # `push:` with an empty value -- every branch, every path.
+        return PushTrigger(present=True)
+    return PushTrigger(
+        present=True,
+        branches=_as_tuple(push.get("branches")),
+        branches_ignore=_as_tuple(push.get("branches-ignore")),
+        paths=_as_tuple(push.get("paths")),
+        paths_ignore=_as_tuple(push.get("paths-ignore")),
+    )
+
+
+def _glob_to_regex(pattern: str) -> str:
+    r"""GitHub filter-pattern semantics, not `fnmatch`.
+
+    `fnmatch.translate` maps `*` to `.*`, which matches across `/` -- so
+    `'*.bicep'` would match `deploy/x.bicep` and a top-level-only filter would
+    silently excuse nothing. The three wildcards differ here:
+
+        `**`  zero or more characters, INCLUDING `/`
+        `*`   zero or more characters, EXCLUDING `/`
+        `?`   exactly one character, EXCLUDING `/`
+
+    `a/**/b` matches `a/b` as well as `a/x/y/b`: the `**/` is allowed to consume
+    zero path segments together with its slash. `.github/workflows/**` therefore
+    matches `.github/workflows/validate.yml`, and `deploy/**/*.bicep` matches
+    `deploy/x.bicep` -- both of which a naive `**` -> `.*` translation gets
+    wrong in the direction of excusing too much.
+    """
+    out = []
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "*":
+            if pattern.startswith("**", i):
+                if pattern.startswith("**/", i):
+                    out.append("(?:.*/)?")
+                    i += 3
+                    continue
+                if i > 0 and pattern[i - 1] == "/" and i + 2 == len(pattern):
+                    # trailing `/**` -- the slash is already emitted, so let it
+                    # match the directory itself too.
+                    out.append(".*")
+                    i += 2
+                    continue
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(char))
+        i += 1
+    return "^" + "".join(out) + "$"
+
+
+#: Filter-pattern syntax this translator does NOT implement. `!` negates,
+#: `[...]` is a character range, `+` and `(` are extglob-ish. Translating them
+#: as LITERALS under-matches, and under-matching a positive `paths:` list is the
+#: EXCUSING direction -- the filter looks like it admitted nothing, so an
+#: absence gets excused. `!` under `paths-ignore:` is worse still: it re-includes
+#: a path, so ignoring it can excuse outright.
+#:
+#: Zero workflows in this repo use any of them today (measured), which is
+#: exactly why refusing is free. A pattern this cannot represent is an
+#: unanswered question, and unanswered questions fail closed here.
+_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|]")
+
+
+class UnsupportedPatternError(ValueError):
+    """A filter pattern this translator cannot represent faithfully."""
+
+
+def glob_matches(pattern: str, path: str) -> bool:
+    """Does one GitHub filter pattern match one path?
+
+    Raises `UnsupportedPattern` rather than guessing. See `_UNSUPPORTED_GLOB`:
+    silently treating `!` or `[0-9]` as literal text under-matches, and
+    under-matching is the direction that EXCUSES an absence.
+    """
+    if _UNSUPPORTED_GLOB.search(pattern):
+        raise UnsupportedPatternError(pattern)
+    return re.match(_glob_to_regex(pattern), path) is not None
+
+
+def _any_match(patterns: tuple[str, ...], values) -> bool:
+    return any(glob_matches(p, v) for p in patterns for v in values)
+
+
+def select_merged_run(runs, workflow_path: str, merged_sha: str) -> dict | None:
+    """The `push` run of `workflow_path` AT the merged sha, or None.
+
+    EXTRACTED FROM THE COLLECTOR SO IT CAN BE TESTED. The version that lived
+    inline in `merge_gate.collect_ci_green_evidence` took the NEWEST run for a
+    path with no event filter and no sha filter, and both independent reviewers
+    built the same attack on it: a single sha carries many runs per path across
+    `push`, `schedule`, `check_suite` and `issues` -- measured, 73 workflow runs
+    at `a02cd41e6d42` with 10 paths carrying more than one -- so a RED `push`
+    run followed by any green cron would supply the "rename" evidence.
+
+    `push` is the only event that answers the question being asked. The
+    required context is the `pull_request` spelling; what is being excused is
+    that the `push` event published a different job name at this commit. A
+    `schedule` or `workflow_dispatch` run is a different question with a
+    different range, which `commit-message-parses.yml` states about itself in
+    so many words.
+
+    Newest-first among genuine candidates only, so a re-run of the push
+    supersedes the original rather than a cron superseding both.
+    """
+    candidates = [
+        run for run in runs
+        if isinstance(run, dict)
+        and run.get("path") == workflow_path
+        and str(run.get("head_sha") or "") == merged_sha
+        and str(run.get("event") or "").lower() == "push"
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: str(r.get("run_started_at") or ""))
+
+
+def push_event_runs(
+    trigger: PushTrigger, branch: str, changed_files
+) -> tuple[bool, str]:
+    """Would this workflow run on a push of `changed_files` to `branch`?
+
+    Returns (runs, why). The `why` is the receipt's explanation text when the
+    answer is False, so it names the filter and the population it was applied
+    to rather than saying "filtered out".
+
+    An EMPTY `changed_files` returns True with a reason saying the question was
+    unanswerable: a path filter cannot be shown to exclude a set nobody
+    measured, and "it did not run" must never be inferred from "I read no
+    files". The caller turns a True here into a FAILURE (the context should
+    have been created and was not), which is the fail-closed direction.
+    """
+    if not trigger.present:
+        return False, "the producing workflow has no `push:` trigger at all"
+    files = [f for f in changed_files if f]
+
+    # An UNREPRESENTABLE pattern anywhere in this trigger makes the whole
+    # question unanswerable, and it resolves to "it runs" -- which the receipt
+    # turns into a FAILURE. Never into an excused absence.
+    for label, patterns in (
+        ("push.branches", trigger.branches),
+        ("push.branches-ignore", trigger.branches_ignore),
+        ("push.paths", trigger.paths),
+        ("push.paths-ignore", trigger.paths_ignore),
+    ):
+        if patterns is None:
+            continue
+        for pattern in patterns:
+            if _UNSUPPORTED_GLOB.search(pattern):
+                return True, (
+                    f"`{label}` contains {pattern!r}, which this translator cannot "
+                    "represent faithfully - refusing to guess rather than under-match"
+                )
+
+    if trigger.branches is not None and not _any_match(trigger.branches, [branch]):
+        return False, (
+            f"`push.branches` {list(trigger.branches)} does not match {branch!r}"
+        )
+    if trigger.branches_ignore is not None and _any_match(trigger.branches_ignore, [branch]):
+        return False, (
+            f"`push.branches-ignore` {list(trigger.branches_ignore)} matches {branch!r}"
+        )
+    if trigger.paths is not None:
+        if not files:
+            return True, "no changed files were measured, so no path filter can be shown to exclude them"
+        if not _any_match(trigger.paths, files):
+            return False, (
+                f"`push.paths` {list(trigger.paths)} matches none of the "
+                f"{len(files)} changed file(s)"
+            )
+    if trigger.paths_ignore is not None and files:
+        unignored = [f for f in files if not _any_match(trigger.paths_ignore, [f])]
+        if not unignored:
+            return False, (
+                f"`push.paths-ignore` {list(trigger.paths_ignore)} matches all "
+                f"{len(files)} changed file(s)"
+            )
+    return True, "the `push:` trigger admits this commit"
+
+
+@dataclass(frozen=True)
+class ContextEvidence:
+    """Everything measured about ONE required context, for the receipt.
+
+    Collected by `merge_gate.collect_ci_green_evidence`; this module never
+    reaches the network, so every branch below is reachable from a fixture.
+
+    `workflow_path` is measured at the PR HEAD -- the event where the context
+    demonstrably ran -- because that is the only place a context that is absent
+    at the merged sha can be traced back to a producer. `None` means the trace
+    failed, and an untraceable absence is NO, not an excuse.
+    """
+
+    name: str
+    workflow_path: str | None = None
+    merged_check: dict | None = None
+    head_check: dict | None = None
+    merged_workflow_run: dict | None = None
+    #: The JOBS of `merged_workflow_run`, as dicts carrying at least `name`,
+    #: `conclusion` and `steps`. This used to be a tuple of bare NAMES that the
+    #: receipt read only to PRINT -- the evidence that would prove a rename was
+    #: gathered and then discarded, and both independent reviewers found it.
+    merged_workflow_jobs: tuple[dict, ...] = ()
+    #: The PR-head job behind `head_check`, same shape. Needed because a green
+    #: check is not proof that anything RAN: `test.yml` reports SUCCESS on
+    #: `pull_request` with `Run pytest`, `Lint with ruff` and `mypy` all
+    #: `skipped`, BY DESIGN, and runs the real suite only on `push`. Measured on
+    #: PRs #4440 and #4437, whose deferral this receipt used to accept.
+    head_job: dict | None = None
+    #: The job behind `merged_check`, same shape. `green-at-merge` needs it for
+    #: exactly the reason `deferred-to-head` needs `head_job`: a green
+    #: conclusion is not evidence the check did its work.
+    merged_job: dict | None = None
+    push_trigger: PushTrigger | None = None
+
+
+@dataclass(frozen=True)
+class ContextResult:
+    """One required context's standing in the receipt."""
+
+    name: str
+    state: str          # green-at-merge | renamed-at-merge | deferred-to-head | FAIL
+    detail: str
+
+    @property
+    def ok(self) -> bool:
+        return self.state != "FAIL"
+
+
+@dataclass(frozen=True)
+class CiGreenReceipt:
+    ok: bool
+    contexts: tuple[ContextResult, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+    def by_state(self, state: str) -> list[ContextResult]:
+        return [c for c in self.contexts if c.state == state]
+
+    @property
+    def summary(self) -> str:
+        counts = {}
+        for context in self.contexts:
+            counts[context.state] = counts.get(context.state, 0) + 1
+        shape = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        return f"{'GREEN' if self.ok else 'NOT GREEN'} ({shape or 'no contexts'})"
+
+
+def ci_green_receipt(
+    evidence,
+    *,
+    merged_total_count: int,
+    merged_changed_files,
+    merged_sha: str,
+    merged_branch: str = "main",
+    trees_identical: bool,
+    policy: dict,
+    infra_ere: str | None = None,
+) -> CiGreenReceipt:
+    """The `ci-green` receipt, as a measurement that can actually be taken.
+
+    Per required context, worst-first, every unanswered question failing closed:
+
+    1. **Present at the merged sha** -- green closes it; RED and INCOMPLETE
+       fail. Reuses the same two vocabularies `classify_checks` reads, so a
+       StatusContext `ERROR` is not scored green here either.
+    2. **Absent, producer untraceable** -- FAIL. "I could not find out why" is
+       not a reason a receipt may contain (`deploy-integrity.md` R7).
+    3. **Absent, but the producing workflow RAN at the merged sha and concluded
+       green** -- the context was renamed for this event, which is the
+       `commit-message-parses.yml` shape. Resolved by workflow IDENTITY, never
+       by an alias table, and the sibling job names are recorded.
+    4. **Absent, and the producing workflow was NEVER CREATED at the merged
+       sha** -- only excused when its own `push:` trigger, read at that sha,
+       says it could not have run. Then the result is deferred to the PR head,
+       and ONLY over an identical tree: a head green over a different tree is a
+       statement about a tree that was not merged.
+    5. Anything else -- FAIL.
+
+    `merged_total_count` guards the whole receipt through `classify_missing`: if
+    the merged sha carries ZERO check-runs, nothing ran at all and every
+    "absence" above would be excused one by one into a vacuous pass.
+    """
+    contexts: list[ContextResult] = []
+    reasons: list[str] = []
+
+    if classify_missing(merged_total_count, waiting=False) == "never-created":
+        return CiGreenReceipt(
+            ok=False,
+            reasons=(
+                ("the merged sha carries ZERO check-runs - nothing ran there at all, "
+                 "so no per-context absence can be excused"),
+            ),
+        )
+
+    for item in evidence:
+        result = _one_context(
+            item,
+            merged_changed_files=merged_changed_files,
+            merged_branch=merged_branch,
+            merged_sha=merged_sha,
+            trees_identical=trees_identical,
+            policy=policy,
+            infra_ere=infra_ere,
+        )
+        contexts.append(result)
+        if not result.ok:
+            reasons.append(f"{result.name}: {result.detail}")
+
+    if not contexts:
+        return CiGreenReceipt(
+            ok=False,
+            reasons=("no required contexts were measured - an empty receipt is not a green one",),
+        )
+    return CiGreenReceipt(ok=not reasons, contexts=tuple(contexts), reasons=tuple(reasons))
+
+
+def _one_context(
+    item: ContextEvidence,
+    *,
+    merged_changed_files,
+    merged_branch: str,
+    merged_sha: str,
+    trees_identical: bool,
+    policy: dict,
+    infra_ere: str | None = None,
+) -> ContextResult:
+    if item.merged_check is not None:
+        verdict, status = _outcome(item.merged_check)
+        if verdict in RED_CONCLUSIONS:
+            return ContextResult(item.name, "FAIL", f"RED at the merged sha ({verdict})")
+        if not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
+            return ContextResult(
+                item.name, "FAIL",
+                f"INCOMPLETE at the merged sha (state={verdict or status or 'unknown'})",
+            )
+        if verdict == "SKIPPED":
+            return ContextResult(
+                item.name, "FAIL",
+                "SKIPPED at the merged sha - a required context that ran nothing is not a pass",
+            )
+        # KNOWN DISAGREEMENT, RECORDED RATHER THAN DEFERRED SILENTLY (#4491
+        # round 16 review, finding 6). This branch decides green NEGATIVELY --
+        # "not RED, not INCOMPLETE, not SKIPPED" -- while the deferral branch
+        # ~80 lines below asks `verdict != "SUCCESS"` POSITIVELY. The two
+        # vocabularies agree on every conclusion except one:
+        #
+        #   NEUTRAL  ->  green here, refused there.
+        #
+        # A reviewer demonstrated it end to end; the receipt literally prints
+        # `green at the merged sha (NEUTRAL)`. `neutral` is the Checks API's
+        # "ran, made no determination", which is the exact shape this package
+        # refuses everywhere else, and the string `neutral` appears nowhere in
+        # `tools/drain/` -- not in policy.json, not in a test, not in an arm. So
+        # it is undocumented, untested and unarmed.
+        #
+        # NOT CHANGED IN THIS ROUND, and the reason is scope rather than
+        # disagreement: refusing NEUTRAL here makes the gate STRICTER, which is
+        # the direction this package normally moves, but it changes the merge
+        # verdict for every PR the harness gates while three are mid-flight
+        # against it. A semantics change to the instrument, made by the author
+        # of the work the instrument is judging, is not something to slip into a
+        # round that exists to fix stale numbers. Tracked as issue #4518 with the
+        # measurement, and the two predicates over one question are named here
+        # so the next reader does not have to re-derive the contradiction.
+        # A GREEN CONCLUSION IS NOT EVIDENCE THE CHECK DID ITS WORK, and this
+        # branch carries 14 of 15 contexts on a typical PR. It used to return a
+        # pass on the conclusion alone -- the same defect the deferral branch
+        # had, one branch along, which is this package's most persistent shape.
+        # Live at the time it was found: PR #4488 returned RECEIPT: GREEN while
+        # `next build (node 20)` concluded success with `Build (next build)`
+        # SKIPPED behind a change-detection gate.
+        did_work, evidence, route = context_is_accounted_for(
+            item.name, item.merged_job, merged_changed_files, policy,
+            infra_ere=infra_ere,
+        )
+        if not did_work:
+            return ContextResult(
+                item.name, "FAIL",
+                f"green at the merged sha ({verdict}), but {evidence}",
+            )
+        if route == ACCOUNTED_SCOPE_SKIP:
+            return ContextResult(
+                item.name, ACCOUNTED_SCOPE_SKIP,
+                f"green at the merged sha ({verdict}); it skipped its declared work, and "
+                f"{evidence}",
+            )
+        if route == ACCOUNTED_ALTERNATIVE:
+            # REPORTED SEPARATELY FROM `green-at-merge`, because it is a
+            # different claim. Its declared substantive step was SKIPPED, and an
+            # independent reviewer pointed out that folding it in makes the one
+            # line a reader acts on say twelve contexts executed their check when
+            # eleven did and one did the other half of its job. The README
+            # already refuses that fold for `scope-untouched-at-merge`; the
+            # asymmetry was the defect.
+            return ContextResult(
+                item.name, ACCOUNTED_ALTERNATIVE,
+                f"green at the merged sha ({verdict}); it {evidence}",
+            )
+        return ContextResult(
+            item.name, ACCOUNTED_DID_WORK,
+            f"green at the merged sha ({verdict}), and it {evidence}",
+        )
+
+    if not item.workflow_path:
+        return ContextResult(
+            item.name, "FAIL",
+            "absent at the merged sha and its producing workflow could not be traced "
+            "from the PR head - an absence nobody can explain is not an excused one",
+        )
+
+    if item.merged_workflow_run is not None:
+        return _renamed_at_merge(
+            item, merged_sha=merged_sha,
+            merged_changed_files=merged_changed_files, policy=policy,
+            infra_ere=infra_ere,
+        )
+
+    if item.push_trigger is None:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent at the merged sha and the `on.push` trigger of {item.workflow_path} "
+            "could not be read there - fail closed rather than assume it was filtered out",
+        )
+
+    runs, why = push_event_runs(item.push_trigger, merged_branch, merged_changed_files)
+    if runs:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent at the merged sha although {item.workflow_path} SHOULD have run there "
+            f"({why}) - that is a missing check, not a structural absence",
+        )
+    if not trees_identical:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}), and the PR head result cannot "
+            "stand in for it because the merged tree differs from the PR head tree - "
+            f"dispatch {item.workflow_path} at the merged sha to obtain it",
+        )
+    if item.head_check is None:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}) and absent on the PR head too - "
+            "there is no result anywhere to defer to",
+        )
+    verdict, status = _outcome(item.head_check)
+    if verdict != "SUCCESS":
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}) and its PR-head result is "
+            f"{verdict or status or 'unknown'}, not green",
+        )
+    # A GREEN THAT RAN NOTHING IS NOT A RESULT TO DEFER TO, and this is the
+    # branch both independent reviewers blocked on. `test.yml` publishes
+    # `Python Tests (3.x)` on BOTH events and, on `pull_request`, reports
+    # SUCCESS with `Run pytest with coverage`, `Lint with ruff` and `mypy` all
+    # `skipped` -- by design, documented in the workflow, because the real suite
+    # is meant to run on `push`. Deferring a path-filtered context to that green
+    # is precisely "quietly accept 10-of-15" wearing a function.
+    #
+    # Measured live before this check existed: the receipt returned GREEN for
+    # #4440 and #4437 on exactly that job (run 34483464251). It is 3 of 11
+    # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
+    # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
+    # than distrust deferral as a category.
+    ran, evidence, route = context_is_accounted_for(
+        item.name, item.head_job, merged_changed_files, policy,
+        push_trigger=item.push_trigger, infra_ere=infra_ere,
+    )
+    if not ran:
+        return ContextResult(
+            item.name, "FAIL",
+            f"structurally absent at the merged sha ({why}), and its PR-head run is green "
+            f"but {evidence} - a check that executed nothing is not a result to defer to; "
+            f"dispatch {item.workflow_path} at the merged sha instead",
+        )
+    if route == ACCOUNTED_SCOPE_SKIP:
+        return ContextResult(
+            item.name, ACCOUNTED_SCOPE_SKIP,
+            f"structurally absent at the merged sha ({why}); green on the PR head over an "
+            f"identical tree, where it skipped its declared work, and {evidence}",
+        )
+    if route == ACCOUNTED_ALTERNATIVE:
+        return ContextResult(
+            item.name, ACCOUNTED_ALTERNATIVE,
+            f"structurally absent at the merged sha ({why}); green on the PR head over an "
+            f"identical tree, where it {evidence}",
+        )
+    return ContextResult(
+        item.name, "deferred-to-head",
+        f"structurally absent at the merged sha ({why}); green on the PR head over an "
+        f"identical tree, and it {evidence}",
+    )
+
+
+def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[bool, str]:
+    """Did THIS context execute the step that IS the check?
+
+    WHICH step, not how many, and the distinction is the whole control.
+    Measured 2026-09-13 over 24 `green-at-merge` contexts on PRs #4483 and
+    #4488, a proportion cannot decide it:
+
+        Python Tests (3.10)    9% skipped -> `Coverage summary`      LEGITIMATE
+        vitest (node 20)      38% skipped -> `Run vitest (...)`      HOLLOW
+        next build (node 20)  92% skipped -> `Build (next build)`    HOLLOW
+
+    `vitest` skipped the step that IS the check while sitting at a LOWER
+    proportion than a job that skipped only a trailing report. Any threshold
+    that accepts the second accepts the first.
+
+    Nor can it be inferred from names: `_is_bookkeeping_step` already
+    misclassifies six real step names (`Post HIGH findings to PR`) in the
+    EXCUSING direction, which is what a name-shaped guess buys you.
+
+    So it is DECLARED in `policy.json` under
+    `receipts.ci_green_rule.substantive_steps`, read off real green runs. A
+    context absent from that map FAILS CLOSED -- the alternative is a receipt
+    that silently stops checking whenever someone adds a required context.
+
+    `"ALL"` means every work step must have run, for contexts whose work is
+    spread across many steps (`guardrails` has 158) rather than concentrated in
+    one. A LIST names the steps that must have executed, matched as substrings
+    so a step's parenthetical detail can change without breaking the receipt.
+    """
+    declared = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+    )
+    if name not in declared:
+        return False, (
+            f"no substantive step is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.substantive_steps) - an undeclared context "
+            "fails closed rather than silently stop being checked"
+        )
+    if not isinstance(job, dict):
+        return False, "no job record was read for it, so it cannot be shown to have run"
+    # THE JOB'S OWN VERDICT, which this path never read. Round 14: `green-at-
+    # merge` and the deferral path asked only about STEPS, so a job that
+    # concluded `failure` was accepted as having "executed its declared
+    # substantive step" -- and an independent reviewer proved the job join
+    # PREFERS that failed job over its green twin. `_renamed_at_merge` has
+    # always read this field; the other two routes did not, and a receipt is
+    # only as good as its least-asked route.
+    job_verdict = step_conclusion(job)
+    if job_verdict is None:
+        return False, (
+            "its job record has not concluded, so it is still running and "
+            "cannot yet be shown to have done its work"
+        )
+    if job_verdict != "success":
+        return False, (
+            f"its job concluded {job_verdict!r}, not success - a job that did "
+            "not pass has not done the thing it is required for, whatever its "
+            "individual steps say"
+        )
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return False, "its job record carries no steps, so it cannot be shown to have run"
+
+    work = [
+        s for s in steps
+        if isinstance(s, dict) and not _is_bookkeeping_step(str(s.get("name") or ""))
+    ]
+    if not work:
+        return False, (
+            f"all {len(steps)} of its steps are runner bookkeeping - no work steps at all"
+        )
+
+    # A STEP THAT HAS NOT CONCLUDED IS NEITHER RUN NOR SKIPPED, and this is the
+    # SEVENTH reader of that field. Round 13 fixed `scope_untouched_at_merge`
+    # and called it a root-cause fix; an independent reviewer showed it landed
+    # on ONE OF THREE ROUTES. Here the consequence is `green-at-merge`: an
+    # in-progress job whose declared step had already succeeded was accepted,
+    # and `merge_gate`'s job join PREFERS that job in both input orders.
+    unfinished = [
+        str(s.get("name") or "?") for s in work if not step_has_concluded(s)
+    ]
+    if unfinished:
+        return False, (
+            f"{len(unfinished)} of its work step(s) have NOT CONCLUDED "
+            f"({', '.join(unfinished[:3])}) - this job is still running, so it "
+            "cannot yet be shown to have done the thing it is required for"
+        )
+
+    def ran(step: dict) -> bool:
+        return step_conclusion(step) != "skipped"
+
+    rule = declared[name]
+    if rule == "ALL":
+        skipped = [s for s in work if not ran(s)]
+        if skipped:
+            names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+            return False, (
+                f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
+                f"are SKIPPED ({names})"
+            )
+        return True, f"declared ALL; every one of its {len(work)} work step(s) ran"
+
+    if not isinstance(rule, list) or not rule:
+        return False, (
+            f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
+            "non-empty list of step names"
+        )
+
+    missing, hollow, ambiguous = [], [], []
+    for wanted in rule:
+        # EVERY matching step, and EVERY one of them must have run. This used to
+        # be `any(ran(s) for s in matches)`, and an independent reviewer's
+        # mutation arm truncated the match list to `[:1]` and SURVIVED: with
+        # `any`, one running step satisfied a declaration no matter how many
+        # others matched and skipped, so narrowing the population was
+        # unobservable. A filter placed INSIDE the predicate beats a contract
+        # written about the predicate -- which is the whole lesson of the `N*`
+        # arms. `all` makes the size of the match set load-bearing, so a
+        # truncation changes an answer and a test can see it.
+        matches = [s for s in work if wanted in str(s.get("name") or "")]
+        if not matches:
+            missing.append(wanted)
+            continue
+        skipped = [s for s in matches if not ran(s)]
+        if len(skipped) == len(matches):
+            hollow.append(wanted)
+        elif skipped:
+            ambiguous.append(
+                f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
+                "are SKIPPED"
+            )
+    if missing:
+        return False, (
+            f"the declared step(s) {missing} are ABSENT from this job - the declaration "
+            "is stale, or this is not the job it describes; re-read it off a green run"
+        )
+    if ambiguous:
+        # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched several
+        # steps with a MIXED outcome cannot say which one is the check, and
+        # round 5 answered a hollow primary with an alternative BEFORE reaching
+        # this refusal -- so a two-entry declaration with one hollow entry and
+        # one ambiguous entry returned a pass and this sentence was never
+        # printed. An independent reviewer demonstrated it synthetically; it was
+        # latent only because both rows that declare alternatives name exactly
+        # one primary step.
+        return False, (
+            "a declaration matched several steps with a MIXED outcome, so which one "
+            f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
+            "the declaration name exactly one step"
+        )
+    if hollow:
+        # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
+        # blocker. Round 5 accepted "a declared alternative ran" as the context
+        # having done its work, inside this function -- which has no
+        # `changed_files` and cannot ask the only question that makes such an
+        # acceptance safe. `context_is_accounted_for` returned on `did` before
+        # the merged file list was ever consulted, so the `hits` refusal (a
+        # change detector that MISSED a change, the #3783 shape `policy.json`
+        # says must never be laundered) became unreachable whenever any
+        # alternative ran. Two reviewers found it independently, on different
+        # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
+        #
+        # So the alternative lives in `alternative_accounted_for`, which asks
+        # the scope question and this one as two halves of a single predicate.
+        return False, (
+            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
+            "concluded green having not done the thing it is required for"
+        )
+    return True, f"executed its declared substantive step(s) {list(rule)}"
+
+
+#: A `scope_paths` output may declare its scope to BE the producing workflow's
+#: own `on.push.paths` rather than a copy of it. Used where the workflow's in-job
+#: detector parses that key out of the file itself, so a second list in
+#: `policy.json` would be the drift the workflow explicitly refuses to carry.
+ON_PUSH_PATHS = "on.push.paths"
+
+#: The same delegation, for a scope that is COMPUTED rather than written down.
+#: `fiab-console-ci.yml`'s vitest detector derives its `infra` ERE by running
+#: `node scripts/ci/derive-infra-reading-suites.mjs --ere` over the tree, so
+#: there is no list to copy and any copy would be stale the moment a suite moves.
+#: The value is resolved by the CALLER and injected, exactly as `push_trigger`
+#: is -- `gates.py` runs no subprocess, so the decision function stays pure and a
+#: test can drive both the resolved and the unresolvable case.
+INFRA_READING_ERE = "derive-infra-reading-suites.mjs --ere"
+
+#: The routes by which a green required context can be ACCOUNTED FOR. Returned
+#: by `context_is_accounted_for` as the third element so the collector names the
+#: route rather than re-deriving it, and so the three cannot be folded into one
+#: another in a summary line. They are genuinely different claims:
+#:
+#:   DID_WORK     it executed the step that IS the check
+#:   ALTERNATIVE  it skipped that step and executed a declared OTHER half of the
+#:                same job, with the merged files outside the primary's scope
+#:   SCOPE_SKIP   it skipped that step, ran nothing at all, and the merged files
+#:                are outside every scope the job gates work on
+#:
+#: An independent reviewer found ALTERNATIVE being counted inside DID_WORK: on
+#: #4488 that is the difference between `green-at-merge=13` and `12 + 1`, and the
+#: per-context detail was honest while the summary a reader acts on was not.
+ACCOUNTED_DID_WORK = "green-at-merge"
+ACCOUNTED_ALTERNATIVE = "alternative-work-at-merge"
+ACCOUNTED_SCOPE_SKIP = "scope-untouched-at-merge"
+
+
+def context_is_accounted_for(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+    infra_ere: str | None = None,
+) -> tuple[bool, str, str]:
+    """ONE question -- is this green check accounted for? -- asked in one place.
+
+    Returns `(ok, evidence, route)`, where `route` is one of
+    `ACCOUNTED_DID_WORK`, `ACCOUNTED_ALTERNATIVE`, `ACCOUNTED_SCOPE_SKIP`, or
+    `""` when the answer is no.
+
+    A green check is accounted for by exactly one of three routes:
+
+    1. it EXECUTED its declared substantive step;
+    2. it skipped that step and executed a declared ALTERNATIVE -- the other
+       half of a job whose work is gated on more than one output -- **with the
+       merged files outside the primary's declared scope**;
+    3. it skipped that step, ran nothing at all, and the merged commit's own
+       file list falls outside every scope the job gates work on.
+
+    Every branch of the receipt goes through here. Three of them used to ask the
+    question with three different predicates -- `green-at-merge` and
+    `deferred-to-head` called `context_did_its_work` while `_renamed_at_merge`
+    called `job_executed` -- and "two predicates over the same question" is
+    exactly the shape that produced the original hole: the deferral branch was
+    fixed, the green-at-merge branch was not, and a reviewer found it one round
+    later. A single entry point is not tidiness; it is what makes "fixed on one
+    side only" impossible to write.
+
+    AND IT IS NOT YET TRUE OF THE JOB'S OWN CONCLUSION (#4491 round 16 review,
+    finding 5). Round 14 added a job-level conclusion check -- refuse a job that
+    did not conclude, refuse one that concluded non-`success` -- and it landed
+    on ONE of the three routes. Route 1 `context_did_its_work` reads it (`:2080`,
+    refusing `None` at `:2081` and non-success at `:2086`); route 2
+    `scope_untouched_at_merge` and route 3 `alternative_accounted_for` read no
+    job-level conclusion at all. A reviewer demonstrated it against the real
+    unmodified `next build (node 20)` policy row:
+
+        job.conclusion='success'   -> ok=True route='scope-untouched-at-merge'
+        job.conclusion='failure'   -> ok=True route='scope-untouched-at-merge'
+        job.conclusion='cancelled' -> ok=True route='scope-untouched-at-merge'
+        job.conclusion=None        -> ok=True route='scope-untouched-at-merge'
+
+    So this docstring's own claim -- that a single entry point makes "fixed on
+    one side only" impossible -- is exactly what round 14 then wrote, one level
+    up from where round 13 wrote it. The paragraph above describes the defect
+    the paragraph is in.
+
+    The `None` row is the one that matters, because `merge_gate._jobs_by_name`
+    deliberately prefers "the one that executed LESS", so an in-progress
+    duplicate wins the join -- which is the documented input rounds 13 and 14
+    exist for. End-to-end reachability is LOW (an in-progress job usually
+    publishes an in-progress check-run, and `worst_by_name` scores it INCOMPLETE
+    first), but that is a coincidence of the rollup, not a control, and this
+    package does not rest a stop on a coincidence.
+
+    NOT FIXED IN THIS ROUND, deliberately and for the same reason as the NEUTRAL
+    disagreement recorded at `_one_context`: the remedy is either three lines in
+    each route or lifting the job-verdict read into THIS function, and both
+    change what the merge gate accepts while three PRs are mid-flight against
+    it. Changing the instrument's verdict, authored by the same hand as the work
+    it is judging, does not belong in a round convened to correct stale numbers.
+    Recorded with its measurement so the next reader inherits the finding rather
+    than the silence, and tracked as issue #4518 -- a reviewer filtered all 400
+    open issues and found that an earlier "tracked separately" here named
+    nothing, which is an unconsulted claim in a tracked file: the defect class
+    this package exists to refuse, written into its own deferral.
+
+    THE ORDER OF 2 AND 3 IS NOT ARBITRARY and neither may skip the other's
+    question. Round 5 put the alternative inside `context_did_its_work`, which
+    receives no `changed_files`, so route 2 returned a pass before route 3's
+    scope corroboration was ever reached -- and the `hits` refusal, the one
+    check watching for a detector that MISSED a change, became unreachable
+    whenever an alternative ran. Both reviewers reproduced it: the identical
+    input that round 4 refused with "that is a change detector that missed a
+    change", round 5 accepted as `green-at-merge`. Routes 2 and 3 now share
+    `_merged_files_outside_scope`, so the file-list question is asked on every
+    route that accepts a SKIPPED primary, and the two are halves of one
+    predicate rather than two branches that can each bypass the other.
+    """
+    did, evidence = context_did_its_work(name, job, policy)
+    if did:
+        return True, evidence, ACCOUNTED_DID_WORK
+    excused, why = scope_untouched_at_merge(
+        name, job, changed_files, policy,
+        push_trigger=push_trigger, infra_ere=infra_ere)
+    if excused:
+        return True, why, ACCOUNTED_SCOPE_SKIP
+    alt_ok, alt_why = alternative_accounted_for(
+        name, job, changed_files, policy,
+        push_trigger=push_trigger, infra_ere=infra_ere)
+    if alt_ok:
+        return True, alt_why, ACCOUNTED_ALTERNATIVE
+    return False, (
+        f"{evidence}. Nor is that a scope skip: {why}. "
+        f"Nor a declared alternative: {alt_why}"
+    ), ""
+
+
+def scope_untouched_at_merge(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+    infra_ere: str | None = None,
+) -> tuple[bool, str]:
+    """Was the substantive step skipped because this context's SCOPE did not change?
+
+    #4487 round 4. `context_did_its_work` correctly refuses a check that
+    concluded green having skipped the step that IS the check -- and that made
+    `ci-green` UNOBTAINABLE FOR THE EXACT CLASS IT CLOSES. A guard/test-only PR
+    is by construction one that does not touch `apps/fiab-console`, so
+    `next build (node 20)` and `vitest (node 20)` correctly skip their build and
+    test steps behind an in-job change detector and conclude SUCCESS. Measured:
+    both drain merges in the window, #4483 and #4488 -- the two PRs this receipt
+    exists for, including the harness's own merge -- returned NOT GREEN for
+    exactly those two contexts, 0 for 2 on the population it serves.
+
+    That is #4487's own thesis reproduced one branch along: a definition the
+    topology cannot satisfy leaves every guard/test-only issue unclosable, or
+    somebody quietly accepts. The receipt excused a PATH-FILTERED workflow and
+    refused the structurally identical IN-JOB change-detection skip -- the only
+    difference being whether the filter lives in `on.push.paths` or in a shell
+    step, which is a fact about where GitHub lets you write a filter, not about
+    how much the merge was checked.
+
+    So this is the same measurement the path-filter branch takes, against the
+    same population. `push_event_runs` proves a workflow could not have run by
+    applying its DECLARED filter to the merged commit's changed files; this
+    proves a step could not have run by applying its DECLARED scope to the same
+    list. `merge_gate` reads that list with `git show --name-only <merged>`,
+    which is the very range the on-push detector computes for itself
+    (`HEAD~1...HEAD`), so this corroborates the detector against its own input
+    rather than trusting its output.
+
+    It is an EXCUSE, never a shortcut, and every unanswered question fails
+    closed:
+
+    - no declared row for the context -> no excuse. An undeclared context
+      cannot reach this branch at all.
+    - the gate step is absent from the job, or did not run, or did not conclude
+      success -> we do not know why the substantive step skipped.
+    - a declared substantive step concluded anything other than `skipped`
+      (failed, cancelled, absent) -> that is not a scope skip.
+    - the merged changed-file list is empty -> nothing to measure against.
+    - ANY changed file matches the declared scope -> FAIL, loudly. The detector
+      skipped work it should have done, which is the #3783 shape and a real
+      defect rather than an excuse.
+    """
+    row = _scope_row(name, policy)
+    if row is None:
+        return False, (
+            f"no change-detection scope is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.scope_paths), so its skip cannot be excused "
+            "as a scope skip"
+        )
+    gate_step = str(row.get("gate_step") or "")
+    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+        return False, "no job record was read for it, so its skip cannot be explained"
+    steps = [s for s in job["steps"] if isinstance(s, dict)]
+
+    gate_ok, gate_why, detectors = _declared_gate_ran(row, steps)
+    if not gate_ok:
+        return False, gate_why
+
+    hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
+    if not hollow_ok:
+        return False, hollow_why
+
+    files = [str(f) for f in (changed_files or []) if str(f).strip()]
+    # "NOTHING FOR IT TO DO" MUST BE TRUE WHEN IT IS PRINTED (R7), and so must
+    # every refusal on the way there. This is asked BEFORE the scope comparison
+    # because a job that ran its other half would otherwise be refused with
+    # "that is a change detector that missed a change" -- a sentence about a
+    # detector that did NOT miss anything, since the matching scope is exactly
+    # why the alternative ran. Round 6 introduced that inversion by adding the
+    # second output and left the order alone; the order IS the claim.
+    #
+    # It closes the BENIGN direction only, and that is stated because round 5's
+    # reply claimed more for it. A detector that wrongly reports FALSE runs
+    # nothing, so `did_run` is empty and this assertion is silent -- the
+    # dangerous direction is closed by `_merged_files_outside_scope` asking
+    # EVERY output below, which is what makes an under-declared row impossible
+    # rather than merely unlikely.
+    # A STEP THAT HAS NOT CONCLUDED IS NOT A STEP THAT DID NOT RUN. Round 13:
+    # this read `conclusion or ""` and folded `""` into the "did not run" set
+    # alongside `skipped`, so a `queued` or `in_progress` step -- whose
+    # conclusion is `null` -- made this branch report "no work step in the job
+    # ran". Measured live, with no mutation and no policy edit.
+    unfinished = [
+        str(s.get("name") or "?")
+        for s in steps
+        if s not in detectors
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
+        and not step_has_concluded(s)
+    ]
+    if unfinished:
+        return False, (
+            f"{len(unfinished)} work step(s) have NOT CONCLUDED "
+            f"({', '.join(unfinished[:3])}) - a step that is queued or still "
+            "running has not been shown to have done nothing, and this branch "
+            "may only excuse a job that provably had nothing to do"
+        )
+    did_run = [
+        str(s.get("name") or "?")
+        for s in steps
+        if s not in detectors
+        and not _is_bookkeeping_step(str(s.get("name") or ""))
+        and step_conclusion(s) != "skipped"
+    ]
+    if did_run:
+        return False, (
+            f"{len(did_run)} work step(s) RAN anyway ({', '.join(did_run[:3])}) - a job "
+            "that did work is not a job with nothing to do. If those steps are a second "
+            "half of this job's work, declare them under `alternatives`, which is "
+            "corroborated against the merged files exactly as this branch is"
+        )
+    clear, scope_why = _merged_files_outside_scope(
+        name, row, files, push_trigger, infra_ere)
+    if not clear:
+        return False, scope_why
+    return True, (
+        f"its declared gate step {gate_step!r} ran, {scope_why}, and no work "
+        "step in the job ran - so there was nothing for it to do"
+    )
+
+
+def _scope_row(name: str, policy: dict) -> dict | None:
+    """The `scope_paths` row for a context, or None when it declares no scope."""
+    row = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("scope_paths", {})
+        .get(name)
+    )
+    return row if isinstance(row, dict) else None
+
+
+def _declared_gate_ran(
+    row: dict, steps: list[dict],
+) -> tuple[bool, str, list[dict]]:
+    """Did the declared change detector run and conclude success?
+
+    Returns `(ok, why, detectors)`.
+
+    EVERY matching gate step must have concluded success, not ANY of them.
+    `gate_step` is matched as a SUBSTRING, so `any()` let a step whose name
+    merely CONTAINS the declared one answer for a detector that was itself
+    skipped -- an independent reviewer's counterexample:
+
+      Detect console changes                 -> skipped
+      Detect console changes (portal half)   -> success
+      Build (next build)                     -> skipped
+      => excused, claiming "its declared gate step ... ran"
+
+    That is also an R7 lie: the message asserts the declared detector ran when
+    what ran was a different step. `context_did_its_work` moved from `any` to
+    `all` for exactly this reason; this parallel loop stayed behind, which was
+    the one-side-of-a-symmetry defect again, inside the round that named it.
+    """
+    gate_step = str(row.get("gate_step") or "")
+    if not gate_step:
+        return False, (
+            f"the declared scope {row!r} is missing a `gate_step`, so nothing "
+            "establishes WHY the work was skipped"
+        ), []
+    detectors = [s for s in steps if gate_step in str(s.get("name") or "")]
+    if not detectors:
+        return False, (
+            f"its declared gate step {gate_step!r} is ABSENT from this job - the "
+            "declaration is stale, or this is not the job it describes"
+        ), []
+    off = [
+        f"{s.get('name') or '?'!s}={step_conclusion(s) or 'NOT CONCLUDED'!s}"
+        for s in detectors
+        if step_conclusion(s) != "success"
+    ]
+    if off:
+        return False, (
+            f"its declared gate step {gate_step!r} matches {len(detectors)} step(s) "
+            f"and {len(off)} of them did not conclude success ({', '.join(off[:3])}), "
+            "so nothing establishes WHY the work was skipped"
+        ), detectors
+    return True, "", detectors
+
+
+def step_conclusion(step: dict) -> str | None:
+    """A step's conclusion, or None when it HAS NOT REACHED ONE.
+
+    ROUND 13 BLOCKER, and the most reachable defect this issue has produced: no
+    mutation, no policy edit, live production path. A step that is `queued` or
+    `in_progress` carries `conclusion: null`, and every reader in this module
+    coerced that to `""` -- which `did_run` then folded into "did not run", so
+    `scope_untouched_at_merge` returned True and printed "no work step in the
+    job ran - so there was nothing for it to do" about steps that were STILL
+    RUNNING. An R7 lie and a fail-open in one sentence.
+
+    An independent reviewer measured the whole chain rather than asserting it:
+    `merge_gate` applies no `status == "completed"` filter, its job join PREFERS
+    the job that executed less (so an in-progress duplicate wins in both input
+    orders), and the live jobs API returned `guardrails steps=162
+    status=in_progress nullsteps=11` on the day it was found.
+
+    So `None` is its own answer here. It is not `skipped`, it is not `success`,
+    and it is not `failure`: it is "this step has not said". Every caller must
+    treat it as undecidable and refuse, because the alternative is to decide on
+    behalf of a step that is still running.
+    """
+    raw = step.get("conclusion")
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    return text or None
+
+
+def step_has_concluded(step: dict) -> bool:
+    """Has this step reached a conclusion at all? The negation is a refusal.
+
+    ROUND 16: now CALLED, at all three sites that had inlined it. It was added
+    in round 15 with zero production callers and exactly two test assertions --
+    decorative code, which this package's own rule refuses in the same breath as
+    it refuses an unconsulted policy key ("an unconsulted definition is prose,
+    not a control"). A reviewer caught it and offered the choice: delete it, or
+    call it where `step_conclusion(x) is None` was already written out.
+
+    Wiring won over deleting because the three sites were spelling the same
+    concept three times and none of them named it. The substitution is
+    behaviour-identical by construction -- `not step_has_concluded(s)` IS
+    `step_conclusion(s) is None`, the body is that expression -- so this does not
+    move the gate's verdict, which matters in a round that deliberately declined
+    to move it anywhere else.
+    """
+    return step_conclusion(step) is not None
+
+
+def steps_named(wanted: str, steps: list[dict]) -> tuple[list[dict] | None, str]:
+    """Every step a DECLARED name refers to, or None when it cannot be decided.
+
+    ROUND 9. There are five places in this module that resolve a declared step
+    name against a job's actual steps by SUBSTRING. Three were hardened in
+    earlier rounds of this issue, each after a reviewer found the ambiguity, and
+    each independently:
+
+        context_did_its_work        REFUSES a mixed-outcome match
+        _declared_gate_ran          REFUSES unless every match concluded success
+        _primary_steps_all_skipped  REFUSES unless every match skipped
+
+    Round 8 added a fourth (`_outputs_whose_work_did_not_run`) and left a fifth
+    (`ran_instead`) unhardened, and an independent reviewer showed both were
+    exploitable by adding ONE step whose name extends a declared one:
+
+      - the fourth DROPPED the output from the scope question entirely, so a
+        portal-only merge with every portal step skipped was certified green by
+        the portal's only blocking check -- round 6's blocker restored;
+      - the fifth reported the MATCHED step as the declared alternative, so the
+        receipt said `executed its declared alternative(s) ['Jest (portal) -
+        snapshot freshness report']` while both DECLARED alternatives were
+        skipped. That is the R7 lie fixed at `_declared_gate_ran` and not
+        carried across.
+
+    So the resolution lives in ONE place. A sixth site must call this rather
+    than write a sixth ruling.
+
+    An EXACT name match wins outright: that is what the declaration means when
+    the workflow says it. Otherwise a substring match is accepted only when it
+    is unique -- several near-misses and no exact hit cannot say which step the
+    declaration meant, and this repo's naming convention makes that live rather
+    than hypothetical (`Use Node.js 20` / `Use Node.js 20 (portal)` and
+    `Install dependencies` / `Install dependencies (portal)` are both in the one
+    job whose row declares `Jest (portal)` and `Type-check (portal)`).
+
+    Returns `([], "")` for "no such step" -- an absent step is a different
+    finding from an undecidable one, and each caller words it differently.
+    """
+    exact = [s for s in steps if str(s.get("name") or "") == wanted]
+    if exact:
+        return exact, ""
+    loose = [s for s in steps if wanted in str(s.get("name") or "")]
+    if len(loose) > 1:
+        shown = ", ".join(sorted(repr(str(s.get("name") or "")) for s in loose))
+        return None, (
+            f"{wanted!r} matches {len(loose)} steps and NONE is named exactly that "
+            f"({shown}) - which step the declaration means cannot be decided from it"
+        )
+    return loose, ""
+
+
+def _primary_steps_all_skipped(
+    name: str, steps: list[dict], policy: dict,
+) -> tuple[bool, str]:
+    """Were ALL of this context's declared substantive steps skipped?
+
+    The precondition both routes that accept a skipped primary share. A step
+    that concluded anything else (failed, cancelled) is not a skip and neither
+    route may excuse or substitute for it.
+    """
+    declared_steps = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+    if not isinstance(declared_steps, list) or not declared_steps:
+        return False, (
+            f"the substantive-step declaration for {name!r} is {declared_steps!r}; "
+            'a scope skip is only meaningful for a NAMED step, never for "ALL"'
+        )
+    for wanted in declared_steps:
+        # THROUGH THE SHARED RESOLVER. Round 11: this was the SEVENTH place
+        # resolving a declared step name by raw substring, and the one that
+        # gates BOTH routes -- "the primary must be cleanly HOLLOW" is the
+        # precondition the excuse and the alternative share. An independent
+        # reviewer showed a `[:1]` narrowing of it is fail-OPEN (a decoy that
+        # SKIPPED, ahead of a primary that RAN, reads as hollow) and that no arm
+        # pointed at it. Exact-match-wins ignores the decoy outright; an
+        # ambiguous pool refuses.
+        matches, ambiguous = steps_named(str(wanted), steps)
+        if matches is None:
+            return False, (
+                f"its declared step {wanted!r} cannot be resolved: {ambiguous}"
+            )
+        if not matches:
+            return False, f"its declared step {wanted!r} is absent from this job"
+        off = [
+            step_conclusion(s) or "NOT CONCLUDED"
+            for s in matches
+            if step_conclusion(s) != "skipped"
+        ]
+        if off:
+            return False, (
+                f"its declared step {wanted!r} concluded {', '.join(off)} rather "
+                "than `skipped`, so this is not a scope skip"
+            )
+    return True, ""
+
+
+def _outputs_whose_work_did_not_run(
+    name: str, row: dict, steps: list[dict],
+) -> tuple[list[str] | None, str]:
+    """Which declared outputs gated work that did NOT run?
+
+    ROUND 8 BLOCKER 1, and it is round 6's blocker rebuilt one output over.
+    `alternative_accounted_for` used to narrow the scope question by IDENTITY --
+    "the outputs that gate the PRIMARY step" -- and those are not the same set as
+    "the outputs whose work did not run" the moment a job carries a third output.
+
+    An independent reviewer drove the real `next build (node 20)` row plus a
+    third declared output `docs` (gating `Docs link check`, which SKIPPED) with
+    `docs/adr/0001.md` in the merge. The excuse branch refused the job in those
+    words; the alternative branch accepted it, because `docs` gates neither the
+    primary nor the alternative and so was never asked. Declaring the output
+    CORRECTLY did not protect it -- which matters, because "declare every
+    work-gating output" is the entire remedy round 7 chose for round 6.
+
+    So selection is by OUTCOME: an output is asked when every step it gates
+    concluded `skipped`. An output whose gated steps RAN is excluded, and that
+    exclusion is the one this route exists for -- the alternative's own scope
+    SHOULD match a merged file, because that is WHY it ran. Asking it would
+    rebuild round 4's defect, where `infra`'s ERE contains `tools/` and so
+    matches every drain PR by construction.
+
+    Returns `(None, why)` when an output's gated step cannot be found in the job
+    at all. That is an ambiguous declaration, not an absent one, and this fails
+    closed rather than silently dropping the output from the question.
+    """
+    outputs = row.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        return None, (
+            f"the declared scope for {name!r} carries no non-empty `outputs` list, "
+            "so which outputs gated unrun work cannot be decided"
+        )
+    gate_step = str(row.get("gate_step") or "")
+    asked: list[str] = []
+    for spec in outputs:
+        if not isinstance(spec, dict):
+            return None, f"a declared output of {name!r} is {spec!r}, not an object"
+        out = spec.get("output")
+        gated = spec.get("gates")
+        if not isinstance(gated, list) or not gated:
+            return None, (
+                f"declared output {out!r} of {name!r} does not name the steps it "
+                "`gates`, so whether its work ran cannot be decided"
+            )
+        conclusions: list[str] = []
+        for wanted in gated:
+            # A DECLARED GATE MAY NOT BE THE DETECTOR OR RUNNER BOOKKEEPING.
+            # Round 10: `ran_instead` refuses both and this, the caller whose
+            # answer decides WHICH SCOPES GET COMPARED, refused neither -- so one
+            # policy line naming `Detect console changes` or `Set up job` as an
+            # output's `gates` exempted that output's scope on the alternative
+            # route while the excuse route refused the byte-identical job. The
+            # detector always runs, so an output gated on it is never "unrun";
+            # bookkeeping is not this job's work at all. `_merged_files_outside_
+            # scope` already validates shape on EVERY entry for the same reason:
+            # a row is the authority or it is not.
+            if gate_step and gate_step in str(wanted):
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate "
+                    f"{wanted!r}, which is its own change DETECTOR - the detector "
+                    "always runs, so that output could never be shown to have had "
+                    "nothing to do"
+                )
+            if _is_bookkeeping_step(str(wanted)):
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate "
+                    f"{wanted!r}, which is runner BOOKKEEPING and not this job's "
+                    "work - it cannot evidence whether that output's work ran"
+                )
+            matches, ambiguous = steps_named(str(wanted), steps)
+            if matches is None:
+                # ROUND 9 BLOCKER. This used to resolve a mixed-outcome match in
+                # the EXCUSING direction: `all(c == "skipped")` came back False,
+                # the output was silently removed from `asked`, and its scope was
+                # then never compared against the merged files at all. One added
+                # step named `Jest (portal) - snapshot freshness report` flipped a
+                # portal-only merge -- every portal step skipped -- from refused to
+                # `ok=True route=alternative-work-at-merge`.
+                return None, (
+                    f"declared output {out!r} of {name!r} cannot be resolved: {ambiguous}"
+                )
+            if not matches:
+                return None, (
+                    f"declared output {out!r} of {name!r} claims to gate {wanted!r}, "
+                    "which is absent from this job - the row cannot say whether that "
+                    "output's work ran"
+                )
+            # ONE NAME, ONE ANSWER. Round 10 BLOCKER: `steps_named` returns EVERY
+            # exact match and GitHub Actions permits two steps in a job to share a
+            # `name` (steps are a list, not a map). A duplicate `Docs link check`
+            # -- one skipped, one success -- pooled below, `all(skipped)` came back
+            # False, and the output was dropped from the question with its scope
+            # never compared. That is round 8's blocker restored by a DUPLICATE
+            # name where round 9 closed only the EXTENDING name.
+            #
+            # Distinct from, and deliberately not disturbing, the rule below: two
+            # DIFFERENT declared steps that disagree means part of this output's
+            # work ran, and excluding it is correct. One NAME that disagrees with
+            # itself is undecidable.
+            mine = {str(s.get("conclusion") or "?").lower() for s in matches}
+            if len(mine) > 1:
+                return None, (
+                    f"declared output {out!r} of {name!r} gates {wanted!r}, which "
+                    f"resolved to {len(matches)} steps concluding {sorted(mine)} - "
+                    "one declared name cannot say whether its own work ran"
+                )
+            conclusions += sorted(mine)
+        # ALL SKIPPED -> ask its scope. ALL RAN -> exclude it, because its scope
+        # SHOULD match and that is why the work ran. MIXED -> REFUSE.
+        #
+        # ROUND 11 BLOCKER, and a correction of round 10. Round 10 wrote this
+        # refusal, saw it break the control proving every declared alternative is
+        # consulted, and backed it out as an "over-correction". THE TEST WAS
+        # WRONG, not the refusal. Measured in the real workflow: `Type-check
+        # (portal)` and `Jest (portal)` carry the IDENTICAL condition
+        # (`fiab-console-ci.yml:297` and `:302` respectively, both
+        # `steps.changed.outputs.portal == 'true'`), so they CANNOT disagree.
+        # (Round 16: the two names were listed in the opposite order to their
+        # two line numbers. The substantive claim was true and both citations
+        # resolved, so nothing downstream was wrong -- but a citation a reader
+        # cannot follow without re-deriving it is the defect this file spends
+        # its budget on. A reviewer caught it; re-read both lines before
+        # editing.) The
+        # fixture that produced a mixed outcome was describing an impossible job,
+        # and treating that state as "part of its work ran, so exclude it" is
+        # fail-OPEN: an independent reviewer drove a merge of
+        # `portal/react-webapp/src/App.tsx` with `Jest (portal)` SKIPPED and
+        # `Type-check (portal)` RUN, and the portal scope -- which MATCHED -- was
+        # never asked. Round 8's blocker through a third door, on the one
+        # required context that is the portal's only blocking check.
+        #
+        # So a declaration whose steps disagree cannot say whether that output's
+        # work ran, exactly as one NAME that disagrees with itself cannot. Both
+        # refuse. What must NOT refuse is the ordinary two-output job where one
+        # output's work all ran and another's all skipped -- that is the
+        # population this route exists for, and it is unaffected.
+        # THE WHOLE TABLE, NOT ONE ROW OF IT. Round 12 BLOCKER: round 11 refused
+        # `skipped`+`success` and EXCLUDED everything else, and an independent
+        # reviewer drove `Jest (portal)=failure` + `Type-check (portal)=success`
+        # on the UNMODIFIED real policy row with `portal/react-webapp/src/App.tsx`
+        # merged: `ok=True`, the portal scope MATCHED and was never asked, while
+        # the portal's blocking test step had FAILED. `cancelled`, `timed_out`
+        # and an unknown conclusion all behaved the same way. Same defect, through
+        # the failure door.
+        #
+        # Round 11's stated reason for excluding a failure -- that `ran_instead`
+        # refuses it one sentence later -- is FALSE, and the reviewer measured
+        # that too: `ran_instead` BUILDS "concluded ['failure'], not success" and
+        # DISCARDS it whenever a sibling alternative succeeded, and for an output
+        # whose gated steps are not declared alternatives it never iterates them
+        # at all. A comment asserting a mechanism the code does not have is the
+        # exact R7 defect this package exists to refuse, written into the
+        # justification for an R7 fix.
+        #
+        # So: ASK when every step skipped. EXCLUDE only when every step
+        # SUCCEEDED -- that is the alternative that ran, whose scope should
+        # match, which is the population this route exists for. REFUSE anything
+        # else. "Not shown to have succeeded" is not "shown to have run".
+        outcomes = set(conclusions)
+        if outcomes == {"skipped"}:
+            asked.append(str(out))
+        elif outcomes == {"success"}:
+            pass  # its work ran and passed; its scope is expected to match
+        else:
+            return None, (
+                f"declared output {out!r} of {name!r} gates {list(gated)}, which "
+                f"concluded {sorted(outcomes)} - neither 'every step skipped' nor "
+                "'every step succeeded', so whether that output's work ran cannot "
+                "be read off the declaration"
+            )
+    return asked, ""
+
+
+def _output_scope_hits(
+    spec, files: list[str],
+    push_trigger: PushTrigger | None, infra_ere: str | None,
+) -> tuple[list[str] | None, str]:
+    """Which merged files fall inside ONE declared output's scope?
+
+    Returns `(hits, description)`, or `(None, refusal)` when the scope cannot be
+    evaluated -- every unanswerable question resolves in the refusing direction.
+    """
+    if not isinstance(spec, dict):
+        return None, (
+            f"a declared output is {spec!r}, not an object with `output` and `paths`"
+        )
+    out = str(spec.get("output") or "")
+    if not out:
+        return None, f"a declared output {spec!r} does not name the output it gates"
+    paths = spec.get("paths")
+
+    if paths == ON_PUSH_PATHS:
+        # THE DETECTOR READS THE WORKFLOW'S OWN `on.push.paths`, so there is no
+        # second list to drift. `test.yml`'s `Detect Python-relevant changes`
+        # delegates to `scripts/ci/python_trigger_scope.py`, which parses that
+        # very key out of the file -- its own comment says "ONE list ... READ OUT
+        # OF THIS FILE - not a second copy of it that has to be kept in agreement
+        # by review". Copying those 15 globs into `policy.json` would create
+        # exactly the second copy that file refuses to have.
+        #
+        # This is the SAME predicate `push_event_runs` applies one branch up, and
+        # that is the point rather than a circularity: one list governs both
+        # whether the workflow could run at the merged sha and whether the step
+        # could run at the head, because the workflow was written that way.
+        if push_trigger is None or not push_trigger.paths:
+            return None, (
+                f"output {out!r} declares its scope as the producing workflow's "
+                "`on.push.paths`, and that trigger could not be read here - fail "
+                "closed rather than assume it excludes anything"
+            )
+        paths = list(push_trigger.paths)
+
+    if paths == INFRA_READING_ERE:
+        # THE SAME DELEGATION, for a scope that is COMPUTED. The vitest
+        # detector's `infra` half greps the merged files against an ERE produced
+        # by `derive-infra-reading-suites.mjs --ere`, which walks the tree -- so
+        # there is no list to copy, and a copy would be stale the moment a suite
+        # moves. Resolved by the caller and injected; unresolvable means refuse.
+        if not infra_ere:
+            return None, (
+                f"output {out!r} declares its scope as the ERE computed by "
+                f"{INFRA_READING_ERE}, and it was not resolved here - fail closed "
+                "rather than assume it excludes anything"
+            )
+        try:
+            return (
+                sorted({f for f in files if re.search(infra_ere, f)}),
+                f"{out}=/{infra_ere}/",
+            )
+        except re.error as exc:
+            return None, (
+                f"output {out!r} resolved to {infra_ere!r}, which is not a regular "
+                f"expression this gate can evaluate ({exc}) - a scope that cannot "
+                "be evaluated excuses nothing"
+            )
+
+    if not isinstance(paths, list) or not paths:
+        return None, (
+            f"output {out!r} declares {paths!r}, which is neither a non-empty list "
+            f"of globs nor a recognised delegation"
+        )
+    # AN UNREPRESENTABLE PATTERN IS AN UNANSWERED QUESTION, and `glob_matches`
+    # RAISES on one rather than guessing -- so without this the excuse branch
+    # would propagate an exception out of a gate whose entire contract is to fail
+    # closed. `push_event_runs` has the same guard one branch up and resolves it
+    # in the REFUSING direction (the workflow "runs", so the absence is not
+    # excused); the refusing direction here is "not a scope skip".
+    try:
+        hits = sorted({f for f in files if _any_match(tuple(paths), [f])})
+    except UnsupportedPatternError as exc:
+        return None, (
+            f"its declared scope contains {str(exc)!r}, which this translator "
+            "cannot represent faithfully - a scope that cannot be evaluated "
+            "excuses nothing"
+        )
+    return hits, f"{out}={list(paths)}"
+
+
+def _merged_files_outside_scope(
+    name: str, row: dict, files: list[str],
+    push_trigger: PushTrigger | None = None, infra_ere: str | None = None,
+    only_gating: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Do the merged files fall outside the scope of the outputs that matter?
+
+    THE UNIT IS THE OUTPUT, NOT THE CONTEXT, and that is round 6's second
+    blocker. A `scope_paths` row used to carry one `paths` list against a
+    `gate_step` that emits SEVERAL outputs, and the receipt corroborated only
+    the first of them. Measured by an independent reviewer:
+
+      next build (node 20)  declared `console`; the same detector also emits
+                            `portal` (`^portal/react-webapp/`), and
+                            `fiab-console-ci.yml` records this job as the
+                            portal's ONLY blocking check. A portal-only merge
+                            whose portal grep did not fire was excused with
+                            "there was nothing for it to do" by the one required
+                            context that would have caught it.
+      vitest (node 20)      declared `console`; also emits `infra`, whose scope
+                            is an ERE computed by a script and named in no row.
+
+    So a row enumerates EVERY output that gates work, each with its own scope
+    and the steps it gates. An output that cannot be evaluated REFUSES -- an
+    under-declared row is a refusal rather than a silent pass, which is the
+    direction this whole receipt is specified to fail in.
+
+    `only_gating` is a list of OUTPUT NAMES and narrows the question to them.
+    Getting this wrong re-breaks the receipt rather than merely weakening it.
+    The two routes ask genuinely different questions:
+
+      excuse       nothing ran, so EVERY output must have been false, so no
+                   output's scope may match. `only_gating=None`.
+      alternative  some of this job's work ran and some did not. Every output
+                   whose work did NOT run must have a clear scope; an output
+                   whose work RAN is excluded, because its scope SHOULD match --
+                   that is WHY it ran.
+
+    ROUND 8: the alternative used to narrow to "the outputs that gate the
+    PRIMARY step", which is selection by IDENTITY. Selection is by OUTCOME --
+    see `_outputs_whose_work_did_not_run` -- because a job with a THIRD output
+    whose gated step skipped and whose scope matched was accepted here while the
+    excuse branch refused the byte-identical job.
+
+    Asking every output on the alternative route would instead make `ci-green`
+    unobtainable for the exact class it closes, which is round 4's defect
+    rebuilt: `infra`'s ERE contains `tools/` and `PRPs/`, so every drain PR
+    matches it, and vitest -- whose infra suite genuinely runs on those PRs --
+    would be refused for having done the work.
+
+    A scope that MATCHES a merged file is a FAILURE, loudly: that is a change
+    detector that missed a change (#3783), and it is the defect this must never
+    launder. Both routes that accept a SKIPPED primary come through here, so
+    that refusal cannot be bypassed by taking the other one.
+    """
+    outputs = row.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        return False, (
+            f"the declared scope for {name!r} is {row!r}, which carries no non-empty "
+            "`outputs` list - a row that does not enumerate every work-gating output "
+            "cannot show this job had nothing to do"
+        )
+    if not files:
+        return False, (
+            "the merged commit's changed-file list is empty, so the declared scope "
+            "cannot be shown to exclude anything"
+        )
+    selected, described = [], []
+    seen: set[str] = set()
+    for spec in outputs:
+        if not isinstance(spec, dict):
+            return False, (
+                f"a declared output of {name!r} is {spec!r}, not an object"
+            )
+        # SHAPE ON EVERY ENTRY, BEFORE SELECTING. Round 8: `gates` was validated
+        # on every output but `output` and `paths` only on the SELECTED ones, so
+        # a malformed non-selected entry refused on one route and passed on the
+        # other, and a DUPLICATE output name passed on both. A row is the
+        # authority or it is not; it cannot be the authority only where the
+        # question happens to land.
+        out = spec.get("output")
+        if not isinstance(out, str) or not out.strip():
+            return False, (
+                f"a declared output of {name!r} has no `output` name ({out!r}), so "
+                "its scope cannot be attributed to anything the detector emits"
+            )
+        if out in seen:
+            return False, (
+                f"declared output {out!r} of {name!r} appears more than once - the "
+                "row cannot say which of the two scopes is that output's"
+            )
+        seen.add(out)
+        if not spec.get("paths"):
+            return False, (
+                f"declared output {out!r} of {name!r} declares no `paths`, so it "
+                "cannot be shown to exclude any merged file"
+            )
+        gated = spec.get("gates")
+        if not isinstance(gated, list) or not gated:
+            return False, (
+                f"declared output {out!r} of {name!r} does not name the "
+                "steps it `gates`, so it cannot be matched to a substantive step"
+            )
+        if only_gating is None or out in only_gating:
+            selected.append(spec)
+    if only_gating is not None and not selected:
+        return False, (
+            f"no declared output of {name!r} gates work that was skipped "
+            f"({list(only_gating)}) - the row cannot say which detector decided it"
+        )
+    for spec in selected:
+        hits, detail = _output_scope_hits(spec, files, push_trigger, infra_ere)
+        if hits is None:
+            return False, detail
+        if hits:
+            shown = ", ".join(hits[:3])
+            more = f", +{len(hits) - 3} more" if len(hits) > 3 else ""
+            return False, (
+                f"its declared scope {detail} MATCHES {len(hits)} merged file(s) "
+                f"({shown}{more}) and the work was skipped anyway - that is a change "
+                "detector that missed a change, not a scope skip"
+            )
+        described.append(detail)
+    return True, (
+        f"none of the {len(files)} merged file(s) is inside any of the "
+        f"{len(described)} declared scope(s) checked ({'; '.join(described)})"
+    )
+
+
+def alternative_accounted_for(
+    name: str, job: dict | None, changed_files, policy: dict,
+    push_trigger: PushTrigger | None = None,
+    infra_ere: str | None = None,
+) -> tuple[bool, str]:
+    """Did this context skip its primary step and do the OTHER half of its work?
+
+    A job may carry more than one work-gating output. `vitest (node 20)` skips
+    `Run vitest (with istanbul coverage floor)` when the console is untouched
+    and runs `Run vitest (infra-reading suites only)` when `infra` fired -- and
+    `infra`'s ERE contains `tools/` and `PRPs/`, the exact footprint of a drain
+    PR. Reporting that as "there was nothing for it to do" stated something
+    FALSE about a job that had done work (R7), which is what round 5 fixed.
+
+    THE FIX FOR ROUND 5'S FIX. That acceptance was made inside
+    `context_did_its_work`, which receives no `changed_files`, so it returned a
+    pass before the scope corroboration ran -- and `_merged_files_outside_scope`
+    is the only place a detector's output is checked against the merged commit's
+    own file list. Both reviewers demonstrated the consequence on different
+    rows: with a console file in the merge and the detector wrongly reporting
+    `console=false`, round 4 refused ("a change detector that missed a change")
+    and round 5 returned `green-at-merge`, naming the alternative. A required
+    context was certified green over a console that was never built or tested.
+
+    So an alternative may stand in for a skipped primary ONLY when the merged
+    files are provably outside every declared scope -- the same question the
+    excuse branch asks, asked here too. The two are halves of one predicate.
+
+    Three further conditions, each of which was a reviewer's finding:
+
+    - the alternative must have concluded SUCCESS, not merely "not skipped".
+      `ran()` counts `failure` and `cancelled` as executed, which is harmless
+      for a primary inside a green job and is not harmless here: it would
+      report a FAILED step as the work this context did instead.
+    - the alternative must not be the gate step. Alternatives are matched as
+      substrings against the job's steps, and the detector always runs, so
+      declaring it would make this function return True for every green run of
+      the context -- switching the substantive-step rule off entirely, with a
+      one-line edit to `policy.json` and no test failing.
+    - the primary must be cleanly HOLLOW. `_primary_steps_all_skipped` refuses a
+      primary that failed or was cancelled, and it is also what refuses an
+      AMBIGUOUS declaration -- `context_is_accounted_for` reaches BOTH routes
+      whenever the substantive-step check came back false, so nothing upstream
+      has already filtered one out. Round 8 note: this docstring used to credit
+      `context_did_its_work` with that refusal. Same outcome, wrong stated
+      reason, in a file whose whole thesis is that the stated reason IS the
+      control.
+    """
+    alternatives = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("alternatives", {})
+        .get(name)
+    )
+    if not isinstance(alternatives, list) or not alternatives:
+        return False, (
+            f"no alternative step is DECLARED for {name!r} in policy.json "
+            "(receipts.ci_green_rule.alternatives)"
+        )
+    row = _scope_row(name, policy)
+    if row is None:
+        return False, (
+            f"no change-detection scope is DECLARED for {name!r}, so an alternative "
+            "cannot be corroborated against the merged files"
+        )
+    if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+        return False, "no job record was read for it, so no alternative can be shown to have run"
+    steps = [s for s in job["steps"] if isinstance(s, dict)]
+
+    gate_ok, gate_why, _ = _declared_gate_ran(row, steps)
+    if not gate_ok:
+        return False, gate_why
+    hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
+    if not hollow_ok:
+        return False, hollow_why
+
+    files = [str(f) for f in (changed_files or []) if str(f).strip()]
+    declared_primary = (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+    if not isinstance(declared_primary, list) or not declared_primary:
+        return False, (
+            f"the substantive-step declaration for {name!r} is {declared_primary!r}; "
+            "an alternative is only meaningful for a NAMED primary step"
+        )
+    # EVERY OUTPUT WHOSE WORK DID NOT RUN, not "the primary's output". Round 8
+    # BLOCKER 1: those two sets diverge the moment a job carries a third output,
+    # and the alternative route accepted a matching scope on one the excuse
+    # route refused. The alternative's OWN output is excluded because its work
+    # ran -- its scope SHOULD match, which is why it ran.
+    unrun, unrun_why = _outputs_whose_work_did_not_run(name, row, steps)
+    if unrun is None:
+        return False, unrun_why
+    clear, scope_why = _merged_files_outside_scope(
+        name, row, files, push_trigger, infra_ere, only_gating=unrun)
+    if not clear:
+        return False, scope_why
+
+    gate_step = str(row.get("gate_step") or "")
+    # THE DECLARED NAME, RESOLVED ONCE. Round 9 BLOCKER: this matched by bare
+    # substring and then PRINTED THE MATCHED STEP as the declared alternative, so
+    # the receipt read `executed its declared alternative(s) ['Jest (portal) -
+    # snapshot freshness report']` while both DECLARED alternatives concluded
+    # `skipped`. `Jest (portal) - snapshot freshness report` is declared nowhere.
+    # The sentence asserted that a declared alternative ran; the code had
+    # established only that SOME step containing a declared name ran. That is
+    # word-for-word the R7 lie `_declared_gate_ran` was fixed for in round 5, and
+    # it was not carried across. `ran_instead` now reports the DECLARED name.
+    ran_instead: list[str] = []
+    # WHY EACH ONE WAS NOT COUNTED, so the refusal below can say. Round 10 (R7):
+    # both `continue`s here were silent and the refusal then attributed every
+    # outcome to "did not conclude success" -- including an alternative the code
+    # had just established DID succeed (the gate-step case, whose success
+    # `_declared_gate_ran` proved forty lines earlier) and one that was simply
+    # ABSENT. `steps_named`'s own docstring says an absent step is a different
+    # finding from an undecidable one "and each caller words it differently";
+    # this caller did not word it at all.
+    not_counted: list[str] = []
+    for alt in alternatives:
+        alt_name = str(alt)
+        if gate_step and gate_step in alt_name:
+            not_counted.append(
+                f"{alt_name!r} IS the change detector, which always runs, so it "
+                "cannot stand in for skipped work"
+            )
+            continue
+        matches, ambiguous = steps_named(alt_name, steps)
+        if matches is None:
+            return False, (
+                f"its declared alternative {alt_name!r} cannot be resolved: {ambiguous}"
+            )
+        if not matches:
+            not_counted.append(f"{alt_name!r} is absent from this job")
+            continue
+        usable = [
+            s for s in matches
+            if gate_step not in str(s.get("name") or "")
+            and not _is_bookkeeping_step(str(s.get("name") or ""))
+        ]
+        if not usable:
+            not_counted.append(
+                f"{alt_name!r} resolved only to the detector or to runner "
+                "bookkeeping, which is not this job's work"
+            )
+            continue
+        concluded = {str(s.get("conclusion") or "?").lower() for s in usable}
+        if concluded == {"success"}:
+            ran_instead.append(alt_name)
+        elif "success" in concluded:
+            return False, (
+                f"its declared alternative {alt_name!r} resolved to {len(usable)} steps "
+                f"concluding {sorted(concluded)} - a MIXED outcome cannot show the "
+                "alternative ran"
+            )
+        else:
+            not_counted.append(
+                f"{alt_name!r} concluded {sorted(concluded)}, not success"
+            )
+    if not ran_instead:
+        return False, (
+            f"none of its declared alternative(s) {list(alternatives)} is shown to "
+            f"have run: {'; '.join(not_counted)}"
+        )
+    return True, (
+        f"skipped its primary step(s) {list(declared_primary)} and executed its "
+        f"declared alternative(s) {ran_instead} instead - the other half of a job whose "
+        f"work is gated on more than one output - and {scope_why}"
+    )
+
+
+def job_executed(job: dict | None) -> tuple[bool, str]:
+    """Did this job actually DO its work, or conclude green having skipped it?
+
+    The population source `statusCheckRollup` does not have and the Actions
+    jobs API does: `steps[].conclusion`.
+
+    THE PREDICATE IS "EVERY WORK STEP RAN", NOT "ANY DID", and that distinction
+    is the whole control. The first version of this function asked whether ANY
+    substantive step executed -- and on PR #4440 the `Python Tests (3.10)` head
+    job satisfied it with exactly one: `Detect Python-relevant changes`, the
+    change-detection gate that then SKIPPED the other ten, including `Run
+    pytest with coverage`, `Lint with ruff` and `Typecheck with mypy (strict)`.
+    A predicate a gate step can satisfy is not a predicate. That was found by
+    running the corrected receipt against the reviewer's own counterexample
+    instead of against the fixture written from their description.
+
+    MEASURED BEFORE CHOOSING THE RULE, because a threshold picked without the
+    distribution is the same defect one level up. Across the 16 deferrals on
+    PRs #4440 and #4483 the split is BIMODAL WITH NO MIDDLE:
+
+        genuine   `Python Lint`, `Secret Scan`, `Repo Hygiene`, all four
+                  `dbt Compile (*)`, `changelog parser ...`, `PowerShell Lint`
+                  -> 0 skipped, of 2 to 7 work steps. Every one.
+        hollow    `Python Tests (3.10|3.11|3.12)` -> 10 skipped of 11.
+
+    No job is partially skipped, so "any skip refuses" costs nothing today and
+    a ratio threshold would be an arbitrary number dressed as a measurement. If
+    a job legitimately starts skipping a step, this refuses and a human looks —
+    which is the direction this package fails in.
+
+    Fails CLOSED on absent step data: `None`, an empty `steps` list, or a
+    non-dict all mean the question was not answered, and an unanswered question
+    is not evidence. Returns (ran, evidence-phrase) so the caller can quote
+    WHAT it saw rather than assert a cause (R7).
+
+    The runner's own bookkeeping is not evidence that the job did its work:
+    `Set up job`, `Complete job`, `Post ...` and the checkout run on every job
+    including one whose real steps were all skipped.
+    """
+    if not isinstance(job, dict):
+        return False, "no job record was read for it, so it cannot be shown to have run"
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return False, "its job record carries no steps, so it cannot be shown to have run"
+    substantive = [
+        step for step in steps
+        if isinstance(step, dict) and not _is_bookkeeping_step(str(step.get("name") or ""))
+    ]
+    if not substantive:
+        return False, (
+            f"all {len(steps)} of its steps are runner bookkeeping - it has no work steps at all"
+        )
+    # THE EIGHTH READER, and the one that STEERS the others: this boolean is the
+    # selector `merge_gate` uses to choose a route. Round 14: it folded "has not
+    # concluded" into "skipped" and then printed "1 of its 1 work step(s) are
+    # SKIPPED" about a step that was QUEUED -- an R7-false sentence feeding a
+    # wrong route choice.
+    unfinished = [
+        step for step in substantive if not step_has_concluded(step)
+    ]
+    if unfinished:
+        names = ", ".join(str(s.get("name") or "?") for s in unfinished[:4])
+        return False, (
+            f"{len(unfinished)} of its {len(substantive)} work step(s) have NOT "
+            f"CONCLUDED ({names}) - the job is still running, which is not the "
+            "same as having skipped its work"
+        )
+    skipped = [
+        step for step in substantive
+        if step_conclusion(step) == "skipped"
+    ]
+    if skipped:
+        names = ", ".join(str(s.get("name") or "?") for s in skipped[:4])
+        more = f", +{len(skipped) - 4} more" if len(skipped) > 4 else ""
+        return False, (
+            f"{len(skipped)} of its {len(substantive)} work step(s) are SKIPPED "
+            f"({names}{more})"
+        )
+    return True, f"executed {len(substantive)} of {len(substantive)} work step(s)"
+
+
+_BOOKKEEPING = (
+    "set up job", "complete job", "checkout", "post ", "set up runner",
+)
+
+
+def _is_bookkeeping_step(name: str) -> bool:
+    lowered = name.strip().lower()
+    return any(lowered.startswith(prefix) or prefix in lowered for prefix in _BOOKKEEPING)
+
+
+def _renamed_at_merge(
+    item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict,
+    infra_ere: str | None = None,
+) -> ContextResult:
+    """The per-event RENAME case, on evidence rather than on a green run.
+
+    THE FIRST VERSION OF THIS WAS A WEAKENING and both independent reviewers
+    blocked on it. It asked one question -- did some run of this workflow path
+    at the merged sha conclude SUCCESS -- and from that asserted "published
+    under a different name", which is a cause it never established (R7). It
+    accepted an EMPTY job list, never read a job's conclusion, never checked
+    the run was even about this commit, and the collector handed it the NEWEST
+    run of that path regardless of event. Since `commit-message-parses.yml`
+    also carries `schedule:` and `workflow_dispatch:`, and its own header says
+    the dispatch shape "goes green having judged no commits at all", a RED push
+    run followed by any green cron could produce `RECEIPT: GREEN`. Under the
+    definition this replaced there was simply no receipt.
+
+    So the rename must now be SHOWN, not inferred:
+
+    1. the run is about THIS commit (`head_sha` == the merged sha),
+    2. it is the `push` run -- the event whose spelling we are excusing,
+    3. it concluded SUCCESS,
+    4. its job list is non-empty and the required context is genuinely ABSENT
+       from it (that is what makes this a rename rather than a missing job),
+    5. the sibling job that stands in concluded success and is ACCOUNTED FOR by
+       `context_is_accounted_for` -- the same predicate every other branch uses.
+       It used to call `job_executed` instead, which asked a DIFFERENT question
+       ("every work step ran") about the same thing, and two predicates over one
+       question is the shape that produced the original hole. The sibling is the
+       renamed job, so it carries the same STEPS and the context's own
+       declaration applies to it unchanged.
+
+    Every one of those fails closed, and the message names the sibling actually
+    observed instead of asserting one exists.
+    """
+    run = item.merged_workflow_run or {}
+    where = item.workflow_path
+    conclusion = str(run.get("conclusion") or "").upper()
+    status = str(run.get("status") or "").upper()
+
+    head_sha = str(run.get("head_sha") or "")
+    if not head_sha or (merged_sha and head_sha != merged_sha):
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and the {where} run offered as the rename is for "
+            f"{head_sha[:12] or 'an unreadable sha'}, not the merged sha {merged_sha[:12]}",
+        )
+    event = str(run.get("event") or "").lower()
+    if event != "push":
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and the {where} run offered as the rename was "
+            f"triggered by {event or 'an unreadable event'}, not `push` - a scheduled or "
+            "dispatched run is not the event whose spelling is being excused",
+        )
+    if conclusion != "SUCCESS":
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and {where} did run at the merged sha but concluded "
+            f"{conclusion or status or 'unknown'}",
+        )
+    jobs = [j for j in item.merged_workflow_jobs if isinstance(j, dict)]
+    if not jobs:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and no jobs could be read from the {where} run - "
+            "with no job list there is nothing showing a rename rather than a missing job",
+        )
+    names = [str(j.get("name") or "") for j in jobs]
+    if item.name in names:
+        return ContextResult(
+            item.name, "FAIL",
+            f"the {where} run DOES carry a job named {item.name!r}, so this is not a "
+            "rename - the context is absent for some other reason",
+        )
+    ran = [
+        (j, context_is_accounted_for(
+            item.name, j, merged_changed_files, policy, infra_ere=infra_ere))
+        for j in jobs
+    ]
+    usable = [
+        (j, ev) for j, (ok, ev, _route) in ran
+        if ok and str(j.get("conclusion") or "").lower() == "success"
+    ]
+    if not usable:
+        return ContextResult(
+            item.name, "FAIL",
+            f"absent under this name, and no job in the {where} run both concluded success "
+            f"and executed anything (jobs: {', '.join(n or '?' for n in names[:4])})",
+        )
+    sibling, evidence = usable[0]
+    return ContextResult(
+        item.name, "renamed-at-merge",
+        f"{where} ran on `push` at the merged sha, concluded SUCCESS, and published "
+        f"{str(sibling.get('name'))!r} instead of this context - which {evidence}",
+    )
 
 
 # ---------------------------------------------------------------------------

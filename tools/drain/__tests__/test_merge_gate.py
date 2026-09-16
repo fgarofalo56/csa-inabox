@@ -929,3 +929,209 @@ def test_a_concurrent_open_alone_is_not_a_finding():
     ok, why = gates.issue_set_audit([1, 2, 3], [1, 2, 9], [3])
     assert ok, why
     assert "concurrently" in why
+
+
+# ---------------------------------------------------------------------------
+# The job join -- `merge_gate.py` is in SOURCES but no arm pointed at this
+# ---------------------------------------------------------------------------
+
+
+def test_the_job_join_reads_every_workflow_run_of_the_sha(monkeypatch):
+    """Arm CB14: `run_ids[:1]`.
+
+    An independent reviewer wrote this arm and it SURVIVED, because every test
+    of the receipt hands `gates` a job dict directly and nothing exercised the
+    PRODUCER that builds the name -> job map. One sha carries many workflow runs
+    -- this repo publishes its 15 required contexts from five workflows -- so
+    reading only the first run leaves most contexts with no job record at all,
+    and "no job record was read for it" is indistinguishable from a genuine
+    absence.
+
+    That is the same class of defect the CB* arms exist for: the pure function
+    was mutated to death while the program deciding its inputs was not.
+    """
+    runs = {
+        11: ({"name": "Python Lint", "conclusion": "success", "steps": []},),
+        22: ({"name": "next build (node 20)", "conclusion": "success", "steps": []},),
+        33: ({"name": "guardrails", "conclusion": "success", "steps": []},),
+    }
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    joined = merge_gate._jobs_by_name("owner/repo", [11, 22, 33])
+    assert set(joined) == {"Python Lint", "next build (node 20)", "guardrails"}
+
+
+def test_the_job_join_keeps_the_job_that_ran_less_on_a_duplicate(monkeypatch):
+    """The other half of the same function: a green re-run must not hide a
+    sibling that ran nothing. Without this, the arm above could be killed by
+    making the join take the LAST run instead of every run."""
+    hollow = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "skipped"}],
+    }
+    real = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "success"}],
+    }
+    runs = {1: (real,), 2: (hollow,)}
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    assert merge_gate._jobs_by_name("owner/repo", [1, 2])["vitest (node 20)"] is hollow
+    assert merge_gate._jobs_by_name("owner/repo", [2, 1])["vitest (node 20)"] is hollow
+
+
+# --------------------------------------------------------------------------
+# The DELEGATED infra scope. Round 8, both findings in the EXCUSING direction.
+# --------------------------------------------------------------------------
+
+def _fake_run(stdout: str, rc: int = 0):
+    def run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
+    return run
+
+
+REAL_ERE = r"^(\.claude|\.github|PRPs|scripts|tools)/"
+
+
+def test_a_contaminated_but_compilable_ere_is_refused_not_accepted(monkeypatch):
+    """ROUND 8. `stdout.strip() or None` accepted anything non-empty.
+
+    Empty stdout refuses and an UNCOMPILABLE pattern refuses. The one shape that
+    is neither -- a warning line, a newline, then the real ERE -- is a VALID
+    regex: it compiles, raises nothing, matches no path, and the excuse route
+    then returns ok=True. The only stdout shape with no guard was the one that
+    silently excused.
+
+    Not reachable through today's deriver (every diagnostic goes to stderr and
+    stdout is one line), which is why an independent reviewer filed it as
+    should-fix rather than a blocker. It was one `console.log` away, in a file
+    nothing under `tools/drain/` owns.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run",
+                        _fake_run(f"warning: could not stat foo\n{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+    # NEGATIVE CONTROL: the clean shape still resolves, or this test would pass
+    # under a mutant that simply returns None always.
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() == REAL_ERE
+
+
+def test_a_diagnostic_after_the_ere_is_refused_by_the_newline_check(monkeypatch):
+    """ROUND 9. The fixture above puts the diagnostic BEFORE the ERE, where the
+    `^(` anchor check alone already refuses it -- so the "contains a newline"
+    half of the shape check was a SURVIVING MUTANT: an independent reviewer
+    dropped only that clause and the whole suite stayed green.
+
+    Put the diagnostic AFTER instead (the deriver prints the ERE, then
+    `warning: 3 suites could not be parsed`) and the anchor check passes while
+    the value is still contaminated. It compiles, matches no path, and the
+    excuse route returns ok=True. Each half of that `or` needs its own fixture
+    or the matrix cannot tell the halves apart.
+    """
+    monkeypatch.setattr(
+        merge_gate.subprocess, "run",
+        _fake_run(f"{REAL_ERE}\nwarning: 3 suites could not be parsed\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_an_unanchored_ere_is_refused(monkeypatch):
+    """A single line that is not the deriver's declared shape is still not it.
+
+    A delegated scope arriving in an unexpected shape must be None, never a
+    regex that happens to compile and match nothing.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run("no suites found\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
+        monkeypatch):
+    """ROUND 8, the TWO CLOCKS: the deriver walks the working tree's HEAD while
+    `push_trigger` is pinned to the merged sha.
+
+    If today's tree is NARROWER, a file that was in the infra scope at merge
+    falls outside it now, `hits` comes back empty, and a merge that DID have
+    infra work is excused. Present-day narrowing is the excusing direction, so
+    it refuses; today's tree having MORE directories only widens the scope, and
+    a wider scope can refuse but never excuse.
+    """
+    trees = {
+        "MERGED": "tools\nscripts\nretired-dir\n",
+        "HEAD": "tools\nscripts\n",
+    }
+
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout=trees[args[-1]], stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+    # WIDER today is fine -- and this is the control that stops the fix above
+    # from simply refusing everything. My first draft compared the merged sha's
+    # directories against the ERE's own ALTERNATIVES, which are a different set
+    # by design (18 of 29 at the time of writing), so it returned None on every
+    # receipt and would have refused `vitest (node 20)` on every merge.
+    trees["HEAD"] = "tools\nscripts\nretired-dir\nbrand-new\n"
+    assert merge_gate._top_level_dirs_agree("MERGED") is True
+    assert merge_gate.resolve_infra_ere("MERGED") == REAL_ERE
+
+
+def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch):
+    """"Cannot be shown to agree" is not "agree"."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate.resolve_infra_ere("deadbeef") is None
+
+
+# --------------------------------------------------------------------------
+# ROUND 10: three mutations of these two guards SURVIVED the E1-E6 arms, found
+# by an independent reviewer. All three are an EXIT CODE stopping being read --
+# a subprocess that FAILED treated as one that ANSWERED -- and each needs a
+# fixture where the failing call still produces OUTPUT, which the round-9
+# fixtures did not have. One fixture satisfying both halves of a check is the
+# same conflation round 9 fixed one function further up.
+# --------------------------------------------------------------------------
+
+def test_a_crashed_deriver_with_partial_output_is_not_the_delegated_scope(monkeypatch):
+    """Kills E7. The rc check and the shape check were both satisfied by the
+    same fixture (rc=0 AND clean stdout), so dropping the rc check changed
+    nothing observable. A deriver that crashed halfway still has stdout."""
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n", rc=1))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_a_failed_ls_tree_with_output_does_not_read_as_an_empty_tree(monkeypatch):
+    """Kills E8. An empty `at_merge` subtracts to nothing, and nothing AGREES --
+    so a failed listing treated as an empty one silently permits the narrowing
+    this guard exists to refuse."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(
+                returncode=128, stdout="tools\nscripts\n", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+
+def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch):
+    """Kills E9. `found or None` is what makes an empty listing UNREADABLE
+    rather than an answer; returning the bare set lets the caller's `is None`
+    check pass and then compare against nothing."""
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None

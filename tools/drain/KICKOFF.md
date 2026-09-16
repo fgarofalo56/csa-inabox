@@ -3,6 +3,15 @@
 Paste the block below as the first message of a fresh session. It is
 self-contained — it assumes no memory of how the harness got here.
 
+**This file is HAND-MAINTAINED, not generated.** `README.md` says KICKOFF is
+"regenerated every cycle"; `tick.py` contains no reference to it (`grep -n
+KICKOFF tools/drain/tick.py` returns nothing). That claim is prose, and this
+note exists so the next reader does not trust a freshness the program does not
+provide. **Re-read the FIRST TASK section against `--status` before pasting** —
+it was stale once already, naming work that had since been done.
+
+Last hand-updated: 2026-09-15 (re-checked against live state: PR #4491 on round 16; #4492 PARKED as draft — the migration premise did not hold, see its thread). This line read "2026-09-13 … round 5" for eleven rounds, three lines below the warning that it goes stale — which is the warning demonstrating itself. A reviewer caught it. Prefer `--status` over this line; it is hand-maintained and will be wrong again.
+
 ---
 
 ```
@@ -52,11 +61,36 @@ Scope and autonomy are already decided — do not re-ask them:
     only if auth fails.
   - policy.json is the authority for what you may not do. It fails closed.
 
-FIRST TASK, before draining anything else: #4487 — the `ci-green` receipt names a
-measurement the CI topology cannot produce, so NO guard/test-only issue can reach
-a terminal state until it is fixed. Then #4468's remainder: port `unblock-git.py`
-and `preflight-casedrop.py` out of temp/ into tools/drain with tests, and close
-#4468 on its own checklist. Both are W0 — finish the gate before trusting it.
+FIRST TASK, before draining anything else — check each against live state, because
+this list is hand-maintained and was stale once already:
+
+  1. #4487 (W0) — PR #4491 is OPEN and has reached its SIXTEENTH round of
+     independent review. Read the PR's own comments for the live state rather
+     than trusting a sha or a round number written here — this entry said
+     "FIFTH" for eleven rounds. Every round so far found its blocker
+     INSIDE the previous round's fix, which is the pattern to expect. Round 5's
+     were: a sibling gate step could answer for a skipped detector (`any()` over
+     a substring-matched population), and a job with TWO work-gating outputs was
+     reported as having "nothing to do" when its second half had actually run.
+     Until this lands, NO guard/test-only issue can reach a terminal state, so
+     it gates the whole drain.
+  2. #4468's remainder — port `unblock-git.py` and `preflight-casedrop.py` out of
+     `temp/` into `tools/drain` with tests, then close #4468 on its own checklist.
+  3. PR #4492 (CI runners) is PARKED as a draft — do not pick it up without
+     reading its thread. It moved CI onto in-VNet Azure Container Apps runners
+     behind a `CI_RUNNER` repo variable, to remove a CI billing blocker. **There
+     is no CI billing blocker**: this repo is PUBLIC, so GitHub-hosted runners
+     are free, and the ACA fleet costs ~$0.62/node-hour in use. The migration
+     added cost rather than removing it. Measured 2026-09-13: `CI_RUNNER` unset,
+     0 runners registered, `gh-aca-runner` at `maxExecutions: 0`, D8 profile at
+     `minimumCount: 0` — so the fleet is off and costs nothing to leave in place.
+     Two independent reviews also found it not ready (network axis unmeasured,
+     the body's "CI_RUNNER is set" claim false, `provision-gh-runner.sh` unable
+     to reproduce the fleet). If an in-VNet driver appears later — CI needing
+     private endpoints or Key Vault that GitHub-hosted runners cannot reach —
+     that branch is the starting point and its thread is the fix list.
+
+Both #4487 and #4468 are W0 — finish the gate before trusting it.
 ```
 
 ---
@@ -76,7 +110,7 @@ kickoff block names:
 
 | # | what | why it matters |
 |---|---|---|
-| **#4487** | `ci-green` names an unobtainable measurement | 10 of 15 required contexts can run at a merged sha; `validate.yml`'s `push:` trigger is path-filtered and one job is renamed on push. Until this is fixed no guard/test-only issue can close. |
+| **#4487** | `ci-green` named an unobtainable measurement, twice | first "green at the merged sha", which only 10 of 15 required contexts can satisfy; then, after the substantive-step rule closed the hollow-green hole, a definition no guard/test-only merge could satisfy either — 4 of the 12 most recent merges could take the receipt. PR #4491, round 4, fixes the second. |
 | **#4468** | `unblock-git.py` (502 lines) and `preflight-casedrop.py` still untracked | the drain leans on the first across every merge, and it is one `rm -rf` from gone — the issue's own thesis |
 | **#4485** | five residual review findings | all non-blocking, all measured, none a live defect today |
 
@@ -87,8 +121,8 @@ preempt all feature work.
 
 ```bash
 python tools/drain/tick.py --status      # counts move out of `ready`
-python -m pytest tools/drain/__tests__   # 300 pass
-python tools/drain/mutate_gates.py       # 155 KILLED / 0 survived
+python -m pytest tools/drain/__tests__   # all pass
+python tools/drain/mutate_gates.py       # every arm KILLED / 0 survived
 python tools/drain/merge_gate.py <PR>    # the gate, as a program, on a real PR
 ```
 
