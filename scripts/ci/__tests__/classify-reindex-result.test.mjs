@@ -1045,3 +1045,61 @@ test('#4498 round 16 B1 — a credential straddling the 300 bound must not survi
   );
   assert.doesNotMatch(r.message, new RegExp(SECRET), 'the whole credential must not appear either');
 });
+
+test('#4498 round 16 M2 — the sourceCommit 12-char bound must redact BEFORE it cuts', () => {
+  // THE R2 FIX HAD ZERO TESTS AND A REVIEWER MEASURED THAT REVERTING IT
+  // SURVIVED — 54/0 and 51/0. Their framing is the reason this test exists at
+  // all: a security property that was defective one round ago and is now
+  // covered by nothing is exactly the configuration that regresses, and on this
+  // file that is not hypothetical.
+  //
+  // Same defect as B1, three lines up, in the same durable record.
+  // `lastRun.sourceCommit` is bounded at 12 characters for display as a short
+  // sha. Cutting BEFORE redaction leaves `code=` plus 7 survivors — far below
+  // the rule's `{20,}` floor, so nothing downstream matches it:
+  //
+  //   "code=" (5) + 7 credential characters = the 12-char bound
+  //
+  // The field is MEANT to hold a build sha. That is not a control: the value
+  // arrives in a remote response body, and a reviewer measured three of four
+  // credential shapes publishing a fragment here (`AccountKey=` is contained
+  // only because that rule has no length floor to fall below).
+  const SECRET = 'A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0';
+  const LEAKED_IF_BROKEN = `code=${SECRET}`.slice(0, 12);
+  assert.equal(LEAKED_IF_BROKEN, 'code=A1b2C3d', 'the fixture must span the 12-char bound');
+
+  const r = classifyReindexPoll({
+    // `rebuild_failed` is the only outcome that reads lastRun — same as B1.
+    outcome: 'rebuild_failed',
+    body: JSON.stringify({
+      freshness: {
+        state: 'stale',
+        lastRun: { outcome: 'failed', sourceCommit: `code=${SECRET}`, finishedAt: '2026-09-15T00:00:00Z' },
+      },
+      job: { state: 'idle' },
+    }),
+    waitedSeconds: 600,
+    attempts: 4,
+  });
+
+  assert.doesNotMatch(
+    r.message,
+    new RegExp(LEAKED_IF_BROKEN),
+    'a credential fragment survived the sourceCommit 12-char cut — this is redact-AFTER-truncate',
+  );
+
+  // AND THE FIELD MUST STILL DO ITS JOB. A test that only asserts absence is
+  // satisfied by deleting the feature, so pin the positive case too: a real
+  // short sha still renders at 12 characters.
+  const ok = classifyReindexPoll({
+    outcome: 'rebuild_failed',
+    body: JSON.stringify({
+      freshness: {
+        state: 'stale',
+        lastRun: { outcome: 'failed', sourceCommit: 'abcdef0123456789abcdef', finishedAt: '2026-09-15T00:00:00Z' },
+      },
+      job: { state: 'idle' },
+    }),
+  });
+  assert.match(ok.message, /revision abcdef012345/, 'a genuine short sha must still render at 12 chars');
+});
