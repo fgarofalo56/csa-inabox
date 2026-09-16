@@ -390,9 +390,9 @@ def test_blocker_the_cycle_guards_its_save_when_state_json_was_absent(monkeypatc
     def load_then_let_a_lane_write(self):
         result = real_load(self)          # reads nothing; the file is gone
         rival = Ledger(state, receipts=POLICY["receipts"])
-        rival.upsert(2002, "a lane's item", "W6-ci", lane="lane:ci", size=1)
-        rival.record_receipt(2002, "ci-green", "green at sha")
-        rival.transition(2002, CLOSED, "the lane closed it")
+        rival.upsert(990002, "a lane's item", "W6-ci", lane="lane:ci", size=1)
+        rival.record_receipt(990002, "ci-green", "green at sha")
+        rival.transition(990002, CLOSED, "the lane closed it")
         rival.save()
         return result
 
@@ -404,8 +404,8 @@ def test_blocker_the_cycle_guards_its_save_when_state_json_was_absent(monkeypatc
 
     assert tick.main() == 1, "the cycle saved over a concurrent lane's close"
     final = Ledger(state, receipts=POLICY["receipts"]).load()
-    assert final.items[2002].state == CLOSED
-    assert final.items[2002].receipt_kind == "ci-green"
+    assert final.items[990002].state == CLOSED
+    assert final.items[990002].receipt_kind == "ci-green"
 
 
 def test_blocker_the_record_path_guards_its_save_too(monkeypatch, tmp_path):

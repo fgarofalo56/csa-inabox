@@ -778,8 +778,8 @@ def test_counts_cover_every_state(tmp_path):
 
 def _seed_two(tmp_path):
     led = Ledger(str(tmp_path / "state.json"), receipts=RECEIPTS)
-    led.upsert(2001, "item A", "W6-ci", lane="lane:ci", size=1)
-    led.upsert(2002, "item B", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(990001, "item A", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(990002, "item B", "W6-ci", lane="lane:ci", size=1)
     led.save()
     return str(tmp_path / "state.json")
 
@@ -790,16 +790,16 @@ def test_positive_control_an_uncontended_guarded_save_still_works(tmp_path):
     unwritable. This pins that the ordinary path is unaffected."""
     path = _seed_two(tmp_path)
     led = Ledger(path, receipts=RECEIPTS).load()
-    led.record_receipt(2001, "ci-green", "green at sha")
-    led.transition(2001, CLOSED, "closed")
+    led.record_receipt(990001, "ci-green", "green at sha")
+    led.transition(990001, CLOSED, "closed")
     led.save(if_unchanged=True)
-    assert Ledger(path, receipts=RECEIPTS).load().items[2001].state == CLOSED
+    assert Ledger(path, receipts=RECEIPTS).load().items[990001].state == CLOSED
 
 
 def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
-    """THE LOST UPDATE, measured before the guard existed: B closed #2002 and
+    """THE LOST UPDATE, measured before the guard existed: B closed #990002 and
     saved; A, holding a document loaded before that, saved its own unrelated
-    change; #2002 came back `ready` with its receipt and history line GONE.
+    change; #990002 came back `ready` with its receipt and history line GONE.
 
     Silent, and it un-closes a RECEIPTED item -- so the next tick re-selects
     work that was already finished and verified.
@@ -811,8 +811,8 @@ def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
     a = Ledger(path, receipts=RECEIPTS).load()
     b = Ledger(path, receipts=RECEIPTS).load()
 
-    b.record_receipt(2002, "ci-green", "green at sha B")
-    b.transition(2002, CLOSED, "B closed it")
+    b.record_receipt(990002, "ci-green", "green at sha B")
+    b.transition(990002, CLOSED, "B closed it")
     b.save(if_unchanged=True)
 
     a.notes.append("A's unrelated edit")
@@ -820,8 +820,8 @@ def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
         a.save(if_unchanged=True)
 
     final = Ledger(path, receipts=RECEIPTS).load()
-    assert final.items[2002].state == CLOSED, "B's verified close was discarded"
-    assert final.items[2002].receipt_kind == "ci-green"
+    assert final.items[990002].state == CLOSED, "B's verified close was discarded"
+    assert final.items[990002].receipt_kind == "ci-green"
 
 
 def test_a_refused_save_writes_nothing_at_all(tmp_path):
