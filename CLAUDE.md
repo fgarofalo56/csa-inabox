@@ -14,7 +14,7 @@ live in `.claude/rules/` and load automatically — they are not restated here.
 
 ## The die-hard rules
 
-`.claude/rules/*.md` auto-load. Nine of them are marked **die-hard**: they sit
+`.claude/rules/*.md` auto-load. Ten of them are marked **die-hard**: they sit
 above convenience and above "it works", and they define what *done* means. Read
 the rule itself before arguing with it — each one states its scope and effective
 date.
@@ -29,6 +29,7 @@ date.
 | `ui-parity.md` | Surfaces match Azure & Fabric one-for-one. |
 | `ux-baseline.md` | Fabric-grade floor on every front-end surface. |
 | `web3-ui.md` | Modern, consistent, picture-perfect UI. |
+| `assertion-design.md` | Every assertion names the value that would break it. |
 | `session-end.md` · `task-tracking.md` | Native task list in-session, GitHub Issues across sessions. |
 
 `tool-specifications.md` is path-scoped — it applies under `skills/`,
