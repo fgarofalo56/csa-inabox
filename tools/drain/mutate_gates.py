@@ -2774,20 +2774,22 @@ def main() -> int:
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
           f"of {len(ARMS)} arms")
-    # WHAT IS STILL UNOBSERVED HERE, stated rather than left for the next
-    # reviewer to rediscover. Round 16 moved the arm loop into `_run_arms` and
-    # the tree comparison into `_exit_code`, so both are now driven by tests.
-    # What remains in `main()` is WIRING: which variable is passed to which
-    # parameter, and that the return value is returned. A mutation that swapped
-    # `after=after` for `after=before` would still not be caught, because
-    # nothing calls `main()` except `__main__`.
+    # WHAT IS STILL UNOBSERVED HERE, restated because round 19 changed it and a
+    # reviewer corrected my summary of what it changed.
     #
-    # That surface is strictly smaller than it was -- it holds no decisions, only
-    # argument passing -- but it is not zero, and calling it zero would be the
-    # same overclaim this package exists to prevent. Closing it needs a `main()`
-    # smoke test, which costs a full control-suite run (16-18s measured) plus a
-    # sandbox build for every invocation; that is a real trade and it has not
-    # been made. Recorded as a known gap, not as coverage.
+    # Round 16 recorded this whole block as a known gap. Round 19 extracted
+    # `_exit_args`, which moved TWO of the four shapes into a tested function:
+    # `total` mis-sourcing and `survived` zeroing both die there now.
+    #
+    # THE CALL-SITE EXPRESSIONS BELOW ARE UNCHANGED IN KILL POWER. All four
+    # wiring mutations still survive AT THIS LINE, because nothing calls
+    # `main()`. The accurate statement is narrower than "the wiring is now
+    # testable": two shapes moved inward, the expressions here did not. Saying
+    # "closed" would make the next reader stop looking, which is the whole
+    # failure mode this file is about.
+    #
+    # Both remaining shapes fail closed in production for an independent
+    # reason, so this is disclosure rather than an open defect.
     code, why = _exit_code(**_exit_args(
         counts=(killed, survived, skipped, errored),
         arms=ARMS, before=before, after=after,

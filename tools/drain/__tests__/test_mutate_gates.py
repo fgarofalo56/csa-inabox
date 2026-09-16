@@ -727,24 +727,44 @@ def test_the_exit_args_wiring_cannot_pass_a_count_where_the_total_belongs():
     args = mutate_gates._exit_args(
         counts=(7, 1, 2, 0),
         arms=[("a", "f", "x", "y")] * 10,
-        before="d0",
-        after="d0",
+        # DISTINCT DIGESTS, AND THE FIRST VERSION USED THE SAME VALUE TWICE.
+        # With `before="d0", after="d0"` the returned dict is byte-identical
+        # under `"after": before`, so that mutation SURVIVED all 459 tests — the
+        # swap is invisible when the two operands are equal.
+        #
+        # This is the SECOND time in two rounds that the remaining gap was in
+        # the fix for the previous gap, for the same reason: a fixture that
+        # could not fail. The `_score` rc conjunct was unpinned because every
+        # rc=2 fixture also carried an error line; this was unpinned because
+        # both digests were "d0". A reviewer named the discipline that catches
+        # both: the question to ask an assertion is not "does this cover the
+        # field" but "WHAT VALUE WOULD MAKE THIS FAIL".
+        before="digest-before",
+        after="digest-after",
     )
     assert args == {
         "killed": 7, "survived": 1, "skipped": 2, "errored": 0,
-        "total": 10, "before": "d0", "after": "d0",
+        "total": 10, "before": "digest-before", "after": "digest-after",
     }
     # TOTAL IS DERIVED, NOT PASSED. This is the assertion that closes the
     # `total=killed` mutation: the count and the total come from different
     # objects, so no edit here can make them the same by accident.
     assert args["total"] != args["killed"]
+    # AND THE DIGESTS MUST NOT COLLAPSE ONTO EACH OTHER. `"after": before` is
+    # the sandbox-escape check silently disarmed: it makes `_exit_code` compare
+    # a value with itself, which is true by construction.
+    assert args["before"] != args["after"]
 
-    # And it composes into a real refusal rather than a shape check.
+    # Composed into the real refusal rather than checked as a shape: with
+    # distinct digests the tree-changed refusal must fire. Under the mutant this
+    # returns (0, "all 10 arms KILLED, tracked tree untouched") -- green over a
+    # run whose results cannot be trusted.
     code, why = mutate_gates._exit_code(**args)
     assert code == 1
-    assert "scored 10 arms but the matrix declares 10" not in why
-    assert "not every arm died" in why
-    assert "killed=7 of 10" in why
+    assert "TRACKED TREE CHANGED" in why, (
+        "distinct digests must reach the sandbox-escape refusal; if this reads "
+        "'all arms KILLED' the two digests collapsed onto one operand"
+    )
 
 
 def test_the_error_line_says_whether_an_error_was_reported(capsys):
