@@ -405,6 +405,24 @@ get_status() {
   # comment claimed the boundary was closed on this file; it covered one of the
   # two invocations. Disclosed ONCE, on the first poll that hits it, because 60
   # copies of the same traceback is not 60 times the information.
+  # TRUNCATED FIRST, so the file holds ONLY this invocation's stderr.
+  #
+  # ROUND 16 (review B3, and a defect found while proving the test for it).
+  # `$REDACT_ERR_FILE` is shared with `do_post`, which truncates it at `:264`
+  # and then lets `_dump_redacted` write into it. The poll loop read `[ -s ]`
+  # on that same file WITHOUT clearing it, so bytes left over from the POST
+  # phase made this disclosure fire and report a count for stderr the poll
+  # parser never wrote — "the poll parser wrote N byte(s)" asserting something
+  # about an invocation that produced none. That is R7, and it is the third
+  # R7 defect on this branch committed by a fix for an R7 defect.
+  #
+  # It also MASKED the redirect. A reviewer deleted `2> "$REDACT_ERR_FILE"`
+  # from the line below and nothing went red; the first test written to catch
+  # that deletion ALSO passed, because the stale POST-phase bytes kept the
+  # disclosure firing whether or not the redirect existed. Clearing the file
+  # here is what makes the redirect observable: without it the file stays
+  # empty, `[ -s ]` is false, and the disclosure legitimately disappears.
+  : > "$REDACT_ERR_FILE"
   STATES=$(node "$PARSER" "$POLL_BODY_FILE" 2> "$REDACT_ERR_FILE") || true
   if [ -s "$REDACT_ERR_FILE" ] && [ "${POLL_PARSER_STDERR_SEEN:-}" != "true" ]; then
     POLL_PARSER_STDERR_SEEN=true

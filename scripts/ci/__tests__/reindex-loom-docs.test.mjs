@@ -1264,6 +1264,48 @@ test('#4498 round 11 — a parser that exits 0 with a WARNING on stderr is NOT r
   );
 });
 
+test('#4498 round 16 B3 — the POLL parser stderr redirect is pinned by behaviour, not by a comment', async () => {
+  // A reviewer deleted `2> "$REDACT_ERR_FILE"` from the poll parser call and
+  // the suite reported 49 passed / 0 failed. That mutation restores precisely
+  // what round 11 records as the previous reviewer's S2 finding — the parser's
+  // raw stderr reaching a PUBLIC Actions log — and nothing in this file noticed.
+  //
+  // Nothing asserted the disclosure line at all, which is what made the redirect
+  // unobservable: the string `the poll parser wrote` appeared nowhere in the
+  // tests before this.
+  //
+  // WHY THIS ASSERTION IS THE WITNESS, and why the obvious one is not. Asserting
+  // that node's warning text is ABSENT from the output cannot work here:
+  // `NODE_OPTIONS` breaks every node invocation in the script, including the
+  // three unredirected `node "$CLASSIFIER"` calls, so `ExperimentalWarning`
+  // legitimately appears whether or not the poll redirect exists. The redirect's
+  // observable consequence is narrower — it is the only thing that puts bytes in
+  // `$REDACT_ERR_FILE` on the poll path, and the byte COUNT in the disclosure is
+  // read from that file. Delete the redirect and the file stays empty, `[ -s ]`
+  // is false, and this line never prints.
+  await withServer(
+    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-poll-1' } }),
+    () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
+    async (url) => {
+      const res = await runScript(url, {
+        // Exits 0, writes a warning to stderr — so the parser SUCCEEDS and the
+        // only question is where its stderr went.
+        NODE_OPTIONS: '--experimental-loader=data:text/javascript,',
+      });
+      const out = res.stdout + res.stderr;
+      // The redirect captured the bytes, and the capture is disclosed with a
+      // NON-ZERO count read back from the file the redirect wrote.
+      assert.match(out, /poll: the poll parser wrote [1-9]\d* byte\(s\) to stderr/, out);
+      // ...and it is still WITHHELD rather than published.
+      assert.match(out, /WITHHELD rather than published raw \(it may be the redactor itself\)/, out);
+      // ...and the run still reached its real verdict, so this is not a test
+      // that passes by breaking the script.
+      assert.match(out, /loom-docs reindex COMPLETE/, out);
+    },
+  );
+});
+
+
 test('#4498 round 16 — stderr AND no jobId: the cell neither earlier test could reach', async () => {
   // THE TWO TESTS THAT EXIST EACH HOLD FIXED THE VARIABLE THE OTHER VARIES, so
   // the one cell where round 11's sentence is false was untested BY
@@ -1326,7 +1368,12 @@ test('#4498 round 11 — a parser that CANNOT START is named as such, and its by
   // "C:/Program Files", so the test ends up asserting about a different error
   // than it meant to. Measured while writing this.
   await withServer(
-    () => ({ status: 202, body: { ok: true, accepted: true, state: 'running', jobId: 'j-dead' } }),
+    () => ({
+      status: 202,
+      // A DISTINCTIVE MARKER IN THE BODY. The assertions below are about this
+      // string's ABSENCE, which is the half the round-11 test did not have.
+      body: { ok: true, accepted: true, state: 'running', jobId: 'j-dead', note: 'CANARY-RAW-BODY-7f3a91' },
+    }),
     () => ({ status: 200, body: { freshness: { state: 'fresh' }, job: { state: 'idle' } } }),
     async (url) => {
       const res = await runScript(url, {
@@ -1339,6 +1386,16 @@ test('#4498 round 11 — a parser that CANNOT START is named as such, and its by
       assert.match(out, /WITHHELD rather than published raw/, out);
       // The round-10 claim that is now false must not reappear.
       assert.doesNotMatch(out, /its stderr follows/, out);
+
+      // ROUND 16 REVIEW, B2 — THE SENTENCE IS NOT THE BEHAVIOUR. Every
+      // assertion above is satisfied by a `_dump_redacted` whose else-branch
+      // publishes the raw file AND keeps the disclosure sentence: a reviewer
+      // built exactly that mutant and this suite reported 49 passed / 0 failed.
+      // A test that pins a claim rather than the conduct it describes cannot
+      // tell a fail-closed path from a fail-open one wearing its wording.
+      //
+      // This is the assertion that can: the body's own bytes must NOT appear.
+      assert.doesNotMatch(out, /CANARY-RAW-BODY-7f3a91/, out);
 
       // SCOPE, STATED HONESTLY. This asserts that the PARSER's stderr is not
       // published raw — the two sites round 11 fixes (`do_post` and the poll

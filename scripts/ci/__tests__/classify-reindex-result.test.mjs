@@ -984,3 +984,64 @@ test('#4498 a newline in the REMOTE freshness.reason reaches stdout as one line'
   // string naming the cause would trade an R7 defect for a different one.
   assert.match(res.stdout, /manifest unreadable%0A::error::FORGED ANNOTATION/);
 });
+
+test('#4498 round 16 B1 — a credential straddling the 300 bound must not survive the truncation', () => {
+  // TRUNCATE-THEN-REDACT PUBLISHES A SECRET. It does not merely publish less.
+  //
+  // `firstLine()` bounded at 300 with no redaction, and the redaction ran later
+  // over the assembled message. A credential CUT by that bound leaves a
+  // fragment too short for the rule that would have caught it, and the fragment
+  // reaches the log verbatim. The `code=` rule needs {20,} characters, so a cut
+  // to 18 disarms it exactly.
+  //
+  // The fixture is positioned arithmetically rather than by eyeball, because
+  // the whole defect is an off-by-boundary:
+  //
+  //   indices    0..275  padding                        (276 chars)
+  //   index         276   a SPACE                        (1 char)
+  //   indices  277..281  "code="                        (5 chars)
+  //   indices  282..321  the 40-char credential
+  //   slice(0, 300) keeps 0..299  ->  282..299 = 18 credential characters
+  //
+  // 18 < 20, so before the fix those 18 characters were published. Redacting
+  // BEFORE the slice sees the full 40-character value, matches, and replaces it.
+  //
+  // THE SPACE AT 276 IS LOAD-BEARING and the first draft omitted it. The rule is
+  // `(?<![A-Za-z0-9_])(code=)…` — a deliberate negative lookbehind so that
+  // `errorcode=`/`statuscode=` are NOT treated as a key. With `x` padding butted
+  // straight against it, `xcode=` never matched, and the test failed WITH the
+  // fix applied while appearing to prove the fix was broken. The fixture was
+  // wrong, not the remedy. A probe that lifts the rule and tests both sides is
+  // what separated those two readings.
+  const SECRET = 'A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0';
+  assert.equal(SECRET.length, 40, 'the fixture must span the bound as computed');
+  const LEAKED_IF_BROKEN = SECRET.slice(0, 18);
+  const error = `${'x'.repeat(276)} code=${SECRET}`;
+  assert.equal(error.indexOf(SECRET), 282, 'the credential must start at 282');
+
+  const r = classifyReindexPoll({
+    // `rebuild_failed` is the ONLY outcome that reaches the `lastRun.error`
+    // read. Stated because the first draft of this test used `timeout`, PASSED
+    // against the broken code, and would have shipped as a test that witnesses
+    // nothing — the exact failure this suite exists to refuse, inside the test
+    // written to refuse it. Probed every outcome; only this one reproduces it.
+    outcome: 'rebuild_failed',
+    body: JSON.stringify({
+      freshness: { state: 'stale', lastRun: { error, finishedAt: '2026-09-15T00:00:00Z' } },
+      job: { state: 'idle' },
+    }),
+    waitedSeconds: 600,
+    attempts: 4,
+  });
+
+  // The precise claim: no fragment of the credential survives anywhere in the
+  // published message. Asserting on the 18-character prefix rather than the
+  // whole value is what makes this a witness — the whole value never appeared
+  // even before the fix, because it was cut.
+  assert.doesNotMatch(
+    r.message,
+    new RegExp(LEAKED_IF_BROKEN),
+    'a credential fragment survived the 300-char truncation — this is redact-AFTER-truncate',
+  );
+  assert.doesNotMatch(r.message, new RegExp(SECRET), 'the whole credential must not appear either');
+});

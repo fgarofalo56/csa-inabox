@@ -609,8 +609,31 @@ function summarize(parsed) {
   return bits.join(' ');
 }
 
+/**
+ * The first line of a remote-influenced string, REDACTED and then bounded.
+ *
+ * THE ORDER IS THE WHOLE POINT, and it was wrong here (#4498 round 16 review,
+ * B1). This read `.split(/\r?\n/)[0].slice(0, 300)` with no redaction at all,
+ * and the redaction ran later over the assembled message in `redactVerdict()`.
+ * Truncate-then-redact is the ordering this very PR's docblocks forbid TWICE
+ * (`parse-reindex-poll.mjs:96-101` and `:162-165`), and it does not merely
+ * publish less — it publishes a SECRET.
+ *
+ * The mechanism: a credential straddling the 300-character bound is CUT, and
+ * the surviving fragment no longer matches the rule that would have redacted
+ * it, so it reaches the log verbatim. A reviewer measured up to 18 characters
+ * of a credential surviving by exactly this route, on a field THIS PR
+ * introduces (`freshness.lastRun.error`), while `parse-reindex-poll.mjs`
+ * reading the SAME field with the SAME 300 bound emitted the redaction marker.
+ * Two modules, one field, one run, opposite orders.
+ *
+ * Redacting first fixes it by construction: whatever the slice cuts afterwards
+ * is either ordinary text or a redaction MARKER, and a truncated marker carries
+ * nothing. `redactVerdict()` still redacts the assembled message — `redactSecrets`
+ * is idempotent, so that stays as defence in depth rather than being removed.
+ */
 function firstLine(s) {
-  return String(s || '').split(/\r?\n/)[0].slice(0, 300);
+  return redactSecrets(String(s || '').split(/\r?\n/)[0]).slice(0, 300);
 }
 
 /**
