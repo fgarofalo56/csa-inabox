@@ -97,7 +97,94 @@
     "estate-behaviour": "estate",
     "ui-surface": "g1-browser",
     "human-only": "operator",
-    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt."
+    "g1_assertion_rule": "must key on something ONLY a success path can produce, and the receipt must NAME why it is unreachable from an error path. An assertion satisfied by 'Error: HTTP 500' is not a receipt.",
+    "ci_green_rule": {
+      "_": "#4487. The OLD definition - 'every required context green AT THE MERGED SHA' - names a measurement this CI topology cannot produce, and that was found by trying to take the receipt for the first time. At a02cd41e6d42 (the merge of #4483): 15 required, 10 green, 5 absent, 0 red. Four of the five are published by validate.yml, whose push: trigger is path-filtered to bicep/deploy/workflow paths that merge did not touch; the fifth is commit-message-parses.yml publishing the PUSH spelling of a conditionally-named job. A definition the topology cannot satisfy leaves two outcomes - every guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as green and the receipt stops meaning what it says.",
+      "definition": "every required context that CAN run at the merged sha is green; every one that CANNOT is NAMED, with the reason it could not and its result on the PR head over an IDENTICAL TREE",
+      "absence_is_excused_only_when": "the producing workflow - traced by workflow IDENTITY from the PR head, never by an alias table - either RAN at the merged sha and concluded SUCCESS under a different job name (the per-event rename case), or was NEVER CREATED there because its own on.push trigger, read AT that sha, could not have admitted the commit (the path-filter case)",
+      "fails_closed_on": "an untraceable producer, an unreadable on.push trigger, a workflow that SHOULD have run and did not, a merged sha carrying zero check-runs at all, an empty required set, and a deferral to a PR head whose tree differs from the merged tree",
+      "not_proven_by_this_receipt": "that any required context measured a non-empty POPULATION. statusCheckRollup publishes none, so green-over-zero-items (the #4451 shape) stays invisible here and remains an owed capability, not a claim.",
+      "_substantive_steps": "WHICH step a context must have EXECUTED, not how many. Measured 2026-09-13 over 24 green-at-merge contexts on PRs 4483 and 4488: a proportion cannot decide this. `vitest (node 20)` skipped `Run vitest (with istanbul coverage floor)` - the step that IS the check - at 38% skipped, while `Python Tests (3.10)` skipped only its trailing `Coverage summary` at 9%. Any threshold accepting the second accepts the first. Nor can it be inferred from names: `_is_bookkeeping_step` already misclassifies six real step names (`Post HIGH findings to PR`) in the EXCUSING direction. So it is DECLARED, per context, from evidence. A context ABSENT from this map FAILS CLOSED - add it with the step read off a real green run, never guessed. `ALL` means every work step must have run, for contexts whose work is distributed across many steps rather than concentrated in one.",
+      "substantive_steps": {
+        "Python Lint": ["Lint Python files"],
+        "Python Tests (3.10)": ["Run pytest with coverage"],
+        "Python Tests (3.11)": ["Run pytest with coverage"],
+        "Python Tests (3.12)": ["Run pytest with coverage"],
+        "PowerShell Lint": ["Lint PowerShell scripts"],
+        "Secret Scan": ["Run gitleaks"],
+        "Repo Hygiene": "ALL",
+        "dbt Compile (shared)": ["Compile dbt models"],
+        "dbt Compile (finance)": ["Compile dbt models"],
+        "dbt Compile (inventory)": ["Compile dbt models"],
+        "dbt Compile (sales)": ["Compile dbt models"],
+        "next build (node 20)": ["Build (next build)"],
+        "guardrails": "ALL",
+        "vitest (node 20)": ["Run vitest (with istanbul coverage floor)"],
+        "changelog parser can read every commit message": ["Check every changelog-bound commit message"]
+      },
+      "_alternatives": "#4487 round 5, and it is the defect that mattered most: a job may have MORE THAN ONE work-gating output, and a row naming only the first makes the receipt SAY SOMETHING FALSE. `vitest (node 20)` runs `Run vitest (infra-reading suites only)` when console is untouched but `infra` changed - and `infra` is derived by scripts/ci/derive-infra-reading-suites.mjs from an ERE containing `tools/` and `PRPs/`, which is the exact footprint of a drain PR. MEASURED by an independent reviewer on the two merged shas this PR presents as its receipt (runs 34707045178 and 34665183833): the coverage-floor suite was skipped and the infra suite SUCCEEDED, while the receipt printed 'there was nothing for it to do'. It did work. Same shape for `next build (node 20)`'s `portal` output, which per that workflow's #4187 comment is the portal's only blocking check. So a declared ALTERNATIVE that RAN is the context doing its work, named in the evidence. ROUND 6 - WHERE THAT ACCEPTANCE IS MADE IS THE WHOLE CONTROL. It was made inside `context_did_its_work`, which receives no changed_files, so it returned a pass BEFORE the scope corroboration ran - and `_merged_files_outside_scope` is the only place a detector's output is checked against the merged commit's own file list. Both reviewers reproduced the consequence on different rows: with a console file in the merge and the detector wrongly reporting console=false, round 4 REFUSED ('a change detector that missed a change') and round 5 ACCEPTED as green-at-merge, naming the alternative. A required context certified green over a console that was never built or tested - the #3783 shape this file says must never be laundered, laundered by the fix for something else. So `alternative_accounted_for` asks BOTH questions: an alternative stands in for a skipped primary only when the merged files are outside every declared scope. It must also have concluded SUCCESS (not merely 'not skipped', which counts `failure` and `cancelled`), and it must NOT be the row's `gate_step` - the detector always runs, so declaring it would make the substantive-step rule vacuous for that context with a one-line edit here.",
+      "alternatives": {
+        "vitest (node 20)": ["Run vitest (infra-reading suites only)"],
+        "next build (node 20)": ["Jest (portal)", "Type-check (portal)"]
+      },
+      "_scope_paths": "#4487 round 4. The substantive-step rule made `ci-green` UNOBTAINABLE FOR THE EXACT CLASS IT CLOSES: a guard/test-only PR by construction does not touch apps/fiab-console, so `next build (node 20)` and `vitest (node 20)` correctly skip their work behind an in-job change detector and conclude SUCCESS - and both drain merges in the window, #4483 and #4488, returned NOT GREEN for exactly those two. 0 for 2 on the population the receipt serves, which is #4487's own thesis one branch along. The receipt already excuses a PATH-FILTERED workflow by applying its declared filter to the merged commit's changed files; this is the SAME measurement for a filter that lives in a shell step instead of in on.push.paths, and the difference between those two is where GitHub lets you write a filter, not how much the merge was checked. `paths` are GitHub filter-pattern globs, read off the producing workflow's own change detector; __tests__/test_ci_green_declared.py fails if they drift from it. A context with no row here CANNOT reach the excuse at all, and a row whose scope MATCHES a merged file is a FAILURE, not an excuse - that is a detector that missed a change (#3783), which is the defect this must never launder. ROUND 6: THE UNIT IS THE OUTPUT, NOT THE CONTEXT. A row used to carry one `paths` list against a `gate_step` that emits SEVERAL outputs, and so corroborated only the first. `next build (node 20)` declared `console` while the same detector also emits `portal` (^portal/react-webapp/) - and that job is, per the workflow's own #4187 comment, the portal's ONLY blocking check, so a portal-only merge whose portal grep did not fire was excused with 'there was nothing for it to do' by the one required context that would have caught it. `vitest (node 20)` declared `console` while also emitting `infra`, whose scope is an ERE COMPUTED by scripts/ci/derive-infra-reading-suites.mjs and named in no row at all. Both were found by an independent reviewer. So `outputs` enumerates EVERY output that gates work, each with its own scope, and the excuse is granted only when every one of them provably excludes every merged file. An output that cannot be evaluated REFUSES. ROUND 8 - AND THIS SENTENCE USED TO END HERE, CLAIMING 'an under-declared row is now a refusal, not a silent pass'. It was false, and BOTH independent reviewers proved it independently: the refusal existed for an output PRESENT-BUT-UNEVALUABLE and never for an ABSENT one, because nothing compared this list against what the detector actually emits. Deleting the four-line `portal` block below left `391 passed` untouched and flipped a portal-only merge from refused to excused - round 6's blocker verbatim. What makes the sentence true now is an INSTRUMENT, not this note: `test_the_declared_scope_matches_the_workflows_own_change_detector` walks WORKFLOW -> DECLARED as well as declared -> workflow, asserting every `steps.<detector-id>.outputs.<X>` the job gates work on appears here; and arms R17/R18 in `mutate_gates.py` delete an output and must be KILLED, which is why the mutation sandbox now carries the workflow files this row names. A claim in this file that no arm can kill is prose.",
+      "_job": "The YAML job KEY, not the display name. Round 5: the drift guard matched on the context's display name and so read the WRONG job — both console rows resolved to the `build` job's detector and `vitest`'s, 250 lines down with a different second output, was never read. A display name is also not always present in the file: `Python Tests (3.10)` is a MATRIX job whose `name:` is `Python Tests (${{ matrix.python-version }})`, so the literal context name appears nowhere. The job key is exact, stable across a rename, and the thing a reader can find. ROUND 8 DISCLOSURE: `workflow` and `job` are read by the DRIFT TEST and by the mutation sandbox's workflow copy — no decision function resolves a row through them, so pointing either at something that does not exist changes no verdict and only the test notices. They are the guard's addressing, not the receipt's; do not read them as though `gates.py` consulted them.",
+      "scope_paths": {
+        "next build (node 20)": {
+          "workflow": ".github/workflows/fiab-console-ci.yml",
+          "job": "build",
+          "gate_step": "Detect console changes",
+          "outputs": [
+            {
+              "output": "console",
+              "paths": ["apps/fiab-console/**", ".github/workflows/fiab-console-ci.yml"],
+              "gates": ["Build (next build)"]
+            },
+            {
+              "output": "portal",
+              "paths": ["portal/react-webapp/**", ".github/workflows/fiab-console-ci.yml"],
+              "gates": ["Jest (portal)", "Type-check (portal)"]
+            }
+          ]
+        },
+        "vitest (node 20)": {
+          "workflow": ".github/workflows/fiab-console-ci.yml",
+          "job": "vitest",
+          "gate_step": "Detect console changes",
+          "outputs": [
+            {
+              "output": "console",
+              "paths": ["apps/fiab-console/**", ".github/workflows/fiab-console-ci.yml"],
+              "gates": ["Run vitest (with istanbul coverage floor)"]
+            },
+            {
+              "output": "infra",
+              "paths": "derive-infra-reading-suites.mjs --ere",
+              "gates": ["Run vitest (infra-reading suites only)"]
+            }
+          ]
+        },
+        "_python_tests": "Same family, different shape, and it is the reason a `paths` may be the STRING \"on.push.paths\". test.yml's `Detect Python-relevant changes` does not carry its own path list: it delegates to scripts/ci/python_trigger_scope.py, which parses on.push.paths OUT OF test.yml - and that file's own comment says 'ONE list ... READ OUT OF THIS FILE - not a second copy of it that has to be kept in agreement by review'. Copying those 15 globs here would create precisely that second copy. So the row points at the trigger the receipt ALREADY parses, which is drift-free by construction. This job has ONE work-gating output, so its `outputs` list has one entry - the list is not padding, it is the shape that made the two-output rows above expressible. Measured on PR #4401 (console-only): test.yml is path-filtered out at the merged sha AND its PR-head job skipped `Run pytest with coverage` behind the same list, so all three legs returned FAIL under round 4's first draft - the console blocker one family over.",
+        "Python Tests (3.10)": {
+          "workflow": ".github/workflows/test.yml",
+          "job": "python-tests",
+          "gate_step": "Detect Python-relevant changes",
+          "outputs": [{"output": "run", "paths": "on.push.paths", "gates": ["Run pytest with coverage"]}]
+        },
+        "Python Tests (3.11)": {
+          "workflow": ".github/workflows/test.yml",
+          "job": "python-tests",
+          "gate_step": "Detect Python-relevant changes",
+          "outputs": [{"output": "run", "paths": "on.push.paths", "gates": ["Run pytest with coverage"]}]
+        },
+        "Python Tests (3.12)": {
+          "workflow": ".github/workflows/test.yml",
+          "job": "python-tests",
+          "gate_step": "Detect Python-relevant changes",
+          "outputs": [{"output": "run", "paths": "on.push.paths", "gates": ["Run pytest with coverage"]}]
+        }
+      }
+    }
   },
 
   "merge_gate": {

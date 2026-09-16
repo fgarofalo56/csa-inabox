@@ -1,0 +1,24 @@
+{
+  "_": "A SNAPSHOT of `main`'s required status checks, so the declaration in policy.json (receipts.ci_green_rule.substantive_steps) can be checked for SET EQUALITY offline. Refresh with `python tools/drain/merge_gate.py --refresh-required-contexts`.",
+  "_currency": "__tests__/test_ci_green_declared.py compares this to the live API and SKIPS when `gh` cannot reach GitHub — which, measured, is EVERY CI run: the test.yml step that runs this suite passes no token, so `gh` is unauthenticated there and the comparison never executes. It is also skipped inside the mutation sandbox, deliberately, so the arms do not each make a live API call. So a stale snapshot is caught by a developer running the suite locally with `gh` authenticated, and by NOTHING in CI. Stated rather than implied, because an earlier version of this note claimed it 'fails in CI' — which is the kind of unearned assurance this package exists to stop (deploy-integrity.md R7). The snapshot is correct as of `measured` below; give the step a token if that assurance is wanted.",
+  "_why_not_live_only": "gates.DATA_NOT_NAMESPACE names this test as the instrument that checks the rows of `substantive_steps`, which is what lets the policy walk stop there. An instrument that only runs when a network is up is not one a stop can rest on.",
+  "measured": "2026-09-13",
+  "source": "repos/fgarofalo56/csa-inabox/branches/main/protection/required_status_checks",
+  "contexts": [
+    "Python Lint",
+    "Python Tests (3.10)",
+    "Python Tests (3.11)",
+    "Python Tests (3.12)",
+    "PowerShell Lint",
+    "Secret Scan",
+    "Repo Hygiene",
+    "dbt Compile (shared)",
+    "dbt Compile (finance)",
+    "dbt Compile (inventory)",
+    "dbt Compile (sales)",
+    "next build (node 20)",
+    "guardrails",
+    "vitest (node 20)",
+    "changelog parser can read every commit message"
+  ]
+}
