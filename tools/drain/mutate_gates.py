@@ -787,15 +787,29 @@ ARMS: list[tuple[str, str, str, str]] = [
          "concluded FAILURE is accepted as having executed its declared "
          "substantive step"),
         "gates.py",
-        '    if job_verdict != "success":',
-        "    if False:",
+        # ANCHORED ON THE MESSAGE, not on the `if`. Finding 5 added the same
+        # two refusals to `context_is_accounted_for`, so `if job_verdict !=
+        # "success":` now appears TWICE in gates.py and the bare line would
+        # mutate whichever came first. The message line is what distinguishes
+        # route 1's copy from the all-routes one; `test_every_arm_anchor_is_
+        # present_and_unique_in_the_current_source` is what caught it.
+        ('    if job_verdict != "success":\n'
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - a job that did "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - a job that did "'),
     ),
     (
         ("U3 the job-level NOT-CONCLUDED refusal collapses, so a job that is "
          "still running answers for a merge"),
         "gates.py",
-        "    if job_verdict is None:",
-        "    if False:",
+        ("    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so it is still running and "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so it is still running and "'),
     ),
     (
         ("U4 `job_executed` -- the SELECTOR that steers the route choice -- "
@@ -1967,6 +1981,48 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
         "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
+    ),
+    # -- FINDING 5 (#4518): the job-conclusion check, lifted to ALL THREE -----
+    # routes. U2/U3 above cover route 1's own copy, which stays because
+    # `context_did_its_work` is a public predicate called directly by the
+    # suite. These three cover the all-routes gate in `context_is_accounted_
+    # for`, and each is killed ONLY by a job that route 1 would never see --
+    # one that the scope-skip or alternative route would otherwise accept.
+    (
+        ("F5A1 the all-routes gate stops fail-closing on an ABSENT job record, "
+         "so a context with no job at all is handed to the scope and "
+         "alternative routes, which never read a job verdict"),
+        "gates.py",
+        ("    if not isinstance(job, dict):\n"
+         "        return False, (\n"
+         '            "no job record was read for it, so nothing about it can be shown - "'),
+        ("    if not isinstance(job, dict):\n"
+         "        return True, (\n"
+         '            "no job record was read for it, so nothing about it can be shown - "'),
+    ),
+    (
+        ("F5A2 the all-routes NOT-CONCLUDED refusal collapses, so a job still "
+         "RUNNING is excused by a scope skip or an alternative and answers for "
+         "a merge"),
+        "gates.py",
+        ("    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so nothing about it can be "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so nothing about it can be "'),
+    ),
+    (
+        ("F5A3 the all-routes FAILURE refusal collapses, so a job that "
+         "concluded `failure` is still accounted for by its scope excuse or by "
+         "a declared alternative - the exact hole finding 5 names"),
+        "gates.py",
+        ('    if job_verdict != "success":\n'
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - no route can "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - no route can "'),
     ),
 ]
 
