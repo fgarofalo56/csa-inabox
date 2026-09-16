@@ -37,6 +37,10 @@ import {
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
 import { classify, classifyLeaves, TAXONOMY } from '../deploy-classify.mjs';
+// The REDACTION half of `formatAnnotation`. Imported so the round-trip oracle
+// below can state the real contract: the runner decodes back to the REDACTED
+// message, not to the caller's raw one. See the round-4 note on that test.
+import { redactedLine } from '../_azure-redact.mjs';
 import {
   streamWrites,
   stripComments,
@@ -792,10 +796,156 @@ test('MUTATION-VISIBLE — EVERY annotation level is redacted, not just `error`'
 test('formatAnnotation keeps its other contracts: one line, and never blank', () => {
   const multi = formatAnnotation('error', 'line one\nline two\r\nline three');
   assert.equal(multi.split('\n').length, 2, 'a multi-line message must render as ONE annotation');
-  assert.match(multi, /line one%0Aline two%0Aline three/);
+  // The LF encodes as `%0A` and the CRLF as `%0D%0A` — the runner's own mapping.
+  // This fixture previously expected `%0A` for BOTH, which is what made it the
+  // third casualty when review substituted the injective encoder (round 3).
+  assert.match(multi, /line one%0Aline two%0D%0Aline three/);
   // A non-string must not silently become a blank `::error::` — redact() returns
   // '' for a non-string, which is why String() comes first.
   assert.match(formatAnnotation('error', { toString: () => 'an object message' }), /an object message/);
+});
+
+// ── THE ENCODER MUST BE INJECTIVE (GHSA-9cv3-6cpm-975m) ──────────────────────
+//
+// The runner does not print a workflow command, it PARSES one. Before parsing it
+// runs `unescapeData`, which decodes `%0D` -> CR, `%0A` -> LF and `%25` -> `%`,
+// in that order — `%25` LAST, because it is the inverse of an encoder that
+// escapes `%` FIRST. An encoder that escapes the line terminators but not the
+// percent sign is therefore not injective: the three literal characters `%0A`
+// inside a message decode to a real newline in the runner's view.
+//
+// WHAT THAT SECOND CASE IS, PRECISELY — an earlier version of this block
+// overstated it, and the source comment was corrected before this one was.
+// The decode runs INSIDE the parse, on an ALREADY DELIMITED line
+// (`ProcessInvoker.cs:513` splits on CR/LF/CRLF first, `ActionCommandManager.cs:70`
+// parses per line), and `ExecutionContext.cs:855` writes the decoded text to the
+// log without it ever re-entering `TryProcessCommand`. So a decoded `%0A` yields
+// ONE annotation whose body READS as a second `::error::` line — log forgery
+// (CWE-117) in a public log, NOT a second parsed command. The terminator that
+// genuinely forges a parsed command is a LONE CR, because the split happens
+// before the decode. Both are closed here; they are not the same severity, and
+// this block used to claim the weaker one was the stronger.
+//
+// `message` is composed from ARM deployment error text. In a brownfield deploy
+// ARM echoes caller-supplied resource names and parameter values into it, so the
+// input is remote-influenced, and the log is public.
+//
+// This is modelled rather than asserted on the encoded string alone, because a
+// substring assertion cannot distinguish "escaped correctly" from "escaped twice".
+// Round-tripping through the runner's own inverse is the only check that fails
+// for BOTH directions of the ordering mistake.
+
+/** The runner's inverse, in the runner's order. `%25` last, deliberately. */
+function unescapeData(s) {
+  return s.replace(/%0D/g, '\r').replace(/%0A/g, '\n').replace(/%25/g, '%');
+}
+
+test('MUTATION-VISIBLE — the ESCAPE is INJECTIVE: the runner decodes back to the REDACTED message', () => {
+  const messages = [
+    'plain text with no metacharacters',
+    'literal percent-oh-a: %0A::error::forged annotation',
+    'a literal percent sign: 100% complete',
+    'already-encoded-looking: %25 and %0D and %0A',
+    'real newline\nand a real CRLF\r\nand a LONE CR\rtail',
+    '%',
+    '%%0A%',
+    // Round 3 (review). The three terminator forms must stay DISTINGUISHABLE.
+    'a\nb',
+    'a\rb',
+    'a\r\nb',
+    // ROUND 4 (review BLOCKER). REALISTIC ARM MESSAGES — the input class this
+    // whole boundary exists for, and the one the previous oracle could not
+    // accept. `redact()` rewrites both, and NOT to the same token: the first
+    // becomes `<guid>`, the second `<redacted>` (the `/subscriptions/` rule
+    // runs first and consumes the id before the GUID rule can see it). Either
+    // way, comparing against the RAW message fails here on correct code.
+    'ARM: deployment loomdep-11111111-2222-3333-4444-555555555555 failed',
+    '/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/rg-loom',
+  ];
+
+  for (const message of messages) {
+    const line = formatAnnotation('error', message);
+    assert.ok(line.startsWith('::error::'), 'the level prefix must survive');
+    assert.ok(line.endsWith('\n'), 'the annotation must be newline-terminated');
+
+    // ONE command line: the payload carries no raw terminator the runner could
+    // split on. This is the property the forgery attacks.
+    const payload = line.slice('::error::'.length, -1);
+    assert.doesNotMatch(payload, /[\r\n]/, `a raw line terminator survived encoding of ${JSON.stringify(message)}`);
+
+    // And the runner reconstructs EXACTLY the REDACTED message — no more, no
+    // less.
+    //
+    // WHY `redactedLine(message)` AND NOT `message`, WHICH IS THE ROUND-4
+    // BLOCKER. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
+    // deliberately rewrites ids to shared tokens — `<guid>`, or `<redacted>`
+    // for one inside a `/subscriptions/` or `/tenant(s)/` path. Comparing against
+    // the raw message therefore asserts that redaction does not happen — so
+    // this line went RED on CORRECT behaviour for any realistic ARM fixture,
+    // with a message claiming "the runner sees something the caller did not
+    // send" about output the caller's own redaction policy chose to send. R7,
+    // in the assertion written to enforce R7.
+    //
+    // ROUND 3 had the mirror-image defect: it compared against
+    // `message.replace(/\r\n|\r|\n/g, '\n')` — the implementation's own
+    // UNINTENDED lossy map — so it could not witness the mutant. Round 4
+    // ignored a DIFFERENT, INTENTIONAL lossy stage and fired on correct code.
+    // Same family both times: the oracle was not an independent statement of
+    // the contract. It is now, and the contract is that the ESCAPE is
+    // injective over whatever `redactedLine` produces.
+    assert.equal(
+      unescapeData(payload),
+      redactedLine(message),
+      `the ESCAPE is not injective for ${JSON.stringify(message)} — the runner sees something the redactor did not emit`,
+    );
+  }
+});
+
+test('MUTATION-VISIBLE — the three terminator forms do not collide', () => {
+  // ROUND 4 (review). This lived INSIDE the round-trip test above and had ZERO
+  // kill power there: it is strictly implied by the three equality assertions
+  // that precede it in the same loop — `unescapeData` is a function, so three
+  // distinct decoded results force three distinct encodings — and
+  // `assert.equal` throws, so under the mutant it was written for the kill
+  // landed on the equality and this line was never reached. Measured: deleting
+  // it changed nothing, `fail 3` either way, same three tests, byte-identical.
+  //
+  // In its OWN test it discriminates, because nothing throws first: under the
+  // round-3 lossy collapse the set size measures 1, and under `\r?\n` it
+  // measures 2.
+  const encodings = ['a\nb', 'a\rb', 'a\r\nb'].map((m) => formatAnnotation('error', m));
+  assert.equal(
+    new Set(encodings).size,
+    3,
+    `the three terminator forms collided onto ${JSON.stringify(encodings)} — the escape is not injective`,
+  );
+});
+
+test('the escape ORDER is pinned in both directions', () => {
+  // `%` FIRST: a literal `%0A` must reach the runner as `%250A`, which decodes
+  // back to the literal.
+  //
+  // WHICH MUTANT THIS KILLS, corrected in round 4: it kills the
+  // NO-`%`-ESCAPE-AT-ALL mutant, which emits `::error::%0A` and forges a line.
+  // It does NOT kill the escape-`%`-LAST mutant — that one emits `%250A` here,
+  // identically to correct code, and this assertion passes. The previous
+  // comment claimed the opposite, which is the same conflation the round-2
+  // commit was written to remove.
+  assert.match(formatAnnotation('error', '%0A'), /^::error::%250A\n$/);
+
+  // ...and THIS is the one that kills escape-`%`-LAST: a REAL newline must
+  // reach the runner as `%0A`, NOT `%250A`. Escaping `%` after the substitution
+  // re-escapes the escape and breaks every genuine multi-line remediation.
+  assert.match(formatAnnotation('error', 'a\nb'), /^::error::a%0Ab\n$/);
+
+  // A LONE CR is a terminator to the runner too — `\r?\n` did not match it, and
+  // that is the case that genuinely forges a PARSED command. It encodes to
+  // `%0D`, not `%0A`: the runner's own mapping, and the reason the three
+  // terminator forms stay distinguishable (round 3 review).
+  assert.match(formatAnnotation('error', 'a\rb'), /^::error::a%0Db\n$/);
+
+  // CRLF is the pair, in order.
+  assert.match(formatAnnotation('error', 'a\r\nb'), /^::error::a%0D%0Ab\n$/);
 });
 
 // ── THE RUN LOG IS A DIFFERENT SURFACE FROM THE ANNOTATION (#3829 round 5) ────

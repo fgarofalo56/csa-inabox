@@ -16743,7 +16743,7 @@
             "declaredSinkCount": 4,
             "sinks": [
               {
-                "id": "inherited-fd:spawn-stdio:933",
+                "id": "inherited-fd:spawn-stdio:1083",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16753,7 +16753,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:938",
+                "id": "inherited-fd:spawn-stdio:1088",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16763,7 +16763,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:939",
+                "id": "inherited-fd:spawn-stdio:1089",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16773,7 +16773,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:940",
+                "id": "inherited-fd:spawn-stdio:1090",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -16899,26 +16899,16 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-            "declaredSinkCount": 2,
+            "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:bracket:141",
+                "id": "stdout:bracket:139",
                 "surface": "stdout",
                 "accessPath": "bracket",
                 "wholeExpressionBounded": false,
                 "boundary": null,
                 "unredactedByDesign": false,
                 "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "inherited-fd:spawn-stdio:220",
-                "surface": "inherited-fd",
-                "accessPath": "spawn-stdio",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": true,
                 "childProvenRedacting": null
               }
             ]
@@ -36194,11 +36184,21 @@
           "facet": {
             "kind": "publication",
             "module": "scripts/ci/classify-reindex-result.mjs",
-            "declaredSinkCount": 1,
+            "declaredSinkCount": 2,
             "sinks": [
               {
-                "id": "stdout:member:792",
-                "surface": "stdout",
+                "id": "console:member:502",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:503",
+                "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -36791,7 +36791,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stdout:member:638",
+                "id": "stdout:member:709",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36801,7 +36801,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:642",
+                "id": "stderr:member:713",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36811,7 +36811,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:696",
+                "id": "stderr:member:767",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36821,7 +36821,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:953",
+                "id": "stderr:member:1024",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36831,7 +36831,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "stderr:member:966",
+                "id": "stderr:member:1037",
                 "surface": "stderr",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -36851,7 +36851,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "inherited-fd:spawn-stdio:826",
+                "id": "inherited-fd:spawn-stdio:897",
                 "surface": "inherited-fd",
                 "accessPath": "spawn-stdio",
                 "wholeExpressionBounded": false,
@@ -38311,49 +38311,6 @@
               {
                 "id": "console:member:158",
                 "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              }
-            ]
-          }
-        },
-        {
-          "id": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
-          "kind": "publication",
-          "provenance": "declared",
-          "label": "scripts/ci/parse-reindex-poll.mjs",
-          "facet": {
-            "kind": "publication",
-            "module": "scripts/ci/parse-reindex-poll.mjs",
-            "declaredSinkCount": 3,
-            "sinks": [
-              {
-                "id": "stdout:member:212",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:214",
-                "surface": "stdout",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "stdout:member:216",
-                "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
                 "boundary": null,
@@ -49571,11 +49528,6 @@
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
         },
         {
-          "nodeId": "sec:publication:scripts/ci/parse-reindex-poll.mjs#module",
-          "codeModuleId": "code:scripts/ci/parse-reindex-poll.mjs",
-          "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
-        },
-        {
           "nodeId": "sec:publication:scripts/ci/reconcile-policy.mjs#module",
           "codeModuleId": "code:scripts/ci/reconcile-policy.mjs",
           "reason": "CI guard script — executes on a GitHub Actions runner, not in any deployed Azure resource. Painting it onto a Container App would assert an edge that does not exist."
@@ -49849,10 +49801,10 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-16T00:02:15.682Z",
-      "commit": "a083241a2fa3c29774004e4f41fdf59339d0dbfb",
-      "inputsDigest": "96f0dfa7a3bb15a9",
-      "filesScanned": 2108,
+      "generatedAt": "2026-09-15T21:47:33.250Z",
+      "commit": "fbc81b73c0cca65f16e08d6c2888b3eac93c3bc6",
+      "inputsDigest": "007d2574a7290daa",
+      "filesScanned": 2104,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
@@ -49861,8 +49813,8 @@
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
-          "filesMatched": 410,
-          "nodesEmitted": 235
+          "filesMatched": 406,
+          "nodesEmitted": 234
         }
       ],
       "skipped": [
@@ -50044,7 +49996,7 @@
         },
         {
           "subject": "scripts/ci/__tests__/publication-surface-bypasses.test.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/__tests__/python-cve-floors.test.mjs",
@@ -50624,7 +50576,7 @@
         },
         {
           "subject": "scripts/ci/classify-reindex-result.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 1). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
+          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 2). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/codeql-scan-liveness.mjs",
@@ -50721,10 +50673,6 @@
         {
           "subject": "scripts/ci/neutralize-release-close-keywords.mjs",
           "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 6). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
-        },
-        {
-          "subject": "scripts/ci/parse-reindex-poll.mjs",
-          "reason": "module declares no PUBLICATION-SINKS marker, so C4's declared-count drift check is INERT for it (declaredSinkCount is set to the observed 3). Recorded so the inertness is countable rather than invisible — a check that cannot fail must not be mistaken for a check that passed."
         },
         {
           "subject": "scripts/ci/reconcile-policy.mjs",
@@ -50948,7 +50896,7 @@
         },
         {
           "subject": "C4 expression arm (carriesSensitive)",
-          "reason": "matched 0 of 2440 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
+          "reason": "matched 0 of 2438 non-spawn publication sink(s), so every C4 finding on this tree comes from the spawn-stdio arm. The expression arm is INERT here and its correctness is therefore unexercised by the real corpus — C4 output is not evidence that no unbounded sensitive write exists."
         }
       ]
     }
