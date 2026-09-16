@@ -2032,3 +2032,120 @@ def test_job_executed_does_not_call_a_queued_step_skipped():
     assert not ok
     assert "NOT CONCLUDED" in why, why
     assert "SKIPPED" not in why, why
+
+
+# -- FINDING 5 (#4518): the job verdict, asked on ALL THREE routes ------------
+
+#: The reviewer's fixture, reproduced exactly: the real unmodified `next build
+#: (node 20)` policy row, its DETECTOR concluding `success` and every work step
+#: `skipped`. That combination is what reaches route 2, and route 2 is the one
+#: that read no job verdict. `_hollow_job` will NOT do -- it skips the detector
+#: too, so the scope route refuses on a stale/absent gate step and the test
+#: would pass without ever reaching the check it exists for.
+_F5_STEPS = ("Detect console changes", "Build (next build)",
+             "Type-check (portal)", "Jest (portal)")
+_F5_WORK = ("Build (next build)", "Type-check (portal)", "Jest (portal)")
+
+
+def _f5_job(conclusion):
+    return _job("next build (node 20)", steps=_F5_STEPS, skipped=_F5_WORK,
+                conclusion=conclusion)
+
+
+def test_positive_control_a_successful_job_still_takes_the_scope_route():
+    """THE CONTROL THAT MAKES THE THREE BELOW MEAN ANYTHING.
+
+    Every test under this heading asserts a REFUSAL. A refusal proves nothing
+    on its own -- a fixture that never reaches route 2 refuses for free, and
+    then the job-verdict check could be deleted with the suite still green.
+    This row is the one that would break if the fixture stopped reaching it:
+    same job, same files, `conclusion='success'` -> ACCEPTED, and by the scope
+    route specifically.
+    """
+    acct, evidence, route = gates.context_is_accounted_for(
+        "next build (node 20)", _f5_job("success"), MERGED_FILES, POLICY)
+    assert acct, evidence
+    assert route == gates.ACCOUNTED_SCOPE_SKIP
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+def test_blocker_a_job_that_did_not_pass_is_not_excused_by_its_scope(conclusion):
+    """#4491 round 16, finding 5. Round 14 added the job-level conclusion check
+    and it landed on ROUTE 1 ONLY, so a job that concluded `failure` was still
+    accounted for as `scope-untouched-at-merge` -- the shape the entry point's
+    own docstring says a single entry point makes impossible to write.
+
+    THE SECOND ASSERTION IS THE LOAD-BEARING ONE. Route 2 STILL reads no job
+    verdict -- it is unchanged by this fix and it still says "excused" about a
+    failed job. If the composed answer refuses while route 2 accepts, the only
+    thing that can be refusing is the gate this test is for. Drop the new check
+    and `scope_route_alone` stays True while `acct` flips to True with it.
+    """
+    job = _f5_job(conclusion)
+
+    scope_only, scope_why = gates.scope_untouched_at_merge(
+        "next build (node 20)", job, MERGED_FILES, POLICY)
+    assert scope_only, scope_why
+
+    acct, evidence, route = gates.context_is_accounted_for(
+        "next build (node 20)", job, MERGED_FILES, POLICY)
+    assert not acct, evidence
+    assert route == ""
+    assert f"its job concluded {conclusion!r}, not success" in evidence
+    assert "no route can account for" in evidence
+
+
+def test_blocker_a_job_that_has_not_concluded_is_not_excused_by_its_scope():
+    """The `None` row, which is the one that matters end-to-end:
+    `merge_gate._jobs_by_name` deliberately prefers "the one that executed
+    LESS", so an in-progress duplicate wins the join. That is the documented
+    input rounds 13 and 14 exist for, and until finding 5 it was accounted for
+    as a scope skip -- a merge certified on a job that was still running.
+    """
+    job = _f5_job(None)
+
+    scope_only, scope_why = gates.scope_untouched_at_merge(
+        "next build (node 20)", job, MERGED_FILES, POLICY)
+    assert scope_only, scope_why
+
+    acct, evidence, route = gates.context_is_accounted_for(
+        "next build (node 20)", job, MERGED_FILES, POLICY)
+    assert not acct, evidence
+    assert route == ""
+    assert "has not concluded" in evidence
+
+
+def test_the_absent_job_guard_refuses_rather_than_accepting_on_every_route():
+    """THE `isinstance` GUARD, AND ONLY IT. Read the name carefully: this does
+    NOT claim to be the thing that first refuses an absent job record.
+
+    The first version of this test claimed exactly that -- "route 2 is happy to
+    excuse a context whose job was never read at all" -- and a reviewer
+    measured it false. On the PRE-FIX tree `scope_untouched_at_merge(name,
+    None, ...)` already returns `(False, 'no job record was read for it, so its
+    skip cannot be explained')`. All three routes already refused `None`. The
+    docstring asserted a cause it had not established, in a test written under
+    the rule that forbids exactly that.
+
+    What the guard is actually for is stated in the source: `job` is
+    `dict | None` by signature and `step_conclusion` does `step.get(...)`, so
+    without it the LIFTED CHECK crashes before any route is consulted -- which
+    it did, on the first run of this change. It is a crash guard, and the
+    behaviour it pins is that an absent record is refused HERE rather than
+    accepted here.
+
+    SO THE ASSERTION MUST DISCRIMINATE. `"no job record was read for it"`
+    appears in FIVE places in gates.py, so asserting it proves only that some
+    refusal happened somewhere -- it passes with the entire fix reverted, which
+    the reviewer demonstrated. The all-routes message is the one that names all
+    three routes in a single breath; `"not that its skip was scope-appropriate"`
+    occurs exactly once in the file, so it is the substring that can only have
+    come from this guard.
+    """
+    acct, evidence, route = gates.context_is_accounted_for(
+        "next build (node 20)", None, MERGED_FILES, POLICY)
+    assert not acct, evidence
+    assert route == ""
+    assert "no job record was read for it" in evidence
+    # The discriminating half. Deleting the guard cannot produce this string.
+    assert "not that its skip was scope-appropriate" in evidence

@@ -2288,14 +2288,18 @@ def context_is_accounted_for(
     later. A single entry point is not tidiness; it is what makes "fixed on one
     side only" impossible to write.
 
-    AND IT IS NOT YET TRUE OF THE JOB'S OWN CONCLUSION (#4491 round 16 review,
-    finding 5). Round 14 added a job-level conclusion check -- refuse a job that
-    did not conclude, refuse one that concluded non-`success` -- and it landed
-    on ONE of the three routes. Route 1 `context_did_its_work` reads it (`:2080`,
-    refusing `None` at `:2081` and non-success at `:2086`); route 2
+    AND IT WAS NOT TRUE OF THE JOB'S OWN CONCLUSION until #4518 finding 5, which
+    is what the check below the docstring now fixes. Round 14 added a job-level
+    conclusion check -- refuse a job that did not conclude, refuse one that
+    concluded non-`success` -- and it landed
+    on ONE of the three routes. Route 1 `context_did_its_work` reads it (the
+    `step_conclusion` call and the two refusals immediately below it, in this
+    file); route 2
     `scope_untouched_at_merge` and route 3 `alternative_accounted_for` read no
-    job-level conclusion at all. A reviewer demonstrated it against the real
-    unmodified `next build (node 20)` policy row:
+    job-level conclusion at all -- and STILL DO NOT, deliberately: the check is
+    asked once, here, rather than copied into each of them, because three copies
+    is the defect one more time. A reviewer demonstrated the hole against the
+    real unmodified `next build (node 20)` policy row:
 
         job.conclusion='success'   -> ok=True route='scope-untouched-at-merge'
         job.conclusion='failure'   -> ok=True route='scope-untouched-at-merge'
@@ -2315,17 +2319,23 @@ def context_is_accounted_for(
     first), but that is a coincidence of the rollup, not a control, and this
     package does not rest a stop on a coincidence.
 
-    NOT FIXED IN THIS ROUND, deliberately and for the same reason as the NEUTRAL
-    disagreement recorded at `_one_context`: the remedy is either three lines in
-    each route or lifting the job-verdict read into THIS function, and both
-    change what the merge gate accepts while three PRs are mid-flight against
-    it. Changing the instrument's verdict, authored by the same hand as the work
-    it is judging, does not belong in a round convened to correct stale numbers.
-    Recorded with its measurement so the next reader inherits the finding rather
-    than the silence, and tracked as issue #4518 -- a reviewer filtered all 400
-    open issues and found that an earlier "tracked separately" here named
-    nothing, which is an unconsulted claim in a tracked file: the defect class
-    this package exists to refuse, written into its own deferral.
+    NOW FIXED, as its own change (#4518 finding 5), for the reason the deferral
+    itself named: the remedy is either three lines in each route or lifting the
+    job-verdict read into THIS function, and the second is the one that cannot
+    be got half-right. It is lifted, below, before any route runs. It was held
+    back for several rounds because it changes what the merge gate accepts and
+    three PRs were mid-flight against it -- changing the instrument's verdict,
+    authored by the same hand as the work it was judging, did not belong in a
+    round convened to correct stale numbers. Those PRs have landed, so it ships
+    alone, where its effect on the estate is the only thing being read.
+
+    The remedy is STRICTLY STRICTER and one-directional: it can only turn an
+    acceptance into a refusal, never the reverse, and it fails visibly when it
+    does. Tracked as #4518; the finding was recorded with its measurement so
+    the next reader inherited it rather than the silence, after a reviewer
+    filtered all 400 open issues and found that an earlier "tracked separately"
+    here named nothing -- an unconsulted claim in a tracked file, the defect
+    class this package exists to refuse, written into its own deferral.
 
     THE ORDER OF 2 AND 3 IS NOT ARBITRARY and neither may skip the other's
     question. Round 5 put the alternative inside `context_did_its_work`, which
@@ -2339,6 +2349,67 @@ def context_is_accounted_for(
     route that accepts a SKIPPED primary, and the two are halves of one
     predicate rather than two branches that can each bypass the other.
     """
+    # THE JOB'S OWN VERDICT, ASKED ONCE, BEFORE ANY ROUTE (#4518 finding 5).
+    #
+    # Round 14 added this check and it landed on ROUTE 1 ONLY. Routes 2 and 3
+    # read no job-level conclusion at all, so a job that concluded `failure`,
+    # `cancelled`, or NOT AT ALL was still accepted as `scope-untouched-at-merge`.
+    # Measured by a reviewer against the real unmodified `next build (node 20)`
+    # policy row -- detector `success`, all work steps `skipped`, `Post Checkout`
+    # failing:
+    #
+    #     job.conclusion='success'    -> ok=True route='scope-untouched-at-merge'
+    #     job.conclusion='failure'    -> ok=True route='scope-untouched-at-merge'
+    #     job.conclusion='cancelled'  -> ok=True route='scope-untouched-at-merge'
+    #     job.conclusion=None         -> ok=True route='scope-untouched-at-merge'
+    #
+    # The `None` row is the one that matters: `merge_gate._jobs_by_name`
+    # deliberately prefers "the one that executed LESS", so an in-progress
+    # duplicate wins the join -- the documented input rounds 13 and 14 exist for.
+    #
+    # THIS IS THE SHAPE THE DOCSTRING ABOVE FORBIDS, written into the function
+    # that forbids it. "A single entry point is not tidiness; it is what makes
+    # 'fixed on one side only' impossible to write" -- and then round 14 wrote
+    # it, one level up from where round 13 had.
+    #
+    # Deferred for several rounds on the argument that end-to-end reachability
+    # is low, because an in-progress job usually publishes an in-progress
+    # check-run and `worst_by_name` scores it INCOMPLETE first. That is true and
+    # it is not a control: it is a coincidence of the rollup, and the deferral
+    # said so in the same breath as resting on it.
+    #
+    # Asked HERE rather than added to each route, because three copies is the
+    # defect one more time. Every route below accepts a job as having accounted
+    # for a context; none of them may do so for a job that did not conclude
+    # successfully.
+    #
+    # THE `isinstance` GUARD IS NOT DEFENSIVE PADDING -- it is load-bearing, and
+    # omitting it crashed the negative control on the first run of this change.
+    # `job` is `dict | None` by signature, `step_conclusion` does `step.get(...)`,
+    # and a `None` job reaches here whenever no job record was read. Route 1
+    # guards it the same way before its own `step_conclusion`; the guard has to
+    # move up with the check it protects, not stay behind with the route that
+    # used to own it.
+    if not isinstance(job, dict):
+        return False, (
+            "no job record was read for it, so nothing about it can be shown - "
+            "not that it did its work, not that its skip was scope-appropriate, "
+            "and not that an alternative covered it"
+        ), ""
+    job_verdict = step_conclusion(job)
+    if job_verdict is None:
+        return False, (
+            "its job record has not concluded, so nothing about it can be "
+            "shown yet - not that it did its work, not that its skip was "
+            "scope-appropriate, and not that an alternative covered it"
+        ), ""
+    if job_verdict != "success":
+        return False, (
+            f"its job concluded {job_verdict!r}, not success - no route can "
+            "account for a context whose job did not pass, whatever its "
+            "individual steps, its scope, or its alternatives say"
+        ), ""
+
     did, evidence = context_did_its_work(name, job, policy)
     if did:
         return True, evidence, ACCOUNTED_DID_WORK

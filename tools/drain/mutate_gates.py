@@ -787,15 +787,49 @@ ARMS: list[tuple[str, str, str, str]] = [
          "concluded FAILURE is accepted as having executed its declared "
          "substantive step"),
         "gates.py",
-        '    if job_verdict != "success":',
-        "    if False:",
+        # ANCHORED ON THE MESSAGE, not on the `if`. Finding 5 added the same
+        # two refusals to `context_is_accounted_for`, so `if job_verdict !=
+        # "success":` now appears TWICE in gates.py and the bare line would
+        # mutate whichever came first. The message line is what distinguishes
+        # route 1's copy from the all-routes one; `test_every_arm_anchor_is_
+        # present_and_unique_in_the_current_source` is what caught it.
+        ('    if job_verdict != "success":\n'
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - a job that did "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - a job that did "'),
     ),
     (
         ("U3 the job-level NOT-CONCLUDED refusal collapses, so a job that is "
          "still running answers for a merge"),
         "gates.py",
-        "    if job_verdict is None:",
-        "    if False:",
+        # THE SAME WEAK-MUTANT CORRECTION AS F5A2, and this one is older: this
+        # arm has had the flaw since it was written, and re-anchoring it for
+        # finding 5 cloned the shape before a reviewer measured it. `if False:`
+        # on the `is None` branch leaves `job_verdict` as `None` and the
+        # `!= "success"` branch below still refuses -- measured `did=False`
+        # either way, so the kill was a message substring and the arm's name
+        # ("answers for a merge") described an outcome the mutation could not
+        # produce.
+        #
+        # Mapping `None -> "success"` produces it: measured `did=True` with the
+        # evidence "executed its declared substantive step(s)" about a job that
+        # never concluded, killed by
+        # `test_green_at_merge_refuses_a_job_that_is_still_running`.
+        #
+        # The fixture matters as much as the arm. Route 1 can only ACCEPT a job
+        # whose declared work actually ran, so a fixture that skips the work
+        # step makes route 1 refuse for an unrelated reason and hides the
+        # difference entirely -- which it did, on the first measurement of this.
+        ("    job_verdict = step_conclusion(job)\n"
+         "    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so it is still running and "'),
+        ('    job_verdict = step_conclusion(job) or "success"\n'
+         "    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so it is still running and "'),
     ),
     (
         ("U4 `job_executed` -- the SELECTOR that steers the route choice -- "
@@ -1967,6 +2001,76 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         "    for run_id in run_ids:\n        for job in _jobs_of_run(repo, run_id):",
         "    for run_id in list(run_ids)[:1]:\n        for job in _jobs_of_run(repo, run_id):",
+    ),
+    # -- FINDING 5 (#4518): the job-conclusion check, lifted to ALL THREE -----
+    # routes. U2/U3 above cover route 1's own copy, which stays because
+    # `context_did_its_work` is a public predicate called directly by the suite
+    # (14 direct call sites in `test_ci_green_declared.py`, measured -- an
+    # earlier draft of this said 15 without counting).
+    #
+    # DISCLOSED, because a reviewer measured it and it cuts against keeping the
+    # copy: route 1's copy is DEAD IN THE COMPOSED PATH. Deleting it scores
+    # identically on all 150 real contexts and all 8 synthetic rows, because the
+    # all-routes gate below now refuses first. It is retained only for the
+    # standalone predicate, and the two copies have ALREADY diverged in order
+    # and message -- the same drift class this change exists to close, one level
+    # down. Tracked as #4527 rather than restructured mid-review, because
+    # extracting the shared helper deletes the very lines U2/U3 anchor on.
+    #
+    # These three cover the all-routes gate in `context_is_accounted_
+    # for`, and each is killed ONLY by a job that route 1 would never see --
+    # one that the scope-skip or alternative route would otherwise accept.
+    (
+        ("F5A1 the all-routes gate stops fail-closing on an ABSENT job record, "
+         "so a context with no job at all is handed to the scope and "
+         "alternative routes, which never read a job verdict"),
+        "gates.py",
+        ("    if not isinstance(job, dict):\n"
+         "        return False, (\n"
+         '            "no job record was read for it, so nothing about it can be shown - "'),
+        ("    if not isinstance(job, dict):\n"
+         "        return True, (\n"
+         '            "no job record was read for it, so nothing about it can be shown - "'),
+    ),
+    (
+        ("F5A2 the all-routes NOT-CONCLUDED refusal collapses, so a job still "
+         "RUNNING is excused by a scope skip or an alternative and answers for "
+         "a merge"),
+        "gates.py",
+        # NOT `if False:` ON THE `is None` BRANCH -- that is a WEAK MUTANT, and
+        # an independent reviewer caught the first version of this arm being
+        # one. Skipping the branch leaves `job_verdict` as `None`, and
+        # `if job_verdict != "success":` on the very next lines still refuses,
+        # so the gate does NOT fail open: measured `acct=False route=''`. Only
+        # the MESSAGE changes, so the arm would report KILLED while the
+        # fail-open its own name promises was never produced -- the receipt
+        # would claim the suite catches something it was never shown.
+        #
+        # Mapping `None -> "success"` produces the real thing: measured
+        # `acct=True route='scope-untouched-at-merge'` for a job that never
+        # concluded, killed by
+        # `test_blocker_a_job_that_has_not_concluded_is_not_excused_by_its_scope`
+        # on `assert not acct` rather than on a substring.
+        ("    job_verdict = step_conclusion(job)\n"
+         "    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so nothing about it can be "'),
+        ('    job_verdict = step_conclusion(job) or "success"\n'
+         "    if job_verdict is None:\n"
+         "        return False, (\n"
+         '            "its job record has not concluded, so nothing about it can be "'),
+    ),
+    (
+        ("F5A3 the all-routes FAILURE refusal collapses, so a job that "
+         "concluded `failure` is still accounted for by its scope excuse or by "
+         "a declared alternative - the exact hole finding 5 names"),
+        "gates.py",
+        ('    if job_verdict != "success":\n'
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - no route can "'),
+        ("    if False:\n"
+         "        return False, (\n"
+         '            f"its job concluded {job_verdict!r}, not success - no route can "'),
     ),
 ]
 
