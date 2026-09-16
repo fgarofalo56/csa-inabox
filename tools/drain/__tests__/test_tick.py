@@ -678,6 +678,25 @@ def test_the_receipt_ref_names_the_commit_that_was_deployed():
     assert "abc123def456" in ref
 
 
+def test_all_required_steps_are_checked_not_merely_the_first():
+    """`receipt_required_steps` holds a LIST and the contract is ALL of them.
+
+    Nothing distinguished 2-of-2 from 1-of-2 before this: a reviewer showed
+    `[:1]` and `[-1:]` both survive, because on observed history the two roll
+    steps are always both green or both absent. This fixture separates them --
+    the roll happened, the VALIDATION did not -- which is the shape a future
+    `if:` on the validate step would produce, and exactly what the map exists
+    to refuse.
+    """
+    run = _roll_run()
+    for job in run["jobs"]:
+        for step in job["steps"]:
+            if step["name"] == "Validate live URL":
+                step["conclusion"] = "skipped"
+    with pytest.raises(tick.ReceiptRefusedError, match="Validate live URL"):
+        tick.verify_run_backed_receipt("deploy-run", run, POLICY)
+
+
 def test_a_kind_with_no_required_steps_is_refused_not_waved_through():
     """An empty requirement would mean 'any green run of this workflow will do',
     which is the run-level check this branch exists to replace. Fails closed so
@@ -804,11 +823,25 @@ class _FakeReceipt:
         self.ok, self.summary, self.reasons = ok, summary, tuple(reasons)
 
 
-def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)"):
-    """Inject BOTH network calls the ci-green path makes, and the binding read."""
+def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)", binds=True):
+    """Inject the network calls the ci-green path makes.
+
+    IT STUBS `gh_json_local`, NOT `_pr_references_item`. The first version
+    stubbed the binding CHECK itself, so both ci-green tests ran with that
+    control disarmed and deleting its CALL SITE survived the whole suite. A
+    reviewer found it: the check was tested as a FUNCTION and never as a
+    CONTROL. Stubbing the seam it reads through keeps the real check in the
+    path, and `binds=False` drives it to refuse.
+    """
     import merge_gate
 
-    monkeypatch.setattr(tick, "_pr_references_item", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        tick, "gh_json_local",
+        lambda *_a, **_k: {
+            "body": "Refs #800 #801 #802 #804" if binds else "entirely unrelated work",
+            "commits": [], "closingIssuesReferences": [],
+        },
+    )
     monkeypatch.setattr(
         merge_gate, "collect_ci_green_evidence",
         lambda *_: {
@@ -822,6 +855,25 @@ def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)"):
         gates, "ci_green_receipt",
         lambda *_a, **_k: _FakeReceipt(ok, summary, () if ok else ("vitest: RED at the merged sha",)),
     )
+
+
+def test_blocker_the_binding_check_is_actually_called_on_the_record_path(tmp_path, monkeypatch):
+    """THE CALL SITE, not the function. `test_blocker_a_pr_that_never_names_the_
+    item_is_refused` calls `_pr_references_item` directly, so it passes whether
+    or not anything invokes it -- and a reviewer showed deleting the call
+    survived the suite at 486 passed.
+
+    This drives the WHOLE record path with a PR body that names no item, so the
+    only thing that can refuse is the call site being there. Would pass with
+    `binds=True`, which is what every other ci-green test uses.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(805, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True, binds=False)
+    with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 805, from_pr=4498, from_run=None)
+    assert item.state == READY
 
 
 def test_blocker_a_not_green_ci_green_receipt_does_not_close_the_item(tmp_path, monkeypatch):

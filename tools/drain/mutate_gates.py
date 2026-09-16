@@ -2174,6 +2174,36 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if not from_run:",
         "        if False:",
     ),
+    (
+        ("RW10 the LOST-UPDATE guard collapses, so a stale writer silently "
+         "discards a concurrent lane's verified close - the item reverts to "
+         "`ready` with its receipt and history gone, and the next tick "
+         "re-selects work that was already done. Reproduced before the guard "
+         "existed; `save()` is atomic per FILE and never was per DOCUMENT"),
+        "ledger.py",
+        "            if current != self.loaded_digest:",
+        "            if False:",
+    ),
+    (
+        ("RW11 the BINDING CHECK's call site disappears. The function keeps its "
+         "own test and keeps passing - which is the whole point: a reviewer "
+         "showed the check was tested as a FUNCTION and never as a CONTROL, so "
+         "deleting this line survived the suite until a test drove the record "
+         "path with a non-referencing PR"),
+        "tick.py",
+        "        _pr_references_item(repo, from_pr, number)",
+        "        pass",
+    ),
+    (
+        ("RW12 only the FIRST required step is checked, so a roll that rolled "
+         "but SKIPPED validation is accepted - `receipt_required_steps` means "
+         "ALL of them, and on observed history the two roll steps are always "
+         "both green or both absent, so nothing distinguished 2-of-2 from "
+         "1-of-2 until a fixture separated them"),
+        "tick.py",
+        "    for required in required_steps:",
+        "    for required in required_steps[:1]:",
+    ),
 ]
 
 

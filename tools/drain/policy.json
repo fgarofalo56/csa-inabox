@@ -106,6 +106,7 @@
       "Roll Container App to new image",
       "Validate live URL"
     ],
+    "_deploy-run": "WHICH OF THE TWO DISCRIMINATES TODAY, stated so a later reader does not infer both were measured to bite: over the last 52 successful runs, 46 carry BOTH green and 6 carry NEITHER (the skipped-job shape) - none has one without the other. So `Roll Container App to new image` is the step that refuses the observed vacuous runs, and `Validate live URL` has no kill power over that history. It is kept deliberately: it fails closed against a future `if:` that skips validation while still rolling, which is the shape this whole map exists to refuse.",
     "estate": [
       "Start (or adopt) a synthetic-monitor execution + poll to completion"
     ]

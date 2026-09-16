@@ -29,6 +29,7 @@ from ledger import (
     READY,
     TERMINAL,
     Ledger,
+    LedgerChangedError,
 )
 
 import gates
@@ -707,19 +708,32 @@ def record_receipt_from_evidence(
         ref = verify_run_backed_receipt(kind, run, policy)
         detail = f"{run.get('workflowName')} run {from_run} concluded success"
 
-    # RESTORE ON REFUSAL. `record_receipt` sets three fields and `transition`
-    # can still refuse afterwards (R2 compares the stamped class at the
-    # decision), which would leave the item carrying a receipt it was refused
-    # on. `main()` does not save on that path, so it is not reachable from the
-    # CLI today -- but "unreachable from the one caller I wrote" is exactly the
-    # kind of latency this package keeps finding years later, and an in-memory
-    # `Ledger` can be saved by a different caller in the same process.
+    # DISCLOSED AS UN-KILLABLE, per assertion-design.md #5, because a reviewer
+    # spent a round confirming it and the next reader should not have to: in the
+    # CURRENT call graph nothing can reach this `except`. `transition` refuses
+    # on a class/kind mismatch, and the kind is DERIVED from that same class two
+    # lines up, so the two always agree. There is no input that makes this
+    # branch run, and no test here pretends otherwise.
+    #
+    # It is kept because the invariant it protects is real and the call graph is
+    # not a guarantee: `record_receipt` sets three fields AND appends a history
+    # line before `transition` can refuse, so any future caller that stamps a
+    # class separately -- or any change that lets `transition` refuse for a new
+    # reason -- lands on an item carrying a receipt it was refused on.
+    #
+    # THE HISTORY LINE IS PART OF THE RESTORE. A reviewer pointed out that
+    # clearing the three fields alone leaves the audit record asserting a
+    # receipt that does not exist, which is worse than keeping or dropping
+    # both: the fields would say no receipt and the history would say there was
+    # one.
     before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
+    history_len = len(item.history)
     led.record_receipt(number, kind, ref)
     try:
         led.transition(number, CLOSED, f"receipt verified by tick: {detail}")
     except Exception:
         (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) = before
+        del item.history[history_len:]
         raise
     return f"#{number} closed on a {kind} receipt - {detail}"
 
@@ -817,7 +831,15 @@ def main() -> int:
             # receipt leaves the ledger byte-identical.
             print(f"RECEIPT REFUSED: {exc}", file=sys.stderr)
             return 1
-        led.save()
+        try:
+            # if_unchanged: refuse a LOST UPDATE rather than discard a
+            # concurrent lane's close. Reproduced before this existed -- two
+            # overlapping records, and the loser's item silently reverted to
+            # `ready` with its receipt gone.
+            led.save(if_unchanged=True)
+        except LedgerChangedError as exc:
+            print(f"RECEIPT NOT RECORDED: {exc}", file=sys.stderr)
+            return 1
         print(summary)
         return 0
 
@@ -840,7 +862,21 @@ def main() -> int:
     for item in chosen:
         led.transition(item.number, IN_FLIGHT, f"selected in cycle {led.cycle}")
 
-    led.save()
+    # GUARDED ON THE REFRESH PATH TOO, and it has to be: CAS on the record side
+    # alone protects nothing if the REFRESH is the writer doing the clobbering.
+    # A cycle that loaded before a lane recorded a receipt would write a
+    # document in which that receipt never existed, reverting a closed item to
+    # `ready` -- the same loss, from the other direction.
+    #
+    # `if_unchanged` is keyed to `loaded_from_disk` because `--bootstrap`
+    # DELIBERATELY discards the ledger: it never read the file, so there is no
+    # prior document to be consistent with, and guarding it would refuse the one
+    # operation whose whole purpose is to replace what is there.
+    try:
+        led.save(if_unchanged=led.loaded_from_disk)
+    except LedgerChangedError as exc:
+        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)
+        return 1
 
     print(emit(led, policy, chosen, triage_queue(led), audit_queue(led)))
     print()

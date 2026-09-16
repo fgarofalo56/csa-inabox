@@ -765,3 +765,105 @@ def test_counts_cover_every_state(tmp_path):
     assert counts["total"] == 1
     assert counts[READY] == 1
     assert counts[DECLINED] == 0
+
+
+# -- LOST UPDATES ------------------------------------------------------------
+#
+# `save()` is atomic at the FILE level and was never atomic at the DOCUMENT
+# level. It serialises the whole ledger from memory, so two transactions that
+# overlap do not conflict -- the second writes a document that never contained
+# the first one's change. Reproduced by an independent reviewer against the new
+# receipt write path, and reproduced again here before the guard was written.
+
+
+def _seed_two(tmp_path):
+    led = Ledger(str(tmp_path / "state.json"), receipts=RECEIPTS)
+    led.upsert(2001, "item A", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(2002, "item B", "W6-ci", lane="lane:ci", size=1)
+    led.save()
+    return str(tmp_path / "state.json")
+
+
+def test_positive_control_an_uncontended_guarded_save_still_works(tmp_path):
+    """THE CONTROL. Every test below asserts a refusal, and a guard that refused
+    unconditionally would satisfy all of them while making the ledger
+    unwritable. This pins that the ordinary path is unaffected."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.record_receipt(2001, "ci-green", "green at sha")
+    led.transition(2001, CLOSED, "closed")
+    led.save(if_unchanged=True)
+    assert Ledger(path, receipts=RECEIPTS).load().items[2001].state == CLOSED
+
+
+def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
+    """THE LOST UPDATE, measured before the guard existed: B closed #2002 and
+    saved; A, holding a document loaded before that, saved its own unrelated
+    change; #2002 came back `ready` with its receipt and history line GONE.
+
+    Silent, and it un-closes a RECEIPTED item -- so the next tick re-selects
+    work that was already finished and verified.
+
+    Would pass (no exception) if the digest comparison were removed; that is
+    arm RW10.
+    """
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+
+    b.record_receipt(2002, "ci-green", "green at sha B")
+    b.transition(2002, CLOSED, "B closed it")
+    b.save(if_unchanged=True)
+
+    a.notes.append("A's unrelated edit")
+    with pytest.raises(led_mod.LedgerChangedError, match="changed since this transaction"):
+        a.save(if_unchanged=True)
+
+    final = Ledger(path, receipts=RECEIPTS).load()
+    assert final.items[2002].state == CLOSED, "B's verified close was discarded"
+    assert final.items[2002].receipt_kind == "ci-green"
+
+
+def test_a_refused_save_writes_nothing_at_all(tmp_path):
+    """A refusal must not leave a partial document. Compared by DIGEST rather
+    than by re-reading fields, so a change anywhere in the file is caught."""
+    import hashlib
+
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+    b.notes.append("b was here")
+    b.save(if_unchanged=True)
+
+    with open(path, "rb") as handle:
+        before = hashlib.sha256(handle.read()).hexdigest()
+    a.notes.append("stale")
+    with pytest.raises(led_mod.LedgerChangedError):
+        a.save(if_unchanged=True)
+    with open(path, "rb") as handle:
+        assert hashlib.sha256(handle.read()).hexdigest() == before
+
+
+def test_the_same_transaction_can_save_twice(tmp_path):
+    """The digest is refreshed after a successful write, or a caller that saves
+    twice would refuse itself on its OWN previous save -- which would make the
+    guard unusable for any multi-step operation."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.notes.append("first")
+    led.save(if_unchanged=True)
+    led.notes.append("second")
+    led.save(if_unchanged=True)
+    assert "second" in Ledger(path, receipts=RECEIPTS).load().notes
+
+
+def test_an_unloaded_ledger_is_not_guarded_so_bootstrap_still_works(tmp_path):
+    """`--bootstrap` DELIBERATELY discards the ledger: it never read the file, so
+    there is no prior document to be consistent with. Guarding it would refuse
+    the one operation whose whole purpose is to replace what is there."""
+    path = _seed_two(tmp_path)
+    fresh = Ledger(path, receipts=RECEIPTS)  # no .load()
+    assert fresh.loaded_from_disk is False
+    fresh.upsert(3001, "seeded", "W6-ci", lane="lane:ci", size=1)
+    fresh.save(if_unchanged=fresh.loaded_from_disk)  # exactly what tick.main() does
+    assert 3001 in Ledger(path, receipts=RECEIPTS).load().items
