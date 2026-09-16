@@ -1101,5 +1101,11 @@ test('#4498 round 16 M2 — the sourceCommit 12-char bound must redact BEFORE it
       job: { state: 'idle' },
     }),
   });
-  assert.match(ok.message, /revision abcdef012345/, 'a genuine short sha must still render at 12 chars');
+  // ANCHORED ON THE CLOSING PAREN, and the first version was not — which made
+  // the message a claim the assertion did not test. `/revision abcdef012345/`
+  // matches a 12-character PREFIX, so widening the display bound from 12 to 40
+  // SURVIVED at 55/0: the sha still rendered, just longer. Nothing unsafe
+  // follows (redaction has already run), but an assertion whose message states
+  // a property it does not check is the B2 shape one file over.
+  assert.match(ok.message, /revision abcdef012345\)/, 'a genuine short sha must still render at EXACTLY 12 chars');
 });

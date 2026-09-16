@@ -1382,6 +1382,14 @@ test('#4498 round 11 — a parser that CANNOT START is named as such, and its by
       const out = res.stdout + res.stderr;
       // Named for what it is, with the status rather than a proxy for it.
       assert.match(out, /the jobId parser EXITED \d+/, out);
+      // ROUND 16 REVIEW, R5b — AND IT MUST CLAIM NOTHING ABOUT THE BODY. The
+      // clause "— the response body was not read" is false on the case where
+      // node runs, `readFileSync` and `JSON.parse` both succeed, and the parser
+      // throws afterwards. It also contradicted the UNKNOWN line below it. This
+      // assertion is not redundant with the `doesNotMatch` further down: that
+      // one guards the round-10 wording, this one guards the clause returning
+      // to the round-16 line.
+      assert.match(out, /the jobId parser EXITED \d+\. Its stderr:/, out);
       // FAILS CLOSED: bytes withheld, and the withholding itself disclosed.
       assert.match(out, /WITHHELD rather than published raw/, out);
       // The round-10 claim that is now false must not reappear.

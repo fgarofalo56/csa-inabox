@@ -353,7 +353,18 @@ do_post() {
   # mutually exclusive, which is exactly the thing that was false. R7, committed
   # by the fix for R7 — the third time on this branch.
   if [ "$PRC" -ne 0 ]; then
-    echo "reindex POST: the jobId parser EXITED $PRC — the response body was not read. Its stderr:"
+    # NO CLAIM ABOUT THE BODY. This read "— the response body was not read"
+    # until round 16, which is round 11's clause doubled rather than introduced,
+    # and it is false on the same Case B that R5 turned on: node starts, the
+    # body is well-formed JSON carrying a `jobId`, `readFileSync` and
+    # `JSON.parse` both succeed, and the parser throws afterwards at a string
+    # coercion. The body WAS read.
+    #
+    # It had also become self-contradictory: this line asserted knowledge of
+    # what happened to the body while the line below it says that is UNKNOWN.
+    # Dropping the clause loses nothing — the parser's own stderr follows
+    # immediately and says more than the guess did.
+    echo "reindex POST: the jobId parser EXITED $PRC. Its stderr:"
     _dump_redacted "$POST_ERR_FILE"
   elif [ -s "$POST_ERR_FILE" ]; then
     # It SUCCEEDED and wrote to stderr. Warnings live here. Say ONLY that —
