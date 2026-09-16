@@ -134,6 +134,41 @@ test('parser: unreadable and non-JSON bodies read as unknown, not as an error', 
   assert.equal(parsePollFile(garbage), 'unknown|unknown|||||');
 });
 
+test('parser: pollFields redacts the last-run error BEFORE it truncates at 300', () => {
+  // P3, AND IT WAS REPORTED CLOSED WHEN IT WAS NOT. The two tests above name
+  // `redactBodyFile` and neither touches `pollFields`, so `:102` — the field
+  // THIS PR introduces, and the exact site B1 was about on the classifier side
+  // — still had zero ordering coverage. A reviewer measured the order-inverted
+  // mutant there SURVIVING at 12/0 after the round that claimed to close it.
+  //
+  // The mechanism of the miss is worth more than the fix: two findings were
+  // bundled under one label, and a finding named by a label gets CLOSED by a
+  // label. The remedy for that is an assertion per site, not per name.
+  //
+  // `:102`'s own comment declares this ordering load-bearing — "redact THEN
+  // slice. Slicing first can cut a credential below the rule's length bound" —
+  // which made it the second place in this module where the property was
+  // written down and not enforced.
+  //
+  //   indices    0..275  padding                 (276 chars)
+  //   index         276  a SPACE                 (the `code=` lookbehind)
+  //   indices  277..281  "code="                 (5 chars)
+  //   indices  282..319  the 38-char credential
+  //   slice(0, 300) keeps 0..299 -> 282..299 = 18 credential characters
+  const SECRET = 'Zq7Rt2Wm9Xk4Lp6Vn8Jd3Hs5Fg1Ba0CeYuIoPw';
+  const error = `${'x'.repeat(276)} code=${SECRET}`;
+  assert.equal(error.indexOf(SECRET), 282, 'the credential must start at 282');
+
+  const le = pollFields({ freshness: { lastRun: { error } } })[5];
+
+  assert.doesNotMatch(
+    le,
+    new RegExp(SECRET.slice(0, 18)),
+    'a credential fragment survived the 300-char truncation in pollFields — redact-AFTER-truncate',
+  );
+  assert.doesNotMatch(le, new RegExp(SECRET), 'the whole credential must not appear either');
+});
+
 test('parser: a JSON body that is not an object is not trusted for property reads', () => {
   const p = writeBody('just a string');
   assert.equal(parsePollFile(p), 'unknown|unknown|||||');
