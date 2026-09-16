@@ -132,10 +132,18 @@ regexes = [
     '''^A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0$''',
     # #4498's SECOND straddle fixture, in
     # scripts/ci/__tests__/parse-reindex-poll.test.mjs — 38 synthetic
-    # characters, entropy 5.25, same job as the one above at the 800-char and
-    # 300-char bounds instead of 300. Committed twice (rounds 17 and 18) before
-    # its allowlist entry existed, which is the same one-round lag this file
-    # keeps recording.
+    # characters, entropy 5.25. It serves TWO bounds in that file: the 300-char
+    # `pollFields` bound at :158 and the 800-char `redactBodyFile` bound at
+    # :224. (The sibling above serves the 300-char bound in
+    # classify-reindex-result.test.mjs and is also read through a 12-char
+    # `sourceCommit` bound.)
+    #
+    # Both reviewers flagged the earlier wording here — "at the 800-char and
+    # 300-char bounds instead of 300" — as self-contradictory: it named 300 and
+    # then excluded it. Corrected from the call sites rather than reworded.
+    #
+    # Committed twice (rounds 17 and 18) before its allowlist entry existed,
+    # which is the same one-round lag this file keeps recording.
     #
     # Landed here for the same reason as its sibling: the finding is reachable
     # from every PR's full-history scan, so it fails PRs that do not contain it
