@@ -111,10 +111,25 @@
 #     cannot discharge it.
 #
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
-# `freshness.state === 'fresh'` — the DURABLE, cross-replica signal (the
-# persisted corpus manifest). `job.state` is only the answering REPLICA's view:
-# a poll can land on a replica that never ran the job and read `idle` forever,
-# so job state can prove a FAILURE but never a success.
+# `freshness.state === 'fresh'` — the signal this script waits on. Whether it is
+# cross-replica depends on WHAT THE MANIFEST VALUE IS COMPARED AGAINST, and an
+# earlier version of this paragraph got the discriminator wrong: it said the
+# signal is durable "only when read from the persisted corpus manifest", but the
+# stat fallback compares `manifest.statFingerprint` — also from the manifest. A
+# reviewer measured that the test returns true on the very path it was warning
+# about.
+#
+# The real split is the comparand:
+#   compared against a BUILD COMMIT        -> durable, cross-replica
+#   compared against a replica-local
+#     `path:size:mtime` fingerprint        -> replica-local, cannot converge
+#
+# Under the fallback the value is not durable and not cross-replica, which is
+# the whole defect #4497 records: the roll polled it for 912s across 55 polls
+# while its subject could not change. The script must not assume which one it is
+# reading. `job.state` is only ever the answering REPLICA's view: a poll can land
+# on a replica that never ran the job and read `idle` forever, so job state can
+# prove a FAILURE but never a success.
 #
 # A POLL TIMEOUT IS A FAILURE. It is a refusal, not a pass: continuing would
 # leave exactly the stale index this script exists to prevent.
@@ -150,6 +165,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASSIFIER="$HERE/classify-reindex-result.mjs"
+PARSER="$HERE/parse-reindex-poll.mjs"
 
 CONSOLE_URL="${CONSOLE_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
@@ -173,7 +189,44 @@ FATAL="${FATAL:-true}"
 
 POST_BODY_FILE="$(mktemp)"
 POLL_BODY_FILE="$(mktemp)"
-trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE"' EXIT
+# The parser's stderr, captured rather than discarded — see `do_post`. Separate
+# from the body file so a parse failure cannot overwrite the response it failed
+# to read, which is the one thing that would explain it.
+POST_ERR_FILE="$(mktemp)"
+# The REDACTOR's own stderr. Separate again, and never published: when the
+# redactor is what failed, its diagnostic is the same bytes we are declining to
+# publish, so printing it would defeat the withholding one line above.
+REDACT_ERR_FILE="$(mktemp)"
+trap 'rm -f "$POST_BODY_FILE" "$POLL_BODY_FILE" "$POST_ERR_FILE" "$REDACT_ERR_FILE"' EXIT
+
+# ── THE ONLY WAY BYTES FROM A FILE REACH STDOUT ─────────────────────────────
+# ROUND 11 (both reviewers, independently). The round-10 dump was
+# `node "$PARSER" --body "$f" || true`, which has two defects on the one path it
+# was written for -- a parser that cannot start:
+#
+#   1. THE REDACTOR IS THE FAILING SUBJECT. `--body` runs the same module the
+#      branch above has just declared broken, so the dump printed NOTHING and
+#      "its stderr follows" was false. Measured with a parser copy that cannot
+#      load: the line appeared, the next line was empty.
+#   2. THE RAW TRACE WAS PUBLISHED ANYWAY. That invocation did not redirect its
+#      OWN stderr, so node's diagnostic went straight to this script's stderr --
+#      the same public Actions log -- three times over. N7's shape ("sanitized,
+#      then republished verbatim by the next statement") re-instantiated by the
+#      statement doing the sanitizing.
+#
+# So this FAILS CLOSED: if the redactor cannot run, the bytes are WITHHELD and
+# the withholding is disclosed with its size. Suppressing evidence silently
+# would be the other half of R7; saying that we suppressed it, and how much, is
+# not.
+_dump_redacted() {
+  _dump_out=""
+  if _dump_out=$(node "$PARSER" --body "$1" 2> "$REDACT_ERR_FILE"); then
+    printf '%s\n' "$_dump_out"
+  else
+    printf '%s\n' "(the redactor could not run, so $(wc -c < "$1" | tr -d ' ') byte(s) are WITHHELD rather than published raw. Its own stderr is $(wc -c < "$REDACT_ERR_FILE" | tr -d ' ') byte(s) and is deliberately not printed, because on this path it is the same failure.)"
+  fi
+  echo ""
+}
 
 emit() { [ -n "${GITHUB_OUTPUT:-}" ] && printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; return 0; }
 
@@ -222,15 +275,151 @@ fi
 # is a log sentence that described the wrong thing, that is the same defect.
 do_post() {
   : > "$POST_BODY_FILE"
+  : > "$POST_ERR_FILE"
+  : > "$REDACT_ERR_FILE"
   CODE=$(curl -sS -o "$POST_BODY_FILE" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer $INTERNAL_TOKEN" \
     -H 'Content-Type: application/json' \
     --max-time 120 \
     "$ENDPOINT") || true
   [ -n "$CODE" ] || CODE=000
-  echo "reindex POST $ENDPOINT -> HTTP $CODE"
-  head -c 800 "$POST_BODY_FILE" || true
-  echo ""
+  # The jobId this attempt was given. It is what the durable last-run record is
+  # correlated against, so a failure recorded by an UNRELATED overlapping run
+  # cannot red this one, and a failure that lands in the same second as our
+  # start mark cannot be missed. Empty when the POST was not answered by the
+  # console -- in which case the record check below simply never fires, which
+  # is the correct fail-closed behaviour: no identity, no claim.
+  #
+  # The substitution must be the SAME one the poll's `clean()` helper applies,
+  # so this SHELLS OUT TO THAT HELPER rather than restating it. Round 8 carried
+  # an inline `node -e` here that stripped the separator but did NOT redact, while
+  # this comment claimed the two sides matched. They did not: a credential-shaped
+  # id redacts on the poll side and passed through verbatim here, so
+  # `[ "$LAST_JOB_ID" = "$POST_JOB_ID" ]` below could never match, the correlation
+  # silently stopped firing, and a durable failure of OUR job read as a timeout —
+  # the #4497 symptom, restored by the fix meant to remove it. The raw remote
+  # value also reached the echo below, which on a roll run is a PUBLIC log.
+  #
+  # No `2>/dev/null`: `deploy-integrity.md` R7 exists because a discarded stderr
+  # once turned "I could not reach the registry" into "the tag does not exist".
+  # `|| true` stays — an unparseable body must leave the id EMPTY and fail
+  # closed, not abort the run.
+  #
+  # ROUND 10 (finding N3). The first version of this block claimed "the failure
+  # is now visible rather than silent", and that was FALSE for the failure class
+  # it named. `postJobId` catches its own read/parse errors, so garbage JSON, an
+  # empty body, a body with no `jobId`, and a missing file all exit 0 with
+  # ZERO bytes of stderr — measured, all four. The block never fired for any of
+  # them. And on the one path where stderr IS non-empty (node itself failing to
+  # start, e.g. a missing module) it printed "could not read a jobId from the
+  # response body", which is a cause it had not established: the body was never
+  # read at all. That is the exact R7 shape the comment cited as its own
+  # justification, committed by the fix for it.
+  #
+  # So the three cases are now disclosed SEPARATELY, each saying only what is
+  # known, and each keyed on the fact that establishes it.
+  #
+  # ROUND 11 (both reviewers, independently). Round 10 keyed the first branch on
+  # `[ -s "$POST_ERR_FILE" ]` -- "the parser wrote bytes to stderr" -- while
+  # CLAIMING "the parser FAILED … the response body was not read". Those are
+  # different predicates, and the exit status that actually answers the question
+  # was thrown away by a `|| true` on the same line. Demonstrated on the
+  # UNMUTATED tree with nothing but an env var:
+  #
+  #   NODE_OPTIONS="--experimental-loader=data:text/javascript," ...
+  #   reindex POST: the jobId parser FAILED — its stderr follows (the response body was not read):
+  #   (node:89144) ExperimentalWarning: `--experimental-loader` may be removed …
+  #   reindex POST … -> HTTP 202 job=j-1        <-- exited 0, DID read the body, returned the id
+  #
+  # Three false assertions, contradicted one line later by this script's own
+  # output. Any node build that emits an ExperimentalWarning or a
+  # DeprecationWarning here flips it on with no code change, and `NODE_OPTIONS`
+  # is already set elsewhere in this repo's CI. R7, committed by the fix for R7
+  # -- the same move round 9 made, which is why the predicate is now the status.
+  PRC=0
+  POST_JOB_ID=$(node "$PARSER" --post "$POST_BODY_FILE" 2> "$POST_ERR_FILE") || PRC=$?
+  # TWO INDEPENDENT QUESTIONS, ASKED SEPARATELY. Round 11 made them one `if`
+  # chain and the second branch then asserted something it never measured:
+  # "the id below is still valid" is a claim about $POST_JOB_ID, and that
+  # branch's test is `[ -s "$POST_ERR_FILE" ]` — the size of a DIFFERENT file.
+  # A parser that exits 0, emits a warning, and finds no jobId made the script
+  # print that the id was valid and then print `job=unknown` on the very next
+  # line, refuting itself. Worse, sitting above the empty-id branch it SWALLOWED
+  # the round-10 disclosure, so the one line telling the operator the #4497
+  # durable-record correlation is dead for this attempt never appeared.
+  #
+  # Neither test implies the other: stderr is about DIAGNOSTIC NOISE, the id is
+  # about CORRELATION VIABILITY. Chaining them with `elif` asserts they are
+  # mutually exclusive, which is exactly the thing that was false. R7, committed
+  # by the fix for R7 — the third time on this branch.
+  if [ "$PRC" -ne 0 ]; then
+    # NO CLAIM ABOUT THE BODY. This read "— the response body was not read"
+    # until round 16, which is round 11's clause doubled rather than introduced,
+    # and it is false on the same Case B that R5 turned on: node starts, the
+    # body is well-formed JSON carrying a `jobId`, `readFileSync` and
+    # `JSON.parse` both succeed, and the parser throws afterwards at a string
+    # coercion. The body WAS read.
+    #
+    # It had also become self-contradictory: this line asserted knowledge of
+    # what happened to the body while the line below it says that is UNKNOWN.
+    # Dropping the clause loses nothing — the parser's own stderr follows
+    # immediately and says more than the guess did.
+    echo "reindex POST: the jobId parser EXITED $PRC. Its stderr:"
+    _dump_redacted "$POST_ERR_FILE"
+  elif [ -s "$POST_ERR_FILE" ]; then
+    # It SUCCEEDED and wrote to stderr. Warnings live here. Say ONLY that —
+    # whether an id came back is the next question's business, not this one's.
+    echo "reindex POST: the jobId parser exited 0 but wrote to stderr. Its stderr:"
+    _dump_redacted "$POST_ERR_FILE"
+  fi
+  # THE CORRELATION CONSEQUENCE IS UNCONDITIONAL. WHAT THE BODY CONTAINED IS
+  # NOT. Round 12 asked this as one unconditional question and re-created
+  # round 10's R7 defect by a different route: `$POST_JOB_ID` is ALSO empty when
+  # the parser never RAN, so on the crash path the script printed
+  #
+  #   reindex POST: the jobId parser EXITED 1 — the response body was not read.
+  #   reindex POST: the response body carried no readable jobId — ...
+  #
+  # Line 1 says the body was not read; line 2 states what it contained. A
+  # reviewer measured it with a body that DID carry `jobId: j-dead`, so the
+  # second line was not merely unwarranted, it was false. `PRC != 0` implies an
+  # empty id, so this was 100% of the crash path, not a corner.
+  #
+  # Two claims with different warrants, so they are now two sentences. "The
+  # correlation cannot fire" holds whenever there is no id, whatever the reason.
+  # "The body carried no readable jobId" is a claim about CONTENTS and needs the
+  # parser to have actually read them.
+  if [ -z "$POST_JOB_ID" ]; then
+    if [ "$PRC" -eq 0 ]; then
+      echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
+    else
+      # STATES THE MEASUREMENT AND STOPS. Round 14 wrote "the parser did not
+      # run" here, which swapped a false claim about the body for a false claim
+      # about the CAUSE. The exit status is one bit and at least two things
+      # produce it. A reviewer drove two runs of the real script to
+      # byte-identical output: (A) node cannot start, and (B) node starts, the
+      # body is well-formed JSON carrying a `jobId` key, and the parser throws
+      # at a string coercion — `rc=1`, `at String (<anonymous>)`, after
+      # `readFileSync` and `JSON.parse` both succeeded. In case B both halves of
+      # the round-14 sentence are false and an operator reads a broken runner
+      # where the cause is a remote body shape.
+      #
+      # Guarding that one coercion would NOT make the sentence true: it removes
+      # one producer of a non-zero exit, not all of them — a stdout write
+      # failure or an OOM after the read remain. A claim that cannot be made
+      # exhaustively true must not be asserted at all. What IS true on every
+      # path is the measurement: a status, and the absence of an id.
+      echo "reindex POST: the jobId parser exited $PRC without producing a jobId, so the durable-record correlation below will not fire for this attempt. What the body contained, and why the parser exited, are both UNKNOWN here."
+    fi
+  fi
+  echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
+  # REDACTED, not raw. This dumped the remote body verbatim with `head -c 800`,
+  # one line below the `job=` echo that redacts — so the same value was sanitized
+  # and then immediately republished, and on a roll run that stdout is a PUBLIC
+  # Actions log. Measured in the round-9 correlation test before this changed.
+  # Redaction happens in `$PARSER` (redact THEN truncate; see its docblock), so
+  # there is still exactly one definition of what a credential looks like.
+  _dump_redacted "$POST_BODY_FILE"
 }
 
 # ── ONE GET, PARSED ONCE ────────────────────────────────────────────────────
@@ -257,23 +446,65 @@ get_status() {
   FRESH=unknown
   JOB=unknown
   CHUNKS=''
+  LAST_OUTCOME=''
+  LAST_FINISHED=''
+  LAST_ERROR=''
+  LAST_JOB_ID=''
   if [ "$GCODE" = "000" ]; then
     return 0
   fi
-  STATES=$(node -e '
-    const fs = require("node:fs");
-    let j = {};
-    try { j = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { j = {}; }
-    const f = (j.freshness && j.freshness.state) || "unknown";
-    const s = (j.job && j.job.state) || "unknown";
-    const c = j.freshness && Number.isFinite(j.freshness.indexedChunkCount)
-      ? String(j.freshness.indexedChunkCount)
-      : "";
-    process.stdout.write(f + "|" + s + "|" + c);
-  ' "$POLL_BODY_FILE")
-  # Three fields, so `${STATES%%|*}` / `${STATES##*|}` do not suffice — the
-  # suffix form would have handed JOB the chunk count.
-  IFS='|' read -r FRESH JOB CHUNKS <<< "$STATES"
+  # Seven pipe-joined fields from ONE parser that IMPORTS `redact-secrets.mjs`.
+  # This used to be an inline `node -e` carrying a hand-copied duplicate of every
+  # redaction regex in that module — two copies of a security control, which is
+  # exactly the drift the module's own docblock claimed to prevent. See
+  # `parse-reindex-poll.mjs` for why it moved.
+  # STDERR CAPTURED, NOT PUBLISHED. Round 11 (reviewer 2, S2): the POST-side
+  # invocation captures and redacts its parser's stderr while THIS one did
+  # neither, so a parser that cannot start wrote node's raw diagnostic straight
+  # to a PUBLIC Actions log -- once per poll, up to 60 times. The round-10
+  # comment claimed the boundary was closed on this file; it covered one of the
+  # two invocations. Disclosed ONCE, on the first poll that hits it, because 60
+  # copies of the same traceback is not 60 times the information.
+  # TRUNCATED FIRST — A TESTABILITY AFFORDANCE, NOT A BUG FIX. Read the
+  # correction below before citing this line as evidence of anything.
+  #
+  # ROUND 13 ADDED THIS AND CLAIMED IT FIXED A LIVE R7 DEFECT. That claim was
+  # FALSE and a reviewer measured it. The reasoning was that `$REDACT_ERR_FILE`
+  # is shared with `do_post`, so leftover POST-phase bytes could make the size
+  # test below fire and report a count for stderr the poll parser never wrote.
+  # What that overlooked is that `2> "$REDACT_ERR_FILE"` on the very next line
+  # opens the file with O_TRUNC before exec — so the redirect ITSELF clears it
+  # every iteration. A node run that writes nothing leaves 0 bytes; one that
+  # fails to start leaves only its own bytes. Stale content cannot reach the
+  # `[ -s ]` test WHILE THE REDIRECT EXISTS.
+  #
+  # So this line changes no shipped behaviour. What it does is make the redirect
+  # OBSERVABLE: with the redirect deleted, nothing clears the file, leftover
+  # bytes keep the disclosure firing, and the mutation is invisible — which is
+  # exactly why a reviewer's S4 arm survived, and why the first test written to
+  # catch S4 also passed. With this clearing in place, deleting the redirect
+  # leaves the file empty, the disclosure legitimately disappears, and S4 dies.
+  #
+  # Kept for that reason and labelled honestly. Round 13's comment asserting a
+  # cause it had not established is the R7 defect this file exists to refuse,
+  # committed in the sentence claiming to have fixed one — another instance of
+  # this branch's recurring pattern, where each round's remedy carries the next
+  # round's defect. DELIBERATELY NOT NUMBERED: a reviewer caught this sentence
+  # saying "the fourth iteration" while the hand-off describing the same run
+  # called it the sixth, in the very commit that added "DO NOT WRITE THE CURRENT
+  # COUNT HERE AGAIN" eleven lines away. The count depends on where you start
+  # counting and nothing enforces it; the pattern is the durable claim. The
+  # correction is recorded rather than quietly reworded.
+  : > "$REDACT_ERR_FILE"
+  STATES=$(node "$PARSER" "$POLL_BODY_FILE" 2> "$REDACT_ERR_FILE") || true
+  if [ -s "$REDACT_ERR_FILE" ] && [ "${POLL_PARSER_STDERR_SEEN:-}" != "true" ]; then
+    POLL_PARSER_STDERR_SEEN=true
+    echo "poll: the poll parser wrote $(wc -c < "$REDACT_ERR_FILE" | tr -d ' ') byte(s) to stderr; WITHHELD rather than published raw (it may be the redactor itself). Fields below read 'unknown' if it could not parse."
+  fi
+  # Seven fields. Read positionally into named vars -- `${STATES%%|*}` style
+  # trimming does not extend past two fields. `le` is placed second-to-last
+  # rather than last so a truncated error cannot swallow the jobId.
+  IFS='|' read -r FRESH JOB CHUNKS LAST_OUTCOME LAST_FINISHED LAST_ERROR LAST_JOB_ID <<< "$STATES"
   FRESH="${FRESH:-unknown}"
   JOB="${JOB:-unknown}"
   return 0
@@ -284,6 +515,7 @@ get_status() {
 # #3394): the edge replied for the console, so whether the POST reached a replica
 # is unknown. Do not guess — fall through to the poll and let the durable
 # freshness signal settle it. Every OTHER non-zero stays a failure.
+POST_JOB_ID=''
 do_post
 POST_ATTEMPTS=1
 # EVERY attempt's status, in order. The verdict's parenthetical is plural ("All
@@ -488,6 +720,85 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if [ "$FRESH" = "fresh" ]; then OUTCOME=fresh; break; fi
   if [ "$JOB" = "failed" ]; then OUTCOME=failed; break; fi
 
+  # ── THE DURABLE LAST-RUN RECORD ENDS THE WAIT (#4497) ─────────────────────
+  # `job.state` is the answering replica's in-memory view, so it can prove a
+  # failure and never a success -- and it almost never lands on the replica
+  # that ran the job. The console now writes each attempt's outcome to the same
+  # durable store as the manifest, INCLUDING when the manifest write is itself
+  # what failed, which is the case no manifest-based signal can ever report.
+  #
+  # CORRELATED BY jobId, NOT BY TIME, and an earlier revision used time and was
+  # wrong twice over. The start mark is `date -u +%Y-%m-%dT%H:%M:%SZ` (second
+  # precision) while the record is `toISOString()` (milliseconds), and `.`
+  # (0x2E) sorts BELOW `Z` (0x5A) -- so a record at `…:46.999Z` compared with a
+  # mark of `…:46Z` read as OLDER and was ignored. That blind window covers
+  # exactly the FAST failures, which is the class a manifest-write 403 is in:
+  # the fix would have silently not worked for its own headline case. And with
+  # no run identity, an unrelated overlapping run's failure could red a healthy
+  # rebuild -- including one started by this script's own POST retry. The
+  # jobId the 202 handed us settles both: the record is about our attempt or it
+  # is not.
+  if [ "$LAST_OUTCOME" = "failed" ] && [ -n "$POST_JOB_ID" ] && \
+     [ "$LAST_JOB_ID" = "$POST_JOB_ID" ]; then
+    echo "  last-run record: job $LAST_JOB_ID FAILED at $LAST_FINISHED — $LAST_ERROR"
+    OUTCOME=rebuild_failed
+    break
+  fi
+
+  # THE LATCH RUNS BEFORE ANY `unknown` HANDLING, and an earlier revision of this
+  # change got that wrong. It added an `if [ "$FRESH" = "unknown" ]; then …
+  # continue; fi` ABOVE this line, which skipped the `SAW_RUNNING` update, so a
+  # poll that printed `freshness=unknown job=running` could still end in
+  # `TRIGGER REFUSED … the rebuild was never OBSERVED to be accepted or running`
+  # — a sentence contradicted by the script's own output four lines earlier. A
+  # reviewer demonstrated it end-to-end with real curl, and `main` does not make
+  # that claim, so the branch would have INTRODUCED a false statement while
+  # fixing a different one. `job.state` is readable whatever freshness says: the
+  # two fields fail independently.
+  #
+  # That branch is now GONE rather than reordered, because it was a DEFECT and
+  # not merely dead code. Its body was `IDLE_STREAK=0; continue`, and the
+  # `continue` is the whole problem: it skips the latch on the very next line.
+  # The `else` further down restores `IDLE_STREAK=0` for any non-`stale`
+  # reading, so the streak bookkeeping is indeed unchanged — but that `else`
+  # never touches SAW_RUNNING, so nothing downstream recovers the sighting the
+  # `continue` stepped over.
+  #
+  # Measured, not reasoned: re-inserting the branch verbatim above this line
+  # turns exactly ONE shell test RED — `#4497 a job=running sighting
+  # counts even when that poll could not read freshness` — with the assertion
+  # `a rebuild WAS observed running, so "never observed" would be refuted by the
+  # log above it`, over a log carrying `poll: freshness=unknown job=running`
+  # followed by `TRIGGER REFUSED`. Deleting it restores `main`'s behaviour, and
+  # that test is what pins it. The `[ "$FRESH" = "stale" ]` guard below is what
+  # keeps `unknown` out of the streak, and it is tested directly.
+  #
+  # The "exactly ONE" is a claim about the whole suite, so name the population it
+  # was measured over: the 43 tests this file held at the time.
+  #
+  # DO NOT WRITE THE CURRENT COUNT HERE AGAIN. This sentence has carried "now
+  # holds 45", then "47", and was still saying 47 when the file held 51 —
+  # corrected three times, wrong again within one round each time, inside the
+  # very comment that exists to pin a population. A number no test enforces rots
+  # by default. The population the claim was measured over (43) is FIXED and
+  # belongs here; today's count is not, and is one `grep -c '^test('` away for
+  # anyone who needs it.
+  #
+  # The four added later in this same PR, identified by diffing `^test(` lines
+  # commit-by-commit rather than from memory:
+  #   b18cdfb  the two sanitizers agree (an id carrying the field separator)
+  #   0876fe8  round 5 — a credential inside the remote error is REDACTED
+  #   f58e9da  round 9 — the two sanitizers agree on a REDACTED id too
+  #   round 10 the POST parse-failure disclosure
+  # None was in that population and none reaches this branch.
+  #
+  # (Round 9 finding N6 said 44 while the file held 45. Round 10 then found the
+  # CORRECTED version naming a "parse-failure disclosure test" that did not
+  # exist — a wrong measurement replaced by a wrong inventory, in the comment
+  # arguing that counts here rot. The test now exists, and the list above was
+  # derived by diff. Re-measure with `grep -c '^test('` — never increment.)
+  if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
+
   # ── SIGNATURE OF A TRIGGER THAT WAS NEVER ACCEPTED (#3472) ────────────────
   # Maintained here, EVALUATED AFTER THE LOOP. It decides the NAME of a failure
   # the ceilings have already produced; it never ends the wait and never changes
@@ -514,12 +825,21 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # 9 — turned a run that exits 0 at head into exit 1 at poll 8. Deciding a NAME
   # on weak evidence costs a misleading sentence in a log that is already red;
   # deciding a WAIT on it costs a false failure.
-  if [ "$JOB" = "running" ] || [ "$JOB" = "succeeded" ]; then SAW_RUNNING=true; fi
-  # `-n "$CHUNKS"` is not a formality: the classifier's verdict SAYS "with the
-  # indexed chunk count unchanged", and a body that never reported a count
+  #
+  # `[ "$FRESH" = "stale" ]` is an EQUALITY, not `!= "fresh"`, and that is the
+  # whole of the `unknown` handling. `unknown` means the console could not READ
+  # the manifest — a fact about the CHECK, not about the corpus — so a poll that
+  # reads it is not one of the `stale`/`idle` observations the verdict claims to
+  # have made. Under `!= "fresh"` an unreadable poll would count toward that
+  # sentence and the verdict would assert a reading nothing produced (R7).
+  # Falling to the `else` also RESETS the streak, which is the honest reading:
+  # after `stale`×7, `unknown`, `stale`×7 the trailing run of stale/idle polls is
+  # 7, not 14, and the verdict names the trailing run.
+  #
+  # `-n "$CHUNKS"` is not a formality either: the classifier's verdict SAYS "with
+  # the indexed chunk count unchanged", and a body that never reported a count
   # cannot support that sentence. With no count the streak never starts and the
-  # verdict keeps its `timeout` name (R7: do not fire a verdict whose stated
-  # evidence you do not have).
+  # verdict keeps its `timeout` name.
   if [ "$POST_REFUSED" = "true" ] && [ "$SAW_RUNNING" = "false" ] && \
      [ "$REFUSED_IDLE_POLLS" -gt 0 ] && [ "$FRESH" = "stale" ] && [ "$JOB" = "idle" ] && \
      [ -n "$CHUNKS" ]; then

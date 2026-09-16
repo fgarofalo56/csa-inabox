@@ -42,35 +42,32 @@ import { copilotSessionsContainer } from './cosmos-client';
 import { recordRetrieval } from '@/lib/perf/retrieval-metrics';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import {
-  buildBm25Index,
-  bm25Rank,
   diversifyByDocument,
-  rankSubstring,
   surfaceTopicTerms,
   DEFAULT_MAX_CHUNKS_PER_DOC,
-  DEFAULT_SURFACE_BOOST,
-  DEFAULT_SOURCE_WEIGHTS,
-  type Bm25CorpusStats,
-  type Bm25Index,
 } from './docs-ranker';
 import {
   collectSources,
   corpusSourceCount,
   detectRoots,
   docKey,
-  docsUrlForPath,
   enumerateSourceFiles,
   hashContent,
   localCorpusStats,
-  resetCorpusStatsCache,
   setCorpusStatsForTests,
   statFingerprint,
-  summarizeSource,
-  walkMarkdown,
-  walkSource,
   type DocChunk,
   type ManifestFileEntry,
 } from './loom-docs-corpus';
+import {
+  AI_SEARCH_CANDIDATE_WINDOW,
+  RETRIEVAL_OVERFETCH,
+  bm25IndexFor,
+  rankChunks,
+  resetDocsRankerCache,
+  type DocHit,
+} from './docs-corpus-ranker';
+import { currentSourceCommit, isBuildCommit, sameCommit } from './build-stamp';
 
 // ---------- Types ----------
 
@@ -79,10 +76,12 @@ import {
 // `DocChunk` from this module keeps working unchanged.
 export type { DocChunk };
 
-export interface DocHit extends DocChunk {
-  /** 0..1 normalized relevance */
-  score: number;
-}
+// `DocHit` is produced by the corpus ranker, so it is DECLARED in
+// ./docs-corpus-ranker and re-exported here — same treatment as `DocChunk`
+// above, and every existing importer keeps working unchanged.
+export type { DocHit };
+export { AI_SEARCH_CANDIDATE_WINDOW, resetDocsRankerCache } from './docs-corpus-ranker';
+
 
 // ---------- Credentials / config ----------
 
@@ -352,17 +351,92 @@ async function searchSearch(query: string, top: number, kind?: DocChunk['kind'])
 
 // ---------- Cosmos fallback backend ----------
 
+/**
+ * The corpus container handle, memoised for the life of the process.
+ *
+ * WHY MEMOISE (#4498 round 4) — `createIfNotExists` is a CONTROL-PLANE call,
+ * and without this memo every `helpCorpusContainer()` issued one. That lands on
+ * a POLL: `corpusFreshness` is what the roll's reindex step waits on, looping
+ * for up to ~15 minutes, and it also backs `/admin/readiness` and
+ * `/api/admin/performance/retrieval-stats` per request.
+ *
+ * It was not even once per poll on the Cosmos backend only. `loadLastRun` reads
+ * BOTH stores unconditionally — deliberately, and for a reason argued at its
+ * own doc comment — so a deployment running the AI Search backend, which never
+ * stores a corpus chunk in Cosmos, still took a Cosmos control-plane round trip
+ * on every poll. That is the cost this PR would otherwise have added to the very
+ * path it exists to make reliable.
+ *
+ * The precedent is `ensure()` in `cosmos-client.ts`, memoised by `_ensured` for
+ * exactly this reason. This memo holds the PROMISE rather than the resolved
+ * handle, so concurrent callers share one in-flight call instead of racing two;
+ * `COSMOS_CONTAINER_ID` is a module constant, so there is no key to vary on. A
+ * rejection CLEARS the memo — caching a failure would convert one transient
+ * Cosmos error into a permanently corpus-less process.
+ *
+ * THE TRADE-OFF, stated rather than discovered later: `auto-bind-by-default.md`
+ * §3 wants a binding to re-heal when its backing object is deleted out of band,
+ * and before this memo every call re-ran `createIfNotExists` and would have
+ * re-created a deleted `help-corpus`. Now the process holds a stale handle until
+ * it rolls. Accepted for two reasons — `saveManifest` throws on the dead handle
+ * and `persist` folds that to `ok:false`, so a reindex fails LOUDLY rather than
+ * silently indexing nowhere; and `cosmos-client.ts`'s `_ensured` already sets
+ * this precedent for 60+ containers, so this is the existing bargain, not a new
+ * one.
+ */
+let _corpusContainer: Promise<Container> | null = null;
+
+/** Drop the memoised handle. Tests only — see `__testInternals`. */
+function __resetCorpusContainerForTests(): void {
+  _corpusContainer = null;
+}
+
 async function helpCorpusContainer(): Promise<Container> {
+  // DELIBERATELY ABOVE THE MEMO CHECK (#4498 round 5, reviewer finding).
+  // `copilotSessionsContainer()` is the only production path into `ensure()` in
+  // `cosmos-client.ts`, and `ensure()` opens with `await injectCosmosFault()`
+  // under a comment saying that placement exists so an armed fault injects on
+  // EVERY container accessor and not just the first. Round 4 put this memo in
+  // FRONT of that chokepoint, which re-opened the hole: a chaos run over the
+  // corpus/last-run path would have injected on poll one and served every later
+  // poll from the memo, reporting resilience it never measured. Inert in
+  // production — `injectCosmosFault` is a no-op unless the harness is armed and
+  // `LOOM_DEPENDENCY_CHAOS_ENABLED` is set — and it costs nothing to keep,
+  // because `ensure()` short-circuits on `_ensured` and issues no control-plane
+  // call after the first. The saving the memo exists for is `createIfNotExists`,
+  // which is still memoised below.
+  //
+  // The await here does not re-open a double-create race. Two concurrent first
+  // callers both suspend on this line, but whichever resumes first runs from the
+  // check to `_corpusContainer = pending` with no await in between, so the
+  // install is atomic and the second caller observes it.
+  const cs = await copilotSessionsContainer();
+  if (_corpusContainer) return _corpusContainer;
   // Re-use the cosmos-client singleton via copilotSessionsContainer's `ensure()`
   // by piggy-backing on the same database. We could expose a generic builder
   // but inlining keeps the diff small and reuses connection + auth.
-  const cs = await copilotSessionsContainer();
-  const db = (cs as any).database; // @azure/cosmos exposes database off Container
-  const { container } = await db.containers.createIfNotExists({
-    id: COSMOS_CONTAINER_ID,
-    partitionKey: { paths: ['/kind'] },
+  const pending = (async () => {
+    const db = (cs as any).database; // @azure/cosmos exposes database off Container
+    const { container } = await db.containers.createIfNotExists({
+      id: COSMOS_CONTAINER_ID,
+      partitionKey: { paths: ['/kind'] },
+    });
+    return container as Container;
+  })();
+  _corpusContainer = pending;
+  // Only clear if THIS attempt is still the memoised one — a retry may already
+  // have replaced it by the time this rejection settles. The identity check is a
+  // NO-OP in production and is not claimed otherwise: installing a replacement
+  // requires the memo to be falsy, which only this catch produces, so no
+  // production ordering reaches it holding a different promise. It is
+  // load-bearing only for `__resetCorpusContainerForTests()`, which can null the
+  // memo mid-flight. A reviewer mutated the guard away and the suite stayed
+  // green; that is a weak mutation, not a blind test, and the honest fix is to
+  // say so here rather than add a test that would only exercise the test hook.
+  pending.catch(() => {
+    if (_corpusContainer === pending) _corpusContainer = null;
   });
-  return container;
+  return pending;
 }
 
 async function pushChunksToCosmos(chunks: DocChunk[]): Promise<{ ok: boolean; uploaded: number; error?: string }> {
@@ -408,143 +482,6 @@ async function deleteChunksFromCosmos(
   } catch (e: any) {
     return { ok: false, deleted: 0, error: e?.message || String(e) };
   }
-}
-
-// ---------- Cosmos-fallback ranking (issue #2585 P0) ----------
-
-/**
- * BM25 needs corpus-wide statistics (document frequency, mean chunk length), so
- * unlike the per-chunk `rankSubstring` it cannot be evaluated one row at a time.
- * The index is therefore built once per corpus SNAPSHOT and reused across
- * queries: building it over the ~50k-chunk corpus costs ~850 ms, ranking against
- * it costs microseconds because the postings walk touches only the query's own
- * terms instead of scanning every chunk.
- *
- * Cache key = chunk count + an order-independent hash of the chunk ids, so a
- * reindex (new/removed/renamed chunks) invalidates it automatically without a
- * process restart, and Cosmos returning rows in a different order does not.
- * Content-only edits that keep every id stable are picked up on the next
- * `resetDocsRankerCache()` (called by `reindex`) or process roll.
- */
-let bm25Cache: { signature: string; index: Bm25Index } | null = null;
-
-/** FNV-1a over one id — cheap, and combined order-independently below. */
-function idHash(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-function corpusSignature(chunks: DocChunk[]): string {
-  let sum = 0;
-  let xor = 0;
-  for (const c of chunks) {
-    const h = idHash(c.id || c.path);
-    sum = (sum + h) >>> 0;
-    xor ^= h;
-  }
-  return `${chunks.length}:${sum}:${xor >>> 0}`;
-}
-
-/**
- * Drop the memoised BM25 index AND the memoised corpus statistics (called after
- * a reindex; exported for tests). Both are snapshots of a corpus that has just
- * changed, so they have to fall together — dropping only one would leave the AI
- * Search re-rank scoring fresh chunks against stale document frequencies.
- */
-export function resetDocsRankerCache(): void {
-  bm25Cache = null;
-  resetCorpusStatsCache();
-}
-
-function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
-  const signature = corpusSignature(chunks);
-  if (bm25Cache && bm25Cache.signature === signature) return bm25Cache.index;
-  const index = buildBm25Index(chunks);
-  bm25Cache = { signature, index };
-  return index;
-}
-
-/**
- * How many candidates to pull before per-document diversification trims back to
- * `top`. Without an over-fetch the diversifier has nothing to backfill from and
- * is a no-op.
- */
-const RETRIEVAL_OVERFETCH = 4;
-
-/**
- * How wide a candidate window to pull from AI Search before the shared ranker
- * re-orders it (#2929). AI Search's `simple`/`any` scoring decides only which
- * documents are CANDIDATES here — NOT their final order — so this must be wide
- * enough that a specific gold document (buried by AI Search under same-named
- * siblings) is still inside the window for `rankChunks` to surface. 100 covers
- * the observed miss (`parity/lakehouse.md` sat well below AI Search's top ~32,
- * giving hit-rate ~0.07); it is never smaller than the diversification
- * over-fetch. AI Search caps `top` at 1000, so this is comfortably in range.
- */
-export const AI_SEARCH_CANDIDATE_WINDOW = 100;
-
-/**
- * The ONE ranking pipeline both retrieval backends run (issue #2585 ranker,
- * wired to the AI Search path for #2929). Given a set of candidate chunks it
- * returns the top `top` as DocHits under BM25 (IDF · TF-saturation · length
- * normalisation) + the surface boost + source-class weighting — identical
- * knobs, identical code — normalised to the documented 0..1 `DocHit.score`.
- *
- * Extracted from `searchCosmos` so the AI Search path can REUSE it verbatim
- * rather than re-sorting AI Search's short returned window by a multiplier: for
- * the SAME candidate documents the two backends now produce the SAME ordering,
- * so the offline-measured Cosmos numbers (measure-retrieval.mjs, ~0.83) carry
- * to the live AI Search path.
- *
- * `buildIndex` is injectable ONLY so the Cosmos path can keep its
- * corpus-signature memoiser (`bm25IndexFor`): it always ranks the SAME full
- * ~50k-chunk corpus, so the ~850 ms index build must be amortised across
- * queries. The AI Search path ranks a small, per-query candidate window, so it
- * uses the default fresh `buildBm25Index` — there is nothing stable to cache
- * and a per-window build is microseconds.
- */
-function rankChunks(
-  resources: DocChunk[],
-  query: string,
-  top: number,
-  opts: {
-    bm25: boolean;
-    surfaceTerms?: readonly string[];
-    sourceWeights: boolean;
-    /**
-     * #2970 — corpus-wide BM25 statistics. MUST be supplied when `resources` is
-     * a query-selected subset (the AI Search candidate window); omitted on the
-     * Cosmos path, whose index already covers the whole corpus.
-     */
-    corpusStats?: Bm25CorpusStats | null;
-  },
-  buildIndex: (chunks: DocChunk[]) => Bm25Index = buildBm25Index,
-): DocHit[] {
-  if (opts.bm25 === false) {
-    // Kill-switch path — byte-identical to the pre-#2585 ranker.
-    return resources
-      .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, top);
-  }
-  const index = buildIndex(resources);
-  const ranked = bm25Rank(index, query, top, {
-    surfaceTerms: opts.surfaceTerms,
-    surfaceBoost: opts.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
-    // #2585 P2 — rank published product docs above the engineering ledger.
-    sourceWeights: opts.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
-    corpusStats: opts.corpusStats ?? null,
-  });
-  // Normalise to the 0..1 `DocHit.score` contract (BM25 is unbounded above and
-  // only comparable within one result set) — citations and the Copilot tool
-  // render this number.
-  const max = ranked.length > 0 ? ranked[0].score : 1;
-  return ranked.map((r) => ({ ...resources[r.index], score: max > 0 ? r.score / max : 0 }));
 }
 
 async function searchCosmos(
@@ -789,24 +726,38 @@ async function lookupSearchDoc(svc: string, tok: string, key: string): Promise<a
  * `corpusFreshness()` (and therefore by the health probe and the CI reindex
  * poller). Never pulls the `files` shards.
  */
-async function loadManifestHead(backend: 'ai-search' | 'cosmos'): Promise<CorpusManifestHead | null> {
+/** A manifest-head read, with ABSENT and UNREADABLE kept apart.
+ *
+ * `head: null, error: null` means the store answered and there is no manifest.
+ * `head: null, error: '...'` means the store did not answer. Collapsing the
+ * second into the first is what let `corpusFreshness()` assert "never indexed"
+ * about a corpus it had simply failed to look at (R7). */
+interface ManifestHeadRead {
+  head: CorpusManifestHead | null;
+  error: string | null;
+}
+
+async function loadManifestHead(backend: 'ai-search' | 'cosmos'): Promise<ManifestHeadRead> {
   try {
     if (backend === 'ai-search') {
       const svc = searchServiceName();
-      if (!svc) return null;
+      // NOT "absent": this replica cannot look at all. A replica with the env
+      // var unset would otherwise report a corpus it cannot see as unbuilt.
+      if (!svc) return { head: null, error: 'AI Search is not configured on this replica (LOOM_AI_SEARCH_SERVICE is unset)' };
       const tok = await searchToken();
       const j = await lookupSearchDoc(svc, tok, MANIFEST_KEY);
-      if (!j?.content) return null;
-      return JSON.parse(j.content) as CorpusManifestHead;
+      if (!j?.content) return { head: null, error: null };
+      return { head: JSON.parse(j.content) as CorpusManifestHead, error: null };
     }
     const c = await helpCorpusContainer();
     const r = await c.item(MANIFEST_KEY, META_KIND).read<any>().catch(() => ({ resource: null }));
     const doc = r.resource;
-    if (!doc?.content) return null;
-    return JSON.parse(doc.content) as CorpusManifestHead;
+    if (!doc?.content) return { head: null, error: null };
+    return { head: JSON.parse(doc.content) as CorpusManifestHead, error: null };
   } catch (e: any) {
-    console.warn('[loom-docs-index] manifest head load failed', e?.message);
-    return null;
+    const message = e?.message || String(e);
+    console.warn('[loom-docs-index] manifest head load failed', message);
+    return { head: null, error: message };
   }
 }
 
@@ -814,7 +765,12 @@ async function loadManifestHead(backend: 'ai-search' | 'cosmos'): Promise<Corpus
  *  doc or the Cosmos corpus container). Returns null when absent/unreadable —
  *  which safely forces a full rebuild. */
 async function loadManifest(backend: 'ai-search' | 'cosmos'): Promise<CorpusManifest | null> {
-  const head = await loadManifestHead(backend);
+  // Absent and unreadable are both `null` HERE, and that is correct for THIS
+  // caller: the incremental path only needs "is there a file map to diff
+  // against", and both answers are no. The distinction matters to
+  // `corpusFreshness`, which REPORTS a state, not to a builder that falls back
+  // to a full rebuild either way.
+  const { head } = await loadManifestHead(backend);
   if (!head) return null;
   // Cosmos (and any legacy doc) still carries `files` inline.
   if (head.files) return head as CorpusManifest;
@@ -848,6 +804,131 @@ async function loadManifest(backend: 'ai-search' | 'cosmos'): Promise<CorpusMani
  * depends on is this write, so a failure here must never be swallowed — before
  * #2964 it was, and the gate reported success while measuring nothing.
  */
+const LAST_RUN_KEY = 'corpus-last-run';
+
+/**
+ * Record the outcome of a rebuild attempt where EVERY replica can read it.
+ *
+ * Best-effort by design, and it must stay that way: this is diagnosis, so a
+ * failure to write it must never turn a successful rebuild into a failure. But
+ * it is attempted on the FAILURE path too, which is the whole point — the case
+ * that defeated the roll is the manifest write itself failing, and a record
+ * that only exists when the manifest succeeded could never describe it.
+ *
+ * IT FALLS BACK TO THE OTHER STORE, because the honest scope of the original
+ * claim was narrower than the claim. A reviewer measured three failure classes:
+ * a rejected manifest DOCUMENT writes the record fine, but an AI Search 503
+ * from the manifest write onward, and a write-403 that fell back to Cosmos,
+ * both left `lastRun` null — the record died of the same cause as the thing it
+ * was meant to explain. Trying the other backend does not make this
+ * bulletproof and is not claimed to: a total outage of both stores still
+ * leaves nothing to read, and the poller's timeout is still the backstop for
+ * that. It removes the single-store correlation, which is the common case.
+ */
+async function saveLastRun(
+  backend: 'ai-search' | 'cosmos',
+  run: CorpusLastRun,
+): Promise<void> {
+  const order: ('ai-search' | 'cosmos')[] =
+    backend === 'ai-search' ? ['ai-search', 'cosmos'] : ['cosmos', 'ai-search'];
+  const failures: string[] = [];
+  for (const store of order) {
+    try {
+      const content = JSON.stringify(run);
+      if (store === 'ai-search') {
+        const svc = searchServiceName();
+        if (!svc) { failures.push('ai-search: not configured'); continue; }
+        const tok = await searchToken();
+        const out = await indexBatch(svc, tok, [{
+          '@search.action': 'mergeOrUpload',
+          id: LAST_RUN_KEY, kind: META_KIND, path: '__corpus_last_run__',
+          content, touchedAt: run.finishedAt,
+        }]);
+        // `indexBatch` REPORTS failure rather than throwing, so an unchecked
+        // call here would have looked like a successful write.
+        if (!out.ok) { failures.push(`ai-search: ${out.error}`); continue; }
+        return;
+      }
+      const c = await helpCorpusContainer();
+      await c.items.upsert({
+        id: LAST_RUN_KEY, kind: META_KIND, path: '__corpus_last_run__',
+        content, touchedAt: run.finishedAt,
+      });
+      return;
+    } catch (e: any) {
+      failures.push(`${store}: ${e?.message || String(e)}`);
+    }
+  }
+  console.warn('[loom-docs-index] last-run record could not be persisted to any store:',
+    failures.join('; '));
+}
+
+/** Read the last-run record out of ONE store. Null when absent or unreadable —
+ *  this is corroborating detail beside a freshness state that has already been
+ *  decided, so it never needs to distinguish the two. */
+async function readLastRunFrom(store: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
+  try {
+    if (store === 'ai-search') {
+      const svc = searchServiceName();
+      if (!svc) return null;
+      const tok = await searchToken();
+      const j = await lookupSearchDoc(svc, tok, LAST_RUN_KEY);
+      if (!j?.content) return null;
+      return JSON.parse(j.content) as CorpusLastRun;
+    }
+    const c = await helpCorpusContainer();
+    const r = await c.item(LAST_RUN_KEY, META_KIND).read<any>().catch(() => ({ resource: null }));
+    if (!r.resource?.content) return null;
+    return JSON.parse(r.resource.content) as CorpusLastRun;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the last rebuild attempt any replica recorded, from EITHER store.
+ *
+ * It must walk the same two stores `saveLastRun` writes to, or the fallback it
+ * performs is unreadable and buys nothing. That was the shape of the original
+ * defect in miniature: the write survived a single-store outage and the read
+ * did not, so the record existed and the poller still saw `lastRun: null` —
+ * indistinguishable from never having been written, which is the one thing the
+ * durable record exists to tell apart.
+ *
+ * Both stores can legitimately hold a record: the fallback writes to the other
+ * backend while a stale copy from an earlier, healthier run sits in the primary.
+ * So this is NOT first-answer-wins — it takes the one with the newer
+ * `finishedAt`. An unparseable or absent timestamp loses to a comparable one,
+ * and when neither is comparable the primary backend wins, matching the store
+ * `saveLastRun` tries first.
+ *
+ * Both reads are issued unconditionally and concurrently rather than consulting
+ * the second store only when the first comes back empty: a primary that answers
+ * can still be answering with an OLDER record than the fallback wrote, and a
+ * short-circuit would return it as "the last run". What the extra round trip
+ * costs is stated as a SHAPE, not a measurement — an earlier revision of this
+ * paragraph said it was "small beside the source-tree stat walk `corpusFreshness`
+ * performs", which reads as measured and was only reasoned, and comparing the two
+ * would need a live estate. Established: it is a single point read by document
+ * id, on a memoised container handle (see `helpCorpusContainer`), so it carries
+ * no control-plane call; and an unconfigured or unreachable store costs one
+ * caught rejection, not a retry loop.
+ */
+async function loadLastRun(backend: 'ai-search' | 'cosmos'): Promise<CorpusLastRun | null> {
+  const other: 'ai-search' | 'cosmos' = backend === 'ai-search' ? 'cosmos' : 'ai-search';
+  const [primary, secondary] = await Promise.all([
+    readLastRunFrom(backend),
+    readLastRunFrom(other),
+  ]);
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const at = (r: CorpusLastRun): number => {
+    const t = Date.parse(String((r as any)?.finishedAt ?? ''));
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  return at(secondary) > at(primary) ? secondary : primary;
+}
+
 async function saveManifest(
   backend: 'ai-search' | 'cosmos',
   manifest: CorpusManifest,
@@ -969,7 +1050,58 @@ function diffManifest(
 
 // ---------- Corpus freshness guard (WS-G / G2) ----------
 
-export type CorpusFreshnessState = 'fresh' | 'stale' | 'never-indexed';
+export type CorpusFreshnessState = 'fresh' | 'stale' | 'never-indexed' | 'unknown';
+
+/**
+ * The outcome of the LAST rebuild attempt, persisted where every replica can
+ * read it.
+ *
+ * WHY THIS EXISTS (roll 34648534467, 2026-09-11). `reindex()` records its
+ * outcome — succeeded, failed, or thrown — ONLY in `startReindexJob()`'s
+ * in-memory job state, which is scoped to the replica that ran it. Front Door
+ * session affinity is Disabled and the console runs 2-6 replicas, so a poll
+ * almost never lands on that replica: every other one answers `job=idle` with
+ * whatever manifest it can read. The roll's reindex step polled for 912
+ * seconds, read `stale`/`idle` 55 times, and failed with "NOTHING WAS OBSERVED
+ * RUNNING" — which is true about what it saw and says nothing about what
+ * happened.
+ *
+ * Note what that leaves unresolved: whether that rebuild failed is still
+ * unknown, and it is unknowable from the outside, because the only place an
+ * outcome was written was a field no other replica can read. The defect is the
+ * unknowability, not a failure we can point at.
+ *
+ * So the attempt's outcome goes in the SAME durable store as the manifest, and
+ * is written on the failure path too -- including when the manifest write is
+ * itself what failed, which is the case the manifest alone can never report.
+ */
+export interface CorpusLastRun {
+  outcome: 'succeeded' | 'failed';
+  /** ISO timestamp the attempt finished. */
+  finishedAt: string;
+  /** The error, when it failed. Never empty on a `failed` record. */
+  error: string | null;
+  /** Build SHA of the image that ran it, so a reader can tell WHICH revision. */
+  sourceCommit: string | null;
+  backend: 'ai-search' | 'cosmos' | 'none';
+  chunkCount: number;
+  /**
+   * The `jobId` the POST returned to whoever triggered this attempt.
+   *
+   * IDENTITY, NOT TIME, is what a poller must correlate on. An earlier
+   * revision of the poller compared `finishedAt` against a mark it took at
+   * startup, and a reviewer demonstrated two defects in that: the mark is
+   * `date -u +%Y-%m-%dT%H:%M:%SZ` (second precision) while this field is
+   * `toISOString()` (milliseconds), and `.` sorts BELOW `Z`, so a record at
+   * `…:46.999Z` compared against a mark of `…:46Z` reads as OLDER and is
+   * ignored — a blind window covering exactly the fast failures, which is the
+   * class a manifest-write 403 falls into. And two runs overlapping meant an
+   * unrelated failure could red a healthy rebuild, including one started by
+   * this script's own documented POST retry. Matching the jobId removes both:
+   * a record is about YOUR attempt or it is not.
+   */
+  jobId: string | null;
+}
 
 export interface CorpusFreshness {
   state: CorpusFreshnessState;
@@ -981,19 +1113,88 @@ export interface CorpusFreshness {
   indexedStatFingerprint: string | null;
   sourceCommit: string | null;
   indexedCommit: string | null;
+  /** The last rebuild attempt any replica recorded, or null if none ever did. */
+  lastRun: CorpusLastRun | null;
 }
 
-/** The staged source commit / build SHA, when the image stamps it. */
-function currentSourceCommit(): string | null {
-  return (process.env.LOOM_BUILD_SHA || '').trim() || null;
-}
-
-/** Pure freshness evaluation from the current stat fingerprint + the manifest. */
+/** Pure freshness evaluation from the current fingerprints + the manifest.
+ *
+ * `manifestError` is the READ failing, which is not the same fact as there
+ * being nothing to read, and must not be reported as one. `loadManifestHead`
+ * catches every exception and returns null, so an AI Search blip, an expired
+ * token, or an unconfigured service all arrived here indistinguishable from a
+ * corpus that has genuinely never been built -- and this function then asserted
+ * "has never been indexed in this backend", a claim it had not established.
+ * That is `deploy-integrity.md` R7's recorded incident exactly: a `2>/dev/null`
+ * turned a permission denial into an empty string and the empty string into a
+ * false statement of cause. It is also why the roll's poll log alternated
+ * between `never-indexed` and `stale` while nothing changed -- reads were
+ * intermittently failing, and each failure printed as a different fact about
+ * the corpus.
+ *
+ * COMMITS BEAT MTIMES when both are known. `statFingerprint` hashes
+ * `path:size:mtime` from the ANSWERING REPLICA's local filesystem, while the
+ * manifest is shared -- so the comparison is replica-local against durable, and
+ * two replicas on different revisions disagree by construction. The build SHA
+ * is stamped into the image, so every replica of a revision reports the same
+ * one; when the manifest also carries a commit, comparing those is both
+ * cheaper and stable across replicas. The stat comparison stays as the fallback
+ * for dev and for manifests written before commits were recorded.
+ */
 export function evaluateFreshness(
   currentStat: string,
-  manifest: Pick<CorpusManifest, 'statFingerprint'> | null,
+  manifest: (Pick<CorpusManifest, 'statFingerprint'> & Partial<Pick<CorpusManifest, 'sourceCommit'>>) | null,
+  opts?: { currentCommit?: string | null; manifestError?: string | null },
 ): { state: CorpusFreshnessState; reason: string } {
+  const manifestError = opts?.manifestError ?? null;
+  if (manifestError) {
+    return {
+      state: 'unknown',
+      reason: `The corpus manifest could not be READ (${manifestError}). This says nothing about whether the corpus is indexed — it says the check could not run.`,
+    };
+  }
   if (!manifest) return { state: 'never-indexed', reason: 'The Help Copilot corpus has never been indexed in this backend.' };
+
+  // BOTH sides are filtered, not just the live one. `manifest.sourceCommit` is
+  // PERSISTED DATA -- a manifest written by an image built without
+  // `--build-arg LOOM_BUILD_SHA` carries the literal `unknown` forever, and it
+  // outlives the image that wrote it.
+  //
+  // Be precise about what the indexed-side filter buys, because an earlier
+  // revision of this comment had it backwards. It does NOT stop a false green:
+  // filtering only the live side already does that, since `unknown` on both
+  // sides blanks `currentCommit` and short-circuits to the stat path before the
+  // commit comparison can engage. What the indexed-side filter changes is the
+  // MIXED case -- a real sha live, `unknown` in the manifest -- and it changes
+  // it toward `fresh`: unfiltered, that pair compares unequal and reports
+  // `stale`; filtered, it falls through to the stat comparison, which reports
+  // `fresh` when the fingerprints match. Measured, not argued: the case is
+  // `the MIXED case — a real sha live, a placeholder in the manifest — falls to
+  // stat, and that is a WEAKENING`, in
+  // `__tests__/loom-docs-index-incremental.test.ts`.
+  //
+  // That is deliberate, and it is the same rule the live side follows. `unknown`
+  // is not a revision, so diffing it against one asserts a comparison the code
+  // cannot make -- it would report "built from unknown, serving abc12345" as if
+  // that were a revision gap, when the only thing established is that one image
+  // did not stamp. Falling back to the stat fingerprint is the designed
+  // no-commits-available path, and it is real evidence: the manifest's
+  // `path:size:mtime` hash matching this replica's is what the guard used before
+  // commits were recorded at all.
+  const live = (opts?.currentCommit ?? '').trim();
+  const indexed = (manifest.sourceCommit ?? '').trim();
+  const currentCommit = isBuildCommit(live) ? live : '';
+  const indexedCommit = isBuildCommit(indexed) ? indexed : '';
+  if (currentCommit && indexedCommit) {
+    if (!sameCommit(currentCommit, indexedCommit)) {
+      return {
+        state: 'stale',
+        reason: `The index was built from ${indexedCommit.slice(0, 12)} and this revision serves ${currentCommit.slice(0, 12)}.`,
+      };
+    }
+    return { state: 'fresh', reason: `The indexed corpus was built from this revision (${currentCommit.slice(0, 12)}).` };
+  }
+
   if (manifest.statFingerprint !== currentStat) {
     return { state: 'stale', reason: 'Staged docs have changed since the last index build (source fingerprint differs).' };
   }
@@ -1018,16 +1219,21 @@ export { corpusSourceCount };
 export async function corpusFreshness(): Promise<CorpusFreshness> {
   const backend: 'ai-search' | 'cosmos' = isSearchConfigured() ? 'ai-search' : 'cosmos';
   const currentStat = statFingerprint(enumerateSourceFiles(detectRoots()));
-  const manifest = await loadManifestHead(backend);
-  const { state, reason } = evaluateFreshness(currentStat, manifest);
+  const { head: manifest, error: manifestError } = await loadManifestHead(backend);
+  const currentCommit = currentSourceCommit();
+  const { state, reason } = evaluateFreshness(currentStat, manifest, { currentCommit, manifestError });
+  // Best-effort and deliberately not fatal: the last-run record is DIAGNOSIS,
+  // so a failure to read it must never change the freshness verdict itself.
+  const lastRun = await loadLastRun(backend).catch(() => null);
   return {
     state, reason, backend,
     indexedAt: manifest?.builtAt ?? null,
     indexedChunkCount: manifest?.chunkCount ?? null,
     currentStatFingerprint: currentStat,
     indexedStatFingerprint: manifest?.statFingerprint ?? null,
-    sourceCommit: currentSourceCommit(),
+    sourceCommit: currentCommit,
     indexedCommit: manifest?.sourceCommit ?? null,
+    lastRun,
   };
 }
 
@@ -1055,7 +1261,52 @@ export async function buildCorpus(): Promise<DocChunk[]> {
   return collectSources().chunks;
 }
 
-export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult> {
+/**
+ * Rebuild the corpus index, recording the outcome where every replica can read
+ * it.
+ *
+ * The recording is a WRAPPER rather than an edit to each `return`, on purpose:
+ * `reindexInner` has several exit paths and the one that matters most is the
+ * one added last, so a scheme that needs every future author to remember a call
+ * is a scheme that will miss one. The roll this fixes failed because an outcome
+ * was visible on exactly one replica.
+ */
+export async function reindex(opts?: { full?: boolean; jobId?: string }): Promise<ReindexResult> {
+  const jobId = opts?.jobId ?? null;
+  let result: ReindexResult;
+  try {
+    result = await reindexInner(opts);
+  } catch (e: any) {
+    // A THROW is an outcome too, and previously the least visible one of all:
+    // the job went `failed` in this replica's memory and every other replica
+    // kept answering `idle` with an unchanged manifest.
+    const message = e?.message || String(e);
+    await saveLastRun(isSearchConfigured() ? 'ai-search' : 'cosmos', {
+      outcome: 'failed',
+      finishedAt: new Date().toISOString(),
+      error: `reindex threw: ${message}`,
+      sourceCommit: currentSourceCommit(),
+      backend: isSearchConfigured() ? 'ai-search' : 'cosmos',
+      chunkCount: 0,
+      jobId,
+    });
+    throw e;
+  }
+  const store: 'ai-search' | 'cosmos' =
+    result.backend === 'none' ? (isSearchConfigured() ? 'ai-search' : 'cosmos') : result.backend;
+  await saveLastRun(store, {
+    outcome: result.ok ? 'succeeded' : 'failed',
+    finishedAt: new Date().toISOString(),
+    error: result.ok ? null : (result.error || 'reindex reported ok:false with no error string'),
+    sourceCommit: currentSourceCommit(),
+    backend: result.backend,
+    chunkCount: result.totalChunks,
+    jobId,
+  });
+  return result;
+}
+
+async function reindexInner(opts?: { full?: boolean }): Promise<ReindexResult> {
   const warnings: string[] = [];
   // The BM25 index is keyed on chunk IDS, which are stable across a pure content
   // edit — so a reindex must drop it explicitly or this replica would keep
@@ -1205,9 +1456,17 @@ export const __testInternals = {
   MANIFEST_SHARD_CHARS,
   MANIFEST_KEY,
   manifestShardKey,
+  // #4497 — the durable last-run document id. Exposed so the producer test
+  // asserts on the SHARED-STORE bytes rather than on `reindex`'s return value:
+  // the return value is this replica's view, and this replica's view is exactly
+  // what the roll already had and could not act on.
+  LAST_RUN_KEY,
   // #2970 — point the AI Search path's corpus statistics at a synthetic corpus
   // so a backend-symmetry test can hold BOTH paths to the same corpus. Pass
   // `undefined` to restore the real bundled-corpus source.
   setCorpusStatsForTests,
   localCorpusStats,
+  // #4498 round 4 — drop the memoised corpus-container handle. A memo that
+  // survives between cases would let one case's Cosmos stub answer the next.
+  __resetCorpusContainerForTests,
 };
