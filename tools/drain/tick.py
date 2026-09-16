@@ -442,7 +442,7 @@ def emit(led: Ledger, policy: dict, chosen: list, triage: list, audit: list) -> 
     return "\n".join(lines)
 
 
-class ReceiptRefused(Exception):
+class ReceiptRefusedError(Exception):
     """The evidence offered does not establish the receipt. Never recorded."""
 
 
@@ -458,14 +458,14 @@ def _run_evidence(repo: str, run_id: str) -> dict:
          "--json", "databaseId,workflowName,conclusion,status,headSha,url,jobs"]
     )
     if rc != 0:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"cannot read run {run_id} in {repo} (rc={rc}): {err[:200]}. "
             "A run this tool cannot read is not evidence - it is an unanswered question."
         )
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ReceiptRefused(f"unparseable run {run_id}: {exc}") from exc
+        raise ReceiptRefusedError(f"unparseable run {run_id}: {exc}") from exc
 
 
 def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
@@ -503,7 +503,7 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
     producers = policy.get("receipt_producers", {})
     expected = producers.get(kind)
     if not expected:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"receipt kind {kind!r} has no declared producer in policy.receipt_producers, "
             "so it cannot be recorded from a run. Take it deliberately, or declare a "
             "producer in policy.json after taking one from that workflow by hand."
@@ -511,24 +511,24 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
 
     actual = run.get("workflowName")
     if actual != expected:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"run is from workflow {actual!r}, but {kind!r} is only produced by "
             f"{expected!r} - a green run of a different workflow says nothing about this item"
         )
 
     if run.get("status") != "completed":
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"run has status {run.get('status')!r} - it has not finished, so it is "
             "not yet a verdict either way"
         )
     if run.get("conclusion") != "success":
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"run concluded {run.get('conclusion')!r}, not success"
         )
 
     required_steps = (policy.get("receipt_required_steps", {}) or {}).get(kind)
     if not required_steps:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"receipt kind {kind!r} declares no required steps in "
             "policy.receipt_required_steps, so a green run of its producer could be "
             "green over nothing - refusing rather than accepting a run-level check"
@@ -542,14 +542,14 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
     for required in required_steps:
         found = by_name.get(required) or []
         if not found:
-            raise ReceiptRefused(
+            raise ReceiptRefusedError(
                 f"the run never ran the step {required!r}, which is part of what "
                 f"actually establishes a {kind} receipt - a green run without it did "
                 "not do the work (a SKIPPED job reports no steps at all)"
             )
         bad = [s for s in found if s.get("conclusion") != "success"]
         if bad:
-            raise ReceiptRefused(
+            raise ReceiptRefusedError(
                 f"the step {required!r} concluded "
                 f"{bad[0].get('conclusion')!r}, not success"
             )
@@ -593,7 +593,7 @@ def _pr_references_item(repo: str, pr_number: int, item: int) -> None:
     ]
     mentioned = gates.referenced_issues(pr.get("body") or "", messages, repo)
     if item not in set(closing) | set(mentioned):
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"PR #{pr_number} does not reference #{item} anywhere - not in "
             f"closingIssuesReferences {closing}, not in its body, not in its commit "
             "trail. A receipt measured from a PR that never names the item is a "
@@ -605,13 +605,13 @@ def gh_json_local(args: list[str], what: str) -> dict:
     """`sh` + JSON, kept here so this module does not depend on merge_gate for it."""
     rc, out, err = sh(args)
     if rc != 0:
-        raise ReceiptRefused(f"cannot read {what} (rc={rc}): {err[:200]}")
+        raise ReceiptRefusedError(f"cannot read {what} (rc={rc}): {err[:200]}")
     try:
         parsed = json.loads(out)
     except json.JSONDecodeError as exc:
-        raise ReceiptRefused(f"unparseable {what}: {exc}") from exc
+        raise ReceiptRefusedError(f"unparseable {what}: {exc}") from exc
     if not isinstance(parsed, dict):
-        raise ReceiptRefused(f"unexpected shape for {what}")
+        raise ReceiptRefusedError(f"unexpected shape for {what}")
     return parsed
 
 
@@ -656,9 +656,9 @@ def record_receipt_from_evidence(
     """
     item = led.items.get(number)
     if item is None:
-        raise ReceiptRefused(f"#{number} is not in the ledger")
+        raise ReceiptRefusedError(f"#{number} is not in the ledger")
     if item.state in TERMINAL:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"#{number} is already {item.state} - re-recording would rewrite a "
             "terminal item's evidence"
         )
@@ -666,13 +666,13 @@ def record_receipt_from_evidence(
     issue_class = item.effective_receipt_class
     kind = (policy.get("receipts", {}) or {}).get(issue_class)
     if not kind:
-        raise ReceiptRefused(
+        raise ReceiptRefusedError(
             f"#{number} resolves to class {issue_class!r}, which names no receipt kind"
         )
 
     if kind == "ci-green":
         if from_pr is None:
-            raise ReceiptRefused(
+            raise ReceiptRefusedError(
                 f"#{number} is {issue_class!r} and needs a ci-green receipt, which is "
                 "measured from a MERGED PR - pass --from-pr"
             )
@@ -691,7 +691,7 @@ def record_receipt_from_evidence(
             infra_ere=merge_gate.resolve_infra_ere(data["merged"]),
         )
         if not receipt.ok:
-            raise ReceiptRefused(
+            raise ReceiptRefusedError(
                 f"ci-green receipt for PR #{from_pr} is {receipt.summary}; "
                 + "; ".join(receipt.reasons)[:400]
             )
@@ -699,7 +699,7 @@ def record_receipt_from_evidence(
         detail = f"{receipt.summary} at {ref} (PR #{from_pr})"
     else:
         if not from_run:
-            raise ReceiptRefused(
+            raise ReceiptRefusedError(
                 f"#{number} is {issue_class!r} and needs a {kind} receipt, which is "
                 "established by a workflow run - pass --from-run"
             )
@@ -810,7 +810,7 @@ def main() -> int:
                 led, policy, repo, args.record_receipt,
                 from_pr=args.from_pr, from_run=args.from_run,
             )
-        except (ReceiptRefused, ValueError) as exc:
+        except (ReceiptRefusedError, ValueError) as exc:
             # ValueError is the ledger's own R2 refusal from `transition`. It is
             # caught here so a refusal prints as a refusal rather than a
             # traceback -- and NOTHING is saved on this path, so a refused

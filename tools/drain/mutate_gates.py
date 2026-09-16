@@ -2083,8 +2083,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "that skipped the work - a smoke-only loom-ui-verify, or a roll whose "
          "job was skipped at 0 steps - is accepted as a receipt over nothing"),
         "tick.py",
-        "        if not found:\n            raise ReceiptRefused(",
-        "        if False:\n            raise ReceiptRefused(",
+        "        if not found:\n            raise ReceiptRefusedError(",
+        "        if False:\n            raise ReceiptRefusedError(",
     ),
     (
         ("RW1b the required-steps map resolves to nothing, so every run-backed "
@@ -2103,18 +2103,29 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    actual = run.get("workflowName")\n    if False:',
     ),
     (
-        ("RW3 an UNDECLARED receipt kind stops failing closed, so the write path "
-         "widens by accident rather than by a deliberate edit to policy.json - "
-         "and `operator`, absent on purpose, becomes recordable by a program"),
+        ("RW3 an UNDECLARED receipt kind stops failing closed AT THE PRODUCER "
+         "CHECK. DISCLOSED AS A MESSAGE ARM, not a behaviour one: `operator` is "
+         "still refused downstream because it declares no required steps, so "
+         "this mutation changes the stated REASON and not the outcome. That is "
+         "defense in depth, and an R7 defect is worth an arm on its own - a "
+         "refusal that names the wrong cause sends the reader to the wrong fix. "
+         "Named rather than left to look like a behaviour kill, per "
+         "assertion-design.md's ban on reporting an arm without saying which it "
+         "pins. A reviewer caught the first version claiming more than it did"),
         "tick.py",
-        ('    if not expected:\n        raise ReceiptRefused(\n'
+        ('    if not expected:\n        raise ReceiptRefusedError(\n'
          '            f"receipt kind {kind!r} has no declared producer'),
-        ('    if False:\n        raise ReceiptRefused(\n'
+        ('    if False:\n        raise ReceiptRefusedError(\n'
          '            f"receipt kind {kind!r} has no declared producer'),
     ),
     (
-        ("RW4 an IN-PROGRESS run stops being distinguished from a failed one, so "
-         "a still-running job is read as a verdict"),
+        ("RW4 an IN-PROGRESS run stops being distinguished from a finished one, "
+         "so a run still in flight is read as a verdict. STRONG on the fixture "
+         "that matters: GitHub reports a `conclusion` from a previous attempt "
+         "while `status` is in_progress, and on that input this check is the "
+         "ONLY thing refusing - the first version of the test used "
+         "conclusion=None, where the conclusion check refuses anyway and the "
+         "arm was therefore weak"),
         "tick.py",
         '    if run.get("status") != "completed":',
         "    if False:",
@@ -2125,6 +2136,43 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    if item.state in TERMINAL:",
         "    if False:",
+    ),
+    # THE FOUR SURVIVORS an independent reviewer found. RW1-RW5 covered the
+    # run-backed branch and left the ci-green decide path and the entry
+    # refusals unwatched -- and the worst of them was the one the PR body
+    # offered as its end-to-end proof.
+    (
+        ("RW6 a NOT-GREEN ci-green receipt closes the item anyway. The reviewer's "
+         "measurement: mutated, the suite stayed at 474 passed, so a receipt the "
+         "`--ci-green-receipt` report would print as NOT GREEN still closed a "
+         "guard-or-test-only item"),
+        "tick.py",
+        "        if not receipt.ok:",
+        "        if False:",
+    ),
+    (
+        ("RW7 the kind stops being DERIVED from the item's class, so an item "
+         "whose class names no receipt kind is recorded on whatever evidence "
+         "was offered instead of being refused"),
+        "tick.py",
+        "    if not kind:\n        raise ReceiptRefusedError(",
+        "    if False:\n        raise ReceiptRefusedError(",
+    ),
+    (
+        ("RW8 an item the ledger has never seen is no longer refused up front, "
+         "so the failure surfaces as a KeyError deep inside record_receipt "
+         "rather than as a refusal naming the number"),
+        "tick.py",
+        "    if item is None:",
+        "    if False:",
+    ),
+    (
+        ("RW9 a run-backed item offered NO evidence at all stops being refused, "
+         "so `--record-receipt` with neither --from-pr nor --from-run reaches "
+         "the run reader with an empty id"),
+        "tick.py",
+        "        if not from_run:",
+        "        if False:",
     ),
 ]
 
