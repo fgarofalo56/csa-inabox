@@ -2115,17 +2115,37 @@ def test_blocker_a_job_that_has_not_concluded_is_not_excused_by_its_scope():
     assert "has not concluded" in evidence
 
 
-def test_blocker_an_absent_job_record_fails_closed_on_every_route():
-    """The `isinstance` guard moved up WITH the check it protects, and it is
-    not defensive padding: `job` is `dict | None` by signature,
-    `step_conclusion` does `step.get(...)`, and omitting the guard crashed the
-    negative control on the first run of this change.
+def test_the_absent_job_guard_refuses_rather_than_accepting_on_every_route():
+    """THE `isinstance` GUARD, AND ONLY IT. Read the name carefully: this does
+    NOT claim to be the thing that first refuses an absent job record.
 
-    Without it the routes below decide an absent job on their own terms, and
-    route 2 is happy to excuse a context whose job was never read at all.
+    The first version of this test claimed exactly that -- "route 2 is happy to
+    excuse a context whose job was never read at all" -- and a reviewer
+    measured it false. On the PRE-FIX tree `scope_untouched_at_merge(name,
+    None, ...)` already returns `(False, 'no job record was read for it, so its
+    skip cannot be explained')`. All three routes already refused `None`. The
+    docstring asserted a cause it had not established, in a test written under
+    the rule that forbids exactly that.
+
+    What the guard is actually for is stated in the source: `job` is
+    `dict | None` by signature and `step_conclusion` does `step.get(...)`, so
+    without it the LIFTED CHECK crashes before any route is consulted -- which
+    it did, on the first run of this change. It is a crash guard, and the
+    behaviour it pins is that an absent record is refused HERE rather than
+    accepted here.
+
+    SO THE ASSERTION MUST DISCRIMINATE. `"no job record was read for it"`
+    appears in FIVE places in gates.py, so asserting it proves only that some
+    refusal happened somewhere -- it passes with the entire fix reverted, which
+    the reviewer demonstrated. The all-routes message is the one that names all
+    three routes in a single breath; `"not that its skip was scope-appropriate"`
+    occurs exactly once in the file, so it is the substring that can only have
+    come from this guard.
     """
     acct, evidence, route = gates.context_is_accounted_for(
         "next build (node 20)", None, MERGED_FILES, POLICY)
     assert not acct, evidence
     assert route == ""
     assert "no job record was read for it" in evidence
+    # The discriminating half. Deleting the guard cannot produce this string.
+    assert "not that its skip was scope-appropriate" in evidence

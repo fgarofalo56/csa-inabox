@@ -804,10 +804,30 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("U3 the job-level NOT-CONCLUDED refusal collapses, so a job that is "
          "still running answers for a merge"),
         "gates.py",
-        ("    if job_verdict is None:\n"
+        # THE SAME WEAK-MUTANT CORRECTION AS F5A2, and this one is older: this
+        # arm has had the flaw since it was written, and re-anchoring it for
+        # finding 5 cloned the shape before a reviewer measured it. `if False:`
+        # on the `is None` branch leaves `job_verdict` as `None` and the
+        # `!= "success"` branch below still refuses -- measured `did=False`
+        # either way, so the kill was a message substring and the arm's name
+        # ("answers for a merge") described an outcome the mutation could not
+        # produce.
+        #
+        # Mapping `None -> "success"` produces it: measured `did=True` with the
+        # evidence "executed its declared substantive step(s)" about a job that
+        # never concluded, killed by
+        # `test_green_at_merge_refuses_a_job_that_is_still_running`.
+        #
+        # The fixture matters as much as the arm. Route 1 can only ACCEPT a job
+        # whose declared work actually ran, so a fixture that skips the work
+        # step makes route 1 refuse for an unrelated reason and hides the
+        # difference entirely -- which it did, on the first measurement of this.
+        ("    job_verdict = step_conclusion(job)\n"
+         "    if job_verdict is None:\n"
          "        return False, (\n"
          '            "its job record has not concluded, so it is still running and "'),
-        ("    if False:\n"
+        ('    job_verdict = step_conclusion(job) or "success"\n'
+         "    if job_verdict is None:\n"
          "        return False, (\n"
          '            "its job record has not concluded, so it is still running and "'),
     ),
@@ -2005,10 +2025,26 @@ ARMS: list[tuple[str, str, str, str]] = [
          "RUNNING is excused by a scope skip or an alternative and answers for "
          "a merge"),
         "gates.py",
-        ("    if job_verdict is None:\n"
+        # NOT `if False:` ON THE `is None` BRANCH -- that is a WEAK MUTANT, and
+        # an independent reviewer caught the first version of this arm being
+        # one. Skipping the branch leaves `job_verdict` as `None`, and
+        # `if job_verdict != "success":` on the very next lines still refuses,
+        # so the gate does NOT fail open: measured `acct=False route=''`. Only
+        # the MESSAGE changes, so the arm would report KILLED while the
+        # fail-open its own name promises was never produced -- the receipt
+        # would claim the suite catches something it was never shown.
+        #
+        # Mapping `None -> "success"` produces the real thing: measured
+        # `acct=True route='scope-untouched-at-merge'` for a job that never
+        # concluded, killed by
+        # `test_blocker_a_job_that_has_not_concluded_is_not_excused_by_its_scope`
+        # on `assert not acct` rather than on a substring.
+        ("    job_verdict = step_conclusion(job)\n"
+         "    if job_verdict is None:\n"
          "        return False, (\n"
          '            "its job record has not concluded, so nothing about it can be "'),
-        ("    if False:\n"
+        ('    job_verdict = step_conclusion(job) or "success"\n'
+         "    if job_verdict is None:\n"
          "        return False, (\n"
          '            "its job record has not concluded, so nothing about it can be "'),
     ),
