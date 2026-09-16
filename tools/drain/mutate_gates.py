@@ -2648,21 +2648,45 @@ def main() -> int:
         # kind. The conditions now live in `_preamble_verdict`, which is pure and
         # tested per refusal; what stays here is the I/O and the extra dump.
         #
-        # The gathering is no longer short-circuited, so a red control costs one
-        # extra suite run before it refuses. ROUND 16: that cost was written
-        # here as "~6s" and it was not measured -- it was estimated, in a file
-        # whose entire subject is the difference. Two independent measurements
-        # of the same thing disagree with it and with each other: a reviewer
-        # measured 36.9s, and two timed runs on the authoring workstation gave
-        # 16s and 18s. The spread is real (runner vs workstation, cold vs warm
-        # import cache) and neither number is "the" answer, so both are recorded
-        # rather than averaged into a false precision.
+        # The gathering is no longer short-circuited, so a red control pays for
+        # work whose result it will not use. ROUND 16 WROTE THAT COST AS "one
+        # extra suite run" AND THAT WAS WRONG TOO -- it was the third estimate
+        # in this comment's history, after an unmeasured "~6s" and a reviewer's
+        # own first figure of "roughly three runs", which they then corrected by
+        # measuring. The COMPOSITION is the durable claim, so it is stated
+        # instead of a number:
         #
-        # What survives either measurement is the conclusion: one suite run
-        # against a ~22-minute matrix is noise, and it buys the decision being
-        # in one tested place instead of four untested ones. The refusal ORDER
-        # inside `_preamble_verdict` still reports the control first, so the
-        # diagnosis a reader sees is unchanged.
+        #   control            full suite run   ALSO run by the old code - not extra
+        #   _skipped_nodeids   full suite run   EXTRA  (`-q` stripped, `-v` added)
+        #   _collected(HERE)   collect-only     EXTRA
+        #   _collected(sandbox) collect-only    EXTRA
+        #   with_meta          full suite run   EXTRA  (the deselect removed)
+        #
+        # So: TWO extra full executions of the suite plus TWO collect-only
+        # passes. Measured once, on the authoring workstation at 51a0ce9d7a1 --
+        # 19.24s + 4.07s + 4.06s + 19.56s = 46.93s, against a 20.32s control.
+        # Scaling by that control against CI's measured 5.50s per arm puts the
+        # extra near 13s on CI; the collect-only passes are import-bound rather
+        # than test-bound, so treat 13s as an order of magnitude, not a
+        # measurement.
+        #
+        # DO NOT RE-ESTIMATE THIS FROM THE STRUCTURE. Every previous figure here
+        # was derived by reasoning about the code rather than by running it, and
+        # all three were wrong. Either re-measure and pin the new number to a
+        # named sha, or quote the composition alone -- which is what actually
+        # decides whether the trade is worth it, and does not rot when the suite
+        # grows (it went 434 -> 452 collected inside this PR).
+        #
+        # Against a ~22-minute matrix any of these figures is noise, and the
+        # trade is the decision living in one tested place instead of four
+        # untested ones. The refusal ORDER inside `_preamble_verdict` still
+        # reports the control first, so the diagnosis a reader sees is unchanged
+        # -- and that clause is EARNED: on a red control `_skipped_nodeids` and
+        # `with_meta` are red too, so `skips` comes back None and the run prints
+        # `SKIPS UNREADABLE`, which would be a misleading first line if the
+        # ordering did not hold. A reviewer drove `_preamble_verdict` with
+        # exactly that input and confirmed it still answers "control is not
+        # green; nothing below would mean anything".
         ok, why = _preamble_verdict(
             control_rc=control.returncode,
             skipped_ids=skipped_ids,
