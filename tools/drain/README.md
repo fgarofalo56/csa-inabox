@@ -275,13 +275,48 @@ gap in the required set, not in the receipt, and the receipt is not the place to
 fix it — but a reader counting states should know which of the two they are
 looking at.
 
-**How a receipt actually gets recorded, and the gap in it.** `record_receipt()`
-and `transition(CLOSED)` have **no production caller**. `tick.py` writes only
-what a refresh writes; `merge_gate.py` only *reads*, through `receipt_ok()`.
-Recording a receipt today is a hand edit to `state.json` — which is gitignored —
-or a call from a lane's own script. Nothing in this file used to say that, and
-it is the operational gap behind the whole "a stale ledger evaluates against a
-weaker class" family: the write path is outside the instrumented code.
+**How a receipt actually gets recorded.** There is now one instrumented way:
+
+```bash
+# guard-or-test-only -> ci-green, RE-MEASURED from the merged PR
+python tools/drain/tick.py --record-receipt <ITEM> --from-pr <PR>
+# ui-surface / estate-behaviour / deploy-path -> verified against the run
+python tools/drain/tick.py --record-receipt <ITEM> --from-run <RUN_ID>
+```
+
+It lives in `tick.py` because `tick.py` owns the ledger. #4489 blocked the same
+write in `merge_gate` twice: once because the worktree fallback resolves
+`state.json` from the **primary checkout**, so a lane running the gate from its
+own worktree rewrote a ledger it does not own; and once because it was an
+unlocked read-modify-write on the only durable record with up to four lanes
+live, where `Ledger.save()` serialises the whole document from memory and the
+loser's transitions simply vanish.
+
+**It verifies rather than accepts.** The KIND is derived from the item's class
+and is never a flag — a `--kind` option would let a `ui-surface` item close on a
+`ci-green`, and the R2 invariant cannot catch that, because R2 compares the
+class a receipt was *taken under* against the class at the decision and a caller
+who names the wrong kind up front is consistent with itself. `ci-green` is
+re-measured by `gates.ci_green_receipt` at record time, so this path cannot
+record a receipt `--ci-green-receipt` would not print. Run-backed kinds must
+match the workflow named in `policy.receipt_producers`, must have *concluded*
+success (status and conclusion checked separately, so an in-progress run is
+refused as unfinished rather than as failed), and — where
+`policy.receipt_required_steps` names one — that step must itself have concluded
+success. That last check is `receipts.g1_assertion_rule` in code: a
+`loom-ui-verify` run with a blank `target_route` **skips the capture step** and
+concludes green having captured nothing.
+
+**What it does not establish.** That the evidence is *about* the item. Nothing
+stops a green roll being recorded against a second deploy-path item it never
+touched; the operator supplies that pairing, and the harness cannot check it
+until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
+ledger is byte-identical afterwards, verified by digest.
+
+`receipt_class` still has no production writer, so the `human-only` class is
+reachable only by hand — and `operator` is deliberately **absent** from
+`receipt_producers`, because a human-only receipt a program can record is not
+human-only.
 
 That is also why the R2 check is an **invariant**, not an event observer.
 `record_receipt` stamps the class the receipt was taken under, and
@@ -291,10 +326,6 @@ two routes `upsert` structurally cannot see, since `RECEIPT_CLASS_BY_STREAM` and
 `LANE_RECEIPT_CLASS` are module constants rather than fields. A reviewer closed
 a `ui-surface` item on a `ci-green` that had been refused moments earlier, by
 editing one line of a map.
-
-`receipt_class` likewise has no production writer, so the `human-only` class is
-currently reachable only by hand. Stated here rather than implied, because by
-this package's own standard an unreachable path is prose.
 
 **If you hand-edit a receipt, set `receipt_taken_under` too.** A ledger written
 before that field existed — or a hand edit that sets `receipt_kind` and

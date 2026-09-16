@@ -2072,6 +2072,52 @@ ARMS: list[tuple[str, str, str, str]] = [
          "        return False, (\n"
          '            f"its job concluded {job_verdict!r}, not success - no route can "'),
     ),
+    # -- THE RECEIPT WRITE PATH ----------------------------------------------
+    # README recorded this as the gap for as long as the ledger has existed:
+    # `record_receipt` had no production caller, so every close was a hand edit
+    # to an untracked file and "the write path is outside the instrumented
+    # code". These arms are what keeps the new writer instrumented -- each was
+    # measured RED against its named test on a sandbox copy before being added.
+    (
+        ("RW1 the required-STEP check collapses, so a SMOKE-ONLY loom-ui-verify "
+         "run - green, with the capture step SKIPPED because target_route was "
+         "blank - is accepted as a G1 receipt having captured nothing at all"),
+        "tick.py",
+        '    required_step = (policy.get("receipt_required_steps", {}) or {}).get(kind)',
+        "    required_step = None",
+    ),
+    (
+        ("RW2 the workflow-identity check collapses, so a green run of ANY "
+         "workflow establishes any run-backed receipt - a fact about that "
+         "workflow read as a fact about this item"),
+        "tick.py",
+        '    actual = run.get("workflowName")\n    if actual != expected:',
+        '    actual = run.get("workflowName")\n    if False:',
+    ),
+    (
+        ("RW3 an UNDECLARED receipt kind stops failing closed, so the write path "
+         "widens by accident rather than by a deliberate edit to policy.json - "
+         "and `operator`, absent on purpose, becomes recordable by a program"),
+        "tick.py",
+        ('    if not expected:\n        raise ReceiptRefused(\n'
+         '            f"receipt kind {kind!r} has no declared producer'),
+        ('    if False:\n        raise ReceiptRefused(\n'
+         '            f"receipt kind {kind!r} has no declared producer'),
+    ),
+    (
+        ("RW4 an IN-PROGRESS run stops being distinguished from a failed one, so "
+         "a still-running job is read as a verdict"),
+        "tick.py",
+        '    if run.get("status") != "completed":',
+        "    if False:",
+    ),
+    (
+        ("RW5 an already-terminal item can be re-receipted, so a second caller's "
+         "run silently replaces the evidence the first one closed on"),
+        "tick.py",
+        "    if item.state in TERMINAL:",
+        "    if False:",
+    ),
 ]
 
 

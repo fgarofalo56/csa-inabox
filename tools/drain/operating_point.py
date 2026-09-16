@@ -144,8 +144,10 @@ def main() -> int:
         print("  an undeclared close is refused by gate 6, and `--allow-close` "
               "is refused without a receipt of the item's kind - so the rest "
               "cannot reach GO however many reviewers approve.")
-        print("  Nothing records a receipt automatically: `record_receipt` has "
-              "no production caller (#4489).")
+        print("  A receipt is recorded by `tick.py --record-receipt <ITEM> "
+              "--from-pr <PR>|--from-run <RUN>`, which VERIFIES the evidence "
+              "before writing. Binding the evidence to the item is still a "
+              "claim, not a check (#4489).")
         return 0
 
     counts, by_reason, per_stream = brief_time(policy, led)
