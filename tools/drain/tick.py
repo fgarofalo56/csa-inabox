@@ -868,12 +868,22 @@ def main() -> int:
     # document in which that receipt never existed, reverting a closed item to
     # `ready` -- the same loss, from the other direction.
     #
-    # `if_unchanged` is keyed to `loaded_from_disk` because `--bootstrap`
-    # DELIBERATELY discards the ledger: it never read the file, so there is no
-    # prior document to be consistent with, and guarding it would refuse the one
-    # operation whose whole purpose is to replace what is there.
+    # `if_unchanged` is keyed to the BOOTSTRAP FLAG, not to `loaded_from_disk`.
+    # Those are not the same question and the difference is a real loss:
+    # `loaded_from_disk` is False for TWO reasons -- `--bootstrap`, which is
+    # intended, and THE FILE SIMPLY NOT EXISTING, which is not. `load()` returns
+    # early on a missing file, so an ordinary cycle over an absent `state.json`
+    # -- a fresh clone, or the deleted-scratch-file event this package already
+    # has a memory about -- ran with no guard at all. Reproduced through
+    # `main()`: a concurrent lane closed #2002 with a ci-green receipt, the
+    # cycle saved, rc=0, and #2002 was GONE from the document entirely.
+    #
+    # `not args.bootstrap` exempts only what was meant. A missing file is safe
+    # to guard: `_on_disk_digest()` returns None, `loaded_digest` is None, so
+    # the comparison passes when nothing is there and REFUSES if another writer
+    # created it in the meantime.
     try:
-        led.save(if_unchanged=led.loaded_from_disk)
+        led.save(if_unchanged=not args.bootstrap)
     except LedgerChangedError as exc:
         print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)
         return 1

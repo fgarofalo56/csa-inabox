@@ -255,16 +255,33 @@ class Ledger:
                 )
         directory = os.path.dirname(self.path) or "."
         os.makedirs(directory, exist_ok=True)
+        # SERIALISE ONCE, TO BYTES, and hash THOSE. The first version re-read
+        # the file to refresh the digest after replacing it, which opened a
+        # second window nobody had named: a writer landing between `os.replace`
+        # and that re-read leaves this ledger holding SOMEONE ELSE'S digest, and
+        # the next guarded save then sails straight through the comparison it
+        # was supposed to fail. Found by a reviewer who demonstrated the
+        # interleave rather than asserting it.
+        #
+        # Hashing the payload removes the window entirely: this is exactly what
+        # was written, so no read-back can disagree with it.
+        #
+        # WRITTEN AS BYTES, not text, and that is load-bearing for the digest
+        # rather than a style choice. `open(..., "w")` translates `\n` to
+        # `\r\n` on Windows, so a hash of the in-memory string would not match
+        # a hash of the file `load()` reads back -- every guarded save would
+        # refuse itself on its own write.
+        blob = json.dumps(payload, indent=1).encode("utf-8")
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
         os.close(fd)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=1)
+        with open(tmp, "wb") as handle:
+            handle.write(blob)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.path)
         # This transaction is now the document on disk, so a caller that saves
         # twice does not refuse itself on its own previous write.
-        self.loaded_digest = self._on_disk_digest()
+        self.loaded_digest = hashlib.sha256(blob).hexdigest()
 
     # -- mutation -----------------------------------------------------------
 

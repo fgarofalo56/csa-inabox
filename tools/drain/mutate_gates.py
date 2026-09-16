@@ -2204,6 +2204,46 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    for required in required_steps:",
         "    for required in required_steps[:1]:",
     ),
+    # THE CALL SITES of the lost-update guard. RW10 arms the COMPARISON inside
+    # `Ledger.save`; these arm the three ways a caller can switch it off while
+    # the comparison stays perfectly intact -- the same function-versus-control
+    # shape a reviewer found in the binding check, one module over.
+    (
+        ("RW13 the CYCLE stops guarding its save, so a refresh silently writes "
+         "over a concurrent lane's verified close. The comparison in "
+         "Ledger.save is untouched and RW10 still dies; only the call site "
+         "changes"),
+        "tick.py",
+        "        led.save(if_unchanged=not args.bootstrap)",
+        "        led.save()",
+    ),
+    (
+        ("RW14 the RECORD path stops guarding its save, the other half of RW13 "
+         "and the one this PR introduced"),
+        "tick.py",
+        "            led.save(if_unchanged=True)",
+        "            led.save()",
+    ),
+    (
+        ("RW15 the cycle SWALLOWS a refused save and reports success, so a "
+         "detected lost update is converted back into a silent one - worse "
+         "than not detecting it, because the guard now launders the failure"),
+        "tick.py",
+        ('    except LedgerChangedError as exc:\n'
+         '        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)\n'
+         "        return 1"),
+        ('    except LedgerChangedError as exc:\n'
+         '        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)\n'
+         "        return 0"),
+    ),
+    (
+        ("RW16 `_on_disk_digest` returns a constant for a MISSING file, so two "
+         "writers racing to create the ledger both see 'unchanged' and the "
+         "loser is overwritten - the fresh-clone and deleted-scratch-file case"),
+        "ledger.py",
+        "        if not os.path.exists(self.path):\n            return None",
+        "        if not os.path.exists(self.path):\n            return 'absent'",
+    ),
 ]
 
 

@@ -364,6 +364,125 @@ def _main_over(monkeypatch, tmp_path, live, argv):
     return tick.main()
 
 
+def test_blocker_the_cycle_guards_its_save_when_state_json_was_absent(monkeypatch, tmp_path):
+    """DRIVES `main()`, rather than transcribing its expression.
+
+    The first version of this test copied `if_unchanged=led.loaded_from_disk`
+    into the test body, so it agreed with its own copy and could not notice that
+    the expression was wrong. A reviewer reproduced the loss end to end through
+    `main()` instead: `loaded_from_disk` is False for TWO reasons -- `--bootstrap`
+    AND the file simply not existing -- so an ordinary cycle over an absent
+    `state.json` saved with no guard, and a concurrent lane's closed, receipted
+    item vanished from the document entirely.
+
+    Here the ledger file is DELETED after seeding, so `load()` returns early and
+    `loaded_from_disk` is False on a non-bootstrap run. A competing writer then
+    creates the file under the cycle. The save must REFUSE.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    for i in range(20):
+        seed.upsert(1000 + i, f"issue {1000 + i}", "W6-ci", lane="lane:ci", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    real_load = Ledger.load
+
+    def load_then_let_a_lane_write(self):
+        result = real_load(self)          # reads nothing; the file is gone
+        rival = Ledger(state, receipts=POLICY["receipts"])
+        rival.upsert(2002, "a lane's item", "W6-ci", lane="lane:ci", size=1)
+        rival.record_receipt(2002, "ci-green", "green at sha")
+        rival.transition(2002, CLOSED, "the lane closed it")
+        rival.save()
+        return result
+
+    os.remove(state)
+    monkeypatch.setattr(Ledger, "load", load_then_let_a_lane_write)
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(tick, "read_live_issues", lambda _repo: _live(range(1000, 1020)))
+    monkeypatch.setattr(sys, "argv", ["tick.py"])
+
+    assert tick.main() == 1, "the cycle saved over a concurrent lane's close"
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[2002].state == CLOSED
+    assert final.items[2002].receipt_kind == "ci-green"
+
+
+def test_blocker_the_record_path_guards_its_save_too(monkeypatch, tmp_path):
+    """The other call site. RW13 pins the CYCLE's guarded save; nothing pinned
+    the RECORD path's, so `led.save(if_unchanged=True)` -> `led.save()` survived
+    the suite with the comparison inside `Ledger.save` perfectly intact.
+
+    Drives `main()` on `--record-receipt` and lets a rival writer land between
+    the load and the save. The command must refuse rather than discard it.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(900, "a guard", "W6-ci", lane="lane:ci", size=1)
+    seed.upsert(901, "another", "W6-ci", lane="lane:ci", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    def record_then_a_rival_writes(led, _policy, _repo, number, **_kwargs):
+        led.items[number].receipt_kind = "ci-green"
+        led.items[number].receipt_ref = "sha"
+        led.items[number].receipt_taken_under = "guard-or-test-only"
+        led.transition(number, CLOSED, "recorded")
+        rival = Ledger(state, receipts=POLICY["receipts"]).load()
+        rival.record_receipt(901, "ci-green", "green at sha")
+        rival.transition(901, CLOSED, "the rival closed it")
+        rival.save()
+        return "recorded"
+
+    monkeypatch.setattr(tick, "record_receipt_from_evidence", record_then_a_rival_writes)
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "900", "--from-pr", "1"])
+
+    assert tick.main() == 1, "the record path saved over a rival's close"
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[901].state == CLOSED, "the rival's verified close was discarded"
+
+
+def test_positive_control_a_guarded_save_over_an_absent_ledger_succeeds(tmp_path):
+    """The fresh-clone path, and the control that stops the missing-file case
+    being guarded into uselessness.
+
+    `_on_disk_digest` returns None for a missing file and `load()` leaves
+    `loaded_digest` None, so the comparison passes when nothing is there. A
+    constant sentinel instead of None would make this legitimate FIRST WRITE
+    refuse -- which is arm RW16, and which survived until this test existed.
+    """
+    state = str(tmp_path / "nothing-here.json")
+    led = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert led.loaded_from_disk is False
+    led.upsert(910, "first ever item", "W6-ci", lane="lane:ci", size=1)
+    led.save(if_unchanged=True)
+    assert 910 in Ledger(state, receipts=POLICY["receipts"]).load().items
+
+
+def test_a_rival_creating_the_ledger_first_is_still_refused(tmp_path):
+    """The other half: absent at load is not a licence to clobber. If a rival
+    CREATES the file while this transaction held 'absent', the guard must still
+    refuse -- otherwise two fresh clones racing both write and one wins
+    silently."""
+    state = str(tmp_path / "race.json")
+    mine = Ledger(state, receipts=POLICY["receipts"]).load()
+    mine.upsert(911, "mine", "W6-ci", lane="lane:ci", size=1)
+
+    rival = Ledger(state, receipts=POLICY["receipts"])
+    rival.upsert(912, "rival", "W6-ci", lane="lane:ci", size=1)
+    rival.save()
+
+    with pytest.raises(led_changed_error()):
+        mine.save(if_unchanged=True)
+    assert 912 in Ledger(state, receipts=POLICY["receipts"]).load().items
+
+
+def led_changed_error():
+    import ledger as _l
+
+    return _l.LedgerChangedError
+
+
 def test_negative_control_main_actually_calls_the_refresh_guard(monkeypatch, tmp_path):
     """The unit tests above prove `guard_refresh` refuses the right inputs. They
     say nothing about whether anything CALLS it -- which is precisely the shape
