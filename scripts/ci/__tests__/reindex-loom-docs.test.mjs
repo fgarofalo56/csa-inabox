@@ -1387,6 +1387,18 @@ test('#4498 round 11 — a parser that CANNOT START is named as such, and its by
       // The round-10 claim that is now false must not reappear.
       assert.doesNotMatch(out, /its stderr follows/, out);
 
+      // ROUND 16 REVIEW, BLOCKER 1 — THE CRASH PATH MUST NOT CLAIM WHAT THE
+      // BODY CONTAINED. `$POST_JOB_ID` is empty here because the parser never
+      // RAN, not because the body lacked an id — and this fixture DOES send
+      // `jobId: j-dead`, which is what makes the assertion falsifiable. Round
+      // 12 printed "the response body carried no readable jobId" on this path,
+      // one line after saying the body was not read, about a body that had one.
+      assert.doesNotMatch(out, /the response body carried no readable jobId/, out);
+      // The consequence IS still disclosed — the correlation genuinely cannot
+      // fire — but stated from what is known, with the contents marked unknown.
+      assert.match(out, /no jobId was read, so the durable-record correlation/, out);
+      assert.match(out, /What the body contained is UNKNOWN/, out);
+
       // ROUND 16 REVIEW, B2 — THE SENTENCE IS NOT THE BEHAVIOUR. Every
       // assertion above is satisfied by a `_dump_redacted` whose else-branch
       // publishes the raw file AND keeps the disclosure sentence: a reviewer

@@ -338,7 +338,21 @@ function classifyReindexPollImpl({ outcome, body, waitedSeconds, attempts, idleS
       // NOT redacted here. Redacting this one field by hand is precisely what
       // round 5 did, and it left the other eight sites raw — see `redactVerdict`.
       const why = lastRun?.error ? firstLine(String(lastRun.error)) : '';
-      const commit = lastRun?.sourceCommit ? ` (revision ${String(lastRun.sourceCommit).slice(0, 12)})` : '';
+      // THE NINTH TRUNCATION SITE, three lines above the one B1 fixed and in
+      // the same durable record. `.slice(0, 12)` bounds this BEFORE redaction,
+      // which is the identical defect: a credential-shaped value in
+      // `sourceCommit` is cut to 12 characters, drops below the length floor of
+      // the rule that would have caught it, and reaches the log. Narrower than
+      // B1 — 12 characters, and the field is meant to hold a build sha — but a
+      // reviewer measured three of four credential shapes publishing a fragment
+      // here, so "meant to hold" is not a control.
+      //
+      // Routed through `firstLine`, which redacts then bounds. The extra
+      // `.slice(0, 12)` stays because 12 is the intended display width for a
+      // short sha; it now cuts redacted text, which is safe by construction.
+      const commit = lastRun?.sourceCommit
+        ? ` (revision ${firstLine(String(lastRun.sourceCommit)).slice(0, 12)})`
+        : '';
       return {
         verdict: 'fail',
         level: 'error',
@@ -621,16 +635,47 @@ function summarize(parsed) {
  *
  * The mechanism: a credential straddling the 300-character bound is CUT, and
  * the surviving fragment no longer matches the rule that would have redacted
- * it, so it reaches the log verbatim. A reviewer measured up to 18 characters
- * of a credential surviving by exactly this route, on a field THIS PR
- * introduces (`freshness.lastRun.error`), while `parse-reindex-poll.mjs`
- * reading the SAME field with the SAME 300 bound emitted the redaction marker.
- * Two modules, one field, one run, opposite orders.
+ * it, so it reaches the log verbatim.
  *
- * Redacting first fixes it by construction: whatever the slice cuts afterwards
- * is either ordinary text or a redaction MARKER, and a truncated marker carries
- * nothing. `redactVerdict()` still redacts the assembled message — `redactSecrets`
- * is idempotent, so that stays as defence in depth rather than being removed.
+ * WHICH RULES LEAK, MEASURED — and the first version of this docblock named the
+ * wrong family. It is NOT the connection-string rules. `AccountKey=`, `sig=`
+ * and `password=` have NO length floor, so a truncated fragment still matches
+ * and `redactVerdict()` rescues it downstream; those do not leak by this route.
+ *
+ * The rules that leak are the LENGTH-BOUNDED ones, because a floor is exactly
+ * what a cut can drop you below. Measured, most material first:
+ *
+ *   code=[…]{20,}       the worst here. A cut to 19 or fewer publishes the
+ *                       survivors; measured at 18 raw characters.
+ *   Bearer \s+[…]{8,}   up to 7 raw characters survive.
+ *   eyJ[…]{6,}\.[…]{6,}\.[…]*   the LEAST material, though it looks the worst.
+ *
+ * THAT ORDERING IS ITSELF A CORRECTION, and the first version of this docblock
+ * had it backwards — it called the JWT case "the worst" and claimed a cut could
+ * publish "the whole header plus arbitrary payload". Measured: at this file's
+ * message sites the interpolation is followed by a literal period, `.` is inside
+ * that rule's character class, so the period SUPPLIES the missing second dot and
+ * the pattern re-matches. The payload portion is bounded under 6 characters, and
+ * the header is base64 of the `alg`/`typ` object, which is not secret. The same
+ * accident is why the `code=` figure is 18 and not 19: at 19 survivors the
+ * trailing period pushes the match back over the `{20,}` floor.
+ *
+ * Worth stating plainly, because it happened twice in two rounds: the first
+ * version of this comment understated the exposure by naming only `code=`, and
+ * the correction then OVERSTATED it by promoting JWT to worst. Both were written
+ * from reasoning rather than from measuring every cut position.
+ *
+ * The durable lesson survives either ordering: ADDING A LENGTH FLOOR TO A
+ * REDACTION RULE CREATES THIS EXPOSURE unless redaction precedes every
+ * truncation. Rules with NO floor — `AccountKey=`, `sig=`, `password=` — do not
+ * leak by this route, because a truncated fragment still matches and
+ * `redactVerdict()` rescues it downstream.
+ *
+ * Redacting first fixes all of them by construction: whatever the slice cuts
+ * afterwards is either ordinary text or a redaction MARKER, and a truncated
+ * marker carries nothing. `redactVerdict()` still redacts the assembled message
+ * — `redactSecrets` is idempotent, so that stays as defence in depth rather
+ * than being removed.
  */
 function firstLine(s) {
   return redactSecrets(String(s || '').split(/\r?\n/)[0]).slice(0, 300);

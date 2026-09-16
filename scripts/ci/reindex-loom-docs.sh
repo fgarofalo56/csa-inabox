@@ -111,10 +111,19 @@
 #     cannot discharge it.
 #
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
-# `freshness.state === 'fresh'` — the DURABLE, cross-replica signal (the
-# persisted corpus manifest). `job.state` is only the answering REPLICA's view:
-# a poll can land on a replica that never ran the job and read `idle` forever,
-# so job state can prove a FAILURE but never a success.
+# `freshness.state === 'fresh'` — the signal this script waits on. It is
+# cross-replica ONLY when it is read from the persisted corpus manifest, which
+# is the qualification this line lacked for three rounds while the PR body
+# quoted it and called it false. `evaluateFreshness` retains a replica-local
+# `path:size:mtime` fallback, and under that fallback the value is NOT durable
+# and NOT cross-replica — which is the whole defect #4497 records: the roll
+# polled it for 912s across 55 polls while its subject could not converge.
+#
+# So: durable when manifest-backed, replica-local under the stat fallback, and
+# the script must not assume which one it is reading. `job.state` is only ever
+# the answering REPLICA's view: a poll can land on a replica that never ran the
+# job and read `idle` forever, so job state can prove a FAILURE but never a
+# success.
 #
 # A POLL TIMEOUT IS A FAILURE. It is a refusal, not a pass: continuing would
 # leave exactly the stale index this script exists to prevent.
@@ -346,11 +355,29 @@ do_post() {
     echo "reindex POST: the jobId parser exited 0 but wrote to stderr. Its stderr:"
     _dump_redacted "$POST_ERR_FILE"
   fi
-  # ASKED UNCONDITIONALLY, because "there is no id" is the exact condition under
-  # which the correlation cannot fire — whatever the parser's exit status was and
-  # whatever it wrote to stderr.
+  # THE CORRELATION CONSEQUENCE IS UNCONDITIONAL. WHAT THE BODY CONTAINED IS
+  # NOT. Round 12 asked this as one unconditional question and re-created
+  # round 10's R7 defect by a different route: `$POST_JOB_ID` is ALSO empty when
+  # the parser never RAN, so on the crash path the script printed
+  #
+  #   reindex POST: the jobId parser EXITED 1 — the response body was not read.
+  #   reindex POST: the response body carried no readable jobId — ...
+  #
+  # Line 1 says the body was not read; line 2 states what it contained. A
+  # reviewer measured it with a body that DID carry `jobId: j-dead`, so the
+  # second line was not merely unwarranted, it was false. `PRC != 0` implies an
+  # empty id, so this was 100% of the crash path, not a corner.
+  #
+  # Two claims with different warrants, so they are now two sentences. "The
+  # correlation cannot fire" holds whenever there is no id, whatever the reason.
+  # "The body carried no readable jobId" is a claim about CONTENTS and needs the
+  # parser to have actually read them.
   if [ -z "$POST_JOB_ID" ]; then
-    echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
+    if [ "$PRC" -eq 0 ]; then
+      echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
+    else
+      echo "reindex POST: no jobId was read, so the durable-record correlation below will not fire for this attempt. What the body contained is UNKNOWN — the parser did not run."
+    fi
   fi
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
   # REDACTED, not raw. This dumped the remote body verbatim with `head -c 800`,
@@ -405,23 +432,31 @@ get_status() {
   # comment claimed the boundary was closed on this file; it covered one of the
   # two invocations. Disclosed ONCE, on the first poll that hits it, because 60
   # copies of the same traceback is not 60 times the information.
-  # TRUNCATED FIRST, so the file holds ONLY this invocation's stderr.
+  # TRUNCATED FIRST — A TESTABILITY AFFORDANCE, NOT A BUG FIX. Read the
+  # correction below before citing this line as evidence of anything.
   #
-  # ROUND 16 (review B3, and a defect found while proving the test for it).
-  # `$REDACT_ERR_FILE` is shared with `do_post`, which truncates it at `:264`
-  # and then lets `_dump_redacted` write into it. The poll loop read `[ -s ]`
-  # on that same file WITHOUT clearing it, so bytes left over from the POST
-  # phase made this disclosure fire and report a count for stderr the poll
-  # parser never wrote — "the poll parser wrote N byte(s)" asserting something
-  # about an invocation that produced none. That is R7, and it is the third
-  # R7 defect on this branch committed by a fix for an R7 defect.
+  # ROUND 13 ADDED THIS AND CLAIMED IT FIXED A LIVE R7 DEFECT. That claim was
+  # FALSE and a reviewer measured it. The reasoning was that `$REDACT_ERR_FILE`
+  # is shared with `do_post`, so leftover POST-phase bytes could make the size
+  # test below fire and report a count for stderr the poll parser never wrote.
+  # What that overlooked is that `2> "$REDACT_ERR_FILE"` on the very next line
+  # opens the file with O_TRUNC before exec — so the redirect ITSELF clears it
+  # every iteration. A node run that writes nothing leaves 0 bytes; one that
+  # fails to start leaves only its own bytes. Stale content cannot reach the
+  # `[ -s ]` test WHILE THE REDIRECT EXISTS.
   #
-  # It also MASKED the redirect. A reviewer deleted `2> "$REDACT_ERR_FILE"`
-  # from the line below and nothing went red; the first test written to catch
-  # that deletion ALSO passed, because the stale POST-phase bytes kept the
-  # disclosure firing whether or not the redirect existed. Clearing the file
-  # here is what makes the redirect observable: without it the file stays
-  # empty, `[ -s ]` is false, and the disclosure legitimately disappears.
+  # So this line changes no shipped behaviour. What it does is make the redirect
+  # OBSERVABLE: with the redirect deleted, nothing clears the file, leftover
+  # bytes keep the disclosure firing, and the mutation is invisible — which is
+  # exactly why a reviewer's S4 arm survived, and why the first test written to
+  # catch S4 also passed. With this clearing in place, deleting the redirect
+  # leaves the file empty, the disclosure legitimately disappears, and S4 dies.
+  #
+  # Kept for that reason and labelled honestly. Round 13's comment asserting a
+  # cause it had not established is the R7 defect this file exists to refuse,
+  # committed in the sentence claiming to have fixed one — the fourth iteration
+  # of this branch's own pattern, and the correction is recorded rather than
+  # quietly reworded.
   : > "$REDACT_ERR_FILE"
   STATES=$(node "$PARSER" "$POLL_BODY_FILE" 2> "$REDACT_ERR_FILE") || true
   if [ -s "$REDACT_ERR_FILE" ] && [ "${POLL_PARSER_STDERR_SEEN:-}" != "true" ]; then
@@ -701,7 +736,16 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   # keeps `unknown` out of the streak, and it is tested directly.
   #
   # The "exactly ONE" is a claim about the whole suite, so name the population it
-  # was measured over: the 43 tests this file held at the time. It now holds 47.
+  # was measured over: the 43 tests this file held at the time.
+  #
+  # DO NOT WRITE THE CURRENT COUNT HERE AGAIN. This sentence has carried "now
+  # holds 45", then "47", and was still saying 47 when the file held 51 —
+  # corrected three times, wrong again within one round each time, inside the
+  # very comment that exists to pin a population. A number no test enforces rots
+  # by default. The population the claim was measured over (43) is FIXED and
+  # belongs here; today's count is not, and is one `grep -c '^test('` away for
+  # anyone who needs it.
+  #
   # The four added later in this same PR, identified by diffing `^test(` lines
   # commit-by-commit rather than from memory:
   #   b18cdfb  the two sanitizers agree (an id carrying the field separator)
