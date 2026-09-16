@@ -750,9 +750,21 @@ def test_the_exit_args_wiring_cannot_pass_a_count_where_the_total_belongs():
     # `total=killed` mutation: the count and the total come from different
     # objects, so no edit here can make them the same by accident.
     assert args["total"] != args["killed"]
-    # AND THE DIGESTS MUST NOT COLLAPSE ONTO EACH OTHER. `"after": before` is
-    # the sandbox-escape check silently disarmed: it makes `_exit_code` compare
-    # a value with itself, which is true by construction.
+    # THE DIGESTS MUST NOT COLLAPSE ONTO EACH OTHER -- but this line is NOT what
+    # catches that, and saying otherwise would be the defect this round is about.
+    #
+    # A reviewer measured it: deleting this assertion changes nothing, because
+    # the dict-equality assertion above pins BOTH values exactly and throws
+    # first. Asked the honest question -- what value would make this line fail
+    # that would not already fail the line above it? -- there is none. The
+    # `"after": before` swap is killed by the dict comparison and by the
+    # composed `_exit_code` call below; this is a third statement of a property
+    # already covered twice, not a third killer.
+    #
+    # Kept deliberately, and only for what it actually does: it fires if the
+    # dict assertion is ever loosened to a subset check, which is a plausible
+    # future edit. It is not coverage of the swap and must not be counted as
+    # such -- the rule that produced this round, applied to the round itself.
     assert args["before"] != args["after"]
 
     # Composed into the real refusal rather than checked as a shape: with
