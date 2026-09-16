@@ -108,43 +108,38 @@ regexes = [
     '''^QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ$''',
     '''^Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA$''',
     '''^QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ$''',
-    # #4498 round 13 — the B1 straddle fixture in
+    # #4498's B1 straddle fixture, in
     # scripts/ci/__tests__/classify-reindex-result.test.mjs. A 40-character
-    # synthetic value with no meaning, chosen only because it is long enough to
-    # span the 300-character truncation boundary and matches the `code=` rule's
-    # `[A-Za-z0-9._~+/=-]{20,}` class. Its entropy (4.82) trips
-    # `generic-api-key`. It is not a credential and never was one.
+    # synthetic value with no meaning: it is long enough to span a 300-character
+    # truncation boundary and matches the `code=` rule's
+    # `[A-Za-z0-9._~+/=-]{20,}` class, which is exactly what the test needs to
+    # prove that truncating BEFORE redacting publishes a credential fragment.
+    # Its entropy (4.82) trips `generic-api-key`. It is not a credential.
     #
-    # ANCHORED, and this entry is why: `allowlist.regexes` are compiled with a
-    # bare `regexp.MustCompile` and tested with `re.FindString(secret) != ""`,
-    # so an unanchored entry matches any secret CONTAINING this text and would
-    # mask a real credential that happened to embed it.
+    # ON MAIN, FOR THE SAME REASON THE FOUR ENTRIES ABOVE ARE. `Secret Scan`
+    # runs `gitleaks detect --source .` over full history while `--config` reads
+    # the CHECKED-OUT branch, so a fixture committed on one branch red-lines
+    # every OTHER open PR until its allowlist entry is on the default branch.
+    # Measured 2026-09-16: the finding pinned to commit `a083241a2fa` on
+    # #4498's branch was failing `Secret Scan` on #4491, which does not contain
+    # that commit and cannot fix it. Landing the entry here is the only remedy
+    # that unblocks both.
     #
-    # AND IT MUST MERGE WITH THE COMMIT IT COVERS. `Secret Scan` runs
-    # `gitleaks detect --source .` with no `--log-opts`, so it walks the whole
-    # history — 4285 commits — and pinned this finding to `a083241a2fa`.
-    # Editing or deleting the fixture at HEAD does NOT clear it; only an
-    # allowlist entry does, and if this file lands without the fixture's commit
-    # (or the fixture lands without this entry) main inherits the red.
+    # ANCHORED: `allowlist.regexes` compile with a bare `regexp.MustCompile` and
+    # are tested with `re.FindString(secret) != ""`, so there is no implicit
+    # anchoring — an unanchored entry would mask any real credential that merely
+    # CONTAINS this text.
     '''^A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0$''',
-    # #4498 rounds 17-18 — the straddle fixture for `redactBodyFile` (800-char
-    # bound) and `pollFields` (300-char bound), in
-    # scripts/ci/__tests__/parse-reindex-poll.test.mjs. 38 synthetic characters,
-    # entropy 5.25, same purpose as the entry above: long enough to span a
-    # truncation boundary and inside the `code=` rule's class, which is what
-    # proves truncate-before-redact publishes a fragment. Not a credential.
+    # #4498's SECOND straddle fixture, in
+    # scripts/ci/__tests__/parse-reindex-poll.test.mjs — 38 synthetic
+    # characters, entropy 5.25, same job as the one above at the 800-char and
+    # 300-char bounds instead of 300. Committed twice (rounds 17 and 18) before
+    # its allowlist entry existed, which is the same one-round lag this file
+    # keeps recording.
     #
-    # ADDED ONE ROUND LATE, AND THE RULE IT BROKE IS WRITTEN SIX LINES UP.
-    # "It must merge with the commit it covers" was recorded when the entry
-    # above landed; round 17 then added a NEW high-entropy fixture without
-    # pairing it with a config entry, and round 18 reused the same value, so it
-    # is in history twice. `Secret Scan` was green at `001b6e85314` and red on
-    # both pushes after.
-    #
-    # Changing the fixture now would NOT fix it: `gitleaks detect` walks
-    # history, so every value ever committed stays reachable. Allowlisting the
-    # committed values is the only remedy; de-entropying a future fixture avoids
-    # the next one.
+    # Landed here for the same reason as its sibling: the finding is reachable
+    # from every PR's full-history scan, so it fails PRs that do not contain it
+    # and cannot fix it. Anchored for the same reason too.
     '''^Zq7Rt2Wm9Xk4Lp6Vn8Jd3Hs5Fg1Ba0CeYuIoPw$''',
 ]
 
