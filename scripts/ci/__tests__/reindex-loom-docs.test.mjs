@@ -1395,9 +1395,14 @@ test('#4498 round 11 — a parser that CANNOT START is named as such, and its by
       // one line after saying the body was not read, about a body that had one.
       assert.doesNotMatch(out, /the response body carried no readable jobId/, out);
       // The consequence IS still disclosed — the correlation genuinely cannot
-      // fire — but stated from what is known, with the contents marked unknown.
-      assert.match(out, /no jobId was read, so the durable-record correlation/, out);
-      assert.match(out, /What the body contained is UNKNOWN/, out);
+      // fire — but stated from what is known. ROUND 15: it must not name a
+      // CAUSE either. A reviewer showed the exit status has at least two
+      // producers (node cannot start; node runs and the parser throws on a
+      // well-formed body that HAS a jobId), byte-identical output for both, so
+      // "the parser did not run" is false on one of them.
+      assert.match(out, /the jobId parser exited \d+ without producing a jobId/, out);
+      assert.doesNotMatch(out, /the parser did not run/, out);
+      assert.match(out, /are both UNKNOWN here/, out);
 
       // ROUND 16 REVIEW, B2 — THE SENTENCE IS NOT THE BEHAVIOUR. Every
       // assertion above is satisfied by a `_dump_redacted` whose else-branch

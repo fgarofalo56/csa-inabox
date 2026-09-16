@@ -653,17 +653,27 @@ function summarize(parsed) {
  * THAT ORDERING IS ITSELF A CORRECTION, and the first version of this docblock
  * had it backwards — it called the JWT case "the worst" and claimed a cut could
  * publish "the whole header plus arbitrary payload". Measured: at this file's
- * message sites the interpolation is followed by a literal period, `.` is inside
- * that rule's character class, so the period SUPPLIES the missing second dot and
- * the pattern re-matches. The payload portion is bounded under 6 characters, and
- * the header is base64 of the `alg`/`typ` object, which is not secret. The same
- * accident is why the `code=` figure is 18 and not 19: at 19 survivors the
- * trailing period pushes the match back over the `{20,}` floor.
+ * message sites the interpolation is followed by a literal period, and that
+ * period lets the JWT pattern re-match, bounding the published payload to ≤5
+ * characters. The header is base64 of the `alg`/`typ` object and is not secret.
  *
- * Worth stating plainly, because it happened twice in two rounds: the first
- * version of this comment understated the exposure by naming only `code=`, and
- * the correction then OVERSTATED it by promoting JWT to worst. Both were written
- * from reasoning rather than from measuring every cut position.
+ * THE MECHANISM IS DIFFERENT FOR THE TWO RULES, and a previous version of this
+ * paragraph gave the `code=` explanation for both. Read the classes rather than
+ * trusting this comment — they were lifted at runtime to write it:
+ *
+ *   code=  class is [A-Za-z0-9._~+/=-]   — the period is INSIDE the class, so a
+ *          trailing period EXTENDS the match. That is why the figure is 18 and
+ *          not 19: at 19 survivors the period pushes it back over the {20,}
+ *          floor and the rule fires again.
+ *   JWT    classes are [A-Za-z0-9_-] ×3  — NO period. The period is not part of
+ *          any class; it satisfies the pattern's own second literal `\.`
+ *          separator, which is what lets the rule re-match at all.
+ *
+ * Worth stating plainly, because it has now gone wrong three rounds running:
+ * the first version understated the exposure by naming only `code=`, the
+ * correction OVERSTATED it by promoting JWT to worst, and the correction to
+ * that attributed the right conclusion to the wrong mechanism. Each was written
+ * from reasoning rather than from reading the regex.
  *
  * The durable lesson survives either ordering: ADDING A LENGTH FLOOR TO A
  * REDACTION RULE CREATES THIS EXPOSURE unless redaction precedes every

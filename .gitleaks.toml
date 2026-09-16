@@ -108,6 +108,25 @@ regexes = [
     '''^QW5ub3RhdGlvbkFjY291bnRLZXlEb05vdFB1Ymxpc2g9PQ$''',
     '''^Zm9yYmlkZGVuLXNpZ25hdHVyZS12YWx1ZS1kby1ub3QtcHVibGlzaA$''',
     '''^QWNjb3VudEtleVRoYXRNdXN0Tm90UmVhY2hUaGVMb2c9PQ$''',
+    # #4498 round 13 — the B1 straddle fixture in
+    # scripts/ci/__tests__/classify-reindex-result.test.mjs. A 40-character
+    # synthetic value with no meaning, chosen only because it is long enough to
+    # span the 300-character truncation boundary and matches the `code=` rule's
+    # `[A-Za-z0-9._~+/=-]{20,}` class. Its entropy (4.82) trips
+    # `generic-api-key`. It is not a credential and never was one.
+    #
+    # ANCHORED, and this entry is why: `allowlist.regexes` are compiled with a
+    # bare `regexp.MustCompile` and tested with `re.FindString(secret) != ""`,
+    # so an unanchored entry matches any secret CONTAINING this text and would
+    # mask a real credential that happened to embed it.
+    #
+    # AND IT MUST MERGE WITH THE COMMIT IT COVERS. `Secret Scan` runs
+    # `gitleaks detect --source .` with no `--log-opts`, so it walks the whole
+    # history — 4285 commits — and pinned this finding to `a083241a2fa`.
+    # Editing or deleting the fixture at HEAD does NOT clear it; only an
+    # allowlist entry does, and if this file lands without the fixture's commit
+    # (or the fixture lands without this entry) main inherits the red.
+    '''^A1b2C3d4E5f6G7h8J9k0L1m2N3o4P5q6R7s8T9u0$''',
 ]
 
 paths = [

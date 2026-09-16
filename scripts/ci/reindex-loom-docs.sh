@@ -111,19 +111,25 @@
 #     cannot discharge it.
 #
 # ── WHAT COUNTS AS DONE ─────────────────────────────────────────────────────
-# `freshness.state === 'fresh'` — the signal this script waits on. It is
-# cross-replica ONLY when it is read from the persisted corpus manifest, which
-# is the qualification this line lacked for three rounds while the PR body
-# quoted it and called it false. `evaluateFreshness` retains a replica-local
-# `path:size:mtime` fallback, and under that fallback the value is NOT durable
-# and NOT cross-replica — which is the whole defect #4497 records: the roll
-# polled it for 912s across 55 polls while its subject could not converge.
+# `freshness.state === 'fresh'` — the signal this script waits on. Whether it is
+# cross-replica depends on WHAT THE MANIFEST VALUE IS COMPARED AGAINST, and an
+# earlier version of this paragraph got the discriminator wrong: it said the
+# signal is durable "only when read from the persisted corpus manifest", but the
+# stat fallback compares `manifest.statFingerprint` — also from the manifest. A
+# reviewer measured that the test returns true on the very path it was warning
+# about.
 #
-# So: durable when manifest-backed, replica-local under the stat fallback, and
-# the script must not assume which one it is reading. `job.state` is only ever
-# the answering REPLICA's view: a poll can land on a replica that never ran the
-# job and read `idle` forever, so job state can prove a FAILURE but never a
-# success.
+# The real split is the comparand:
+#   compared against a BUILD COMMIT        -> durable, cross-replica
+#   compared against a replica-local
+#     `path:size:mtime` fingerprint        -> replica-local, cannot converge
+#
+# Under the fallback the value is not durable and not cross-replica, which is
+# the whole defect #4497 records: the roll polled it for 912s across 55 polls
+# while its subject could not change. The script must not assume which one it is
+# reading. `job.state` is only ever the answering REPLICA's view: a poll can land
+# on a replica that never ran the job and read `idle` forever, so job state can
+# prove a FAILURE but never a success.
 #
 # A POLL TIMEOUT IS A FAILURE. It is a refusal, not a pass: continuing would
 # leave exactly the stale index this script exists to prevent.
@@ -376,7 +382,23 @@ do_post() {
     if [ "$PRC" -eq 0 ]; then
       echo "reindex POST: the response body carried no readable jobId — the durable-record correlation below will not fire for this attempt."
     else
-      echo "reindex POST: no jobId was read, so the durable-record correlation below will not fire for this attempt. What the body contained is UNKNOWN — the parser did not run."
+      # STATES THE MEASUREMENT AND STOPS. Round 14 wrote "the parser did not
+      # run" here, which swapped a false claim about the body for a false claim
+      # about the CAUSE. The exit status is one bit and at least two things
+      # produce it. A reviewer drove two runs of the real script to
+      # byte-identical output: (A) node cannot start, and (B) node starts, the
+      # body is well-formed JSON carrying a `jobId` key, and the parser throws
+      # at a string coercion — `rc=1`, `at String (<anonymous>)`, after
+      # `readFileSync` and `JSON.parse` both succeeded. In case B both halves of
+      # the round-14 sentence are false and an operator reads a broken runner
+      # where the cause is a remote body shape.
+      #
+      # Guarding that one coercion would NOT make the sentence true: it removes
+      # one producer of a non-zero exit, not all of them — a stdout write
+      # failure or an OOM after the read remain. A claim that cannot be made
+      # exhaustively true must not be asserted at all. What IS true on every
+      # path is the measurement: a status, and the absence of an id.
+      echo "reindex POST: the jobId parser exited $PRC without producing a jobId, so the durable-record correlation below will not fire for this attempt. What the body contained, and why the parser exited, are both UNKNOWN here."
     fi
   fi
   echo "reindex POST $ENDPOINT -> HTTP $CODE${POST_JOB_ID:+ job=$POST_JOB_ID}"
@@ -454,9 +476,14 @@ get_status() {
   #
   # Kept for that reason and labelled honestly. Round 13's comment asserting a
   # cause it had not established is the R7 defect this file exists to refuse,
-  # committed in the sentence claiming to have fixed one — the fourth iteration
-  # of this branch's own pattern, and the correction is recorded rather than
-  # quietly reworded.
+  # committed in the sentence claiming to have fixed one — another instance of
+  # this branch's recurring pattern, where each round's remedy carries the next
+  # round's defect. DELIBERATELY NOT NUMBERED: a reviewer caught this sentence
+  # saying "the fourth iteration" while the hand-off describing the same run
+  # called it the sixth, in the very commit that added "DO NOT WRITE THE CURRENT
+  # COUNT HERE AGAIN" eleven lines away. The count depends on where you start
+  # counting and nothing enforces it; the pattern is the durable claim. The
+  # correction is recorded rather than quietly reworded.
   : > "$REDACT_ERR_FILE"
   STATES=$(node "$PARSER" "$POLL_BODY_FILE" 2> "$REDACT_ERR_FILE") || true
   if [ -s "$REDACT_ERR_FILE" ] && [ "${POLL_PARSER_STDERR_SEEN:-}" != "true" ]; then
