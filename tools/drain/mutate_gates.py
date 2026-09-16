@@ -2244,6 +2244,28 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if not os.path.exists(self.path):\n            return None",
         "        if not os.path.exists(self.path):\n            return 'absent'",
     ),
+    (
+        ("RW17 the post-write digest goes back to RE-READING the file instead of "
+         "hashing the bytes just written, re-opening the window between "
+         "os.replace and that read: a writer landing there leaves this "
+         "transaction holding SOMEONE ELSE'S digest and the next guarded save "
+         "sails through. Killed by COUNTING the read-backs (1 at head, 2 "
+         "mutated), because the two implementations differ only inside a "
+         "microseconds-wide gap and no sequential test can see the difference"),
+        "ledger.py",
+        "        self.loaded_digest = hashlib.sha256(blob).hexdigest()",
+        "        self.loaded_digest = self._on_disk_digest()",
+    ),
+    (
+        ("RW18 the BOOTSTRAP exemption disappears, so `--bootstrap` over an "
+         "existing ledger refuses to reseed - the one operation whose purpose "
+         "is to replace what is there, and the recovery path for a wiped or "
+         "wrong-repo ledger. Fails CLOSED, which is why it survived a suite "
+         "that only ever asserted the guard fires"),
+        "tick.py",
+        "        led.save(if_unchanged=not args.bootstrap)",
+        "        led.save(if_unchanged=True)",
+    ),
 ]
 
 

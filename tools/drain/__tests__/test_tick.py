@@ -483,6 +483,26 @@ def led_changed_error():
     return _l.LedgerChangedError
 
 
+def test_bootstrap_still_reseeds_over_an_existing_ledger(monkeypatch, tmp_path):
+    """THE OTHER HALF of `if_unchanged=not args.bootstrap`, and the half that was
+    unarmed: `if_unchanged=True` survived the suite, and a reviewer measured the
+    consequence by driving `main()` under that mutation -- `tick.py --bootstrap`
+    over an EXISTING ledger returns rc=1 and refuses to reseed.
+
+    It fails closed, so it is not a silent loss; it is the one operation whose
+    whole purpose is to replace what is there, refusing to do so. `--bootstrap`
+    is how a wiped or wrong-repo ledger gets recovered, which makes "cannot
+    reseed" a bad state to be one token away from.
+
+    DRIVES `main()` rather than transcribing its expression -- the transcription
+    is what let the wrong expression stay green for a whole round.
+    """
+    rc = _main_over(monkeypatch, tmp_path, _live(range(1000, 1020)), ["--bootstrap"])
+    assert rc == 0, "--bootstrap refused to reseed over an existing ledger"
+    assert os.path.exists(str(tmp_path / "state.json") + ".bak"), "no prior-ledger backup"
+    assert len(Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"]).load().items) == 20
+
+
 def test_negative_control_main_actually_calls_the_refresh_guard(monkeypatch, tmp_path):
     """The unit tests above prove `guard_refresh` refuses the right inputs. They
     say nothing about whether anything CALLS it -- which is precisely the shape

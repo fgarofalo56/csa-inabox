@@ -857,13 +857,69 @@ def test_the_same_transaction_can_save_twice(tmp_path):
     assert "second" in Ledger(path, receipts=RECEIPTS).load().notes
 
 
-def test_an_unloaded_ledger_is_not_guarded_so_bootstrap_still_works(tmp_path):
-    """`--bootstrap` DELIBERATELY discards the ledger: it never read the file, so
-    there is no prior document to be consistent with. Guarding it would refuse
-    the one operation whose whole purpose is to replace what is there."""
+def test_a_guarded_save_does_not_read_the_file_back_after_writing(monkeypatch, tmp_path):
+    """THE POST-WRITE WINDOW, armed by COUNTING rather than by racing.
+
+    `save()` used to refresh its digest by RE-READING the file after
+    `os.replace`. A writer landing in that gap leaves this ledger holding
+    someone else's digest, and the next guarded save then sails through the
+    comparison it was supposed to fail. Fixed by hashing the payload that was
+    written.
+
+    NO SEQUENTIAL TEST CAN KILL THAT MUTATION. The two implementations differ
+    only inside a microseconds-wide gap between `os.replace` and the re-read, so
+    any test that drives them in order sees identical results -- a reviewer
+    spent a round establishing exactly that, and corrected themselves twice
+    doing it.
+
+    What IS deterministic is the OBSERVABLE the fix changes: a guarded save
+    reads the file once, for the comparison, and never again. Under the mutation
+    it reads twice. Counting the reads pins the property without needing to win
+    a race.
+
+    This asserts on a call count, which is closer to the implementation than
+    most tests here. That is deliberate and disclosed: the alternative is
+    leaving a correct fix silently green, so that a future editor restoring the
+    re-read gets no signal at all.
+    """
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+
+    reads = []
+    real = Ledger._on_disk_digest
+
+    def counting(self):
+        reads.append(1)
+        return real(self)
+
+    monkeypatch.setattr(Ledger, "_on_disk_digest", counting)
+    led.notes.append("one guarded save")
+    led.save(if_unchanged=True)
+
+    assert len(reads) == 1, (
+        f"a guarded save read the ledger back {len(reads)} times; the second read "
+        "is the post-write refresh, and a writer in that gap leaves this "
+        "transaction holding someone else's digest"
+    )
+
+
+def test_an_unguarded_save_replaces_whatever_is_there(tmp_path):
+    """`if_unchanged=False` is the unguarded write `--bootstrap` needs: it
+    replaces the document outright rather than reconciling with it.
+
+    IT NO LONGER CLAIMS TO MIRROR `main()`. The previous version transcribed
+    `fresh.save(if_unchanged=fresh.loaded_from_disk)` with the comment "exactly
+    what tick.main() does" -- and that stopped being true the moment `main()`
+    switched to `not args.bootstrap`, so the test went on agreeing with a copy
+    of an expression that no longer existed. A reviewer found it at its second
+    site after the same defect produced the round-4 blocker at its first.
+
+    Whether `main()` passes the right flag is `main()`'s test to make, and it is
+    made by driving `main()` -- see `test_bootstrap_still_reseeds_over_an_
+    existing_ledger` in test_tick.py.
+    """
     path = _seed_two(tmp_path)
     fresh = Ledger(path, receipts=RECEIPTS)  # no .load()
-    assert fresh.loaded_from_disk is False
     fresh.upsert(3001, "seeded", "W6-ci", lane="lane:ci", size=1)
-    fresh.save(if_unchanged=fresh.loaded_from_disk)  # exactly what tick.main() does
+    fresh.save(if_unchanged=False)
     assert 3001 in Ledger(path, receipts=RECEIPTS).load().items
