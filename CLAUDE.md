@@ -14,8 +14,9 @@ live in `.claude/rules/` and load automatically — they are not restated here.
 
 ## The die-hard rules
 
-`.claude/rules/*.md` auto-load — twelve of them. **Eight carry a `die-hard`
-marker in the file itself** (`no-vaporware`, `no-fabric-dependency`,
+`.claude/rules/*.md` auto-load — eleven globally, plus the path-scoped
+`tool-specifications.md` (twelve files in the directory). **Eight carry a
+`die-hard` marker in the file itself** (`no-vaporware`, `no-fabric-dependency`,
 `cloud-parity`, `auto-bind-by-default`, `deploy-integrity`, `ux-baseline`,
 `web3-ui`, `assertion-design`); the table below lists those eight plus
 `ui-parity`, `session-end` and `task-tracking`, which define what *done* means

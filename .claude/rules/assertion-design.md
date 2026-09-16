@@ -74,9 +74,10 @@ and discovering the answer was "none".
    implementation.
 4. **Absence-only assertions are paired with a positive one.** `doesNotMatch`
    alone is satisfied by deleting the feature. Pin that the thing still works.
-   **This binds new and touched assertions only.** There are ~407 existing
-   `doesNotMatch` sites; they are not retroactively in violation, and this rule
-   is not a licence to open 407 issues. Fix one when you touch its test.
+   **This binds new and touched assertions only.** There are 432 existing
+   `doesNotMatch` sites and 96 existing `assert ... not in` sites; they are not
+   retroactively in violation, and this rule is not a licence to open 528
+   issues. Fix one when you touch its test.
 5. **An un-killable assertion is DISCLOSED, not counted.** If no input can break
    it, say so at the site and say what it is for. An equivalent mutant is
    evidence about the arm, not a gap in the suite — but it must be named.
@@ -109,12 +110,26 @@ same defect this rule is about — a control that looks like it watches.
 #    zero, and do not read a clean result as evidence the suite has teeth.
 grep -rnE "assert(\.ok)?\(\s*(true|True|1)\s*\)" tests/ scripts/ tools/ apps/
 
-# 2. Absence-only tests. 432 `doesNotMatch` hits, and the rule binds only the
-#    ones you touch (see "done" #4) -- so this is a list to check AGAINST your
-#    diff, never a backlog to burn down.
-#    `assertNotIn` is not used in this repo (0 hits) and bare `not in` is 300
-#    hits of ordinary control flow; neither belongs in this grep.
+# 2. Absence-only tests, JS/TS side. 432 hits. The rule binds only the ones you
+#    touch (see "done" #4) -- check this AGAINST your diff, never burn it down.
 grep -rn "doesNotMatch" tests/ scripts/ tools/ apps/
+
+# 3. Absence-only ASSERTIONS, Python side. 96 hits, and they are the ones
+#    "done" #4 actually governs -- an earlier draft of this rule deleted this
+#    arm on the claim that `not in` is "ordinary control flow", which is false:
+#    bare ` not in ` is ~877 hits at this scope, but the assert-anchored subset
+#    below is 96 and is nearly all signal.
+grep -rnE "^[[:space:]]*assert .* not in " tests/ scripts/ tools/ apps/
+
+# `assertNotIn` is deliberately absent: 0 hits, not an idiom here.
+#
+# THE BARE-SUBSTRING COUNTS ARE PATTERN-SENSITIVE, so quote the pattern with
+# the number or the number means nothing: ` not in ` (both spaces) is 877 at
+# this four-directory scope and 300 at `tests/ scripts/ tools/`, and dropping
+# the trailing space moves it again. An earlier draft of this rule published
+# the three-directory number under a four-directory scope line -- the same
+# could-not-fail error the table above is about, committed in the paragraph
+# warning about it.
 ```
 
 **The real check is not greppable**, and no version of it will be: take the
