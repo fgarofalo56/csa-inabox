@@ -36197,7 +36197,7 @@
             "declaredSinkCount": 1,
             "sinks": [
               {
-                "id": "stdout:member:837",
+                "id": "stdout:member:847",
                 "surface": "stdout",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49849,9 +49849,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-16T00:25:16.014Z",
-      "commit": "a6ba5862ddceb492513711dab4111dadee002d04",
-      "inputsDigest": "df614c31ae9edd8b",
+      "generatedAt": "2026-09-16T00:51:22.157Z",
+      "commit": "8ba3c1309227ca4ea0c057541df74196f7443b68",
+      "inputsDigest": "ab0193375e38ec04",
       "filesScanned": 2108,
       "scanScopes": [
         {
