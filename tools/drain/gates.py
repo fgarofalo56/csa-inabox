@@ -255,6 +255,20 @@ OTHER_IMPLEMENTED_BY = {
     "wip.max_lanes_hard_ceiling": "tick.select_cycle",
     "ordering.streams": "tick.select_cycle",
     "receipts": "ledger.Ledger.receipt_ok",
+    # THE WRITE PATH, which README long recorded as the gap: `record_receipt`
+    # had no production caller, so every close was a hand edit to an untracked
+    # file. `tick.py` is the writer because it already owns the ledger -- #4489
+    # blocked the same write in `merge_gate` twice, once for rewriting a ledger
+    # a worktree does not own and once for an unlocked read-modify-write with
+    # four lanes live.
+    "receipt_producers": "tick.verify_run_backed_receipt",
+    "receipt_producers.g1-browser": "tick.verify_run_backed_receipt",
+    "receipt_producers.estate": "tick.verify_run_backed_receipt",
+    "receipt_producers.deploy-run": "tick.verify_run_backed_receipt",
+    "receipt_required_steps": "tick.verify_run_backed_receipt",
+    "receipt_required_steps.g1-browser": "tick.verify_run_backed_receipt",
+    "receipt_required_steps.deploy-run": "tick.verify_run_backed_receipt",
+    "receipt_required_steps.estate": "tick.verify_run_backed_receipt",
     # EACH CLASS DECLARED INDIVIDUALLY, now that a dict-valued top-level key no
     # longer exempts its sub-keys. `receipt_satisfies` looks each of these up by
     # name, so they are read, not prose -- and spelling them out is what makes

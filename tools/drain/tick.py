@@ -23,11 +23,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_inventory import stream_for
 from ledger import (
     AUDIT_DEPARTED,
+    CLOSED,
     IN_FLIGHT,
     NEEDS_AUDIT,
     READY,
     TERMINAL,
     Ledger,
+    LedgerChangedError,
 )
 
 import gates
@@ -441,6 +443,301 @@ def emit(led: Ledger, policy: dict, chosen: list, triage: list, audit: list) -> 
     return "\n".join(lines)
 
 
+class ReceiptRefusedError(Exception):
+    """The evidence offered does not establish the receipt. Never recorded."""
+
+
+def _run_evidence(repo: str, run_id: str) -> dict:
+    """Read ONE workflow run and its jobs, by id, from the named repository.
+
+    `--repo` is explicit for the same reason `read_live_issues` makes it
+    explicit: the repository is a policy input, not an accident of the working
+    directory. Never discards stderr (deploy-integrity R7).
+    """
+    rc, out, err = sh(
+        ["gh", "run", "view", run_id, "--repo", repo,
+         "--json", "databaseId,workflowName,conclusion,status,headSha,url,jobs"]
+    )
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"cannot read run {run_id} in {repo} (rc={rc}): {err[:200]}. "
+            "A run this tool cannot read is not evidence - it is an unanswered question."
+        )
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefusedError(f"unparseable run {run_id}: {exc}") from exc
+
+
+def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
+    """Refuse unless this RUN establishes a receipt of this KIND. Returns the ref.
+
+    FAILS CLOSED AT EVERY STEP, because the whole value of a receipt is that it
+    was refused when it could not be taken:
+
+    1. **The kind must be declared** in `policy.receipt_producers`. An undeclared
+       kind cannot be auto-recorded at all -- `operator` is absent on purpose,
+       since a human-only receipt a program can record is not human-only.
+    2. **The workflow must be the declared producer**, matched on the run's own
+       `workflowName`. A green run of some *other* workflow is a fact about that
+       workflow, not about this item.
+    3. **The run must have CONCLUDED success.** `status` is checked separately
+       from `conclusion` so an in-progress run is refused as unfinished rather
+       than as failed -- two different states, and rounding them together is how
+       a still-running job gets read as a verdict.
+    4. **Where the kind declares required STEPS, every one of them must itself
+       have concluded success.** This is `receipts.g1_assertion_rule` in code,
+       and it applies to EVERY run-backed kind rather than to one of them: the
+       first version wired it to `g1-browser` alone, which closed the defect at
+       its label and left it open at two other sites. Measured on real history
+       -- 2 of the last 25 successful `loom-roll-and-validate` runs carry
+       `Roll image + validate live URL` = skipped with steps=0, and
+       `cloud-parity.md` names that shape exactly: a green run whose deploy job
+       was skipped at 0 steps is not a receipt. A skipped JOB reports no steps,
+       so requiring a step INSIDE it catches the skipped-job case and the
+       skipped-step case through one mechanism.
+
+       A kind with NO declared steps is REFUSED rather than waved through. An
+       empty requirement would mean "any green run of this workflow will do",
+       which is the run-level check this whole branch exists to replace.
+    """
+    producers = policy.get("receipt_producers", {})
+    expected = producers.get(kind)
+    if not expected:
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} has no declared producer in policy.receipt_producers, "
+            "so it cannot be recorded from a run. Take it deliberately, or declare a "
+            "producer in policy.json after taking one from that workflow by hand."
+        )
+
+    actual = run.get("workflowName")
+    if actual != expected:
+        raise ReceiptRefusedError(
+            f"run is from workflow {actual!r}, but {kind!r} is only produced by "
+            f"{expected!r} - a green run of a different workflow says nothing about this item"
+        )
+
+    if run.get("status") != "completed":
+        raise ReceiptRefusedError(
+            f"run has status {run.get('status')!r} - it has not finished, so it is "
+            "not yet a verdict either way"
+        )
+    if run.get("conclusion") != "success":
+        raise ReceiptRefusedError(
+            f"run concluded {run.get('conclusion')!r}, not success"
+        )
+
+    required_steps = (policy.get("receipt_required_steps", {}) or {}).get(kind)
+    if not required_steps:
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} declares no required steps in "
+            "policy.receipt_required_steps, so a green run of its producer could be "
+            "green over nothing - refusing rather than accepting a run-level check"
+        )
+
+    by_name: dict[str, list[dict]] = {}
+    for job in (run.get("jobs") or []):
+        for step in (job.get("steps") or []):
+            by_name.setdefault(str(step.get("name")), []).append(step)
+
+    for required in required_steps:
+        found = by_name.get(required) or []
+        if not found:
+            raise ReceiptRefusedError(
+                f"the run never ran the step {required!r}, which is part of what "
+                f"actually establishes a {kind} receipt - a green run without it did "
+                "not do the work (a SKIPPED job reports no steps at all)"
+            )
+        bad = [s for s in found if s.get("conclusion") != "success"]
+        if bad:
+            raise ReceiptRefusedError(
+                f"the step {required!r} concluded "
+                f"{bad[0].get('conclusion')!r}, not success"
+            )
+
+    sha = run.get("headSha")
+    ref = str(run.get("url") or run.get("databaseId"))
+    return f"{ref} (headSha {sha})" if sha else ref
+
+
+def _pr_references_item(repo: str, pr_number: int, item: int) -> None:
+    """Refuse unless PR #pr_number actually NAMES this item. Raises or returns None.
+
+    THE BINDING CHECK, and the first version of this feature did not have one:
+    it disclosed "this does not verify the evidence is ABOUT the item" and left
+    it there. A reviewer showed that disclosure was OVERSTATED for the `--from-pr`
+    path by closing an EPIC on a PR that references it nowhere -- so the
+    limitation was real but the remedy was cheap and already in the package.
+
+    Both surfaces are read, because neither alone is an oracle:
+
+    - `closingIssuesReferences` is the API's own view, and it is NOT complete --
+      it has read empty while a squash commit closed an issue, which is why
+      `merge_gate` reports it BESIDE its own scan rather than trusting it.
+    - `gates.referenced_issues` scans the body and the commit trail and is
+      verb-agnostic, so it sees `Refs #N` -- which is how nearly every PR in
+      this repo names the item it is work on, and which carries no closing verb.
+
+    This is WEAKER than `Item.pr` (#4489) and is not a substitute for it: a PR
+    that references an item is not necessarily that item's lane. It is strictly
+    better than nothing, which is what was here before.
+    """
+    pr = gh_json_local(
+        ["gh", "pr", "view", str(pr_number), "--repo", repo,
+         "--json", "body,commits,closingIssuesReferences"],
+        f"PR #{pr_number} references",
+    )
+    closing = [i["number"] for i in (pr.get("closingIssuesReferences") or [])]
+    messages = [
+        (c.get("messageHeadline", "") + "\n" + c.get("messageBody", ""))
+        for c in (pr.get("commits") or [])
+    ]
+    mentioned = gates.referenced_issues(pr.get("body") or "", messages, repo)
+    if item not in set(closing) | set(mentioned):
+        raise ReceiptRefusedError(
+            f"PR #{pr_number} does not reference #{item} anywhere - not in "
+            f"closingIssuesReferences {closing}, not in its body, not in its commit "
+            "trail. A receipt measured from a PR that never names the item is a "
+            "receipt about a different piece of work."
+        )
+
+
+def gh_json_local(args: list[str], what: str) -> dict:
+    """`sh` + JSON, kept here so this module does not depend on merge_gate for it."""
+    rc, out, err = sh(args)
+    if rc != 0:
+        raise ReceiptRefusedError(f"cannot read {what} (rc={rc}): {err[:200]}")
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise ReceiptRefusedError(f"unparseable {what}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ReceiptRefusedError(f"unexpected shape for {what}")
+    return parsed
+
+
+def record_receipt_from_evidence(
+    led: Ledger, policy: dict, repo: str, number: int,
+    *, from_pr: int | None, from_run: str | None,
+) -> str:
+    """Record a receipt this tool has MEASURED, then close the item. Or refuse.
+
+    THE KIND IS DERIVED FROM THE ITEM'S CLASS, never supplied by the caller.
+    That is the load-bearing choice here. A `--kind` flag would let a
+    `ui-surface` item close on a `ci-green`, which is the exact defect a
+    reviewer reproduced by editing one line of `LANE_RECEIPT_CLASS` -- and the
+    R2 invariant catches a class that MOVED, not a caller who named the wrong
+    one up front.
+
+    `ci-green` is RE-MEASURED here rather than trusted: `merge_gate` collects
+    the evidence and `gates.ci_green_receipt` decides, the same two calls the
+    `--ci-green-receipt` report makes, so this path cannot record a receipt the
+    report would not print. Everything else is run-backed and goes through
+    `verify_run_backed_receipt`.
+
+    This is deliberately NOT "record whatever the operator says". `tick.py`'s
+    own refresh comment already names the failure mode -- inventing a receipt to
+    get past the receipt gate is the gate defeating itself -- and the difference
+    between that and this is that every fact recorded here was read back from
+    GitHub by this function.
+
+    WHAT THIS DOES AND DOES NOT ESTABLISH about the BINDING -- that the evidence
+    is ABOUT this item -- stated precisely, because the first version of this
+    docstring overstated the gap and a reviewer proved it by closing an EPIC on
+    a PR that references it nowhere:
+
+    - `--from-pr` IS bound: `_pr_references_item` refuses unless the PR names
+      the item in `closingIssuesReferences`, its body, or its commit trail.
+      Weaker than `Item.pr` (#4489) -- a PR that references an item is not
+      necessarily that item's lane -- but no longer absent.
+    - `--from-run` is NOT bound, and cannot be from here: a workflow run carries
+      no issue reference at all. Nothing stops a green roll being recorded
+      against a second deploy-path item it never touched. That one genuinely
+      waits on #4489.
+    """
+    item = led.items.get(number)
+    if item is None:
+        raise ReceiptRefusedError(f"#{number} is not in the ledger")
+    if item.state in TERMINAL:
+        raise ReceiptRefusedError(
+            f"#{number} is already {item.state} - re-recording would rewrite a "
+            "terminal item's evidence"
+        )
+
+    issue_class = item.effective_receipt_class
+    kind = (policy.get("receipts", {}) or {}).get(issue_class)
+    if not kind:
+        raise ReceiptRefusedError(
+            f"#{number} resolves to class {issue_class!r}, which names no receipt kind"
+        )
+
+    if kind == "ci-green":
+        if from_pr is None:
+            raise ReceiptRefusedError(
+                f"#{number} is {issue_class!r} and needs a ci-green receipt, which is "
+                "measured from a MERGED PR - pass --from-pr"
+            )
+        import merge_gate  # local: only this path needs it, and it imports gates
+
+        _pr_references_item(repo, from_pr, number)
+        data = merge_gate.collect_ci_green_evidence(repo, from_pr)
+        receipt = gates.ci_green_receipt(
+            data["evidence"],
+            merged_total_count=data["merged_total_count"],
+            merged_changed_files=data["changed_files"],
+            merged_branch=data["branch"],
+            merged_sha=data["merged"],
+            trees_identical=data["trees_identical"],
+            policy=policy,
+            infra_ere=merge_gate.resolve_infra_ere(data["merged"]),
+        )
+        if not receipt.ok:
+            raise ReceiptRefusedError(
+                f"ci-green receipt for PR #{from_pr} is {receipt.summary}; "
+                + "; ".join(receipt.reasons)[:400]
+            )
+        ref = data["merged"]
+        detail = f"{receipt.summary} at {ref} (PR #{from_pr})"
+    else:
+        if not from_run:
+            raise ReceiptRefusedError(
+                f"#{number} is {issue_class!r} and needs a {kind} receipt, which is "
+                "established by a workflow run - pass --from-run"
+            )
+        run = _run_evidence(repo, from_run)
+        ref = verify_run_backed_receipt(kind, run, policy)
+        detail = f"{run.get('workflowName')} run {from_run} concluded success"
+
+    # DISCLOSED AS UN-KILLABLE, per assertion-design.md #5, because a reviewer
+    # spent a round confirming it and the next reader should not have to: in the
+    # CURRENT call graph nothing can reach this `except`. `transition` refuses
+    # on a class/kind mismatch, and the kind is DERIVED from that same class two
+    # lines up, so the two always agree. There is no input that makes this
+    # branch run, and no test here pretends otherwise.
+    #
+    # It is kept because the invariant it protects is real and the call graph is
+    # not a guarantee: `record_receipt` sets three fields AND appends a history
+    # line before `transition` can refuse, so any future caller that stamps a
+    # class separately -- or any change that lets `transition` refuse for a new
+    # reason -- lands on an item carrying a receipt it was refused on.
+    #
+    # THE HISTORY LINE IS PART OF THE RESTORE. A reviewer pointed out that
+    # clearing the three fields alone leaves the audit record asserting a
+    # receipt that does not exist, which is worse than keeping or dropping
+    # both: the fields would say no receipt and the history would say there was
+    # one.
+    before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
+    history_len = len(item.history)
+    led.record_receipt(number, kind, ref)
+    try:
+        led.transition(number, CLOSED, f"receipt verified by tick: {detail}")
+    except Exception:
+        (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) = before
+        del item.history[history_len:]
+        raise
+    return f"#{number} closed on a {kind} receipt - {detail}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--status", action="store_true", help="report, change nothing")
@@ -456,6 +753,18 @@ def main() -> int:
         "--allow-shrink", action="store_true",
         help="suppress the RETENTION clause only; the wrong-repo and zero-issue "
              "refusals still apply",
+    )
+    parser.add_argument(
+        "--record-receipt", type=int, metavar="ITEM",
+        help="verify a receipt for this item from the evidence below and CLOSE it",
+    )
+    parser.add_argument(
+        "--from-pr", type=int, metavar="PR",
+        help="for a ci-green item: the MERGED PR to re-measure the receipt from",
+    )
+    parser.add_argument(
+        "--from-run", metavar="RUN_ID",
+        help="for a run-backed item: the workflow run that establishes the receipt",
     )
     args = parser.parse_args()
 
@@ -496,6 +805,44 @@ def main() -> int:
         print("drained:", led.drained())
         return 0
 
+    if args.record_receipt is not None:
+        # RETURNS BEFORE `read_live_issues`, deliberately. Recording a receipt is
+        # a transaction about ONE item; a refresh rewrites every item's state and
+        # can move things to `needs-audit`. Bolting the two together would mean a
+        # receipt could not be recorded without also accepting whatever the
+        # refresh decided that minute -- and the refresh is the operation this
+        # package already has a memory about erasing a queue.
+        if not led.loaded_from_disk:
+            print(
+                f"NO LEDGER at {STATE_PATH} - nothing to record against. "
+                "Seed it with:  python tools/drain/tick.py --bootstrap",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            summary = record_receipt_from_evidence(
+                led, policy, repo, args.record_receipt,
+                from_pr=args.from_pr, from_run=args.from_run,
+            )
+        except (ReceiptRefusedError, ValueError) as exc:
+            # ValueError is the ledger's own R2 refusal from `transition`. It is
+            # caught here so a refusal prints as a refusal rather than a
+            # traceback -- and NOTHING is saved on this path, so a refused
+            # receipt leaves the ledger byte-identical.
+            print(f"RECEIPT REFUSED: {exc}", file=sys.stderr)
+            return 1
+        try:
+            # if_unchanged: refuse a LOST UPDATE rather than discard a
+            # concurrent lane's close. Reproduced before this existed -- two
+            # overlapping records, and the loser's item silently reverted to
+            # `ready` with its receipt gone.
+            led.save(if_unchanged=True)
+        except LedgerChangedError as exc:
+            print(f"RECEIPT NOT RECORDED: {exc}", file=sys.stderr)
+            return 1
+        print(summary)
+        return 0
+
     live = read_live_issues(repo)
     guard_refresh(led, live, allow_shrink=args.allow_shrink)
     if args.bootstrap and os.path.exists(STATE_PATH):
@@ -515,7 +862,31 @@ def main() -> int:
     for item in chosen:
         led.transition(item.number, IN_FLIGHT, f"selected in cycle {led.cycle}")
 
-    led.save()
+    # GUARDED ON THE REFRESH PATH TOO, and it has to be: CAS on the record side
+    # alone protects nothing if the REFRESH is the writer doing the clobbering.
+    # A cycle that loaded before a lane recorded a receipt would write a
+    # document in which that receipt never existed, reverting a closed item to
+    # `ready` -- the same loss, from the other direction.
+    #
+    # `if_unchanged` is keyed to the BOOTSTRAP FLAG, not to `loaded_from_disk`.
+    # Those are not the same question and the difference is a real loss:
+    # `loaded_from_disk` is False for TWO reasons -- `--bootstrap`, which is
+    # intended, and THE FILE SIMPLY NOT EXISTING, which is not. `load()` returns
+    # early on a missing file, so an ordinary cycle over an absent `state.json`
+    # -- a fresh clone, or the deleted-scratch-file event this package already
+    # has a memory about -- ran with no guard at all. Reproduced through
+    # `main()`: a concurrent lane closed #2002 with a ci-green receipt, the
+    # cycle saved, rc=0, and #2002 was GONE from the document entirely.
+    #
+    # `not args.bootstrap` exempts only what was meant. A missing file is safe
+    # to guard: `_on_disk_digest()` returns None, `loaded_digest` is None, so
+    # the comparison passes when nothing is there and REFUSES if another writer
+    # created it in the meantime.
+    try:
+        led.save(if_unchanged=not args.bootstrap)
+    except LedgerChangedError as exc:
+        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)
+        return 1
 
     print(emit(led, policy, chosen, triage_queue(led), audit_queue(led)))
     print()

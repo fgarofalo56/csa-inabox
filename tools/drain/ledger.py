@@ -13,6 +13,7 @@ string `"merged"` -- the one thing R2 says is never a receipt.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -146,6 +147,15 @@ class Item:
         return RECEIPT_CLASS_BY_STREAM.get(self.stream, DEFAULT_RECEIPT_CLASS)
 
 
+class LedgerChangedError(RuntimeError):
+    """The ledger changed under a transaction that was about to overwrite it.
+
+    Raised only by `save(if_unchanged=True)`. It means a lost update was caught,
+    not that anything is corrupt: nothing has been written, and re-running the
+    command against the current ledger is the whole remedy.
+    """
+
+
 class Ledger:
     """Load / mutate / atomically save the drain state.
 
@@ -161,14 +171,21 @@ class Ledger:
         self.notes: list[str] = []
         self.receipts = receipts or {}
         self.loaded_from_disk = False
+        #: sha256 of the bytes `load()` read, or None when nothing was read.
+        #: `save(if_unchanged=True)` compares it to refuse a LOST UPDATE.
+        self.loaded_digest: str | None = None
 
     # -- persistence --------------------------------------------------------
 
     def load(self) -> Ledger:
         if not os.path.exists(self.path):
             return self
-        with open(self.path, encoding="utf-8") as handle:
-            raw = json.load(handle)
+        with open(self.path, "rb") as handle:
+            data = handle.read()
+        # THE DOCUMENT THIS TRANSACTION READ, kept so `save(if_unchanged=True)`
+        # can tell a lost update from an ordinary write. See `_on_disk_digest`.
+        self.loaded_digest = hashlib.sha256(data).hexdigest()
+        raw = json.loads(data.decode("utf-8"))
         if raw.get("schema") != SCHEMA:
             raise SystemExit(
                 f"ledger schema {raw.get('schema')} != {SCHEMA} - migrate deliberately"
@@ -181,12 +198,42 @@ class Ledger:
         self.loaded_from_disk = True
         return self
 
-    def save(self) -> None:
+    def _on_disk_digest(self) -> str | None:
+        if not os.path.exists(self.path):
+            return None
+        with open(self.path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def save(self, if_unchanged: bool = False) -> None:
         """Write atomically.
 
         A half-written ledger is worse than none: the next cycle would read a
         truncated plan as the whole plan. Write to a temp file in the same
         directory and replace, so a reader sees the old file or the new one.
+
+        `if_unchanged=True` ALSO refuses a LOST UPDATE, which atomicity does not
+        address and which an independent reviewer reproduced here. The file
+        write is atomic; the DOCUMENT is not. `save()` serialises the whole
+        ledger from memory, so two transactions that overlap do not conflict --
+        the second simply writes a document that never contained the first one's
+        change. Measured: A and B both load, B closes #2002 and saves, A closes
+        #2001 and saves, and #2002 is `ready` again with its receipt and its
+        history line gone. Silent, and it un-closes a RECEIPTED item, so the
+        next tick re-selects work that was already done.
+
+        This DETECTS rather than PREVENTS, deliberately. A lock file was the
+        other option and is rejected: this repo has already lost hours to a
+        stale `index.lock` that "looks exactly like a contended one", and a
+        crashed lane holding a lock would wedge the drain. Refusing is safe
+        here because the record path is one short transaction -- the caller
+        re-runs it and wins the next round.
+
+        RESIDUAL WINDOW, disclosed rather than implied: the compare and the
+        `os.replace` are not one atomic step, so two writers can still interleave
+        inside that gap. It is microseconds against the seconds-long
+        load-verify-save window it closes, and it converts a silent revert into
+        a loud refusal. The complete fix is single-writer discipline or a real
+        lock, which is #4489.
         """
         payload = {
             "schema": SCHEMA,
@@ -196,15 +243,45 @@ class Ledger:
             "counts": self.counts(),
             "items": [asdict(i) for i in sorted(self.items.values(), key=lambda x: x.number)],
         }
+        if if_unchanged:
+            current = self._on_disk_digest()
+            if current != self.loaded_digest:
+                raise LedgerChangedError(
+                    f"refusing to save {self.path}: it changed since this transaction "
+                    "read it, so writing would DISCARD the other writer's change rather "
+                    "than conflict with it (the whole document is serialised from "
+                    "memory). Nothing was written. Re-run the command - it reads the "
+                    "current ledger and will succeed unless it races again."
+                )
         directory = os.path.dirname(self.path) or "."
         os.makedirs(directory, exist_ok=True)
+        # SERIALISE ONCE, TO BYTES, and hash THOSE. The first version re-read
+        # the file to refresh the digest after replacing it, which opened a
+        # second window nobody had named: a writer landing between `os.replace`
+        # and that re-read leaves this ledger holding SOMEONE ELSE'S digest, and
+        # the next guarded save then sails straight through the comparison it
+        # was supposed to fail. Found by a reviewer who demonstrated the
+        # interleave rather than asserting it.
+        #
+        # Hashing the payload removes the window entirely: this is exactly what
+        # was written, so no read-back can disagree with it.
+        #
+        # WRITTEN AS BYTES, not text, and that is load-bearing for the digest
+        # rather than a style choice. `open(..., "w")` translates `\n` to
+        # `\r\n` on Windows, so a hash of the in-memory string would not match
+        # a hash of the file `load()` reads back -- every guarded save would
+        # refuse itself on its own write.
+        blob = json.dumps(payload, indent=1).encode("utf-8")
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
         os.close(fd)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=1)
+        with open(tmp, "wb") as handle:
+            handle.write(blob)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.path)
+        # This transaction is now the document on disk, so a caller that saves
+        # twice does not refuse itself on its own previous write.
+        self.loaded_digest = hashlib.sha256(blob).hexdigest()
 
     # -- mutation -----------------------------------------------------------
 

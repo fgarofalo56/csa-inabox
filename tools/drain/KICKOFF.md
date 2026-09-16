@@ -50,10 +50,20 @@ Scope and autonomy are already decided — do not re-ask them:
     not an oversight: a bare `Refs #N` is an aside, good enough to raise the
     count and not good enough to lower it, because a stale copy-pasted number
     must never buy a weaker gate. It relaxes as items start carrying receipts —
-    and note that NOTHING records one automatically today: `record_receipt` has
-    no production caller (#4489), so a receipt is a deliberate hand edit to
-    `state.json`. Measure it with
-    `python tools/drain/operating_point.py --merge-gate`.
+    and a receipt is now RECORDED BY A PROGRAM rather than by hand:
+
+        python tools/drain/tick.py --record-receipt <ITEM> --from-pr <PR>
+        python tools/drain/tick.py --record-receipt <ITEM> --from-run <RUN_ID>
+
+    It VERIFIES before it writes — `ci-green` is re-measured from the merged PR,
+    run-backed kinds must match the workflow declared in
+    `policy.receipt_producers` and have CONCLUDED success, and where
+    `policy.receipt_required_steps` names a step, that step must have concluded
+    success too (a `loom-ui-verify` run with a blank `target_route` skips the
+    capture step and is green having captured nothing). A refusal writes
+    nothing. It does NOT check the evidence is ABOUT the item — that binding
+    needs `Item.pr`, which still has no writer (#4489). Measure the operating
+    point with `python tools/drain/operating_point.py --merge-gate`.
     Run the gate from the PRIMARY checkout if you can; from a worktree it falls
     back to the primary's ledger via git's common dir, and if that fails it
     escalates.

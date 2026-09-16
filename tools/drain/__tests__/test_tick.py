@@ -16,6 +16,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 
@@ -363,6 +364,145 @@ def _main_over(monkeypatch, tmp_path, live, argv):
     return tick.main()
 
 
+def test_blocker_the_cycle_guards_its_save_when_state_json_was_absent(monkeypatch, tmp_path):
+    """DRIVES `main()`, rather than transcribing its expression.
+
+    The first version of this test copied `if_unchanged=led.loaded_from_disk`
+    into the test body, so it agreed with its own copy and could not notice that
+    the expression was wrong. A reviewer reproduced the loss end to end through
+    `main()` instead: `loaded_from_disk` is False for TWO reasons -- `--bootstrap`
+    AND the file simply not existing -- so an ordinary cycle over an absent
+    `state.json` saved with no guard, and a concurrent lane's closed, receipted
+    item vanished from the document entirely.
+
+    Here the ledger file is DELETED after seeding, so `load()` returns early and
+    `loaded_from_disk` is False on a non-bootstrap run. A competing writer then
+    creates the file under the cycle. The save must REFUSE.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    for i in range(20):
+        seed.upsert(1000 + i, f"issue {1000 + i}", "W6-ci", lane="lane:ci", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    real_load = Ledger.load
+
+    def load_then_let_a_lane_write(self):
+        result = real_load(self)          # reads nothing; the file is gone
+        rival = Ledger(state, receipts=POLICY["receipts"])
+        rival.upsert(990002, "a lane's item", "W6-ci", lane="lane:ci", size=1)
+        rival.record_receipt(990002, "ci-green", "green at sha")
+        rival.transition(990002, CLOSED, "the lane closed it")
+        rival.save()
+        return result
+
+    os.remove(state)
+    monkeypatch.setattr(Ledger, "load", load_then_let_a_lane_write)
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(tick, "read_live_issues", lambda _repo: _live(range(1000, 1020)))
+    monkeypatch.setattr(sys, "argv", ["tick.py"])
+
+    assert tick.main() == 1, "the cycle saved over a concurrent lane's close"
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[990002].state == CLOSED
+    assert final.items[990002].receipt_kind == "ci-green"
+
+
+def test_blocker_the_record_path_guards_its_save_too(monkeypatch, tmp_path):
+    """The other call site. RW13 pins the CYCLE's guarded save; nothing pinned
+    the RECORD path's, so `led.save(if_unchanged=True)` -> `led.save()` survived
+    the suite with the comparison inside `Ledger.save` perfectly intact.
+
+    Drives `main()` on `--record-receipt` and lets a rival writer land between
+    the load and the save. The command must refuse rather than discard it.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(900, "a guard", "W6-ci", lane="lane:ci", size=1)
+    seed.upsert(901, "another", "W6-ci", lane="lane:ci", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    def record_then_a_rival_writes(led, _policy, _repo, number, **_kwargs):
+        led.items[number].receipt_kind = "ci-green"
+        led.items[number].receipt_ref = "sha"
+        led.items[number].receipt_taken_under = "guard-or-test-only"
+        led.transition(number, CLOSED, "recorded")
+        rival = Ledger(state, receipts=POLICY["receipts"]).load()
+        rival.record_receipt(901, "ci-green", "green at sha")
+        rival.transition(901, CLOSED, "the rival closed it")
+        rival.save()
+        return "recorded"
+
+    monkeypatch.setattr(tick, "record_receipt_from_evidence", record_then_a_rival_writes)
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "900", "--from-pr", "1"])
+
+    assert tick.main() == 1, "the record path saved over a rival's close"
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[901].state == CLOSED, "the rival's verified close was discarded"
+
+
+def test_positive_control_a_guarded_save_over_an_absent_ledger_succeeds(tmp_path):
+    """The fresh-clone path, and the control that stops the missing-file case
+    being guarded into uselessness.
+
+    `_on_disk_digest` returns None for a missing file and `load()` leaves
+    `loaded_digest` None, so the comparison passes when nothing is there. A
+    constant sentinel instead of None would make this legitimate FIRST WRITE
+    refuse -- which is arm RW16, and which survived until this test existed.
+    """
+    state = str(tmp_path / "nothing-here.json")
+    led = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert led.loaded_from_disk is False
+    led.upsert(910, "first ever item", "W6-ci", lane="lane:ci", size=1)
+    led.save(if_unchanged=True)
+    assert 910 in Ledger(state, receipts=POLICY["receipts"]).load().items
+
+
+def test_a_rival_creating_the_ledger_first_is_still_refused(tmp_path):
+    """The other half: absent at load is not a licence to clobber. If a rival
+    CREATES the file while this transaction held 'absent', the guard must still
+    refuse -- otherwise two fresh clones racing both write and one wins
+    silently."""
+    state = str(tmp_path / "race.json")
+    mine = Ledger(state, receipts=POLICY["receipts"]).load()
+    mine.upsert(911, "mine", "W6-ci", lane="lane:ci", size=1)
+
+    rival = Ledger(state, receipts=POLICY["receipts"])
+    rival.upsert(912, "rival", "W6-ci", lane="lane:ci", size=1)
+    rival.save()
+
+    with pytest.raises(led_changed_error()):
+        mine.save(if_unchanged=True)
+    assert 912 in Ledger(state, receipts=POLICY["receipts"]).load().items
+
+
+def led_changed_error():
+    import ledger as _l
+
+    return _l.LedgerChangedError
+
+
+def test_bootstrap_still_reseeds_over_an_existing_ledger(monkeypatch, tmp_path):
+    """THE OTHER HALF of `if_unchanged=not args.bootstrap`, and the half that was
+    unarmed: `if_unchanged=True` survived the suite, and a reviewer measured the
+    consequence by driving `main()` under that mutation -- `tick.py --bootstrap`
+    over an EXISTING ledger returns rc=1 and refuses to reseed.
+
+    It fails closed, so it is not a silent loss; it is the one operation whose
+    whole purpose is to replace what is there, refusing to do so. `--bootstrap`
+    is how a wiped or wrong-repo ledger gets recovered, which makes "cannot
+    reseed" a bad state to be one token away from.
+
+    DRIVES `main()` rather than transcribing its expression -- the transcription
+    is what let the wrong expression stay green for a whole round.
+    """
+    rc = _main_over(monkeypatch, tmp_path, _live(range(1000, 1020)), ["--bootstrap"])
+    assert rc == 0, "--bootstrap refused to reseed over an existing ledger"
+    assert os.path.exists(str(tmp_path / "state.json") + ".bak"), "no prior-ledger backup"
+    assert len(Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"]).load().items) == 20
+
+
 def test_negative_control_main_actually_calls_the_refresh_guard(monkeypatch, tmp_path):
     """The unit tests above prove `guard_refresh` refuses the right inputs. They
     say nothing about whether anything CALLS it -- which is precisely the shape
@@ -506,3 +646,459 @@ def test_negative_control_the_brief_does_not_leak_the_documentation_key(tmp_path
     assert "Stop and ask for: _," not in brief
     assert "add_trivyignore_entry" in brief
     assert "commit-a-secret" in brief  # the `never` list is surfaced at all
+
+
+# -- THE RECEIPT WRITE PATH --------------------------------------------------
+#
+# README recorded this as the gap for as long as the ledger has existed:
+# `record_receipt` had no production caller, so every close was a hand edit to
+# an untracked file and "the write path is outside the instrumented code".
+# These tests are the instrument.
+#
+# Every refusal below names the value that would make it pass, per
+# `.claude/rules/assertion-design.md`, and the POSITIVE CONTROL comes first --
+# a suite of refusals proves nothing if the happy path never reaches the check,
+# because then every one of them refuses for free.
+
+
+def _g1_run(*, workflow="loom-ui-verify", conclusion="success", status="completed",
+            step_name="Capture browser-E2E receipt (optional)", step_conclusion="success"):
+    """A `loom-ui-verify` run shaped like the real `gh run view --json` output."""
+    steps = [{"name": "Smoke verify", "conclusion": "success"}]
+    if step_name is not None:
+        steps.append({"name": step_name, "conclusion": step_conclusion})
+    return {
+        "databaseId": 123, "workflowName": workflow, "status": status,
+        "conclusion": conclusion, "url": "https://example.invalid/runs/123",
+        "jobs": [{"name": "verify", "steps": steps}],
+    }
+
+
+def test_positive_control_a_well_formed_g1_run_establishes_the_receipt():
+    """THE CONTROL THAT MAKES THE REFUSALS BELOW MEAN ANYTHING.
+
+    Every other test here asserts a refusal, and a fixture that never reaches
+    the checks refuses for free. This one pins that the same shape, unmodified,
+    is ACCEPTED -- so when a test below flips to refused, the single field it
+    changed is the reason.
+    """
+    ref = tick.verify_run_backed_receipt("g1-browser", _g1_run(), POLICY)
+    assert ref == "https://example.invalid/runs/123"
+
+
+def test_an_undeclared_receipt_kind_cannot_be_recorded_from_a_run():
+    """`operator` is absent from `receipt_producers` ON PURPOSE: a human-only
+    receipt a program can record is not human-only. Fails closed on ANY kind the
+    authority does not declare, so widening the write path is an edit to
+    policy.json rather than an emergent behaviour.
+
+    Would pass if `receipt_producers` grew an `operator` entry -- which is the
+    edit this test exists to make someone justify.
+    """
+    with pytest.raises(tick.ReceiptRefusedError, match="no declared producer"):
+        tick.verify_run_backed_receipt("operator", _g1_run(), POLICY)
+
+
+def test_a_green_run_of_the_wrong_workflow_is_refused():
+    """The producer is matched on the run's own `workflowName`. A green run of
+    some other workflow is a fact about that workflow.
+
+    Would pass if the workflow were `loom-ui-verify`; it is the ONLY field this
+    fixture changes from the positive control.
+    """
+    with pytest.raises(tick.ReceiptRefusedError, match="different workflow"):
+        tick.verify_run_backed_receipt(
+            "g1-browser", _g1_run(workflow="loom-synthetic-monitor"), POLICY)
+
+
+def test_an_unfinished_run_is_refused_as_unfinished_not_as_failed():
+    """`status` is checked separately from `conclusion`, and this fixture is what
+    makes that check load-bearing rather than decorative.
+
+    THE FIXTURE IS THE POINT. With `conclusion=None` the conclusion check
+    refuses the same input, so deleting the status check changes only the
+    MESSAGE -- a reviewer showed the arm for it was a weak mutant for exactly
+    that reason. GitHub can report a `conclusion` from a previous attempt while
+    `status` is `in_progress` (a re-run in flight), and on THAT input the status
+    check is the only thing standing between an unfinished run and a receipt.
+
+    Would pass -- and does, with the check removed -- if status were ignored.
+    """
+    with pytest.raises(tick.ReceiptRefusedError, match="has not finished"):
+        tick.verify_run_backed_receipt(
+            "g1-browser", _g1_run(status="in_progress", conclusion="success"), POLICY)
+
+
+def test_a_failed_run_is_refused():
+    with pytest.raises(tick.ReceiptRefusedError, match="concluded 'failure'"):
+        tick.verify_run_backed_receipt(
+            "g1-browser", _g1_run(conclusion="failure"), POLICY)
+
+
+def test_blocker_a_smoke_only_run_is_green_and_captured_nothing():
+    """THE ONE THAT MATTERS, and the reason `receipt_required_steps` exists.
+
+    `loom-ui-verify` skips its capture step when `target_route` is blank, so a
+    smoke-only run CONCLUDES SUCCESS having produced no screenshot, no trace and
+    no receipt -- exactly the vacuous case `receipts.g1_assertion_rule` excludes.
+
+    THE FIXTURE SHAPE IS THE FINDING HERE. The first version modelled the skip
+    as the step being ABSENT from the JSON; a reviewer checked real run
+    33389868059 and it is PRESENT with `conclusion: "skipped"`. So the branch
+    that version pinned was unreachable from real API output -- a test that
+    could not fail on the input it named. Measured and corrected.
+
+    Would pass if the step concluded success; that is the positive control.
+    """
+    with pytest.raises(tick.ReceiptRefusedError, match="not success"):
+        tick.verify_run_backed_receipt(
+            "g1-browser", _g1_run(step_conclusion="skipped"), POLICY)
+
+
+def test_a_required_step_absent_entirely_is_refused():
+    """The OTHER real shape, and it is the deploy-run one: a SKIPPED JOB reports
+    no steps at all, so the step is genuinely absent rather than present-and-
+    skipped. Measured on 34575500655. Both shapes must refuse, and they take
+    different branches, so both are pinned."""
+    with pytest.raises(tick.ReceiptRefusedError, match="never ran the step"):
+        tick.verify_run_backed_receipt("g1-browser", _g1_run(step_name=None), POLICY)
+
+
+def _roll_run(*, job_conclusion="success", steps=True):
+    """A `loom-roll-and-validate` run. `steps=False` is the REAL vacuous shape:
+    a successful run whose roll job is SKIPPED with zero steps -- measured on
+    34575500655 and 34573457723, 2 of the last 25 successful runs."""
+    job = {"name": "Roll image + validate live URL", "conclusion": job_conclusion}
+    job["steps"] = [
+        {"name": "Roll Container App to new image", "conclusion": "success"},
+        {"name": "Validate live URL", "conclusion": "success"},
+    ] if steps else []
+    return {
+        "databaseId": 34575500655, "workflowName": "loom-roll-and-validate",
+        "status": "completed", "conclusion": "success",
+        "url": "https://example.invalid/runs/345", "headSha": "abc123def456",
+        "jobs": [job],
+    }
+
+
+def test_blocker_a_green_roll_whose_job_was_skipped_is_green_over_nothing():
+    """MEASURED ON REAL HISTORY, and the defect an independent reviewer found:
+    the first version of this feature wired `receipt_required_steps` to
+    `g1-browser` alone and left `deploy-run` run-level, so it closed the defect
+    at its LABEL and left it open at its other SITES.
+
+    2 of the last 25 successful `loom-roll-and-validate` runs carry
+    `Roll image + validate live URL` = skipped with steps=0 (34575500655,
+    34573457723). Nothing rolled, nothing validated -- and `cloud-parity.md`
+    names this shape in terms: "a green run whose deploy job was skipped at 0
+    steps is not [a receipt]".
+
+    A skipped JOB reports no steps at all, so requiring a step INSIDE it is what
+    catches this. Would pass with `steps=True`, which is the positive control
+    immediately below.
+    """
+    with pytest.raises(tick.ReceiptRefusedError, match="never ran the step"):
+        tick.verify_run_backed_receipt(
+            "deploy-run", _roll_run(job_conclusion="skipped", steps=False), POLICY)
+
+
+def test_positive_control_a_real_roll_establishes_a_deploy_run_receipt():
+    """The control for the test above: the SAME workflow, same run conclusion,
+    differing only in whether the roll job actually ran its steps."""
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    assert "345" in ref
+
+
+def test_the_receipt_ref_names_the_commit_that_was_deployed():
+    """`headSha` was fetched and never read, so a deploy-run receipt recorded the
+    run without recording WHICH COMMIT it put live -- and 'which sha is live' is
+    the question `deploy-integrity.md` R3 exists to answer."""
+    ref = tick.verify_run_backed_receipt("deploy-run", _roll_run(), POLICY)
+    assert "abc123def456" in ref
+
+
+def test_all_required_steps_are_checked_not_merely_the_first():
+    """`receipt_required_steps` holds a LIST and the contract is ALL of them.
+
+    Nothing distinguished 2-of-2 from 1-of-2 before this: a reviewer showed
+    `[:1]` and `[-1:]` both survive, because on observed history the two roll
+    steps are always both green or both absent. This fixture separates them --
+    the roll happened, the VALIDATION did not -- which is the shape a future
+    `if:` on the validate step would produce, and exactly what the map exists
+    to refuse.
+    """
+    run = _roll_run()
+    for job in run["jobs"]:
+        for step in job["steps"]:
+            if step["name"] == "Validate live URL":
+                step["conclusion"] = "skipped"
+    with pytest.raises(tick.ReceiptRefusedError, match="Validate live URL"):
+        tick.verify_run_backed_receipt("deploy-run", run, POLICY)
+
+
+def test_a_kind_with_no_required_steps_is_refused_not_waved_through():
+    """An empty requirement would mean 'any green run of this workflow will do',
+    which is the run-level check this branch exists to replace. Fails closed so
+    that adding a producer without naming its load-bearing steps cannot quietly
+    re-open the vacuous-green hole."""
+    thin = copy.deepcopy(POLICY)
+    thin["receipt_required_steps"] = {"_": "x"}
+    with pytest.raises(tick.ReceiptRefusedError, match="no required steps"):
+        tick.verify_run_backed_receipt("g1-browser", _g1_run(), thin)
+
+
+def test_every_run_backed_kind_declares_required_steps():
+    """THE REGRESSION GUARD for the finding itself. The defect was not a missing
+    check -- it was a check wired to one of three kinds. This asserts the map is
+    total over the producers, so adding a fourth producer without its steps
+    fails here rather than in production."""
+    producers = {k for k in POLICY["receipt_producers"] if not k.startswith("_")}
+    required = {k for k in POLICY["receipt_required_steps"] if not k.startswith("_")}
+    assert producers == required, f"run-backed kinds without required steps: {producers - required}"
+
+
+def test_the_capture_step_must_have_concluded_success_not_merely_appeared():
+    """`e2e-receipt.mjs` exits 2 on UNREACHABLE and 3 on SESSION REJECTED, so a
+    present-but-red step is a route that did not load or a session that bounced.
+    Presence is not the property; conclusion is."""
+    with pytest.raises(tick.ReceiptRefusedError, match="not success"):
+        tick.verify_run_backed_receipt(
+            "g1-browser", _g1_run(step_conclusion="failure"), POLICY)
+
+
+def test_blocker_the_kind_comes_from_the_items_class_not_from_the_caller(tmp_path, monkeypatch):
+    """A `--kind` flag would let a ui-surface item close on a ci-green receipt.
+
+    This is the defect a reviewer reproduced by editing one line of
+    `LANE_RECEIPT_CLASS`, and the R2 invariant does NOT catch it: R2 compares
+    the class a receipt was TAKEN under against the class at the decision, so a
+    caller who names the wrong kind up front is consistent with itself.
+
+    Here a ui-surface item (kind `g1-browser`) is offered a green
+    `loom-synthetic-monitor` run -- which is a perfectly valid producer for
+    `estate`. It must still be refused, because this item's class does not ask
+    for an estate receipt. Would pass if the kind tracked the evidence instead
+    of the item.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(700, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(
+        tick, "_run_evidence",
+        lambda *_: _g1_run(workflow="loom-synthetic-monitor"),
+    )
+    with pytest.raises(tick.ReceiptRefusedError, match="different workflow"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "fgarofalo56/csa-inabox", 700,
+            from_pr=None, from_run="123",
+        )
+
+
+def test_a_refused_receipt_leaves_the_item_untouched(tmp_path, monkeypatch):
+    """A refusal must not half-write. `record_receipt` sets three fields before
+    `transition` can refuse, so the ordering is what keeps this true -- and
+    `main()` returns without `save()` on this path."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(701, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run(conclusion="failure"))
+    with pytest.raises(tick.ReceiptRefusedError):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 701, from_pr=None, from_run="123")
+    assert item.state == READY
+    assert item.receipt_kind is None
+    assert item.receipt_ref is None
+
+
+def test_a_verified_run_closes_the_item_and_stamps_the_class(tmp_path, monkeypatch):
+    """The whole point: a verified receipt CLOSES the item, through
+    `led.transition` so the R2 invariant runs, with `receipt_taken_under`
+    stamped -- the field README warns a hand edit forgets."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(702, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "r", 702, from_pr=None, from_run="123")
+    assert item.state == CLOSED
+    assert item.receipt_kind == "g1-browser"
+    assert item.receipt_taken_under == "ui-surface"
+    assert "g1-browser" in out
+
+
+def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
+    """Re-recording would rewrite a terminal item's evidence, so the second
+    caller's run would silently replace the first one's."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(703, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="1")
+    with pytest.raises(tick.ReceiptRefusedError, match="already closed"):
+        tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="2")
+
+
+def test_a_ci_green_item_refuses_a_run_and_asks_for_the_pr(tmp_path):
+    """ci-green is not run-backed -- it is re-measured from a MERGED PR. Offering
+    a run must say so rather than falling through to the run-backed path, where
+    `ci-green` has no declared producer and the message would be misleading."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(704, "a guard", "W6-ci", lane="lane:ci", size=1)
+    with pytest.raises(tick.ReceiptRefusedError, match="--from-pr"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 704, from_pr=None, from_run="123")
+
+
+# -- THE ci-green DECIDE PATH ------------------------------------------------
+#
+# AN INDEPENDENT REVIEWER FOUND THIS WHOLE BRANCH UNTESTED, and the survivor was
+# the worst one available: mutating `if not receipt.ok:` to `if False:` left the
+# suite at 474 passed, meaning a NOT-GREEN receipt closed the item -- on the
+# exact path the PR body offered as its end-to-end proof. Coverage agreed: the
+# entire decide block was unexecuted by the suite.
+#
+# It went untested because it reaches the network twice. That is a reason to
+# inject the two calls, not a reason to leave the branch unwatched.
+
+
+class _FakeReceipt:
+    def __init__(self, ok, summary="GREEN", reasons=()):
+        self.ok, self.summary, self.reasons = ok, summary, tuple(reasons)
+
+
+def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)", binds=True):
+    """Inject the network calls the ci-green path makes.
+
+    IT STUBS `gh_json_local`, NOT `_pr_references_item`. The first version
+    stubbed the binding CHECK itself, so both ci-green tests ran with that
+    control disarmed and deleting its CALL SITE survived the whole suite. A
+    reviewer found it: the check was tested as a FUNCTION and never as a
+    CONTROL. Stubbing the seam it reads through keeps the real check in the
+    path, and `binds=False` drives it to refuse.
+    """
+    import merge_gate
+
+    monkeypatch.setattr(
+        tick, "gh_json_local",
+        lambda *_a, **_k: {
+            "body": "Refs #800 #801 #802 #804" if binds else "entirely unrelated work",
+            "commits": [], "closingIssuesReferences": [],
+        },
+    )
+    monkeypatch.setattr(
+        merge_gate, "collect_ci_green_evidence",
+        lambda *_: {
+            "evidence": [], "merged_total_count": 1, "changed_files": [],
+            "branch": "main", "merged": "deadbeefcafe", "head": "head",
+            "trees_identical": True,
+        },
+    )
+    monkeypatch.setattr(merge_gate, "resolve_infra_ere", lambda _sha: None)
+    monkeypatch.setattr(
+        gates, "ci_green_receipt",
+        lambda *_a, **_k: _FakeReceipt(ok, summary, () if ok else ("vitest: RED at the merged sha",)),
+    )
+
+
+def test_blocker_the_binding_check_is_actually_called_on_the_record_path(tmp_path, monkeypatch):
+    """THE CALL SITE, not the function. `test_blocker_a_pr_that_never_names_the_
+    item_is_refused` calls `_pr_references_item` directly, so it passes whether
+    or not anything invokes it -- and a reviewer showed deleting the call
+    survived the suite at 486 passed.
+
+    This drives the WHOLE record path with a PR body that names no item, so the
+    only thing that can refuse is the call site being there. Would pass with
+    `binds=True`, which is what every other ci-green test uses.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(805, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True, binds=False)
+    with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 805, from_pr=4498, from_run=None)
+    assert item.state == READY
+
+
+def test_blocker_a_not_green_ci_green_receipt_does_not_close_the_item(tmp_path, monkeypatch):
+    """THE SURVIVOR. `if not receipt.ok:` -> `if False:` left the suite green,
+    so a receipt the report would print as NOT GREEN closed the item anyway.
+
+    Would pass if the receipt were GREEN -- which is the positive control
+    immediately below, differing in that one field.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(800, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=False, summary="NOT GREEN (FAIL=1)")
+    with pytest.raises(tick.ReceiptRefusedError, match="NOT GREEN"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 800, from_pr=4498, from_run=None)
+    assert item.state == READY
+    assert item.receipt_kind is None
+
+
+def test_positive_control_a_green_ci_green_receipt_closes_the_item(tmp_path, monkeypatch):
+    """The control for the test above: same fixture, `ok=True`."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(801, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True)
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "r", 801, from_pr=4498, from_run=None)
+    assert item.state == CLOSED
+    assert item.receipt_kind == "ci-green"
+    assert item.receipt_taken_under == "guard-or-test-only"
+    assert item.receipt_ref == "deadbeefcafe"  # the MERGED sha, not the PR number
+    assert "ci-green" in out
+
+
+def test_blocker_a_pr_that_never_names_the_item_is_refused(tmp_path, monkeypatch):
+    """The binding check. A reviewer closed an EPIC on a PR that references it
+    nowhere -- `closingIssuesReferences: []`, no mention in body or commits.
+
+    Would pass if the PR referenced the item; `_pr_references_item` is the only
+    thing stubbed out in the two tests above, which is why they do not catch it.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(802, "a guard", "W6-ci", lane="lane:ci", size=1)
+    monkeypatch.setattr(
+        tick, "gh_json_local",
+        lambda *_a, **_k: {"body": "unrelated work", "commits": [],
+                         "closingIssuesReferences": []},
+    )
+    with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
+        tick._pr_references_item("r", 4521, 802)
+
+
+def test_an_item_not_in_the_ledger_is_refused(tmp_path):
+    """Recording against a number the ledger has never seen would KeyError deep
+    in `record_receipt`; it refuses up front instead."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    with pytest.raises(tick.ReceiptRefusedError, match="not in the ledger"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 999999, from_pr=None, from_run="1")
+
+
+def test_an_item_whose_class_names_no_receipt_kind_is_refused(tmp_path):
+    """REACHABLE, which is why this is a test and not a disclosed equivalent
+    mutant. `receipt_class` is a per-item override with NO production writer --
+    README says so -- meaning the only way it is ever set is a hand edit to
+    `state.json`. A hand edit is exactly where a typo lives.
+
+    With a misspelled class, `policy.receipts.get(...)` returns None and the
+    item would otherwise be recorded on whatever evidence was offered, under a
+    class the policy has never heard of. Found because the arm for this branch
+    SURVIVED the first time it was run -- the suite had no input that made
+    `kind` falsy.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(804, "a guard", "W6-ci", lane="lane:ci", size=1)
+    item.receipt_class = "guard-or-test-onlyy"  # the typo a hand edit makes
+    with pytest.raises(tick.ReceiptRefusedError, match="names no receipt kind"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 804, from_pr=None, from_run="1")
+    assert item.state == READY
+
+
+def test_a_run_backed_item_offered_no_evidence_at_all_is_refused(tmp_path):
+    """Neither `--from-pr` nor `--from-run`. The symmetric half of the ci-green
+    case above, and it was the fourth survivor."""
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(803, "a console surface", "W5-console", lane="lane:console", size=1)
+    with pytest.raises(tick.ReceiptRefusedError, match="--from-run"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 803, from_pr=None, from_run=None)

@@ -2072,6 +2072,200 @@ ARMS: list[tuple[str, str, str, str]] = [
          "        return False, (\n"
          '            f"its job concluded {job_verdict!r}, not success - no route can "'),
     ),
+    # -- THE RECEIPT WRITE PATH ----------------------------------------------
+    # README recorded this as the gap for as long as the ledger has existed:
+    # `record_receipt` had no production caller, so every close was a hand edit
+    # to an untracked file and "the write path is outside the instrumented
+    # code". These arms are what keeps the new writer instrumented -- each was
+    # measured RED against its named test on a sandbox copy before being added.
+    (
+        ("RW1 a required step that is ABSENT stops being refused, so a green run "
+         "that skipped the work - a smoke-only loom-ui-verify, or a roll whose "
+         "job was skipped at 0 steps - is accepted as a receipt over nothing"),
+        "tick.py",
+        "        if not found:\n            raise ReceiptRefusedError(",
+        "        if False:\n            raise ReceiptRefusedError(",
+    ),
+    (
+        ("RW1b the required-steps map resolves to nothing, so every run-backed "
+         "kind silently degrades to a RUN-LEVEL check - the exact shape that "
+         "wired this defect to one of three kinds in the first place"),
+        "tick.py",
+        '    required_steps = (policy.get("receipt_required_steps", {}) or {}).get(kind)',
+        "    required_steps = [] if kind else None",
+    ),
+    (
+        ("RW2 the workflow-identity check collapses, so a green run of ANY "
+         "workflow establishes any run-backed receipt - a fact about that "
+         "workflow read as a fact about this item"),
+        "tick.py",
+        '    actual = run.get("workflowName")\n    if actual != expected:',
+        '    actual = run.get("workflowName")\n    if False:',
+    ),
+    (
+        ("RW3 an UNDECLARED receipt kind stops failing closed AT THE PRODUCER "
+         "CHECK. DISCLOSED AS A MESSAGE ARM, not a behaviour one: `operator` is "
+         "still refused downstream because it declares no required steps, so "
+         "this mutation changes the stated REASON and not the outcome. That is "
+         "defense in depth, and an R7 defect is worth an arm on its own - a "
+         "refusal that names the wrong cause sends the reader to the wrong fix. "
+         "Named rather than left to look like a behaviour kill, per "
+         "assertion-design.md's ban on reporting an arm without saying which it "
+         "pins. A reviewer caught the first version claiming more than it did"),
+        "tick.py",
+        ('    if not expected:\n        raise ReceiptRefusedError(\n'
+         '            f"receipt kind {kind!r} has no declared producer'),
+        ('    if False:\n        raise ReceiptRefusedError(\n'
+         '            f"receipt kind {kind!r} has no declared producer'),
+    ),
+    (
+        ("RW4 an IN-PROGRESS run stops being distinguished from a finished one, "
+         "so a run still in flight is read as a verdict. STRONG on the fixture "
+         "that matters: GitHub reports a `conclusion` from a previous attempt "
+         "while `status` is in_progress, and on that input this check is the "
+         "ONLY thing refusing - the first version of the test used "
+         "conclusion=None, where the conclusion check refuses anyway and the "
+         "arm was therefore weak"),
+        "tick.py",
+        '    if run.get("status") != "completed":',
+        "    if False:",
+    ),
+    (
+        ("RW5 an already-terminal item can be re-receipted, so a second caller's "
+         "run silently replaces the evidence the first one closed on"),
+        "tick.py",
+        "    if item.state in TERMINAL:",
+        "    if False:",
+    ),
+    # THE FOUR SURVIVORS an independent reviewer found. RW1-RW5 covered the
+    # run-backed branch and left the ci-green decide path and the entry
+    # refusals unwatched -- and the worst of them was the one the PR body
+    # offered as its end-to-end proof.
+    (
+        ("RW6 a NOT-GREEN ci-green receipt closes the item anyway. The reviewer's "
+         "measurement: mutated, the suite stayed at 474 passed, so a receipt the "
+         "`--ci-green-receipt` report would print as NOT GREEN still closed a "
+         "guard-or-test-only item"),
+        "tick.py",
+        "        if not receipt.ok:",
+        "        if False:",
+    ),
+    (
+        ("RW7 the kind stops being DERIVED from the item's class, so an item "
+         "whose class names no receipt kind is recorded on whatever evidence "
+         "was offered instead of being refused"),
+        "tick.py",
+        "    if not kind:\n        raise ReceiptRefusedError(",
+        "    if False:\n        raise ReceiptRefusedError(",
+    ),
+    (
+        ("RW8 an item the ledger has never seen is no longer refused up front, "
+         "so the failure surfaces as a KeyError deep inside record_receipt "
+         "rather than as a refusal naming the number"),
+        "tick.py",
+        "    if item is None:",
+        "    if False:",
+    ),
+    (
+        ("RW9 a run-backed item offered NO evidence at all stops being refused, "
+         "so `--record-receipt` with neither --from-pr nor --from-run reaches "
+         "the run reader with an empty id"),
+        "tick.py",
+        "        if not from_run:",
+        "        if False:",
+    ),
+    (
+        ("RW10 the LOST-UPDATE guard collapses, so a stale writer silently "
+         "discards a concurrent lane's verified close - the item reverts to "
+         "`ready` with its receipt and history gone, and the next tick "
+         "re-selects work that was already done. Reproduced before the guard "
+         "existed; `save()` is atomic per FILE and never was per DOCUMENT"),
+        "ledger.py",
+        "            if current != self.loaded_digest:",
+        "            if False:",
+    ),
+    (
+        ("RW11 the BINDING CHECK's call site disappears. The function keeps its "
+         "own test and keeps passing - which is the whole point: a reviewer "
+         "showed the check was tested as a FUNCTION and never as a CONTROL, so "
+         "deleting this line survived the suite until a test drove the record "
+         "path with a non-referencing PR"),
+        "tick.py",
+        "        _pr_references_item(repo, from_pr, number)",
+        "        pass",
+    ),
+    (
+        ("RW12 only the FIRST required step is checked, so a roll that rolled "
+         "but SKIPPED validation is accepted - `receipt_required_steps` means "
+         "ALL of them, and on observed history the two roll steps are always "
+         "both green or both absent, so nothing distinguished 2-of-2 from "
+         "1-of-2 until a fixture separated them"),
+        "tick.py",
+        "    for required in required_steps:",
+        "    for required in required_steps[:1]:",
+    ),
+    # THE CALL SITES of the lost-update guard. RW10 arms the COMPARISON inside
+    # `Ledger.save`; these arm the three ways a caller can switch it off while
+    # the comparison stays perfectly intact -- the same function-versus-control
+    # shape a reviewer found in the binding check, one module over.
+    (
+        ("RW13 the CYCLE stops guarding its save, so a refresh silently writes "
+         "over a concurrent lane's verified close. The comparison in "
+         "Ledger.save is untouched and RW10 still dies; only the call site "
+         "changes"),
+        "tick.py",
+        "        led.save(if_unchanged=not args.bootstrap)",
+        "        led.save()",
+    ),
+    (
+        ("RW14 the RECORD path stops guarding its save, the other half of RW13 "
+         "and the one this PR introduced"),
+        "tick.py",
+        "            led.save(if_unchanged=True)",
+        "            led.save()",
+    ),
+    (
+        ("RW15 the cycle SWALLOWS a refused save and reports success, so a "
+         "detected lost update is converted back into a silent one - worse "
+         "than not detecting it, because the guard now launders the failure"),
+        "tick.py",
+        ('    except LedgerChangedError as exc:\n'
+         '        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)\n'
+         "        return 1"),
+        ('    except LedgerChangedError as exc:\n'
+         '        print(f"CYCLE NOT SAVED: {exc}", file=sys.stderr)\n'
+         "        return 0"),
+    ),
+    (
+        ("RW16 `_on_disk_digest` returns a constant for a MISSING file, so two "
+         "writers racing to create the ledger both see 'unchanged' and the "
+         "loser is overwritten - the fresh-clone and deleted-scratch-file case"),
+        "ledger.py",
+        "        if not os.path.exists(self.path):\n            return None",
+        "        if not os.path.exists(self.path):\n            return 'absent'",
+    ),
+    (
+        ("RW17 the post-write digest goes back to RE-READING the file instead of "
+         "hashing the bytes just written, re-opening the window between "
+         "os.replace and that read: a writer landing there leaves this "
+         "transaction holding SOMEONE ELSE'S digest and the next guarded save "
+         "sails through. Killed by COUNTING the read-backs (1 at head, 2 "
+         "mutated), because the two implementations differ only inside a "
+         "microseconds-wide gap and no sequential test can see the difference"),
+        "ledger.py",
+        "        self.loaded_digest = hashlib.sha256(blob).hexdigest()",
+        "        self.loaded_digest = self._on_disk_digest()",
+    ),
+    (
+        ("RW18 the BOOTSTRAP exemption disappears, so `--bootstrap` over an "
+         "existing ledger refuses to reseed - the one operation whose purpose "
+         "is to replace what is there, and the recovery path for a wiped or "
+         "wrong-repo ledger. Fails CLOSED, which is why it survived a suite "
+         "that only ever asserted the guard fires"),
+        "tick.py",
+        "        led.save(if_unchanged=not args.bootstrap)",
+        "        led.save(if_unchanged=True)",
+    ),
 ]
 
 
