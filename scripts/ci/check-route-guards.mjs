@@ -1844,7 +1844,61 @@ for (const p of SHARED_BACKEND_TYPE_ROUTES) {
 // scan (per-route so each carries its own honest reason).
 for (const [p, reason] of [
   ['apps/fiab-console/app/api/data-products/import/template/route.ts', 'imports a data product from a shared template definition; no per-tenant Cosmos read'],
-  ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: returns the owner\'s Access-policy purposes for the Request-access dialog (documented cross-tenant read, read-only, non-sensitive)'],
+  // #3580 (second pass) — THIS ENTRY NO LONGER EXCUSES AN UNGUARDED ROUTE, AND
+  // ITS REASON SAYS SO. It used to read "consumer-discovery: returns the owner's
+  // Access-policy purposes for the Request-access dialog (documented cross-tenant
+  // read, read-only, NON-SENSITIVE)". Two of those clauses were false of the code:
+  //
+  //   - "documented cross-tenant read" — the route established NOTHING about
+  //     which product the caller could see. Step 1 was the unscoped
+  //     `SELECT c.workspaceId FROM c WHERE c.id = @id AND c.itemType = @t`, no
+  //     workspace / tid / lifecycle predicate, so it answered for a DRAFT product
+  //     in ANY tenant rather than for a discoverable one.
+  //   - "non-sensitive" — the response carries `PermittedPurpose.rule`, the
+  //     OWNER's own governance expression stating the conditions under which
+  //     their data may be used. That is policy text, not a label.
+  //
+  // The route now runs `resolveDiscoveryAccess` (lib/dataproducts/
+  // discoverability.ts) — the same decision `GET /api/data-products/[id]` makes —
+  // and returns the not-found body to everyone it refuses.
+  //
+  // WHY THE ENTRY IS KEPT RATHER THAN DELETED, MEASURED NOT ASSUMED. Deleting it
+  // was tried first, and the run went RED naming this exact route:
+  //
+  //     [route-guards] FAIL — these routes are gated only by getSession() with no
+  //     owner/tenant/admin authorization (potential cross-tenant access):
+  //       - apps/fiab-console/app/api/data-products/[id]/policies/route.ts  [GET]
+  //     violations: 1
+  //
+  // The route did not become less authorized by having the entry removed. CHECK 2
+  // is a NAME SEARCH over the route's own source, `resolveDiscoveryAccess` is not
+  // in GUARD_SIGNAL_RE, and this handler destructures `{ session: s, params }`
+  // from `withSession` and passes `s` straight down rather than spelling
+  // `session.claims.*` itself — so it matches no OWNERSHIP token. (`withSession`
+  // establishes a SESSION, which is the thing CHECK 2 treats as insufficient on
+  // its own; that is why migrating this route to the route-toolkit, which the
+  // boy-scout ratchet in check-route-toolkit.mjs required, did not change the
+  // verdict — RE-MEASURED after that migration, still `violations: 1`.) That is
+  // the SAME measurement `[id]/ports` recorded when it tried to delegate.
+  //
+  // The two ways past it, and why only one is taken here:
+  //   - Register `resolveDiscoveryAccess` in GUARD_SIGNAL_RE and in
+  //     GUARD_WRAPPERS with `mustCall` pinned to EXPRESSIONS (`authorizeWorkspace(
+  //     session, item.workspaceId,`; `DISCOVERABLE.has(resolveLifecycleState(`;
+  //     `sameTenantConfirmed(session.claims.tid, ownerTid)`). That is the correct
+  //     fix, it would also let `[id]/ports` finally drop its byte-identical
+  //     private copy — and per the `withOwnedSqlItem` note above it must be done
+  //     IN LOCKSTEP with generate-route-inventory's OWNER_RE, which this change
+  //     does not own. Left as the named next step, same as the ports docblock.
+  //   - Name something in the route so a token reappears in its text. That is
+  //     writing a token to satisfy a scanner — the presence-vs-enforcement lie
+  //     this checker documents about itself. Refused, as it was on ports.
+  //
+  // SO THE ENTRY IS NOT LOAD-BEARING FOR SECURITY, ONLY FOR THE CHECKER'S
+  // VOCABULARY, and the enforcement is pinned where a regression can actually be
+  // caught: `app/api/data-products/[id]/policies/__tests__/route.test.ts` runs
+  // the real `resolveDiscoveryAccess` and goes red if the call is removed.
+  ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: the Request-access dialog\'s permitted purposes, gated by resolveDiscoveryAccess (member, or published/deprecated in the caller\'s own tenant) — allowlisted because CHECK 2 cannot see that symbol, NOT because the route is unguarded; enforcement pinned by policies/__tests__/route.test.ts'],
   ['apps/fiab-console/app/api/data-products/[id]/preview/route.ts', 'consumer-discovery: read-only 25-row preview of a discoverable data product (documented, mirrors GET /api/data-products/[id])'],
   // #3580 — THE `data-products/[id]/ports` ENTRY IS DELETED, NOT REWORDED.
   //
