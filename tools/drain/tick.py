@@ -484,6 +484,25 @@ class IssueCloseFailedError(Exception):
     """
 
 
+class LedgerWriteAfterCloseError(Exception):
+    """The GitHub close LANDED and the ledger write that should follow failed.
+
+    THE REVERSE PATH, and it needs its own word for the same reason
+    `IssueCloseFailedError` does. A reviewer found both sibling messages saying
+    the opposite of what had happened: a lost CAS after a successful upstream
+    close printed `RECEIPT NOT RECORDED`, which reads as "nothing happened",
+    and a ledger refusal after that same close printed `RECEIPT REFUSED`, which
+    reads as "your evidence was rejected". Neither is true -- the issue is
+    closed on GitHub and the evidence was fine.
+
+    The state of the world when this is raised: **issue closed upstream, ledger
+    NOT written, nothing saved**. That is the recoverable half of the ordering
+    argued in `record_receipt_from_evidence` -- re-running the same command is
+    safe and is the remedy, because the closer reads the issue state first,
+    sees CLOSED and short-circuits.
+    """
+
+
 def _issue_state_on_github(repo: str, number: int) -> str:
     """Read ONE issue's OPEN/CLOSED state. Raises rather than guessing.
 
@@ -914,9 +933,26 @@ def record_receipt_from_evidence(
     # The close raises rather than returning a flag, so the ledger write below
     # is unreachable unless the issue is observably closed on GitHub.
     close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)
-    _record_close_in_ledger(
-        led, item, number, kind, ref, f"receipt verified by tick: {detail}; {close_note}"
-    )
+    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE, and it is wrapped so
+    # it cannot be reported as a refusal. `_record_close_in_ledger` restores the
+    # item, so the in-memory ledger is untouched and `main()` saves nothing --
+    # but the ISSUE IS CLOSED, and a message that says "nothing recorded"
+    # without saying that is false in the half that matters (R7).
+    #
+    # This wrap is also what makes the `ValueError` arm in `main()` honest: with
+    # it in place, a bare ValueError can only escape from BEFORE the close.
+    try:
+        _record_close_in_ledger(
+            led, item, number, kind, ref, f"receipt verified by tick: {detail}; {close_note}"
+        )
+    except Exception as exc:
+        raise LedgerWriteAfterCloseError(
+            f"#{number}: {close_note}, and the ledger write that should have "
+            f"followed failed: {exc}. The issue is closed UPSTREAM and this item "
+            "is NOT terminal here; nothing was saved. Re-run the same command - "
+            "the closer reads the issue state first, sees CLOSED and "
+            "short-circuits, so there is no second close and no second comment."
+        ) from exc
     return f"#{number} closed on a {kind} receipt - {detail} ({close_note})"
 
 
@@ -1008,18 +1044,43 @@ def main() -> int:
             )
         except IssueCloseFailedError as exc:
             # A DIFFERENT DIAGNOSIS FROM A REFUSAL, and it gets a different
-            # word (R7). The receipt may have been sound; the WRITE failed. The
-            # item is left non-terminal and nothing is saved, which is the
-            # honest state when the close did not happen -- reporting a close
-            # this tool could not observe is #4545 one layer down.
-            print(f"GITHUB CLOSE FAILED - NOTHING RECORDED: {exc}", file=sys.stderr)
+            # word (R7). The receipt may have been sound; the WRITE failed.
+            #
+            # It does NOT claim the issue is still open. One of the three ways
+            # to get here is a read-back that could not be READ, and that case
+            # genuinely does not know the upstream state -- saying "still open"
+            # would be the R7 defect this rule exists for. What IS established
+            # is the ledger side: nothing was written, the item is non-terminal.
+            print(
+                f"GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER: {exc}\n"
+                "  Re-running is safe: the closer reads the issue state first and "
+                "short-circuits if it is already closed.",
+                file=sys.stderr,
+            )
+            return 1
+        except LedgerWriteAfterCloseError as exc:
+            # THE REVERSE PATH. The message the item's operator needs is the
+            # state of the world, and the world is asymmetric here: GitHub took
+            # the write, the ledger did not.
+            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: {exc}\n"
+                  "  Nothing was saved, so the ledger file is byte-identical.",
+                  file=sys.stderr)
             return 1
         except (ReceiptRefusedError, ValueError) as exc:
             # ValueError is the ledger's own R2 refusal from `transition`. It is
             # caught here so a refusal prints as a refusal rather than a
-            # traceback -- and NOTHING is saved on this path, so a refused
-            # receipt leaves the ledger byte-identical.
-            print(f"RECEIPT REFUSED: {exc}", file=sys.stderr)
+            # traceback.
+            #
+            # "BEFORE THE GITHUB WRITE" IS NOW STRUCTURAL, not a hope: every
+            # failure after the close is wrapped in `LedgerWriteAfterCloseError`
+            # by `record_receipt_from_evidence`, so anything reaching this arm
+            # happened while both records were still untouched. That is what
+            # makes the words "nothing was written" true here -- they were
+            # printed over a landed GitHub close before a reviewer caught it.
+            print(
+                f"RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER: {exc}",
+                file=sys.stderr,
+            )
             return 1
         try:
             # if_unchanged: refuse a LOST UPDATE rather than discard a
@@ -1028,7 +1089,18 @@ def main() -> int:
             # `ready` with its receipt gone.
             led.save(if_unchanged=True)
         except LedgerChangedError as exc:
-            print(f"RECEIPT NOT RECORDED: {exc}", file=sys.stderr)
+            # THE FAILURE THAT WILL ACTUALLY FIRE IN PRODUCTION, because the
+            # drain runs four lanes: this is a lost CAS, and by the time it
+            # happens the GitHub close has ALREADY LANDED. It used to print
+            # `RECEIPT NOT RECORDED`, which is the wording for "nothing
+            # happened" -- true of the ledger, false of the world.
+            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: {exc}\n"
+                  f"  The GitHub write LANDED ({summary}); only the ledger write was "
+                  "refused, so the two records disagree until this is re-run. "
+                  "RE-RUN THE SAME COMMAND: the closer reads the issue state first, "
+                  "sees CLOSED and short-circuits - no second close, no second "
+                  "comment - and the ledger then records the receipt.",
+                  file=sys.stderr)
             return 1
         print(summary)
         return 0

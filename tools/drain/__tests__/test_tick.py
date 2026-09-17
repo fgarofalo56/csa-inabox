@@ -978,6 +978,18 @@ class _GhSpy:
         """The issue NUMBERS a `gh issue close` was actually issued for."""
         return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "close"]]
 
+    @property
+    def views(self) -> list[str]:
+        """The issue NUMBERS a `gh issue view` was issued for.
+
+        THE DISCRIMINATOR FOR ORDERING QUESTIONS THE CLOSE COUNT CANNOT SEE. A
+        closer that runs against an ALREADY-CLOSED issue short-circuits, so it
+        adds a `view` and no `close` -- which is exactly the mutant that moves
+        the terminal refusal below the closer, and exactly why asserting on
+        `closed` alone could not catch it.
+        """
+        return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "view"]]
+
     def live(self, numbers, labels=("lane:console", "sp:1")) -> list[dict]:
         """The `gh issue list` payload FOR THIS FAKE GITHUB.
 
@@ -1065,7 +1077,20 @@ def test_a_verified_run_closes_the_item_and_stamps_the_class(tmp_path, monkeypat
 
 def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
     """Re-recording would rewrite a terminal item's evidence, so the second
-    caller's run would silently replace the first one's."""
+    caller's run would silently replace the first one's.
+
+    THE SECOND ASSERTION PINS THE ORDERING, and it is a CALL COUNT because the
+    close count cannot see it. An independent reviewer moved
+    `if item.state in TERMINAL: raise` to below the closer and all 80 tests in
+    this file still passed: the closer runs, READS the already-closed issue,
+    short-circuits, and issues no close -- so `spy.closed` is `["703"]` either
+    way and the caption claimed something the assertion did not pin.
+
+    The reads discriminate: **2 `gh issue view` at head** (one before the close,
+    one reading back after it, both in the FIRST call -- the second call is
+    refused before any `gh` runs) against **3 under that mutant**. 3 is the
+    value that makes this fail.
+    """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     led.upsert(703, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
@@ -1073,9 +1098,11 @@ def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
     tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="1")
     with pytest.raises(tick.ReceiptRefusedError, match="already closed"):
         tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="2")
-    assert spy.closed == ["703"], (
-        "the terminal refusal must come BEFORE the GitHub write, or a second "
-        "call re-closes and re-comments on an issue that is already closed"
+    assert spy.closed == ["703"]
+    assert spy.views == ["703", "703"], (
+        f"the terminal refusal must come BEFORE the closer: {len(spy.views)} reads "
+        "means the second call reached GitHub at all, which is the mutant that "
+        "moves the refusal below the close"
     )
 
 
@@ -1417,6 +1444,114 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
     assert spy.closed == [], "an already-closed issue was closed again"
     assert item.state == CLOSED
     assert "already closed" in out
+
+
+def test_blocker_a_ledger_failure_after_the_close_is_not_reported_as_a_refusal(
+    tmp_path, monkeypatch
+):
+    """R7 ON THE REVERSE PATH. `RECEIPT REFUSED` means "your evidence was
+    rejected"; over a landed GitHub close both halves of that are false.
+
+    The ledger write is driven to fail the way a FUTURE refusal would -- a
+    `transition` that raises -- and the error must name the upstream close and
+    the recovery. The value that breaks it: a bare `ValueError` escaping, which
+    `main()` prints as a refusal (arm GH11).
+
+    `_record_close_in_ledger` restores the item, so the in-memory ledger is
+    untouched; that is asserted too, because "nothing was saved" is half of
+    what the message claims.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(716, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+
+    def refuse(*_a, **_k):
+        raise ValueError("a future R2 refusal nobody has written yet")
+
+    monkeypatch.setattr(led, "transition", refuse)
+
+    with pytest.raises(tick.LedgerWriteAfterCloseError) as caught:
+        tick.record_receipt_from_evidence(led, POLICY, "r", 716, from_pr=None, from_run="1")
+
+    assert spy.closed == ["716"], "the close must have LANDED for this to be the case under test"
+    assert "closed on GitHub" in str(caught.value)
+    assert "Re-run the same command" in str(caught.value)
+    assert item.state == READY
+    assert item.receipt_kind is None
+
+
+def test_blocker_a_lost_cas_after_a_landed_close_says_so(tmp_path, monkeypatch, capsys):
+    """THE FAILURE THAT WILL ACTUALLY FIRE, because the drain runs four lanes.
+
+    A rival lane lands between this transaction's load and its save, so
+    `save(if_unchanged=True)` refuses -- AFTER the issue has been closed
+    upstream. The old message was `RECEIPT NOT RECORDED`, the words for
+    "nothing happened", over a world where the issue IS closed.
+
+    Driven through `main()` because that is where the message lives. The value
+    that breaks it: a message that does not name the upstream close, which is
+    arm GH10 -- and the assertion is on the MESSAGE, not on a count, because
+    the behaviour (rc=1, nothing saved) is identical either way.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(717, "a console surface", "W5-console", lane="lane:console", size=1)
+    seed.upsert(718, "another", "W6-ci", lane="lane:ci", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    spy = _gh(monkeypatch)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+
+    real_close = tick.close_issue_on_github
+
+    def close_then_a_rival_writes(*args, **kwargs):
+        note = real_close(*args, **kwargs)          # the upstream write LANDS
+        rival = Ledger(state, receipts=POLICY["receipts"]).load()
+        rival.record_receipt(718, "ci-green", "green at sha")
+        rival.transition(718, CLOSED, "the rival closed it")
+        rival.save()
+        return note
+
+    monkeypatch.setattr(tick, "close_issue_on_github", close_then_a_rival_writes)
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "717", "--from-run", "1"])
+
+    assert tick.main() == 1
+    err = capsys.readouterr().err
+    assert spy.closed == ["717"], "the close must have LANDED for this to be the case under test"
+    assert "THE ISSUE IS CLOSED UPSTREAM" in err
+    assert "RE-RUN THE SAME COMMAND" in err
+    assert "RECEIPT NOT RECORDED" not in err, (
+        "'not recorded' is the wording for 'nothing happened', and the issue is "
+        "closed on GitHub"
+    )
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[717].state == READY, "the ledger must be the one that did not move"
+    assert final.items[718].state == CLOSED, "the rival's close must survive"
+
+
+def test_a_refusal_before_the_close_still_says_nothing_was_written(tmp_path, monkeypatch, capsys):
+    """THE CONTROL FOR THE TWO ABOVE, and the reason the wording can be trusted:
+    a genuine pre-close refusal must still print the refusal words, and must
+    NOT claim an upstream close.
+
+    Would fail if every path printed the post-close message -- i.e. if the fix
+    for R7 on the reverse path had been to change one string for all of them.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(719, "a console surface", "W5-console", lane="lane:console", size=1)
+    seed.save()
+    spy = _gh(monkeypatch)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run(conclusion="failure"))
+    monkeypatch.setattr(tick, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "719", "--from-run", "1"])
+
+    assert tick.main() == 1
+    err = capsys.readouterr().err
+    assert "RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER" in err
+    assert "CLOSED UPSTREAM" not in err
+    assert spy.calls == [], "a refused receipt must not have reached GitHub at all"
 
 
 def test_blocker_a_park_is_never_closed_on_github(monkeypatch):

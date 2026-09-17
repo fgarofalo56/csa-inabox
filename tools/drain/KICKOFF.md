@@ -66,8 +66,13 @@ Scope and autonomy are already decided — do not re-ask them:
     GitHub, so the next refresh read the harness's own close as a REOPEN and
     voided the receipt; every self-closed item un-closed itself one cycle later.
     Only `closed` gets a GitHub close: a park is supposed to stay open. If the
-    close fails, the command prints `GITHUB CLOSE FAILED - NOTHING RECORDED`,
-    writes nothing, and the item stays non-terminal — re-run it once `gh` works.
+    close fails, the command prints `GITHUB CLOSE DID NOT COMPLETE - NOTHING
+    WRITTEN TO THE LEDGER`, writes nothing, and the item stays non-terminal —
+    re-run it once `gh` works. If the close LANDS and the ledger write then
+    fails (a lost CAS against another lane is the realistic one), it prints
+    `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM` and says to re-run: the
+    closer reads the issue state first, sees CLOSED and short-circuits, so
+    there is no second close and no second comment.
     It does NOT check the evidence is ABOUT the item — that binding
     needs `Item.pr`, which still has no writer (#4489). Measure the operating
     point with `python tools/drain/operating_point.py --merge-gate`.

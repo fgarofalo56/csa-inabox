@@ -142,6 +142,24 @@ idempotent (an already-closed issue is read first and left alone — which is ho
 nothing is written, and the item stays non-terminal — a close that did not happen
 is never reported as one.
 
+**Each failure says which half of the pair moved.** Three outcomes, three
+messages, because the operator's next action differs:
+
+| what failed | what it prints | the world |
+|---|---|---|
+| anything before the close | `RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER` | both records untouched |
+| the close itself | `GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says — it does **not** claim the issue is still open, because one route here is a read-back that could not be read |
+| the ledger write, after the close landed | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM` | issue closed, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
+
+The third is not hypothetical: a lost CAS against another lane is the realistic
+failure, because the drain runs four. It used to print `RECEIPT NOT RECORDED` —
+the wording for "nothing happened" — and a ledger refusal after the same close
+used to print `RECEIPT REFUSED`, the wording for "your evidence was rejected".
+Both were false in the half that matters, which is the R7 defect inside the R7
+fix. Everything after the close is now wrapped in `LedgerWriteAfterCloseError`,
+which is also what makes "nothing was written" true in the first row: a bare
+refusal can only escape from *before* the close.
+
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
 before any work is done — and `drained: true` is this program's documented exit

@@ -382,13 +382,30 @@ ARMS: list[tuple[str, str, str, str]] = [
          "#4545 reproduced by the fix for it"),
         "tick.py",
         ("    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
-         "    _record_close_in_ledger(\n"
-         '        led, item, number, kind, ref, f"receipt verified by tick: {detail}; {close_note}"\n'
-         "    )"),
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
         ("    _record_close_in_ledger(\n"
          '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
          "    )\n"
-         "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)"),
+         "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+    ),
+    (
+        ("GH10 a lost CAS after a SUCCESSFUL upstream close is reported as "
+         "`RECEIPT NOT RECORDED` -- the words for 'nothing happened', over a "
+         "world where the issue IS closed on GitHub (R7, inside the R7 fix)"),
+        "tick.py",
+        ('            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: {exc}\\n"\n'
+         '                  f"  The GitHub write LANDED ({summary}); only the ledger write was "'),
+        ('            print(f"RECEIPT NOT RECORDED: {exc}\\n"\n'
+         '                  f"  ({summary}); only the ledger write was "'),
+    ),
+    (
+        ("GH11 a ledger failure AFTER the close stops being wrapped, so it "
+         "escapes as a bare ValueError and `main()` prints RECEIPT REFUSED -- "
+         "'your evidence was rejected' -- over a landed GitHub write"),
+        "tick.py",
+        "    except Exception as exc:\n        raise LedgerWriteAfterCloseError(",
+        "    except SystemExit as exc:\n        raise LedgerWriteAfterCloseError(",
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (
