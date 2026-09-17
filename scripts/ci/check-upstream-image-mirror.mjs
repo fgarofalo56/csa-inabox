@@ -85,6 +85,12 @@ const IMAGE_PIN_LINE_RE = /\b(image|Image)\b/;
 
 function listBicepFiles() {
   try {
+    // SCOPE (#4466): these pathspecs match ZERO `.bicepparam`, deliberately —
+    // this resolves container image REFERENCES out of templates, and the param
+    // files' contribution (image TAGS) is covered by
+    // check-bicepparam-env-reaches-deploy.mjs and check-appimagetags-coverage.mjs.
+    // Whether those param files COMPILE is validate.yml's `bicep-params` job,
+    // guarded by scripts/ci/check-bicepparam-compiled.mjs.
     return execSync('git ls-files "platform/fiab/bicep/**/*.bicep" "platform/fiab/bicep/*.bicep"', {
       cwd: REPO_ROOT,
       encoding: 'utf8',

@@ -12,6 +12,19 @@ on:
       - 'deploy/**/*.bicep'
       - 'deploy/**/*.json'
       - '*.bicep'
+      # #4466. The three entries above reach 'deploy/**' and the repo ROOT only.
+      # Measured on this tree: `git ls-files '*.bicep'` -> 357 files, of which
+      # 198 live under platform/fiab/bicep/ and matched NONE of them, and
+      # `git ls-files '*.bicepparam'` -> 17 files, of which 7 are
+      # platform/fiab/bicep/params/*.bicepparam and again matched none. So a
+      # push to main touching only those paths never started this workflow at
+      # all. Both globs are widened together deliberately: adding the
+      # .bicepparam arm alone would have left the .bicep arm short by the same
+      # 198 files, which is the one-side-of-a-symmetry shape this repo keeps
+      # shipping. `pull_request:` below carries no `paths:`, so the PR path was
+      # never affected — this only closes the push-to-main arm.
+      - '**/*.bicep'
+      - '**/*.bicepparam'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -133,6 +146,14 @@ jobs:
           #   gov/main.bicep       policy defs using dynamic expressions
           #   alerts/              threshold expressions -> false positives
           #   example-vertical/    cookiecutter {{ }} Jinja, not valid until rendered
+          #
+          # SCOPE, MEASURED (#4466): this pathspec matches 357 files and ZERO
+          # `.bicepparam` — `git ls-files '*.bicep' | grep -c bicepparam` -> 0.
+          # Param files are NOT in this population and are not meant to be; they
+          # need `bicep build-params`, not `bicep build`. The `bicep-params` job
+          # below is the guard that covers them, and
+          # scripts/ci/check-bicepparam-compiled.mjs enforces that it keeps
+          # doing so.
           git ls-files '*.bicep' \
             | grep -vE '^codeqlDB/|/node_modules/|landing-zone-alz/|gov/main\.bicep$|/alerts/|templates/example-vertical/' \
             > /tmp/bicep-files.txt
@@ -168,6 +189,196 @@ jobs:
             exit 1
           fi
           echo "All $COUNT Bicep files compiled clean."
+
+  # -------------------------------------------------------------------------
+  # Bicep PARAM files (#4466)
+  #
+  # The job above compiles `*.bicep`. It does NOT compile `*.bicepparam`, and
+  # neither did anything else: measured on 0348d3715e6, `az bicep build-params`
+  # appeared in `.github/workflows/` at exactly three sites, ALL of them
+  # comments (deploy-fiab-commercial.yml:1114,1172; loom-guardrails.yml:581) and
+  # zero of them executable steps. The enumeration above is
+  # `git ls-files '*.bicep'`, whose pathspec matches 357 files and ZERO
+  # `.bicepparam` (verified: `git ls-files '*.bicep' | grep -c bicepparam` -> 0),
+  # so the param files were outside the population that guard walks rather than
+  # merely skipped by it. The only other build of a param file is
+  # `bicep-whatif.yml:403`, which passes `commercial-full.bicepparam` to
+  # `az deployment sub what-if` — one file out of seventeen, behind an Azure
+  # login, on a lane that no-ops when credentials are absent.
+  #
+  # Net effect: a syntax error, a BCP259 undeclared assignment, a type mismatch
+  # or a dangling `using` in gcc.bicepparam / gcc-high.bicepparam /
+  # il5.bicepparam / dlz-attach.bicepparam / tenant-dmlz.bicepparam reached main
+  # with nothing in CI having parsed it. il5.bicepparam is the worst case: it is
+  # compiled by no gate AND executed by no deploy (deploy-fiab-il5.yml is
+  # `active` with zero recorded runs), so an IL5 first-ever deploy would have
+  # been the first time anything parsed it — against deploy-integrity.md R4.
+  #
+  # NO PATHS FILTER, DELIBERATELY. #4466 asks for a filter that includes
+  # '**/*.bicepparam' so a param-only PR cannot skip the step. This job goes
+  # further: it carries no `needs: changes` and no `if:`, so NO PR can skip it,
+  # and a `skipped` (green-looking) result is unreachable. That costs ~1 minute
+  # and removes the hollow-check shape entirely. `check-bicepparam-compiled.mjs`
+  # enforces that it stays unconditional.
+  #
+  # POPULATION: every tracked `*.bicepparam`, repo-wide — 17 files, not just the
+  # 7 under platform/fiab/bicep/params/. All 17 compile clean today (measured
+  # with `az bicep build-params` CLI 0.45.15 before this job was written), so
+  # there is no exclusion list and none is needed. Adding one would be a
+  # weakening: `check-bicepparam-compiled.mjs` fails if a `grep -v` here drops
+  # any tracked param file.
+  # -------------------------------------------------------------------------
+  bicep-params:
+    name: Bicep Params Compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Install Bicep CLI
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep
+          sudo mv bicep /usr/local/bin/
+          bicep --version
+
+      # NEGATIVE CONTROL, RUN FIRST (#4466 "done" #4; assertion-design.md §2).
+      # A gate nobody has seen fail is not known to watch anything, so this
+      # proves the kill power of the compile below IN THE ENVIRONMENT WHERE IT
+      # RUNS — this CLI build, this runner — before any verdict is reported
+      # about the repo.
+      #
+      # It works on a SANDBOX COPY under $RUNNER_TEMP. The tracked tree is never
+      # written to, and the final arm PROVES that (before/after `git status`)
+      # rather than asserting it.
+      #
+      # POSITIVE ARM (assertion-design.md §4): the unmutated copy must compile
+      # clean. Without it a RED from the mutated arm could equally mean "the
+      # copy is broken" — e.g. a `cp` that lost ../main.bicep, which is exactly
+      # what happens if you copy the params directory alone.
+      #   -> goes red if `cp -r platform/fiab/bicep` stops producing a
+      #      self-contained tree, or if il5.bicepparam itself stops compiling.
+      #
+      # NEGATIVE ARM: the SAME copy, plus one line assigning a parameter that
+      # main.bicep does not declare, must exit NON-ZERO.
+      #   -> goes red (i.e. this step fails) if `bicep build-params` exits 0 for
+      #      a params file containing
+      #      `param zzzGateNegativeControlUndeclaredParam = true`.
+      #      Measured locally with az bicep 0.45.15: rc=1 (BCP259 class). Also
+      #      measured rc=1 for a syntax error, a type mismatch and a dangling
+      #      `using`; rc=0 for the pristine file DESPITE ~40 linter warnings, so
+      #      this gate fires on errors only and warnings cannot red main.
+      #
+      # An undeclared-parameter assignment is chosen over a syntax error on
+      # purpose: a syntax error would only prove the parser ran, while BCP259
+      # can only be reached by TYPE-CHECKING the params file against the target
+      # template — which is the property #4466 says nothing had ever
+      # established.
+      - name: Negative control — prove this gate can fail
+        run: |
+          set -uo pipefail
+          SBX="$RUNNER_TEMP/bicepparam-negative-control"
+          rm -rf "$SBX"
+          mkdir -p "$SBX"
+          # BEFORE state, so a tree that was already dirty for some unrelated
+          # reason is not mis-attributed to this control (deploy-integrity.md R7
+          # — do not assert a cause you have not established).
+          BEFORE=$(git status --porcelain -- platform/fiab/bicep)
+          cp -r platform/fiab/bicep "$SBX/bicep"
+          TARGET="$SBX/bicep/params/il5.bicepparam"
+          if [ ! -f "$TARGET" ]; then
+            echo "::error::Negative-control sandbox has no params/il5.bicepparam — the copy did not produce the expected tree, so nothing below would be attributable. Check that platform/fiab/bicep/params/il5.bicepparam still exists."
+            exit 1
+          fi
+
+          echo "--- positive arm: the unmutated sandbox copy must compile clean ---"
+          if ! bicep build-params "$TARGET" --outfile "$SBX/pristine.json"; then
+            echo "::error::Negative-control SANDBOX is broken: the UNMUTATED copy of il5.bicepparam failed to compile. A red from the mutated arm below would not be attributable to the mutation, so no verdict is reported."
+            exit 1
+          fi
+          echo "pristine copy compiled clean (rc=0)."
+
+          echo "--- negative arm: the same copy + one undeclared assignment must FAIL ---"
+          printf '\nparam zzzGateNegativeControlUndeclaredParam = true\n' >> "$TARGET"
+          # No `set -e` toggling here: errexit was never enabled (`set -uo
+          # pipefail` above), so $? is read directly. Turning errexit on around
+          # this would silently change the semantics of every later line.
+          bicep build-params "$TARGET" --outfile "$SBX/mutated.json"
+          MUT_RC=$?
+          echo "mutated copy exit code: $MUT_RC"
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::NEGATIVE CONTROL FAILED — bicep build-params returned 0 for a params file assigning 'zzzGateNegativeControlUndeclaredParam', which platform/fiab/bicep/main.bicep does not declare. This gate cannot distinguish a broken param file from a good one, so its pass below would mean nothing. Do NOT weaken or delete this control to get green: fix the compile invocation (or pin a CLI version that type-checks params files)."
+            exit 1
+          fi
+
+          echo "--- proving the tracked tree was never written to ---"
+          AFTER=$(git status --porcelain -- platform/fiab/bicep)
+          if [ "$AFTER" != "$BEFORE" ]; then
+            echo "::error::The negative control modified the TRACKED tree, which it must never do (assertion-design.md: mutate a sandbox copy, never the tracked tree). git status under platform/fiab/bicep changed during this step. Before:"
+            printf '%s\n' "$BEFORE"
+            echo "After:"
+            printf '%s\n' "$AFTER"
+            exit 1
+          fi
+          rm -rf "$SBX"
+          echo "Negative control OK: clean copy rc=0, mutated copy rc=$MUT_RC, tracked tree unchanged by this step."
+
+      - name: Compile every tracked .bicepparam
+        run: |
+          set -uo pipefail
+          # `git ls-files` for the same reasons the .bicep job gives: tracked
+          # files only, deterministic, cannot wander into node_modules. NO
+          # exclusion filter — every tracked param file compiles clean today and
+          # check-bicepparam-compiled.mjs fails if one is ever excluded here.
+          git ls-files '*.bicepparam' > /tmp/bicepparam-files.txt
+          COUNT=$(wc -l < /tmp/bicepparam-files.txt)
+          # FAIL CLOSED on an empty population. A renamed directory or a changed
+          # extension would otherwise make this step exit 0 having compiled
+          # nothing, which is the exact defect #4466 is about wearing a green
+          # tick. Same fail-closed shape as check-postgres-quota-gate.mjs's
+          # zero-corpus check.
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::git ls-files matched ZERO .bicepparam files — the corpus drifted. Nothing was compiled, so no verdict is reported."
+            exit 1
+          fi
+          echo "=== Compiling $COUNT Bicep param files across $(nproc) workers ==="
+          cat /tmp/bicepparam-files.txt
+
+          # Exported for the same reason the .bicep job exports it: the `sh -c`
+          # workers are separate processes and inherit only the environment.
+          export FAIL_DIR OUT_DIR
+          FAIL_DIR=$(mktemp -d)
+          # --outfile, never --stdout: --stdout crashes on the Unicode these
+          # param files carry. Output goes OUTSIDE the checkout so the run
+          # cannot litter the tree with sibling .json artifacts.
+          OUT_DIR=$(mktemp -d)
+
+          # The `sh -c '…'` body is single-quoted ON PURPOSE: it must be
+          # expanded by the WORKER, not by this shell, so that `$1` is the
+          # filename xargs passes and `$OUT_DIR`/`$FAIL_DIR` are read from the
+          # exported environment. SC2016 is exactly the observation "these do
+          # not expand here", which is the intent — suppressed rather than
+          # baselined, so `validate.yml` stays at its recorded 1 finding
+          # (scripts/ci/workflow-actionlint-baseline.json) and the
+          # workflow-actionlint ratchet keeps its teeth.
+          # shellcheck disable=SC2016
+          xargs -d '\n' -P "$(nproc)" -n1 sh -c '
+            f="$1"
+            flat=$(printf "%s" "$f" | tr "/" "_")
+            if ! out=$(bicep build-params "$f" --outfile "$OUT_DIR/$flat.json" 2>&1); then
+              printf "%s\n" "$out"
+              printf "::error file=%s::bicep build-params failed\n" "$f"
+              touch "$FAIL_DIR/$flat"
+            fi
+          ' _ < /tmp/bicepparam-files.txt
+
+          FAILED=$(find "$FAIL_DIR" -type f | wc -l)
+          rm -rf "$FAIL_DIR" "$OUT_DIR"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED Bicep param file(s) failed to compile"
+            exit 1
+          fi
+          echo "All $COUNT Bicep param files compiled clean."
 
   # -------------------------------------------------------------------------
   # Secret Scanning
