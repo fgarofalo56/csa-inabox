@@ -38,6 +38,8 @@ on:
       - 'deploy/**/*.bicep'
       - 'deploy/**/*.json'
       - '*.bicep'
+      - '**/*.bicep'
+      - '**/*.bicepparam'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -50,6 +52,18 @@ jobs:
 
 # The shape of the files the #4483 merge actually touched. None of them is under
 # deploy/, none is a top-level .bicep, none is a workflow.
+#
+# NOTE (#4466): the two `**` globs above were ADDED to the real validate.yml by
+# that PR, because the previous list reached deploy/** and the repo root only —
+# 223 tracked .bicep files and all 17 .bicepparam files matched none of it, so a
+# push to main touching only those never started the workflow. This fixture is
+# kept in step with the real file so the excuse it exercises stays realistic.
+# It is SYNTHETIC — nothing here reads the workflow off disk — so a drift
+# between the two cannot fail a test; it can only make this test rehearse a
+# trigger shape the repo no longer has. MERGED_FILES below still matches none of
+# the six globs, which is the property the excuse-path assertions depend on, and
+# the new globs do not change that: `.gitignore`, a `.md`, `pyproject.toml` and
+# a `.py` are not bicep.
 MERGED_FILES = [
     ".gitignore",
     "PRPs/active/zero-backlog/PRP.md",
@@ -157,8 +171,17 @@ def test_push_trigger_is_parsed_through_the_yaml_true_key():
     assert trigger is not None
     assert trigger.present
     assert trigger.branches == ("main",)
+    # Kept in step with the real validate.yml, which #4466 widened by the two
+    # `**` globs. This asserts the ORDER and the FULL tuple deliberately: a
+    # reader that de-duplicates, sorts, or silently drops an entry it cannot
+    # compile would still satisfy a membership check.
     assert trigger.paths == (
-        "deploy/**/*.bicep", "deploy/**/*.json", "*.bicep", ".github/workflows/**"
+        "deploy/**/*.bicep",
+        "deploy/**/*.json",
+        "*.bicep",
+        "**/*.bicep",
+        "**/*.bicepparam",
+        ".github/workflows/**",
     )
 
 
