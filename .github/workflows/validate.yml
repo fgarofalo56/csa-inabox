@@ -300,11 +300,22 @@ jobs:
 
           echo "--- negative arm: the same copy + one undeclared assignment must FAIL ---"
           printf '\nparam zzzGateNegativeControlUndeclaredParam = true\n' >> "$TARGET"
-          # No `set -e` toggling here: errexit was never enabled (`set -uo
-          # pipefail` above), so $? is read directly. Turning errexit on around
-          # this would silently change the semantics of every later line.
-          bicep build-params "$TARGET" --outfile "$SBX/mutated.json"
-          MUT_RC=$?
+          # CAPTURE THE RC THROUGH AN `if`, NOT THROUGH `$?`.
+          #
+          # GitHub's default shell for a `run:` block is
+          # `bash --noprofile --norc -e -o pipefail {0}` — errexit is ON before
+          # this script's own `set -uo pipefail` ever runs, and `set -uo` does
+          # not clear it. A bare `bicep build-params …` followed by `MUT_RC=$?`
+          # therefore KILLED THE STEP the instant the mutation worked: the
+          # control could only pass by failing to fail. Measured on run
+          # 35173056079 — BCP259 fired exactly as designed and the job still
+          # went red at that line. A command in an `if` condition is exempt from
+          # errexit, so this shape is correct under `-e` and without it.
+          if bicep build-params "$TARGET" --outfile "$SBX/mutated.json"; then
+            MUT_RC=0
+          else
+            MUT_RC=$?
+          fi
           echo "mutated copy exit code: $MUT_RC"
           if [ "$MUT_RC" -eq 0 ]; then
             echo "::error::NEGATIVE CONTROL FAILED — bicep build-params returned 0 for a params file assigning 'zzzGateNegativeControlUndeclaredParam', which platform/fiab/bicep/main.bicep does not declare. This gate cannot distinguish a broken param file from a good one, so its pass below would mean nothing. Do NOT weaken or delete this control to get green: fix the compile invocation (or pin a CLI version that type-checks params files)."
