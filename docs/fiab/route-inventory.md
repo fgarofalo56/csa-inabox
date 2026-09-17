@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1692 |
 | Public (no session) | 59 |
-| Session-only | 648 |
-| Owner-scoped | 675 |
+| Session-only | 646 |
+| Owner-scoped | 677 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -726,7 +726,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `data-products/[id]/analytics/route.ts` | GET | owner-scoped |  | Cosmos |
 | `data-products/[id]/assets/route.ts` | GET POST DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
 | `data-products/[id]/cdes/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph, Purview |
-| `data-products/[id]/certification/route.ts` | GET | session-only |  | Cosmos |
+| `data-products/[id]/certification/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `data-products/[id]/certify/route.ts` | POST | owner-scoped |  | ADX, AI Search, ARM, Cosmos, Managed Identity, Microsoft Graph |
 | `data-products/[id]/contract-quality/route.ts` | GET POST | owner-scoped | ● | ADX, ARM, Cosmos, Managed Identity, Microsoft Graph |
 | `data-products/[id]/deprecate/route.ts` | POST | owner-scoped |  | AI Search, Cosmos, Microsoft Graph |
@@ -734,7 +734,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `data-products/[id]/health-actions/route.ts` | POST | owner-scoped | ● | ADX, AI Search, ARM, Compute, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `data-products/[id]/observability/route.ts` | GET | owner-scoped | ● | ADX, ARM, Cosmos, Managed Identity, Microsoft Graph, Purview |
 | `data-products/[id]/okrs/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos, Microsoft Graph |
-| `data-products/[id]/policies/route.ts` | GET | session-only |  | Cosmos |
+| `data-products/[id]/policies/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `data-products/[id]/ports/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |
 | `data-products/[id]/preview/route.ts` | POST | owner-scoped | ● | ADX, ARM, Cosmos, Managed Identity, Microsoft Graph |
 | `data-products/[id]/principal-search/route.ts` | GET | owner-scoped |  | Cosmos, Microsoft Graph |

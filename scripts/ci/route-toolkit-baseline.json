@@ -213,7 +213,6 @@
     "apps/fiab-console/app/api/data-products/[id]/contract-quality/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/glossary-terms/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/okrs/route.ts": 1,
-    "apps/fiab-console/app/api/data-products/[id]/policies/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/ports/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/principal-search/route.ts": 1,
     "apps/fiab-console/app/api/data-products/[id]/sla-check/route.ts": 1,
