@@ -105,17 +105,25 @@ mkdir -p "$WORK"
 # "completed, and here is the answer" ABORTS. Fail closed; never delete on an
 # unestablished fact.
 #
-# SCOPE OF THAT CLAIM, stated precisely because an earlier revision of this very
-# comment overstated it and a reviewer measured the gap. It covers every command
-# that INTERROGATES THE FILESYSTEM -- `find` and `grep` -- at every site in this
-# file. It does NOT claim the file is pipeline-free: `wc -c < file | tr -d ' '`
-# below is a pipeline, and deliberately so. `wc` reading a regular file this
-# script just wrote is not a probe of the world; it cannot report "no match" and
-# it has no empty-versus-error ambiguity to collapse. Where a local transform
-# COULD truncate silently (`tr`, `sed`, the blank filter), a status read is not
-# sufficient on its own and each carries an exact arithmetic invariant instead --
-# see the keep-set derivation. The distinction that matters is not "pipeline or
-# not"; it is whether a failure can masquerade as an answer.
+# SCOPE OF THAT CLAIM, stated precisely because two earlier revisions of this
+# very comment overstated it and a reviewer measured the gap both times. It
+# covers every command that INTERROGATES THE FILESYSTEM -- `find` and `grep` --
+# at every site in this file, AND every `wc` whose result is used as a `[`
+# operand, which now goes through `measure`.
+#
+# Round 2 of this comment claimed `wc -c < file | tr -d ' '` "has no
+# empty-versus-error ambiguity to collapse". THAT WAS FALSE, and it was the
+# second R7 claim in the file: the pipeline hides wc's status from `set -e`, an
+# empty operand makes `[` exit 2, and a `[` that fails inside an `if` CONDITION
+# is exempt from errexit -- so the condition reads false and the invariant is
+# SKIPPED. See `require_number` for the measurement that settled it. A local
+# transform is not automatically safe; it is safe only when its failure cannot
+# be mistaken for its answer, and `measure` is what establishes that here.
+#
+# Where a local transform could truncate SILENTLY (`tr`, `sed`, the blank
+# filter), a status read is not sufficient on its own and each carries an exact
+# invariant instead -- see the keep-set derivation. The distinction that matters
+# is not "pipeline or not"; it is whether a failure can masquerade as an answer.
 
 # Abort naming the probe that did not finish, and SHOW its stderr. Deliberately
 # worded so it can never be misread as "nothing matched".
@@ -130,6 +138,50 @@ probe_failed() { # $1=what  $2=exit status  $3=stderr file
     echo "       probe stderr: (empty -- the probe failed without writing one)" >&2
   fi
   exit 1
+}
+
+# Refuse a value that `[` cannot compare.
+#
+# #4471 (round 3) -- THE SAME COLLAPSE, COMMITTED IN THE FIX FOR IT. Every count
+# in this file used to be read as `_n="$(wc -c < f | tr -d ' ')"` and then used
+# directly as a `[` operand. Four things go wrong in sequence:
+#   * the substitution is a PIPELINE, so its status is `tr`'s -- a `wc` that died
+#     is invisible to `set -e`, exactly the defect this script exists to remove;
+#   * the substitution then yields an EMPTY STRING;
+#   * `[ "" -ne 5 ]` is not false, it is an ERROR (status 2);
+#   * and a command that fails inside an `if` CONDITION is EXEMPT from errexit,
+#     so the condition reads FALSE and the invariant it guards is SKIPPED.
+# Measured against the round-2 text, same truncation both times, differing only
+# in whether `wc` works: with it working the run aborts at "the colon split lost
+# bytes (580 in, 172 out)" and every referenced jar survives; with it failing the
+# run prints `[: : integer expected` and exits 0 having DELETED two jars the
+# server classpath names. A measurement that cannot fail loudly is not a
+# measurement, and an invariant that is silently skipped is not an invariant.
+require_number() { # $1 = value  $2 = what produced it
+  case "$1" in
+    '' | *[!0-9]*)
+      echo "FATAL: ${2} produced no usable number ('${1}')." >&2
+      echo "       An empty or non-numeric operand makes '[' exit 2, and a command that" >&2
+      echo "       fails inside an 'if' CONDITION is exempt from errexit -- the condition" >&2
+      echo "       would read FALSE and SKIP the check it guards. Refusing to continue on" >&2
+      echo "       an invariant that was never evaluated." >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Measure a count, reading WC's own status, and hand back something `[` can use.
+# Sets COUNT. `2>` is placed FIRST so a redirection failure on a missing input is
+# captured too -- redirections are processed left to right, and a missing `$2`
+# aborts the command before a later `2>` would have been set up.
+measure() { # $1 = -c|-l  $2 = file  $3 = description
+  _m_rc=0
+  wc "$1" 2> "${WORK}/.count.err" < "$2" > "${WORK}/.count" || _m_rc=$?
+  if [ "$_m_rc" -ne 0 ]; then
+    probe_failed "$3" "$_m_rc" "${WORK}/.count.err"
+  fi
+  COUNT="$(tr -d ' \011\015\012' < "${WORK}/.count")"
+  require_number "$COUNT" "$3"
 }
 
 # Run `find`, reading FIND's own status instead of a pipeline's, surfacing its
@@ -154,7 +206,8 @@ probe_find() {
   # and a SHORT keep-set deletes MORE. Refuse rather than guess. `find -print0`
   # is kept for exactly this: it makes the ambiguity detectable instead of silent.
   tr -cd '\n' < "${WORK}/.probe.z" > "${WORK}/.probe.nl"
-  _p_nl="$(wc -c < "${WORK}/.probe.nl" | tr -d ' ')"
+  measure -c "${WORK}/.probe.nl" "the embedded-newline count for ${_p_what}"
+  _p_nl="$COUNT"
   if [ "$_p_nl" -ne 0 ]; then
     echo "FATAL: ${_p_what} returned a path containing a newline. The line-oriented" >&2
     echo "       keep-set cannot represent it, and a short keep-set deletes MORE." >&2
@@ -244,7 +297,13 @@ if [ -d "$EXAMPLES" ]; then
     cat "$OTHERS" >&2
     exit 1
   fi
-  echo "examples-reference check: $(wc -l < "$CPOTHERS") classpath file(s) searched, 0 reference ${EXAMPLES}/"
+  # Round 3: the printed counts go through `measure` too. A failed `wc` inside
+  # an `echo` does not disarm a check, but it prints a CLAIM with a blank where
+  # a number should be -- "classpath files: " was in the measured output of the
+  # fail-open run -- and a count the operator reads is still a statement about
+  # what happened.
+  measure -l "$CPOTHERS" "the searched-classpath count"
+  echo "examples-reference check: ${COUNT} classpath file(s) searched, 0 reference ${EXAMPLES}/"
   rm -rf "$EXAMPLES"
   echo "removed ${EXAMPLES} (upstream demo CLI; carries the 641 MB awssdk bundle)"
 else
@@ -267,7 +326,8 @@ if [ ! -s "$CPFILES" ]; then
   echo "FATAL: no classpath file found under ${UC_HOME} -- cannot derive the keep-set." >&2
   exit 1
 fi
-echo "classpath files: $(wc -l < "$CPFILES")"
+measure -l "$CPFILES" "the classpath-file count"
+echo "classpath files: ${COUNT}"
 
 # 2) Keep-set = every .jar named by any of them. The files are written by sbt as a
 #    single colon-separated line with NO trailing newline, so append an explicit
@@ -288,38 +348,53 @@ tr ':' '\n' < "${WORK}/cp.raw" > "${WORK}/fields.raw"
 # a jar NAMED BY THE SERVER CLASSPATH was deleted, exit 0, stderr empty,
 # "assertions passed" printed. Status reads alone are not enough here, because a
 # stage can also truncate at rc=0, so each stage additionally carries an EXACT
-# arithmetic invariant:
+# invariant -- and (round 3) every count feeding one is taken through `measure`,
+# so a failed MEASUREMENT aborts instead of silently disarming its own check:
 #   * `tr` is a pure byte substitution -- same byte count in and out;
 #   * `sed` is per-line -- same line count in and out;
-#   * after `sort -u` every blank field has collapsed to AT MOST ONE line, so
-#     the blank filter may remove at most 1 line. More than that is truncation.
-_tr_in="$(wc -c < "${WORK}/cp.raw" | tr -d ' ')"
-_tr_out="$(wc -c < "${WORK}/fields.raw" | tr -d ' ')"
+#   * the blank filter's removal is checked by IDENTITY, not by a bound: `comm`
+#     names exactly which lines it dropped, and the only line it may drop is a
+#     single empty one. A bound ("at most one line") could not tell "removed the
+#     blank" from "removed one real line and kept the blank" -- a reviewer
+#     measured a referenced jar deleted at exit 0 through exactly that one-line
+#     gap, so the bound is gone and the identity check replaces it.
+measure -c "${WORK}/cp.raw" "the byte count of the raw classpath text"
+_tr_in="$COUNT"
+measure -c "${WORK}/fields.raw" "the byte count of the split field list"
+_tr_out="$COUNT"
 if [ "$_tr_in" -ne "$_tr_out" ]; then
   echo "FATAL: the colon split lost bytes (${_tr_in} in, ${_tr_out} out). A truncated" >&2
   echo "       field list yields a SHORT keep-set, which deletes MORE." >&2
   exit 1
 fi
 sed 's/[[:space:]]*$//' "${WORK}/fields.raw" > "${WORK}/fields.trimmed"
-_sed_in="$(wc -l < "${WORK}/fields.raw" | tr -d ' ')"
-_sed_out="$(wc -l < "${WORK}/fields.trimmed" | tr -d ' ')"
+measure -l "${WORK}/fields.raw" "the line count of the split field list"
+_sed_in="$COUNT"
+measure -l "${WORK}/fields.trimmed" "the line count of the trimmed field list"
+_sed_out="$COUNT"
 if [ "$_sed_in" -ne "$_sed_out" ]; then
   echo "FATAL: the trailing-space trim lost lines (${_sed_in} in, ${_sed_out} out). A" >&2
   echo "       truncated field list yields a SHORT keep-set, which deletes MORE." >&2
   exit 1
 fi
 sort -u "${WORK}/fields.trimmed" > "${WORK}/fields.sorted"
-_srt="$(wc -l < "${WORK}/fields.sorted" | tr -d ' ')"
 _b_rc=0
 grep -vE -e '^$' -- "${WORK}/fields.sorted" > "${WORK}/entries.txt" 2> "${WORK}/.grep.err" || _b_rc=$?
 if [ "$_b_rc" -gt 1 ]; then
   probe_failed "the blank-field filter over the classpath entries" "$_b_rc" "${WORK}/.grep.err"
 fi
-_ent="$(wc -l < "${WORK}/entries.txt" | tr -d ' ')"
-if [ "$(( _srt - _ent ))" -gt 1 ]; then
-  echo "FATAL: the blank-field filter removed $(( _srt - _ent )) of ${_srt} lines, but after" >&2
-  echo "       'sort -u' at most ONE can be blank -- so it truncated. A short keep-set" >&2
-  echo "       deletes MORE." >&2
+# WHICH lines went, not how many. Both operands are `sort`ed, so `comm -23` is
+# exactly the removed set; after `sort -u` the only removable line is one empty
+# one, which is a single newline byte. Anything else is a truncation, including
+# a truncation of size one.
+comm -23 "${WORK}/fields.sorted" "${WORK}/entries.txt" > "${WORK}/removed.txt"
+measure -c "${WORK}/removed.txt" "the byte count of the lines the blank filter removed"
+_rm_bytes="$COUNT"
+if [ "$_rm_bytes" -gt 1 ]; then
+  echo "FATAL: the blank-field filter removed ${_rm_bytes} bytes, but the only line it may" >&2
+  echo "       remove is a single empty one (1 byte). It dropped real classpath entries:" >&2
+  sed 's/^/         /' "${WORK}/removed.txt" >&2
+  echo "       A short keep-set deletes MORE." >&2
   exit 1
 fi
 # #4471: `grep ... > "$KEEP" || true` had the same collapse as the examples
@@ -335,7 +410,8 @@ if [ ! -s "$KEEP" ]; then
   echo "FATAL: derived an EMPTY keep-set -- refusing to delete anything." >&2
   exit 1
 fi
-echo "jars referenced by a classpath: $(wc -l < "$KEEP")"
+measure -l "$KEEP" "the keep-set count"
+echo "jars referenced by a classpath: ${COUNT}"
 
 # Snapshot which classpath entries EXIST right now. The upstream image already
 # ships a classpath naming paths that were never built (e.g.
@@ -347,7 +423,10 @@ while IFS= read -r entry; do
     printf '%s\n' "$entry" >> "$PRESENT"
   fi
 done < "${WORK}/entries.txt"
-echo "classpath entries present pre-prune: $(wc -l < "$PRESENT") of $(wc -l < "${WORK}/entries.txt")"
+measure -l "$PRESENT" "the present-entry count"
+_present_n="$COUNT"
+measure -l "${WORK}/entries.txt" "the classpath-entry count"
+echo "classpath entries present pre-prune: ${_present_n} of ${COUNT}"
 
 # 3) Everything cached, and the difference. Same treatment: a truncated cache
 #    scan under-reports what is there, which under-deletes rather than
@@ -356,9 +435,11 @@ echo "classpath entries present pre-prune: $(wc -l < "$PRESENT") of $(wc -l < "$
 probe_find "${WORK}/all.raw" "the coursier cache scan under ${CACHE}" \
   "$CACHE" -type f -name '*.jar'
 sort -u "${WORK}/all.raw" > "$ALL"
-echo "jars in the coursier cache:    $(wc -l < "$ALL")"
+measure -l "$ALL" "the cached-jar count"
+echo "jars in the coursier cache:    ${COUNT}"
 comm -23 "$ALL" "$KEEP" > "$DROP"
-echo "unreferenced jars to remove:   $(wc -l < "$DROP")"
+measure -l "$DROP" "the drop-list count"
+echo "unreferenced jars to remove:   ${COUNT}"
 if [ ! -s "$DROP" ]; then
   echo "FATAL: nothing to prune -- the upstream image no longer matches the analysis this script encodes. Re-scan and re-derive rather than shipping a no-op." >&2
   exit 1
@@ -416,6 +497,9 @@ if [ -e "${UC_HOME}/bin/uc" ] || [ -e "${UC_HOME}/examples" ]; then
   exit 1
 fi
 
-echo "assertions passed ($(wc -l < "$PRESENT") classpath entries intact, $(wc -l < "$DROP") unreferenced jars removed)"
+measure -l "$PRESENT" "the surviving-entry count"
+_intact_n="$COUNT"
+measure -l "$DROP" "the removed-jar count"
+echo "assertions passed (${_intact_n} classpath entries intact, ${COUNT} unreferenced jars removed)"
 rm -rf "$WORK"
 echo "== SC1 loom-unity cache prune complete =="

@@ -134,11 +134,39 @@ function makeFixture(opts = {}) {
   // sbt writes a classpath as ONE colon-separated line with NO trailing newline.
   // The script's own comment says so and appends a separator between files; a
   // fixture with trailing newlines would not exercise that.
-  const serverEntries = [shRel(...jars.serverJar), shRel('server', 'target', 'classes')];
+  //
+  // `content` shapes the two legitimate NO-MATCH cases. They are the only way to
+  // distinguish a `-gt 1` status classification from a `-ge 1` one: both abort,
+  // but `-ge 1` reports a grep that FINISHED as "could not be COMPLETED", which
+  // is false — an R7 falsehood, and the reason these two arms are killable
+  // rather than merely equivalent.
+  //   'noJars' — no entry ends in .jar, so the .jar filter legitimately exits 1
+  //   'empty'  — every field is blank, so the blank filter legitimately exits 1
+  const content = opts.content || 'normal';
+  const serverEntries =
+    content === 'noJars'
+      ? [shRel('server', 'target', 'classes')]
+      : [shRel(...jars.serverJar), shRel('server', 'target', 'classes')];
   if (opts.outsideRef) serverEntries.push(shRel('examples', 'cli', 'target', 'lib.jar'));
-  writeFileSync(rel('server', 'target', 'classpath'), serverEntries.join(':'));
-  writeFileSync(rel('clients', 'java', 'target', 'classpath'), shRel(...jars.clientJar));
-  writeFileSync(rel('cli', 'target', 'classpath'), shRel(...jars.cliJar));
+  if (content === 'empty') {
+    for (const p of [
+      rel('server', 'target', 'classpath'),
+      rel('clients', 'java', 'target', 'classpath'),
+      rel('cli', 'target', 'classpath'),
+    ]) {
+      writeFileSync(p, '');
+    }
+  } else {
+    writeFileSync(rel('server', 'target', 'classpath'), serverEntries.join(':'));
+    writeFileSync(
+      rel('clients', 'java', 'target', 'classpath'),
+      content === 'noJars' ? shRel('clients', 'java', 'target') : shRel(...jars.clientJar),
+    );
+    writeFileSync(
+      rel('cli', 'target', 'classpath'),
+      content === 'noJars' ? shRel('cli', 'target') : shRel(...jars.cliJar),
+    );
+  }
   writeFileSync(rel('examples', 'cli', 'target', 'classpath'), shRel(...jars.bundleJar));
 
   const native = {};
@@ -156,11 +184,13 @@ function makeFixture(opts = {}) {
  * @param {{
  *   grepFailOnCall?: {needle: string, call: number},
  *   grepPartial?: {needle: string, keep: number, status: number},
+ *   grepDropExtra?: {needle: string},
  *   findFail?: {needle: string, exclude?: string, status: number},
  *   findWarn?: {needle: string},
  *   findNewline?: {needle: string},
  *   sedTruncate?: {status: number},
  *   trTruncate?: boolean,
+ *   wcFail?: {status: number},
  * }} spec
  */
 function makeShims(spec) {
@@ -170,6 +200,18 @@ function makeShims(spec) {
     writeFileSync(p, `${body}\n`);
     chmodSync(p, 0o755);
   };
+
+  if (spec.wcFail) {
+    // Two distinct failure modes of the MEASUREMENT itself, which is what
+    // R2-2 was about: a non-zero status, and a zero status with no output.
+    // Both yield an empty `[` operand; only the second survives a status read.
+    w(
+      'wc',
+      spec.wcFail.status === 0
+        ? '#!/bin/sh\nexit 0'
+        : `#!/bin/sh\necho "wc: simulated measurement failure (injected)" >&2\nexit ${spec.wcFail.status}`,
+    );
+  }
 
   const grepCases = [];
   if (spec.grepFailOnCall) {
@@ -205,6 +247,22 @@ function makeShims(spec) {
         `    ${realTool('grep')} "$@" | ${realTool('head')} -n ${keep}`,
         `    echo "grep: simulated partial read (injected)" >&2`,
         `    exit ${status}`,
+        `    ;;`,
+        `esac`,
+      ].join('\n'),
+    );
+  }
+  if (spec.grepDropExtra) {
+    // Removes exactly ONE line more than the real grep would. This is the
+    // distance-1 boundary: a bound of "at most one line removed" cannot tell
+    // this from the legitimate removal of the single blank line, which is why
+    // the script checks WHICH lines went (via `comm`) rather than how many.
+    grepCases.push(
+      [
+        `case "$*" in`,
+        `  *'${spec.grepDropExtra.needle}'*)`,
+        `    ${realTool('grep')} "$@" | ${realTool('head')} -n -1`,
+        `    exit 0`,
         `    ;;`,
         `esac`,
       ].join('\n'),
@@ -541,15 +599,14 @@ test('a trim stage that truncates at exit ZERO is caught by the line invariant',
   assert.doesNotMatch(r.stdout, /assertions passed/);
 });
 
-test('a blank-field filter that truncates at exit ZERO is caught by the at-most-one invariant', () => {
+test('a blank-field filter that truncates at exit ZERO is caught by the removed-line identity check', () => {
   // The sharpest of the keep-set arms. `entries.txt` feeds BOTH $KEEP and
   // $PRESENT, so a truncation here removes a referenced jar from the keep-set
   // AND from the integrity check that would notice — in lockstep. Nothing
   // downstream can see it.
-  // FAILS IF the `(_srt - _ent) -gt 1` invariant is deleted: measured on that
+  // FAILS IF the `comm`-based identity check is deleted: measured on that
   // mutant, a jar named by the java-client classpath is DELETED at exit 0 with
-  // "assertions passed" printed. After `sort -u` at most ONE line can be blank,
-  // which is what makes the exact arithmetic available.
+  // "assertions passed" printed.
   const fx = makeFixture();
   const r = run(SCRIPT, fx, { shims: { grepPartial: { needle: '^$', keep: 2, status: 0 } } });
 
@@ -584,8 +641,103 @@ test('a PARTIAL failure of the .jar filter is attributed to the filter, not to a
   assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted from a truncated keep-set');
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// The MEASUREMENTS themselves. Round 2 read every count as
+// `_n="$(wc -c < f | tr -d ' ')"` and used it directly as a `[` operand — the
+// same collapse this script exists to remove, committed in the fix for it. The
+// pipeline hides wc's status from errexit; the substitution yields ""; `[ "" -ne
+// 5 ]` is an ERROR, not false; and a command that fails inside an `if` CONDITION
+// is exempt from errexit, so the condition reads FALSE and the invariant it
+// guards is SKIPPED. Reproduced independently before fixing: same truncation,
+// wc working -> abort at "the colon split lost bytes (580 in, 172 out)" with
+// every referenced jar intact; wc failing -> `[: : integer expected` and exit 0
+// having DELETED two jars the server classpath names.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('a MEASUREMENT that fails with a non-zero status aborts the prune', () => {
+  // FAILS IF the count is read through a pipeline again (`wc … | tr -d ' '`),
+  // because the pipeline's status is `tr`'s and errexit never sees wc die.
+  // Paired with a truncation so the run has something to catch: with the fix the
+  // measurement aborts first; without it, the invariant is skipped and the
+  // truncated keep-set deletes referenced jars.
+  const fx = makeFixture();
+  const r = run(SCRIPT, fx, { shims: { wcFail: { status: 1 }, trTruncate: true } });
+
+  assert.notEqual(r.status, 0, `a failed measurement must abort\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /count .* could not be COMPLETED/s);
+  assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted while an invariant was skipped');
+  assert.ok(existsSync(fx.cliJar), 'a referenced jar was deleted while an invariant was skipped');
+  // The tell of the round-2 defect, which must never appear again.
+  assert.doesNotMatch(r.stderr, /integer expected/);
+});
+
+test('a MEASUREMENT that succeeds but returns nothing aborts the prune', () => {
+  // The half a status read cannot catch, and the reason `require_number` exists
+  // separately from the status check: this `wc` exits 0 and prints nothing, so
+  // `_m_rc` is 0 and only operand validation can see it.
+  // FAILS IF `require_number` is deleted — the empty operand then reaches `[`,
+  // which exits 2 inside an `if` condition, which reads as false.
+  const fx = makeFixture();
+  const r = run(SCRIPT, fx, { shims: { wcFail: { status: 0 }, trTruncate: true } });
+
+  assert.notEqual(r.status, 0, `an empty measurement must abort\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /produced no usable number/);
+  assert.match(r.stderr, /SKIP the check it guards/);
+  assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted while an invariant was skipped');
+  assert.doesNotMatch(r.stderr, /integer expected/);
+});
+
+test('the blank filter dropping exactly ONE real line is caught (the distance-1 boundary)', () => {
+  // A BOUND of "at most one line removed" passes this: one blank kept, one real
+  // line dropped, difference still 1. A reviewer measured a referenced jar
+  // deleted at exit 0 through exactly that gap. The script therefore checks
+  // WHICH lines went, via `comm`, not how many.
+  // FAILS IF the identity check is replaced by any count-based bound.
+  const fx = makeFixture();
+  const r = run(SCRIPT, fx, { shims: { grepDropExtra: { needle: '^$' } } });
+
+  assert.notEqual(r.status, 0, `a one-line truncation must abort\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /the blank-field filter removed \d+ bytes/);
+  assert.match(r.stderr, /dropped real classpath entries/);
+  assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted from a keep-set short by one');
+  assert.ok(existsSync(fx.cliJar), 'a referenced jar was deleted from a keep-set short by one');
+  assert.doesNotMatch(r.stdout, /assertions passed/);
+});
+
+test('a .jar filter that legitimately matches NOTHING is reported as empty, not as incomplete', () => {
+  // The arm that makes `-gt 1` vs `-ge 1` distinguishable at this site. Both
+  // abort; only `-ge 1` calls a grep that FINISHED "could not be COMPLETED",
+  // which is an R7 falsehood about a probe that did its job.
+  // FAILS IF the classification is loosened to `-ge 1` / `-ne 0`.
+  const fx = makeFixture({ content: 'noJars' });
+  const r = run(SCRIPT, fx);
+
+  assert.notEqual(r.status, 0, `an empty keep-set must abort\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /derived an EMPTY keep-set/);
+  assert.doesNotMatch(
+    r.stderr,
+    /\.jar filter .* could not be COMPLETED/s,
+    'a grep that completed with no match must not be reported as an incomplete probe',
+  );
+});
+
+test('a blank filter that legitimately matches NOTHING is reported as empty, not as incomplete', () => {
+  // Same shape at the sibling site: with every classpath field blank, the
+  // blank filter's no-match exit of 1 is the CORRECT outcome.
+  // FAILS IF that classification is loosened to `-ge 1` / `-ne 0`.
+  const fx = makeFixture({ content: 'empty' });
+  const r = run(SCRIPT, fx);
+
+  assert.notEqual(r.status, 0, `an all-blank field list must abort\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /derived an EMPTY keep-set/);
+  assert.doesNotMatch(
+    r.stderr,
+    /blank-field filter .* could not be COMPLETED/s,
+    'a grep that completed with no match must not be reported as an incomplete probe',
+  );
+});
+
 test('the fixture carries the elements the mutation arms depend on', () => {
-  // Not a test of the script — a test of this file's own preconditions, and it
   // is here because a reviewer showed a fixture element can be deleted with
   // nothing going red, which silently disarms the arm that element exists for.
   //
@@ -659,7 +811,7 @@ test('no executable line in the script lets a failure masquerade as an answer', 
   const executable = src
     .split('\n')
     .map((line, i) => ({ line, n: i + 1 }))
-    .filter(({ line }) => !/^\s*#/.test(line));
+    .filter(({ line }) => line.trim() !== '' && !/^\s*#/.test(line));
 
   const offenders = [];
   for (const { line, n } of executable) {
@@ -669,21 +821,37 @@ test('no executable line in the script lets a failure masquerade as an answer', 
   }
   assert.deepEqual(offenders, [], 'a probe status or stderr is being discarded on an executable line');
 
-  // The population this guard actually scanned, pinned by CONTENT rather than by
-  // a count written about it. A reviewer evaded the previous revision by slicing
-  // the line list to the first 120 entries and putting the defect at line 230, so
-  // the anchors below are drawn from the START and the END of the file: if the
-  // scanned set is truncated at either end, one of them goes missing.
-  // FAILS IF the guard's own population is narrowed, or the file is emptied.
+  // The population this guard actually scanned, pinned POSITIONALLY at both
+  // ends. The previous revision listed five content anchors — and a reviewer
+  // showed they all sat between lines 143 and 411 of a 421-line file, so
+  // `.slice(120, 412)` kept every one of them while a `set +e` at :65 and
+  // discards at :79 and :420 went green. Content anchors cannot bracket a file
+  // they do not sit at the edges of; the FIRST and LAST executable lines can.
+  // FAILS IF the scanned list is narrowed from either end, or the file is
+  // emptied, or its first/last executable statement changes without this being
+  // reconsidered.
+  const first = executable[0];
+  const last = executable[executable.length - 1];
+  assert.match(
+    first.line,
+    /^set -eu$/,
+    `the first executable line scanned was line ${first.n} (${first.line.trim()}), not the script's 'set -eu'`,
+  );
+  assert.match(
+    last.line,
+    /SC1 loom-unity cache prune complete/,
+    `the last executable line scanned was line ${last.n} (${last.line.trim()}), not the script's closing echo`,
+  );
+
+  // Paired positive: the replacement idioms are present, so the shape scan above
+  // cannot pass over a file that no longer reads any status at all.
   const scanned = executable.map(({ line }) => line);
-  const anchors = [
-    { what: 'the examples delete (early)', re: /^\s*rm -rf "\$EXAMPLES"\s*$/ },
-    { what: 'the awssdk-bundle survivor scan (late)', re: /bundle\.txt/ },
+  for (const a of [
     { what: 'find reading its own status', re: /\|\| _p_rc=\$\?/ },
     { what: 'grep reading its own status', re: /\|\| _g_rc=\$\?/ },
-    { what: 'the byte invariant on the colon split', re: /the colon split lost bytes/ },
-  ];
-  for (const a of anchors) {
+    { what: 'wc reading its own status', re: /\|\| _m_rc=\$\?/ },
+    { what: 'the operand validation', re: /require_number/ },
+  ]) {
     assert.ok(
       scanned.some((l) => a.re.test(l)),
       `${a.what} was not among the ${scanned.length} lines this guard scanned`,

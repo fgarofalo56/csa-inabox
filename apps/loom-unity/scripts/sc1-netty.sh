@@ -145,16 +145,32 @@ chmod "$DIR_MODE" "$NEW_DIR"
 # ---------------------------------------------------------------------------
 TOUCHED=0
 # #4471, sibling audit -- a DELIBERATE exception, recorded here rather than left
-# to look like an oversight. This `$(find ...)` discards find's status (and
-# word-splits on spaces in paths), and `LEFT=` below is the same collapsed
-# absence shape that was fixed in sc1-prune-cache.sh. It is NOT fixed here
-# because the load-bearing claim does not rest on either: a walk that misses the
-# server classpath leaves it un-repointed, and the two `grep -q` assertions at
-# the NAMED $SERVER_CP below abort under `set -eu`; :182-185 then re-checks every
-# server-classpath entry. So a partial walk fails closed on the claim that
-# matters. This file is inside the same ownership as the fix, so leaving it is a
-# choice, not a boundary -- revisit it if the assertions below ever stop naming
-# $SERVER_CP explicitly, because that is the whole reason this is tolerable.
+# to look like an oversight, and scoped precisely because a reviewer showed the
+# first version of this note was true of less than it implied.
+#
+# THREE sites in this file collapse a status, not one:
+#   * this `$(find ...)`, which discards find's status and word-splits on spaces;
+#   * `:190` `rmdir "$(dirname "$OLD_JAR")" 2>/dev/null || true`, a cleanup whose
+#     failure is deliberately ignored -- it removes a directory only if it is
+#     already empty, and authorises nothing;
+#   * `:204` `LEFT="$(find ... | wc -l | tr -d ' ')"`, whose status belongs to
+#     `tr`, so a dead walk yields 0 and the absence claim passes falsely.
+#
+# What the exception DOES cover: the REPOINT claim. A walk that misses the server
+# classpath leaves it un-repointed, and the two `grep -q` assertions against the
+# NAMED $SERVER_CP below abort under `set -eu`; :208-211 then re-checks every
+# server-classpath entry. That claim fails closed without needing find's status.
+#
+# What it does NOT cover, stated plainly: `:204`'s "no old jar survives anywhere
+# under $UC_HOME" is a genuine collapsed absence claim with no paired control,
+# the same shape deferred to #4538 for fiab-mirroring-engine. It is weaker than
+# that one -- a stale copy OUTSIDE the server classpath cannot be loaded, since
+# `java -cp "$(cat $SERVER_CP)"` names its jars explicitly -- so it is a
+# false-assurance defect rather than a reachable-CVE one.
+#
+# And the condition below is a NOTE, not a mechanism: nothing enforces that the
+# assertions keep naming $SERVER_CP. If they stop, this exception silently stops
+# being true. Revisit it then.
 for CP_FILE in $(find "$UC_HOME" -type f -name classpath); do
   if grep -q "netty-handler-${OLD_VERSION}.jar" "$CP_FILE"; then
     sed "s|${OLD_JAR}|${NEW_JAR}|g" "$CP_FILE" > "${WORK}/cp.new"
