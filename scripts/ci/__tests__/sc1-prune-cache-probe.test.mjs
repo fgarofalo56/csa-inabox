@@ -190,7 +190,8 @@ function makeFixture(opts = {}) {
  *   findNewline?: {needle: string},
  *   sedTruncate?: {status: number},
  *   trTruncate?: boolean,
- *   wcFail?: {status: number},
+ *   wcFail?: {call: number, mode: 'status'|'silent'|'garbage'},
+ *   wcCount?: {file: string},
  * }} spec
  */
 function makeShims(spec) {
@@ -202,14 +203,54 @@ function makeShims(spec) {
   };
 
   if (spec.wcFail) {
-    // Two distinct failure modes of the MEASUREMENT itself, which is what
-    // R2-2 was about: a non-zero status, and a zero status with no output.
-    // Both yield an empty `[` operand; only the second survives a status read.
+    // A BLANKET wc shim is a fixture that never arrives: the script aborts at
+    // the FIRST `measure` it reaches (inside `probe_find`, long before the
+    // keep-set), so every later call site is unreachable by it and an arm aimed
+    // at them measures the first one instead. A reviewer proved this by
+    // reverting one `measure` at a time: 14 of 15 sites SURVIVED, with
+    // `[: : integer expected` back at exit 0 and the suite green. So the trigger
+    // is a CALL ORDINAL, exactly like the grep shim's.
+    //
+    // Three failure modes, because they are caught by three different guards:
+    //   status  — a non-zero exit, caught by `measure`'s own rc read
+    //   silent  — exit 0 with NO output, caught by require_number's '' arm
+    //   garbage — exit 0 with a NON-EMPTY non-numeric value, caught only by
+    //             require_number's *[!0-9]* arm
+    const { call, mode } = spec.wcFail;
+    const counter = toPosix(path.join(dir, 'wc.count'));
+    const body =
+      mode === 'silent'
+        ? '    exit 0'
+        : mode === 'garbage'
+          ? '    echo "not-a-number"\n    exit 0'
+          : '    echo "wc: simulated measurement failure (injected)" >&2\n    exit 1';
     w(
       'wc',
-      spec.wcFail.status === 0
-        ? '#!/bin/sh\nexit 0'
-        : `#!/bin/sh\necho "wc: simulated measurement failure (injected)" >&2\nexit ${spec.wcFail.status}`,
+      [
+        '#!/bin/sh',
+        'n=0',
+        `if [ -f '${counter}' ]; then n=$(cat '${counter}'); fi`,
+        `n=$((n + 1)); echo "$n" > '${counter}'`,
+        `if [ "$n" -eq ${call} ]; then`,
+        body,
+        'fi',
+        `exec ${realTool('wc')} "$@"`,
+      ].join('\n'),
+    );
+  }
+  if (spec.wcCount) {
+    // Counts invocations without failing any, so the number of `measure` call
+    // sites the script actually reaches is LIFTED from a run rather than
+    // transcribed into this file.
+    w(
+      'wc',
+      [
+        '#!/bin/sh',
+        'n=0',
+        `if [ -f '${toPosix(spec.wcCount.file)}' ]; then n=$(cat '${toPosix(spec.wcCount.file)}'); fi`,
+        `n=$((n + 1)); echo "$n" > '${toPosix(spec.wcCount.file)}'`,
+        `exec ${realTool('wc')} "$@"`,
+      ].join('\n'),
     );
   }
 
@@ -654,37 +695,76 @@ test('a PARTIAL failure of the .jar filter is attributed to the filter, not to a
 // having DELETED two jars the server classpath names.
 // ───────────────────────────────────────────────────────────────────────────
 
-test('a MEASUREMENT that fails with a non-zero status aborts the prune', () => {
-  // FAILS IF the count is read through a pipeline again (`wc … | tr -d ' '`),
-  // because the pipeline's status is `tr`'s and errexit never sees wc die.
-  // Paired with a truncation so the run has something to catch: with the fix the
-  // measurement aborts first; without it, the invariant is skipped and the
-  // truncated keep-set deletes referenced jars.
-  const fx = makeFixture();
-  const r = run(SCRIPT, fx, { shims: { wcFail: { status: 1 }, trTruncate: true } });
+test('a MEASUREMENT that fails aborts the prune — at EVERY call site, in all three modes', () => {
+  // THE ARM THAT MATTERS, and the one a blanket shim could not make.
+  //
+  // `measure` is called from 15 sites. A shim that fails EVERY `wc` aborts at
+  // the first one reached — inside `probe_find`, long before the keep-set — so
+  // it can only ever witness that one; a reviewer reverted the other 14 to the
+  // round-2 collapsed form one at a time and every one SURVIVED, with
+  // `[: : integer expected` back at exit 0 and "assertions passed" printed.
+  // So the trigger is a call ORDINAL, and the loop below walks all of them.
+  //
+  // The call count is LIFTED from a run rather than transcribed, so a site added
+  // or removed later is covered automatically and cannot silently shrink this
+  // arm. FAILS IF any single `measure` call is reverted to
+  // `_n="$(wc -X < f | tr -d ' ')"`: that site's ordinal then reaches `[` with an
+  // empty operand, which exits 2, which inside an `if` CONDITION reads FALSE and
+  // SKIPS the invariant.
+  const probe = makeFixture();
+  const counter = path.join(mkdtempSync(path.join(tmpdir(), 'sc1-wc-')), 'count');
+  const baseline = run(SCRIPT, probe, { shims: { wcCount: { file: counter } } });
+  assert.equal(baseline.status, 0, `the counting run must succeed\n${baseline.stdout}${baseline.stderr}`);
+  const calls = Number(readFileSync(counter, 'utf8').trim());
+  assert.ok(
+    calls >= 15,
+    `expected at least the 15 known measure call sites to be reached, counted ${calls}`,
+  );
 
-  assert.notEqual(r.status, 0, `a failed measurement must abort\n${r.stdout}${r.stderr}`);
-  assert.match(r.stderr, /count .* could not be COMPLETED/s);
-  assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted while an invariant was skipped');
-  assert.ok(existsSync(fx.cliJar), 'a referenced jar was deleted while an invariant was skipped');
-  // The tell of the round-2 defect, which must never appear again.
-  assert.doesNotMatch(r.stderr, /integer expected/);
+  const failures = [];
+  // Mode 'status' walks EVERY call ordinal — that is the site coverage, and the
+  // arm that a blanket shim could not make. The other two modes are about
+  // `require_number`'s two arms rather than about any particular site, so they
+  // are sampled at the first, middle and last ordinals; the attribution test
+  // below pins all three modes' messages.
+  const sampled = [...new Set([1, Math.ceil(calls / 2), calls])];
+  const plan = [
+    ...Array.from({ length: calls }, (_, i) => ['status', i + 1]),
+    ...sampled.map((c) => ['silent', c]),
+    ...sampled.map((c) => ['garbage', c]),
+  ];
+  for (const [mode, call] of plan) {
+    const fx = makeFixture();
+    const r = run(SCRIPT, fx, { shims: { wcFail: { call, mode } } });
+    const why = [];
+    if (r.status === 0) why.push('exit 0');
+    // The tell of the round-2 defect. Two other tests assert it never appears;
+    // this one asserts it never appears at ANY call site.
+    if (/integer expected/.test(r.stderr)) why.push('`[: : integer expected`');
+    if (/assertions passed/.test(r.stdout)) why.push('"assertions passed" over a skipped invariant');
+    if (why.length) failures.push(`${mode} @ wc call ${call}: ${why.join(', ')}`);
+  }
+  assert.deepEqual(failures, [], 'a failed measurement did not fail closed at every site');
 });
 
-test('a MEASUREMENT that succeeds but returns nothing aborts the prune', () => {
-  // The half a status read cannot catch, and the reason `require_number` exists
-  // separately from the status check: this `wc` exits 0 and prints nothing, so
-  // `_m_rc` is 0 and only operand validation can see it.
-  // FAILS IF `require_number` is deleted — the empty operand then reaches `[`,
-  // which exits 2 inside an `if` condition, which reads as false.
+test('a measurement failure names the measurement, not a downstream symptom', () => {
+  // The companion to the loop above, which pins only that nothing fails OPEN.
+  // This pins that the abort is ATTRIBUTED correctly (R7): the operator is told
+  // which measurement did not complete, not which invariant later looked odd.
+  // FAILS IF `measure` stops routing through `probe_failed` / `require_number`.
   const fx = makeFixture();
-  const r = run(SCRIPT, fx, { shims: { wcFail: { status: 0 }, trTruncate: true } });
+  const statusRun = run(SCRIPT, fx, { shims: { wcFail: { call: 1, mode: 'status' } } });
+  assert.match(statusRun.stderr, /count .* could not be COMPLETED/s);
 
-  assert.notEqual(r.status, 0, `an empty measurement must abort\n${r.stdout}${r.stderr}`);
-  assert.match(r.stderr, /produced no usable number/);
-  assert.match(r.stderr, /SKIP the check it guards/);
-  assert.ok(existsSync(fx.clientJar), 'a referenced jar was deleted while an invariant was skipped');
-  assert.doesNotMatch(r.stderr, /integer expected/);
+  const silentRun = run(SCRIPT, makeFixture(), { shims: { wcFail: { call: 1, mode: 'silent' } } });
+  assert.match(silentRun.stderr, /produced no usable number/);
+  assert.match(silentRun.stderr, /SKIP the check it guards/);
+
+  // A NON-EMPTY non-numeric result — the arm that distinguishes
+  // `case "$1" in '')` from `case "$1" in '' | *[!0-9]*)`.
+  // FAILS IF require_number is narrowed to reject only the empty string.
+  const garbageRun = run(SCRIPT, makeFixture(), { shims: { wcFail: { call: 1, mode: 'garbage' } } });
+  assert.match(garbageRun.stderr, /produced no usable number \('not-a-number'\)/);
 });
 
 test('the blank filter dropping exactly ONE real line is caught (the distance-1 boundary)', () => {
@@ -797,6 +877,58 @@ const COLLAPSE_SHAPES = [
   { name: 'xargs collapsing a child status', re: /\bxargs\b/ },
 ];
 
+/**
+ * Samples each shape MUST match, and samples it must NOT.
+ *
+ * A guard is only as wide as its predicate, and a predicate can be narrowed
+ * without anything going red: a reviewer narrowed the errexit shape to column 1
+ * and planted an INDENTED `set +e`, which the shipped file then carried with the
+ * suite green. Lifting the predicate and firing known-positive samples at it is
+ * the check that narrowing cannot survive — and the negative samples stop the
+ * opposite fix (widening it until it matches everything) from passing either.
+ */
+const SHAPE_PROBES = [
+  { name: 'errexit disabled', yes: ['set +e', '  set +e', '\tset +eu', 'set +x'], no: ['set -eu', 'unset +e'] },
+  {
+    name: 'stderr redirected to the null device',
+    yes: ['foo 2>/dev/null', 'foo 2>>/dev/null', 'foo 2> /dev/null'],
+    no: ['foo 2> "${WORK}/.err"', 'foo >/dev/null'],
+  },
+  { name: 'stderr closed outright', yes: ['foo 2>&-'], no: ['foo 2>&1'] },
+  {
+    name: 'a status swallowed by a short-circuit',
+    yes: ['foo || true', 'foo || :', 'foo || exit 0', 'foo || :;'],
+    no: ['foo || _p_rc=$?', 'foo || return 1', 'foo || { exit 1; }'],
+  },
+  {
+    name: 'a find whose status is taken by a pipeline',
+    yes: ['find . -name x | sort > f', 'find "$A" -type f|wc -l'],
+    no: ['find "$@" -print0 > "$z" 2> "$e" || _p_rc=$?', 'wc -c < f | tr -d " "'],
+  },
+  { name: 'xargs collapsing a child status', yes: ['a | xargs -0 grep x'], no: ['a | grep x'] },
+];
+
+test('every collapse shape matches what it claims to, and nothing it does not', () => {
+  // FAILS IF any shape is narrowed — e.g. `/^\s*set\s+\+/` to `/^set\s+\+/`,
+  // which stops matching an indented `set +e` — or widened past its meaning.
+  for (const probe of SHAPE_PROBES) {
+    const shape = COLLAPSE_SHAPES.find((s) => s.name === probe.name);
+    assert.ok(shape, `no shape named ${probe.name}`);
+    for (const sample of probe.yes) {
+      assert.ok(shape.re.test(sample), `[${probe.name}] should match but does not: ${JSON.stringify(sample)}`);
+    }
+    for (const sample of probe.no) {
+      assert.ok(!shape.re.test(sample), `[${probe.name}] should NOT match but does: ${JSON.stringify(sample)}`);
+    }
+  }
+  // Every shape carries probes. FAILS IF a shape is added without them.
+  assert.deepEqual(
+    COLLAPSE_SHAPES.map((s) => s.name).sort(),
+    SHAPE_PROBES.map((p) => p.name).sort(),
+    'a collapse shape has no positive/negative probes',
+  );
+});
+
 test('no executable line in the script lets a failure masquerade as an answer', () => {
   // Comment lines are stripped FIRST because the script quotes the defective line
   // verbatim in its own rationale — a guard matching raw source would be falsely
@@ -821,15 +953,26 @@ test('no executable line in the script lets a failure masquerade as an answer', 
   }
   assert.deepEqual(offenders, [], 'a probe status or stderr is being discarded on an executable line');
 
-  // The population this guard actually scanned, pinned POSITIONALLY at both
-  // ends. The previous revision listed five content anchors — and a reviewer
-  // showed they all sat between lines 143 and 411 of a 421-line file, so
-  // `.slice(120, 412)` kept every one of them while a `set +e` at :65 and
-  // discards at :79 and :420 went green. Content anchors cannot bracket a file
-  // they do not sit at the edges of; the FIRST and LAST executable lines can.
-  // FAILS IF the scanned list is narrowed from either end, or the file is
-  // emptied, or its first/last executable statement changes without this being
-  // reconsidered.
+  // The population this guard actually scanned. Positional anchors bracket the
+  // ENDS, which kills a slice from either end — but a reviewer showed a
+  // mid-EXCISION survives them, because removing an interior element is not
+  // slicing from an edge. So the line NUMBERS are compared against a SECOND,
+  // independent pass over the same source: any element dropped, added or
+  // reordered anywhere in the list breaks the comparison.
+  // FAILS IF the scanned list is sliced, filtered, spliced or reordered.
+  const expectedNumbers = [];
+  {
+    const raw = src.split('\n');
+    for (let i = 0; i < raw.length; i += 1) {
+      if (raw[i].trim() !== '' && !/^\s*#/.test(raw[i])) expectedNumbers.push(i + 1);
+    }
+  }
+  assert.deepEqual(
+    executable.map((e) => e.n),
+    expectedNumbers,
+    'the lines this guard scanned are not the executable lines of the file',
+  );
+
   const first = executable[0];
   const last = executable[executable.length - 1];
   assert.match(

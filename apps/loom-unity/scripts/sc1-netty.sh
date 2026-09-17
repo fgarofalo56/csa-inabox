@@ -163,10 +163,25 @@ TOUCHED=0
 #
 # What it does NOT cover, stated plainly: `:204`'s "no old jar survives anywhere
 # under $UC_HOME" is a genuine collapsed absence claim with no paired control,
-# the same shape deferred to #4538 for fiab-mirroring-engine. It is weaker than
-# that one -- a stale copy OUTSIDE the server classpath cannot be loaded, since
-# `java -cp "$(cat $SERVER_CP)"` names its jars explicitly -- so it is a
-# false-assurance defect rather than a reachable-CVE one.
+# the same shape deferred to #4538 for fiab-mirroring-engine.
+#
+# Two corrections to an earlier draft of this note, both from review:
+#
+#   * It said "not a reachable CVE, because java -cp names its jars explicitly".
+#     That is right about the RUNTIME and wrong about the GATE. Trivy scans image
+#     LAYERS, not the classpath, so a surviving old jar is still a reported
+#     CRITICAL. The deferral stands because it fails LOUDLY at the SC1 gate --
+#     not because the jar is unreachable.
+#
+#   * The construction here is `[ ... ] || { ...; exit 1; }`, NOT an `if`
+#     condition, and that distinction is load-bearing. Measured:
+#       if [ "" -ne 5 ]; then FATAL; fi        -> FATAL SKIPPED, execution continues
+#       [ "" -eq 0 ] || { FATAL; exit 3; }     -> FATAL TAKEN, aborts
+#     So a failed MEASUREMENT here fails CLOSED (with a message naming an empty
+#     count, which is false but loud). Only the PARTIAL-WALK mode fails open: a
+#     find that enumerates some directories and not the one holding a stale jar
+#     yields a truthful-looking 0. That is the residual hole, and it is narrower
+#     than the round-2 defect in sc1-prune-cache.sh was.
 #
 # And the condition below is a NOTE, not a mechanism: nothing enforces that the
 # assertions keep naming $SERVER_CP. If they stop, this exception silently stops

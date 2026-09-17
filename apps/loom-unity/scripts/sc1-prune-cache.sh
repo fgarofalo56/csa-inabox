@@ -124,6 +124,16 @@ mkdir -p "$WORK"
 # filter), a status read is not sufficient on its own and each carries an exact
 # invariant instead -- see the keep-set derivation. The distinction that matters
 # is not "pipeline or not"; it is whether a failure can masquerade as an answer.
+#
+# WHERE THE CHAIN ENDS, so nobody has to work it out from the code. The
+# invariants are computed by `comm` and `sort`, which are NOT themselves
+# verified by anything downstream. A non-zero status from either aborts (they are
+# simple commands under `set -e`, measured), but a `comm` or `sort` that returned
+# a WRONG answer at rc=0 would disarm the identity check the way a broken `wc`
+# once disarmed the byte check. That is the floor of this script's
+# self-verification, and it is a floor, not an absence of one: every layer above
+# it is checked, and the layer itself is two coreutils doing set arithmetic on
+# files this script just wrote.
 
 # Abort naming the probe that did not finish, and SHOW its stderr. Deliberately
 # worded so it can never be misread as "nothing matched".
