@@ -17,6 +17,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sys
 
@@ -25,7 +26,16 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import tick
-from ledger import AUDIT_DEPARTED, CLOSED, IN_FLIGHT, NEEDS_AUDIT, PARKED, READY, Ledger
+from ledger import (
+    AUDIT_DEPARTED,
+    CLOSED,
+    DECLINED,
+    IN_FLIGHT,
+    NEEDS_AUDIT,
+    PARKED,
+    READY,
+    Ledger,
+)
 
 import gates
 
@@ -910,6 +920,87 @@ def test_the_capture_step_must_have_concluded_success_not_merely_appeared():
             "g1-browser", _g1_run(step_conclusion="failure"), POLICY)
 
 
+# -- THE GITHUB CLOSE (#4545) ------------------------------------------------
+#
+# The ledger close never reached GitHub, so the next `refresh_from_github` saw a
+# `closed` item open upstream, read the harness's OWN close as a reopen, demoted
+# it to `needs-audit` and VOIDED the receipt. Measured on #4535, the first item
+# the harness ever closed on its own evidence: it bounced on the very next
+# cycle. `drained()` -- this program's exit condition -- was unreachable for
+# anything the harness closed itself.
+#
+# Every test below fails against the code as it stood at 16b83e8ce9c, where
+# `tools/drain/` contained no `gh issue close` at all: the spy records ZERO
+# close calls and each assertion names that as the value that breaks it.
+
+
+class _GhSpy:
+    """Stub the `gh` SEAM (`tick.sh`), never the closer itself.
+
+    The rc check, the JSON parse, the already-closed short-circuit and the
+    read-back all stay in the path, so deleting any one of them is still
+    visible -- the lesson from `_stub_ci_green`, where stubbing the binding
+    CHECK left its call site deletable by a green suite.
+
+    A command this spy does not recognise raises. A stub that answers
+    everything cannot fail, and the harness must never reach a live `gh` from
+    the suite: the numbers these tests use are real issue numbers in the real
+    repository.
+    """
+
+    def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
+                 on_close=None, raises=None):
+        self.state = state
+        self.states: dict[str, str] = {}
+        self.close_rc = close_rc
+        self.close_err = close_err
+        self.takes_effect = takes_effect
+        self.on_close = on_close
+        self.raises = raises
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if self.raises is not None:
+            raise self.raises
+        if args[:3] == ["gh", "issue", "view"]:
+            return 0, json.dumps({"state": self.states.get(args[3], self.state)}), ""
+        if args[:3] == ["gh", "issue", "close"]:
+            if self.on_close is not None:
+                self.on_close()
+            if self.close_rc == 0 and self.takes_effect:
+                self.states[args[3]] = "CLOSED"
+            return self.close_rc, "", self.close_err
+        raise AssertionError(f"the closer ran an unexpected command: {args}")
+
+    @property
+    def closed(self) -> list[str]:
+        """The issue NUMBERS a `gh issue close` was actually issued for."""
+        return [c[3] for c in self.calls if c[:3] == ["gh", "issue", "close"]]
+
+    def live(self, numbers, labels=("lane:console", "sp:1")) -> list[dict]:
+        """The `gh issue list` payload FOR THIS FAKE GITHUB.
+
+        DERIVED from the same state the closer writes, never transcribed. A
+        transcribed live set is what made the first version of the end-to-end
+        test below unable to fail: whether the item is still in the open set is
+        the entire question, so writing the answer into the fixture tests the
+        refresh's arithmetic instead of the close.
+        """
+        return [
+            {"number": n, "title": f"issue {n}",
+             "labels": [{"name": x} for x in labels]}
+            for n in numbers
+            if self.states.get(str(n), self.state) != "CLOSED"
+        ]
+
+
+def _gh(monkeypatch, **kwargs) -> _GhSpy:
+    spy = _GhSpy(**kwargs)
+    monkeypatch.setattr(tick, "sh", spy)
+    return spy
+
+
 def test_blocker_the_kind_comes_from_the_items_class_not_from_the_caller(tmp_path, monkeypatch):
     """A `--kind` flag would let a ui-surface item close on a ci-green receipt.
 
@@ -955,10 +1046,15 @@ def test_a_refused_receipt_leaves_the_item_untouched(tmp_path, monkeypatch):
 def test_a_verified_run_closes_the_item_and_stamps_the_class(tmp_path, monkeypatch):
     """The whole point: a verified receipt CLOSES the item, through
     `led.transition` so the R2 invariant runs, with `receipt_taken_under`
-    stamped -- the field README warns a hand edit forgets."""
+    stamped -- the field README warns a hand edit forgets.
+
+    The `gh` seam is stubbed because the close path now WRITES to GitHub
+    (#4545); the close itself is asserted by the tests below.
+    """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     item = led.upsert(702, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    _gh(monkeypatch)
     out = tick.record_receipt_from_evidence(
         led, POLICY, "r", 702, from_pr=None, from_run="123")
     assert item.state == CLOSED
@@ -973,9 +1069,14 @@ def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     led.upsert(703, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
     tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="1")
     with pytest.raises(tick.ReceiptRefusedError, match="already closed"):
         tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="2")
+    assert spy.closed == ["703"], (
+        "the terminal refusal must come BEFORE the GitHub write, or a second "
+        "call re-closes and re-comments on an issue that is already closed"
+    )
 
 
 def test_a_ci_green_item_refuses_a_run_and_asks_for_the_pr(tmp_path):
@@ -1021,7 +1122,7 @@ def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)", bind
     monkeypatch.setattr(
         tick, "gh_json_local",
         lambda *_a, **_k: {
-            "body": "Refs #800 #801 #802 #804" if binds else "entirely unrelated work",
+            "body": "Refs #800 #801 #802 #804 #806" if binds else "entirely unrelated work",
             "commits": [], "closingIssuesReferences": [],
         },
     )
@@ -1081,6 +1182,7 @@ def test_positive_control_a_green_ci_green_receipt_closes_the_item(tmp_path, mon
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     item = led.upsert(801, "a guard", "W6-ci", lane="lane:ci", size=1)
     _stub_ci_green(monkeypatch, ok=True)
+    _gh(monkeypatch)
     out = tick.record_receipt_from_evidence(
         led, POLICY, "r", 801, from_pr=4498, from_run=None)
     assert item.state == CLOSED
@@ -1146,3 +1248,263 @@ def test_a_run_backed_item_offered_no_evidence_at_all_is_refused(tmp_path):
     with pytest.raises(tick.ReceiptRefusedError, match="--from-run"):
         tick.record_receipt_from_evidence(
             led, POLICY, "r", 803, from_pr=None, from_run=None)
+
+
+def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkeypatch):
+    """#4545, THE RUN-BACKED ROUTE. Nothing in `tools/drain/` wrote to GitHub.
+
+    FAILS against today's code on `spy.closed == []`: the ledger reached
+    `closed` and the issue stayed open, which the next refresh reads as a
+    reopen. The value that breaks this test is a `record_receipt_from_evidence`
+    that does not call the closer -- exactly the state at 16b83e8ce9c.
+
+    It also pins the ARGUMENTS, because a close aimed at the wrong repository
+    is the same class of defect `sh`'s pinned `cwd` and the explicit `--repo`
+    already exist to prevent.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(710, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "fgarofalo56/csa-inabox", 710, from_pr=None, from_run="123")
+
+    assert item.state == CLOSED
+    assert spy.closed == ["710"], "the ledger closed the item and GitHub never heard"
+    close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
+    assert "--repo" in close
+    assert close[close.index("--repo") + 1] == "fgarofalo56/csa-inabox"
+    assert "closed on GitHub" in out
+
+
+def test_blocker_the_github_close_happens_on_the_ci_green_route_too(tmp_path, monkeypatch):
+    """THE OTHER ROUTE, and the reason it is a separate test rather than a
+    parameter: the defects this package keeps producing are fixes applied to one
+    side of a symmetry. A closer wired only where the author tested it -- `if
+    from_pr:` -- would leave every run-backed item un-closed, and the arm that
+    narrows it that way is GH2 in `mutate_gates.py`.
+
+    Fails against today's code for the same reason as the test above, and would
+    also fail if the close were reachable only from the run-backed branch.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(806, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True)
+    spy = _gh(monkeypatch)
+
+    tick.record_receipt_from_evidence(led, POLICY, "r", 806, from_pr=4498, from_run=None)
+
+    assert item.state == CLOSED
+    assert spy.closed == ["806"], "the ci-green route closed the ledger only"
+
+
+def test_blocker_the_github_close_happens_before_the_ledger_write(tmp_path, monkeypatch):
+    """THE ORDERING, asserted rather than described.
+
+    The two writes fail independently and the orderings are not symmetric.
+    GitHub-first leaves, on a ledger failure, an issue closed upstream and an
+    item still non-terminal here -- which the next refresh flags as `departed`,
+    loudly, and which `--record-receipt` can simply re-run. Ledger-first leaves,
+    on a GitHub failure, an item `closed` here and open there: #4545 verbatim,
+    receipt destroyed on the next cycle.
+
+    The spy reads the item's state AT THE MOMENT the close is issued. The value
+    that breaks this assertion is `closed` -- i.e. the ledger having gone first.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(711, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    seen: list[str] = []
+    spy = _gh(monkeypatch, on_close=lambda: seen.append(item.state))
+
+    tick.record_receipt_from_evidence(led, POLICY, "r", 711, from_pr=None, from_run="1")
+
+    assert spy.closed == ["711"]
+    assert seen == [READY], (
+        f"the ledger was already {seen} when the GitHub close was issued - that is "
+        "the ordering whose half-completed pair IS #4545"
+    )
+    assert item.state == CLOSED  # and it still finishes the job
+
+
+def test_blocker_a_failed_github_close_leaves_the_item_non_terminal(tmp_path, monkeypatch):
+    """FAILURE IS NOT SILENCE. A close that did not happen must not be reported
+    as one, and must not be recorded as one.
+
+    `gh` exits non-zero -- no token, a 404, a rate limit. The item must stay
+    where it was, with no receipt, so the next cycle re-selects it. The value
+    that breaks this: an `|| true` on the close, an ignored rc, or the ledger
+    write running first.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(712, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    _gh(monkeypatch, close_rc=1, close_err="HTTP 403: Resource not accessible")
+
+    with pytest.raises(tick.IssueCloseFailedError, match="403"):
+        tick.record_receipt_from_evidence(led, POLICY, "r", 712, from_pr=None, from_run="1")
+
+    assert item.state == READY
+    assert item.receipt_kind is None
+    assert item.receipt_ref is None
+
+
+def test_blocker_gh_being_unrunnable_is_a_refusal_not_a_traceback(tmp_path, monkeypatch):
+    """THE ENVIRONMENT FAILURE, which is a different experiment from mutating
+    the code at the site: a mutated site is still EVALUATED, so the suite sees
+    it; a site that is never reached because the tool is missing is how a
+    100%-killed matrix sits over a fail-open.
+
+    `gh` absent from PATH raises `FileNotFoundError` out of `subprocess`. The
+    item must stay non-terminal, and the message must say nothing was written.
+    Would fail if the closer caught OSError and carried on, or if the ledger
+    write had already happened.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(713, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    _gh(monkeypatch, raises=FileNotFoundError("gh"))
+
+    with pytest.raises(tick.IssueCloseFailedError, match="Nothing was written"):
+        tick.record_receipt_from_evidence(led, POLICY, "r", 713, from_pr=None, from_run="1")
+
+    assert item.state == READY
+    assert item.receipt_kind is None
+
+
+def test_blocker_a_close_that_rc0s_but_leaves_the_issue_open_is_refused(tmp_path, monkeypatch):
+    """VERIFIED BY EFFECT, not by exit code. rc=0 from a wrapper that did
+    nothing is a false success this repo has already paid for.
+
+    The spy returns rc=0 and leaves the state OPEN. Reporting a close here
+    would recreate #4545 one layer down: ledger `closed`, issue open, receipt
+    voided next cycle. The value that breaks this assertion is dropping the
+    read-back and trusting rc.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(714, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    _gh(monkeypatch, takes_effect=False)
+
+    with pytest.raises(tick.IssueCloseFailedError, match="still reads OPEN"):
+        tick.record_receipt_from_evidence(led, POLICY, "r", 714, from_pr=None, from_run="1")
+
+    assert item.state == READY
+    assert item.receipt_kind is None
+
+
+def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
+    tmp_path, monkeypatch
+):
+    """IDEMPOTENCE, and it is not hypothetical: #4535 was closed BY HAND as the
+    interim workaround, so the first real run of this path met an issue that was
+    already closed.
+
+    No second close, therefore no second comment on a human's issue -- and the
+    ledger still reaches `closed`, because the upstream state is already what
+    this transaction wanted. The value that breaks it: closing unconditionally
+    (a `gh issue close` call appears), or refusing (the item stays READY).
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(715, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch, state="CLOSED")
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "r", 715, from_pr=None, from_run="1")
+
+    assert spy.closed == [], "an already-closed issue was closed again"
+    assert item.state == CLOSED
+    assert "already closed" in out
+
+
+def test_blocker_a_park_is_never_closed_on_github(monkeypatch):
+    """#4535 FROM THE OTHER SIDE, and the constraint this change must not break.
+
+    A park is BLOCKED, not done: its issue is supposed to stay open, and a
+    harness that closed it would re-create the lie that issue refused. Same for
+    a decline, which has no unattended path and whose disposal carries a
+    `--reason` no program decided.
+
+    DISCLOSED: no production caller passes anything but `closed` today, so this
+    test drives the closer DIRECTLY. It is a fail-closed precondition for the
+    park/decline routes that do not exist yet, and the value that breaks it is
+    `CLOSES_ON_GITHUB` growing a second member -- which is arm GH3.
+    """
+    spy = _gh(monkeypatch)
+    for state in (PARKED, DECLINED):
+        with pytest.raises(tick.IssueCloseFailedError, match="only"):
+            tick.close_issue_on_github(POLICY, "r", 4535, state, "blocked on a tenant")
+    assert spy.calls == [], "the closer reached GitHub before deciding it must not"
+
+
+def test_the_close_is_refused_when_the_policy_does_not_permit_it(monkeypatch):
+    """`policy.permitted_unattended` is the authority, and a policy key read by
+    nothing is prose. `gates.action_is_permitted` FAILS CLOSED, so removing
+    `close-on-receipt` must stop the write.
+
+    The value that breaks this: a closer that never asks. Note the policy is
+    DEEP-COPIED -- the live file keeps the permission, which is the positive
+    control every other test in this block runs under.
+    """
+    thin = copy.deepcopy(POLICY)
+    thin["permitted_unattended"] = [
+        a for a in thin["permitted_unattended"] if a != "close-on-receipt"
+    ]
+    spy = _gh(monkeypatch)
+    with pytest.raises(tick.IssueCloseFailedError, match="close-on-receipt"):
+        tick.close_issue_on_github(thin, "r", 4545, CLOSED, "a receipt")
+    assert spy.calls == []
+
+
+def test_blocker_a_harness_close_survives_the_next_refresh(tmp_path, monkeypatch):
+    """THE DEFECT END TO END, and the reason this issue is P0 for the drain.
+
+    THE LIVE SET IS DERIVED FROM THE FAKE GITHUB, not written into the fixture.
+    The first version of this test transcribed it -- and PASSED against the
+    defect, because the refresh's arithmetic was never the broken part. What
+    breaks it is the item still being OPEN upstream after the harness closed it
+    in the ledger, which is the pre-fix world exactly: #4535 went to
+    `needs-audit` with `receipt_kind=None` one cycle after it was closed.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(720, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+    tick.record_receipt_from_evidence(led, POLICY, "r", 720, from_pr=None, from_run="1")
+
+    tick.refresh_from_github(led, {}, spy.live([720, 730]))
+
+    assert item.state == CLOSED, "the harness's own close bounced back to needs-audit"
+    assert item.receipt_kind == "g1-browser", "the receipt was voided by a false reopen"
+
+
+def test_positive_control_a_real_reopen_still_voids_the_receipt(tmp_path, monkeypatch):
+    """THE HALF THAT MUST NOT BE WEAKENED. `ledger.py`'s void is correct and
+    load-bearing; the fix is to stop MANUFACTURING false reopens, not to stop
+    noticing real ones.
+
+    Same item, same close -- and then a HUMAN reopens it upstream, so the
+    derived live set carries it again. It must be demoted and its receipt
+    voided. This is the assertion the test above would satisfy trivially if
+    someone 'fixed' #4545 by deleting the dispute branch (arm L5), and the value
+    that breaks it is the reopen no longer registering.
+
+    DISCLOSED: this one also passes against the pre-fix code, by construction --
+    it pins behaviour this change deliberately leaves alone. It is the control
+    for the test above, not additional evidence for the fix.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(721, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+    tick.record_receipt_from_evidence(led, POLICY, "r", 721, from_pr=None, from_run="1")
+    assert item.state == CLOSED
+
+    spy.states["721"] = "OPEN"          # a human reopened it
+    tick.refresh_from_github(led, {}, spy.live([721]))
+
+    assert item.state == NEEDS_AUDIT
+    assert item.audit_reason == "reopened"
+    assert item.receipt_kind is None

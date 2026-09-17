@@ -309,6 +309,87 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
         "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink)",
     ),
+    # -- #4545: the ledger close must REACH GITHUB -------------------------
+    #
+    # The defect: `tools/drain/` contained no `gh issue close` at all, so a
+    # ledger close was invisible upstream and the next refresh read the
+    # harness's OWN close as a reopen -- demoting the item and VOIDING the
+    # receipt. Measured on #4535, the first item the harness ever closed on its
+    # own evidence; it bounced on the next cycle.
+    #
+    # Per this file's own lesson, the arms that matter are not the ones that
+    # weaken a check. GH2 narrows the POPULATION to one of the two routes, GH3
+    # widens the STATE set so a park is dragged along (#4535 from the other
+    # side), GH4 narrows it to nothing, and GH9 swaps the ORDER of the two
+    # writes -- which is the mutation that reproduces the original defect
+    # exactly, because a ledger-first pair whose second half fails IS #4545.
+    (
+        "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
+        "tick.py",
+        "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)",
+        '    close_note = "the ledger is the only record"',
+    ),
+    (
+        ("GH2 the close fires on ONE ROUTE only: ci-green items are closed "
+         "upstream and every run-backed item is left open"),
+        "tick.py",
+        "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)",
+        ("    close_note = (close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+         '                  if from_pr else "run-backed items close quietly")'),
+    ),
+    (
+        ("GH3 the state set widens to every terminal state, so a PARK -- which "
+         "is SUPPOSED to stay open on GitHub -- gets closed too (#4535)"),
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = TERMINAL",
+    ),
+    (
+        "GH4 the state set narrows to nothing, so no item ever closes upstream",
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = ()",
+    ),
+    (
+        "GH5 the close's exit code stops being read (the `|| true` shape)",
+        "tick.py",
+        "        if rc != 0:",
+        "        if rc != 0 and False:",
+    ),
+    (
+        ("GH6 rc=0 is trusted instead of reading the state back, so a wrapper "
+         "that did nothing reports a close"),
+        "tick.py",
+        "        after = _issue_state_on_github(repo, number)",
+        '        after = "CLOSED"',
+    ),
+    (
+        ("GH7 the already-closed short circuit goes, so a human's hand-closed "
+         "issue is closed again and re-commented on"),
+        "tick.py",
+        '        if _issue_state_on_github(repo, number) == "CLOSED":',
+        "        if False:",
+    ),
+    (
+        "GH8 the autonomy contract stops being consulted before the write",
+        "tick.py",
+        '    permitted, why = gates.action_is_permitted("close-on-receipt", policy)',
+        '    permitted, why = True, "assumed"',
+    ),
+    (
+        ("GH9 the ORDER is reversed -- ledger first, GitHub second -- so a "
+         "failed close leaves the item closed here and open there, which is "
+         "#4545 reproduced by the fix for it"),
+        "tick.py",
+        ("    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+         "    _record_close_in_ledger(\n"
+         '        led, item, number, kind, ref, f"receipt verified by tick: {detail}; {close_note}"\n'
+         "    )"),
+        ("    _record_close_in_ledger(\n"
+         '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
+         "    )\n"
+         "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)"),
+    ),
     # -- the composed caller: the file that actually decides a merge -------
     (
         "MG1 the verdict is reduced over an EMPTY finding set (the rubber stamp)",

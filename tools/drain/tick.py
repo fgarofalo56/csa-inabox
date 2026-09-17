@@ -24,6 +24,7 @@ from build_inventory import stream_for
 from ledger import (
     AUDIT_DEPARTED,
     CLOSED,
+    CLOSES_ON_GITHUB,
     IN_FLIGHT,
     NEEDS_AUDIT,
     READY,
@@ -253,6 +254,15 @@ def refresh_from_github(led: Ledger, streams: dict, live: list[dict]) -> tuple[i
     #   parked    | EXPECTED -> survives parked        | survives parked
     #   declined  | disputed -> needs-audit            | expected -> survives
     #
+    # THE `closed`/OPEN CELL NOW MEANS WHAT IT SAYS (#4545). It used to fire on
+    # the harness's OWN closes, because nothing closed the issue upstream -- so
+    # "disputed" was a false reopen and the void destroyed a receipt taken
+    # minutes earlier. `record_receipt_from_evidence` closes the GitHub issue
+    # before it writes the ledger, so a `closed` item seen open again is once
+    # again evidence that a HUMAN reopened it. The demotion and the void are
+    # deliberately untouched: the fix is to stop manufacturing false reopens,
+    # not to stop noticing real ones.
+    #
     # The `parked`/departed cell is the one with no obvious right answer: the
     # issue being closed does not establish that the blocker lifted, and there
     # is no state meaning "park resolved", so auditing it would only reproduce
@@ -464,6 +474,116 @@ class ReceiptRefusedError(Exception):
     """The evidence offered does not establish the receipt. Never recorded."""
 
 
+class IssueCloseFailedError(Exception):
+    """The GitHub close did not happen, so NOTHING was written to the ledger.
+
+    A separate class from `ReceiptRefusedError` on purpose (deploy-integrity
+    R7): a refusal says the evidence was not good enough, and printing that
+    over a network failure asserts a cause the code did not establish. Here the
+    receipt may have been perfectly sound and the WRITE failed.
+    """
+
+
+def _issue_state_on_github(repo: str, number: int) -> str:
+    """Read ONE issue's OPEN/CLOSED state. Raises rather than guessing.
+
+    Never discards stderr and never turns an unreadable answer into a
+    convenient one -- the roll that reported "the tag does not exist" when the
+    truth was "I could not reach the registry" is the shape being avoided here
+    (deploy-integrity R7).
+    """
+    rc, out, err = sh(
+        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "state"]
+    )
+    if rc != 0:
+        raise IssueCloseFailedError(
+            f"cannot read the state of #{number} in {repo} (rc={rc}): {err[:200]}. "
+            "This tool does not know whether the issue is open, so it will not "
+            "act as though it does."
+        )
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise IssueCloseFailedError(f"unparseable state for #{number}: {exc}") from exc
+    state = str((parsed or {}).get("state") or "").upper()
+    if state not in ("OPEN", "CLOSED"):
+        raise IssueCloseFailedError(
+            f"#{number} reported state {state!r}, which is neither OPEN nor CLOSED - "
+            "an answer this tool cannot interpret is not an answer"
+        )
+    return state
+
+
+def close_issue_on_github(
+    policy: dict, repo: str, number: int, target_state: str, detail: str
+) -> str:
+    """Close the GitHub issue for an item the ledger is about to make terminal.
+
+    THE WRITE THAT WAS MISSING (#4545). `tick.py` read GitHub and never wrote to
+    it, so a ledger close was invisible upstream and the next refresh read it as
+    a reopen.
+
+    **Only `CLOSES_ON_GITHUB` states get a close**, and the guard is here rather
+    than at the call site so a future park/decline route cannot acquire one by
+    forgetting. A park is meant to stay open (#4535); closing it would re-create
+    the lie that issue refused.
+
+    DISCLOSED: the only production caller passes `CLOSED`, so no input reachable
+    from `--record-receipt` today makes that guard fire. It is a fail-closed
+    precondition for the callers that do not exist yet, and the test that pins
+    it calls this function directly and says so at its site.
+
+    Idempotent by READING FIRST: an issue already closed is left alone entirely
+    -- no second close, no second comment, no noise on an issue a human may have
+    closed by hand (which is exactly how #4535 was worked around).
+
+    Verified BY EFFECT, not by exit code: the state is read back after the
+    close, because rc=0 from a wrapper that did nothing is a false success this
+    repo has already paid for. If the issue is not closed afterwards, this
+    raises -- silence is not an option a close may take.
+    """
+    if target_state not in CLOSES_ON_GITHUB:
+        raise IssueCloseFailedError(
+            f"refusing to close #{number} on GitHub for state {target_state!r}: only "
+            f"{list(CLOSES_ON_GITHUB)} close an issue. A parked item is BLOCKED, not "
+            "done, and its issue is supposed to stay open (#4535)"
+        )
+    permitted, why = gates.action_is_permitted("close-on-receipt", policy)
+    if not permitted:
+        raise IssueCloseFailedError(
+            f"refusing to close #{number} on GitHub: `close-on-receipt` is {why}"
+        )
+
+    try:
+        if _issue_state_on_github(repo, number) == "CLOSED":
+            return f"#{number} was already closed on GitHub - left alone"
+        rc, _out, err = sh(
+            ["gh", "issue", "close", str(number), "--repo", repo,
+             "--comment", f"Closed by the drain harness on a verified receipt: {detail}"]
+        )
+        if rc != 0:
+            raise IssueCloseFailedError(
+                f"`gh issue close {number}` failed (rc={rc}): {err[:200]}. The ledger "
+                "was NOT written - the item stays non-terminal, which is the honest "
+                "state when the close did not happen"
+            )
+        after = _issue_state_on_github(repo, number)
+    except OSError as exc:
+        # `gh` missing or unexecutable. Without this the record path dies on a
+        # traceback from inside `subprocess`, which is loud but says nothing
+        # about what the harness did or did not write.
+        raise IssueCloseFailedError(
+            f"cannot run `gh` to close #{number}: {exc}. Nothing was written."
+        ) from exc
+    if after != "CLOSED":
+        raise IssueCloseFailedError(
+            f"`gh issue close {number}` returned 0 but the issue still reads {after} - "
+            "reporting a close this tool cannot observe would be the defect #4545 is "
+            "about, one layer down"
+        )
+    return f"#{number} closed on GitHub"
+
+
 def _run_evidence(repo: str, run_id: str) -> dict:
     """Read ONE workflow run and its jobs, by id, from the named repository.
 
@@ -633,11 +753,60 @@ def gh_json_local(args: list[str], what: str) -> dict:
     return parsed
 
 
+def _record_close_in_ledger(
+    led: Ledger, item, number: int, kind: str, ref: str, why: str
+) -> None:
+    """Attach the receipt and move the item to `closed`, or leave it untouched.
+
+    DISCLOSED AS UN-KILLABLE, per assertion-design.md #5, because a reviewer
+    spent a round confirming it and the next reader should not have to: in the
+    CURRENT call graph nothing can reach this `except`. `transition` refuses on
+    a class/kind mismatch, and the kind is DERIVED from that same class in the
+    caller, so the two always agree. There is no input that makes this branch
+    run, and no test here pretends otherwise.
+
+    It is kept because the invariant it protects is real and the call graph is
+    not a guarantee: `record_receipt` sets three fields AND appends a history
+    line before `transition` can refuse, so any future caller that stamps a
+    class separately -- or any change that lets `transition` refuse for a new
+    reason -- lands on an item carrying a receipt it was refused on.
+
+    THE HISTORY LINE IS PART OF THE RESTORE. A reviewer pointed out that
+    clearing the three fields alone leaves the audit record asserting a receipt
+    that does not exist, which is worse than keeping or dropping both: the
+    fields would say no receipt and the history would say there was one.
+
+    WHAT AN UNREACHABLE-TODAY FAILURE HERE WOULD LEAVE, now that the GitHub
+    close runs FIRST: an issue closed upstream and an item still non-terminal
+    here. That is the recoverable half of the pair -- the next refresh sees the
+    item gone from the live set and flags it `departed`/`needs-audit` (loudly,
+    with its receipt intact), and re-running `--record-receipt` succeeds because
+    `needs-audit` is not terminal. The other ordering has no such half: it is
+    #4545 itself.
+    """
+    before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
+    history_len = len(item.history)
+    led.record_receipt(number, kind, ref)
+    try:
+        led.transition(number, CLOSED, why)
+    except Exception:
+        (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) = before
+        del item.history[history_len:]
+        raise
+
+
 def record_receipt_from_evidence(
     led: Ledger, policy: dict, repo: str, number: int,
     *, from_pr: int | None, from_run: str | None,
 ) -> str:
-    """Record a receipt this tool has MEASURED, then close the item. Or refuse.
+    """Record a receipt this tool has MEASURED, close the issue, close the item.
+
+    THE CLOSE IS ONE TRANSACTION ACROSS BOTH RECORDS (#4545). Before this, the
+    ledger close never reached GitHub, so the next refresh read the harness's
+    own close as a REOPEN and voided the receipt -- every self-closed item
+    un-closed itself one cycle later. The ordering is asymmetric and is argued
+    at the call site below; the short form is that the GitHub close goes first,
+    because the half-completed pair the other way round IS the defect.
 
     THE KIND IS DERIVED FROM THE ITEM'S CLASS, never supplied by the caller.
     That is the load-bearing choice here. A `--kind` flag would let a
@@ -725,34 +894,30 @@ def record_receipt_from_evidence(
         ref = verify_run_backed_receipt(kind, run, policy)
         detail = f"{run.get('workflowName')} run {from_run} concluded success"
 
-    # DISCLOSED AS UN-KILLABLE, per assertion-design.md #5, because a reviewer
-    # spent a round confirming it and the next reader should not have to: in the
-    # CURRENT call graph nothing can reach this `except`. `transition` refuses
-    # on a class/kind mismatch, and the kind is DERIVED from that same class two
-    # lines up, so the two always agree. There is no input that makes this
-    # branch run, and no test here pretends otherwise.
+    # THE GITHUB CLOSE RUNS FIRST, AND THE ORDER IS THE FIX (#4545).
     #
-    # It is kept because the invariant it protects is real and the call graph is
-    # not a guarantee: `record_receipt` sets three fields AND appends a history
-    # line before `transition` can refuse, so any future caller that stamps a
-    # class separately -- or any change that lets `transition` refuse for a new
-    # reason -- lands on an item carrying a receipt it was refused on.
+    # The two writes can fail independently, and the two orderings are NOT
+    # symmetric, so this is stated rather than chosen silently:
     #
-    # THE HISTORY LINE IS PART OF THE RESTORE. A reviewer pointed out that
-    # clearing the three fields alone leaves the audit record asserting a
-    # receipt that does not exist, which is worse than keeping or dropping
-    # both: the fields would say no receipt and the history would say there was
-    # one.
-    before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
-    history_len = len(item.history)
-    led.record_receipt(number, kind, ref)
-    try:
-        led.transition(number, CLOSED, f"receipt verified by tick: {detail}")
-    except Exception:
-        (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) = before
-        del item.history[history_len:]
-        raise
-    return f"#{number} closed on a {kind} receipt - {detail}"
+    # - **GitHub, then the ledger** (this one). If the ledger write fails, the
+    #   issue is closed upstream and the item is still non-terminal here. The
+    #   next refresh sees it gone from the live set, flags it `departed` ->
+    #   `needs-audit` -- loudly, receipt intact, non-terminal -- and
+    #   `--record-receipt` can simply be re-run, because it refuses only on a
+    #   TERMINAL item. Recoverable, and visible while it is not.
+    # - **The ledger, then GitHub.** If the GitHub write fails, the item is
+    #   `closed` here and open there, which is EXACTLY #4545: the next refresh
+    #   reads it as a reopen, demotes it, and VOIDS the receipt that was just
+    #   verified. The half-completed pair is indistinguishable from the bug this
+    #   change exists to remove, so that ordering is not available.
+    #
+    # The close raises rather than returning a flag, so the ledger write below
+    # is unreachable unless the issue is observably closed on GitHub.
+    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)
+    _record_close_in_ledger(
+        led, item, number, kind, ref, f"receipt verified by tick: {detail}; {close_note}"
+    )
+    return f"#{number} closed on a {kind} receipt - {detail} ({close_note})"
 
 
 def main() -> int:
@@ -841,6 +1006,14 @@ def main() -> int:
                 led, policy, repo, args.record_receipt,
                 from_pr=args.from_pr, from_run=args.from_run,
             )
+        except IssueCloseFailedError as exc:
+            # A DIFFERENT DIAGNOSIS FROM A REFUSAL, and it gets a different
+            # word (R7). The receipt may have been sound; the WRITE failed. The
+            # item is left non-terminal and nothing is saved, which is the
+            # honest state when the close did not happen -- reporting a close
+            # this tool could not observe is #4545 one layer down.
+            print(f"GITHUB CLOSE FAILED - NOTHING RECORDED: {exc}", file=sys.stderr)
+            return 1
         except (ReceiptRefusedError, ValueError) as exc:
             # ValueError is the ledger's own R2 refusal from `transition`. It is
             # caught here so a refusal prints as a refusal rather than a

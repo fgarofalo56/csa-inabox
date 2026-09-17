@@ -115,6 +115,33 @@ look. That demotion has a legal escape — close the issue and the decline stand
 A park has none: closing a blocked item's issue is how a backlog lies about
 itself (`deploy-integrity.md` R2).
 
+**A ledger close now REACHES GitHub, which is the precondition that branch
+always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
+all, so an item the harness closed on its own evidence stayed open upstream, the
+next refresh read that as a reopen, and the receipt recorded minutes earlier was
+**voided**. Measured on #4535 — the first item the harness ever closed itself —
+which bounced to `needs-audit` on the very next cycle, so `drained()` was
+unreachable for anything the drain closed rather than inherited.
+
+`record_receipt_from_evidence` closes the issue **before** it writes the ledger,
+and the order is not arbitrary. The two writes fail independently:
+
+| ordering | if the second write fails |
+|---|---|
+| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, receipt intact, and `--record-receipt` can simply be re-run |
+| ledger, then GitHub | item `closed` here, open there → **#4545 verbatim**: false reopen, receipt destroyed next cycle |
+
+Only `CLOSES_ON_GITHUB` — `closed`, and nothing else — gets a close. A park is
+blocked, not done. `declined` is deliberately out too, although it is *in*
+`REOPEN_DISPUTES`: there is no unattended decline path, and its disposal carries
+a `--reason not-planned` resting on a judgement no program made. The close is
+idempotent (an already-closed issue is read first and left alone — which is how
+#4535's hand-closed workaround is met), is gated on `close-on-receipt` in
+`permitted_unattended`, and is verified **by reading the state back**, not by
+`gh`'s exit code. A close that cannot be observed raises `IssueCloseFailedError`,
+nothing is written, and the item stays non-terminal — a close that did not happen
+is never reported as one.
+
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
 before any work is done — and `drained: true` is this program's documented exit
@@ -323,7 +350,9 @@ concludes green having captured nothing.
 stops a green roll being recorded against a second deploy-path item it never
 touched; the operator supplies that pairing, and the harness cannot check it
 until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
-ledger is byte-identical afterwards, verified by digest.
+ledger is byte-identical afterwards, verified by digest, **and no GitHub write
+happens either**, because the close runs only after every refusal has been
+passed.
 
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from
