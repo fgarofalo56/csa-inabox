@@ -430,10 +430,9 @@ jobs:
           # (scripts/ci/workflow-actionlint-baseline.json) and the
           # workflow-actionlint ratchet keeps its teeth.
           # shellcheck disable=SC2016
-          xargs -d '\n' -P "$(nproc)" -n1 sh -c '
+          xargs -r -d '\n' -P "$(nproc)" -n1 sh -c '
             f="$1"
             flat=$(printf "%s" "$f" | tr "/" "_")
-            touch "$ATTEMPT_DIR/$flat"
             if ! out=$(bicep build-params "$f" --outfile "$OUT_DIR/$flat.json" 2>&1); then
               printf "%s\n" "$out"
               printf "::error file=%s::bicep build-params failed\n" "$f"
@@ -442,56 +441,109 @@ jobs:
               printf "::error file=%s::bicep build-params exited 0 but wrote no ARM JSON - nothing was actually compiled for this file\n" "$f"
               touch "$FAIL_DIR/$flat"
             fi
+            touch "$ATTEMPT_DIR/$flat"
           ' _ < "$RUNNER_TEMP/bicepparam-files.txt"
 
           FAILED=$(find "$FAIL_DIR" -type f | wc -l)
 
-          # ── POPULATION RECONCILIATION (#4466, review round 2) ──────────────
+          # ── POPULATION RECONCILIATION (#4466, review rounds 2 and 3) ───────
           #
           # WHAT THIS IS FOR. Everything above this line judges the RESULT of
-          # whatever list reached xargs. Nothing judged the LIST. Seven one-line
-          # narrowings were demonstrated against the previous revision — a
-          # `head -n 1`, a positive `grep -E` keeping only the 7 fiab params, a
-          # SECOND `grep -v` after a harmless first one, `grep -vF` instead of
-          # `-vE`, a `sed -i '/params.il5/d'`, a truncated list with COUNT
-          # forced to 1, and replacing the real invocation with an `echo` — and
-          # every one left this step GREEN while it printed a count it had never
-          # established (deploy-integrity.md R7). That is the very shape #4466
-          # is about: the ISSUE was a POPULATION defect, not a check defect, and
-          # the first cut of this gate reproduced it.
+          # whatever list reached xargs. Nothing judged the LIST. Ten one-line
+          # narrowings were demonstrated against the pre-reconciliation
+          # revision — `head -n 1`, a positive `grep -E` keeping only the 7 fiab
+          # params, a SECOND `grep -v` after a harmless first, `grep -vF`,
+          # `sed -i`, a truncated list with COUNT forced, a pipe into xargs, and
+          # replacing the invocation with an `echo` — and every one left this
+          # step GREEN while printing a count it had never established
+          # (deploy-integrity.md R7). That is the very shape #4466 is about: the
+          # ISSUE was a POPULATION defect, not a check defect, and the first cut
+          # of this gate reproduced it.
           #
-          # SO COUNT WHAT HAPPENED, NOT WHAT WAS ASKED FOR. `$ATTEMPT_DIR` holds
-          # one marker per file the compiler was actually invoked on, written by
-          # the worker itself. `EXPECTED` re-derives the tracked set
-          # INDEPENDENTLY — it does not read the list file — so
-          # anything that narrowed, truncated or reordered that file shows up
-          # here. The `-s` arm in the worker covers the remaining case: an
-          # invocation that returns 0 without producing ARM JSON (replacing the
-          # compiler with an `echo`) is a FAILURE, not a pass.
+          # AND THEN THE FIX HAD THE SAME DEFECT ONE LEVEL DOWN. Round 2 computed
+          # four numbers and compared ONE pair, so two more narrowings walked
+          # through the reconciliation itself:
+          #   - marking the attempt BEFORE the work (`touch` then `exit 0`)
+          #     kept ATTEMPTED at 17 while 7 compiled — measured rc=0, with the
+          #     success line printing its own disproof: "reconciled 17 ...; 7 ARM
+          #     JSON output(s) written". PRODUCED was computed and compared
+          #     against nothing.
+          #   - narrowing ATTEMPTED and EXPECTED in lockstep printed
+          #     "reconciled 7 ... against 7" at rc=0. COUNT was likewise computed
+          #     and compared against nothing.
+          # EVERY NUMBER THIS STEP COMPUTES IS NOW COMPARED. If you add another,
+          # compare it or do not compute it.
           #
-          # The two arms report SEPARATELY and in this order, because they mean
+          # The four arms report SEPARATELY and in this order, because they mean
           # different things and an error must not claim what it did not
-          # establish: "the compiler never saw 16 of your files" is a different
-          # defect from "16 of your files do not compile".
+          # establish. The order is chosen so each defect meets the arm that
+          # describes it: a narrowed enumeration reaches (1), two lenses narrowed
+          # together reach (2), a genuinely broken file reaches (3), and work
+          # that was marked but not done reaches (4).
+          #
+          # SCOPE OF THE WORKER'S `-s` ARM, stated because it is exactly the gap
+          # (4) exists to close: `-s` only judges a worker that REACHED the
+          # compiler. A worker that returns before calling it produces no `-s`
+          # verdict at all, and is caught by (4) instead.
+          #
+          # The attempt marker is written AFTER the compile for the same reason:
+          # marking is not doing, and a marker written first counts a worker that
+          # did nothing. It is still written on the failure path, so a file that
+          # genuinely fails to compile is reported by (3) and not miscounted as a
+          # narrowing by (1).
           ATTEMPTED=$(find "$ATTEMPT_DIR" -type f | wc -l)
           EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | wc -l)
           PRODUCED=$(find "$OUT_DIR" -type f -name '*.json' | wc -l)
           rm -rf "$FAIL_DIR" "$OUT_DIR" "$ATTEMPT_DIR"
+
+          # (1) Do the two INDEPENDENT enumerations agree with each other? This
+          # runs FIRST because it names the ROOT cause when a pathspec is wrong:
+          # if the oracle itself was narrowed, arm (3) would report "invoked on
+          # 17 but 3 tracked", which reads backwards. It is also the cross-check
+          # that stops the reconciliation being narrowed on both sides at once —
+          # ATTEMPTED and EXPECTED can be made to agree at 7 while the
+          # enumeration really produced 17. And it must precede (2), because a
+          # forged or truncated COUNT would otherwise surface there as a
+          # "collision", which is true arithmetic but the wrong diagnosis.
+          if [ "$COUNT" -ne "$EXPECTED" ]; then
+            echo "::error::THE TWO ENUMERATIONS DISAGREE — the list enumerated $COUNT file(s) while an independent re-derivation counts $EXPECTED tracked .bicepparam file(s). One of the two pathspecs has been narrowed. Fix the pathspec; do NOT make the two agree by narrowing the other one."
+            exit 1
+          fi
+
+          # (2) Marker names must be unique, or the counts below undercount and
+          # arm (3) would report a narrowing that did not happen. `tr / _` maps
+          # `a/b` and `a_b` to the same name. Measured on this tree: 17 paths ->
+          # 17 distinct names, so this is a REGRESSION GUARD at zero, not a
+          # finder — but it is compared, not merely printed.
+          FLATNAMES=$(tr '/' '_' < "$RUNNER_TEMP/bicepparam-files.txt" | sort -u | wc -l)
+          if [ "$FLATNAMES" -ne "$COUNT" ]; then
+            echo "::error::$COUNT param path(s) collapse to only $FLATNAMES distinct marker name(s) — two paths differ only where one has '/' and the other '_'. The counts below would undercount and blame the enumeration. Give the markers a collision-free name."
+            exit 1
+          fi
+
+          # (3) Did every tracked file reach the compiler? Distinct from (1):
+          # the two enumerations can agree while the LIST is rewritten between
+          # the count and the compile.
           if [ "$ATTEMPTED" -ne "$EXPECTED" ]; then
             echo "::error::POPULATION NARROWED — bicep build-params was invoked on $ATTEMPTED file(s) but $EXPECTED .bicepparam file(s) are tracked. Every tracked param file must reach the compiler. Look at the enumeration above for a filter, a truncation, or a pathspec that no longer matches; do NOT adjust this comparison to agree with the smaller number."
             exit 1
           fi
+
+          # (4) Did anything fail to compile?
           if [ "$FAILED" -gt 0 ]; then
             echo "::error::$FAILED Bicep param file(s) failed to compile"
             exit 1
           fi
-          # PRODUCED is REPORTED, not compared. Each successful compile is
-          # already pinned to have written non-empty ARM JSON by the `-s` arm in
-          # the worker, so the reconciliation that decides the verdict is
-          # ATTEMPTED vs EXPECTED. Saying which is which matters: a line that
-          # printed a number it had not used in any comparison would be
-          # asserting something it did not establish (deploy-integrity.md R7).
-          echo "All $COUNT Bicep param files compiled clean — reconciled $ATTEMPTED compiler invocation(s) against $EXPECTED tracked file(s); $PRODUCED ARM JSON output(s) written."
+
+          # (5) Nothing failed and everything was attempted — so every tracked
+          # file must have produced ARM JSON. A shortfall here means a worker was
+          # counted without doing the work.
+          if [ "$PRODUCED" -ne "$EXPECTED" ]; then
+            echo "::error::MARKED BUT NOT COMPILED — $ATTEMPTED invocation(s) recorded and 0 failures, yet only $PRODUCED ARM JSON output(s) exist for $EXPECTED tracked file(s). The compiler was counted for work it did not do."
+            exit 1
+          fi
+
+          echo "All $COUNT Bicep param files compiled clean — $COUNT enumerated, $ATTEMPTED invoked, $PRODUCED ARM JSON written, all reconciled against $EXPECTED independently-derived tracked file(s)."
 
   # -------------------------------------------------------------------------
   # Secret Scanning

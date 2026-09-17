@@ -43,6 +43,7 @@ import {
   gitPathspecToRegExp,
   globToRegExp,
   jobsOf,
+  paramEnumerations,
   pushTriggerPaths,
   stripComments,
   trackedBicepParams,
@@ -50,6 +51,7 @@ import {
   BUILD_PARAMS_HEAD,
   NEGATIVE_CONTROL_SENTINEL,
   PARAM_PATHSPEC,
+  RECONCILIATION_COMPARISONS,
   REPO_ROOT,
   WORKFLOW,
 } from '../check-bicepparam-compiled.mjs';
@@ -98,6 +100,32 @@ const LIST_Q = `"${LIST}"`;
  */
 const ENUMERATION_LINE = `          git ls-files -- '${PARAM_PATHSPEC}' > ${LIST_Q}`;
 
+/**
+ * The reconciliation's INDEPENDENT re-derivation line, LIFTED from the workflow.
+ *
+ * Round 2 transcribed this anchor while lifting the enumeration's, and a
+ * reviewer showed what that cost: the two arms aimed at the reconciliation's
+ * own lens reddened the suite with `mutation anchor not found` — a
+ * TRANSCRIPTION TRIPWIRE, not a detection — and the improved message even told
+ * the reader to update the constant, which restores green. So neither arm could
+ * be counted as coverage of the rule it named. Lifted, they measure the rule.
+ *
+ * Selected as: the param enumeration that is NOT the one writing the list file.
+ */
+const RECONCILIATION_LINE = (() => {
+  const body = jobsOf(stripComments(LIVE_LF)).get('bicep-params');
+  const enumLine = enumerationLine(body);
+  const all = paramEnumerations(body);
+  const other = all.filter((e) => e.text !== enumLine.text);
+  assert.equal(
+    other.length,
+    1,
+    `expected exactly one reconciliation enumeration besides the list-writing one; found ${other.length}: ` +
+      other.map((e) => e.text.trim()).join(' | '),
+  );
+  return other[0].text;
+})();
+
 /** The immutable tree #4466 was measured against. */
 const PRE_FIX_SHA = '0348d3715e6';
 
@@ -117,6 +145,32 @@ function mutateLive(find, replace) {
 
 /** Mutate the enumeration line, the anchor five arms share. */
 const mutateEnumeration = (replacement) => mutateLive(ENUMERATION_LINE, replacement);
+
+/**
+ * Replace the first occurrence of `find` INSIDE the `bicep-params` job.
+ *
+ * `mutateLive` replaces the first occurrence in the whole file, and that is not
+ * the same thing: the sibling `bicep-lint` job carries a byte-identical
+ * `if [ "$FAILED" -gt 0 ]; then`, so an arm aimed at this job silently mutated
+ * the OTHER one, left `bicep-params` untouched, and reported the rule as having
+ * no kill power. The anchor assertion could not catch it — the anchor really
+ * was present, just not where the arm meant. An unapplied mutation reporting as
+ * a survivor is the exact defect class this PR is about, and a reviewer hit the
+ * same shape from the other side (an `xargs` mutation landing on `bicep-lint`).
+ *
+ * So: anchor to the job header first, and assert the occurrence is inside.
+ */
+function mutateInJob(find, replace) {
+  const jobAt = LIVE_LF.indexOf('\n  bicep-params:\n');
+  assert.ok(jobAt > -1, 'the bicep-params job header moved');
+  const at = LIVE_LF.indexOf(find, jobAt);
+  assert.ok(
+    at > -1,
+    `mutation anchor not found INSIDE the bicep-params job: ${JSON.stringify(find)}\n` +
+      'this message means the mutation was NOT applied, so the arm below measured nothing.',
+  );
+  return LIVE_LF.slice(0, at) + replace + LIVE_LF.slice(at + find.length);
+}
 
 // ---------------------------------------------------------------------------
 // POSITIVE CONTROLS. Without these, every negative control below is satisfied
@@ -159,10 +213,24 @@ test('POSITIVE: the tracked .bicepparam population is non-empty and includes il5
 // THE ANCHOR: the real pre-fix tree, at an IMMUTABLE sha.
 // ---------------------------------------------------------------------------
 
+/** Is this checkout shallow? The ONLY legitimate reason the anchor object is absent. */
+function isShallowCheckout() {
+  try {
+    return (
+      execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The pre-fix workflow, read from a fixed sha, with its SHAPE checked.
  *
- * @returns {string|null} null when the object is unreachable (shallow clone)
+ * @returns {string|null} null when the object is unreachable
  */
 function preFixWorkflow() {
   try {
@@ -176,14 +244,37 @@ function preFixWorkflow() {
   }
 }
 
+test('ANCHOR: PRE_FIX_SHA is a sha, and it RESOLVES', () => {
+  // HOISTED OUT OF THE ANCHOR TEST (round 3, reviewer finding). Both of these
+  // used to sit BEHIND `if (a === null) return;`, so a one-character typo in
+  // the constant stood the whole anchor down at rc=0:
+  //
+  //   PRE_FIX_SHA = 'deadbee'  ->  suite rc=0, "﹣ ANCHOR: ... is not reachable"
+  //
+  // FAILS IF: PRE_FIX_SHA is repointed at a branch or tag (the hex assertion —
+  // which `deadbee` would have passed, so it is not the arm that catches a
+  // typo), or names an object this checkout cannot resolve while the checkout
+  // is NOT shallow. In a full clone, "unreachable" means TYPO, not shallow, and
+  // the two are now distinguished instead of both landing on a silent skip.
+  assert.match(PRE_FIX_SHA, /^[0-9a-f]{7,40}$/, 'the anchor must be a sha, never a branch or a moving ref');
+  if (isShallowCheckout()) return; // genuinely cannot resolve; the anchor test skips
+  assert.ok(
+    preFixWorkflow() !== null,
+    `PRE_FIX_SHA '${PRE_FIX_SHA}' does not resolve in this FULL checkout — that is a typo, not a shallow clone, ` +
+      'and it would otherwise stand the anchor down silently forever.',
+  );
+});
+
 test('ANCHOR: the guard is RED on the real pre-fix validate.yml, read at a FIXED sha', (t) => {
   const preFix = preFixWorkflow();
   if (preFix === null) {
-    // A shallow clone is not a verdict about the guard. SKIP, never silently
-    // pass — a swallowed failure here would be the "green over nothing" shape
-    // #4466 is about. (`loom-guardrails.yml` checks out with fetch-depth: 0,
-    // so in CI this path is not taken; both reviewers confirmed the anchor RAN.)
-    t.skip(`${PRE_FIX_SHA}:${WORKFLOW} is not reachable in this checkout`);
+    // A shallow clone is the ONLY legitimate absence, and it is now checked for
+    // rather than assumed — a typo reds the test above instead of landing here.
+    // SKIP, never silently pass: a swallowed failure would be the "green over
+    // nothing" shape #4466 is about. (`loom-guardrails.yml` checks out with
+    // fetch-depth: 0, so in CI this path is not taken; both reviewers confirmed
+    // the anchor RAN rather than skipped.)
+    t.skip(`${PRE_FIX_SHA}:${WORKFLOW} is not reachable (shallow checkout: ${isShallowCheckout()})`);
     return;
   }
 
@@ -437,10 +528,7 @@ test('POPULATION A7/R8: deleting the reconciliation is a violation', () => {
 });
 
 test('R8: one enumeration is not enough — the reconciliation needs an INDEPENDENT count', () => {
-  const mutated = mutateLive(
-    "          EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | wc -l)",
-    `          EXPECTED=$(wc -l < ${LIST})`,
-  );
+  const mutated = mutateLive(RECONCILIATION_LINE, `          EXPECTED=$(wc -l < ${LIST_Q})`);
   const r8 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R8') && /TWO independent/.test(v));
   // FAILS IF: R8 accepts a reconciliation that counts the list file it just
   // wrote. That is the whole trap: a count derived from the narrowed list
@@ -453,6 +541,91 @@ test('R8: one enumeration is not enough — the reconciliation needs an INDEPEND
   // therefore still passed the `< 2` test, and this control was green against
   // the very mutation it names. R8 now counts COMMAND POSITIONS.
   assert.ok(r8, `expected the "TWO independent" R8, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
+});
+
+test('N4: aliasing EXPECTED to ATTEMPTED is a violation, not an anchor miss', () => {
+  const mutated = mutateLive(RECONCILIATION_LINE, '          EXPECTED=$ATTEMPTED');
+  const r8 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R8') && /TWO independent/.test(v));
+  // FAILS IF: R8's independence rule is deleted. A reviewer measured this as
+  // "SURVIVED — blind test, not a kill" in round 2, because the arm's anchor
+  // was TRANSCRIBED: it reddened the suite with "mutation anchor not found",
+  // which is a transcription tripwire rather than a detection, and the message
+  // even tells the reader to update the constant — restoring green. The anchor
+  // is now LIFTED from the workflow (RECONCILIATION_LINE), so this arm measures
+  // the rule instead of the transcription.
+  assert.ok(r8, `expected the "TWO independent" R8, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
+});
+
+test('N11: narrowing the RECONCILIATION pathspec alone is a violation', () => {
+  const mutated = mutateLive(
+    RECONCILIATION_LINE,
+    "          EXPECTED=$(git ls-files -- ':(icase)platform/fiab/bicep/params/*.bicepparam' | wc -l)",
+  );
+  const r4 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R4'));
+  // FAILS IF: R4 glob-matches only the ENUMERATION's pathspec. A reviewer
+  // measured this narrowing as surviving the guard in round 2 — it counts 7
+  // while the job compiles 7, so the runtime comparison agrees with itself and
+  // only the LENS was wrong. R4 now judges every `git ls-files` in the job,
+  // because the pathspec IS the lens.
+  assert.ok(r4, `expected R4, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
+  assert.match(r4, /Every `git ls-files` in this job is a lens/);
+});
+
+test('N11b: piping the reconciliation count through a filter is a violation', () => {
+  const mutated = mutateLive(
+    RECONCILIATION_LINE,
+    "          EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | grep -v params/il5 | wc -l)",
+  );
+  const r5 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R5') && /reconciliation count/.test(v));
+  // FAILS IF: R5's bare-command rule is applied to the enumeration only. The
+  // pathspec is intact here, so R4 cannot see it; the narrowing is in the
+  // pipeline of the ORACLE the whole step is judged against.
+  assert.ok(r5, `expected the reconciliation R5, got: ${analyze(mutated, PARAMS).violations.join(' | ')}`);
+});
+
+test('N11c: `| wc -l` is the ONE thing the reconciliation may pipe through', () => {
+  // FAILS IF: R5c forbids every pipe on that line. The shipped line is
+  // `EXPECTED=$(git ls-files … | wc -l)` — it counts rather than lists, so the
+  // rule has to permit exactly that and nothing else. This pins the boundary so
+  // the arm above cannot be satisfied by rejecting everything.
+  assert.deepEqual(analyze(LIVE_LF, PARAMS).violations, []);
+  assert.match(RECONCILIATION_LINE, /\|\s*wc\s+-l/);
+});
+
+test('R8b: every number the step computes must be COMPARED, not just printed', () => {
+  // The round-3 blockers, as guard arms. Each deletes ONE comparison and
+  // leaves the number being computed and printed — which is exactly the state
+  // round 2 shipped in, and exactly how a worker got counted for work it did
+  // not do (PRODUCED) and how two lenses got narrowed together (COUNT).
+  //
+  // The list is IMPORTED from the guard, not transcribed, so a comparison added
+  // to the step without being added to the rule cannot hide here.
+  //
+  // FAILS IF: R8b is deleted, or keyed to a NAME rather than a PAIR — `COUNT`
+  // is also compared in the zero-population check, so a name-level rule was
+  // satisfied by that and stayed green against deleting `COUNT` vs `EXPECTED`,
+  // which is one of the two round-3 escapes. DISCLOSED: existence-only, like
+  // R7/R8/R8c — it notices a comparison being removed, not one being declawed.
+  assert.ok(RECONCILIATION_COMPARISONS.length >= 5, 'the comparison list shrank');
+  const jobAt = LIVE_LF.indexOf('\n  bicep-params:\n');
+  for (const [left, right] of RECONCILIATION_COMPARISONS) {
+    const re = new RegExp(`if \\[ "\\$${left}" -(?:ne|gt) "?\\$?${right}"?`);
+    // Search from the JOB header, not from the top of the file: `bicep-lint`
+    // carries a byte-identical `$FAILED` comparison and was silently taking the
+    // mutation, which made this arm report the rule as toothless.
+    const line = LIVE_LF.slice(jobAt)
+      .split('\n')
+      .find((l) => re.test(l));
+    assert.ok(line, `no \`$${left}\` vs \`${right}\` comparison found inside the bicep-params job`);
+    const mutated = mutateInJob(line, line.replace(`"$${left}"`, `"$IGNORED_${left}"`));
+    const r8b = analyze(mutated, PARAMS).violations.find(
+      (x) => x.startsWith('R8') && x.includes(`compares \`$${left}\` against \`${right}\``),
+    );
+    assert.ok(
+      r8b,
+      `deleting the $${left} vs ${right} comparison must red R8b; got: ${analyze(mutated, PARAMS).violations.join(' | ')}`,
+    );
+  }
 });
 
 test('R8c: deleting the zero-population fail-closed check is a violation', () => {
@@ -710,8 +883,13 @@ test('enumerationLine reads the list path and the pathspec out of the live job',
   assert.deepEqual(e.pathspecs, [PARAM_PATHSPEC]);
   assert.ok(e.listPath, 'no list path extracted');
   assert.ok(!/^["']|["']$/.test(e.listPath), `quotes were not stripped: ${e.listPath}`);
-  // The step must write it, read it back for the log, and feed it to the
-  // compiler — three distinct uses of the SAME path.
-  assert.equal(body.split(e.listPath).length - 1, 4, `expected 4 uses of ${e.listPath}`);
-  assert.match(e.text, new RegExp(`>\\s*"?${e.listPath.replace(/[.*+?^${}()|[\]\\$]/g, '\\$&')}`));
+  // Shaped by ROLE rather than by a total count, which a fifth legitimate use
+  // would break for no reason (adding the marker-collision check did exactly
+  // that): exactly one WRITE, and more than one READ.
+  const q = e.listPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const writes = body.split('\n').filter((l) => new RegExp(`>\\s*"?${q}`).test(l));
+  const reads = body.split('\n').filter((l) => new RegExp(`<\\s*"?${q}`).test(l));
+  assert.equal(writes.length, 1, `exactly one line may WRITE the list; found ${writes.length}`);
+  assert.ok(reads.length >= 2, `the list must be READ to count it and to feed the compiler; found ${reads.length}`);
+  assert.match(e.text, new RegExp(`>\\s*"?${q}`));
 });

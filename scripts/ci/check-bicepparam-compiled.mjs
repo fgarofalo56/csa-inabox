@@ -83,10 +83,14 @@
  *      the evidence the magic is honoured. It does NOT close a different
  *      spelling (`x.bicep-param`, a param file with no extension). Nothing here
  *      watches for that, and this guard is not evidence about it.
- *   2. R7 and R8 are EXISTENCE-ONLY. They notice deletion of the negative
- *      control and of the reconciliation; they cannot tell a working one from a
- *      declawed one. The real evidence for both is produced by the job running
- *      them on every execution. They are not counted as proof of kill power.
+ *   2. R7, R8, R8b and R8c are EXISTENCE-ONLY. They notice deletion of the
+ *      negative control, of the reconciliation, of any of its four comparisons,
+ *      and of the zero-population check; they cannot tell a working one from a
+ *      declawed one. Measured: replacing the reconciliation's `exit 1` with an
+ *      `echo`, or its condition with `if false`, is green here — EQUIVALENT
+ *      under this contract, not a blind test. The real evidence for all of them
+ *      is produced by the job running them on every execution. They are not
+ *      counted as proof of kill power.
  *   3. THE COMPILE IS NOT A REQUIRED CONTEXT. `Bicep Params Compile` is not one
  *      of main's 15 required status checks and no ruleset requires it, so a RED
  *      compile does not block a merge today — only `guardrails`, i.e. THIS
@@ -240,6 +244,23 @@ export const BUILD_PARAMS_HEAD = new RegExp(`^(?:az\\s+)?bicep\\s+${COMPILE_VERB
 export const GIT_LS_FILES_HEAD = /^git\s+ls-files\b/;
 
 /**
+ * The comparisons the compile step must carry, as `[left, right, why]`.
+ *
+ * EVERY NUMBER THE STEP COMPUTES APPEARS HERE. That is the rule this list
+ * exists to hold: round 2 computed four numbers and compared one pair, and both
+ * round-3 escapes walked through the two that were merely printed. Exported so
+ * the tests drive the same list the guard does rather than a transcription of
+ * it (assertion-design.md §3).
+ */
+export const RECONCILIATION_COMPARISONS = [
+  ['FLATNAMES', 'COUNT', 'without it two paths can collapse to one marker name and arm (1) blames the enumeration for a collision'],
+  ['ATTEMPTED', 'EXPECTED', 'without it a narrowed list reaches the compiler unnoticed — the original #4466 shape'],
+  ['COUNT', 'EXPECTED', 'without it the two enumerations can be narrowed in lockstep and agree with each other at 7 of 17'],
+  ['PRODUCED', 'EXPECTED', 'without it a worker that marks its attempt and then skips the compile is counted as having done the work'],
+  ['FAILED', '0', 'without it a file that genuinely fails to compile is not reported'],
+];
+
+/**
  * Split a job body into its steps.
  *
  * A step begins at a six-space `- ` list item. Used so R2b can ask the question
@@ -386,25 +407,47 @@ export function globToRegExp(glob) {
 }
 
 /**
+ * Every logical line in `body` that runs `git ls-files` at a COMMAND POSITION
+ * over a `.bicepparam` pathspec, with the pathspecs it names.
+ *
+ * WHY EVERY ONE, not just the enumeration's (review round 3). R4 originally
+ * glob-matched the ENUMERATION's pathspec and nothing judged the
+ * reconciliation's. That left the reconciliation narrowable on its own side:
+ * point `EXPECTED` at `'platform/fiab/bicep/params/*.bicepparam'` and it counts
+ * 7 while the job compiles 7, and both static rules agree with each other. The
+ * pathspec is the lens; every lens gets the same test.
+ *
+ * @param {string} body comment-stripped job body
+ * @returns {{text:string, pathspecs:string[]}[]}
+ */
+export function paramEnumerations(body) {
+  const out = [];
+  for (const line of body.split('\n')) {
+    if (!/\.bicepparam/i.test(line)) continue;
+    if (commandPositionMatches(line, GIT_LS_FILES_HEAD) === 0) continue;
+    const pathspecs = [...line.matchAll(/'([^']+)'|"([^"]+)"/g)]
+      .map((q) => q[1] ?? q[2])
+      .filter((s) => /\.bicepparam/i.test(s) && !/bicepparam-files/i.test(s));
+    out.push({ text: line, pathspecs });
+  }
+  return out;
+}
+
+/**
  * The logical line in `body` that enumerates the param files into a list file.
  *
  * @param {string} body comment-stripped job body
  * @returns {{text:string, listPath:string|null, pathspecs:string[]}|null}
  */
 export function enumerationLine(body) {
-  for (const line of body.split('\n')) {
-    if (!/\bgit\s+ls-files\b/.test(line)) continue;
-    if (!/\.bicepparam/.test(line)) continue;
-    if (!/>/.test(line)) continue;
-    const m = /(?:^|[^>])>\s*(\S+)/.exec(line);
+  for (const e of paramEnumerations(body)) {
+    if (!/>/.test(e.text)) continue;
+    const m = /(?:^|[^>])>\s*(\S+)/.exec(e.text);
     // Strip surrounding quotes: the list path is written `> "$RUNNER_TEMP/…"`,
     // and carrying the quotes into the rewrite/redirect matchers below made
     // them look for a literal `"` that the consumer line does not have there.
     const listPath = m ? m[1].replace(/^["']|["']$/g, '') : null;
-    const pathspecs = [...line.matchAll(/'([^']+)'|"([^"]+)"/g)]
-      .map((q) => q[1] ?? q[2])
-      .filter((s) => /\.bicepparam/i.test(s) && !/bicepparam-files/i.test(s));
-    return { text: line, listPath, pathspecs };
+    return { text: e.text, listPath, pathspecs: e.pathspecs };
   }
   return null;
 }
@@ -552,27 +595,36 @@ export function analyze(workflowText, params) {
   }
 
   // R4 — the enumeration must be the tracked param population, not a hand list,
-  // and its PATHSPEC must actually reach every tracked param file.
+  // and EVERY pathspec in the job must reach every tracked param file.
   //
-  // The second half is not pedantry: a typo to `'*.bicepparams'` still contains
+  // Glob-matching is not pedantry: a typo to `'*.bicepparams'` still contains
   // the substring `*.bicepparam`, so a substring test passes while the pathspec
-  // matches nothing and the step compiles zero files. Glob-MATCHED against the
-  // real population, the same way R6 judges the path filters.
+  // matches nothing and the step compiles zero files.
+  //
+  // EVERY pathspec, not just the enumeration's (round 3). Judging only the
+  // enumeration left the RECONCILIATION's own lens unwatched: narrow
+  // `EXPECTED` to `'platform/fiab/bicep/params/*.bicepparam'` and it counts 7
+  // against 7 compiled, with both static rules agreeing with each other. The
+  // pathspec IS the lens, so every lens gets the same test.
   const enumeration = enumerationLine(body);
+  const enumerations = paramEnumerations(body);
   if (!enumeration) {
     violations.push(
       `R4 job '${job}' does not enumerate with \`git ls-files … '*.bicepparam' > <list>\` — a hand-maintained list silently drops the next param file added, which is the population defect #4466 is about.`,
     );
-  } else if (enumeration.pathspecs.length === 0) {
-    violations.push(
-      `R4 job '${job}' enumerates with \`git ls-files\` but no quoted .bicepparam pathspec could be read from it: \`${enumeration.text.trim()}\`.`,
-    );
-  } else {
-    const res = enumeration.pathspecs.map((s) => gitPathspecToRegExp(s));
+  }
+  for (const e of enumerations) {
+    if (e.pathspecs.length === 0) {
+      violations.push(
+        `R4 job '${job}' runs \`git ls-files\` over .bicepparam but no quoted pathspec could be read from it: \`${e.text.trim()}\`.`,
+      );
+      continue;
+    }
+    const res = e.pathspecs.map((s) => gitPathspecToRegExp(s));
     const unreached = params.filter((p) => !res.some((re) => re.test(p)));
     if (unreached.length) {
       violations.push(
-        `R4 job '${job}'s pathspec (${enumeration.pathspecs.join(', ')}) matches none of ${unreached.length} tracked param file(s): ${unreached.slice(0, 5).join(', ')}${unreached.length > 5 ? ', …' : ''}. The enumeration would hand the compiler a shorter list than the repo carries.`,
+        `R4 job '${job}' has a pathspec (${e.pathspecs.join(', ')}) that matches none of ${unreached.length} tracked param file(s): ${unreached.slice(0, 5).join(', ')}${unreached.length > 5 ? ', …' : ''}. Every \`git ls-files\` in this job is a lens on the same population and must see all of it — a narrowed one here makes the reconciliation compare two short numbers. Site: \`${e.text.trim()}\``,
       );
     }
   }
@@ -603,6 +655,26 @@ export function analyze(workflowText, params) {
     );
   }
 
+  // R5c — the RECONCILIATION's enumeration gets the same treatment, with one
+  // allowance: it legitimately ends in `| wc -l`, because it counts rather than
+  // lists. Anything else in that pipeline narrows the count the whole
+  // reconciliation is measured against, which is the same defect one lens over.
+  for (const e of enumerations) {
+    if (enumeration && e.text === enumeration.text) continue;
+    // Strip the two shapes this line is legitimately built from — the
+    // `NAME=$( … )` capture and the trailing `| wc -l` — then apply the same
+    // bare-command rule as the enumeration. Anything left is a narrowing.
+    const withoutCount = e.text
+      .replace(/^\s*[A-Za-z_][A-Za-z0-9_]*=\$\(/, '')
+      .replace(/\)\s*$/, '')
+      .replace(/\|\s*wc\s+-l\b/, '');
+    if (ENUMERATION_EXTRA_COMMANDS.test(withoutCount)) {
+      violations.push(
+        `R5 job '${job}' pipes its reconciliation count through something other than \`wc -l\`: \`${e.text.trim()}\`. That count is the independent oracle the whole step is judged against; a filter there narrows the oracle instead of the population.`,
+      );
+    }
+  }
+
   // R5b — nothing may REWRITE the list file between enumeration and use, and
   // the compile must read that same file.
   //
@@ -626,9 +698,19 @@ export function analyze(workflowText, params) {
     // The compile must consume THAT list, by redirect, not a derived one and
     // not a pipe. `head -n 1 list | xargs …` narrowed the population to one
     // file while every other static check stayed green.
-    if (!new RegExp(`<\\s*"?${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?`).test(body)) {
+    //
+    // SCOPED TO A NON-COUNTING READ (round 3, reviewer nit N2). The previous
+    // form accepted ANY `< $LIST` in the job, and `COUNT=$(wc -l < "$LIST")`
+    // satisfies it — so deleting the xargs input redirect left the rule green
+    // while its message claimed the compiler reads the list. The message now
+    // matches what the check can see: a read that is not the `wc -l` count.
+    const readRe = new RegExp(`<\\s*"?${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?`);
+    const feeds = body
+      .split('\n')
+      .filter((l) => readRe.test(l) && !/\bwc\s+-l\b/.test(l));
+    if (feeds.length === 0) {
       violations.push(
-        `R5 job '${job}' never reads '${lp}' with a \`< ${lp}\` redirect — whatever feeds the compiler is not demonstrably the enumerated list.`,
+        `R5 job '${job}' reads '${lp}' only to COUNT it (\`wc -l\`), never as input to anything — so nothing demonstrably feeds the enumerated list to the compiler.`,
       );
     }
     for (const line of body.split('\n')) {
@@ -653,8 +735,21 @@ export function analyze(workflowText, params) {
     const res = globs.map((g) => ({ glob: g, re: globToRegExp(g) }));
     const unreached = params.filter((p) => !res.some(({ re }) => re.test(p)));
     if (unreached.length) {
+      // CASE HINT (round 3, reviewer nit). The pathspec is `:(icase)` but a
+      // GitHub `paths:` glob is genuinely case-SENSITIVE, so a file committed
+      // as `x.BICEPPARAM` is enumerated for compilation and then reported here
+      // — pointing at the trigger filter rather than at the file's extension
+      // case, which is the real cause. Making this matcher case-insensitive
+      // would be WRONG (it would model GitHub as something it is not), so the
+      // message carries the diagnosis instead.
+      const caseOnly = unreached.filter((p) =>
+        res.some(({ re }) => new RegExp(re.source, 'i').test(p)),
+      );
+      const hint = caseOnly.length
+        ? ` ${caseOnly.length} of them differ from a declared pattern ONLY BY CASE (${caseOnly.slice(0, 3).join(', ')}) — GitHub's \`paths:\` globs are case-sensitive while this job's pathspec is \`:(icase)\`, so the likelier fix is renaming the file's extension to lowercase, not widening the filter.`
+        : '';
       violations.push(
-        `R6 the \`${trigger}:\` \`paths:\` filter of ${WORKFLOW} matches none of ${unreached.length} tracked param file(s): ${unreached.slice(0, 5).join(', ')}${unreached.length > 5 ? ', …' : ''}. A ${trigger} touching only those files would not start this workflow, so the compile would not run.`,
+        `R6 the \`${trigger}:\` \`paths:\` filter of ${WORKFLOW} matches none of ${unreached.length} tracked param file(s): ${unreached.slice(0, 5).join(', ')}${unreached.length > 5 ? ', …' : ''}. A ${trigger} touching only those files would not start this workflow, so the compile would not run.${hint}`,
       );
     }
   }
@@ -695,8 +790,36 @@ export function analyze(workflowText, params) {
     }
     if (!/ATTEMPTED/.test(body) || !/EXPECTED/.test(body)) {
       violations.push(
-        `R8 job '${job}' has lost its population reconciliation (ATTEMPTED vs EXPECTED). Without it, seven measured one-line narrowings of the enumeration — head, a positive grep, a second grep -v, grep -vF, sed -i, a truncated list, and substituting echo for the compiler — all leave the job GREEN while it prints a file count it never established (deploy-integrity.md R7).`,
+        `R8 job '${job}' has lost its population reconciliation (ATTEMPTED vs EXPECTED). Without it, ten measured one-line narrowings of the enumeration — head, a positive grep, a second grep -v, grep -vF, sed -i, a truncated list, a pipe into xargs, and substituting echo for the compiler — all leave the job GREEN while it prints a file count it never established (deploy-integrity.md R7).`,
       );
+    }
+    // R8b — EVERY number the step computes must be COMPARED, not merely
+    // printed.
+    //
+    // This is the round-3 finding, and it is this PR's own thesis one level
+    // down: the fix for "nothing watches the population" shipped with an
+    // unwatched population of its own. Round 2 computed COUNT, ATTEMPTED,
+    // PRODUCED and EXPECTED and compared exactly one pair, so two narrowings
+    // walked straight through the reconciliation — marking the attempt before
+    // doing the work (PRODUCED uncompared) and narrowing both lenses in
+    // lockstep (COUNT uncompared). Each was measured at rc=0 with the success
+    // line printing its own disproof.
+    //
+    // EXISTENCE-ONLY, disclosed exactly as R7 and R8 are: this notices a
+    // comparison being deleted, not one being declawed. If you add a fifth
+    // number to that step, add it here too — or do not compute it.
+    //
+    // Keyed to PAIRS, not to "is this name compared anywhere". `COUNT` is
+    // compared in the zero-population check, so a name-level test was satisfied
+    // by that and stayed green against the deletion of `COUNT` vs `EXPECTED` —
+    // which is one of the two round-3 escapes. The pair is the rule.
+    for (const [left, right, why] of RECONCILIATION_COMPARISONS) {
+      const re = new RegExp(`"\\$${left}"\\s+-(?:ne|gt)\\s+"?\\$?${right}"?`);
+      if (!re.test(body)) {
+        violations.push(
+          `R8 job '${job}' no longer compares \`$${left}\` against \`${right}\` — ${why}. A number that is computed and printed but not compared is a claim the step did not establish (deploy-integrity.md R7), and both round-3 escapes were exactly that.`,
+        );
+      }
     }
     // R8c — the zero-population fail-closed check. NOT redundant with the
     // reconciliation, and that was measured rather than assumed: if the corpus
@@ -709,6 +832,13 @@ export function analyze(workflowText, params) {
     // negative control in this same job legitimately writes `"$MUT_RC" -eq 0`,
     // so a loose pattern was satisfied by it and this arm was green against the
     // very mutation it names.
+    //
+    // IT IS ALSO KEYED TO THE LITERAL PHRASE "corpus drifted", DELIBERATELY, so
+    // that rewording that message reds the guard. A reviewer raised this as a
+    // surprise waiting to happen and judged it defensible — it forces a
+    // deliberate edit of a fail-closed check rather than a drive-by reword. It
+    // is recorded here so the next person meets the trade-off rather than the
+    // failure. If you need to reword it, update this rule in the same commit.
     if (!/COUNT"?\s+-eq\s+0\b/.test(body) || !/corpus drifted/.test(body)) {
       violations.push(
         `R8 job '${job}' has lost its zero-population fail-closed check. The reconciliation cannot cover this case — an empty corpus makes both sides of it zero — so a drifted pathspec would exit 0 having compiled nothing.`,
