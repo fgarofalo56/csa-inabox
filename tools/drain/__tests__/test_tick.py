@@ -347,6 +347,50 @@ def test_a_reopened_terminal_item_stays_flagged(tmp_path):
     assert led.items[1000].state == NEEDS_AUDIT, "a disputed close is not self-clearing"
 
 
+def test_a_park_survives_both_refresh_paths(tmp_path):
+    """#4535, driven through the PRODUCTION refresh rather than `upsert` alone.
+
+    Both cells of the parked row, in one test, because they are decided by two
+    DIFFERENT expressions and a fix to either could break the other:
+
+      - issue still OPEN -> `upsert`'s reopen branch, now keyed on
+        `REOPEN_DISPUTES`. WHAT MAKES THIS FAIL: put `PARKED` back in that tuple
+        (i.e. revert it to `TERMINAL`) and the first assertion reads
+        `needs-audit`. That is the live defect -- #2874 lasted 13 seconds.
+      - issue no longer in the live set -> the departure loop, still keyed on
+        `TERMINAL`. WHAT MAKES THIS FAIL: narrow that test to `REOPEN_DISPUTES`
+        and the parked item departs to `needs-audit` with reason `departed`.
+
+    `drained()` is asserted at the end because it is what the two cells are FOR:
+    it is `tick.py`'s documented stop signal, and with the demotion in place no
+    ledger holding a park could ever reach it."""
+    led = _led(tmp_path)
+    led.items[1000].blocker = "no GCC tenant to authenticate against"
+    led.items[1000].owner = "operator"
+    led.transition(1000, PARKED, "re-measured at head: run 35171642605")
+
+    # Cell 1: the issue is open on GitHub, which is where a park BELONGS.
+    tick.refresh_from_github(led, {}, _live(range(1000, 1020)))
+    assert led.items[1000].state == PARKED
+    assert led.items[1000].audit_reason is None
+
+    # Cell 2: the issue has left the live set. Unchanged behaviour, pinned so a
+    # future edit to the departure loop cannot silently take it away.
+    _, departed = tick.refresh_from_github(led, {}, _live(range(1001, 1020)))
+    assert led.items[1000].state == PARKED
+    assert departed == 0
+
+    # The exit condition, over a ledger whose every remaining item is terminal.
+    for n in range(1001, 1020):
+        led.items[n].blocker, led.items[n].owner = "upstream", "operator"
+        led.transition(n, PARKED, "blocked")
+    tick.refresh_from_github(led, {}, _live(range(1000, 1020)))
+    assert led.drained() is True, (
+        "every item parked and every issue open is the shape a fully blocked "
+        "backlog takes; the run must be able to STOP there"
+    )
+
+
 # ---------------------------------------------------------------------------
 # WIRING -- a guard main() does not call is a guard that does not run
 # ---------------------------------------------------------------------------

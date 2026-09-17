@@ -36,6 +36,32 @@ DECLINED = "declined"
 TERMINAL = (CLOSED, PARKED, DECLINED)
 ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMINAL)
 
+# WHICH TERMINAL STATES A REOPEN ACTUALLY DISPUTES. Not all of them, and the
+# difference is the whole of #4535: `upsert` keyed the reopen branch on TERMINAL
+# wholesale, so an item seen OPEN on GitHub was demoted to `needs-audit` no
+# matter what being-open MEANT for its state.
+#
+# - `closed` -- a reopen disputes the receipt that closed it. The item is
+#   supposed to be closed on GitHub; open again is new information.
+# - `declined` -- IN, and this is a DECISION, not an inheritance from the tuple
+#   it used to sit in. "Will not do" leaves nothing to track, so the disposal is
+#   `gh issue close --reason not-planned`; an open issue after a decline means
+#   either the decline never reached GitHub or someone is disputing it, and both
+#   want a look. The mirror risk is real -- decline without closing and the item
+#   is demoted every refresh, which is the defect being fixed here -- but that
+#   demotion has an ESCAPE the park does not: close the issue and the decline
+#   stands. Closing a park's issue is refused by the program (#4535 "Not
+#   proposed"), because an open, blocked, tracked problem reported as closed is
+#   the R2 failure. One state has a legal way out; the other does not.
+# - `parked` -- OUT. A park is blocked, not done, and its issue is SUPPOSED to
+#   stay open: that is what a named blocker + owner means, and `tick.py`'s
+#   overlap guard already documents it ("Parking does not close an issue on
+#   GitHub"). Open is a park's expected condition, so it is not evidence of
+#   anything and must not be demoted -- #2874 was parked and demoted 13 seconds
+#   later, and since `needs-audit` is non-terminal, `drained()` was unreachable
+#   for anything that must be parked.
+REOPEN_DISPUTES = (CLOSED, DECLINED)
+
 # Why an item is in `needs-audit`. The two have OPPOSITE resolutions when the
 # issue turns up open again, so collapsing them made the state one-way.
 AUDIT_DEPARTED = "departed"   # vanished from the live set; nobody said why
@@ -302,10 +328,14 @@ class Ledger:
         claims. Everything else keeps the None-skip, so a partial refresh cannot
         erase progress.
 
-        An item that is TERMINAL and is seen open on GitHub again has been
-        REOPENED. That is how a false close gets disputed, so it must re-enter
-        the queue: it lands in `needs-audit`, never silently back in `ready`
+        An item in one of the `REOPEN_DISPUTES` states -- `closed` or `declined`
+        -- seen open on GitHub again has been REOPENED. That is how a false close
+        gets disputed, so it must re-enter the queue: it lands in `needs-audit`,
+        never silently back in `ready`
         (whatever closed it may still be true) and never left terminal.
+
+        A `parked` item seen open on GitHub is in its EXPECTED state -- it is
+        blocked, not done -- and is left alone, silently. See `REOPEN_DISPUTES`.
         """
         existing = self.items.get(number)
         if existing:
@@ -398,7 +428,10 @@ class Ledger:
                 if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):
                     existing.audit_reason = AUDIT_RECLASSIFIED
                     existing.state = NEEDS_AUDIT
-            if was_state in TERMINAL:
+            # `REOPEN_DISPUTES`, NOT `TERMINAL`: a `parked` item is terminal here
+            # and OPEN there, by design, so being open disputes nothing. See the
+            # constant for why `declined` is in and `parked` is out (#4535).
+            if was_state in REOPEN_DISPUTES:
                 existing.state = NEEDS_AUDIT
                 existing.audit_reason = AUDIT_REOPENED
                 existing.history.append(
@@ -414,13 +447,20 @@ class Ledger:
                 # True, so `--allow-close` re-closed on the very evidence being
                 # disputed, with no new work. The kind check is satisfied
                 # trivially here; there is nothing left to re-take.
+                #
+                # The message names `was_state` rather than saying "closed": a
+                # `declined` item can hold a receipt too (nothing voids one on
+                # decline), and a history line reading "this item was closed on
+                # it" about an item that was declined asserts something the code
+                # did not establish (R7). A `parked` item never reaches here at
+                # all -- see `REOPEN_DISPUTES`.
                 receipt_is_the_thing_in_dispute = bool(existing.receipt_kind)
                 if receipt_is_the_thing_in_dispute:
                     existing.history.append(
                         f"{_now()} receipt {existing.receipt_kind!r} "
-                        f"({existing.receipt_ref}) VOID - this item was closed on it "
-                        "and is open again, so that receipt is the thing in dispute. "
-                        "Re-take it (R2)"
+                        f"({existing.receipt_ref}) VOID - this item reached "
+                        f"{was_state} holding it and is open again, so that receipt "
+                        "is the thing in dispute. Re-take it (R2)"
                     )
                     existing.receipt_kind = None
                     existing.receipt_ref = None
