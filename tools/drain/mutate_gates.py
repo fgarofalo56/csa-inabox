@@ -550,8 +550,11 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "A2 only the first check-run is scanned (the first-N narrowing)",
         "gates.py",
-        "    for name, check in sorted(newest_by_name(checks).items()):",
-        "    for name, check in sorted(newest_by_name(checks[:1]).items()):",
+        # Anchored at the GROUPING, which is the single point the whole
+        # population passes through -- both "which run is newest" and "was an
+        # older run of this name red" read it, so narrowing here narrows both.
+        "    groups = _group_by_name(checks)",
+        "    groups = _group_by_name(checks[:1])",
     ),
     (
         "A3 a duplicated context is keyed LAST-IN-LIST instead of by max start time",
@@ -577,14 +580,14 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "A5 an IN-PROGRESS advisory check reads as RED again (the cry-wolf defect)",
         "gates.py",
-        ('            red.append(f"{name} ({verdict})")\n'
-         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+        # Disambiguated by the line BELOW it: `classify_checks` opens with the
+        # same `if verdict in RED_CONCLUSIONS:` test, and `replace(.., 1)`
+        # takes the first -- the G1 collision one function over.
+        ("        if verdict in RED_CONCLUSIONS:\n"
+         '            red.append(f"{name} ({verdict})")'),
+        ("        if verdict in RED_CONCLUSIONS or verdict in INCOMPLETE_STATUSES "
          "or status in INCOMPLETE_STATUSES:\n"
-         "            wait.append(name)"),
-        ('            red.append(f"{name} ({verdict})")\n'
-         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
-         "or status in INCOMPLETE_STATUSES:\n"
-         '            red.append(f"{name} (in progress)")'),
+         '            red.append(f"{name} ({verdict})")'),
     ),
     (
         "A6 the empty-rollup guard falls OPEN, so a clean answer over zero checks is a pass",
@@ -604,6 +607,21 @@ ARMS: list[tuple[str, str, str, str]] = [
         "merge_gate.py",
         'policy["merge_gate"]["advisory_red_is_a_no_go"]',
         'policy["merge_gate"].get("advisory_red_is_a_no_go", True)',
+    ),
+    (
+        ("A9 a re-run in flight over a completed RED collapses back to ADV-WAIT, so "
+         "the gate's OWN remedy clears the gate's own block before the re-run answers"),
+        "gates.py",
+        "            if was_red:",
+        "            if False:",
+    ),
+    (
+        ("A10 the worst-wins fallback returns the FIRST run instead of the worst -- "
+         "found by an independent reviewer, who showed it SURVIVED all 521 tests "
+         "because both fixtures claiming to pin worst-wins put the red first"),
+        "gates.py",
+        "    chosen = runs[0]\n    for run in runs[1:]:",
+        "    return runs[0]\n    for run in runs[1:]:",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",
@@ -2518,6 +2536,13 @@ EXPECTED_SANDBOX_SKIPS = (
     "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
     "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
     "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
+    # #4543. Reads `.github/workflows/build-fiab-images-acr-tasks.yml` to pin
+    # the invariant gate 4c's scope sentence rests on (`push:` restricted to
+    # `branches: [main]`, so the lane never attaches to a PR head). The sandbox
+    # copies only `tools/drain`, so that file is absent and the test skips --
+    # DECLARED here rather than left to make the skip audit fail, and it kills
+    # no arm, which is exactly what this tuple exists to say out loud.
+    "test_gates.py::test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds",
 )
 
 

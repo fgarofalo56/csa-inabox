@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import gates
@@ -956,6 +958,12 @@ def test_the_go_line_states_what_the_gate_cannot_see():
     ok, why = gates.advisory_verdict(checks, REQUIRED, True)
     assert ok, why
     assert "ATTACHED TO THIS HEAD only" in why
+    # The CONDITION, not just the conclusion. An earlier version of this
+    # sentence said the ACR lane has no push trigger; it has one, scoped
+    # `branches: [main]` (`:80-82`). A disclosure that names the wrong
+    # condition cannot fire -- the reader who checks it finds a `push:` block
+    # and learns nothing about the real invariant.
+    assert "branches: [main]" in why
 
 
 def test_negative_control_a_stale_red_does_not_outrank_a_fresh_green_rerun():
@@ -986,28 +994,83 @@ def test_negative_control_an_undated_group_falls_back_to_worst_wins():
     pessimistic answer is the only honest one -- an unreadable timestamp must
     never let a red be discarded as superseded.
 
-    Breaks if: the fallback picks by list position instead. The red is FIRST
-    here, so last-in-list would answer GO."""
-    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
-        _adv("Secret Scan", "FAILURE"),
-        _adv("Secret Scan", "SUCCESS"),
-    ]
-    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
-    assert not ok, why
-    assert "Secret Scan (FAILURE)" in why
+    BOTH ORDERINGS, and the second one is the whole point. An independent
+    reviewer showed that `_worst(runs)` could be replaced by `return runs[0]`
+    with all 521 tests still green, because every fixture claiming to pin
+    worst-wins put the red FIRST -- where first-in-list and worst-by-rank are
+    indistinguishable. Reproduced before fixing: red-first `runs[0]` answers
+    NO-GO (identical); red-second `runs[0]` answers GO (killed).
+
+    Breaks if: the fallback picks by list position, in either direction."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Secret Scan", order[0]),
+            _adv("Secret Scan", order[1]),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+        assert "Secret Scan (FAILURE)" in why
 
 
 def test_negative_control_a_tie_at_the_newest_start_is_judged_by_its_worst_run():
     """Matrix legs fire together and can publish one name at one instant.
     "Newest" does not pick between them, so the worst of the tied set wins.
 
-    Breaks if: a tie resolves by list position -- the green is second here."""
+    BOTH ORDERINGS, for the same reason as the undated case above: with the red
+    first, `return runs[0]` is indistinguishable from worst-wins.
+
+    Breaks if: a tie resolves by list position, in either direction."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("dbt Compile", order[0], started="2026-09-17T02:25:12Z"),
+            _adv("dbt Compile", order[1], started="2026-09-17T02:25:12Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+
+
+def test_negative_control_a_rerun_in_flight_does_not_clear_its_own_red():
+    """A SELF-CLEARING BLOCK, found by an independent reviewer. Newest-wins
+    alone answers ADV-WAIT here -- which does not block -- so dispatching the
+    gate's own remedy (`rerun-ci`) cleared the gate's own block the moment the
+    re-run STARTED, before it answered anything. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so that was a live path
+    to an unattended merge over a red.
+
+    Breaks if: the older completed RED stops being consulted and the name falls
+    back into `wait`. The ORDER is also asserted both ways, because the older
+    red is found by scanning the group, not by list position.
+
+    Separate from ADV-RED deliberately, and the message is asserted: the check
+    has not failed again, so "wait for it" is true and "fix it" would not be
+    (`deploy-integrity.md` R7)."""
+    red = _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z")
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in ((red, flight), (flight, red)):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + list(order)
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"a re-run in flight over a completed RED must block: {why}"
+        assert "ADV-RERUN 1" in why
+        assert "the last CONCLUDED run at this head was FAILURE" in why
+        assert "ADV-WAIT" not in why, "it must not ALSO be reported as merely waiting"
+
+
+def test_a_rerun_in_flight_over_a_green_run_is_still_only_waiting():
+    """The other side of the pair, so ADV-RERUN cannot be satisfied by routing
+    every in-flight check to it -- which would reinstate the cry-wolf defect
+    ADV-WAIT exists to avoid.
+
+    Breaks if: the `rerun` bucket stops requiring an older RED -- this fixture
+    would then block on an ordinary re-run of a green check."""
     checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
-        _adv("dbt Compile", "FAILURE", started="2026-09-17T02:25:12Z"),
-        _adv("dbt Compile", "SUCCESS", started="2026-09-17T02:25:12Z"),
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T10:00:00Z"),
+        _adv("Repo Hygiene", None, status="IN_PROGRESS", started="2026-09-17T12:00:00Z"),
     ]
     ok, why = gates.advisory_verdict(checks, REQUIRED, True)
-    assert not ok, why
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
 
 
 def test_negative_control_the_statuscontext_shape_is_read_on_the_advisory_side_too():
@@ -1037,6 +1100,64 @@ def test_negative_control_the_statuscontext_shape_is_read_on_the_advisory_side_t
     )
     assert ok, why
     assert "ADV-WAIT 1" in why
+
+
+def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
+    """THE DISCLOSURE IS THE TRIPWIRE, so it is read from the workflow rather
+    than transcribed into prose.
+
+    The first version of the scope sentence said the ACR image lane triggers on
+    `workflow_dispatch` / `workflow_call` **only**. That was FALSE when it was
+    written -- there is a `push:` block at `:80`, restricted to
+    `branches: [main]`. The conclusion survived (a PR head is never on `main`,
+    so the lane still publishes nothing here) but the stated reason did not,
+    and a tripwire that names the wrong condition can never fire: the thing it
+    tells you to watch for has already happened.
+
+    So the real invariant is pinned mechanically, and lifted out of the source
+    with the repo's own parser (`gates.parse_push_trigger`, which knows that
+    `on:` is the YAML 1.1 boolean `True` -- a reader that only looks up the
+    string key finds nothing in any real workflow).
+
+    Breaks if: a `pull_request` trigger is added to that lane, or `branches:`
+    is widened past `main`. Either would start attaching #4547's Trivy reds to
+    PR heads, where this gate WOULD block on them -- and the gate's own scope
+    sentence would silently become wrong again.
+
+    SKIPS in the mutation sandbox, which copies only `tools/drain` -- declared
+    in `mutate_gates.EXPECTED_SANDBOX_SKIPS`, because a test that skips there
+    cannot kill an arm and must not be counted as if it could.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    workflow = os.path.normpath(os.path.join(
+        here, "..", "..", "..", ".github", "workflows",
+        "build-fiab-images-acr-tasks.yml"))
+    if not os.path.exists(workflow):
+        pytest.skip("workflow tree not present (mutation sandbox copies only tools/drain)")
+    with open(workflow, encoding="utf-8") as handle:
+        text = handle.read()
+
+    import yaml
+
+    triggers = yaml.safe_load(text)
+    triggers = triggers.get("on", triggers.get(True))
+    assert "pull_request" not in triggers, (
+        "the ACR image lane now runs on pull_request, so its Trivy CRITICAL "
+        "failures (#4547) WILL attach to PR heads and gate 4c will block on "
+        "them. That is arguably correct under deploy-integrity.md R1, but the "
+        "scope sentence in gates.advisory_verdict now says something false and "
+        "must be revisited."
+    )
+    push = gates.parse_push_trigger(text)
+    assert push is not None, "the ACR lane's `on:` block no longer parses"
+    assert push.present, (
+        "this lane's push trigger vanished - the scope sentence describes a "
+        "`branches: [main]` filter that is no longer there"
+    )
+    assert push.branches == ("main",), (
+        f"push.branches is {push.branches}, not ('main',) - the branch filter IS "
+        "the invariant the scope sentence rests on"
+    )
 
 
 def test_negative_control_an_empty_rollup_is_not_a_clean_advisory_answer():
@@ -1079,6 +1200,7 @@ def test_the_advisory_split_counts_the_whole_published_population():
     assert split.population == 2
     assert split.red == ["Checkov (FAILURE)"]
     assert split.clean == ["CodeQL"]
+    assert split.rerun == []
 
 
 # ---------------------------------------------------------------------------

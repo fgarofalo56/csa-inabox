@@ -1428,17 +1428,24 @@ def _check_rank(check: dict) -> int:
 
 @dataclass(frozen=True)
 class AdvisorySplit:
-    """The three-way split, as names -- so a caller can PRINT which is which.
+    """The split, as names -- so a caller can PRINT which is which.
 
-    `red` carries `"name (CONCLUSION)"`; `wait` and `clean` carry bare names.
-    `population` counts the distinct advisory contexts considered and
-    `total_checks` every entry the rollup published, required included. Both
-    counts are reported rather than derived by the caller, because a clean
-    answer over an EMPTY population is the green-over-zero-items shape
-    (#4451) and the reader has to be able to tell the two apart.
+    `red` carries `"name (CONCLUSION)"`; `rerun` carries a sentence; `wait` and
+    `clean` carry bare names. `population` counts the distinct advisory
+    contexts considered and `total_checks` every entry the rollup published,
+    required included. Both counts are reported rather than derived by the
+    caller, because a clean answer over an EMPTY population is the
+    green-over-zero-items shape (#4451) and the reader has to be able to tell
+    the two apart.
+
+    FOUR buckets, not three. `rerun` is the one the predecessor did not have:
+    a name whose NEWEST run has not concluded while an OLDER run at the same
+    head concluded RED. See `classify_advisory_checks` for why it is separate
+    from both `red` and `wait`.
     """
 
     red: list[str]
+    rerun: list[str]
     wait: list[str]
     clean: list[str]
     population: int
@@ -1487,6 +1494,23 @@ def _worst(runs: list[dict]) -> dict:
     return chosen
 
 
+def _group_by_name(checks) -> dict[str, list[dict]]:
+    """Context name -> every run that published it at this head.
+
+    Split out because TWO questions need the whole group, not just its winner:
+    which run is newest, and whether any OTHER run of that name concluded RED
+    (`classify_advisory_checks`'s `rerun` bucket). Narrowing the population is
+    therefore a single edit here, which is what arm A2 mutates.
+    """
+    groups: dict[str, list[dict]] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        groups.setdefault(name, []).append(check)
+    return groups
+
+
 def newest_by_name(checks) -> dict[str, dict]:
     """Context name -> its NEWEST run, by max start time. Not last-in-list.
 
@@ -1508,13 +1532,10 @@ def newest_by_name(checks) -> dict[str, dict]:
         together) -- then "newest" does not pick one and the worst of the tied
         set is taken.
     """
-    groups: dict[str, list[dict]] = {}
-    for check in checks:
-        name = check.get("name") or check.get("context") or ""
-        if not name:
-            continue
-        groups.setdefault(name, []).append(check)
+    return _newest_from_groups(_group_by_name(checks))
 
+
+def _newest_from_groups(groups: dict[str, list[dict]]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for name, runs in groups.items():
         stamps = [_started_utc(run) for run in runs]
@@ -1527,13 +1548,14 @@ def newest_by_name(checks) -> dict[str, dict]:
 
 
 def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
-    """Split every NON-required context three ways: ADV-RED / ADV-WAIT / clean.
+    """Split every NON-required context: ADV-RED / ADV-RERUN / ADV-WAIT / clean.
 
-    The same three-way split the required path uses, over the population the
-    required path throws away. Both rollup shapes are read via `_outcome`:
-    a StatusContext says ERROR/PENDING where a CheckRun says FAILURE/
-    IN_PROGRESS and has no `status` key at all, so a conclusion-only reader is
-    blind to every context published by the other shape.
+    The same split the required path uses, over the population the required
+    path throws away, plus one bucket the predecessor did not have. Both rollup
+    shapes are read via `_outcome`: a StatusContext says ERROR/PENDING where a
+    CheckRun says FAILURE/IN_PROGRESS and has no `status` key at all, so a
+    conclusion-only reader is blind to every context published by the other
+    shape.
 
     IN-PROGRESS IS NOT RED. That is the recorded mistake from the first time
     this was built, for `merge-eligible.py`: classifying `in_progress` as red
@@ -1547,26 +1569,58 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
     routinely and legitimately on path filters -- `Bicep Lint` and `Workflow
     lane states` were both SKIPPED on the fixture head, on a PR that touched
     neither. Counting those would make the arm red on essentially every PR.
+
+    ADV-RERUN: NEWEST HAS NOT CONCLUDED AND AN OLDER RUN OF THE SAME NAME WAS
+    RED. This closes a SELF-CLEARING BLOCK, found by an independent reviewer on
+    the first version of this arm. `newest`-wins alone answers ADV-WAIT there,
+    which does not block -- so dispatching the gate's OWN remedy (`rerun-ci`)
+    cleared the gate's own block the moment the re-run STARTED, before it
+    answered anything. Both `rerun-ci` and `merge-on-gate-go` are in
+    `permitted_unattended`, so that was a live path to merging over a red
+    without a human in it.
+
+    It is a SEPARATE bucket from `red` on purpose, because the remedy differs
+    and `deploy-integrity.md` R7 applies to a gate's own message: the check has
+    not failed again, the last thing it said was red and the new answer is not
+    in yet. "Wait for it" is true; "fix it" would not be.
+
+    Live frequency of the shape: 0 across 52 PR heads (the reviewer's scan), so
+    holding it costs nothing measurable today. It is blocked rather than
+    disclosed because the cost of holding is a few minutes and the cost of the
+    hole is an unattended merge over a red -- and because the drain's own
+    remedy is what creates the shape, which makes it reachable by design rather
+    than by chance.
     """
     required_names = set(required)
     red: list[str] = []
+    rerun: list[str] = []
     wait: list[str] = []
     clean: list[str] = []
-    for name, check in sorted(newest_by_name(checks).items()):
+    groups = _group_by_name(checks)
+    for name, check in sorted(_newest_from_groups(groups).items()):
         if name in required_names:
             continue
         verdict, status = _outcome(check)
         if verdict in RED_CONCLUSIONS:
             red.append(f"{name} ({verdict})")
         elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
-            wait.append(name)
+            was_red = [_outcome(run)[0] for run in groups[name]
+                       if _outcome(run)[0] in RED_CONCLUSIONS]
+            if was_red:
+                rerun.append(
+                    f"{name} (a re-run is in flight; the last CONCLUDED run at this "
+                    f"head was {was_red[0]})"
+                )
+            else:
+                wait.append(name)
         else:
             clean.append(name)
     return AdvisorySplit(
         red=red,
+        rerun=rerun,
         wait=wait,
         clean=clean,
-        population=len(red) + len(wait) + len(clean),
+        population=len(red) + len(rerun) + len(wait) + len(clean),
         total_checks=len(checks),
     )
 
@@ -1601,18 +1655,32 @@ def advisory_verdict(
 
     WHAT THIS GATE CANNOT SEE, stated here rather than left to be discovered.
     The population is the checks attached to the HEAD BEING MEASURED. A lane
-    that never runs on a pull request publishes no check-run at a PR head and
-    is therefore invisible to this arm -- by construction, not by omission.
-    The named instance is #4547: `build-fiab-images-acr-tasks.yml` triggers on
-    `workflow_dispatch` and `workflow_call` ONLY, so its two Trivy CRITICAL
-    failures do not reach here (re-measured by the operator across three PR
-    heads `51e1736b9a3` / `312765933bb` / `b3b23aafdea`: 0, 0, 0 ACR checks
-    present). Two consequences, both deliberate: the known-flaky objection to
-    blocking does not apply and NO allowlist, exemption or carve-out is built
-    for it -- a guard-weakening mechanism is a defect in its own right here;
-    and this gate must not be read as saying anything about main-only or
-    scheduled lanes. A red there is a P0 under `deploy-integrity.md` R1 and
-    needs a different instrument.
+    with no `pull_request` trigger publishes no check-run at a PR head and is
+    therefore invisible to this arm -- by construction, not by omission.
+
+    The named instance is #4547, and the CONDITION MATTERS more than the
+    conclusion: `build-fiab-images-acr-tasks.yml` triggers on
+    `workflow_dispatch`, `workflow_call` AND `push` -- but that push is
+    `branches: [main]` (`:80-82`), and a PR head is never on `main`. THE
+    INVARIANT IS `branches: [main]`, not "there is no push trigger". An earlier
+    version of this comment said the latter, which was false at the time it was
+    written: the reader who checks it finds a `push:` block, concludes the
+    disclosure is stale, and learns nothing about the real condition. A
+    tripwire that names the wrong condition cannot fire -- the thing it told
+    you to watch for has already happened.
+
+    So what would make these reds start blocking here is a `pull_request`
+    trigger being added, or `branches:` being widened past `main`. Corroborated
+    empirically, twice and independently: 0 ACR-lane checks across 22 PR heads
+    (this lane) and across 40 merged heads (the reviewer's scan, whose only
+    Trivy hits were `trivy.yml`'s, on 2 heads, both SUCCESS).
+
+    Two consequences, both deliberate: the known-flaky objection to blocking
+    does not apply, and NO allowlist, exemption or carve-out is built for it --
+    a guard-weakening mechanism is a defect in its own right here; and this
+    gate must not be read as saying anything about main-only or scheduled
+    lanes. A red there is a P0 under `deploy-integrity.md` R1 and needs a
+    different instrument.
 
     ADV-WAIT does NOT block, and is named in the GO line rather than left as a
     footnote. Blocking on it would mean waiting for every advisory check on
@@ -1646,19 +1714,27 @@ def advisory_verdict(
         "counted as red, and a check still running can still turn red after this line."
         if split.wait else ""
     )
-    if split.red:
+    if split.red or split.rerun:
+        blocking = [
+            (f"ADV-RED {len(split.red)}: {'; '.join(split.red)}." if split.red else ""),
+            (f"ADV-RERUN {len(split.rerun)}: {'; '.join(split.rerun)} - WAIT for the "
+             "re-run; do not read a re-run's mere existence as the red being cleared."
+             if split.rerun else ""),
+        ]
         return False, (
-            f"ADV-RED {len(split.red)}: {'; '.join(split.red)}. These are NOT required "
-            "contexts, so branch protection will merge straight over them - which is "
-            "exactly how #4540 shipped a red main. Fix or re-run the check; do not "
-            f"merge past it. [{split.population} advisory of {split.total_checks} "
-            f"published; {len(split.clean)} clean]" + waiting
+            " ".join(part for part in blocking if part)
+            + " These are NOT required contexts, so branch protection will merge "
+            "straight over them - which is exactly how #4540 shipped a red main. "
+            f"[{split.population} advisory of {split.total_checks} published; "
+            f"{len(split.clean)} clean]" + waiting
         )
     return True, (
         f"no advisory context is red: {len(split.clean)} clean of {split.population} "
         f"advisory ({split.total_checks} checks published in total). SCOPE: checks "
-        "ATTACHED TO THIS HEAD only - a main-only or scheduled lane (the ACR image "
-        "builds, #4547) publishes nothing at a PR head and is not covered here." + waiting
+        "ATTACHED TO THIS HEAD only - a lane with no `pull_request` trigger publishes "
+        "nothing here. The ACR image builds (#4547) DO have a push trigger, but it is "
+        "`branches: [main]`, and a PR head is never on main - that branch filter is the "
+        "invariant, not an absent trigger." + waiting
     )
 
 
