@@ -236,10 +236,16 @@ function makeShims(spec) {
     // Emits a NUL-delimited record that CONTAINS a newline. A real path like
     // this cannot be created on Windows, so injecting it at the producer is the
     // only portable way to reach the script's newline refusal.
+    //
+    // The literal below is deliberately NOT under /tmp (or any shared temp
+    // root): nothing ever creates or opens it — it exists only as bytes in the
+    // shim's stdout — but a fixed path under a world-writable root is a shape
+    // `check-temp-artifact-safety.mjs` rightly bans, and a reader should not
+    // have to know it is inert to tell that it is safe.
     guard(
       spec.findNewline.needle,
       undefined,
-      `    printf '%s\\n%s\\000' "/tmp/one" "two"\n    exit 0`,
+      `    printf '%s\\n%s\\000' "/loom-sc1-newline-probe/one" "two"\n    exit 0`,
     );
   }
   if (findCases.length) w('find', ['#!/bin/sh', ...findCases, `exec ${realTool('find')} "$@"`].join('\n'));
