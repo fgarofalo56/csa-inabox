@@ -55,6 +55,8 @@ PRESENT="${WORK}/present.txt"
 ALL="${WORK}/all.txt"
 DROP="${WORK}/drop.txt"
 CPFILES="${WORK}/cpfiles.txt"
+OTHERS="${WORK}/others.txt"
+CPOTHERS="${WORK}/cp-outside-examples.txt"
 
 echo "== SC1 loom-unity cache prune =="
 if [ ! -d "$CACHE" ]; then
@@ -64,6 +66,78 @@ fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
+
+# PROBE DISCIPLINE (#4471; deploy-integrity.md R7)
+# ------------------------------------------------
+# Every probe in this script authorises a deletion, so a probe whose ERROR is
+# indistinguishable from its EMPTY RESULT authorises that deletion on a fact it
+# never established. That is the exact shape R7 records: a `2>/dev/null` turned a
+# permission denial into an empty string, and the empty string into the false
+# claim "the tag does not exist".
+#
+# The original examples guard had all three collapsing layers at once:
+#   OTHERS="$(find ... -print0 | xargs -0 grep -l "${EXAMPLES}/" 2>/dev/null || true)"
+#   * `grep -l` exits 1 on no-match and >1 on error -- two different facts;
+#   * `xargs` maps BOTH onto 123, because it reports 123 for any child exiting
+#     1..125, so the distinction is already gone before the shell sees it;
+#   * `$?` after a pipeline is the LAST stage's, so find's status was never read;
+#   * `2>/dev/null` discarded the only remaining evidence;
+#   * `|| true` erased what was left.
+# "nothing else references this" and "the probe blew up" were the same
+# observation, and `rm -rf "$EXAMPLES"` ran on either.
+#
+# So, below: no probe runs inside a pipeline whose status belongs to another
+# command, no probe discards stderr, and every probe's status is read on its own
+# line with `cmd > out 2> err || rc=$?` -- the only form in which `$?` provably
+# belongs to the command being judged. Anything that is not an unambiguous
+# "completed, and here is the answer" ABORTS. Fail closed; never delete on an
+# unestablished fact.
+
+# Abort naming the probe that did not finish, and SHOW its stderr. Deliberately
+# worded so it can never be misread as "nothing matched".
+probe_failed() { # $1=what  $2=exit status  $3=stderr file
+  echo "FATAL: ${1} could not be COMPLETED (exit ${2})." >&2
+  echo "       This is NOT 'nothing matched' -- the probe did not finish, so its" >&2
+  echo "       empty result establishes nothing and must not authorise a delete." >&2
+  if [ -s "$3" ]; then
+    echo "       probe stderr:" >&2
+    sed 's/^/         /' "$3" >&2
+  else
+    echo "       probe stderr: (empty -- the probe failed without writing one)" >&2
+  fi
+  exit 1
+}
+
+# Run `find`, reading FIND's own status instead of a pipeline's, surfacing its
+# stderr, and writing a newline-delimited list to $1.
+#   probe_find <outfile> <description> <find args...>
+probe_find() {
+  _p_out="$1"
+  _p_what="$2"
+  shift 2
+  _p_rc=0
+  find "$@" -print0 > "${WORK}/.probe.z" 2> "${WORK}/.probe.err" || _p_rc=$?
+  if [ "$_p_rc" -ne 0 ]; then
+    probe_failed "$_p_what" "$_p_rc" "${WORK}/.probe.err"
+  fi
+  if [ -s "${WORK}/.probe.err" ]; then
+    # Completed, but not silently. Surfaced rather than discarded: a warning here
+    # is how a half-readable tree becomes visible instead of becoming an answer.
+    echo "WARN: ${_p_what} completed (exit 0) but wrote to stderr:" >&2
+    sed 's/^/        /' "${WORK}/.probe.err" >&2
+  fi
+  # A path containing a newline would make the one-per-line form under-report,
+  # and a SHORT keep-set deletes MORE. Refuse rather than guess. `find -print0`
+  # is kept for exactly this: it makes the ambiguity detectable instead of silent.
+  tr -cd '\n' < "${WORK}/.probe.z" > "${WORK}/.probe.nl"
+  _p_nl="$(wc -c < "${WORK}/.probe.nl" | tr -d ' ')"
+  if [ "$_p_nl" -ne 0 ]; then
+    echo "FATAL: ${_p_what} returned a path containing a newline. The line-oriented" >&2
+    echo "       keep-set cannot represent it, and a short keep-set deletes MORE." >&2
+    exit 1
+  fi
+  tr '\0' '\n' < "${WORK}/.probe.z" > "$_p_out"
+}
 
 # 0) REMOVE THE UPSTREAM EXAMPLES TREE FIRST (#4429).
 #
@@ -104,14 +178,38 @@ BUNDLE_GLOB='bundle-*.jar'
 if [ -d "$EXAMPLES" ]; then
   # Fail closed if a classpath OTHER than the examples CLI's has started naming
   # the examples tree -- that would make this removal a real regression.
-  OTHERS="$(find "$UC_HOME" -type f -name classpath ! -path "${EXAMPLES}/*" -print0 \
-            | xargs -0 grep -l "${EXAMPLES}/" 2>/dev/null || true)"
-  if [ -n "$OTHERS" ]; then
+  #
+  # #4471: this is the probe that authorises the `rm -rf` below, so it is split
+  # into two steps that each own their status. `find` enumerates; then each
+  # classpath file is searched on its own so grep's 1 (no match) stays distinct
+  # from its >1 (error) instead of being flattened by `xargs` into 123. Only an
+  # unambiguous 0 or 1 is accepted as an answer.
+  probe_find "$CPOTHERS" "the classpath enumeration OUTSIDE ${EXAMPLES}" \
+    "$UC_HOME" -type f -name classpath ! -path "${EXAMPLES}/*"
+  : > "$OTHERS"
+  while IFS= read -r _cpf; do
+    [ -n "$_cpf" ] || continue
+    _g_rc=0
+    # -F: the needle is a literal path, never a pattern. -e/--: a path or needle
+    # starting with `-` must not become an option. The loop reads from a FILE,
+    # not a pipe, so this is not a subshell and `probe_failed`'s exit is the
+    # script's exit.
+    grep -l -F -e "${EXAMPLES}/" -- "$_cpf" >> "$OTHERS" 2> "${WORK}/.grep.err" || _g_rc=$?
+    if [ "$_g_rc" -gt 1 ]; then
+      probe_failed "the examples-reference check of ${_cpf}" "$_g_rc" "${WORK}/.grep.err"
+    fi
+    if [ -s "${WORK}/.grep.err" ]; then
+      echo "WARN: examples-reference check of ${_cpf} wrote to stderr (exit ${_g_rc}):" >&2
+      sed 's/^/        /' "${WORK}/.grep.err" >&2
+    fi
+  done < "$CPOTHERS"
+  if [ -s "$OTHERS" ]; then
     echo "FATAL: a classpath outside ${EXAMPLES} now references it -- removing the" >&2
     echo "       examples tree would break a live path. Re-derive the disposition." >&2
-    echo "$OTHERS" >&2
+    cat "$OTHERS" >&2
     exit 1
   fi
+  echo "examples-reference check: $(wc -l < "$CPOTHERS") classpath file(s) searched, 0 reference ${EXAMPLES}/"
   rm -rf "$EXAMPLES"
   echo "removed ${EXAMPLES} (upstream demo CLI; carries the 641 MB awssdk bundle)"
 else
@@ -123,7 +221,13 @@ fi
 rm -f "${UC_HOME}/bin/uc"
 
 # 1) Every classpath file in the image (server, CLI, clients, sub-project targets).
-find "$UC_HOME" -type f -name classpath | sort > "$CPFILES"
+#    #4471: `find ... | sort > "$CPFILES"` read SORT's status, not find's, so a
+#    partially-failed walk produced a SHORT classpath list -> a short keep-set ->
+#    MORE jars deleted. The `! -s` check below only ever caught the total-failure
+#    case; truncation sailed through it.
+probe_find "${WORK}/cpfiles.raw" "the classpath enumeration under ${UC_HOME}" \
+  "$UC_HOME" -type f -name classpath
+sort "${WORK}/cpfiles.raw" > "$CPFILES"
 if [ ! -s "$CPFILES" ]; then
   echo "FATAL: no classpath file found under ${UC_HOME} -- cannot derive the keep-set." >&2
   exit 1
@@ -140,7 +244,15 @@ while IFS= read -r f; do
   printf ':\n' >> "${WORK}/cp.raw"
 done < "$CPFILES"
 tr ':' '\n' < "${WORK}/cp.raw" | sed 's/[[:space:]]*$//' | grep -vE '^$' | sort -u > "${WORK}/entries.txt"
-grep -E '\.jar$' "${WORK}/entries.txt" > "$KEEP" || true
+# #4471: `grep ... > "$KEEP" || true` had the same collapse as the examples
+# guard -- a grep that ERRORED partway through writes a TRUNCATED keep-set, and
+# `|| true` made that indistinguishable from "no entry ends in .jar". A short
+# keep-set deletes MORE, and the `! -s` check below only catches the empty case.
+_g_rc=0
+grep -E -e '\.jar$' -- "${WORK}/entries.txt" > "$KEEP" 2> "${WORK}/.grep.err" || _g_rc=$?
+if [ "$_g_rc" -gt 1 ]; then
+  probe_failed "the .jar filter over the classpath entries" "$_g_rc" "${WORK}/.grep.err"
+fi
 if [ ! -s "$KEEP" ]; then
   echo "FATAL: derived an EMPTY keep-set -- refusing to delete anything." >&2
   exit 1
@@ -159,8 +271,13 @@ while IFS= read -r entry; do
 done < "${WORK}/entries.txt"
 echo "classpath entries present pre-prune: $(wc -l < "$PRESENT") of $(wc -l < "${WORK}/entries.txt")"
 
-# 3) Everything cached, and the difference.
-find "$CACHE" -type f -name '*.jar' | sort -u > "$ALL"
+# 3) Everything cached, and the difference. Same treatment: a truncated cache
+#    scan under-reports what is there, which under-deletes rather than
+#    over-deletes -- but it would ALSO hide a surviving bcprov from the counts,
+#    so it is not allowed to pass unnoticed either.
+probe_find "${WORK}/all.raw" "the coursier cache scan under ${CACHE}" \
+  "$CACHE" -type f -name '*.jar'
+sort -u "${WORK}/all.raw" > "$ALL"
 echo "jars in the coursier cache:    $(wc -l < "$ALL")"
 comm -23 "$ALL" "$KEEP" > "$DROP"
 echo "unreferenced jars to remove:   $(wc -l < "$DROP")"
@@ -191,8 +308,13 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-# The specific CVEs this prune exists to clear.
-find "$CACHE" \( -name 'bcprov-*.jar' -o -name 'bcpg-*.jar' \) > "${WORK}/bc.txt"
+# The specific CVEs this prune exists to clear. These are ABSENCE claims, so
+# they get the same treatment (#4471): a scan that died would otherwise write an
+# empty file and be read as "no bouncycastle survived". They are paired with the
+# positive control above -- the surviving-classpath-entry assertion -- so neither
+# a dead scan nor a deleted prune can make the pair pass.
+probe_find "${WORK}/bc.txt" "the bouncycastle survivor scan under ${CACHE}" \
+  "$CACHE" '(' -name 'bcprov-*.jar' -o -name 'bcpg-*.jar' ')'
 if [ -s "${WORK}/bc.txt" ]; then
   echo "FATAL: a bouncycastle jar survived the prune -- CVE-2025-14813 would still be reported:" >&2
   cat "${WORK}/bc.txt" >&2
@@ -203,7 +325,8 @@ fi
 # NAME rather than by version so a future base that caches a different bundle
 # release is caught too -- the finding is "this image ships the AWS SDK uber-jar
 # for a demo CLI it does not run", not "it ships exactly 2.29.52".
-find "$CACHE" -name "$BUNDLE_GLOB" -path '*/awssdk/bundle/*' > "${WORK}/bundle.txt"
+probe_find "${WORK}/bundle.txt" "the awssdk-bundle survivor scan under ${CACHE}" \
+  "$CACHE" -name "$BUNDLE_GLOB" -path '*/awssdk/bundle/*'
 if [ -s "${WORK}/bundle.txt" ]; then
   echo "FATAL: an awssdk bundle fat jar survived the prune -- the shaded netty-handler" >&2
   echo "       CVE-2026-75595 would still be reported:" >&2
