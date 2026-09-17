@@ -241,6 +241,23 @@ def refresh_from_github(led: Ledger, streams: dict, live: list[dict]) -> tuple[i
     # `needs-audit` is NON-TERMINAL on purpose: the item stays in the queue and
     # a human or a lane has to say what closed it. That is what README's
     # "reopen anything auto-closed w/o a receipt" always meant.
+    #
+    # THIS TEST STAYS ON `TERMINAL` -- the full three -- while `upsert`'s reopen
+    # branch is on the narrower `REOPEN_DISPUTES`. They are two different
+    # questions and #4535 is what conflating them cost. The whole matrix:
+    #
+    #   state     | seen OPEN on GitHub (upsert)      | departed (here)
+    #   ----------|-----------------------------------|------------------------
+    #   closed    | disputed -> needs-audit, receipt   | expected -> survives
+    #             | voided                             |
+    #   parked    | EXPECTED -> survives parked        | survives parked
+    #   declined  | disputed -> needs-audit            | expected -> survives
+    #
+    # The `parked`/departed cell is the one with no obvious right answer: the
+    # issue being closed does not establish that the blocker lifted, and there
+    # is no state meaning "park resolved", so auditing it would only reproduce
+    # the unreachable-`drained()` shape from the other side. It is left
+    # surviving, deliberately, and pinned by a test.
     departed = 0
     for number, item in led.items.items():
         if number not in live_numbers and item.state not in TERMINAL and item.state != NEEDS_AUDIT:
