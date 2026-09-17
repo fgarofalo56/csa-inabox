@@ -1308,6 +1308,23 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
     close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
     assert "--repo" in close
     assert close[close.index("--repo") + 1] == "fgarofalo56/csa-inabox"
+    # THE POSITIVE PAIR for the comment. `…_no_comment_is_appended` is named
+    # for the receipt comment and asserts only its ABSENCE on the
+    # already-closed path -- which, per assertion-design.md "done" #4, is
+    # satisfied by deleting the feature. Measured: dropping `--comment` from
+    # the argv left 518/518 green (arm GH14). The comment is the receipt's only
+    # trace on the artifact a human reads; without it the drain closes 334
+    # issues silently, which is the R2 shape the interim workaround for #4535
+    # avoided by quoting the receipt by hand.
+    assert "--comment" in close, "the close carried no receipt for a human to read"
+    body = close[close.index("--comment") + 1]
+    # Split into two asserts (PT018) so a failure names WHICH half of the
+    # detail went missing -- the workflow or the run it was taken from.
+    assert "loom-ui-verify" in body, (
+        "the comment must quote the RECEIPT DETAIL, not merely exist - the value "
+        "that breaks this is a close whose comment does not name the evidence"
+    )
+    assert "123" in body, "the comment must name the RUN the receipt was measured from"
     assert "closed on GitHub" in out
 
 

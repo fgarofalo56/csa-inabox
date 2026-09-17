@@ -427,6 +427,18 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    except SystemExit as exc:\n        raise LedgerWriteAfterCloseError(",
     ),
     (
+        ("GH14 the close posts NO RECEIPT COMMENT, so a closed issue carries no "
+         "trace of which evidence closed it -- 334 issues closed silently, "
+         "which is the R2 shape the #4535 hand-close avoided by quoting the "
+         "receipt. It SURVIVED 518/518 until the positive assertion existed: "
+         "the only test named for the comment asserted its ABSENCE"),
+        "tick.py",
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         '             "--comment", f"Closed by the drain harness on a verified receipt: {detail}"]'),
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         "             ]"),
+    ),
+    (
         ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
          "failure after a landed close -- os.replace raising PermissionError -- "
          "escapes main() UNCAUGHT with an EMPTY stderr while the issue is "

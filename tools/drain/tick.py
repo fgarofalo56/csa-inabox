@@ -807,9 +807,14 @@ def _record_close_in_ledger(
     close runs FIRST: an issue closed upstream and an item still non-terminal
     here. That is the recoverable half of the pair -- the next refresh sees the
     item gone from the live set and flags it `departed`/`needs-audit` (loudly,
-    with its receipt intact), and re-running `--record-receipt` succeeds because
-    `needs-audit` is not terminal. The other ordering has no such half: it is
-    #4545 itself.
+    with NO receipt, because nothing was written: the rollback below restores
+    the three fields and `main()` never saves). The UPSTREAM EVIDENCE is
+    untouched and the receipt is re-takeable, which is the property that
+    matters -- `--record-receipt` re-measures it from the PR or the run and
+    succeeds, because `needs-audit` is not terminal. Measured by a reviewer:
+    `state=needs-audit reason=departed receipt=None`, then a re-run gives
+    rc=0, `state=closed`, and one comment. The other ordering has no such half:
+    it is #4545 itself.
     """
     before = (item.receipt_kind, item.receipt_ref, item.receipt_taken_under)
     history_len = len(item.history)
@@ -929,9 +934,11 @@ def record_receipt_from_evidence(
     # - **GitHub, then the ledger** (this one). If the ledger write fails, the
     #   issue is closed upstream and the item is still non-terminal here. The
     #   next refresh sees it gone from the live set, flags it `departed` ->
-    #   `needs-audit` -- loudly, receipt intact, non-terminal -- and
-    #   `--record-receipt` can simply be re-run, because it refuses only on a
-    #   TERMINAL item. Recoverable, and visible while it is not.
+    #   `needs-audit` -- loudly, non-terminal, and holding NO receipt, because
+    #   nothing was written -- and `--record-receipt` can simply be re-run,
+    #   because it refuses only on a TERMINAL item. The upstream EVIDENCE is
+    #   untouched, so the receipt is re-takeable. Recoverable, and visible
+    #   while it is not.
     # - **The ledger, then GitHub.** If the GitHub write fails, the item is
     #   `closed` here and open there, which is EXACTLY #4545: the next refresh
     #   reads it as a reopen, demotes it, and VOIDS the receipt that was just

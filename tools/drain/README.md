@@ -128,7 +128,7 @@ and the order is not arbitrary. The two writes fail independently:
 
 | ordering | if the second write fails |
 |---|---|
-| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, receipt intact, and `--record-receipt` can simply be re-run |
+| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, holding **no** receipt (nothing was written) — the upstream evidence is untouched, so `--record-receipt` re-measures it and succeeds |
 | ledger, then GitHub | item `closed` here, open there → **#4545 verbatim**: false reopen, receipt destroyed next cycle |
 
 Only `CLOSES_ON_GITHUB` — `closed`, and nothing else — gets a close. A park is
