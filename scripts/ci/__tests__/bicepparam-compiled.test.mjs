@@ -153,7 +153,7 @@ test('stripComments leaves a `#` inside quotes alone', () => {
 
 test('stripComments normalises CRLF away', () => {
   // `validate.yml` is CRLF in a Windows checkout and LF in CI.
-  // FAILS IF: the `.replace(/\r/g, '')` is dropped — the output then still
+  // FAILS IF: the fold stops splitting on `/\r?\n/` — the output then still
   // carries the carriage returns.
   //
   // DISCLOSED, NOT COUNTED: a whole-workflow CRLF-vs-LF verdict comparison has
@@ -162,6 +162,37 @@ test('stripComments normalises CRLF away', () => {
   // assertion pins the normalisation itself so that a future line-anchored
   // pattern cannot silently no-op on a Windows checkout.
   assert.ok(!stripComments('a: 1\r\nb: 2\r\n').includes('\r'));
+});
+
+test('R4: a CONTINUED enumeration is judged as the command the shell runs, not as one line', () => {
+  // The sibling `.bicep` step in this very workflow writes its enumeration
+  // across three physical lines. Rewrite THIS job's enumeration the same way.
+  const mutated = mutateLive(
+    "          git ls-files '*.bicepparam' > /tmp/bicepparam-files.txt",
+    "          git ls-files \\\n            '*.bicepparam' \\\n            > /tmp/bicepparam-files.txt",
+  );
+  const { violations } = analyze(mutated, PARAMS);
+  // FAILS IF: stripComments stops folding backslash continuations (drop the
+  // readLogicalLines import and split on '\n' instead). R4's matcher is
+  // `git\s+ls-files[^\n]*\*\.bicepparam`, and on physical lines the pathspec
+  // sits on a DIFFERENT line from `git ls-files`, so the guard would report a
+  // violation against a workflow that is entirely correct — the #3420 class,
+  // in its false-RED direction.
+  assert.deepEqual(violations, [], `a continued enumeration must still pass; got: ${violations.join(' | ')}`);
+});
+
+test('R5: an exclusion hidden on a CONTINUATION line is still caught', () => {
+  const mutated = mutateLive(
+    "          git ls-files '*.bicepparam' > /tmp/bicepparam-files.txt",
+    "          git ls-files '*.bicepparam' \\\n            | grep -vE 'params/il5' \\\n            > /tmp/bicepparam-files.txt",
+  );
+  const r5 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R5'));
+  // FAILS IF: the fold is removed AND exclusionRegExp were ever line-anchored.
+  // This is the false-GREEN direction of #3420 — the way a real author would
+  // actually hide an exclusion, since that is exactly how the sibling step is
+  // formatted. Pairs with the test above: one direction each.
+  assert.ok(r5, 'an exclusion on a continuation line must still be found');
+  assert.match(r5, /platform\/fiab\/bicep\/params\/il5\.bicepparam/);
 });
 
 // ---------------------------------------------------------------------------

@@ -43,7 +43,12 @@
  *     That is not hypothetical: the pre-fix tree had exactly those three, and
  *     R2 must fail on it. The test suite asserts that.
  *   - "a LINE guard no-ops on CRLF" — `validate.yml` is CRLF on Windows and LF
- *     in CI, so `\r` is stripped before anything else looks at the text.
+ *     in CI, so line endings are normalised at the source.
+ *   - "a guard blind to CONTINUATION lines" (#3420) — the sibling `.bicep` step
+ *     in this same workflow writes `git ls-files … | grep -vE … > file` across
+ *     three physical lines. {@link stripComments} folds continuations with the
+ *     shared `_logical-lines.mjs` primitive first, so R4 and R5 judge the
+ *     command the shell actually runs.
  *
  * The paths-filter rule (R6) is decided by GLOB-MATCHING each declared pattern
  * against each real tracked param path, never by searching for the literal
@@ -71,6 +76,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLogicalLines } from './_logical-lines.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -90,23 +96,39 @@ export const NEGATIVE_CONTROL_SENTINEL = 'zzzGateNegativeControlUndeclaredParam'
 export const COMPILE_VERB = 'build-params';
 
 /**
- * Strip YAML/shell `#` comments and normalise line endings.
+ * Fold backslash continuations into logical lines, then blank `#` comments.
  *
- * Line-based and quote-aware: a `#` inside a single- or double-quoted run of
- * the same line is left alone, so `echo "a#b"` survives while
- * `# az bicep build-params …` does not. Erring toward NOT stripping is the safe
- * direction — a missed strip can only make this guard stricter.
+ * TWO normalisations, both load-bearing:
  *
- * `\r` goes first. `validate.yml` is CRLF in a Windows checkout, and a guard
- * that matched `[^\n]*$` against it would silently see every line as ending in
- * a carriage return.
+ *   1. LOGICAL LINES (`_logical-lines.mjs`, #3420). R4 asks whether the
+ *      enumeration is `git ls-files … '*.bicepparam'`, and the sibling `.bicep`
+ *      step in this very workflow writes its enumeration across THREE physical
+ *      lines with backslash continuations. A physical-line reader would see
+ *      `git ls-files \` with no pathspec on it and report a violation against a
+ *      correct workflow — the "guard blind to continuation lines" class this
+ *      repo has already measured twice. The shared primitive is used rather
+ *      than a private fold so the two cannot diverge.
+ *   2. COMMENTS. Line-based and quote-aware: a `#` inside a single- or
+ *      double-quoted run of the same logical line is left alone, so
+ *      `echo "a#b"` survives while `# az bicep build-params …` does not. Erring
+ *      toward NOT stripping is the safe direction — a missed strip can only
+ *      make this guard stricter.
+ *
+ * `readLogicalLines` splits on `/\r?\n/`, so CRLF is handled at the source.
+ * That matters here: `validate.yml` is CRLF in a Windows checkout and LF in CI,
+ * and a guard that matched `[^\n]*$` against it would see every line as ending
+ * in a carriage return.
+ *
+ * YAML structure is unaffected — a `jobs:` key, a job id, or a `paths:` entry
+ * never ends in a backslash, so nothing outside a `run:` body is ever folded,
+ * and a folded line keeps the indentation of its FIRST physical line.
  *
  * @param {string} text
- * @returns {string} the same text, comments blanked, LF-terminated
+ * @returns {string} the same text, continuations folded, comments blanked, LF-terminated
  */
 export function stripComments(text) {
   const out = [];
-  for (const rawLine of text.replace(/\r/g, '').split('\n')) {
+  for (const { text: rawLine } of readLogicalLines(text)) {
     let inSingle = false;
     let inDouble = false;
     let cut = -1;
