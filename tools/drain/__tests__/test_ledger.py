@@ -530,6 +530,151 @@ def test_negative_control_a_reopen_voids_the_receipt_that_closed_it(tmp_path):
     assert led.transition(1, CLOSED).state == CLOSED
 
 
+# ---------------------------------------------------------------------------
+# #4535 -- a PARK is supposed to stay open on GitHub, so being open disputes
+# nothing. These four tests are the other side of the reopen boundary above:
+# the fix must not be bought by weakening the `closed` case, so every one of
+# them asserts both halves.
+# ---------------------------------------------------------------------------
+
+
+def _parked(led, number=2874, stream="W1-deploy"):
+    """A legal park: the refusal needs a named blocker AND owner."""
+    item = led.upsert(number, "bicep drift, GCC-High", stream, lane="lane:bicep", size=3)
+    item.blocker = "no GCC tenant to authenticate against"
+    item.owner = "operator"
+    led.transition(number, PARKED, "re-measured at head: run 35171642605")
+    return item
+
+
+def test_a_park_survives_the_refresh_that_sees_its_issue_still_open(tmp_path):
+    """#2874 was parked and demoted to `needs-audit` THIRTEEN SECONDS later, by
+    the next refresh, because the reopen branch keyed on TERMINAL wholesale.
+
+    WHAT MAKES THIS FAIL: put `PARKED` back into `REOPEN_DISPUTES` (i.e. revert
+    it to `TERMINAL`) and the second `upsert` -- which is exactly what a refresh
+    does for an issue that is open on GitHub -- moves the item to `needs-audit`
+    with `audit_reason == 'reopened'`. Kills L26.
+
+    The `closed` half is asserted in the SAME test so the park cannot be rescued
+    by simply deleting the branch: an arm that does that has to survive both."""
+    led = _led(tmp_path)
+    _parked(led)
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+
+    assert led.items[2874].state == PARKED, (
+        "a parked item is BLOCKED, not done - its GitHub issue is supposed to be "
+        "open, so being open is not evidence of anything"
+    )
+    assert led.items[2874].audit_reason is None
+    # Paired positive: the branch still fires for the state it was written for.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+
+
+def test_drained_is_true_over_a_park_whose_issue_is_still_open(tmp_path):
+    """THE EXIT CONDITION, which had no test -- which is why this shipped.
+
+    PRP S1 and policy.json both define done as "every issue closed | parked |
+    declined". With the demotion in place `parked` was not a state the ledger
+    could HOLD across a refresh, so `drained()` -- `tick.py`'s documented stop
+    signal -- was unreachable for any item that must be parked.
+
+    WHAT MAKES THIS FAIL: the same `REOPEN_DISPUTES = TERMINAL` revert. The item
+    lands in `needs-audit`, which is non-terminal by design, and `drained()`
+    returns False. It also fails if `drained()` is widened to count
+    `needs-audit`, which is the wrong fix in the other direction -- so the
+    second half pins that a genuine audit still blocks the exit."""
+    led = _led(tmp_path)
+    _parked(led)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.drained() is True
+    assert led.items[2874] not in led.remaining()
+
+    # ...and a real `needs-audit` still blocks it. Without this the first
+    # assertion is satisfied by a `drained()` that counts everything.
+    led.upsert(4491, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(4491, NEEDS_AUDIT, "departed")
+    assert led.drained() is False
+
+
+def test_negative_control_a_park_never_reaches_the_receipt_void(tmp_path):
+    """A park holds no receipt-in-dispute, and the void must not fire for it.
+
+    `record_receipt` refuses a terminal item, so the only way a parked item
+    holds one is to have taken it BEFORE the park -- which is the realistic
+    shape: a lane takes a `deploy-path` receipt, the deploy is then blocked, and
+    the item parks holding it.
+
+    WHAT MAKES THIS FAIL: reverting `REOPEN_DISPUTES` to `TERMINAL` runs the
+    void over the park and clears `receipt_kind`, so the first assertion goes
+    red. The second and third pair it with a positive: the void still fires on
+    the `closed` route, and its history line names the state the item actually
+    reached rather than claiming it was closed (R7)."""
+    led = _led(tmp_path)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    led.record_receipt(2874, "deploy-run", "run/35171642605")
+    led.items[2874].blocker = "no GCC tenant"
+    led.items[2874].owner = "operator"
+    led.transition(2874, PARKED, "blocked on a tenant that does not exist")
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.items[2874].receipt_kind == "deploy-run"
+    assert not any("VOID" in h for h in led.items[2874].history)
+
+    # Paired positive, on the route the void is FOR.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached closed" in h for h in led.items[1].history)
+
+
+def test_a_declined_item_seen_open_is_still_disputed(tmp_path):
+    """THE DECISION, pinned rather than inherited. `declined` stays in the
+    dispute set: "will not do" leaves nothing to track, so the disposal is
+    closing the issue as not-planned, and one still open after a decline means
+    the decline never reached GitHub or someone is disputing it.
+
+    WHAT MAKES THIS FAIL: narrowing `REOPEN_DISPUTES` to `(CLOSED,)` leaves the
+    declined item `declined` and `audit_reason` None. Kills L27.
+
+    The second item carries NO receipt, which is the ORDINARY shape of a decline
+    -- `transition(DECLINED)` requires none. It is here because a filter placed
+    inside the predicate (`... and existing.receipt_kind`) would pass every
+    other reopen test in this file, all of which happen to record one: that arm
+    is L29, and this fixture is what kills it.
+
+    The last assertion is the R7 half: a declined item that held a receipt gets
+    a history line naming `declined`, not one asserting it "was closed on it" --
+    a claim the code cannot establish for this route. Kills L28."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, DECLINED, "operator 2026-09-17: superseded")
+
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(2, DECLINED, "operator 2026-09-17: superseded, no receipt taken")
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached declined" in h for h in led.items[1].history)
+    assert led.items[2].state == NEEDS_AUDIT, (
+        "a decline holds no receipt, so a dispute route gated on holding one "
+        "would never fire for the state it was written for"
+    )
+    assert led.items[2].audit_reason == led_mod.AUDIT_REOPENED
+
+
 def test_negative_control_a_receipt_is_stamped_with_the_class_it_was_taken_under(
     tmp_path,
 ):

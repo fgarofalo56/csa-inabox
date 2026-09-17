@@ -100,8 +100,20 @@ A park with no owner is indistinguishable from forgetting — that is how an ite
 leaves the queue without leaving the backlog.
 
 `needs-audit` is the fifth state and is **non-terminal**: an item that left
-GitHub with no receipt, or a terminal item seen open again (someone reopened it,
-which is how a false close gets disputed). `drained()` is false while any exist.
+GitHub with no receipt, or a `closed`/`declined` item seen open again (someone
+reopened it, which is how a false close gets disputed). `drained()` is false
+while any exist.
+
+**A park is SUPPOSED to stay open on GitHub, and the refresh leaves it alone.**
+The reopen branch keys on `REOPEN_DISPUTES` — `closed` and `declined` — not on
+`TERMINAL`. It used to key on all three, so every refresh demoted every park to
+`needs-audit` (#2874 lasted 13 seconds) and `drained()` was unreachable for
+anything genuinely blocked. `declined` is *in* that tuple by decision, not by
+inheritance: "will not do" leaves nothing to track, so its disposal is `gh issue
+close --reason not-planned`, and an item still open after a decline wants a
+look. That demotion has a legal escape — close the issue and the decline stands.
+A park has none: closing a blocked item's issue is how a backlog lies about
+itself (`deploy-integrity.md` R2).
 
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
