@@ -391,8 +391,8 @@ jobs:
           # disclosure in check-bicepparam-compiled.mjs about a corpus neither
           # lens can see (a `.bicep-param` spelling, say) being invisible to
           # both by construction.
-          git ls-files -- ':(icase)*.bicepparam' > /tmp/bicepparam-files.txt
-          COUNT=$(wc -l < /tmp/bicepparam-files.txt)
+          git ls-files -- ':(icase)*.bicepparam' > "$RUNNER_TEMP/bicepparam-files.txt"
+          COUNT=$(wc -l < "$RUNNER_TEMP/bicepparam-files.txt")
           # FAIL CLOSED on an empty population. A renamed directory or a changed
           # extension would otherwise make this step exit 0 having compiled
           # nothing, which is the exact defect #4466 is about wearing a green
@@ -406,7 +406,7 @@ jobs:
             exit 1
           fi
           echo "=== Compiling $COUNT Bicep param files across $(nproc) workers ==="
-          cat /tmp/bicepparam-files.txt
+          cat "$RUNNER_TEMP/bicepparam-files.txt"
 
           # Exported for the same reason the .bicep job exports it: the `sh -c`
           # workers are separate processes and inherit only the environment.
@@ -418,7 +418,7 @@ jobs:
           OUT_DIR=$(mktemp -d)
           # One marker per file the compiler was actually INVOKED on. This is
           # what the reconciliation below counts, and it is deliberately not
-          # derived from /tmp/bicepparam-files.txt.
+          # derived from that list file.
           ATTEMPT_DIR=$(mktemp -d)
 
           # The `sh -c '…'` body is single-quoted ON PURPOSE: it must be
@@ -442,7 +442,7 @@ jobs:
               printf "::error file=%s::bicep build-params exited 0 but wrote no ARM JSON - nothing was actually compiled for this file\n" "$f"
               touch "$FAIL_DIR/$flat"
             fi
-          ' _ < /tmp/bicepparam-files.txt
+          ' _ < "$RUNNER_TEMP/bicepparam-files.txt"
 
           FAILED=$(find "$FAIL_DIR" -type f | wc -l)
 
@@ -463,7 +463,7 @@ jobs:
           # SO COUNT WHAT HAPPENED, NOT WHAT WAS ASKED FOR. `$ATTEMPT_DIR` holds
           # one marker per file the compiler was actually invoked on, written by
           # the worker itself. `EXPECTED` re-derives the tracked set
-          # INDEPENDENTLY — it does not read /tmp/bicepparam-files.txt — so
+          # INDEPENDENTLY — it does not read the list file — so
           # anything that narrowed, truncated or reordered that file shows up
           # here. The `-s` arm in the worker covers the remaining case: an
           # invocation that returns 0 without producing ARM JSON (replacing the
@@ -485,7 +485,13 @@ jobs:
             echo "::error::$FAILED Bicep param file(s) failed to compile"
             exit 1
           fi
-          echo "All $COUNT Bicep param files compiled clean — $ATTEMPTED invocation(s) and $PRODUCED ARM JSON output(s) reconciled against $EXPECTED tracked file(s)."
+          # PRODUCED is REPORTED, not compared. Each successful compile is
+          # already pinned to have written non-empty ARM JSON by the `-s` arm in
+          # the worker, so the reconciliation that decides the verdict is
+          # ATTEMPTED vs EXPECTED. Saying which is which matters: a line that
+          # printed a number it had not used in any comparison would be
+          # asserting something it did not establish (deploy-integrity.md R7).
+          echo "All $COUNT Bicep param files compiled clean — reconciled $ATTEMPTED compiler invocation(s) against $EXPECTED tracked file(s); $PRODUCED ARM JSON output(s) written."
 
   # -------------------------------------------------------------------------
   # Secret Scanning

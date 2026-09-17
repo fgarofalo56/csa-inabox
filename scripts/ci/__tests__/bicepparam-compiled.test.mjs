@@ -74,6 +74,18 @@ const LIVE_LF = LIVE.replace(/\r/g, '');
 const PARAMS = trackedBicepParams();
 
 /**
+ * The list file the step enumerates into, LIFTED from the workflow.
+ *
+ * Never transcribed, for two reasons. `assertion-design.md` §3 says lift the
+ * pattern out of the source so a typo cannot make the probe disagree with the
+ * implementation — and `check-temp-artifact-safety.mjs` independently REDS a
+ * literal shared-temp path written into a test file, which is how the previous
+ * push failed the required `guardrails` context. Both point the same way.
+ */
+const LIST = enumerationLine(jobsOf(stripComments(LIVE_LF)).get('bicep-params')).listPath;
+const LIST_Q = `"${LIST}"`;
+
+/**
  * The one line five mutations share.
  *
  * Hoisted because the previous revision inlined it five times: any legitimate
@@ -84,7 +96,7 @@ const PARAMS = trackedBicepParams();
  * direction of assertion-design.md, fired by a change that is not a defect.
  * Its presence is now pinned ONCE, below, with an explanation.
  */
-const ENUMERATION_LINE = `          git ls-files -- '${PARAM_PATHSPEC}' > /tmp/bicepparam-files.txt`;
+const ENUMERATION_LINE = `          git ls-files -- '${PARAM_PATHSPEC}' > ${LIST_Q}`;
 
 /** The immutable tree #4466 was measured against. */
 const PRE_FIX_SHA = '0348d3715e6';
@@ -311,7 +323,7 @@ test('stripComments normalises CRLF away', () => {
 
 test('POPULATION P2: `head -n 1` + `mv` over the list file is caught', () => {
   const mutated = mutateEnumeration(
-    `${ENUMERATION_LINE}\n          head -n 1 /tmp/bicepparam-files.txt > /tmp/x && mv /tmp/x /tmp/bicepparam-files.txt`,
+    `${ENUMERATION_LINE}\n          head -n 1 ${LIST} > ${LIST}.scratch && mv ${LIST}.scratch ${LIST}`,
   );
   const r5 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R5'));
   // FAILS IF: the R5 rewrite arm is deleted. Reviewer-measured against the
@@ -322,7 +334,7 @@ test('POPULATION P2: `head -n 1` + `mv` over the list file is caught', () => {
 
 test('POPULATION P3: a POSITIVE grep keeping only the 7 fiab params is caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -E '^platform/fiab/bicep/params/' > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -E '^platform/fiab/bicep/params/' > ${LIST}`,
   );
   const r5 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R5'));
   // FAILS IF: R5 goes back to hunting for `grep -v` shapes. This narrowing is
@@ -335,7 +347,7 @@ test('POPULATION P3: a POSITIVE grep keeping only the 7 fiab params is caught', 
 
 test('POPULATION P4: a SECOND `grep -v` after a harmless first is caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -v 'zzz-nothing' | grep -v 'params/il5' > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -v 'zzz-nothing' | grep -v 'params/il5' > ${LIST}`,
   );
   const r5 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R5'));
   // FAILS IF: R5 reverts to `exclusionRegExp`, which used `.exec` and therefore
@@ -346,7 +358,7 @@ test('POPULATION P4: a SECOND `grep -v` after a harmless first is caught', () =>
 
 test('POPULATION P5: `grep -vF`, a spelling the old rule did not know, is caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -vF 'params/il5' > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -vF 'params/il5' > ${LIST}`,
   );
   // FAILS IF: R5 is keyed to spellings again. -vF, unquoted -v, -v with a
   // regex, `awk`, `comm`, `perl -ne` — the denylist was always going to be
@@ -356,7 +368,7 @@ test('POPULATION P5: `grep -vF`, a spelling the old rule did not know, is caught
 
 test('POPULATION P5b: an UNQUOTED `grep -v il5` is caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -v il5 > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' | grep -v il5 > ${LIST}`,
   );
   // FAILS IF: R5 requires a QUOTED argument, which the previous
   // `exclusionRegExp` did — the first reviewer measured `grep -v il5` as a
@@ -366,7 +378,7 @@ test('POPULATION P5b: an UNQUOTED `grep -v il5` is caught', () => {
 
 test('POPULATION P6: `sed -i` over the list file is caught', () => {
   const mutated = mutateEnumeration(
-    `${ENUMERATION_LINE}\n          sed -i '/params.il5/d' /tmp/bicepparam-files.txt`,
+    `${ENUMERATION_LINE}\n          sed -i '/params.il5/d' ${LIST}`,
   );
   // FAILS IF: the rewrite arm only looks for `>` redirection. `sed -i` narrows
   // in place with no redirect at all. Reviewer-measured: 16 of 17, rc=0.
@@ -375,7 +387,7 @@ test('POPULATION P6: `sed -i` over the list file is caught', () => {
 
 test('POPULATION P7: `head -3` — a narrowing that is not an exclusion at all — is caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' | head -3 > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' | head -3 > ${LIST}`,
   );
   // FAILS IF: R5 asks "is there an exclusion?" instead of "is this a bare
   // enumeration?". The first reviewer's header finding was precisely that the
@@ -385,8 +397,8 @@ test('POPULATION P7: `head -3` — a narrowing that is not an exclusion at all �
 
 test('POPULATION X4: piping the list into xargs instead of redirecting is caught', () => {
   const mutated = mutateLive(
-    "          ' _ < /tmp/bicepparam-files.txt",
-    "          ' _ ;\n          head -n 1 /tmp/bicepparam-files.txt | xargs -n1 true",
+    `          ' _ < ${LIST_Q}`,
+    `          ' _ ;\n          head -n 1 ${LIST_Q} | xargs -n1 true`,
   );
   const r5 = analyze(mutated, PARAMS).violations.filter((v) => v.startsWith('R5'));
   // FAILS IF: the guard only judges the enumeration line and not how the list
@@ -401,7 +413,7 @@ test('POPULATION X4: piping the list into xargs instead of redirecting is caught
 
 test('POPULATION A5: a pathspec TYPO that matches nothing is caught', () => {
   const mutated = mutateEnumeration(
-    "          git ls-files -- ':(icase)*.bicepparams' > /tmp/bicepparam-files.txt",
+    `          git ls-files -- ':(icase)*.bicepparams' > ${LIST}`,
   );
   const r4 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R4'));
   // FAILS IF: R4 tests for the SUBSTRING `*.bicepparam`. `*.bicepparams`
@@ -427,7 +439,7 @@ test('POPULATION A7/R8: deleting the reconciliation is a violation', () => {
 test('R8: one enumeration is not enough — the reconciliation needs an INDEPENDENT count', () => {
   const mutated = mutateLive(
     "          EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | wc -l)",
-    '          EXPECTED=$(wc -l < /tmp/bicepparam-files.txt)',
+    `          EXPECTED=$(wc -l < ${LIST})`,
   );
   const r8 = analyze(mutated, PARAMS).violations.find((v) => v.startsWith('R8') && /TWO independent/.test(v));
   // FAILS IF: R8 accepts a reconciliation that counts the list file it just
@@ -534,7 +546,7 @@ test('R6: a typo in the push paths filter is caught, and a substring check would
 
 test('R4: a hand-maintained file list instead of git ls-files is a violation', () => {
   const mutated = mutateEnumeration(
-    '          printf "platform/fiab/bicep/params/il5.bicepparam\\n" > /tmp/bicepparam-files.txt',
+    `          printf "platform/fiab/bicep/params/il5.bicepparam\\n" > ${LIST}`,
   );
   // FAILS IF: the R4 arm is deleted. A hand list is how the NEXT param file
   // added to the repo silently leaves the population — the same shape as
@@ -544,7 +556,7 @@ test('R4: a hand-maintained file list instead of git ls-files is a violation', (
 
 test('R4/R5: a CONTINUED enumeration is judged as the command the shell runs', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files \\\n            -- '${PARAM_PATHSPEC}' \\\n            > /tmp/bicepparam-files.txt`,
+    `          git ls-files \\\n            -- '${PARAM_PATHSPEC}' \\\n            > ${LIST}`,
   );
   // FAILS IF: stripComments stops folding backslash continuations. R4's reader
   // needs `git ls-files`, the pathspec and the `>` on ONE logical line, and the
@@ -560,7 +572,7 @@ test('R4/R5: a CONTINUED enumeration is judged as the command the shell runs', (
 
 test('R5: an exclusion hidden on a CONTINUATION line is still caught', () => {
   const mutated = mutateEnumeration(
-    `          git ls-files -- '${PARAM_PATHSPEC}' \\\n            | grep -vE 'params/il5' \\\n            > /tmp/bicepparam-files.txt`,
+    `          git ls-files -- '${PARAM_PATHSPEC}' \\\n            | grep -vE 'params/il5' \\\n            > ${LIST}`,
   );
   // FAILS IF: the fold is removed. This is the false-GREEN direction of #3420,
   // and the way a real author would write it — the sibling `.bicep` step is
@@ -680,11 +692,26 @@ test('jobsOf finds the compile job and does not bleed into the next one', () => 
 });
 
 test('enumerationLine reads the list path and the pathspec out of the live job', () => {
-  const e = enumerationLine(jobsOf(stripComments(LIVE)).get('bicep-params'));
-  // FAILS IF: the reader mistakes the `>>`/`2>&1` forms for the output redirect,
-  // or picks up a quoted string that is not a pathspec. Both would silently
-  // disable R5's rewrite arm, since it keys on the list path it extracts here.
+  const body = jobsOf(stripComments(LIVE)).get('bicep-params');
+  const e = enumerationLine(body);
+  // FAILS IF: the reader mistakes the `>>`/`2>&1` forms for the output
+  // redirect, keeps the surrounding quotes (which made the `< list` matcher
+  // look for a literal `"` the consumer line does not carry), or picks up a
+  // quoted string that is not a pathspec — the list file's own name ends in
+  // `bicepparam-files.txt` and was captured as a pathspec until it was
+  // excluded. All three silently disable R5's rewrite arm, which keys on the
+  // list path extracted here.
+  //
+  // The expected path is LIFTED from the workflow, never transcribed
+  // (assertion-design.md §3) — and transcribing it is also forbidden outright
+  // by `check-temp-artifact-safety.mjs`, which reds a literal shared-temp path
+  // in a test file. That guard caught this file on the previous push.
   assert.ok(e, 'no enumeration line found');
-  assert.equal(e.listPath, '/tmp/bicepparam-files.txt');
   assert.deepEqual(e.pathspecs, [PARAM_PATHSPEC]);
+  assert.ok(e.listPath, 'no list path extracted');
+  assert.ok(!/^["']|["']$/.test(e.listPath), `quotes were not stripped: ${e.listPath}`);
+  // The step must write it, read it back for the log, and feed it to the
+  // compiler — three distinct uses of the SAME path.
+  assert.equal(body.split(e.listPath).length - 1, 4, `expected 4 uses of ${e.listPath}`);
+  assert.match(e.text, new RegExp(`>\\s*"?${e.listPath.replace(/[.*+?^${}()|[\]\\$]/g, '\\$&')}`));
 });

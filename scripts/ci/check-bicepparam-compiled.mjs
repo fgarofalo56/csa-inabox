@@ -397,10 +397,14 @@ export function enumerationLine(body) {
     if (!/\.bicepparam/.test(line)) continue;
     if (!/>/.test(line)) continue;
     const m = /(?:^|[^>])>\s*(\S+)/.exec(line);
+    // Strip surrounding quotes: the list path is written `> "$RUNNER_TEMP/…"`,
+    // and carrying the quotes into the rewrite/redirect matchers below made
+    // them look for a literal `"` that the consumer line does not have there.
+    const listPath = m ? m[1].replace(/^["']|["']$/g, '') : null;
     const pathspecs = [...line.matchAll(/'([^']+)'|"([^"]+)"/g)]
       .map((q) => q[1] ?? q[2])
-      .filter((s) => /\.bicepparam/i.test(s));
-    return { text: line, listPath: m ? m[1] : null, pathspecs };
+      .filter((s) => /\.bicepparam/i.test(s) && !/bicepparam-files/i.test(s));
+    return { text: line, listPath, pathspecs };
   }
   return null;
 }
@@ -610,7 +614,7 @@ export function analyze(workflowText, params) {
   // some derived one.
   if (enumeration && enumeration.listPath) {
     const lp = enumeration.listPath;
-    const WRITES = new RegExp(`(?:>>?\\s*${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})|\\b(?:mv|cp|install|tee|truncate|dd)\\b|\\bsed\\b[^\\n]*\\s-i\\b`);
+    const WRITES = new RegExp(`(?:>>?\\s*"?${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?)|\\b(?:mv|cp|install|tee|truncate|dd)\\b|\\bsed\\b[^\\n]*\\s-i\\b`);
     for (const line of body.split('\n')) {
       if (!line.includes(lp)) continue;
       if (line === enumeration.text) continue;
@@ -622,7 +626,7 @@ export function analyze(workflowText, params) {
     // The compile must consume THAT list, by redirect, not a derived one and
     // not a pipe. `head -n 1 list | xargs …` narrowed the population to one
     // file while every other static check stayed green.
-    if (!new RegExp(`<\\s*${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(body)) {
+    if (!new RegExp(`<\\s*"?${lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?`).test(body)) {
       violations.push(
         `R5 job '${job}' never reads '${lp}' with a \`< ${lp}\` redirect — whatever feeds the compiler is not demonstrably the enumerated list.`,
       );
