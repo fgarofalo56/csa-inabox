@@ -3,9 +3,49 @@
  *
  * The certification score for a data product: every automated check evaluated
  * against real Cosmos state, plus the derived certification state (draft →
- * validated → certified) and any recorded sign-off. Read-only + not
- * ownership-gated (the trust signal is discoverable), so the catalog card and
- * marketplace listing can show the same badge the owner sees.
+ * validated → certified) and any recorded sign-off. Read-only. The trust signal
+ * IS discoverable, so the catalog card and marketplace listing can show the same
+ * badge the owner sees — but "discoverable" is now a decision this route makes,
+ * not a sentence it asserts. See the next block.
+ *
+ * ── #3580 — THE POSTURE SENTENCE WAS THE ENTIRE IMPLEMENTATION ──────────────
+ *
+ * This docblock used to read "not ownership-gated (the trust signal is
+ * discoverable)". That is the EXACT wording pattern GHSA-hf73-rp4q-66pf is
+ * about, and it was the whole gate: `withSession` established that the caller
+ * was signed in SOMEWHERE and nothing else ran. `findItem` below is an unscoped
+ * cross-partition `SELECT * FROM c WHERE c.id = @id AND c.itemType = @t` — no
+ * workspace, no tid, no lifecycle — so any signed-in caller holding any product
+ * GUID got an answer for a DRAFT product in ANOTHER Entra tenant.
+ *
+ * AND THE PAYLOAD WAS WIDER THAN "A TRUST SIGNAL". `dq.breakdown` is
+ * `DqRuleResult[]` (lib/azure/data-quality-client.ts:71). Its `scope` field is,
+ * verbatim from `DqRule.scope` at :53, `"table:<name>"` or
+ * `"column:<table>.<column>"`, and its `detail` interpolates the rule's own
+ * `pattern` / `min` / `max` (`:181`, `:192`). So the response carried another
+ * tenant's TABLE AND COLUMN NAMES and their validation expressions — the same
+ * class of infrastructure detail the `[id]/ports` `ref` fix was for, arriving
+ * through a different field on a route the ports fix never touched.
+ *
+ * WHAT RUNS NOW. `resolveDiscoveryAccess` — the one decision, shared with
+ * `GET /api/data-products/[id]` (lib/dataproducts/discoverability.ts):
+ *   - 'member'       → the payload below, byte-for-byte as before.
+ *   - 'discoverable' → the badge, the checks, the score, and the dq SUMMARY
+ *                      (score / gate / counts / measuredAt / stale) — with
+ *                      `breakdown` emptied and `breakdownRedacted:true` saying
+ *                      so, rather than an empty array implying "no rules ran".
+ *   - 'denied'       → 404, worded identically to "no such product".
+ *
+ * WHY THE CHECKS AND THE SCORE STAY. They are the trust signal the sentence
+ * above always meant: `CertCheck` carries `label` + `detail`, which are Loom's
+ * own fixed remediation strings (lib/dataproducts/certification.ts:41-50), not
+ * tenant data. Narrowing that too would have broken the catalog badge this
+ * route exists to serve, which is a product change smuggled into a security fix.
+ *
+ * WHAT THIS DOES NOT CLOSE. The refusal is content-identical to a miss but costs
+ * one `authorizeWorkspace` plus one `workspaceTid` query more, so the timing
+ * side-channel `discoverability.ts` declares applies here unchanged. `id` is a
+ * Cosmos GUID, so this is not an enumeration surface.
  *
  * The DQ input is READ from the last persisted measurement
  * (`state.dqMeasurement`), never re-executed here: executing the tenant's rules
@@ -32,6 +72,7 @@ import {
   type CertificationRecord,
 } from '@/lib/dataproducts/certification';
 import { readCertificationDq } from '@/lib/dataproducts/certification-dq';
+import { resolveDiscoveryAccess, NOT_FOUND } from '@/lib/dataproducts/discoverability';
 import { apiError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -60,7 +101,12 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
   const { id } = params;
   try {
     const item = await findItem(id);
-    if (!item) return apiError('Data product not found', 404, { code: 'not_found' });
+    if (!item) return apiError(NOT_FOUND, 404, { code: 'not_found' });
+    // #3580 — the discovery decision, shared with GET /api/data-products/[id].
+    // 'denied' is worded identically to "no such product", so refusing does not
+    // confirm that the id exists.
+    const access = await resolveDiscoveryAccess(session, item);
+    if (access === 'denied') return apiError(NOT_FOUND, 404, { code: 'not_found' });
 
     const st = (item.state || {}) as Record<string, unknown>;
     // PURE read of the last persisted measurement — no rule execution on a GET.
@@ -92,6 +138,13 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
       // ratio, the per-rule breakdown, WHEN it was measured — and, when nothing
       // could be measured, the exact reason the check is gated rather than
       // passed (plus the registry gate id so the UI renders a real Fix-it).
+      //
+      // #3580 — `breakdown` is the ONE address-bearing field in this response
+      // (`DqRuleResult.scope` is `table:<name>` / `column:<table>.<column>`), so
+      // a catalog reader gets it emptied. `breakdownRedacted` says WHY rather
+      // than letting `[]` read as "no rules ran" — the counts beside it are the
+      // real ones, and an empty array under a non-zero `ruleCount` with no flag
+      // would be a false statement about the measurement (deploy-integrity R7).
       dq: {
         score: dqScore,
         gate: dqGate,
@@ -99,7 +152,8 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
         missing: dqMissing,
         ruleCount: dqResult?.ruleCount ?? 0,
         passingRules: dqResult?.passingRules ?? 0,
-        breakdown: dqResult?.breakdown ?? [],
+        breakdown: access === 'member' ? (dqResult?.breakdown ?? []) : [],
+        ...(access === 'member' ? {} : { breakdownRedacted: true }),
         measuredAt,
         stale,
       },
