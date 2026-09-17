@@ -34,10 +34,25 @@ tree, and moving a file out from under an uncommitted edit is the silent loss
 this retirement exists to prevent. It can be archived alongside the rest once
 that edit is committed or discarded.
 
+## If `/harness:harness-next` sent you here — do NOT run `/harness-init`
+
+`.claude/commands/harness/harness-next.md:38` reads `.harness/state.json` and,
+finding nothing, prints *"No state file (run /harness-init first)"*; `:44` opens
+the same path directly. Both paths moved into `archive/2026-08-08/` when this
+program was retired, so that instruction now points at a retired ledger.
+
+**Re-initialising would re-derive work that has already shipped.** Eleven of the
+eighteen unmapped tasks were re-measured at head and found already done. Read
+`PRPs/active/finishline-retirement/README.md` instead.
+
+That command file is synced from `claude-tools` (see this repo's `CLAUDE.md`), so
+the fix belongs upstream — a local edit here is overwritten on the next resync.
+
 ## Before reviving anything here
 
 Read `PRPs/active/finishline-retirement/README.md` first. Eleven of the eighteen
 unmapped tasks in that ledger were re-measured at head and found already done;
 three are superseded by open issues; two more are partly done with the remainder
-recorded at the site. Re-running this program against the 2026-08-06 ledger
-would re-derive work that has shipped.
+recorded at the site. A further six tasks — reached by no issue, only by merged
+PRs — were dispositioned there too. Re-running this program against the
+2026-08-06 ledger would re-derive work that has shipped.
