@@ -207,8 +207,43 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "L5 a reopened item stays terminal (a false close can never be disputed)",
         "ledger.py",
-        "            if was_state in TERMINAL:",
+        "            if was_state in REOPEN_DISPUTES:",
         "            if False:",
+    ),
+    # -- #4535: WHICH terminal states a reopen disputes --------------------
+    #
+    # L5 above asks whether the branch fires at all. These four ask whether it
+    # fires on the RIGHT POPULATION, which is the question that shipped wrong:
+    # keyed on TERMINAL, every refresh demoted every park, so `drained()` was
+    # unreachable for anything blocked. Three of the four narrow or widen the
+    # population rather than weakening a check, per this file's own lesson.
+    (
+        ("L26 the reopen branch goes back to TERMINAL wholesale, so a PARK -- "
+         "which is SUPPOSED to be open on GitHub -- is demoted every refresh"),
+        "ledger.py",
+        "REOPEN_DISPUTES = (CLOSED, DECLINED)",
+        "REOPEN_DISPUTES = (CLOSED, PARKED, DECLINED)",
+    ),
+    (
+        ("L27 the population narrows the other way: `declined` drops out, so a "
+         "decline that never reached GitHub is never questioned"),
+        "ledger.py",
+        "REOPEN_DISPUTES = (CLOSED, DECLINED)",
+        "REOPEN_DISPUTES = (CLOSED,)",
+    ),
+    (
+        ("L28 the VOID line hard-codes `closed` again, so the history asserts a "
+         "close that never happened for a declined item (R7)"),
+        "ledger.py",
+        'f"{was_state} holding it and is open again, so that receipt "',
+        '"closed holding it and is open again, so that receipt "',
+    ),
+    (
+        ("L29 a FILTER inside the predicate: only a terminal item HOLDING a "
+         "receipt is disputed, so a decline (which needs none) is never audited"),
+        "ledger.py",
+        "            if was_state in REOPEN_DISPUTES:",
+        "            if was_state in REOPEN_DISPUTES and existing.receipt_kind:",
     ),
     # -- the cycle ---------------------------------------------------------
     (
@@ -509,6 +544,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("        if number not in live_numbers and item.state not in TERMINAL "
          "and item.state != NEEDS_AUDIT:"),
         "        if number not in live_numbers and item.state == READY:",
+    ),
+    (
+        ("T16 the departure loop's skip narrows to `closed`, so a PARK whose "
+         "issue is closed departs into needs-audit -- the #4535 "
+         "unreachable-`drained()` shape re-entered through the other cell"),
+        "tick.py",
+        ("        if number not in live_numbers and item.state not in TERMINAL "
+         "and item.state != NEEDS_AUDIT:"),
+        ("        if number not in live_numbers and item.state != CLOSED "
+         "and item.state != NEEDS_AUDIT:"),
     ),
     (
         "L9 the receipt refusal exempts one stream (the narrow bypass)",
