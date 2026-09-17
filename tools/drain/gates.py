@@ -1554,6 +1554,18 @@ def _is_incomplete(check: dict) -> bool:
     exactly: if they drift, a run counts as in-flight for one question and as
     concluded for the other, and the bucket boundary moves without anyone
     editing it.
+
+    DISCLOSED GAP, pre-existing and deliberately not papered over: the
+    `status in INCOMPLETE_STATUSES` clause has NO fixture that distinguishes it
+    on this path. Every advisory in-flight fixture also has a falsy `verdict`,
+    so the first clause answers first and deleting the third is invisible to
+    the suite. It is kept because `_outcome`'s docstring records why -- a
+    CheckRun can publish `status: IN_PROGRESS` alongside a stale `conclusion`,
+    and a reader testing only one of the pair scored a PENDING StatusContext
+    green. The same clause exists unfixtured at two OLDER sites
+    (`classify_checks`, `_check_rank`); an independent reviewer measured that
+    and asked for this line rather than a fabricated fixture, and those two
+    sites are deliberately NOT touched here.
     """
     verdict, status = _outcome(check)
     return not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES
@@ -1585,16 +1597,21 @@ def _newest_concluded(runs: list[dict]) -> dict | None:
     (an unreadable timestamp or a tie at the maximum falls back to worst-wins,
     so an undated red is never discarded as superseded).
 
-    DISCLOSED, because it would otherwise be counted as coverage it is not:
-    the UNDATED fallback inside this function is currently UNREACHABLE from
-    `classify_advisory_checks`. One unreadable stamp anywhere in the group
-    sends the WHOLE group to worst-wins one level up, so the in-flight run
-    never wins "newest" and the red surfaces as ADV-RED directly -- measured,
-    both list orders. That is STRICTER than ADV-RERUN, not weaker, so the
-    fallback is kept rather than removed: it is the honest answer if the outer
-    rule is ever relaxed, and it is unit-tested at this function rather than
-    through the classifier. A path no input reaches is evidence about the
-    contract, not about the gate (`assertion-design.md` #5).
+    DISCLOSED, and stated exactly rather than conveniently. The undated
+    fallback inside this function IS REACHED -- `[SUCCESS undated,
+    IN_PROGRESS@12]` enters it -- and with two undated concluded runs it does
+    genuinely CHOOSE (`[SUCCESS undated, SKIPPED undated, IN_PROGRESS@12]`
+    returns the SKIPPED). What no input produces is a choice that CHANGES THE
+    GATE'S ANSWER: any RED among the concluded runs is picked by the
+    whole-group worst-wins one level up and routed to ADV-RED before this
+    branch is reached, so every case that gets here is non-red and lands in
+    `wait` whichever run is chosen. Measured, all three shapes.
+
+    An earlier draft of this comment said "UNREACHABLE", which was a hair
+    strong in the direction that flatters the disclosure -- the branch runs,
+    it just cannot decide anything the caller can observe. The direct unit test
+    below is correspondingly NOT un-killable: it is one of the tests that kills
+    arm A4's shape, on a branch the gate does take.
     """
     concluded = [run for run in runs if not _is_incomplete(run)]
     if not concluded:
@@ -1784,6 +1801,9 @@ def advisory_verdict(
             " ".join(part for part in blocking if part)
             + " These are NOT required contexts, so branch protection will merge "
             "straight over them - which is exactly how #4540 shipped a red main. "
+            "REMEDY: fix the check, or re-run it with `gh run rerun --failed` (both "
+            "`rerun-ci` and `approve-parked-ci-run` are permitted unattended) and "
+            "wait for the new answer. Do NOT merge past it. "
             f"[{split.population} advisory of {split.total_checks} published; "
             f"{len(split.clean)} clean]" + waiting
         )

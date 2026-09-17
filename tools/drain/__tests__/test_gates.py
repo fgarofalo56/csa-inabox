@@ -1129,10 +1129,11 @@ def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_reru
 
     Any unreadable stamp sends the WHOLE group to worst-wins, so the red
     becomes the group's representative and lands in `red` directly. The
-    in-flight run never wins "newest", which means `_newest_concluded`'s own
-    undated fallback is NOT REACHABLE from this classifier today. That is
-    disclosed at its site and unit-tested directly below rather than counted as
-    covered here -- an un-killable path named, per assertion-design.md #5.
+    in-flight run never wins "newest" WHEN A RED IS PRESENT, which is why
+    `_newest_concluded`'s undated fallback -- though it IS reached, and can
+    even choose between two undated concluded runs -- can never change the
+    gate's answer. Stated precisely at that function; the direct unit test
+    below is a real instrument, not an un-killable one.
 
     BOTH ORDERINGS, per the A10 lesson.
 
@@ -1152,12 +1153,15 @@ def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_reru
 
 
 def test_newest_concluded_falls_back_to_worst_wins_on_an_unreadable_timestamp():
-    """`_newest_concluded` DIRECTLY, because the branch above cannot reach this.
+    """`_newest_concluded` DIRECTLY, on a branch the gate genuinely takes.
 
     The function delegates its fallbacks to `_newest_from_groups`, and
     delegation is a claim until a fixture shows it. Tested at the function
-    rather than through the classifier, and labelled as such: this is evidence
-    about the helper's contract, not about a path the gate takes today.
+    because the CLASSIFIER cannot distinguish the outcomes -- any red among
+    the concluded runs is routed to ADV-RED by the outer worst-wins first, so
+    every case that reaches this branch is non-red and lands in `wait`
+    whichever run wins. That is a limit on what the caller can observe, NOT on
+    whether this code runs: it runs, and this assertion kills arm A4's shape.
 
     BOTH ORDERINGS -- with the red first, first-in-list and worst-by-rank give
     the same answer, which is exactly how arm A10 survived a whole suite.
@@ -1301,6 +1305,12 @@ def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
 
     import yaml
 
+    # TWO PARSES of the same bytes: this one for the trigger KEYS, and
+    # `parse_push_trigger` below for the push block's shape. Deliberate and
+    # cosmetic -- the alternative is a production API change to hand a parsed
+    # doc in, for a test that runs once. BOTH fail closed on unparseable YAML:
+    # `safe_load` raises here, and `parse_push_trigger` returns None, which the
+    # assertion below refuses.
     triggers = yaml.safe_load(text)
     triggers = triggers.get("on", triggers.get(True))
     # EXACT KEY, and that is a KNOWN GAP, filed as #4558 rather than papered
@@ -1329,21 +1339,105 @@ def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
     )
 
 
+def _assert_tripwire_fails_loudly(run_tripwire):
+    """Drive a tripwire and insist it raised an ASSERTION, not a skip.
+
+    `pytest.raises(AssertionError)` CANNOT express this, and that is the whole
+    reason this helper exists. `pytest.skip` raises `Skipped`, which subclasses
+    **BaseException and not Exception** (measured: `BaseException=True
+    Exception=False`). Inside a `pytest.raises(AssertionError)` block it is not
+    caught -- it propagates, and pytest reports the ENCLOSING TEST AS SKIPPED.
+
+    So the previous version of the negative control below, whose docstring said
+    it would break if the tripwire reverted to `pytest.skip`, SURVIVED exactly
+    that mutation: rc=0, `528 passed, 3 skipped`, the extra skip being the
+    control itself. A control that is silent about the regression it names, in
+    the sentence that names it.
+
+    `BaseException` is caught deliberately and the TYPE is then asserted, so a
+    skip becomes a loud failure instead of a quiet abort.
+    """
+    try:
+        run_tripwire()
+    except BaseException as exc:
+        caught = exc
+    else:
+        caught = None
+    assert caught is not None, (
+        "the tripwire returned normally on a subject it could not read - it must "
+        "raise"
+    )
+    assert isinstance(caught, AssertionError), (
+        f"the tripwire raised {type(caught).__name__}, not AssertionError. A "
+        "pytest.skip raises Skipped, a BaseException, which ABORTS the caller AS "
+        "SKIPPED rather than failing it - the silent-skip regression this control "
+        "exists to catch."
+    )
+    assert "CANNOT BE CHECKED" in str(caught), caught
+
+
 def test_the_acr_lane_tripwire_fails_loudly_when_its_subject_is_missing(monkeypatch, tmp_path):
     """THE NEGATIVE CONTROL FOR THE TRIPWIRE ITSELF -- a skip and a failure must
     not be the same observation.
 
     Drives the REAL test function with `_repo_root` pointed at a directory that
     exists and does not contain the lane, which is exactly what a RENAME looks
-    like. The assertion must RAISE. The message is not transcribed here: the
-    `match` is a fragment of the real one, and the real function is what runs.
+    like. The message is not transcribed: the real function runs, and the
+    helper asserts on what it actually raised.
 
-    Breaks if: the missing-file branch goes back to `pytest.skip` -- the
-    `raises` block would then see `Skipped`, not `AssertionError`, and fail.
-    Also breaks if `_repo_root()` stops being consulted at all."""
+    Breaks if: the missing-file branch goes back to `pytest.skip` -- the helper
+    catches `BaseException` and asserts the TYPE, so a `Skipped` fails here
+    instead of quietly aborting. Also breaks if `_repo_root()` stops being
+    consulted at all.
+    """
     monkeypatch.setitem(globals(), "_repo_root", lambda: tmp_path)
-    with pytest.raises(AssertionError, match="CANNOT BE CHECKED"):
-        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds()
+    _assert_tripwire_fails_loudly(
+        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds
+    )
+
+
+def test_negative_control_the_tripwire_guard_itself_catches_a_reversion_to_skip():
+    """THE INSTRUMENT FOR THE INSTRUMENT, because the layer below it was wrong.
+
+    `ARMS` may only mutate the files in `mutate_gates.SOURCES` -- the production
+    modules -- so no mutation arm can be pointed at a test file, and the helper
+    above would otherwise have no standing instrument of any kind. This test is
+    that instrument: it hands `_assert_tripwire_fails_loudly` a callable that
+    does nothing but `pytest.skip`, i.e. the exact regression, and requires the
+    helper to convert it into a failure.
+
+    Written to be robust at ITS level too: a plain
+    `pytest.raises(AssertionError)` here would reproduce the very bug one layer
+    up, because a `Skipped` escaping the helper would abort THIS test as
+    skipped. The explicit `except BaseException` arm is what makes that case
+    red instead of green.
+
+    Breaks if: the helper reverts to `pytest.raises(AssertionError)` (the skip
+    escapes and the BaseException arm converts it to a failure), or if it stops
+    checking the exception type (the else-arm fires).
+    """
+    def reverted_tripwire():
+        pytest.skip("simulated regression: a missing subject treated as out-of-tree")
+
+    caught = None
+    try:
+        _assert_tripwire_fails_loudly(reverted_tripwire)
+    except AssertionError as exc:
+        caught = exc
+    except BaseException as exc:
+        raise AssertionError(
+            f"the helper let {type(exc).__name__} ESCAPE - a Skipped reaching this "
+            "frame aborts the test as skipped, which is the silent-skip defect one "
+            "layer up"
+        ) from exc
+    else:
+        raise AssertionError(
+            "the helper accepted a bare pytest.skip as a loud failure - the "
+            "silent-skip regression would ship unnoticed"
+        )
+    assert "not AssertionError" in str(caught), (
+        f"the helper failed, but not for the skip reason: {caught}"
+    )
 
 
 def test_the_acr_lane_tripwire_skips_only_when_genuinely_out_of_tree(monkeypatch):
