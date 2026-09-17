@@ -144,6 +144,17 @@ chmod "$DIR_MODE" "$NEW_DIR"
 #    command and breaks the boot.
 # ---------------------------------------------------------------------------
 TOUCHED=0
+# #4471, sibling audit -- a DELIBERATE exception, recorded here rather than left
+# to look like an oversight. This `$(find ...)` discards find's status (and
+# word-splits on spaces in paths), and `LEFT=` below is the same collapsed
+# absence shape that was fixed in sc1-prune-cache.sh. It is NOT fixed here
+# because the load-bearing claim does not rest on either: a walk that misses the
+# server classpath leaves it un-repointed, and the two `grep -q` assertions at
+# the NAMED $SERVER_CP below abort under `set -eu`; :182-185 then re-checks every
+# server-classpath entry. So a partial walk fails closed on the claim that
+# matters. This file is inside the same ownership as the fix, so leaving it is a
+# choice, not a boundary -- revisit it if the assertions below ever stop naming
+# $SERVER_CP explicitly, because that is the whole reason this is tolerable.
 for CP_FILE in $(find "$UC_HOME" -type f -name classpath); do
   if grep -q "netty-handler-${OLD_VERSION}.jar" "$CP_FILE"; then
     sed "s|${OLD_JAR}|${NEW_JAR}|g" "$CP_FILE" > "${WORK}/cp.new"

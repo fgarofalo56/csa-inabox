@@ -49,7 +49,19 @@ set -eu
 
 UC_HOME="${UC_HOME:-/home/unitycatalog}"
 CACHE="${UC_HOME}/.cache/coursier"
-WORK=/tmp/loom-sc1
+# The scratch root. Inside the image build this is one process, one run, and
+# /tmp/loom-sc1 is fine. On a HOST harness that spawns the script repeatedly the
+# fixed path is a defect: the `rm -rf` below plus the immediately-following
+# `mkdir -p` race, and the loser proceeds against a half-deleted directory. That
+# produced a RED that read `examples/ was removed despite a live reference` --
+# a false failure whose text is the very defect under fix. So the PARENT is
+# overridable and the leaf is always appended by this script, which keeps the
+# `rm -rf` target a name the script itself chose rather than one it was handed.
+case "${SC1_WORK_PARENT:-/tmp}" in
+  /*) : ;;
+  *)  echo "FATAL: SC1_WORK_PARENT must be an absolute path." >&2; exit 1 ;;
+esac
+WORK="${SC1_WORK_PARENT:-/tmp}/loom-sc1"
 KEEP="${WORK}/keep.txt"
 PRESENT="${WORK}/present.txt"
 ALL="${WORK}/all.txt"
@@ -92,6 +104,18 @@ mkdir -p "$WORK"
 # belongs to the command being judged. Anything that is not an unambiguous
 # "completed, and here is the answer" ABORTS. Fail closed; never delete on an
 # unestablished fact.
+#
+# SCOPE OF THAT CLAIM, stated precisely because an earlier revision of this very
+# comment overstated it and a reviewer measured the gap. It covers every command
+# that INTERROGATES THE FILESYSTEM -- `find` and `grep` -- at every site in this
+# file. It does NOT claim the file is pipeline-free: `wc -c < file | tr -d ' '`
+# below is a pipeline, and deliberately so. `wc` reading a regular file this
+# script just wrote is not a probe of the world; it cannot report "no match" and
+# it has no empty-versus-error ambiguity to collapse. Where a local transform
+# COULD truncate silently (`tr`, `sed`, the blank filter), a status read is not
+# sufficient on its own and each carries an exact arithmetic invariant instead --
+# see the keep-set derivation. The distinction that matters is not "pipeline or
+# not"; it is whether a failure can masquerade as an answer.
 
 # Abort naming the probe that did not finish, and SHOW its stderr. Deliberately
 # worded so it can never be misread as "nothing matched".
@@ -186,6 +210,17 @@ if [ -d "$EXAMPLES" ]; then
   # unambiguous 0 or 1 is accepted as an answer.
   probe_find "$CPOTHERS" "the classpath enumeration OUTSIDE ${EXAMPLES}" \
     "$UC_HOME" -type f -name classpath ! -path "${EXAMPLES}/*"
+  # An EMPTY population is not evidence of absence either. A successful walk
+  # that found nothing to search would otherwise print "0 classpath file(s)
+  # searched, 0 reference ..." and delete on it -- the same absence-over-an-
+  # empty-population shape, one step earlier. Step 1 already carries this guard;
+  # step 0 lacked it.
+  if [ ! -s "$CPOTHERS" ]; then
+    echo "FATAL: no classpath file found outside ${EXAMPLES}, so there was nothing to" >&2
+    echo "       search. An empty population does not establish that nothing references" >&2
+    echo "       the examples tree. Re-derive the disposition." >&2
+    exit 1
+  fi
   : > "$OTHERS"
   while IFS= read -r _cpf; do
     [ -n "$_cpf" ] || continue
@@ -243,7 +278,50 @@ while IFS= read -r f; do
   cat "$f" >> "${WORK}/cp.raw"
   printf ':\n' >> "${WORK}/cp.raw"
 done < "$CPFILES"
-tr ':' '\n' < "${WORK}/cp.raw" | sed 's/[[:space:]]*$//' | grep -vE '^$' | sort -u > "${WORK}/entries.txt"
+tr ':' '\n' < "${WORK}/cp.raw" > "${WORK}/fields.raw"
+# #4471 (round 2): this was a FOUR-STAGE pipeline --
+#   tr ':' '\n' < cp.raw | sed <trim> | grep -vE '^$' | sort -u > entries.txt
+# whose status belonged to `sort -u`. `entries.txt` is the sole input to BOTH
+# $KEEP (what survives the delete) and $PRESENT (the assertion that would catch
+# a bad delete), so a truncation shrinks the protection and its control IN
+# LOCKSTEP. Measured by a reviewer with a `sed` shim that truncates and exits 2:
+# a jar NAMED BY THE SERVER CLASSPATH was deleted, exit 0, stderr empty,
+# "assertions passed" printed. Status reads alone are not enough here, because a
+# stage can also truncate at rc=0, so each stage additionally carries an EXACT
+# arithmetic invariant:
+#   * `tr` is a pure byte substitution -- same byte count in and out;
+#   * `sed` is per-line -- same line count in and out;
+#   * after `sort -u` every blank field has collapsed to AT MOST ONE line, so
+#     the blank filter may remove at most 1 line. More than that is truncation.
+_tr_in="$(wc -c < "${WORK}/cp.raw" | tr -d ' ')"
+_tr_out="$(wc -c < "${WORK}/fields.raw" | tr -d ' ')"
+if [ "$_tr_in" -ne "$_tr_out" ]; then
+  echo "FATAL: the colon split lost bytes (${_tr_in} in, ${_tr_out} out). A truncated" >&2
+  echo "       field list yields a SHORT keep-set, which deletes MORE." >&2
+  exit 1
+fi
+sed 's/[[:space:]]*$//' "${WORK}/fields.raw" > "${WORK}/fields.trimmed"
+_sed_in="$(wc -l < "${WORK}/fields.raw" | tr -d ' ')"
+_sed_out="$(wc -l < "${WORK}/fields.trimmed" | tr -d ' ')"
+if [ "$_sed_in" -ne "$_sed_out" ]; then
+  echo "FATAL: the trailing-space trim lost lines (${_sed_in} in, ${_sed_out} out). A" >&2
+  echo "       truncated field list yields a SHORT keep-set, which deletes MORE." >&2
+  exit 1
+fi
+sort -u "${WORK}/fields.trimmed" > "${WORK}/fields.sorted"
+_srt="$(wc -l < "${WORK}/fields.sorted" | tr -d ' ')"
+_b_rc=0
+grep -vE -e '^$' -- "${WORK}/fields.sorted" > "${WORK}/entries.txt" 2> "${WORK}/.grep.err" || _b_rc=$?
+if [ "$_b_rc" -gt 1 ]; then
+  probe_failed "the blank-field filter over the classpath entries" "$_b_rc" "${WORK}/.grep.err"
+fi
+_ent="$(wc -l < "${WORK}/entries.txt" | tr -d ' ')"
+if [ "$(( _srt - _ent ))" -gt 1 ]; then
+  echo "FATAL: the blank-field filter removed $(( _srt - _ent )) of ${_srt} lines, but after" >&2
+  echo "       'sort -u' at most ONE can be blank -- so it truncated. A short keep-set" >&2
+  echo "       deletes MORE." >&2
+  exit 1
+fi
 # #4471: `grep ... > "$KEEP" || true` had the same collapse as the examples
 # guard -- a grep that ERRORED partway through writes a TRUNCATED keep-set, and
 # `|| true` made that indistinguishable from "no entry ends in .jar". A short
