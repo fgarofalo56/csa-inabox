@@ -1137,6 +1137,19 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
             "re-run creates them; parked means approve the run. Opposite remedies.",
         )
 
+    # 4c -- THE OTHER ~25 CONTEXTS. Gates 4, 4b and 5 above all pass
+    # `data["required"]`, so the population is narrowed before any predicate
+    # runs and an advisory RED coexists happily with VERDICT: GO -- which is
+    # what shipped a red `main` on 2026-09-17 (#4543, fixture #4540 head
+    # `7dd2fa3e279`: forty check-runs, one red, advisory, GO). `rollup` already
+    # carried it; nothing asked. The policy flag is SUBSCRIPTED, not `.get`,
+    # so deleting the key is a loud KeyError rather than a silent default --
+    # the shape `assert_policy_matches_code` was extended for.
+    ok, why = gates.advisory_verdict(
+        rollup, data["required"], policy["merge_gate"]["advisory_red_is_a_no_go"]
+    )
+    record("4c advisory (non-required) contexts", ok, why)
+
     # 5 -- did a required context measure anything? See the docstring on
     # `required_measured_nothing`: statusCheckRollup publishes NO population, so
     # this detects a required context that concluded SKIPPED and says so, rather

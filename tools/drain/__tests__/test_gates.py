@@ -853,6 +853,235 @@ def test_negative_control_a_duplicated_context_is_judged_by_its_worst_run():
 
 
 # ---------------------------------------------------------------------------
+# Gate 4c -- the ADVISORY population (#4543)
+# ---------------------------------------------------------------------------
+#
+# The defect: gates 4, 4b and 5 all filter to `required` before any predicate
+# runs, so ~25 of the ~40 contexts a PR publishes were invisible to the merge
+# decision. Measured on PR #4540 head `7dd2fa3e279` -- forty check-runs, one
+# red, advisory, and `VERDICT: GO`. The merge landed and `main` went red.
+#
+# Each test below names the input that turns it red, because "this covers the
+# advisory case" is intent, and intent is what is wrong when the test and the
+# defect share an author (`.claude/rules/assertion-design.md`).
+
+
+def _adv(name, conclusion, status="COMPLETED", started=None):
+    run = {"name": name, "conclusion": conclusion, "status": status}
+    if started is not None:
+        run["startedAt"] = started
+    return run
+
+
+def test_a_rollup_with_no_advisory_red_is_go():
+    """The POSITIVE control. Without it every NO-GO below is satisfied by an
+    arm that simply blocks everything.
+
+    Breaks if: any of these three advisory conclusions starts counting as red
+    -- SUCCESS, SKIPPED (path-filtered, routine) or NEUTRAL."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Bicep Lint", "SKIPPED"),
+        _adv("CodeQL", "SUCCESS"),
+        _adv("PR Summary", "NEUTRAL"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "3 clean of 3 advisory" in why, why
+
+
+def test_negative_control_an_advisory_red_blocks_while_every_required_is_green():
+    """THE #4540 FIXTURE, in miniature: every required context green, exactly
+    one non-required check red. Today's code answers GO; this must answer
+    NO-GO.
+
+    Breaks if: the population is filtered to `required` again (the defect), or
+    the red is dropped by scanning only the first entries -- which is why the
+    red is deliberately LAST in the list."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("brain security graph — committed artifact matches the tree", "FAILURE"),
+    ]
+    assert gates.classify_checks(checks, REQUIRED)[0], "the required half must be GREEN"
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok
+    assert "ADV-RED 1" in why
+    assert "brain security graph" in why
+
+
+def test_negative_control_an_in_progress_advisory_check_is_not_red():
+    """The recorded mistake from the first build of this split, for
+    `merge-eligible.py`: classifying `in_progress` as red cries wolf on every
+    PR with CI still running.
+
+    Breaks if: the INCOMPLETE branch routes to `red` instead of `wait`. The
+    wait names must ALSO appear in the GO line -- a report the reader has to
+    go looking for is a footnote under a VERDICT: GO."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Checkov", None, status="IN_PROGRESS"),
+        _adv("CodeQL", "SUCCESS"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "Checkov" in why
+
+
+def test_negative_control_every_not_yet_concluded_state_waits_rather_than_reds():
+    """`in_progress` is the one that was misclassified, but it is not the only
+    state that means "has not said anything yet" -- a check sits in QUEUED for
+    the whole runner backlog, and WAITING is the environment-approval park.
+    Fixing the one spelling and leaving the neighbours is the
+    one-side-of-a-symmetry defect this package keeps producing.
+
+    Breaks if: any of these four is scored red -- each would make the arm fire
+    on ordinary in-flight CI."""
+    for status in ("QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Checkov", None, status=status)
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, f"{status} must not read as red: {why}"
+        assert "ADV-WAIT 1" in why
+
+
+def test_the_go_line_states_what_the_gate_cannot_see():
+    """A main-only or scheduled lane publishes NO check-run at a PR head, so it
+    is invisible here by construction (#4547's ACR Trivy reds: 0 present across
+    three measured PR heads). That is a LIMIT of the population, and a gate
+    that reports "no advisory context is red" without it invites the reader to
+    conclude more than was measured -- `deploy-integrity.md` R7.
+
+    Breaks if: the scope clause is dropped from the GO branch."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [_adv("CodeQL", "SUCCESS")]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ATTACHED TO THIS HEAD only" in why
+
+
+def test_negative_control_a_stale_red_does_not_outrank_a_fresh_green_rerun():
+    """A re-run publishes a SECOND check-run under the same name, and list
+    order is the API's, not time's.
+
+    Breaks if: the de-duplication takes the last entry (here the OLD green) or
+    the worst entry. The red is the NEWER of the two, so both wrong rules give
+    the opposite answer to this one."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Repo Hygiene", "FAILURE", started="2026-09-17T12:00:00Z"),
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T10:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, why
+    assert "Repo Hygiene (FAILURE)" in why
+
+    # ...and the OTHER direction, which is the one worst-wins gets wrong: the
+    # green is newer, so the fixed check must stop blocking the drain.
+    checks[-2], checks[-1] = checks[-1], checks[-2]
+    checks[-1] = _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T14:00:00Z")
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+
+
+def test_negative_control_an_undated_group_falls_back_to_worst_wins():
+    """When a start time cannot be read, the group's order is UNKNOWN, and the
+    pessimistic answer is the only honest one -- an unreadable timestamp must
+    never let a red be discarded as superseded.
+
+    Breaks if: the fallback picks by list position instead. The red is FIRST
+    here, so last-in-list would answer GO."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Secret Scan", "FAILURE"),
+        _adv("Secret Scan", "SUCCESS"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, why
+    assert "Secret Scan (FAILURE)" in why
+
+
+def test_negative_control_a_tie_at_the_newest_start_is_judged_by_its_worst_run():
+    """Matrix legs fire together and can publish one name at one instant.
+    "Newest" does not pick between them, so the worst of the tied set wins.
+
+    Breaks if: a tie resolves by list position -- the green is second here."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("dbt Compile", "FAILURE", started="2026-09-17T02:25:12Z"),
+        _adv("dbt Compile", "SUCCESS", started="2026-09-17T02:25:12Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, why
+
+
+def test_negative_control_the_statuscontext_shape_is_read_on_the_advisory_side_too():
+    """`statusCheckRollup` returns TWO shapes. A StatusContext says ERROR where
+    a CheckRun says FAILURE and PENDING where it says IN_PROGRESS, and it
+    carries NO `status` key at all -- so a conclusion-only reader scores both
+    as clean.
+
+    Breaks if: the advisory split stops reading `(.context, .state)`. The
+    positive half of the pair is asserted first, so deleting the feature
+    outright cannot satisfy this."""
+    base = [_run(n, "SUCCESS") for n in REQUIRED]
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "SUCCESS"}], REQUIRED, True
+    )
+    assert ok, why
+    assert "1 clean of 1 advisory" in why
+
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "ERROR"}], REQUIRED, True
+    )
+    assert not ok
+    assert "external/build (ERROR)" in why
+
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "PENDING"}], REQUIRED, True
+    )
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+
+
+def test_negative_control_an_empty_rollup_is_not_a_clean_advisory_answer():
+    """A clean answer over an EMPTY population is the green-over-zero-items
+    shape (#4451: `pass=0 fail=4` printed "UAT-verified roll").
+
+    Breaks if: the guard is removed -- the split over `[]` is empty, carries no
+    red, and would otherwise report GO."""
+    ok, why = gates.advisory_verdict([], REQUIRED, True)
+    assert not ok
+    assert "measured NOTHING" in why
+
+
+def test_negative_control_the_policy_flag_off_takes_the_arm_out_of_service():
+    """`advisory_red_is_a_no_go` is the authority, and it is NOT a switch: this
+    gate implements no permissive mode, so false means "cannot answer", which
+    is NO-GO. A key that could turn a control OFF would be a skip valve.
+
+    Breaks if: the flag becomes an if/else around the blocking branch -- then
+    false would return ok=True over this all-green fixture."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [_adv("CodeQL", "SUCCESS")]
+    assert gates.advisory_verdict(checks, REQUIRED, True)[0]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, False)
+    assert not ok
+    assert "no such mode" in why
+
+
+def test_the_advisory_split_counts_the_whole_published_population():
+    """The counts are what let a reader tell "clean over 25" from "clean over
+    0" -- see the empty-rollup control above.
+
+    Breaks if: `total_checks` is derived from the advisory subset (it would
+    read 2, not 5) or `population` counts required contexts (it would read 5)."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("Checkov", "FAILURE"),
+    ]
+    split = gates.classify_advisory_checks(checks, REQUIRED)
+    assert split.total_checks == 5
+    assert split.population == 2
+    assert split.red == ["Checkov (FAILURE)"]
+    assert split.clean == ["CodeQL"]
+
+
+# ---------------------------------------------------------------------------
 # Gate 5 -- hollow check
 # ---------------------------------------------------------------------------
 

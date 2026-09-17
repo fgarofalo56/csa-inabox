@@ -475,8 +475,17 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G1 the StatusContext vocabulary is dropped from the INCOMPLETE test",
         "gates.py",
-        "        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:",
-        "        elif not verdict or status in INCOMPLETE_STATUSES:",
+        # ANCHORED TO THE REQUIRED PATH. `classify_advisory_checks` (#4543)
+        # reuses the same three-way split, so this line now appears TWICE in
+        # `gates.py` -- and `replace(old, new, 1)` takes the first, which would
+        # have silently pointed a required-path arm at the advisory one. The
+        # preceding RED branch is what distinguishes them; A5 is the advisory
+        # twin of this arm.
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:"),
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or status in INCOMPLETE_STATUSES:"),
     ),
     (
         "G2 a blocking near-miss stops being pinned to head (stale text blocks forever)",
@@ -525,6 +534,76 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "            elif mentions_token:",
         "            elif False:",
+    ),
+    # -- #4543: the ADVISORY population. Every arm here NARROWS the population
+    # back to something smaller than "every check the rollup published", which
+    # is the defect being fixed rather than an invented one: gates 4/4b/5 pass
+    # `required` and ~25 contexts per PR were invisible to the merge decision.
+    # A1 is the exact original; the rest are the neighbouring ways to get the
+    # same blindness, plus the two fail-open edges.
+    (
+        "A1 the advisory arm filters back DOWN to the required contexts (#4543 verbatim)",
+        "gates.py",
+        "        if name in required_names:\n            continue",
+        "        if name not in required_names:\n            continue",
+    ),
+    (
+        "A2 only the first check-run is scanned (the first-N narrowing)",
+        "gates.py",
+        "    for name, check in sorted(newest_by_name(checks).items()):",
+        "    for name, check in sorted(newest_by_name(checks[:1]).items()):",
+    ),
+    (
+        "A3 a duplicated context is keyed LAST-IN-LIST instead of by max start time",
+        "gates.py",
+        ("        newest = max(stamps)\n"
+         "        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) "
+         "if s == newest])"),
+        "        out[name] = runs[-1]",
+    ),
+    (
+        ("A4 an unreadable start time stops falling back to worst-wins, so an "
+         "undated red is discarded as superseded"),
+        "gates.py",
+        # BEHAVIOURAL, not a crash. Deleting the fallback outright would make
+        # `max(stamps)` compare None to None and die with a TypeError -- and a
+        # mutant killed by a TypeError proves only that the tests run Python
+        # (the note on G4 is about the same trap). This substitutes the OTHER
+        # plausible rule instead, so the arm is a wrong ANSWER rather than an
+        # exception.
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = _worst(runs)",
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = runs[-1]",
+    ),
+    (
+        "A5 an IN-PROGRESS advisory check reads as RED again (the cry-wolf defect)",
+        "gates.py",
+        ('            red.append(f"{name} ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:\n"
+         "            wait.append(name)"),
+        ('            red.append(f"{name} ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:\n"
+         '            red.append(f"{name} (in progress)")'),
+    ),
+    (
+        "A6 the empty-rollup guard falls OPEN, so a clean answer over zero checks is a pass",
+        "gates.py",
+        "    if not checks:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        "A7 the advisory arm stops blocking in the composed caller (report-only)",
+        "merge_gate.py",
+        "    ok, why = gates.advisory_verdict(",
+        "    ok = True\n    _, why = gates.advisory_verdict(",
+    ),
+    (
+        ("A8 the policy flag is read with a permissive default, so deleting the "
+         "authority's key leaves the gate silently on"),
+        "merge_gate.py",
+        'policy["merge_gate"]["advisory_red_is_a_no_go"]',
+        'policy["merge_gate"].get("advisory_red_is_a_no_go", True)',
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",

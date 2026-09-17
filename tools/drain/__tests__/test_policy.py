@@ -77,6 +77,7 @@ def test_the_gate_set_is_exactly_what_the_spec_names():
         "require_no_red",
         "require_no_incomplete",
         "require_no_skipped_required_context",
+        "advisory_red_is_a_no_go",
         "scan_closing_keywords_in",
         "closing_keyword_scan_blocks_an_undeclared_close",
         "audit_issue_numbers_around_every_merge",

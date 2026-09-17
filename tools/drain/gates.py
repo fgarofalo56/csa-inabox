@@ -19,6 +19,7 @@ spec and implemented nowhere, and five `policy.json` keys were read by nothing.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass, field
@@ -232,6 +233,7 @@ MERGE_GATE_IMPLEMENTED_BY = {
     "require_no_red": "gates.classify_checks (RED_CONCLUSIONS)",
     "require_no_incomplete": "gates.classify_checks (INCOMPLETE_STATUSES)",
     "require_no_skipped_required_context": "gates.required_measured_nothing",
+    "advisory_red_is_a_no_go": "gates.advisory_verdict",
     "scan_closing_keywords_in": "gates.merge_is_close_safe",
     "closing_keyword_scan_blocks_an_undeclared_close": "merge_gate.run_gates gate 6",
     "audit_issue_numbers_around_every_merge": "gates.issue_set_audit",
@@ -1398,6 +1400,266 @@ def _check_rank(check: dict) -> int:
     if verdict == "SKIPPED":
         return 2
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Gate 4c -- the ADVISORY population (#4543)
+# ---------------------------------------------------------------------------
+#
+# Gates 4, 4b and 5 all take `required` and FILTER THE POPULATION BEFORE ANY
+# PREDICATE RUNS. Only 15 of the ~35-40 contexts this repo publishes are
+# required, so ~25 checks per PR were invisible to the program that decides
+# every merge -- and an advisory RED and `VERDICT: GO` were perfectly
+# compatible. Measured on PR #4540, head `7dd2fa3e279`: forty check-runs,
+# exactly ONE red (`brain security graph -- committed artifact matches the
+# tree`, advisory), and the gate printed GO. The merge landed and `main` was
+# red afterwards.
+#
+# This capability EXISTED and was lost. `temp/merge-eligible.py` -- the tool
+# `merge_gate.py` replaced -- had the same blind spot, it was found (#4035) and
+# it was fixed there with exactly this three-way split. The promotion out of
+# `temp/` did not carry it. A gate checking a gate, inheriting its blindness.
+#
+# The population here is `statusCheckRollup`, which already carries every check
+# and needs no second API call. That matters for fail-closed behaviour: if the
+# rollup cannot be read, `collect` raises and nothing is scored -- a site that
+# is never evaluated, not a site that evaluates to GO.
+
+
+@dataclass(frozen=True)
+class AdvisorySplit:
+    """The three-way split, as names -- so a caller can PRINT which is which.
+
+    `red` carries `"name (CONCLUSION)"`; `wait` and `clean` carry bare names.
+    `population` counts the distinct advisory contexts considered and
+    `total_checks` every entry the rollup published, required included. Both
+    counts are reported rather than derived by the caller, because a clean
+    answer over an EMPTY population is the green-over-zero-items shape
+    (#4451) and the reader has to be able to tell the two apart.
+    """
+
+    red: list[str]
+    wait: list[str]
+    clean: list[str]
+    population: int
+    total_checks: int
+
+
+def _started_utc(check: dict) -> _dt.datetime | None:
+    """When this run STARTED, in UTC, or None when that cannot be established.
+
+    FOUR spellings, because the same fact arrives under different names:
+    GraphQL `statusCheckRollup` publishes `startedAt`, the REST check-runs API
+    publishes `started_at`, and a StatusContext has neither -- it carries
+    `createdAt` / `created_at`. A reader that knows one spelling silently
+    treats every other shape as timestamp-less.
+
+    Returns None, deliberately, for anything it cannot parse or that carries no
+    timezone. `newest_by_name` reads None as "fall back to worst-wins for this
+    whole name", which is the conservative branch: an unreadable timestamp must
+    never let a red run be discarded as superseded.
+    """
+    for key in ("startedAt", "started_at", "createdAt", "created_at"):
+        raw = check.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip()
+        # `fromisoformat` did not accept a trailing `Z` until 3.11, and this
+        # package declares >=3.10. Every GitHub timestamp ends in one.
+        if text[-1] in ("Z", "z"):
+            text = text[:-1] + "+00:00"
+        try:
+            when = _dt.datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if when.tzinfo is None:
+            return None
+        return when.astimezone(_dt.timezone.utc)
+    return None
+
+
+def _worst(runs: list[dict]) -> dict:
+    """The worst run in a group, first-wins on a tie (as `worst_by_name` is)."""
+    chosen = runs[0]
+    for run in runs[1:]:
+        if _check_rank(run) > _check_rank(chosen):
+            chosen = run
+    return chosen
+
+
+def newest_by_name(checks) -> dict[str, dict]:
+    """Context name -> its NEWEST run, by max start time. Not last-in-list.
+
+    A re-run publishes a SECOND check-run under the same name, and list order
+    is the API's, not time's. Taking the last entry is wrong in both
+    directions: a stale red can outrank the green re-run that fixed it, and a
+    stale green can bury a red one. Neither error is visible from the answer.
+
+    Deliberately DIFFERENT from `worst_by_name`, which the required path uses.
+    There, worst-wins is right: a required context that concluded SKIPPED must
+    not hide behind a green twin, and a required gate is allowed to be
+    pessimistic. Here the question is "what does this advisory check say NOW",
+    and a fixed check that still blocks is a gate that strands the drain.
+
+    Two ways this falls back to worst-wins, both fail-closed:
+      * any run in the group has no readable start time -- then the group's
+        order is unknown and the pessimistic answer is the only honest one;
+      * two or more runs TIE at the maximum start time (matrix legs fire
+        together) -- then "newest" does not pick one and the worst of the tied
+        set is taken.
+    """
+    groups: dict[str, list[dict]] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        groups.setdefault(name, []).append(check)
+
+    out: dict[str, dict] = {}
+    for name, runs in groups.items():
+        stamps = [_started_utc(run) for run in runs]
+        if any(stamp is None for stamp in stamps):
+            out[name] = _worst(runs)
+            continue
+        newest = max(stamps)
+        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) if s == newest])
+    return out
+
+
+def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
+    """Split every NON-required context three ways: ADV-RED / ADV-WAIT / clean.
+
+    The same three-way split the required path uses, over the population the
+    required path throws away. Both rollup shapes are read via `_outcome`:
+    a StatusContext says ERROR/PENDING where a CheckRun says FAILURE/
+    IN_PROGRESS and has no `status` key at all, so a conclusion-only reader is
+    blind to every context published by the other shape.
+
+    IN-PROGRESS IS NOT RED. That is the recorded mistake from the first time
+    this was built, for `merge-eligible.py`: classifying `in_progress` as red
+    cries wolf on every PR with CI still running, and a control that fires on
+    everything teaches its reader to skim it. The same goes for `queued` and
+    for a StatusContext's `PENDING` -- `INCOMPLETE_STATUSES` is the whole
+    vocabulary of "has not said anything yet", and all of it routes to `wait`.
+
+    SKIPPED IS NOT RED EITHER, on this side. For a REQUIRED context a SKIPPED
+    run is a gate that measured nothing (gate 5), but advisory checks skip
+    routinely and legitimately on path filters -- `Bicep Lint` and `Workflow
+    lane states` were both SKIPPED on the fixture head, on a PR that touched
+    neither. Counting those would make the arm red on essentially every PR.
+    """
+    required_names = set(required)
+    red: list[str] = []
+    wait: list[str] = []
+    clean: list[str] = []
+    for name, check in sorted(newest_by_name(checks).items()):
+        if name in required_names:
+            continue
+        verdict, status = _outcome(check)
+        if verdict in RED_CONCLUSIONS:
+            red.append(f"{name} ({verdict})")
+        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
+            wait.append(name)
+        else:
+            clean.append(name)
+    return AdvisorySplit(
+        red=red,
+        wait=wait,
+        clean=clean,
+        population=len(red) + len(wait) + len(clean),
+        total_checks=len(checks),
+    )
+
+
+def advisory_verdict(
+    checks: list[dict], required: list[str], policy_says_no_go: bool
+) -> tuple[bool, str]:
+    """Gate 4c: an advisory RED is a NO-GO. Returns (ok, one legible line).
+
+    BLOCK, not report -- decided on a measurement rather than on taste, and the
+    measurement was taken WITH THIS FUNCTION rather than with a restatement of
+    it. Across 22 PR heads on 2026-09-17 (the 10 then-open PRs plus the 12 most
+    recently merged), TWO would go NO-GO here:
+
+        #4540  brain security graph -- committed artifact matches the tree
+               (FAILURE)  <- the fixture; this is the head that shipped a red
+               main under a VERDICT: GO
+        #4492  in-VNet runner capability probe (CANCELLED)
+               the runner PAT is not reachable from job code (CANCELLED)
+
+    So 2 of 22, ~9%: not "every PR", and blocking does not strand the drain.
+    An earlier draft of this docstring said ONE of 22 -- that number came from
+    remembering the merged half of the population and not re-reading the open
+    half, which is the partial-read-then-confident-claim shape this repo keeps
+    recording. It is corrected here rather than quietly dropped, because the
+    block-vs-report decision rests on it.
+
+    #4492's pair is not a false positive to be carved out: a CANCELLED run
+    measured nothing, neither was re-run, and that PR genuinely should not
+    merge until they are. The remedy is a re-run, which is already in
+    `permitted_unattended`.
+
+    WHAT THIS GATE CANNOT SEE, stated here rather than left to be discovered.
+    The population is the checks attached to the HEAD BEING MEASURED. A lane
+    that never runs on a pull request publishes no check-run at a PR head and
+    is therefore invisible to this arm -- by construction, not by omission.
+    The named instance is #4547: `build-fiab-images-acr-tasks.yml` triggers on
+    `workflow_dispatch` and `workflow_call` ONLY, so its two Trivy CRITICAL
+    failures do not reach here (re-measured by the operator across three PR
+    heads `51e1736b9a3` / `312765933bb` / `b3b23aafdea`: 0, 0, 0 ACR checks
+    present). Two consequences, both deliberate: the known-flaky objection to
+    blocking does not apply and NO allowlist, exemption or carve-out is built
+    for it -- a guard-weakening mechanism is a defect in its own right here;
+    and this gate must not be read as saying anything about main-only or
+    scheduled lanes. A red there is a P0 under `deploy-integrity.md` R1 and
+    needs a different instrument.
+
+    ADV-WAIT does NOT block, and is named in the GO line rather than left as a
+    footnote. Blocking on it would mean waiting for every advisory check on
+    every PR, including the 30-minute ones, and an in-progress or queued check
+    has not said anything yet. The residual risk is stated in the line itself:
+    a check still running can still turn red after this answer.
+
+    `policy_says_no_go` is `policy.json`'s `merge_gate.advisory_red_is_a_no_go`,
+    read by the caller and passed here. It is NOT a switch: setting it false
+    does not relax the arm, it makes the arm refuse to answer, because this
+    gate implements no permissive mode. A key that could turn a control off
+    would be a skip valve; a key that can only take the control out of service
+    is the authority being consulted.
+    """
+    if not policy_says_no_go:
+        return False, (
+            "policy.json declares merge_gate.advisory_red_is_a_no_go=false and this "
+            "gate implements no such mode - it cannot answer, which is NO-GO, not a "
+            "pass. Restore the key to true."
+        )
+    if not checks:
+        return False, (
+            "the rollup published NO checks at all, so this arm measured NOTHING - "
+            "a clean advisory answer over an empty population is the "
+            "green-over-zero-items shape (#4451), not a pass. See gate 4b for which "
+            "of never-created / parked this is."
+        )
+    split = classify_advisory_checks(checks, required)
+    waiting = (
+        f" ADV-WAIT {len(split.wait)} still running ({', '.join(split.wait)}) - NOT "
+        "counted as red, and a check still running can still turn red after this line."
+        if split.wait else ""
+    )
+    if split.red:
+        return False, (
+            f"ADV-RED {len(split.red)}: {'; '.join(split.red)}. These are NOT required "
+            "contexts, so branch protection will merge straight over them - which is "
+            "exactly how #4540 shipped a red main. Fix or re-run the check; do not "
+            f"merge past it. [{split.population} advisory of {split.total_checks} "
+            f"published; {len(split.clean)} clean]" + waiting
+        )
+    return True, (
+        f"no advisory context is red: {len(split.clean)} clean of {split.population} "
+        f"advisory ({split.total_checks} checks published in total). SCOPE: checks "
+        "ATTACHED TO THIS HEAD only - a main-only or scheduled lane (the ACR image "
+        "builds, #4547) publishes nothing at a PR head and is not covered here." + waiting
+    )
 
 
 def required_measured_nothing(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
