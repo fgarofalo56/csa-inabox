@@ -144,6 +144,48 @@ chmod "$DIR_MODE" "$NEW_DIR"
 #    command and breaks the boot.
 # ---------------------------------------------------------------------------
 TOUCHED=0
+# #4471, sibling audit -- a DELIBERATE exception, recorded here rather than left
+# to look like an oversight, and scoped precisely because a reviewer showed the
+# first version of this note was true of less than it implied.
+#
+# THREE sites in this file collapse a status, not one:
+#   * this `$(find ...)`, which discards find's status and word-splits on spaces;
+#   * `:190` `rmdir "$(dirname "$OLD_JAR")" 2>/dev/null || true`, a cleanup whose
+#     failure is deliberately ignored -- it removes a directory only if it is
+#     already empty, and authorises nothing;
+#   * `:204` `LEFT="$(find ... | wc -l | tr -d ' ')"`, whose status belongs to
+#     `tr`, so a dead walk yields 0 and the absence claim passes falsely.
+#
+# What the exception DOES cover: the REPOINT claim. A walk that misses the server
+# classpath leaves it un-repointed, and the two `grep -q` assertions against the
+# NAMED $SERVER_CP below abort under `set -eu`; :208-211 then re-checks every
+# server-classpath entry. That claim fails closed without needing find's status.
+#
+# What it does NOT cover, stated plainly: `:204`'s "no old jar survives anywhere
+# under $UC_HOME" is a genuine collapsed absence claim with no paired control,
+# the same shape deferred to #4538 for fiab-mirroring-engine.
+#
+# Two corrections to an earlier draft of this note, both from review:
+#
+#   * It said "not a reachable CVE, because java -cp names its jars explicitly".
+#     That is right about the RUNTIME and wrong about the GATE. Trivy scans image
+#     LAYERS, not the classpath, so a surviving old jar is still a reported
+#     CRITICAL. The deferral stands because it fails LOUDLY at the SC1 gate --
+#     not because the jar is unreachable.
+#
+#   * The construction here is `[ ... ] || { ...; exit 1; }`, NOT an `if`
+#     condition, and that distinction is load-bearing. Measured:
+#       if [ "" -ne 5 ]; then FATAL; fi        -> FATAL SKIPPED, execution continues
+#       [ "" -eq 0 ] || { FATAL; exit 3; }     -> FATAL TAKEN, aborts
+#     So a failed MEASUREMENT here fails CLOSED (with a message naming an empty
+#     count, which is false but loud). Only the PARTIAL-WALK mode fails open: a
+#     find that enumerates some directories and not the one holding a stale jar
+#     yields a truthful-looking 0. That is the residual hole, and it is narrower
+#     than the round-2 defect in sc1-prune-cache.sh was.
+#
+# And the condition below is a NOTE, not a mechanism: nothing enforces that the
+# assertions keep naming $SERVER_CP. If they stop, this exception silently stops
+# being true. Revisit it then.
 for CP_FILE in $(find "$UC_HOME" -type f -name classpath); do
   if grep -q "netty-handler-${OLD_VERSION}.jar" "$CP_FILE"; then
     sed "s|${OLD_JAR}|${NEW_JAR}|g" "$CP_FILE" > "${WORK}/cp.new"
