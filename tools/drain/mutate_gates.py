@@ -323,6 +323,25 @@ ARMS: list[tuple[str, str, str, str]] = [
     # side), GH4 narrows it to nothing, and GH9 swaps the ORDER of the two
     # writes -- which is the mutation that reproduces the original defect
     # exactly, because a ledger-first pair whose second half fails IS #4545.
+    #
+    # ONE MUTANT IN THIS AREA IS NOT IN THIS LIST, and the next person reading
+    # `killed=N of N` needs to know before they trust it. A reviewer moved
+    # `if item.state in TERMINAL: raise` from above the evidence branches to
+    # BELOW the GitHub close -- the terminal refusal firing too late, so a
+    # second `--record-receipt` on an already-closed item reaches GitHub. That
+    # is a DELETE-HERE / INSERT-THERE edit, and the `(name, file, old, new)`
+    # shape cannot express it without an anchor that swallows the whole
+    # function body. Generalising the arm form inside a P0 pre-flight fix is
+    # the worse trade, so it was not generalised.
+    #
+    # What pins it instead: `test_an_already_terminal_item_is_not_re_receipted`
+    # asserts on the READ COUNT -- 2 `gh issue view` at head, 3 under that
+    # mutant, the numbers in the assertion message -- because the CLOSE count
+    # cannot see it (a closer meeting an already-closed issue short-circuits
+    # and issues no close). It was proven RED against the mutant ONCE, BY HAND,
+    # in a sandbox copy, by two people independently. That is a test with a
+    # named discriminator, not a standing arm, and this matrix's totals must
+    # not be read as claiming otherwise.
     (
         "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
         "tick.py",
@@ -394,10 +413,10 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`RECEIPT NOT RECORDED` -- the words for 'nothing happened', over a "
          "world where the issue IS closed on GitHub (R7, inside the R7 fix)"),
         "tick.py",
-        ('            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: {exc}\\n"\n'
-         '                  f"  The GitHub write LANDED ({summary}); only the ledger write was "'),
-        ('            print(f"RECEIPT NOT RECORDED: {exc}\\n"\n'
-         '                  f"  ({summary}); only the ledger write was "'),
+        ('            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
+        ('            print(f"RECEIPT NOT RECORDED: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
     ),
     (
         ("GH11 a ledger failure AFTER the close stops being wrapped, so it "
@@ -406,6 +425,23 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    except Exception as exc:\n        raise LedgerWriteAfterCloseError(",
         "    except SystemExit as exc:\n        raise LedgerWriteAfterCloseError(",
+    ),
+    (
+        ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
+         "failure after a landed close -- os.replace raising PermissionError -- "
+         "escapes main() UNCAUGHT with an EMPTY stderr while the issue is "
+         "closed upstream: #4545 with extra steps, inside the fix for it"),
+        "tick.py",
+        "        except Exception as exc:  # the WIDTH is the point, see below",
+        "        except LedgerChangedError as exc:",
+    ),
+    (
+        ("GH13 the close-failure headline goes back to claiming the close DID "
+         "NOT COMPLETE, which is false when rc=0 and only the read-back failed "
+         "-- the close landed and the tool cannot say so"),
+        "tick.py",
+        'f"GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+        'f"GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (

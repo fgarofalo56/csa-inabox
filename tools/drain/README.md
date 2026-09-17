@@ -148,8 +148,8 @@ messages, because the operator's next action differs:
 | what failed | what it prints | the world |
 |---|---|---|
 | anything before the close | `RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER` | both records untouched |
-| the close itself | `GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says — it does **not** claim the issue is still open, because one route here is a read-back that could not be read |
-| the ledger write, after the close landed | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM` | issue closed, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
+| the close itself | `GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says. It claims neither direction: a read-back that 502s means the close **landed** and cannot be observed, and `gh issue close` also posts the comment, so even a non-zero exit does not establish that nothing happened |
+| the ledger write, after the close | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`, with the exception TYPE | issue settled upstream, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
 
 The third is not hypothetical: a lost CAS against another lane is the realistic
 failure, because the drain runs four. It used to print `RECEIPT NOT RECORDED` —
@@ -158,7 +158,18 @@ used to print `RECEIPT REFUSED`, the wording for "your evidence was rejected".
 Both were false in the half that matters, which is the R7 defect inside the R7
 fix. Everything after the close is now wrapped in `LedgerWriteAfterCloseError`,
 which is also what makes "nothing was written" true in the first row: a bare
-refusal can only escape from *before* the close.
+refusal can only escape from *before* the close. That claim covers the call and
+**not** `main()`'s save step, which is why the save arm is bound to `Exception`
+and not to `LedgerChangedError`: with the narrow bound, `os.replace` raising
+`PermissionError` escaped `main()` uncaught with an **empty stderr** while the
+issue was closed upstream — the silent failure this whole split exists to
+prevent, one layer down. The width is safe to claim because the save is a temp
+file plus an `os.replace`: either the replace happened and nothing after it can
+raise, or the file is untouched.
+
+The third row says "settled", not "the GitHub write LANDED", because the closer
+may have found the issue **already closed** and left it alone. The note it
+quotes says which.
 
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained

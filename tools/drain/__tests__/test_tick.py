@@ -25,6 +25,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import ledger as ledger_module
 import tick
 from ledger import (
     AUDIT_DEPARTED,
@@ -949,7 +950,7 @@ class _GhSpy:
     """
 
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
-                 on_close=None, raises=None):
+                 on_close=None, raises=None, view_fails_after_close=False):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -957,6 +958,9 @@ class _GhSpy:
         self.takes_effect = takes_effect
         self.on_close = on_close
         self.raises = raises
+        #: The 502 shape: the close LANDS and the verification read cannot be
+        #: made. rc=0 from `gh issue close` plus an unreadable state.
+        self.view_fails_after_close = view_fails_after_close
         self.calls: list[list[str]] = []
 
     def __call__(self, args):
@@ -964,6 +968,8 @@ class _GhSpy:
         if self.raises is not None:
             raise self.raises
         if args[:3] == ["gh", "issue", "view"]:
+            if self.view_fails_after_close and self.closed:
+                return 1, "", "HTTP 502: Bad gateway"
             return 0, json.dumps({"state": self.states.get(args[3], self.state)}), ""
         if args[:3] == ["gh", "issue", "close"]:
             if self.on_close is not None:
@@ -1552,6 +1558,90 @@ def test_a_refusal_before_the_close_still_says_nothing_was_written(tmp_path, mon
     assert "RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER" in err
     assert "CLOSED UPSTREAM" not in err
     assert spy.calls == [], "a refused receipt must not have reached GitHub at all"
+
+
+def test_blocker_a_non_cas_save_failure_after_a_landed_close_is_not_silent(
+    tmp_path, monkeypatch, capsys
+):
+    """A SILENT FAILURE INSIDE THE FIX FOR SILENT FAILURES, found by a reviewer.
+
+    The save arm used to catch `LedgerChangedError` only. With `os.replace`
+    raising `PermissionError` -- an antivirus scan, a locked file, a full disk
+    -- the exception escaped `main()` UNCAUGHT, **stderr was empty**, and the
+    issue was closed upstream. That is #4545 with extra steps: the two records
+    disagree and nothing says so.
+
+    The value that makes this fail is the narrow bound: with
+    `except LedgerChangedError`, `PermissionError` propagates and this test
+    ERRORS instead of reading rc=1 (arm GH12). It also fails if the message
+    stops naming the exception TYPE -- a lost CAS and a filesystem failure are
+    different diagnoses and this code cannot tell the reader apart otherwise.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(722, "a console surface", "W5-console", lane="lane:console", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    spy = _gh(monkeypatch)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "722", "--from-run", "1"])
+
+    def no_replace(*_a, **_k):
+        raise PermissionError(13, "The process cannot access the file")
+
+    # THE REAL SAVE PATH RUNS; only the last syscall fails. Patching `save`
+    # itself would test the except clause against a stub rather than against
+    # the failure the reviewer measured.
+    monkeypatch.setattr(ledger_module.os, "replace", no_replace)
+
+    assert tick.main() == 1
+    err = capsys.readouterr().err
+    assert spy.closed == ["722"], "the close must have LANDED for this to be the case under test"
+    assert err.strip(), "the failure was SILENT - stderr was empty while the issue was closed"
+    assert "THE ISSUE IS CLOSED UPSTREAM" in err
+    assert "PermissionError" in err, "a lost CAS and a filesystem failure are different diagnoses"
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[722].state == READY, "the ledger must be the one that did not move"
+
+
+def test_blocker_an_unreadable_verification_is_not_confirmed_not_did_not_complete(
+    tmp_path, monkeypatch, capsys
+):
+    """R7 IN THE HEADLINE, the mirror of the care already taken in the body.
+
+    `gh issue close` returns 0 and the read-back hits a 502: the close LANDED
+    and this tool cannot say so. A headline reading "DID NOT COMPLETE" is as
+    false as the "still open" claim the body is careful not to make -- it just
+    fails in the other direction.
+
+    The value that makes this fail is the word: `DID NOT COMPLETE` in the
+    headline (arm GH13). The body's own honesty is asserted alongside it --
+    "does not know" must still be there, so the fix cannot be a swap of one
+    false claim for another.
+    """
+    seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    seed.upsert(723, "a console surface", "W5-console", lane="lane:console", size=1)
+    seed.save()
+    state = str(tmp_path / "state.json")
+
+    spy = _gh(monkeypatch, view_fails_after_close=True)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    monkeypatch.setattr(tick, "STATE_PATH", state)
+    monkeypatch.setattr(sys, "argv", ["tick.py", "--record-receipt", "723", "--from-run", "1"])
+
+    assert tick.main() == 1
+    err = capsys.readouterr().err
+    assert spy.closed == ["723"], "the close must have LANDED for this to be the case under test"
+    assert "GITHUB CLOSE NOT CONFIRMED" in err
+    assert "DID NOT COMPLETE" not in err, (
+        "the close landed; saying it did not complete is a false claim in the "
+        "opposite direction from 'still open'"
+    )
+    assert "does not know whether the issue is open" in err
+    final = Ledger(state, receipts=POLICY["receipts"]).load()
+    assert final.items[723].state == READY
+    assert final.items[723].receipt_kind is None
 
 
 def test_blocker_a_park_is_never_closed_on_github(monkeypatch):
