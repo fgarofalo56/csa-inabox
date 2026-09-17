@@ -13,16 +13,34 @@ on:
       - 'deploy/**/*.json'
       - '*.bicep'
       # #4466. The three entries above reach 'deploy/**' and the repo ROOT only.
-      # Measured on this tree: `git ls-files '*.bicep'` -> 357 files, of which
-      # 198 live under platform/fiab/bicep/ and matched NONE of them, and
-      # `git ls-files '*.bicepparam'` -> 17 files, of which 7 are
-      # platform/fiab/bicep/params/*.bicepparam and again matched none. So a
-      # push to main touching only those paths never started this workflow at
-      # all. Both globs are widened together deliberately: adding the
-      # .bicepparam arm alone would have left the .bicep arm short by the same
-      # 198 files, which is the one-side-of-a-symmetry shape this repo keeps
-      # shipping. `pull_request:` below carries no `paths:`, so the PR path was
-      # never affected — this only closes the push-to-main arm.
+      # MEASURED THREE WAYS at 0348d3715e6 — and CORRECTED in review: an earlier
+      # revision of this comment said "198 .bicep files under
+      # platform/fiab/bicep/", which is the count of ALL TRACKED FILES in that
+      # directory, not of .bicep files. Quoting a number under the wrong scope
+      # line is the exact error assertion-design.md memorialises, so here is the
+      # full set, each with the query that produces it:
+      #   357  git ls-files -- '*.bicep'                                (repo-wide)
+      #   185  git ls-files -- 'platform/fiab/bicep/**/*.bicep' + the dir's own
+      #   198  git ls-files -- 'platform/fiab/bicep/'                   (ALL files)
+      #   223  .bicep matching NONE of the three globs above  <- the real gap
+      #    17  git ls-files -- '*.bicepparam', of which 17 also matched none
+      # So a push to main touching only those paths never started this workflow
+      # at all, and the .bicep arm was short by 223, not by 198 — the original
+      # argument was understated, not overstated. Both globs are widened
+      # together deliberately: adding the .bicepparam arm alone would have left
+      # the .bicep arm short by all 223, which is the one-side-of-a-symmetry
+      # shape this repo keeps shipping. `pull_request:` below carries no
+      # `paths:`, so the PR path was never affected — this only closes the
+      # push-to-main arm.
+      #
+      # SIDE EFFECT, NAMED. validate.yml publishes 4 of the 15 required contexts
+      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene), and the drain
+      # harness excuses exactly those on a merged sha BECAUSE this push trigger
+      # was path-filtered (tools/drain/gates.py, policy.json `push_event_runs`).
+      # Widening it means a merge touching any .bicep/.bicepparam now really
+      # runs those four instead of being excused. That is the good direction —
+      # fewer excuses, more measurement — but it is a change to a receipt's
+      # accounting and is recorded here rather than discovered later.
       - '**/*.bicep'
       - '**/*.bicepparam'
       - '.github/workflows/**'
@@ -216,17 +234,39 @@ jobs:
   #
   # NO PATHS FILTER, DELIBERATELY. #4466 asks for a filter that includes
   # '**/*.bicepparam' so a param-only PR cannot skip the step. This job goes
-  # further: it carries no `needs: changes` and no `if:`, so NO PR can skip it,
-  # and a `skipped` (green-looking) result is unreachable. That costs ~1 minute
-  # and removes the hollow-check shape entirely. `check-bicepparam-compiled.mjs`
-  # enforces that it stays unconditional.
+  # further: it carries no `needs:` and no `if:` at job OR step level, so no
+  # PR-triggered run of this workflow can skip it.
+  #
+  # THAT IS NOT THE SAME AS "NO PR CAN SKIP IT", and an earlier revision of this
+  # comment claimed exactly that. Two measured escapes were demonstrated in
+  # review against the previous revision — an `if:` on a STEP (eight-space
+  # indent, which the guard's job-level probe never saw) and a `paths:` filter
+  # added under `pull_request:` (which stops the whole workflow, this job
+  # included). Both are now rules in check-bicepparam-compiled.mjs (R3 rejects
+  # any `if:`/`needs:` anywhere in this job; R6 glob-tests `pull_request:`'s
+  # `paths:` as well as `push:`'s), so the claim above is enforced rather than
+  # asserted. What remains outside any guard's reach is a change to branch
+  # protection or to the workflow's `on:` verbs themselves.
+  #
+  # NOT A REQUIRED CONTEXT — STATED PLAINLY. `Bicep Params Compile` is NOT one
+  # of main's 15 required status checks (`gh api
+  # repos/fgarofalo56/csa-inabox/branches/main/protection --jq
+  # '.required_status_checks.contexts[]'` lists none), and ruleset 15128883
+  # carries no required_status_checks rule. So a RED compile here does not block
+  # a merge today: what blocks is `guardrails`, which checks this job's SHAPE,
+  # never the compile's RESULT. #4466's premise — "il5.bicepparam is parsed by
+  # no CI step" — is closed; the stronger claim "a broken il5.bicepparam can no
+  # longer reach main" is NOT, and will not be until an operator adds this
+  # context to branch protection. (`Bicep Lint` is non-required too, so this is
+  # pre-existing practice rather than a regression.) Changing branch protection
+  # is deliberately not done from here.
   #
   # POPULATION: every tracked `*.bicepparam`, repo-wide — 17 files, not just the
   # 7 under platform/fiab/bicep/params/. All 17 compile clean today (measured
-  # with `az bicep build-params` CLI 0.45.15 before this job was written), so
-  # there is no exclusion list and none is needed. Adding one would be a
-  # weakening: `check-bicepparam-compiled.mjs` fails if a `grep -v` here drops
-  # any tracked param file.
+  # with `az bicep build-params` CLI 0.45.15 before this job was written, and
+  # again on the runner with 0.47.16), so there is no exclusion list and none is
+  # needed. The reconciliation at the end of the compile step is what makes that
+  # a measured claim rather than a stated one.
   # -------------------------------------------------------------------------
   bicep-params:
     name: Bicep Params Compile
@@ -339,15 +379,28 @@ jobs:
           set -uo pipefail
           # `git ls-files` for the same reasons the .bicep job gives: tracked
           # files only, deterministic, cannot wander into node_modules. NO
-          # exclusion filter — every tracked param file compiles clean today and
-          # check-bicepparam-compiled.mjs fails if one is ever excluded here.
-          git ls-files '*.bicepparam' > /tmp/bicepparam-files.txt
+          # exclusion filter — every tracked param file compiles clean today.
+          #
+          # `:(icase)` pathspec magic, not a bare `*.bicepparam`: a file
+          # committed as `x.BICEPPARAM` is invisible to the case-sensitive
+          # pathspec on a Linux runner, and would be compiled by nothing while
+          # every count in this step still read clean. Measured: `git ls-files
+          # -- ':(icase)*.BICEPPARAM'` returns the same 17 lowercase files, so
+          # the magic is honoured here and the widening is real. The guard's
+          # own population oracle uses the SAME pathspec, deliberately — see the
+          # disclosure in check-bicepparam-compiled.mjs about a corpus neither
+          # lens can see (a `.bicep-param` spelling, say) being invisible to
+          # both by construction.
+          git ls-files -- ':(icase)*.bicepparam' > /tmp/bicepparam-files.txt
           COUNT=$(wc -l < /tmp/bicepparam-files.txt)
           # FAIL CLOSED on an empty population. A renamed directory or a changed
           # extension would otherwise make this step exit 0 having compiled
           # nothing, which is the exact defect #4466 is about wearing a green
           # tick. Same fail-closed shape as check-postgres-quota-gate.mjs's
-          # zero-corpus check.
+          # zero-corpus check. (This arm is now belt-and-braces: the
+          # reconciliation at the end of the step also reds an empty run,
+          # because 0 produced never equals a non-zero tracked count. It stays
+          # because it fails EARLY, with the specific reason.)
           if [ "$COUNT" -eq 0 ]; then
             echo "::error::git ls-files matched ZERO .bicepparam files — the corpus drifted. Nothing was compiled, so no verdict is reported."
             exit 1
@@ -357,12 +410,16 @@ jobs:
 
           # Exported for the same reason the .bicep job exports it: the `sh -c`
           # workers are separate processes and inherit only the environment.
-          export FAIL_DIR OUT_DIR
+          export FAIL_DIR OUT_DIR ATTEMPT_DIR
           FAIL_DIR=$(mktemp -d)
           # --outfile, never --stdout: --stdout crashes on the Unicode these
           # param files carry. Output goes OUTSIDE the checkout so the run
           # cannot litter the tree with sibling .json artifacts.
           OUT_DIR=$(mktemp -d)
+          # One marker per file the compiler was actually INVOKED on. This is
+          # what the reconciliation below counts, and it is deliberately not
+          # derived from /tmp/bicepparam-files.txt.
+          ATTEMPT_DIR=$(mktemp -d)
 
           # The `sh -c '…'` body is single-quoted ON PURPOSE: it must be
           # expanded by the WORKER, not by this shell, so that `$1` is the
@@ -376,20 +433,59 @@ jobs:
           xargs -d '\n' -P "$(nproc)" -n1 sh -c '
             f="$1"
             flat=$(printf "%s" "$f" | tr "/" "_")
+            touch "$ATTEMPT_DIR/$flat"
             if ! out=$(bicep build-params "$f" --outfile "$OUT_DIR/$flat.json" 2>&1); then
               printf "%s\n" "$out"
               printf "::error file=%s::bicep build-params failed\n" "$f"
+              touch "$FAIL_DIR/$flat"
+            elif [ ! -s "$OUT_DIR/$flat.json" ]; then
+              printf "::error file=%s::bicep build-params exited 0 but wrote no ARM JSON - nothing was actually compiled for this file\n" "$f"
               touch "$FAIL_DIR/$flat"
             fi
           ' _ < /tmp/bicepparam-files.txt
 
           FAILED=$(find "$FAIL_DIR" -type f | wc -l)
-          rm -rf "$FAIL_DIR" "$OUT_DIR"
+
+          # ── POPULATION RECONCILIATION (#4466, review round 2) ──────────────
+          #
+          # WHAT THIS IS FOR. Everything above this line judges the RESULT of
+          # whatever list reached xargs. Nothing judged the LIST. Seven one-line
+          # narrowings were demonstrated against the previous revision — a
+          # `head -n 1`, a positive `grep -E` keeping only the 7 fiab params, a
+          # SECOND `grep -v` after a harmless first one, `grep -vF` instead of
+          # `-vE`, a `sed -i '/params.il5/d'`, a truncated list with COUNT
+          # forced to 1, and replacing the real invocation with an `echo` — and
+          # every one left this step GREEN while it printed a count it had never
+          # established (deploy-integrity.md R7). That is the very shape #4466
+          # is about: the ISSUE was a POPULATION defect, not a check defect, and
+          # the first cut of this gate reproduced it.
+          #
+          # SO COUNT WHAT HAPPENED, NOT WHAT WAS ASKED FOR. `$ATTEMPT_DIR` holds
+          # one marker per file the compiler was actually invoked on, written by
+          # the worker itself. `EXPECTED` re-derives the tracked set
+          # INDEPENDENTLY — it does not read /tmp/bicepparam-files.txt — so
+          # anything that narrowed, truncated or reordered that file shows up
+          # here. The `-s` arm in the worker covers the remaining case: an
+          # invocation that returns 0 without producing ARM JSON (replacing the
+          # compiler with an `echo`) is a FAILURE, not a pass.
+          #
+          # The two arms report SEPARATELY and in this order, because they mean
+          # different things and an error must not claim what it did not
+          # establish: "the compiler never saw 16 of your files" is a different
+          # defect from "16 of your files do not compile".
+          ATTEMPTED=$(find "$ATTEMPT_DIR" -type f | wc -l)
+          EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | wc -l)
+          PRODUCED=$(find "$OUT_DIR" -type f -name '*.json' | wc -l)
+          rm -rf "$FAIL_DIR" "$OUT_DIR" "$ATTEMPT_DIR"
+          if [ "$ATTEMPTED" -ne "$EXPECTED" ]; then
+            echo "::error::POPULATION NARROWED — bicep build-params was invoked on $ATTEMPTED file(s) but $EXPECTED .bicepparam file(s) are tracked. Every tracked param file must reach the compiler. Look at the enumeration above for a filter, a truncation, or a pathspec that no longer matches; do NOT adjust this comparison to agree with the smaller number."
+            exit 1
+          fi
           if [ "$FAILED" -gt 0 ]; then
             echo "::error::$FAILED Bicep param file(s) failed to compile"
             exit 1
           fi
-          echo "All $COUNT Bicep param files compiled clean."
+          echo "All $COUNT Bicep param files compiled clean — $ATTEMPTED invocation(s) and $PRODUCED ARM JSON output(s) reconciled against $EXPECTED tracked file(s)."
 
   # -------------------------------------------------------------------------
   # Secret Scanning
