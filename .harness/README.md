@@ -36,8 +36,8 @@ that edit is committed or discarded.
 
 ## If `/harness:harness-next` sent you here — do NOT run `/harness-init`
 
-`.claude/commands/harness/harness-next.md:38` reads `.harness/state.json` and,
-finding nothing, prints *"No state file (run /harness-init first)"*; `:44` opens
+`.claude/commands/harness/harness-next.md:40` reads `.harness/state.json` and,
+finding nothing, prints *"No state file (run /harness-init first)"*; `:48` opens
 the same path directly. Both paths moved into `archive/2026-08-08/` when this
 program was retired, so that instruction now points at a retired ledger.
 
