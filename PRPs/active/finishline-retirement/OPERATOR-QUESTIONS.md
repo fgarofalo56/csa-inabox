@@ -46,7 +46,8 @@ IP-restrict on Gov `loom-unity`."
 **Why obsolete.** It did not fail in the end.
 `gh run list --workflow gov-uc-purview-wire.yml` shows three failures on
 2026-08-11 followed by **`success` 2026-08-11T17:15Z**. The contingency never
-had to be chosen. Related: #2643 CLOSED, #2974 and #3002 MERGED.
+had to be chosen. Related issue states: #2643 is no longer open; #2974 and
+#3002 both merged.
 
 ### OP-10 · task `C8` · #2622 residual
 
@@ -66,11 +67,22 @@ dev host, no CI compiles that crate. Decide: **add a Rust CI lane, or park**.
 
 **Blocked.** #2671.
 
-**Why obsolete.** The premise died rather than the question being answered.
-#2671 is **CLOSED** and was re-titled *"security: 1 HIGH Dependabot alert —
-nanoid <3.3.17 (**thrift premise is dead**)"*. There is no thrift migration to
-build a Rust lane for. If a Rust CI lane is wanted for other reasons that is a
-new question, not this one.
+**Why obsolete.** **Both branches of the decision have been settled**, and by
+opposite means.
+
+The premise died: #2671 is **CLOSED** and was re-titled *"security: 1 HIGH
+Dependabot alert — nanoid <3.3.17 (**thrift premise is dead**)"*, so there is no
+thrift migration to build a lane for.
+
+And the alternative the question offered — *"add a Rust CI lane"* — **was built
+anyway**. `.github/workflows/loom-directlake-ci.yml` exists and is green:
+`cargo build --locked` across both feature sets plus `cargo test`, with the
+toolchain installed in-lane (`:74-80`); last runs `success` 2026-09-13 and
+2026-09-14. Its own header records the gap it filled — *"`grep -rl "cargo "
+.github/workflows` returned ZERO files"* — which is the condition OP-12
+described. So "no CI compiles that crate" is no longer true either.
+
+Nothing to decide on either horn.
 
 ### OP-17 · task `C18` · pin three MCR `:latest` refs
 

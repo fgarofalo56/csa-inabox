@@ -36,7 +36,8 @@ that edit is committed or discarded.
 
 ## Before reviving anything here
 
-Read `PRPs/active/finishline-retirement/README.md` first. Thirteen of the
-eighteen unmapped tasks in that ledger were re-measured at head and found
-already done; three are superseded by open issues. Re-running this program
-against the 2026-08-06 ledger would re-derive work that has shipped.
+Read `PRPs/active/finishline-retirement/README.md` first. Eleven of the eighteen
+unmapped tasks in that ledger were re-measured at head and found already done;
+three are superseded by open issues; two more are partly done with the remainder
+recorded at the site. Re-running this program against the 2026-08-06 ledger
+would re-derive work that has shipped.
