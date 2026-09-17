@@ -12,7 +12,20 @@
 # third-party HTTP client is contacted at build or run time.
 FROM python:3.11-slim
 
+# The leading `dist-upgrade` is the repo-standard SC1 hardening (same as
+# apps/fiab-mcp-bridge and apps/loom-transform-runner): it pulls the distro's
+# security patches AHEAD of the pinned base tag, which is how OS-layer CRITICALs
+# get cleared here without waiting for a base rebuild.
+#
+# It is NOT prophylactic here (#4547). `python:3.11-slim` resolves to debian
+# 13.6, whose `perl-base` 5.40.1-6 carries THREE CRITICALs that Trivy reports as
+# `fixed` in 5.40.1-6+deb13u1 — CVE-2026-13221, CVE-2026-42496, CVE-2026-8376.
+# Without this line the SC1 gate on the pushed image is RED (`Total: 3
+# (CRITICAL: 3)`), which it was on every build run 2026-09-15 → 2026-09-17.
+# `perl-base` is a base-layer package no instruction in this file installs, so
+# the only lever is the archive upgrade.
 RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
