@@ -1052,7 +1052,7 @@ def test_negative_control_a_rerun_in_flight_does_not_clear_its_own_red():
         ok, why = gates.advisory_verdict(checks, REQUIRED, True)
         assert not ok, f"a re-run in flight over a completed RED must block: {why}"
         assert "ADV-RERUN 1" in why
-        assert "the last CONCLUDED run at this head was FAILURE" in why
+        assert "the NEWEST CONCLUDED run at this head was FAILURE" in why
         assert "ADV-WAIT" not in why, "it must not ALSO be reported as merely waiting"
 
 
@@ -1061,12 +1061,133 @@ def test_a_rerun_in_flight_over_a_green_run_is_still_only_waiting():
     every in-flight check to it -- which would reinstate the cry-wolf defect
     ADV-WAIT exists to avoid.
 
-    Breaks if: the `rerun` bucket stops requiring an older RED -- this fixture
-    would then block on an ordinary re-run of a green check."""
+    Breaks if: the `rerun` bucket stops requiring a RED newest-concluded run --
+    this fixture would then block on an ordinary re-run of a green check."""
     checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
         _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T10:00:00Z"),
         _adv("Repo Hygiene", None, status="IN_PROGRESS", started="2026-09-17T12:00:00Z"),
     ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
+
+
+def test_negative_control_a_red_that_was_already_fixed_does_not_block_a_third_run():
+    """THE ROUND-3 BLOCKER, and it arrived IN the fix for the round-2 one.
+
+    The bucket asked "did ANY run of this name conclude RED", so a check that
+    went red, WAS FIXED, and is being re-run again held the merge -- the mirror
+    image of the hole the bucket was added to close. The newest CONCLUDED run
+    here is the SUCCESS at 11:00, so there is nothing outstanding to wait for.
+
+    Breaks if: the predicate goes back to any-red-in-the-group. The FAILURE is
+    deliberately still present and deliberately FIRST in the list, which is
+    exactly the input the old rule answered wrongly."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z"),
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T11:00:00Z"),
+        _adv("Repo Hygiene", None, status="IN_PROGRESS", started="2026-09-17T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, f"a red that was already fixed must not block a further re-run: {why}"
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
+
+
+def test_the_rerun_reason_names_the_newest_concluded_run_not_the_first_in_list():
+    """R7 ON THE GATE'S OWN MESSAGE: it must name a conclusion it established.
+
+    The first version reported `was_red[0]` -- whichever red sat first in the
+    list -- as "the last CONCLUDED run at this head". Measured by an
+    independent reviewer on these exact three runs: written in this order it
+    named CANCELLED, and REVERSED it named FAILURE. Same head, same runs, two
+    different claims, at most one of them true.
+
+    Breaks if: the selection goes back to list position. CANCELLED is older but
+    FIRST in the first ordering, so a first-in-list rule names it -- and the
+    assertion that CANCELLED is ABSENT is paired with the positive one naming
+    FAILURE, so deleting the sentence cannot satisfy this either."""
+    older = _adv("Repo Hygiene", "CANCELLED", started="2026-09-17T09:00:00Z")
+    newer = _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z")
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in ((older, newer, flight), (flight, newer, older)):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + list(order)
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, why
+        assert "the NEWEST CONCLUDED run at this head was FAILURE" in why
+        assert "CANCELLED" not in why, (
+            "naming the older CANCELLED run is the order-dependent claim this "
+            f"test exists for: {why}"
+        )
+
+
+def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_rerun():
+    """What ACTUALLY happens when a timestamp is unreadable, measured rather
+    than assumed -- and it is STRICTER than ADV-RERUN, not weaker.
+
+    Any unreadable stamp sends the WHOLE group to worst-wins, so the red
+    becomes the group's representative and lands in `red` directly. The
+    in-flight run never wins "newest", which means `_newest_concluded`'s own
+    undated fallback is NOT REACHABLE from this classifier today. That is
+    disclosed at its site and unit-tested directly below rather than counted as
+    covered here -- an un-killable path named, per assertion-design.md #5.
+
+    BOTH ORDERINGS, per the A10 lesson.
+
+    Breaks if: the whole-group fallback stops firing when one run is undated --
+    the SUCCESS-first ordering would then answer GO."""
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Repo Hygiene", order[0]),
+            _adv("Repo Hygiene", order[1]),
+            flight,
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+        assert "ADV-RED 1: Repo Hygiene (FAILURE)" in why
+
+
+def test_newest_concluded_falls_back_to_worst_wins_on_an_unreadable_timestamp():
+    """`_newest_concluded` DIRECTLY, because the branch above cannot reach this.
+
+    The function delegates its fallbacks to `_newest_from_groups`, and
+    delegation is a claim until a fixture shows it. Tested at the function
+    rather than through the classifier, and labelled as such: this is evidence
+    about the helper's contract, not about a path the gate takes today.
+
+    BOTH ORDERINGS -- with the red first, first-in-list and worst-by-rank give
+    the same answer, which is exactly how arm A10 survived a whole suite.
+
+    Breaks if: the concluded subset picks by list position when no timestamp is
+    readable -- the SUCCESS-first ordering would then return the SUCCESS."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        runs = [
+            {"name": "H", "conclusion": order[0], "status": "COMPLETED"},
+            {"name": "H", "conclusion": order[1], "status": "COMPLETED"},
+            {"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
+        ]
+        chosen = gates._newest_concluded(runs)
+        assert chosen is not None
+        assert chosen["conclusion"] == "FAILURE", f"order {order} picked {chosen}"
+
+
+def test_newest_concluded_is_none_when_nothing_has_concluded():
+    """The first-run-of-a-check case: every run is still in flight, so there is
+    no previous answer to carry. It must be ADV-WAIT, never ADV-RERUN.
+
+    Breaks if: an in-flight run is counted as concluded -- `_newest_concluded`
+    would return it, and `_outcome` of an IN_PROGRESS run is not in
+    RED_CONCLUSIONS, so the bug would be silent here and show up as a wrong
+    NAME somewhere else. The classifier assertion below is the one with teeth."""
+    runs = [{"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
+            {"name": "H", "conclusion": None, "status": "QUEUED"}]
+    assert gates._newest_concluded(runs) is None
+
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + runs
     ok, why = gates.advisory_verdict(checks, REQUIRED, True)
     assert ok, why
     assert "ADV-WAIT 1" in why
@@ -1102,6 +1223,33 @@ def test_negative_control_the_statuscontext_shape_is_read_on_the_advisory_side_t
     assert "ADV-WAIT 1" in why
 
 
+#: The name the ACR-lane tripwire watches. A constant so the FAILURE message
+#: can name it: a renamed workflow must say which file it went looking for.
+ACR_LANE = "build-fiab-images-acr-tasks.yml"
+
+
+def _repo_root():
+    """The FULL checkout this package lives in, or None when out of tree.
+
+    DELIBERATELY the same marker pair as `test_ci_green_declared._repo_root`
+    (`.github/workflows` AND `scripts/ci`), whose docstring explicitly forbids
+    counting `parents[N]`: the mutation runner copies this package to a temp
+    dir outside the repo, and from there a fixed three-level index resolves to
+    `C:/Users/<user>/AppData/Local` -- a real directory, silently wrong.
+
+    Returning None is the ONLY signal that means "out of tree". It is what
+    separates the declared sandbox skip from a missing file in a real
+    checkout, which is a FAILURE.
+    """
+    import pathlib
+
+    for candidate in pathlib.Path(__file__).resolve().parents:
+        if (candidate / ".github" / "workflows").is_dir() and (
+                candidate / "scripts" / "ci").is_dir():
+            return candidate
+    return None
+
+
 def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
     """THE DISCLOSURE IS THE TRIPWIRE, so it is read from the workflow rather
     than transcribed into prose.
@@ -1119,28 +1267,49 @@ def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
     `on:` is the YAML 1.1 boolean `True` -- a reader that only looks up the
     string key finds nothing in any real workflow).
 
-    Breaks if: a `pull_request` trigger is added to that lane, or `branches:`
-    is widened past `main`. Either would start attaching #4547's Trivy reds to
-    PR heads, where this gate WOULD block on them -- and the gate's own scope
-    sentence would silently become wrong again.
+    A MISSING WORKFLOW IS A FAILURE, NOT A SKIP. The first version of this test
+    keyed on the FILE's existence, so RENAMING the lane made it skip -- green,
+    blaming a mutation sandbox it was not in, and indistinguishable from the
+    declared sandbox skip with nothing auditing skips outside the sandbox. That
+    is the same class of defect this tripwire was built to close, arriving by a
+    different route: a control that goes quiet when its subject disappears.
+    The two states are now separated by `_repo_root()`, not by the file.
 
-    SKIPS in the mutation sandbox, which copies only `tools/drain` -- declared
-    in `mutate_gates.EXPECTED_SANDBOX_SKIPS`, because a test that skips there
+    Breaks if: a `pull_request` trigger is added to that lane, `branches:` is
+    widened past `main`, the push trigger is deleted, or the workflow is
+    renamed or removed. The first two would start attaching #4547's Trivy reds
+    to PR heads, where this gate WOULD block on them.
+
+    SKIPS only when `_repo_root()` is None -- i.e. genuinely out of tree, which
+    in practice means the mutation sandbox. Declared in
+    `mutate_gates.EXPECTED_SANDBOX_SKIPS`, because a test that skips there
     cannot kill an arm and must not be counted as if it could.
     """
-    here = os.path.dirname(os.path.abspath(__file__))
-    workflow = os.path.normpath(os.path.join(
-        here, "..", "..", "..", ".github", "workflows",
-        "build-fiab-images-acr-tasks.yml"))
-    if not os.path.exists(workflow):
-        pytest.skip("workflow tree not present (mutation sandbox copies only tools/drain)")
-    with open(workflow, encoding="utf-8") as handle:
-        text = handle.read()
+    root = _repo_root()
+    if root is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file "
+                    "(the mutation sandbox copies only tools/drain)")
+    workflow = root / ".github" / "workflows" / ACR_LANE
+    assert workflow.is_file(), (
+        f"{ACR_LANE} is not in {root / '.github' / 'workflows'} - the lane was "
+        "renamed or removed, so the invariant gate 4c's scope sentence rests on "
+        "CANNOT BE CHECKED. That is a failure, not a pass: re-point this test at "
+        "the new name and re-read its triggers before trusting the sentence in "
+        "gates.advisory_verdict."
+    )
+    text = workflow.read_text(encoding="utf-8")
 
     import yaml
 
     triggers = yaml.safe_load(text)
     triggers = triggers.get("on", triggers.get(True))
+    # EXACT KEY, and that is a KNOWN GAP, filed as #4558 rather than papered
+    # over: `pull_request_target` would pass this line. It is deliberately NOT
+    # widened here, because whether such a run attaches a check-run to the PR
+    # head in this repo has not been established -- and asserting on an
+    # unestablished premise is the same error the sentence below was just
+    # corrected for. Measured 2026-09-17: ZERO workflows in this repo use
+    # `pull_request_target`, so nothing can silently satisfy this today.
     assert "pull_request" not in triggers, (
         "the ACR image lane now runs on pull_request, so its Trivy CRITICAL "
         "failures (#4547) WILL attach to PR heads and gate 4c will block on "
@@ -1158,6 +1327,39 @@ def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
         f"push.branches is {push.branches}, not ('main',) - the branch filter IS "
         "the invariant the scope sentence rests on"
     )
+
+
+def test_the_acr_lane_tripwire_fails_loudly_when_its_subject_is_missing(monkeypatch, tmp_path):
+    """THE NEGATIVE CONTROL FOR THE TRIPWIRE ITSELF -- a skip and a failure must
+    not be the same observation.
+
+    Drives the REAL test function with `_repo_root` pointed at a directory that
+    exists and does not contain the lane, which is exactly what a RENAME looks
+    like. The assertion must RAISE. The message is not transcribed here: the
+    `match` is a fragment of the real one, and the real function is what runs.
+
+    Breaks if: the missing-file branch goes back to `pytest.skip` -- the
+    `raises` block would then see `Skipped`, not `AssertionError`, and fail.
+    Also breaks if `_repo_root()` stops being consulted at all."""
+    monkeypatch.setitem(globals(), "_repo_root", lambda: tmp_path)
+    with pytest.raises(AssertionError, match="CANNOT BE CHECKED"):
+        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds()
+
+
+def test_the_acr_lane_tripwire_skips_only_when_genuinely_out_of_tree(monkeypatch):
+    """The OTHER side of that boundary, so the failure above cannot be achieved
+    by making the test raise unconditionally.
+
+    `_repo_root()` returning None is the only thing that may buy a skip, and
+    that is the sandbox's signature.
+
+    Breaks if: out-of-tree stops skipping (the mutation matrix would then score
+    every arm KILLED on this test regardless of the mutation -- the tautology
+    `EXPECTED_SANDBOX_SKIPS` exists to prevent)."""
+    monkeypatch.setitem(globals(), "_repo_root", lambda: None)
+    with pytest.raises(pytest.skip.Exception):
+        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds()
+
 
 
 def test_negative_control_an_empty_rollup_is_not_a_clean_advisory_answer():

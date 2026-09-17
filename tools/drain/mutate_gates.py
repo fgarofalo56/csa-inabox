@@ -585,8 +585,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         # takes the first -- the G1 collision one function over.
         ("        if verdict in RED_CONCLUSIONS:\n"
          '            red.append(f"{name} ({verdict})")'),
-        ("        if verdict in RED_CONCLUSIONS or verdict in INCOMPLETE_STATUSES "
-         "or status in INCOMPLETE_STATUSES:\n"
+        ("        if verdict in RED_CONCLUSIONS or _is_incomplete(check):\n"
          '            red.append(f"{name} ({verdict})")'),
     ),
     (
@@ -612,7 +611,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("A9 a re-run in flight over a completed RED collapses back to ADV-WAIT, so "
          "the gate's OWN remedy clears the gate's own block before the re-run answers"),
         "gates.py",
-        "            if was_red:",
+        "            if last_verdict in RED_CONCLUSIONS:",
         "            if False:",
     ),
     (
@@ -622,6 +621,23 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "    chosen = runs[0]\n    for run in runs[1:]:",
         "    return runs[0]\n    for run in runs[1:]:",
+    ),
+    (
+        ("A11 ADV-RERUN keys on ANY run of the name having concluded RED, so a check "
+         "that went red, WAS FIXED and is being re-run again holds the merge -- the "
+         "mirror image of the hole the bucket was added to close, and it SHIPPED in "
+         "the fix for that hole"),
+        "gates.py",
+        "    concluded = [run for run in runs if not _is_incomplete(run)]",
+        "    concluded = [run for run in runs if _outcome(run)[0] in RED_CONCLUSIONS]",
+    ),
+    (
+        ("A12 the rerun reason picks by LIST POSITION again, so the same three runs "
+         "at one head name CANCELLED or FAILURE depending on the order the API "
+         "returned them - a gate claiming a conclusion it never read (R7)"),
+        "gates.py",
+        '    return _newest_from_groups({"": concluded})[""]',
+        "    return concluded[0]",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",

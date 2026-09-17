@@ -1547,6 +1547,61 @@ def _newest_from_groups(groups: dict[str, list[dict]]) -> dict[str, dict]:
     return out
 
 
+def _is_incomplete(check: dict) -> bool:
+    """Has this run NOT said anything yet? One definition, two callers.
+
+    Written once because the advisory split and `_newest_concluded` must agree
+    exactly: if they drift, a run counts as in-flight for one question and as
+    concluded for the other, and the bucket boundary moves without anyone
+    editing it.
+    """
+    verdict, status = _outcome(check)
+    return not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES
+
+
+def _newest_concluded(runs: list[dict]) -> dict | None:
+    """The newest run of this name that actually CONCLUDED, or None.
+
+    THE ROUND-3 BLOCKER, recorded because it arrived IN the fix for the
+    round-2 one -- the previous-round's-fix pattern, and it was R7 inside the
+    branch whose own docstring cites R7. The first version asked "did ANY run
+    of this name conclude RED" and then reported the first such run as "the
+    last CONCLUDED run at this head". Measured by an independent reviewer:
+
+        FAILURE 10:00, SUCCESS 11:00, IN_PROGRESS 12:00
+            -> BLOCKED, claiming the last concluded run was FAILURE.
+               It was SUCCESS, at 11:00.
+        CANCELLED 09:00, FAILURE 10:00, IN_PROGRESS   -> named CANCELLED
+        the same three runs, list order REVERSED      -> named FAILURE
+
+    Two defects in one. It OVER-BLOCKED -- a check that went red, was fixed,
+    and is being re-run again held the merge, which is the mirror image of the
+    hole `rerun` was added to close. And the reason it gave was FALSE and
+    ORDER-DEPENDENT: it named whichever red sat first in the list, a specific
+    run's conclusion it had never checked.
+
+    So the question is asked properly here, over the CONCLUDED subset, through
+    `_newest_from_groups` -- which already carries both fail-closed fallbacks
+    (an unreadable timestamp or a tie at the maximum falls back to worst-wins,
+    so an undated red is never discarded as superseded).
+
+    DISCLOSED, because it would otherwise be counted as coverage it is not:
+    the UNDATED fallback inside this function is currently UNREACHABLE from
+    `classify_advisory_checks`. One unreadable stamp anywhere in the group
+    sends the WHOLE group to worst-wins one level up, so the in-flight run
+    never wins "newest" and the red surfaces as ADV-RED directly -- measured,
+    both list orders. That is STRICTER than ADV-RERUN, not weaker, so the
+    fallback is kept rather than removed: it is the honest answer if the outer
+    rule is ever relaxed, and it is unit-tested at this function rather than
+    through the classifier. A path no input reaches is evidence about the
+    contract, not about the gate (`assertion-design.md` #5).
+    """
+    concluded = [run for run in runs if not _is_incomplete(run)]
+    if not concluded:
+        return None
+    return _newest_from_groups({"": concluded})[""]
+
+
 def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
     """Split every NON-required context: ADV-RED / ADV-RERUN / ADV-WAIT / clean.
 
@@ -1570,14 +1625,18 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
     lane states` were both SKIPPED on the fixture head, on a PR that touched
     neither. Counting those would make the arm red on essentially every PR.
 
-    ADV-RERUN: NEWEST HAS NOT CONCLUDED AND AN OLDER RUN OF THE SAME NAME WAS
-    RED. This closes a SELF-CLEARING BLOCK, found by an independent reviewer on
-    the first version of this arm. `newest`-wins alone answers ADV-WAIT there,
-    which does not block -- so dispatching the gate's OWN remedy (`rerun-ci`)
-    cleared the gate's own block the moment the re-run STARTED, before it
-    answered anything. Both `rerun-ci` and `merge-on-gate-go` are in
-    `permitted_unattended`, so that was a live path to merging over a red
-    without a human in it.
+    ADV-RERUN: THE NEWEST CONCLUDED RUN OF THIS NAME WAS RED AND A RE-RUN HAS
+    NOT ANSWERED YET. This closes a SELF-CLEARING BLOCK, found by an
+    independent reviewer on the first version of this arm. `newest`-wins alone
+    answers ADV-WAIT there, which does not block -- so dispatching the gate's
+    OWN remedy (`rerun-ci`) cleared the gate's own block the moment the re-run
+    STARTED, before it answered anything. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so that was a live path
+    to merging over a red without a human in it.
+
+    NEWEST CONCLUDED, not "any run was red" -- see `_newest_concluded`, where
+    the second version of this bucket over-blocked a check that had already
+    been fixed and named a run whose conclusion it had never read.
 
     It is a SEPARATE bucket from `red` on purpose, because the remedy differs
     and `deploy-integrity.md` R7 applies to a gate's own message: the check has
@@ -1600,16 +1659,16 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
     for name, check in sorted(_newest_from_groups(groups).items()):
         if name in required_names:
             continue
-        verdict, status = _outcome(check)
+        verdict = _outcome(check)[0]
         if verdict in RED_CONCLUSIONS:
             red.append(f"{name} ({verdict})")
-        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:
-            was_red = [_outcome(run)[0] for run in groups[name]
-                       if _outcome(run)[0] in RED_CONCLUSIONS]
-            if was_red:
+        elif _is_incomplete(check):
+            last = _newest_concluded(groups[name])
+            last_verdict = _outcome(last)[0] if last is not None else ""
+            if last_verdict in RED_CONCLUSIONS:
                 rerun.append(
-                    f"{name} (a re-run is in flight; the last CONCLUDED run at this "
-                    f"head was {was_red[0]})"
+                    f"{name} (a re-run is in flight; the NEWEST CONCLUDED run at this "
+                    f"head was {last_verdict})"
                 )
             else:
                 wait.append(name)
