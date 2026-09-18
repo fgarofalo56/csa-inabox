@@ -5586,26 +5586,144 @@ test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () 
     const body = runBodyOf(readNorm(wf), LEASE_ACQUIRE_STEP);
     assert.ok(/>>\s*"\$GITHUB_OUTPUT"/.test(body),
       `${wf}: the lease step never appends to $GITHUB_OUTPUT at all. Every consumer of steps.img_lease.outputs.* — including the release step's if: — would read empty.`);
-    for (const key of ['held', 'claimed', 'acr_id']) {
+    for (const key of ['held', 'claimed', 'carrier_id']) {
       const n = body.split('\n').filter((l) => new RegExp(`echo\\s+"${key}=`).test(l)).length;
       assert.equal(n, 1, `${wf}: the lease step emits the ${key} output ${n} time(s), not once. Two writes of one key leave the result to undocumented runner precedence.`);
     }
   }
 });
 
-test('PRECONDITION: registry.bicep must NOT declare tags on the ACR, or this mutex evaporates', () => {
-  // An ARM resource PUT replaces a resource's top-level `tags`, which is how the
-  // firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:`
-  // from the ACR for exactly that reason, and this lease is stored in the same
-  // place. That is a PRECONDITION of the mutex, not a coincidence: if it comes
-  // back, this guard goes red instead of the lease silently arbitrating nothing.
+// #4448 — THE PRECONDITION THIS REPLACES WATCHED NOTHING, AND IT IS WORTH
+// SAYING WHY AT THE SITE RATHER THAN DELETING IT QUIETLY.
+//
+// It asserted that registry.bicep declares no `tags:` on the ACR, on the #3681
+// premise that a resource whose template body declares no tags KEEPS the tags
+// it has across an apply. The assertion passed. The mutex evaporated anyway,
+// on every single apply, because the premise is false: an ARM PUT writes the
+// tag dictionary the body hands it, and a body that hands it none writes none.
+//
+// MEASURED 2026-09-17 against the live Commercial estate, and the second row is
+// the positive control that makes the first row mean something:
+//
+//   acrloomk6mvh5sm6z7do       declared WITHOUT `tags:`  -> four loomAcrFw*
+//     values, every one of them written back AFTER the apply by the next lane
+//     to take the firewall lease, and ZERO compliance tags.
+//   pe-acrloomk6mvh5sm6z7do    declared WITH `tags: complianceTags`, same
+//     module, same apply                                 -> all five.
+//
+// Six consecutive scheduled deploys (2026-09-12 .. 2026-09-17) died on the
+// release step reporting that erasure, and every report was TRUE. So the old
+// guard is not tightened here — it is replaced by one aimed at the thing that
+// actually decides whether the mutex survives: WHICH RESOURCE CARRIES IT.
+test('the image-write lease is carried by a resource the apply does NOT PUT (#4448)', () => {
+  for (const [label, file] of [['deploy-fiab-commercial', DEPLOY_WORKFLOW], ['loom-roll-and-validate', ROLL_WORKFLOW]]) {
+    const body = runBodyOf(readNorm(file), LEASE_ACQUIRE_STEP);
+
+    // WHAT BREAKS THIS: restoring `CARRIER_ID="$ACR_ID"`, or pointing either
+    // `az tag` verb back at `$ACR_ID`. Both are the exact regression that cost
+    // six nights, and both leave every other assertion in this file green.
+    assert.match(body, /CARRIER_ID="\/subscriptions\/\$\{CARRIER_SUB\}"/,
+      `${label}: the lease carrier is no longer derived as a subscription id. The registry cannot carry this `
+      + 'mutex: every apply PUTs it and an ARM PUT writes the tag dictionary the template body hands it (#4448).');
+
+    for (const verb of ['az tag list', 'az tag update']) {
+      // INVOCATIONS ONLY. The step also NAMES these commands inside remediation
+      // strings; matching those would score a message as a call site and the
+      // assertion would pass on a step that never runs either verb.
+      const calls = body.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(verb + ' '));
+      assert.ok(calls.length > 0, `${label}: the lease step makes no \`${verb}\` call at all`);
+      for (const call of calls) {
+        assert.ok(!/--resource-id "\$ACR_ID"/.test(call),
+          `${label}: \`${verb}\` still addresses the REGISTRY (${call}). The registry's tags are erased by `
+          + 'every apply, so a lease stored there cannot span the apply it exists to arbitrate.');
+        assert.match(call, /--resource-id "\$CARRIER_ID"/,
+          `${label}: \`${verb}\` does not address the lease carrier (${call}).`);
+      }
+    }
+
+    // The carrier FOLLOWS the registry rather than being handed in, so no lane
+    // can arbitrate against a different estate by passing a stale parameter.
+    assert.match(body, /CARRIER_SUB="\$\(printf '%s' "\$ACR_ID" \| cut -d\/ -f3\)"/,
+      `${label}: the carrier is no longer derived from the registry's own resource id.`);
+
+    // SHAPE-MATCHED, not cut-and-hoped. `cut -d/ -f3` prints the WHOLE line when
+    // the delimiter is absent (`printf 'garbage' | cut -d/ -f3` -> `garbage`), so
+    // the derive must be guarded by a prefix match or a malformed id silently
+    // becomes `/subscriptions/garbage`. The executed probe below is what proves
+    // the refusal; this pins the mechanism that makes it possible.
+    assert.match(body, /case "\$ACR_ID" in\s*\n\s*\/subscriptions\/\*\/resourceGroups\/\*\/providers\/Microsoft\.ContainerRegistry\/registries\/\*\)/,
+      `${label}: the carrier derive is no longer guarded by a registry-shape match, so a malformed id would `
+      + 'yield a plausible-looking subscription id nobody checked.');
+
+    // An id that is not `/subscriptions/<sub>/...` must REFUSE, not tag
+    // whatever `/subscriptions/` alone resolves to.
+    assert.match(body, /\[ -z "\$CARRIER_ID" \]/,
+      `${label}: an unresolvable carrier no longer refuses. Without this the step would write the lease to an `
+      + 'id it never established, and report a mutex it does not have.');
+  }
+});
+
+// EXECUTED, because the previous revision of this guarantee was a SENTENCE.
+// It claimed a malformed id "yields an EMPTY carrier and is refused"; measured,
+// `printf 'garbage' | cut -d/ -f3` prints `garbage`, so the carrier was
+// `/subscriptions/garbage` and the step took a lease against a subscription
+// nobody had checked. A comment is not a guard. This drives the real step body
+// with a malformed `az acr show` answer and reads what it actually did.
+//
+// WHAT BREAKS THIS: delete the `case` shape-match and derive unconditionally —
+// the step then exits 0 with `held=true` and a tag write in the log.
+for (const [label, wf] of [['deploy', DEPLOY_WORKFLOW], ['roll', ROLL_WORKFLOW]]) {
+  for (const [shape, acrId] of [
+    ['no delimiter at all', 'garbage'],
+    ['a plausible id for the wrong provider', '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/sa'],
+    ['the right shape with an EMPTY subscription segment', '//resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acrtest'],
+  ]) {
+    test(`SHELL: ${label} lane REFUSES a malformed registry id (${shape}) and writes no lease`, { skip: shellSkip }, () => {
+      const r = runStep(LEASE_ACQUIRE_STEP, {
+        workflow: wf,
+        env: { ...leaseEnv(), AZ_ACR_ID: acrId },
+        leaseTags: { properties: { tags: {} } },
+      });
+      assert.notEqual(r.status, 0,
+        `${label}: the step accepted '${acrId}' as a lease carrier. It exited 0, so a run would proceed to `
+        + 'write Container App images believing it holds a mutex recorded somewhere nobody checked.');
+      assert.match(r.outFile, /held=false/, `${label}: reported held=true on a carrier it could not resolve`);
+      assert.deepEqual(r.tags, {},
+        `${label}: the refusing run still WROTE tags. A refusal that leaves a claim behind strands the mutex `
+        + 'for a whole TTL on the other lane.');
+      // PAIRED POSITIVE: this fixture must fail for the reason claimed, not
+      // because the harness broke. The control is the same step with a
+      // well-formed id, which is asserted green in the TAKES-the-lease test
+      // above; here we pin that the refusal names the SHAPE and not, say, an
+      // unrelated ARM error it never saw.
+      assert.match(r.out, /Microsoft\.ContainerRegistry\/registries/,
+        `${label}: the refusal does not say WHAT shape it needed, so an operator reading it cannot tell a `
+        + 'malformed id from an ARM outage (deploy-integrity R6).');
+    });
+  }
+}
+
+test('registry.bicep still declares no `tags:` on the ACR — but that is NOT what protects the lease', () => {
+  // KEPT, DEMOTED, AND LABELLED (assertion-design.md "done" #5). Re-adding
+  // `tags:` to the ACR would resume clobbering the `loomAcrFw*` firewall mutex
+  // mid-apply, which is the #3676/#3681 outage and is still a real regression
+  // worth catching. What it does NOT do — and what its previous wording
+  // claimed — is keep the image-write lease alive across an apply. Nothing
+  // stored on the ACR survives an apply, `tags:` or no `tags:`; the test above
+  // is the one that pins the property this mutex depends on.
   const bicep = readNorm(join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'modules', 'admin-plane', 'registry.bicep'));
   const at = bicep.indexOf("resource acr 'Microsoft.ContainerRegistry/registries@");
-  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this precondition before trusting the lease');
+  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this guard');
   const decl = bicep.slice(at, bicep.indexOf('\n}\n', at));
   assert.doesNotMatch(decl, /^ {2}tags:/m,
-    'registry.bicep declares `tags:` on the ACR again. An ARM PUT replaces a resource\'s tags, so every apply '
-    + 'would erase the estate image-write lease mid-apply and both writers would proceed (#3681 / #3676).');
+    'registry.bicep declares `tags:` on the ACR again. An ARM PUT writes the tag dictionary the body hands it, so '
+    + 'this would stamp complianceTags over the `loomAcrFw*` firewall lease mid-apply and deny an in-flight '
+    + '`az acr build` push (#3676 / #3681).');
+  // PAIRED POSITIVE (assertion-design.md "done" #4): a `doesNotMatch` alone is
+  // satisfied by deleting the resource. This pins that it still exists and is
+  // still the resource the guard read.
+  assert.match(decl, /^ {2}name: acrName$/m,
+    'the ACR declaration no longer names acrName — the absence assertion above may be reading an empty slice.');
 });
 
 // ---------------------------------------------------------------------------
@@ -5644,8 +5762,8 @@ const leaseEnv = (over = {}) => ({
  * narrows LEASE_STATE to: 'held' when the read-back confirmed this run,
  * 'claimed' when only the claim WRITE landed.
  */
-const leaseReleaseEnv = (acrId, state = 'held') => ({
-  ...LEASE_GH, LEASE_ACR_ID: acrId, LEASE_STATE: state, DEPLOY_SUB: '',
+const leaseReleaseEnv = (carrierId, state = 'held') => ({
+  ...LEASE_GH, LEASE_CARRIER_ID: carrierId, LEASE_STATE: state, DEPLOY_SUB: '',
 });
 
 test('SHELL: the deploy lane TAKES the lease on a free registry and records itself in the tags', { skip: shellSkip }, () => {
@@ -5655,7 +5773,12 @@ test('SHELL: the deploy lane TAKES the lease on a free registry and records itse
   });
   assert.equal(r.status, 0, r.out);
   assert.match(r.outFile, /held=true/);
-  assert.match(r.outFile, /acr_id=.+ContainerRegistry/);
+  // A SUBSCRIPTION id, not a registry id (#4448). Breaking value: restore
+  // `echo "carrier_id=$ACR_ID"` in the step and this goes red, because the
+  // stub's registry id carries `/providers/Microsoft.ContainerRegistry/`.
+  assert.match(r.outFile, /carrier_id=\/subscriptions\/[^/\s]+\s/);
+  assert.doesNotMatch(r.outFile, /carrier_id=\S*ContainerRegistry/,
+    'the lease carrier is the registry again — every apply PUTs it and erases the mutex (#4448)');
   assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
   assert.ok(Number(r.tags[ESTATE_IMAGE_LEASE_TAGS.expires]) > Math.floor(Date.now() / 1000),
     'the lease was written without a future expiry, so it is stale the instant it is taken');
@@ -5747,10 +5870,10 @@ test('SHELL: acquire then release round-trips — the holder clears the lease it
   try {
     const acq = runStep(LEASE_ACQUIRE_STEP, { ctx, env: leaseEnv(), leaseTags: { properties: { tags: {} } } });
     assert.equal(acq.status, 0, acq.out);
-    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
-    assert.notEqual(acrId, '');
+    const carrierId = /carrier_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(carrierId, '');
 
-    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId) });
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(carrierId) });
     assert.equal(rel.status, 0, rel.out);
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
       'the release did not free the mutex, so the other lane stays blocked until the TTL');
@@ -5763,7 +5886,7 @@ test('SHELL: acquire then release round-trips — the holder clears the lease it
 
 test('SHELL: releasing a lease that was ERASED under this run goes RED, and does not pretend', { skip: shellSkip }, () => {
   const r = runStep(LEASE_RELEASE_STEP, {
-    env: leaseReleaseEnv('acr-resource-id'),
+    env: leaseReleaseEnv('/subscriptions/sub-under-test'),
     leaseTags: { properties: { tags: {} } },
   });
   assert.equal(r.status, 1, r.out);
@@ -5835,16 +5958,16 @@ test('SHELL: the stranded claim is CLEARED by the release step, so the other wri
     });
     assert.equal(acq.status, 1, acq.out);
     assert.match(acq.outFile, /claimed=true/);
-    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
-    assert.notEqual(acrId, '');
+    const carrierId = /carrier_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(carrierId, '');
 
     // This is the step the workflow's `if:` now reaches on claimed=true. The
     // tag store is the SAME document the acquire left behind (shared ctx), so
     // "was the mutex actually freed" is answerable rather than assumed.
-    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId, 'claimed') });
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(carrierId, 'claimed') });
     assert.equal(rel.status, 0, rel.out);
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
-      'the claim is still in the registry: every write on the other lane now queues behind a run that has already exited');
+      'the claim is still in the lease carrier: every write on the other lane now queues behind a run that has already exited');
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
     assert.match(rel.out, /never CONFIRMED/,
       'R7: it cleared the tags, but it may not report that it held the mutex');
@@ -5858,7 +5981,7 @@ test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', {
   // on to write `owner=none` over a LIVE holder — the erasure this mutex exists
   // to make impossible, performed by the release path itself.
   const r = runStep(LEASE_RELEASE_STEP, {
-    env: leaseReleaseEnv('acr-resource-id', 'claimed'),
+    env: leaseReleaseEnv('/subscriptions/sub-under-test', 'claimed'),
     leaseTags: {
       properties: {
         tags: {
