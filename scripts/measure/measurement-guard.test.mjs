@@ -504,6 +504,48 @@ test('CONTROL: `)` closing a SUBSTITUTION does not start a comment', () => {
   assert.ok(has(cmd, 'python-dash-repl'), 'a substitution `)` must not blank the command');
 });
 
+test('the `(` in the word-boundary class has a witness', () => {
+  // Found by review to have NONE — dropping `(` survived the whole suite, and
+  // 122 distinguishing inputs existed, so it was a BLIND TEST, not an
+  // equivalent mutant. That distinction has already been got wrong once in
+  // this file and is not being got wrong twice.
+  //
+  // My first attempt at this witness ALSO failed to discriminate: it used a
+  // heredoc opener, which stripHeredocBodies' own hash scan already rejects
+  // because THAT class includes `(`. The distinguishing inputs are in the other
+  // rules, which consume maskQuoted directly and have no second check.
+  //
+  // Here a comment opened right after `(` contains a `|`. Without `(` in the
+  // class the comment is not masked, the `|` reads as a real pipeline, and
+  // `rc-after-pipe` fires on correct code — a false positive. The `RC=$?` must
+  // be on the IMMEDIATELY following line; a second attempt at this witness put
+  // another command in between and the adjacent-line check never engaged, so it
+  // survived too.
+  // WHAT MAKES THIS FAIL: remove `(` from maskQuoted's boundary class.
+  const cmd = `(#note about a | pipe\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false,
+    'a comment opened right after `(` must be masked for every rule');
+});
+
+test('NEGATIVE: a `#` in a FILENAME is not a comment', () => {
+  // Real false positive found by review: `masked.indexOf('#')` matched the `#`
+  // in a filename, so writing a file with `#` in its name while the body quoted
+  // the pattern was DENIED. A guard that blocks real work gets deleted.
+  // WHAT MAKES THIS FAIL: revert the word-boundary scan to indexOf('#').
+  const cmd = `cat > temp/v2#final.md <<'MD'\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false, 'a `#` in a filename is not a comment');
+});
+
+test('a CRASHED non-measurement rule is not relabelled as a bad measurement', () => {
+  // `${rule.id}-ERRORED` is not in NON_MEASUREMENT_RULES, so the decorated id
+  // fell through to the measurement framing — R7 on the error path, which is
+  // the path nobody reads until it fires.
+  // WHAT MAKES THIS FAIL: classify on `f.id` instead of the base id.
+  const body = denyBody([{ id: 'python-dash-repl-ERRORED', message: 'x' }]);
+  assert.match(body, /carries a known hazard/);
+  assert.doesNotMatch(body, /measurement you cannot trust/);
+});
+
 // ---- the deny message must name the RIGHT line ----------------------------
 test('R7: a lost newline must not make the message accuse an innocent line', () => {
   // maskQuoted's double-quote escape branch emitted `__` for backslash+anything,

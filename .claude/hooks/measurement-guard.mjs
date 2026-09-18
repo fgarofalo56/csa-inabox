@@ -57,9 +57,22 @@
  * serve writes exactly that line.
  *
  * The `#` itself is PRESERVED rather than masked, because stripHeredocBodies
- * locates comments with `masked.indexOf('#')`; masking it would break that
+ * locates comments with a word-boundary `#` scan; masking it would break that
  * caller while fixing this one. A quoted `#` still masks to `_`, which makes
  * that caller strictly more accurate.
+ *
+ * KNOWN RESIDUAL — and an earlier version of this file named the WRONG one.
+ * It disclosed a backslash-escaped-quote case. Measured across 190 tracked
+ * `.sh` scripts, **zero** of the 7 that still swallow the hazard are that;
+ * all 7, and both known false positives, have a single root cause:
+ *
+ *     maskQuoted has NO COMMAND-SUBSTITUTION awareness.
+ *
+ * `$( ... )` and backticks are walked as ordinary text, so quotes opened inside
+ * a substitution are paired against quotes outside it. That is the real
+ * boundary of this function, it is pre-existing and non-regressive, and it is
+ * named here rather than in a commit message because a disclosure that does not
+ * describe the actual limitation is an R7 defect in the guard's own voice.
  */
 function maskQuoted(s) {
   let out = '';
@@ -192,7 +205,19 @@ function stripHeredocBodies(s) {
     // is not.
     const masked = maskQuoted(line);
     if (masked[m.index] !== '<') { out.push(line); continue; }   // quoted
-    const hash = masked.indexOf('#');
+    // The `#` must begin a WORD to be a comment. A bare `indexOf('#')` matched
+    // any `#` at all, so `cat > temp/v2#final.md <<MD` with a `python -` body
+    // was DENIED — a false positive on real work, which is the pressure that
+    // gets a guard deleted. `v2#final.md` is a filename.
+    //
+    // THIS CLASS DELIBERATELY DIFFERS FROM maskQuoted's: it includes `)` and
+    // `}`, which close a control structure so a following `#` IS a comment.
+    // maskQuoted must NOT include them, because `echo $(echo a)#BOOM` prints
+    // `a#BOOM` — there the `)` closes a SUBSTITUTION and the `#` is literal.
+    // Two narrow checks that disagree about `)` are correct here where one wide
+    // one is not; making them agree broke both `)` arms when it was tried.
+    const hm = /(?:^|[\s;|&()}])#/.exec(masked);
+    const hash = hm ? hm.index + hm[0].length - 1 : -1;
     if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
 
     // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
@@ -444,7 +469,12 @@ export function denyBody(findings) {
   // measurement rule added without updating this set still gets the (correct)
   // measurement framing, and only a new NON-measurement rule would be
   // mislabelled. The test below pins that direction so the choice is visible.
-  const anyMeasurement = findings.some((f) => !NON_MEASUREMENT_RULES.has(f.id));
+  // Classify on the BASE id, not the decorated one. `${rule.id}-ERRORED` is not
+  // in NON_MEASUREMENT_RULES, so a crashed python-dash-repl rule was labelled
+  // as a false-measurement finding — the exact R7 this branch exists to avoid,
+  // reached through the error path nobody reads until it fires.
+  const baseId = (f) => String(f.id).replace(/-ERRORED$/, '');
+  const anyMeasurement = findings.some((f) => !NON_MEASUREMENT_RULES.has(baseId(f)));
   const headline = anyMeasurement
     ? 'BLOCKED — this command would produce a measurement you cannot trust.'
     : 'BLOCKED — this command carries a known hazard.';
