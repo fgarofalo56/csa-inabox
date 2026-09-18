@@ -81,22 +81,30 @@ updates:
     directory: "/apps/loom-directlake"
     schedule:
       interval: "weekly"
-    labels: ["dependencies", "rust"]
+    # `dependencies` only: there is no `rust` label in this repo (measured
+    # 2026-09-18 — `gh label list` returns `dependencies`, `javascript`,
+    # `security`, `sp:*`, `lane:*` and no `rust`), and naming one that does not
+    # exist is not a no-op worth shrugging at.
+    labels: ["dependencies"]
     open-pull-requests-limit: 5
-    # The arrow stack moves as ONE unit or not at all — the same lockstep
-    # argument as the codeql-action group above, and measured rather than
-    # assumed. Cargo.toml's own comment states the invariant ("the whole graph
-    # resolves to ONE arrow + ONE datafusion (no split)"); resolving
-    # parquet 59 + datafusion 55 + deltalake 0.32 together violates it, and
-    # cargo does not error — it silently links BOTH majors side by side:
+    # The arrow stack is grouped so it arrives as ONE reviewable PR rather than
+    # four that each look reasonable alone.
+    #
+    # Be precise about what this buys, because the obvious reading is wrong:
+    # grouping does NOT make the upgrade atomic and does NOT prevent a broken
+    # stack from being proposed. A grouped bump to parquet 59 + datafusion 55 +
+    # deltalake 0.32 resolves, and resolves BADLY — measured with cargo 1.98.0:
     #
     #   arrow 58.4.0 AND 59.3.0 · datafusion 53.1.0 AND 55.1.0
     #   parquet 58.4.0 AND 59.3.0 · thrift 0.17.0 still present via parquet 58
     #
     # Two datafusion majors in one graph means two distinct `TableProvider`
     # traits, so `ctx.register_table(Arc::new(delta_table))` in src/scan.rs stops
-    # compiling. Ungrouped bumps would raise exactly that PR, one crate at a
-    # time, and each would look reasonable on its own.
+    # compiling. What actually STOPS that landing is `cargo build --locked` in
+    # .github/workflows/loom-directlake-ci.yml, which compiles both feature sets
+    # plus the release profile on every PR touching this crate. That lane is the
+    # backstop; this group only ensures the four crates are judged together
+    # instead of one at a time.
     groups:
       arrow-stack:
         patterns:

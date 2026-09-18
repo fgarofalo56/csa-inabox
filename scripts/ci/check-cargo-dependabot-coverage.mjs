@@ -30,36 +30,70 @@
  * SCOPE — DELIBERATELY NARROW, AND SAY SO
  * ---------------------------------------
  * This checks CARGO ONLY, and is named for that. It is NOT a "dependabot
- * coverage is complete" guard and must not be read as one. Measured the same
- * day, the npm side has the same gap and a wider one: `apps/fiab-console`,
- * `apps/loom-sdk`, `apps/loom-embed`, `apps/loom-cli`,
- * `apps/fiab-label-propagation` and `azure-functions/secret-expiry-monitor`
- * all carry open npm alerts and none of them appear in dependabot.yml, whose
- * only npm entry is `/portal/react-webapp`. That is a real finding and it is
- * tracked separately — widening this guard to npm without also adding those
- * entries would just turn it red on day one, and widening it silently would
- * make its name lie. Cargo is in scope here because #3982 is a cargo issue and
- * because the repo has exactly one crate, so the fix is one entry.
+ * coverage is complete" guard and must not be read as one. Measured 2026-09-18
+ * against the open-alert list, the same gap is wider elsewhere:
+ *
+ *   - npm: SEVEN manifest paths across SIX directories carry open alerts and
+ *     are absent from dependabot.yml, whose only npm entry is
+ *     `/portal/react-webapp` — `apps/fiab-console` (both `pnpm-lock.yaml` and
+ *     `package.json`), `apps/loom-sdk`, `apps/loom-embed`, `apps/loom-cli`,
+ *     `apps/fiab-label-propagation`, `azure-functions/secret-expiry-monitor`.
+ *   - pip: `requirements/locks/copilot/requirements.txt` carries FOUR open
+ *     alerts, TWO of them HIGH. The `/` pip entry does not reach it — the same
+ *     shape as the `apps/loom-duckdb` entry above it in that file, which exists
+ *     precisely because `/` did not reach that lock either.
+ *
+ * That is a real finding, tracked separately (#4592). Widening this guard to
+ * npm or pip without first adding those entries would just turn it red on day
+ * one, and a guard that is red the moment it lands is one the team learns to
+ * ignore. Widening it SILENTLY would be worse: the name would stop matching the
+ * scope, which is the blind-instrument shape this guard exists to prevent.
+ * Cargo is in scope here because #3982 is a cargo issue and the repo has
+ * exactly one crate, so the fix is one entry and the guard lands green over a
+ * complete population.
  *
  * THE RULE
  * --------
- * For every directory containing a `Cargo.toml`, `.github/dependabot.yml` must
- * contain an `updates[]` entry with `package-ecosystem: cargo` and a
- * `directory:` naming it.
+ * BOTH directions, because only checking one of them has already cost this repo
+ * a defect in each:
+ *   1. Every directory containing a `Cargo.toml` has an `updates[]` entry with
+ *      `package-ecosystem: cargo` and a `directory:` naming it. (The #3982
+ *      shape: a crate nothing proposes updates for.)
+ *   2. Every cargo entry's `directory:` actually contains a `Cargo.toml`. (The
+ *      CSA-0048 shape recorded in dependabot.yml itself: `portal/static-webapp`
+ *      was archived and its entry was left pointing at a directory that no
+ *      longer existed.)
+ *
+ * The config must also be one GitHub will actually honour. A dependabot.yml
+ * that fails to parse does not degrade gracefully — GitHub rejects the WHOLE
+ * file, so every version-update lane in the repo dies at once, including this
+ * crate's. A guard that reports OK over such a file is reporting coverage that
+ * does not exist. Two such cases are checked, both of which this guard was
+ * blind to when first written:
+ *   - TAB characters in indentation. YAML forbids them outright.
+ *   - A missing or non-2 `version:`. Dependabot requires `version: 2`.
  *
  * DELIBERATELY NOT CHECKED:
  *   - The schedule, labels, limit or groups of the entry. Those are policy, and
  *     a weekly-vs-daily argument is not an outage.
  *   - Whether the pinned versions are current. That is dependabot's job; this
  *     guard only cares that dependabot is ASKED.
+ *   - Full YAML well-formedness. This is not a YAML parser and must not be
+ *     mistaken for one; it catches the two rejection modes named above, and a
+ *     file can still be invalid in ways it will not see.
  *
  * ESCAPE HATCH: none. A crate nobody wants update PRs for is a crate that
  * should not be in the tree.
  *
- * SELF-DEFENCE: refuses to pass vacuously. Zero Cargo.toml manifests found, or
- * a dependabot.yml that parsed to zero entries of ANY ecosystem, FAILS rather
- * than printing OK — a broken walker and a clean repo are otherwise the same
- * observation, which is the failure mode this repo keeps rediscovering.
+ * SELF-DEFENCE: four separate refusals, each with its OWN diagnostic, because
+ * "exit 1" is not the useful part — WHICH of these fired tells you whether to
+ * fix the repo or fix the scanner, and those are opposite actions:
+ *   - dependabot.yml absent            -> the config is gone, not "nothing to do"
+ *   - zero Cargo.toml manifests found  -> the walker broke; a dead walker and a
+ *                                         clean repo are otherwise identical
+ *   - zero updates[] entries parsed    -> the PARSER broke (the file is
+ *                                         non-empty), not "the repo is uncovered"
+ *   - config GitHub would reject       -> every lane is dead, coverage is fiction
  *
  * Usage: node scripts/ci/check-cargo-dependabot-coverage.mjs [repoRoot]
  */
@@ -146,14 +180,79 @@ export function parseUpdates(yamlText) {
 const normaliseDir = (d) => String(d ?? '').replace(/^\/+/, '').replace(/\/+$/, '');
 
 /**
- * @returns {{missing: string[], covered: string[], cargoEntries: object[]}}
+ * Reasons GitHub would REJECT this dependabot.yml outright.
+ *
+ * Rejection is not partial: GitHub discards the whole file, so every
+ * version-update lane in the repo stops at once. A guard that reports coverage
+ * over a rejected config is reporting something that cannot happen — which is
+ * exactly the defect this guard was built to catch, so being blind to it here
+ * would reintroduce that defect inside the fix for it.
+ *
+ * NOT a YAML parser, and must not be mistaken for one: it catches two specific
+ * rejection modes and says so.
+ *
+ * @returns {string[]} one message per reason; empty means "none of the two
+ *   modes checked here fired", NOT "this file is valid YAML".
  */
-export function evaluate(manifestDirs, updates) {
+export function configRejectionReasons(yamlText) {
+  const reasons = [];
+  const lines = yamlText.split(/\r?\n/);
+
+  // 1. Tabs in indentation. YAML forbids the tab character for indentation
+  //    outright; a tab-indented file does not load at all. `\s` in a JS regex
+  //    MATCHES a tab, so the line-based parser below happily reads a file
+  //    GitHub would throw away -- the precise blind spot this catches.
+  const tabbed = [];
+  lines.forEach((line, i) => {
+    const indent = line.match(/^[ \t]*/)[0];
+    if (indent.includes('\t')) tabbed.push(i + 1);
+  });
+  if (tabbed.length > 0) {
+    reasons.push(
+      `TAB character used for indentation on line(s) ${tabbed.slice(0, 5).join(', ')}` +
+        `${tabbed.length > 5 ? ` (+${tabbed.length - 5} more)` : ''}. YAML forbids tabs for ` +
+        'indentation, so GitHub rejects the ENTIRE file and every version-update lane ' +
+        'in the repo — not just cargo — stops running.',
+    );
+  }
+
+  // 2. `version: 2` is mandatory. Dependabot v1 config is a different, retired
+  //    schema; without a recognised version the file is not honoured.
+  const versionLine = lines.find((l) => /^\s*version\s*:/.test(l));
+  if (!versionLine) {
+    reasons.push(
+      'no top-level `version:` key. Dependabot requires `version: 2`; without it the ' +
+        'file is not honoured and no version-update PR is ever opened.',
+    );
+  } else {
+    const value = versionLine.replace(/\s+#.*$/, '').split(':')[1]?.trim().replace(/["']/g, '');
+    if (value !== '2') {
+      reasons.push(
+        `\`version: ${value}\` is not \`version: 2\`. Only schema version 2 is honoured; ` +
+          'anything else means no version-update PR is ever opened.',
+      );
+    }
+  }
+
+  return reasons;
+}
+
+/**
+ * @returns {{missing: string[], covered: string[], ghost: object[], cargoEntries: object[]}}
+ *   `missing` = crates with no entry (#3982). `ghost` = entries whose directory
+ *   holds no Cargo.toml (CSA-0048). Both directions, because each has already
+ *   been a real defect in this file.
+ */
+export function evaluate(manifestDirs, updates, dirExists = () => true) {
   const cargoEntries = updates.filter((u) => u.ecosystem === 'cargo');
   const watched = new Set(cargoEntries.map((u) => normaliseDir(u.directory)));
+  const known = new Set(manifestDirs.map(normaliseDir));
   const missing = manifestDirs.filter((d) => !watched.has(normaliseDir(d)));
   const covered = manifestDirs.filter((d) => watched.has(normaliseDir(d)));
-  return { missing, covered, cargoEntries };
+  const ghost = cargoEntries.filter(
+    (u) => !known.has(normaliseDir(u.directory)) && !dirExists(normaliseDir(u.directory)),
+  );
+  return { missing, covered, ghost, cargoEntries };
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -167,16 +266,40 @@ function main(root) {
     );
     return 1;
   }
-  const updates = parseUpdates(readFileSync(dependabotAbs, 'utf8'));
-  const manifestDirs = findCargoManifestDirs(root);
-  const { missing, covered, cargoEntries } = evaluate(manifestDirs, updates);
+  const raw = readFileSync(dependabotAbs, 'utf8');
 
-  // Vacuity, checked BEFORE the verdict: a walker that found nothing and a repo
-  // with nothing to find produce identical `missing.length === 0`.
+  // Checked FIRST: if GitHub would reject this file, every lane is already dead
+  // and any coverage verdict computed below would be describing a world that
+  // does not exist.
+  const rejections = configRejectionReasons(raw);
+  if (rejections.length > 0) {
+    console.error(
+      `\n[cargo-dependabot-coverage] REFUSING TO PASS: ${DEPENDABOT_PATH} is a config GitHub ` +
+        `would reject (${rejections.length} reason(s)):\n`,
+    );
+    for (const r of rejections) console.error(`  - ${r}`);
+    console.error(
+      '\n  A rejected dependabot.yml does not fail partially. The whole file is\n' +
+        '  discarded, so EVERY version-update lane stops — and coverage measured\n' +
+        '  against it is fiction. Fix the config before trusting any green here.\n',
+    );
+    return 1;
+  }
+
+  const updates = parseUpdates(raw);
+  const manifestDirs = findCargoManifestDirs(root);
+  const { missing, covered, ghost, cargoEntries } = evaluate(manifestDirs, updates, (d) =>
+    existsSync(join(root, d)),
+  );
+
+  // Vacuity, checked BEFORE the verdict. The two clauses below are SEPARATE
+  // findings with opposite remediations, so they get separate messages: one
+  // says the walker broke, the other says the parser broke. Collapsing them
+  // into "something is empty" would hand the reader the wrong thing to fix.
   if (manifestDirs.length === 0) {
     console.error(
       '[cargo-dependabot-coverage] REFUSING TO PASS: found 0 Cargo.toml manifests. ' +
-        'This repo has at least one (apps/loom-directlake). The walker has stopped ' +
+        'This repo has at least one (apps/loom-directlake). The WALKER has stopped ' +
         'walking — fix the scanner, do not ship a green check that measures nothing.',
     );
     return 1;
@@ -184,7 +307,25 @@ function main(root) {
   if (updates.length === 0) {
     console.error(
       `[cargo-dependabot-coverage] REFUSING TO PASS: parsed 0 updates[] entries from ` +
-        `${DEPENDABOT_PATH}. The file is non-empty, so the parser has stopped parsing.`,
+        `${DEPENDABOT_PATH}, which is ${raw.length} bytes and non-empty. The PARSER has ` +
+        'stopped parsing. This is NOT the same finding as "the crates are uncovered": ' +
+        'the fix is in this script, not in the config.',
+    );
+    return 1;
+  }
+
+  if (ghost.length > 0) {
+    console.error(
+      `\n[cargo-dependabot-coverage] ${ghost.length} cargo entr(ies) point at a directory ` +
+        'with no Cargo.toml:\n',
+    );
+    for (const g of ghost) console.error(`  directory: "${g.directory}"  -> no Cargo.toml there`);
+    console.error(
+      '\n  dependabot.yml records this exact failure already (CSA-0048): when\n' +
+        '  portal/static-webapp was archived its entry was left behind, pointing at\n' +
+        '  a directory that no longer existed. An entry aimed at nothing produces no\n' +
+        '  PRs while looking like coverage on the page.\n' +
+        '\n  Fix: delete the stale entry, or correct its directory.\n',
     );
     return 1;
   }

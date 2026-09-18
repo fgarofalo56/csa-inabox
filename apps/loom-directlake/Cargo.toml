@@ -50,6 +50,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 #     error — it links arrow 58 AND 59, datafusion 53.1 AND 55.1, parquet 58
 #     AND 59, keeps thrift 0.17 via parquet 58, and breaks src/scan.rs because
 #     two datafusion majors mean two distinct `TableProvider` traits.
+#
+# A PATCHED thrift is not a way out either, and it is worth writing down because
+# "just pin the fixed version" is the obvious first idea. thrift 0.23.0 and
+# 0.24.0 ARE published (2026-06-08 and 2026-07-11; 0.17.0 dates from 2022, so
+# the gap is four years). They are unreachable from here on semver: `parquet`
+# declares `thrift ^0.17`, which for a 0.x crate means `>=0.17.0, <0.18.0`, and
+# a `[patch.crates-io]` replacement must still SATISFY the original requirement
+# — cargo rejects a patch that does not. Using the fixed code would therefore
+# require a maintained 0.17.x fork with the advisory patch backported, published
+# or vendored, and carried until delta-rs moves. That is disproportionate to a
+# medium-severity advisory in a transitive decoder, so it is recorded as
+# considered-and-rejected rather than left to be rediscovered.
+#
 # The unblocking event is a delta-rs release on arrow 59. Do not hand-edit the
 # lock to chase it; wait for the grouped dependabot PR and let CI compile it.
 arrow = "53"
