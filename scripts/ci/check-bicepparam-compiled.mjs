@@ -91,14 +91,36 @@
  *      under this contract, not a blind test. The real evidence for all of them
  *      is produced by the job running them on every execution. They are not
  *      counted as proof of kill power.
- *   3. THE COMPILE IS NOT A REQUIRED CONTEXT. `Bicep Params Compile` is not one
- *      of main's 15 required status checks and no ruleset requires it, so a RED
- *      compile does not block a merge today — only `guardrails`, i.e. THIS
- *      file, blocks, and this file judges the job's SHAPE, never the compile's
- *      RESULT. #4466's premise (nothing parses il5.bicepparam) is closed; the
- *      stronger claim (a broken il5.bicepparam cannot reach main) needs an
- *      operator to add the context to branch protection. Deliberately not done
- *      from here.
+ *   3. THE COMPILE IS A REQUIRED CONTEXT AS OF 2026-09-18 — and this block said
+ *      the opposite until then, while the R11 failure message near the bottom of
+ *      this same file (grep: "The compile IS a required status check") already
+ *      said the new thing. `Bicep Params Compile` is now one of main's 17
+ *      required status checks (it was 15 before; the brain security-graph check
+ *      was added in the same change). So a RED compile blocks an ORDINARY merge.
+ *
+ *      That cross-reference is deliberately a GREP, not a line number. The
+ *      revision that first wrote it cited "line 889" and, in the same commit,
+ *      added 12 lines above the thing it pointed at — so the citation was stale
+ *      before it was ever read, and pointed at a different real line. This file
+ *      is already indexed by line number from outside (the committed
+ *      security-graph artifact records its sink line numbers, and that required
+ *      context went red for exactly this reason). Do not add a third line-number
+ *      dependency pointing at itself.
+ *
+ *      IT DOES NOT MAKE THE PATH UNREACHABLE. `enforce_admins.enabled` is
+ *      `false` on this repo and `--admin` merging is standing practice, so an
+ *      admin merge bypasses every required context. #4466's premise (nothing
+ *      parses il5.bicepparam) was already closed; its stronger claim (a broken
+ *      il5.bicepparam cannot reach main) is NOT closed by required-ness, and
+ *      nothing short of `enforce_admins: true` would close it.
+ *
+ *      This file still judges the job's SHAPE, never the compile's RESULT —
+ *      that part was and remains true.
+ *
+ *      Verify rather than trust these two sentences; they are the kind that rot,
+ *      and this one rotted inside the commit that corrected its sibling:
+ *        gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+ *          --jq '.required_status_checks.contexts | length, .enforce_admins.enabled'
  *   4. WHAT NO RULE HERE CAN SEE: a change to branch protection, and a change to
  *      the workflow's `on:` verbs (removing `pull_request:` outright).
  *
@@ -885,8 +907,10 @@ function main() {
       `\`bicep ${COMPILE_VERB}\` at a command position, enumerates them with a bare \`git ls-files\` and ` +
       'reconciles the compiler invocations against an independently re-derived count, carries no `if:`/`needs:` ' +
       `at any level, and is reachable by both triggers (push: ${stats.pushPaths} path pattern(s), pull_request: ` +
-      `${stats.pullRequestPaths || 'no'} path filter). DISCLOSED: this checks the job's SHAPE — the compile ` +
-      'itself is not a required status check, so a RED compile does not block a merge (see the header).',
+      `${stats.pullRequestPaths || 'no'} path filter). DISCLOSED: this checks the job's SHAPE, not the ` +
+      "compile's RESULT. The compile IS a required status check as of 2026-09-18, so an ordinary merge is " +
+      'blocked on a red compile — but `enforce_admins` is false on this repo, so an admin merge is not. ' +
+      'Required-ness stops the ordinary path, not every path.',
   );
   return 0;
 }
