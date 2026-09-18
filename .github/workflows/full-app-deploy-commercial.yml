@@ -1341,7 +1341,9 @@ jobs:
           # list that fails is unreadability (error, exit 1); a list that
           # succeeds WITHOUT the job is genuine absence (warning, exit 0). The
           # listing is the discriminator precisely because it answers with an
-          # empty array when the job is gone and non-zero when ARM is unreachable.
+          # empty COLLECTION when the job is gone and non-zero when ARM is
+          # unreachable. A COLLECTION, not a page — see the pagination block
+          # below, which is the second half of that sentence and was missing.
           #
           # This is the same rule scripts/ci/_arm-absence.mjs holds for the
           # sovereign estate preflights, and deliberately NOT a third inline copy
@@ -1352,20 +1354,129 @@ jobs:
           # trap that helper documents — `az` emitting a well-formed empty `[]` on
           # stdout alongside a non-zero exit and a ResourceGroupNotFound. Arm 7 of
           # the receipt is exactly that case and it exits 1, not 0.
-          LIST_URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs?api-version=$API"
-          if ! arm_get "$LIST_URL" jobs.json; then
-            echo "::error::Could not LIST Container App Jobs in $RG after 3 attempts, so this run established NOTHING about whether $JOB exists and it is NOT reported as absent. ARM said: $(arm_err) — a 429/5xx is transient (it was already retried), a 403 means the deploy identity lost Reader on $RG, a 404 means the resource group itself is gone. Post-deploy eval re-baseline NOT started."
-            exit 1
-          fi
+          # A PAGE IS NOT A LISTING. `az rest --method get` is a raw HTTP
+          # passthrough: it hands back exactly the page ARM returned and does
+          # NOT follow `nextLink`, so `.value` is ONE page. A 200 carrying a
+          # `nextLink` answers with a PARTIAL array while the job is present,
+          # and a page-1-only reader cannot tell that from "gone" — it is green,
+          # it is false, and the re-baseline silently never runs. That is the
+          # SAME deploy-integrity R3 invisibility this block removes from the
+          # failed-GET path, arriving through the pagination door instead of the
+          # error door. What makes it fail: a `nextLink` key on page 1.
+          #
+          # Not a hypothetical wire shape — measured live on ARM in this repo and
+          # recorded at scripts/ci/check-file-size.mjs:255 (#4432): Cognitive
+          # Services `Accounts_List` is RBAC-filtered PER PAGE, and page 1 came
+          # back HTTP 200 with `value: []` and a `nextLink` while the
+          # subscription held three accounts, so every model picker rendered
+          # empty with no error because nothing had failed.
+          #
+          # The remedy is the one already in the tree: `armListAll()` at
+          # apps/fiab-console/lib/azure/foundry-cs-client.ts — a BOUNDED walk
+          # (page cap, deadline, cycle guard, origin check before the token
+          # travels). It is TypeScript inside the console, behind `@/` path
+          # aliases and the console's own `armFetch`/`token()`, so a `run:`
+          # block cannot call it. This is therefore a SECOND implementation of
+          # that rule and says so rather than being a silent one; the two bounds
+          # below are its MAX_ARM_PAGES and MAX_ARM_PAGING_MS.
+          #
+          # Where it DIVERGES it diverges STRICTLY, and deliberately.
+          # `armListAll()` `break`s out of the walk on a cap, deadline, cycle or
+          # off-origin hop and returns what it has, because its consumer is a
+          # picker that degrades. THIS consumer asserts ABSENCE, and a partial
+          # collection cannot support that claim — so each of those is
+          # `::error::` + exit 1 here, never a shorter list and never an
+          # absence.
+          #
+          # ORIGIN CHECK. `nextLink` is attacker-shaped: an absolute URL read
+          # out of a RESPONSE BODY, to which `az rest` would attach a
+          # management-plane bearer token. lib/util/same-origin-url.ts explains
+          # why `startsWith(base)` is NOT a host check — both
+          # `https://management.azure.com.evil.test/x` and
+          # `https://management.azure.com@evil.test/x` pass a bare prefix test.
+          # The `case` glob below demands the character AFTER the literal base
+          # be `/`, which is the authority TERMINATOR: `.` and `@` are not `/`,
+          # and neither are `:` (port), `?`, `#` or `\`. So the authority is
+          # exactly $ARM_BASE's for any parser that ends the authority at one of
+          # those. $ARM_BASE is also the literal $LIST_URL is built from, so the
+          # endpoint has one spelling in this step rather than two that can
+          # drift.
+          ARM_BASE=https://management.azure.com
+          MAX_PAGES=50            # armListAll() MAX_ARM_PAGES
+          MAX_PAGING_SECONDS=60   # armListAll() MAX_ARM_PAGING_MS
+          LIST_URL="$ARM_BASE/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs?api-version=$API"
+          PAGE_URL="$LIST_URL"
+          SEEN_LINKS="|$LIST_URL|"
+          PAGING_STARTED=$SECONDS
+          PAGES=0
+          TOTAL=0
+          MATCH=0
+          while : ; do
+            PAGES=$((PAGES + 1))
+            if ! arm_get "$PAGE_URL" jobs.json; then
+              echo "::error::Could not LIST Container App Jobs in $RG (page $PAGES) after 3 attempts, so this run established NOTHING about whether $JOB exists and it is NOT reported as absent. ARM said: $(arm_err) — a 429/5xx is transient (it was already retried), a 403 means the deploy identity lost Reader on $RG, a 404 means the resource group itself is gone. Post-deploy eval re-baseline NOT started."
+              exit 1
+            fi
 
-          # A parse that yields nothing is also not an absence. Require the
-          # collection SHAPE before concluding anything from its contents.
-          if ! TOTAL=$(jq -e 'if (.value | type) == "array" then (.value | length) else error("no .value array") end' jobs.json); then
-            echo "::error::The job listing for $RG returned 200 but is not a job collection (no .value array), so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
-            exit 1
-          fi
-          MATCH=$(jq --arg n "$JOB" '[.value[] | select(.name == $n)] | length' jobs.json)
-          MATCH=${MATCH:-0}
+            # A parse that yields nothing is also not an absence. Require the
+            # collection SHAPE before concluding anything from its contents —
+            # and count the matches in the SAME guarded jq. The previous
+            # revision counted in a bare `MATCH=$(jq …)`: on a `.value` of
+            # non-objects that died at rc=5 with no annotation, and its
+            # `MATCH=${MATCH:-0}` default was unreachable (a `length` filter
+            # always emits a number, and errexit killed the bare assignment
+            # before any default could apply).
+            #
+            # The element-type arm is why this is an `elif` and not a typed
+            # `select(...)`: a `select` that SKIPS non-objects turns
+            # `{"value":[1,2]}` into "two jobs, neither matching" — a false
+            # ABSENCE, which is fail-OPEN and strictly worse than the rc=5 it
+            # replaced. Measured on arm P7 while writing this. An array of
+            # non-objects is not a job collection, so it errors like any other
+            # unparseable listing. An EMPTY array still passes (`any` over
+            # nothing is false), because an empty page is legitimate.
+            if ! PAGE_COUNTS=$(jq -er --arg n "$JOB" '
+                   if (.value | type) != "array" then error("no .value array")
+                   elif (.value | map(type) | any(. != "object")) then error("not a job collection")
+                   else "\(.value | length) \([.value[] | select(.name == $n)] | length)" end' jobs.json); then
+              echo "::error::The job listing for $RG returned 200 on page $PAGES but is not a job collection (.value is not an array, or not an array of objects), so absence cannot be concluded from it. jq's own message is on stderr above. Post-deploy eval re-baseline NOT started."
+              exit 1
+            fi
+            TOTAL=$((TOTAL + ${PAGE_COUNTS%% *}))
+            MATCH=$((MATCH + ${PAGE_COUNTS##* }))
+
+            if ! NEXT=$(jq -r '.nextLink // "" | tostring' jobs.json); then
+              echo "::error::The job listing for $RG returned 200 on page $PAGES but its nextLink could not be read, so the collection was not fully walked and absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
+              exit 1
+            fi
+            [ -n "$NEXT" ] || break
+
+            # Past this line the collection is INCOMPLETE, so every exit below
+            # is an error and none of them is an absence: a walk that stopped
+            # early cannot tell "not in the collection" from "not in the part
+            # that was read".
+            case "$NEXT" in
+              "$ARM_BASE"/*) ;;
+              *)
+                echo "::error::The job listing for $RG handed back a nextLink that is not on $ARM_BASE at page $PAGES ('$NEXT'). Refusing to carry a management-plane token off-origin (lib/util/same-origin-url.ts), and refusing to conclude absence from the $TOTAL job(s) read so far. Post-deploy eval re-baseline NOT started."
+                exit 1 ;;
+            esac
+            case "$SEEN_LINKS" in
+              *"|$NEXT|"*)
+                echo "::error::The job listing for $RG repeated a nextLink at page $PAGES — that is a cycle, not progress, so the collection was not fully walked and absence cannot be concluded from the $TOTAL job(s) read so far. Post-deploy eval re-baseline NOT started."
+                exit 1 ;;
+            esac
+            SEEN_LINKS="$SEEN_LINKS|$NEXT|"
+            if [ "$PAGES" -ge "$MAX_PAGES" ]; then
+              echo "::error::The job listing for $RG is still paginating after $MAX_PAGES page(s) ($TOTAL job(s) read). The collection was not fully walked, so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
+              exit 1
+            fi
+            if [ "$((SECONDS - PAGING_STARTED))" -ge "$MAX_PAGING_SECONDS" ]; then
+              echo "::error::Walking the job listing for $RG passed ${MAX_PAGING_SECONDS}s at page $PAGES ($TOTAL job(s) read). The collection was not fully walked, so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
+              exit 1
+            fi
+            PAGE_URL="$NEXT"
+          done
 
           # Only now can absence be asserted, and the cause list is narrower than
           # it used to be BECAUSE it can be: every read-failure cause was just
@@ -1380,15 +1491,20 @@ jobs:
           # R7: name every cause that can actually hold, and do not assert which
           # one does.
           if [ "$MATCH" -eq 0 ]; then
-            echo "::warning::Container App Job $JOB is absent from a successful listing of $RG ($TOTAL job(s) listed). This run did not establish WHICH cause applies; any of these will produce it — functionAppsConfig.copilotEvaluatorEnabled=false (opt-out), containerPlatform != 'containerApps' (the job is Container-Apps-only), or deployAppsEnabled=false. Post-deploy eval re-baseline NOT started. Each of those causes means the job does not exist, so there is no nightly schedule for this step to have affected; if the job is later deployed, its schedule comes from bicep and nothing here changed it."
+            echo "::warning::Container App Job $JOB is absent from a successful listing of $RG — the WHOLE collection was walked ($TOTAL job(s) across $PAGES page(s), with no nextLink left unfollowed), which is what makes this an absence rather than a truncated page. This run did not establish WHICH cause applies; any of these will produce it — functionAppsConfig.copilotEvaluatorEnabled=false (opt-out), containerPlatform != 'containerApps' (the job is Container-Apps-only), or deployAppsEnabled=false. Post-deploy eval re-baseline NOT started. Each of those causes means the job does not exist, so there is no nightly schedule for this step to have affected; if the job is later deployed, its schedule comes from bicep and nothing here changed it."
             exit 0
           fi
 
           # The job IS in the listing. From here a failed GET can only be
           # unreadability -- absence has already been excluded by the line above,
-          # which is the whole point of doing it in that order.
+          # which is the whole point of doing it in that order. The one residual
+          # is a TOCTOU the run genuinely cannot close: a job listed at T0 and
+          # DELETED before this GET answers 404, and this step calls that
+          # unreadable. The window is milliseconds and the direction is closed
+          # (error, never a silent absence), so the sentence names the
+          # possibility rather than asserting a cause it did not establish.
           if ! arm_get "https://management.azure.com${JOB_ID}?api-version=$API" job.json; then
-            echo "::error::$JOB IS present in the $RG listing but its own GET failed after 3 attempts — that is unreadable, not absent. ARM said: $(arm_err). Post-deploy eval re-baseline NOT started."
+            echo "::error::$JOB IS present in the $RG listing but its own GET failed after 3 attempts — that is unreadable, not absent (or, in the millisecond window between the two calls, deleted; this run cannot tell those apart and does not claim to). ARM said: $(arm_err). Post-deploy eval re-baseline NOT started."
             exit 1
           fi
 
@@ -1405,7 +1521,7 @@ jobs:
           COUNT=$(jq '(.properties.template.containers // []) | length' job.json)
           COUNT=${COUNT:-0}
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::$JOB has no container template — its image has not been built/pushed, so no execution can start. Build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh."
+            echo "::error::No container template could be read for $JOB from its GET (an empty or malformed body reads the same way here as a genuinely empty container list, and this run did not establish which). If the job is deployed and its list really is empty, its image has not been built/pushed, so no execution can start — build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh. Either way no execution was started."
             exit 1
           fi
 
@@ -1438,8 +1554,25 @@ jobs:
                    | .env = ((.env // []) | map(select(.name | IN($ovn[]) | not))) + $ov]}' \
             job.json > override.json
 
-          az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
-            --headers "Content-Type=application/json" --body @override.json > start.json
+          # The one WRITE in this step, and the only `az` here that mutates
+          # anything. GUARDED for the same reason the script's `--apply` write
+          # is (check-retired-function-timers.sh): a bare `az rest --method
+          # post` under errexit exits non-zero carrying ONLY az's own text, and
+          # deploy-integrity R6 requires a permission failure to name the exact
+          # action and scope. The step header promises a start that did not
+          # happen "exits non-zero AND SAYS WHY"; without this wrapper the 403
+          # arm said only what az said.
+          #
+          # The role names are from Microsoft Learn (azure/container-apps/jobs
+          # §Permissions), not from memory: `Microsoft.App/jobs/start/action` is
+          # carried by the built-in **Container Apps Jobs Operator** and
+          # **Container Apps Jobs Contributor**.
+          if ! az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
+               --headers "Content-Type=application/json" --body @override.json > start.json 2> arm_err.txt; then
+            cat arm_err.txt >&2
+            echo "::error::Could not START $JOB — no execution was created and the re-baseline did NOT run. ARM said: $(arm_err). A 403 here means the deploy identity lacks Microsoft.App/jobs/start/action on ${JOB_ID}; grant it Container Apps Jobs Operator (read/start/stop) or Container Apps Jobs Contributor at that scope. A 429/5xx is transient and this run can simply be re-dispatched; a 404 means the job vanished between the GET above and this POST."
+            exit 1
+          fi
           EXEC=$(jq -r '.name // .id // "unknown"' start.json)
           # `// "unknown"` covers a MISSING key, not an EMPTY body: on an empty
           # start.json jq emits nothing and exits 0, leaving EXEC="" and a notice

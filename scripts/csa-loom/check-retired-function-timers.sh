@@ -78,8 +78,16 @@
 #       VAL=     `if !` guarded
 #       SHOWN=   `if !` guarded
 #       the `$([[ $APPLY -eq 1 ]] && echo apply || echo verify)` inside the
-#         boundary echo — the `||` makes it total, so it cannot carry a
-#         non-zero status; measured, not assumed
+#         boundary echo — safe because the substitution sits in an ARGUMENT of
+#         `echo`, and a command substitution in argument position never carries
+#         its status to errexit. The reason is NOT that the `||` makes the list
+#         total: an earlier revision of this header said that and it is false by
+#         measurement — `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-`
+#         returns 1, because with the descriptor closed BOTH arms fail. Against
+#         a positive control on the same harness,
+#         `echo "arg-position: $(false)END"` under `set -euo pipefail` exits 0
+#         and the script continues, while `V="$(false)"` exits 1 and it dies.
+#         Same conclusion, load-bearing for a different reason.
 #   1 `az` command outside a substitution
 #       `appsettings set`, guarded by `&& ! az` in an `if` condition
 #                                     <- WAS BARE; this is the other half

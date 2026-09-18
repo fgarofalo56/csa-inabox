@@ -117,6 +117,60 @@ What was missing was any record, so a re-enable would have been silent. Added:
   is unaffected"* is gone — R7, since three of the four causes it sat behind
   mean the job does not exist and so there is no schedule to be unaffected.
 
+  **Correction (round 4, 2026-09-18).** The round-3 fix resolved absence from a
+  **single ARM page**, which is not a listing. `az rest --method get` is a raw
+  HTTP passthrough and does **not** follow `nextLink`, so `.value` was one page
+  and `MATCH == 0` meant "not on page 1". Measured on the rendered block against
+  a stubbed `az`: a page 1 that lacks the job while carrying a `nextLink`
+  produced **rc=0 and the green absence warning** — the job was on page 2 the
+  whole time. Same false green when page 1 was `value:[]` with a `nextLink` and
+  page 2 then **403'd**. That is the identical `deploy-integrity.md` R3
+  invisibility the round-3 fix removes from the failed-GET path, re-entering
+  through the pagination door, and it is the one input the eleven-arm receipt
+  never varied — the table was SILENT there, not clean.
+
+  Not a hypothetical wire shape: this repo measured it live on ARM and recorded
+  it at `scripts/ci/check-file-size.mjs:255` (#4432) — `Accounts_List` is
+  RBAC-filtered per page, and page 1 answered HTTP 200 `value:[]` with a
+  `nextLink` while the subscription held three accounts.
+
+  Fixed by walking the WHOLE collection before any absence can be asserted, with
+  the bounds and the origin check already in the tree at
+  `apps/fiab-console/lib/azure/foundry-cs-client.ts` `armListAll()`. That helper
+  is TypeScript behind the console's `@/` aliases and its own `armFetch`/token
+  minting, so a `run:` block cannot call it; the shell walk therefore says in
+  its own comment that it is a SECOND implementation of the rule rather than a
+  silent one, borrows both bounds by name (`MAX_ARM_PAGES` 50,
+  `MAX_ARM_PAGING_MS` 60s), and **diverges only in the strict direction**:
+  `armListAll()` `break`s on a cap, deadline, cycle or off-origin hop and
+  returns a partial list because its consumer is a picker that degrades; this
+  consumer asserts ABSENCE, which a partial collection cannot support, so each
+  of those is `::error::` + exit 1 and never an absence.
+
+  One regression was caught by the arms rather than by review: the first draft
+  counted matches with a typed `select((type == "object") and …)`, which turned
+  a `.value` of non-objects into "two jobs, neither matching" — a false ABSENCE,
+  fail-OPEN, and strictly worse than the bare rc=5 it replaced. The element-type
+  check is now an `error()` arm, and that is arm P7.
+
+  Also in this round: the workflow's `start` POST — the only `az` in the block
+  that mutates anything — was the one call with no guard and no R6 remediation,
+  so a 403 exited 1 carrying only `az`'s own text. It now names
+  `Microsoft.App/jobs/start/action` and the two built-in roles that carry it
+  (**Container Apps Jobs Operator**, **Container Apps Jobs Contributor** — from
+  Microsoft Learn, not from memory) at the job's full scope. Round 3 gave the
+  script's write exactly this treatment and did not carry it across: closing a
+  finding at its LABEL rather than at every SITE.
+
+  And a header claim corrected in `check-retired-function-timers.sh`: the audit
+  said the `$([[ … ]] && echo apply || echo verify)` substitution was safe
+  because the `||` "makes it total". It does not —
+  `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-` returns 1, since with
+  the descriptor closed both arms fail. The conclusion holds for a stronger
+  reason the audit did not give: the substitution sits in an ARGUMENT of `echo`,
+  and a command substitution in argument position never carries its status to
+  errexit. The claim was labelled "measured"; it was not.
+
 **Obliges:** run the check before any claim that the hazard is retired; if the
 Console ever grows an estate-drift surface, this belongs on it. After part (b)
 lands the check keeps passing — it reports `RETIRED`, not a refusal.
