@@ -217,8 +217,16 @@ test('a pure line comment is masked even when the PREVIOUS line ends in a colon'
 
 test('a real https:// URL outside a string is still NOT read as a comment', () => {
   // The case the `://` exemption exists for — narrowing it must not break it.
-  // FAILS IF: the exemption is deleted outright.
-  assert.equal(codeOnly('<a>https://example.com/x</a>\n').includes('example.com'), true);
+  // FAILS IF: the exemption is deleted outright — codeOnly would mask from the
+  // `//` to end of line and the output would no longer equal the input.
+  //
+  // Asserts WHOLE-STRING equality rather than `.includes('example.com')`. The
+  // substring form was flagged by CodeQL as incomplete URL sanitization
+  // (js/incomplete-url-substring-sanitization) — a false positive in a test, but
+  // the equality form is also the STRONGER assertion: `.includes` passed even if
+  // the rest of the line were eaten, which is the exact failure this pins.
+  const src = '<a>https://example.com/x</a>\n';
+  assert.equal(codeOnly(src), src);
 });
 
 // ───────────────────────────────────────────────────────────────────────────
