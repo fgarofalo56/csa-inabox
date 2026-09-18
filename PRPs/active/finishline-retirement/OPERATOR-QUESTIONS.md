@@ -25,10 +25,10 @@
 > accompany the number, or it protects nothing.
 >
 > Earlier revisions claimed **seven dissolved**, then **two**. Seven was reached
-> by counting OP-19's two asks and OP-9's items as separate rows, which line 91
-> of this very file forbids. Two counted OP-11, which is implemented in the
-> bootstrap script but NOT in `entra-app-registration.bicep` — one of the two
-> creators issue 2678 names. The four asked and answered:
+> by counting OP-19's two asks and OP-9's items as separate rows, which the rule
+> below forbids (grep: "The counts are of"). Two counted OP-11, which is
+> implemented in the bootstrap script but NOT in `entra-app-registration.bicep`
+> — one of the two creators issue 2678 names. The four asked and answered:
 >
 > | row | decision |
 > |---|---|
@@ -94,7 +94,10 @@ counting OP-11, which is implemented in the bootstrap script but not in
 The original counts are kept above rather than overwritten, because the drop from
 ten LIVE to roughly four decisions is still the finding — it is the measurement
 of how much of an operator queue goes stale in
-six weeks, and rewriting the number would erase it.
+six weeks, and rewriting the number would erase it. ("Roughly" is load-bearing:
+the decided count is disputed, see the banner and `DECISIONS.md` § OP-19(b). The
+FINDING survives either value — ten to four and ten to five are the same
+observation — which is why it is stated here without waiting on the dispute.)
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
 been discharged. They are filed under LIVE because a real decision survives in
@@ -348,10 +351,15 @@ Dispatch `deploy-fiab-commercial.yml` attended with `run_mode=full`
 merges.
 
 **#3058 is MERGED**, so the stated precondition is met. The run has not
-happened, and there is a new obstacle the question predates: the six most recent
-`deploy-fiab-commercial.yml` runs — 2026-09-12 through **2026-09-17**, all
-`schedule` — are **all `failure`**, already tracked as **#4448**. An attended
-dispatch into a red lane is unlikely to produce the receipt.
+happened. There WAS a further obstacle the question predates — the
+`deploy-fiab-commercial.yml` scheduled runs from 2026-09-12 through 2026-09-17
+were **six consecutive `failure`s**, tracked as **#4448** — but that is no
+longer the state: the **2026-09-18T10:52Z scheduled run returned `success`**,
+measured the same day as this PR's other estate readings. An earlier revision of
+this paragraph said the six most recent runs are all failure and built its
+conclusion on it; that was true of 2026-09-17 and is not true at head. #4448
+remains OPEN, so the lane's reliability is not established either — one green
+after six reds is a recovery, not a record.
 
 The watch-list in the original ask is still worth carrying verbatim into
 whenever the window opens:
@@ -407,7 +415,8 @@ time.
 
 **Superseded, 2026-09-18.** This row ended "Nothing has disabled the duplicate
 timers." That was true when written and is now false, and it was falsified by
-this very PR's own measurement 345 lines above. Measured read-only in DMLZ:
+this very PR's own measurement earlier in this file (grep: "AzureWebJobs").
+Measured read-only in DMLZ:
 `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
 `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
 `copilotEvaluatorHttp` all report `isDisabled=true` with

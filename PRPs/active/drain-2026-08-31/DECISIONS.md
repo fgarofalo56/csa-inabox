@@ -318,10 +318,26 @@ it extracts a decision that changes nothing.
 carry something live.** Those add to more than ten because OP-9 does both: one
 of its seven items was decided and four were never answered.
 
+**THE "FOUR" IS DISPUTED, AND THIS FILE IS THE AUTHORITATIVE COPY, SO THE
+CAVEAT BELONGS HERE FIRST.** OP-19(b) is filed approved with no recorded
+provenance, while PR #4564's body says `operator-approved 2026-09-17` — the same
+day these questions were put. Either the teardown was a FIFTH decision by
+another route, in which case four is short by one; or that line is unsourced, in
+which case OP-19(b) is not approved at all. See the OP-19(b) row below.
+
+That caveat was written at the OP-19(b) row as "resolve the provenance before
+anyone cites either count" and then **this headline cited the count flat**, 38
+lines above its own instruction — while the caveat was propagated to the PR
+title, the PR body and `OPERATOR-QUESTIONS.md` and never back to the source. A
+reviewer found it in the file that issued the instruction. Fifth round, same
+class: the retraction reaches every surface except the one being read as
+authoritative.
+
 Two earlier revisions of this line were both wrong, in the same direction. The
 first said "seven of the ten dissolved" — reached by counting OP-19's two asks
 as two rows and OP-9's items as a third, which
-`PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md:91` forbids in terms:
+`PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md` forbids in terms
+(grep: "The counts are of"):
 *"The counts are of questions, not of sub-asks; several rows bundle two or
 three."* The second said two dissolved, counting OP-11, which turned out to be
 implemented in one of its two creators and not the other. Splitting sub-asks and
@@ -348,9 +364,9 @@ dissolved — see below.
 |---|---|---|
 | **OP-5** `task C12` | **untouched** | GOV-3 / model-strategy §7 / TPM raises. Not measured, not asked, not dissolved. An earlier revision of this section omitted it entirely while claiming all ten rows were accounted for — the omission is the reason the arithmetic appeared to close |
 | **OP-9** items 1, 3, 5, 7 | **no verdict** | item 2 was decided by the operator (below) and items 4 and 6 are duplicates of OP-8 and OP-7. The remaining four were neither measured nor asked |
-| **OP-11** audience registration | **stands as asked** | an earlier revision filed this as dissolved on the grounds that "option (a) is already implemented in code", citing `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058`. That is ONE of the two creators. Issue 2678's option (a) requires the identifier URI in **both** creators plus `az ad sp create` on the bicep path, and `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:138` still runs `az ad app create --display-name … --sign-in-audience AzureADMyOrg` with **zero** `--identifier-uris` and **zero** `az ad sp create` (measured 2026-09-18; the bootstrap script's single `identifierUris` is the positive control showing the probe is not blind). Issue 2678 is OPEN and its body prefers option (b). This PR's own row at `OPERATOR-QUESTIONS.md:331` says "stands exactly as asked" — the dissolution contradicted a line in the same PR |
+| **OP-11** audience registration | **stands as asked** | an earlier revision filed this as dissolved on the grounds that "option (a) is already implemented in code", citing `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058`. That is ONE of the two creators. Issue 2678's option (a) requires the identifier URI in **both** creators plus `az ad sp create` on the bicep path, and `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:138` still runs `az ad app create --display-name … --sign-in-audience AzureADMyOrg` with **zero** `--identifier-uris` and **zero** `az ad sp create` (measured 2026-09-18; the bootstrap script's single `identifierUris` is the positive control showing the probe is not blind). Issue 2678 is OPEN and its body prefers option (b). This PR's own row at `OPERATOR-QUESTIONS.md` (grep: "stands exactly as asked") says "stands exactly as asked" — the dissolution contradicted a line in the same PR |
 | **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about is much narrower than the row implies — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. "Cannot occur" was too strong: `deploy-fiab-commercial.yml:1265` is an `else` that WARNS and proceeds with a mint. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
-| **OP-14** `#3056` owner + judge cap | **never asked** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **The operator did not decide it.** The anchor is IN THIS DOCUMENT and is checkable: it carries exactly four `> **Decision:**` blocks, at OP-3, OP-9 item 2, OP-7 and OP-8, and there is none for OP-14 — `grep -c '^> \*\*Decision:\*\*'` returns 4. An earlier revision re-anchored this on a bare ENUMERATION, which was as unsourced as the count it replaced; a reviewer was right to say so (`git log --all -S "operator-approved"` returns only this PR's own commit, and operator and agents share the `fgarofalo56` identity, so authorship proves nothing either way). The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
+| **OP-14** `#3056` owner + judge cap | **no decision recorded** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **This document records no decision for it**, and that is exactly what the anchor supports and all it supports: the file carries exactly four `> **Decision:**` blocks — OP-3, OP-9 item 2, OP-7, OP-8 — and none for OP-14 (`grep -c '^> \*\*Decision:\*\*'` returns 4). **Narrowed on purpose.** Two earlier anchors for this retraction were unsourced, and a third overreached: a revision wrote "the operator did not decide it", which the anchor cannot establish — absence from this file is absence of a RECORD, not proof about what was said. The row immediately below applies the OPPOSITE inference to the same kind of evidence, filing OP-19(b) as "approved by a route this document does not record"; both cannot be right about what silence means, so this row now claims only the record. (`git log --all -S "operator-approved"` returns only this PR's own commit, and operator and agents share the `fgarofalo56` identity, so authorship settles nothing either way.) The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
 | **OP-19 (a)** duplicate timers | **mitigated out-of-band; fragile for the OPPOSITE reason first claimed** | measured on the live estate 2026-09-18: the timers ARE disabled — `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor` and `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` both report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`, as does a third, `copilotEvaluatorHttp`, which an earlier revision omitted. It is an app setting applied out of band, **not** the result of PR #4564, which is open and unmerged. An earlier revision then said "a bicep re-apply drops out-of-band state" — that mechanism CANNOT operate here: nothing in `platform/fiab/bicep` declares `func-secexp-*` or `func-cpeval-*` at all (their modules were deleted and replaced by Container App Jobs, e.g. `secret-expiry-monitor-job.bicep:24`), and nothing deploys in Complete mode, so an incremental apply cannot touch an undeclared resource. The real fragility is the mirror image: these hosts sit OUTSIDE IaC, so nothing re-asserts the disable either, and no gate would notice it being undone |
 | **OP-19 (b)** teardown | **approved — by a route this document does not record** | the row says "approved; PR carries the proof", and PR #4564's body line 3 reads `Refs #4495 · task C3 · operator-approved 2026-09-17` — the same day the four questions above were put. **This document does not establish where that approval came from**, and an approval with no recorded provenance is the OP-14 defect one row up. Two readings, and nothing written here separates them: either the teardown was a FIFTH operator decision taken by another route, in which case the headline "four" is short by one; or #4564's "operator-approved" is itself unsourced, in which case OP-19(b) is not approved and belongs with the unanswered rows. Either way it is NOT settled by this pass. Resolve the provenance before anyone cites either count |
 
@@ -503,11 +519,12 @@ forwarding the list as written.
 
 **The ratio did NOT hold, and an earlier revision of this line said it did.**
 It read "The ratio held: **7 of 10 dissolved**" — the same claim retracted at the
-top of this section, surviving 142 lines below the retraction, in the very commit
+top of this section, surviving far below the retraction, in the very commit
 whose subject was about closing a finding at every site rather than at its label.
 Corrected count: **one row dissolved outright** (OP-15), four carry an operator
-decision, and the rest still carry something live. OP-11 was briefly filed as a
-second dissolution and is not one — see its row.
+decision — **that "four" is disputed; see the headline of this section and the
+OP-19(b) row** — and the rest still carry something live. OP-11 was briefly
+filed as a second dissolution and is not one — see its row.
 
 The generalisable form, worth more than any individual row here: **before asking
 an operator to decide, verify the premise of the question at its site.** A
