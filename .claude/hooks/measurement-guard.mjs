@@ -142,6 +142,51 @@ const RULES = [
       `  Precedent: a discarded stderr turned "I could not reach the registry" into\n` +
       `  "the tag does not exist" and sent two investigations down the wrong path (R7).`,
   },
+  {
+    id: 'python-dash-repl',
+    // `python -` that does not cleanly attach to stdin becomes an INTERACTIVE
+    // REPL. It then loops on a traceback forever. Measured twice, same session:
+    //   stderr -> a file   : 69,887,069,161 bytes (~65 GB), stdout 0 bytes
+    //   stderr -> /dev/null: 8.3 GB of write IO, ~1h CPU, and NO file grew at all
+    // The second is worse. It is invisible to every size check and to
+    // `git status` (temp/ is gitignored), so it is found only by listing
+    // processes -- usually after something unrelated gets killed for memory.
+    //
+    // This rule exists because KNOWING the rule demonstrably does not prevent
+    // it: six occurrences in one session, three by agents who were actively
+    // quoting the prohibition at the time, and one by the coordinator while
+    // writing a comment about a different trap. Per the global operating rules,
+    // automatic behaviour requires a hook -- memory only informs.
+    test: (raw) => {
+      const cmd = maskQuoted(raw);
+      // A BARE `-` argument only. The lookahead is what keeps `python -c` and
+      // `python -m` usable: those have a letter immediately after the dash, so
+      // there is no whitespace/redirect boundary for it to match.
+      //
+      // WHAT MAKES THIS FIRE (assertion-design.md): `python - <<'EOF'`,
+      // `python3 - "$@" <<X`, `python - > out 2>&1 <<X`, and a bare `python -`.
+      // WHAT MUST NOT: `python -c "..."`, `python -m pytest`, `python --version`,
+      // and `python -` inside quotes (maskQuoted removes it).
+      const RE = /\b(?:python|python3|py)\s+-(?=\s|$|[<>|&])/;
+      for (const line of cmd.split(/\r?\n/)) {
+        if (/^\s*#/.test(line)) continue;
+        if (RE.test(line)) return line.trim().slice(0, 90);
+      }
+      return null;
+    },
+    message: (hit) =>
+      `\`python -\` becomes an interactive REPL when the heredoc misses stdin.\n` +
+      `  offending: ${hit}\n` +
+      `  FIX: write the script to a file and run it:\n` +
+      `         Write tool -> temp/thing.py ; then  python temp/thing.py\n` +
+      `       A true one-liner is fine as  python -c "..."  (this rule allows it).\n` +
+      `  There is NO safe inline shape. Redirecting stdout does not help -- the\n` +
+      `  REPL's loop is on STDERR. An empty body does not help either; two of the\n` +
+      `  six occurrences were deliberate no-ops that still hung for 120s and left\n` +
+      `  a REPL to be killed.\n` +
+      `  Measured: 65 GB written in one case; 8.3 GB of IO and zero file growth in\n` +
+      `  another, which is the shape no size check can see.`,
+  },
 ];
 
 import { readFileSync } from 'node:fs';

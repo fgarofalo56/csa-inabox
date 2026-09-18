@@ -151,6 +151,66 @@ test('NEGATIVE: a non-measurement discarding stderr is still allowed', () => {
   assert.equal(has(`ps -ef 2>/dev/null | grep node`, 'discarded-stderr'), false);
 });
 
+// ------------------------------------------------ `python -` interactive REPL
+// `python - <<'EOF'` that misses stdin becomes an interactive REPL and loops on
+// a traceback forever. Six occurrences in one session, three of them by agents
+// quoting the prohibition at the time — which is why this is a hook and not a
+// note. The POSITIVE cases below are the literal shapes that were run.
+test('POSITIVE: the canonical heredoc is blocked', () => {
+  assert.ok(has(`python - <<'EOF'\nprint(1)\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: an EMPTY body is blocked — "harmless" is not a defence', () => {
+  // Two of the six were deliberate no-ops. They still hung for the full 120s
+  // and still left a REPL to be killed. The construct is the hazard, not what
+  // it would have run.
+  assert.ok(has(`python - <<'NEVER'\nNEVER`, 'python-dash-repl'));
+});
+
+test('POSITIVE: redirecting STDOUT does not make it safe — the loop is on stderr', () => {
+  assert.ok(has(`python - > /dev/null 2>&1 <<'X'\nX`, 'python-dash-repl'));
+});
+
+test('POSITIVE: the QUIET shape (2>/dev/null) is blocked — no file ever grows', () => {
+  // Measured: 8.3 GB of write IO and ~1h CPU with zero file-size movement. This
+  // variant is invisible to every size check, so it survives longest.
+  assert.ok(has(`python - 2>/dev/null <<'X'\nX`, 'python-dash-repl'));
+});
+
+test('POSITIVE: args before the heredoc are blocked', () => {
+  assert.ok(has(`python - "$@" <<'PYEOF'\nPYEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: python3 and a bare trailing dash are blocked', () => {
+  assert.ok(has(`python3 - <<EOF\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -`, 'python-dash-repl'), 'end-of-string must match too');
+});
+
+test('POSITIVE: buried on a later line of a multi-line script', () => {
+  assert.ok(has(`set -e\ncd /tmp\npython - <<'Z'\nZ`, 'python-dash-repl'));
+});
+
+test('NEGATIVE: `python -c` is the sanctioned escape and must not be blocked', () => {
+  // If this rule denied -c it would be routed around within a day, and a guard
+  // people delete protects nothing.
+  assert.equal(has(`python -c "import sys; print(sys.version)"`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: -m, -u, --version and a plain script path are allowed', () => {
+  assert.equal(has(`python -m pytest tests/ -q`, 'python-dash-repl'), false);
+  assert.equal(has(`python -u temp/s.py`, 'python-dash-repl'), false);
+  assert.equal(has(`python --version`, 'python-dash-repl'), false);
+  assert.equal(has(`python temp/script.py`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: the trap INSIDE quotes is not a command (quote-masking)', () => {
+  // Talking about the pattern must stay possible — in a -c program, in an echo,
+  // and in a comment. A guard that cannot be discussed cannot be documented.
+  assert.equal(has(`python -c "print('python - <<EOF')"`, 'python-dash-repl'), false);
+  assert.equal(has(`echo "never run python - <<EOF"`, 'python-dash-repl'), false);
+  assert.equal(has(`# python - <<'EOF' is forbidden`, 'python-dash-repl'), false);
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule
