@@ -626,7 +626,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`Item.history` permanently. This is the round-9 head, and the whole "
          "PR exists to stop a close being reported that never reached GitHub"),
         "tick.py",
-        "        outcome = _close_outcome(err)",
+        "        outcome = _close_outcome(err, repo, number)",
         "        outcome = CLOSE_PERFORMED",
     ),
     (
@@ -637,10 +637,14 @@ ARMS: list[tuple[str, str, str, str]] = [
          "nothing in this suite watches. The third arm is the difference "
          "between failing honest and failing open"),
         "tick.py",
-        ("    if _GH_PERFORMED_CLOSE in err:\n"
-         "        return CLOSE_PERFORMED\n"
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
          "    return CLOSE_OUTCOME_UNKNOWN"),
-        "    return CLOSE_PERFORMED",
+        ("        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_PERFORMED"),
     ),
     (
         ("GH25 the read stops establishing the object's TYPE, so a number that "
@@ -654,6 +658,87 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         '    url = str((parsed or {}).get("url") or "")',
         '    url = "https://github.com/o/r/issues/0"',
+    ),
+    # -- round 11: the classifier read by IDIOM, and the TITLE is in the line --
+    #
+    # close.go interpolates `issue.Title` as the final `%s` of BOTH exit-0
+    # sentences (:118, :169). Round 10's classifier asked whether a phrase
+    # appeared ANYWHERE in stderr, so an issue's own title could forge the
+    # verdict -- measured end to end at f3a2a834460 on a close that was
+    # genuinely performed: 1 comment posted, state CLOSED, and a note saying
+    # neither happened, written permanently into `Item.history`. GH26 is that
+    # defect verbatim; GH29 is the tempting "swap the two ifs", which merely
+    # moves the collision onto the dangerous side. Only a POSITIONAL read
+    # survives both, because the title can never start a line.
+    (
+        ("GH26 THE CLASSIFIER GOES BACK TO READING BY IDIOM -- a bare substring "
+         "over the whole of stderr, already-closed first. This is round 10's "
+         "head. `issue.Title` is the last field of both sentences, so a close "
+         "this run GENUINELY PERFORMED, on an issue whose title contains `is "
+         "already closed`, is reported as somebody else's with its receipt "
+         "comment denied -- two false statements of fact on the ORDINARY "
+         "SUCCESS PATH, then written into `Item.history`. Latent only because "
+         "no current title collides; the population is 334 issues titled by "
+         "this lane about issue-closing machinery"),
+        "tick.py",
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        ("        if _GH_ALREADY_CLOSED_SUFFIX in err:\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+    ),
+    (
+        ("GH29 THE SAME IDIOM WITH THE TWO TESTS SWAPPED -- the fix that looks "
+         "like a fix. It cures GH26's direction and creates the worse one: an "
+         "already-closed line whose title contains `Closed issue ` now reports "
+         "a close this run did NOT perform, which is GH23 restored through the "
+         "title field. Told apart from GH26 by which half of "
+         "`test_blocker_an_issues_own_title_cannot_forge_the_close_outcome` "
+         "goes red -- GH26 fails half one, GH29 fails half two -- so neither "
+         "arm can pass for the other"),
+        "tick.py",
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+    ),
+    (
+        ("GH27 THE UNKNOWN-OUTCOME NOTE DROPS ITS REMEDIATION, leaving the "
+         "operator told only that the tool cannot tell -- from a state it "
+         "deliberately refuses to re-enter, because the ledger write below "
+         "makes the item terminal and the record route refuses a terminal "
+         "item. Honest and unactionable is not R6 satisfied: the note has to "
+         "name the one action (read the comments, post the receipt by hand if "
+         "none begins `Drain harness: receipt verified`)"),
+        "tick.py",
+        ('            "so the receipt comment MAY NOT have been posted. DO THIS: read the "\n'
+         '            f"issue\'s comments (`gh issue view {number} --repo {repo} --comments`) "\n'
+         '            "and, if none begins `Drain harness: receipt verified`, post the "\n'
+         '            "receipt by hand - this tool will not re-enter the path, because the "\n'
+         '            "ledger write below makes the item terminal and the record route "\n'
+         '            "refuses a terminal item (#4579 tracks closing that gap in code)"'),
+        '            "so the receipt comment MAY NOT have been posted"',
+    ),
+    (
+        ("GH28 THE READ STOPS ESTABLISHING WHICH REPOSITORY ANSWERED, so a "
+         "TRANSFERRED issue -- whose old number stays reachable and resolves "
+         "to the NEW repository -- is closed, and permanently commented on, in "
+         "a repository this tool was never asked about. The `--repo` pin that "
+         "arm GH22 protects was argued from exactly this hazard; without the "
+         "comparison it is a hope about `gh` rather than a verified effect, "
+         "and the url that settles it is already parsed two lines up"),
+        "tick.py",
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if answered.casefold() != repo.casefold():"),
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if False:"),
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (

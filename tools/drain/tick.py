@@ -540,6 +540,34 @@ def _object_kind_from_url(url: str) -> str:
     return parts[2] if len(parts) >= 4 else ""
 
 
+def _object_repo_from_url(url: str) -> str:
+    """The `{owner}/{repo}` of a github.com object URL, BY POSITION.
+
+    THE OTHER HALF OF THE SAME READ, and it was missing. `_object_kind_from_url`
+    established that `gh issue view` answered about an ISSUE; nothing
+    established that it answered about an issue in the repository this tool
+    asked about. A TRANSFERRED issue is exactly that gap: GitHub keeps the old
+    number reachable and answers with the NEW repository's url, so the pre-read
+    could short-circuit -- or the read-back could satisfy the verification -- on
+    an object living somewhere else entirely. Measured on the round-11 head:
+    `https://github.com/other-org/other-repo/issues/9` read `kind='issues'` and
+    was accepted.
+
+    Narrow today, because every ledger number originates in
+    `gh issue list --repo`. Fixed anyway for the reason arm GH22 exists: the
+    `--repo` pin on both reads was argued from "the pre-read can short-circuit
+    on a FOREIGN repo's issue", and the url that settles it was already parsed.
+    An argv pin is a hope about what `gh` will do; comparing the url it answered
+    with is the same claim verified by effect.
+
+    Returns "" when the URL has no such pair, so the caller fails CLOSED on a
+    shape this function does not recognise rather than guessing the caller's own
+    repository.
+    """
+    parts = [p for p in urllib.parse.urlparse(url).path.split("/") if p]
+    return f"{parts[0]}/{parts[1]}" if len(parts) >= 4 else ""
+
+
 def _issue_state_on_github(repo: str, number: int) -> str:
     """Read ONE issue's OPEN/CLOSED state. Raises rather than guessing.
 
@@ -584,6 +612,20 @@ def _issue_state_on_github(repo: str, number: int) -> str:
             "route a pull-request number to `api.PullRequestClose` and post the "
             "receipt comment on the PR, so this tool refuses to act on an object "
             "whose type it has not established"
+        )
+    # AND THAT IT IS THIS REPOSITORY'S ISSUE. The `--repo` pin above says which
+    # repository was ASKED; the url says which one ANSWERED, and a transferred
+    # issue makes those differ. Compared case-insensitively because GitHub
+    # resolves owner/name case-insensitively and answers in canonical casing,
+    # so a policy written `FGarofalo56/...` must not read as a foreign repo.
+    answered = _object_repo_from_url(url)
+    if answered.casefold() != repo.casefold():
+        raise IssueCloseFailedError(
+            f"#{number} was requested in {repo} but `gh issue view` answered about "
+            f"{answered or 'an unrecognised shape'} ({url!r}) - a transferred issue "
+            "keeps its old number reachable and resolves to the NEW repository, so "
+            "acting here would close, and permanently comment on, an object in a "
+            "repository this tool was not asked about"
         )
     state = str((parsed or {}).get("state") or "").upper()
     if state not in ("OPEN", "CLOSED"):
@@ -737,8 +779,19 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
 #: `! Issue fgarofalo56/csa-inabox#4556 (...) is already closed`, state
 #: unchanged. The success sentence is not exercised that way for the obvious
 #: reason -- it would require closing a live issue to watch it print.
-_GH_FOUND_ALREADY_CLOSED = "is already closed"
-_GH_PERFORMED_CLOSE = "Closed issue "
+#:
+#: HELD AS PREFIX/SUFFIX PAIRS, NOT AS FREE SUBSTRINGS, and the split is the
+#: whole point (see `_close_outcome`):
+#:
+#:     :118  "%s Issue %s#%d (%s) is already closed"
+#:     :169  "%s Closed issue %s#%d (%s)"
+#:
+#: The FINAL `%s` in both is `issue.Title` -- operator-supplied data
+#: interpolated into the very string the classifier reads.
+_GH_ALREADY_CLOSED_PREFIX = "Issue "
+_GH_ALREADY_CLOSED_SUFFIX = " is already closed"
+_GH_PERFORMED_PREFIX = "Closed issue "
+_GH_PERFORMED_SUFFIX = ")"
 
 #: The three answers `_close_outcome` can give. `UNKNOWN` is not a failure
 #: mode; it is the honest answer when `gh` said neither sentence.
@@ -747,7 +800,28 @@ CLOSE_FOUND_ALREADY_CLOSED = "found-already-closed"
 CLOSE_OUTCOME_UNKNOWN = "unknown"
 
 
-def _close_outcome(err: str) -> str:
+def _sentence_is(body: str, prefix: str, suffix: str) -> bool:
+    """`body` is that sentence, read at its FIXED OFFSETS rather than anywhere.
+
+    The prefix compare is case-insensitive because the only variable inside it
+    is `{repo}#{number}`: GitHub resolves owner/name case-insensitively and
+    prints its canonical casing, so a policy that spells the repository
+    differently must still be recognised rather than silently classified
+    `UNKNOWN`. Case has no bearing on the forgery this read exists to stop --
+    POSITION does.
+
+    The length guard keeps prefix and suffix from overlapping on a truncated
+    line, so `"Issue o/r#1 ("` cannot satisfy both ends of a sentence it is only
+    the beginning of.
+    """
+    return (
+        len(body) >= len(prefix) + len(suffix)
+        and body[:len(prefix)].casefold() == prefix.casefold()
+        and body.endswith(suffix)
+    )
+
+
+def _close_outcome(err: str, repo: str, number: int) -> str:
     """Which of the two exit-0 outcomes `gh issue close` just had.
 
     THE DISTINCTION THE READ-BACK CANNOT DRAW, and the reason this function
@@ -763,6 +837,39 @@ def _close_outcome(err: str) -> str:
     exist. Measured end-to-end by a reviewer with only `tick.sh` stubbed: 0
     comments posted, `state=closed`, and the false note written permanently
     into `Item.history`.
+
+    READ BY POSITION, NOT BY IDIOM -- and the first revision of this function
+    got that wrong in the commit that fixed the race. It asked whether
+    `"is already closed"` appeared ANYWHERE in stderr, tested first, over a
+    sentence whose final `%s` is `issue.Title`. So a close this run GENUINELY
+    PERFORMED, on an issue whose title happens to contain that phrase,
+    classified `found-already-closed` and the caller then stated two things
+    that were false -- "this run did NOT close it" and "NO receipt comment was
+    posted" -- and `_record_close_in_ledger` wrote them permanently into
+    `Item.history`. Measured end to end at `f3a2a834460` by a reviewer with a
+    fake that really performs the close: ground truth 1 comment posted and
+    state CLOSED, against a note asserting neither happened. R7 reached from
+    the ORDINARY SUCCESS PATH, in the change whose thesis is R7.
+
+    SWAPPING THE TWO TESTS IS NOT THE FIX -- it moves the collision onto the
+    dangerous side, where an already-closed line whose title contains
+    `Closed issue ` reports a close this run did not perform, which is the
+    defect the round-10 arm GH23 models. Both sentences differ at a FIXED
+    OFFSET, immediately after gh's icon token, so they are read there. That is
+    the discipline `_object_kind_from_url` applies earlier in this module
+    (`csa_loom_parse_by_position_not_by_idiom`), and it is title-proof by
+    construction: the title is interpolated at the END of the line, inside
+    `(...)`, and can never occupy the start of one.
+
+    The repo and number are interpolated into both prefixes, so the read
+    additionally establishes that `gh` acted on the object this tool asked
+    about, and the two prefixes (`Closed issue ` / `Issue `) discriminate
+    completely at that offset -- which is why the ORDER of the two tests below
+    no longer carries any meaning. The scan is PER LINE, so a warning ahead of
+    the marker is tolerated, and it uses `splitlines()` rather than
+    `split("\\n")` so a CRLF stream does not leave a `\\r` glued to the suffix
+    (`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`, the
+    same defect in another language).
 
     NO NEW `gh` CALL. `err` is already captured at the close call site and was
     being discarded on the rc=0 path; the two sentences above are the only
@@ -786,13 +893,24 @@ def _close_outcome(err: str) -> str:
     NEITHER sentence answers `UNKNOWN`, and the caller says it does not know
     (deploy-integrity R7: an error message must not state as fact something it
     did not establish). The cost is a qualified note if `gh` ever stops writing
-    to stderr at all; that is noise the operator sees immediately, rather than
-    a false statement they do not.
+    to stderr at all, or reformats the line, or reports a different repo/number
+    than the one asked for; that is noise the operator sees immediately, rather
+    than a false statement they do not.
     """
-    if _GH_FOUND_ALREADY_CLOSED in err:
-        return CLOSE_FOUND_ALREADY_CLOSED
-    if _GH_PERFORMED_CLOSE in err:
-        return CLOSE_PERFORMED
+    already = f"{_GH_ALREADY_CLOSED_PREFIX}{repo}#{number} ("
+    performed = f"{_GH_PERFORMED_PREFIX}{repo}#{number} ("
+    for line in err.splitlines():
+        # DROP gh'S ICON, which is one whitespace-delimited token and the only
+        # thing ahead of the marker: `cs.Yellow("!")` at :118 and
+        # `cs.SuccessIconWithColor(cs.Red)` at :169, each followed by a literal
+        # space in the format string. Colour escapes live inside that token and
+        # contain no space, so the marker starts at the same offset on a TTY and
+        # under NO_COLOR alike.
+        body = line.split(" ", 1)[1] if " " in line else line
+        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):
+            return CLOSE_PERFORMED
+        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):
+            return CLOSE_FOUND_ALREADY_CLOSED
     return CLOSE_OUTCOME_UNKNOWN
 
 
@@ -942,7 +1060,7 @@ def close_issue_on_github(
                 "version -- but this says 're-run' without knowing whether now is "
                 "a good time, and that is a limitation rather than a verdict"
             )
-        outcome = _close_outcome(err)
+        outcome = _close_outcome(err, repo, number)
         after = _issue_state_on_github(repo, number)
     except OSError as exc:
         # `gh` missing or unexecutable. Without this the record path dies on a
@@ -975,11 +1093,23 @@ def close_issue_on_github(
         # `gh` exited 0 and said NEITHER of its two sentences. The state is
         # settled; the authorship is not. Saying which would be asserting a
         # cause this code did not establish (deploy-integrity R7).
+        #
+        # AND IT NAMES THE ONE ACTION, because this branch is TERMINAL: the
+        # ledger write below still runs, so the item goes `closed`, and
+        # `record_receipt_from_evidence` refuses a terminal item at its top.
+        # Re-running the command is therefore not a remedy, and a note that
+        # says only "I do not know" from a state the tool will not re-enter
+        # leaves the operator with no next step (deploy-integrity R6).
         return (
             f"#{number} is closed on GitHub, but this run CANNOT TELL whether it "
             "performed the close or found it already closed: `gh` exited 0 without "
             "either sentence it uses to say which (close.go v2.100.0 :118 / :169), "
-            "so the receipt comment MAY NOT have been posted"
+            "so the receipt comment MAY NOT have been posted. DO THIS: read the "
+            f"issue's comments (`gh issue view {number} --repo {repo} --comments`) "
+            "and, if none begins `Drain harness: receipt verified`, post the "
+            "receipt by hand - this tool will not re-enter the path, because the "
+            "ledger write below makes the item terminal and the record route "
+            "refuses a terminal item (#4579 tracks closing that gap in code)"
         )
     return f"#{number} closed on GitHub"
 

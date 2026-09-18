@@ -978,6 +978,19 @@ def _gh_closed_stderr(repo="o/r", number=1, title="t") -> str:
     return f"v Closed issue {repo}#{number} ({title})\n"
 
 
+#: The repository `gh` would have acted on, read from the argv the closer built.
+#: `gh` prints `ghrepo.FullName(baseRepo)` in both sentences and resolves that
+#: repo from `--repo` when it is pinned and FROM THE WORKING DIRECTORY when it
+#: is not -- so an argv with no `--repo` must model a DIFFERENT repository, not
+#: the one the caller meant. That is the whole content of arm GH22, and a spy
+#: that answered the caller's repo either way would have made it unkillable.
+_SPY_CWD_REPO = "cwd-org/cwd-repo"
+
+
+def _argv_repo(args) -> str:
+    return args[args.index("--repo") + 1] if "--repo" in args else _SPY_CWD_REPO
+
+
 class _GhSpy:
     """Stub the `gh` SEAM (`tick.sh`), never the closer itself.
 
@@ -994,7 +1007,7 @@ class _GhSpy:
 
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
                  on_close=None, raises=None, view_fails_after_close=False,
-                 url_kind="issues"):
+                 url_kind="issues", url_repo="", close_title=""):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -1008,6 +1021,16 @@ class _GhSpy:
         #: carries the url the real command returns and the closer's type guard
         #: is in the path rather than stubbed away.
         self.url_kind = url_kind
+        #: Which REPOSITORY that url names, when it must differ from the one the
+        #: argv asked about. Empty means "the one asked about", which is the
+        #: ordinary world. A TRANSFERRED issue is the world where they differ:
+        #: GitHub keeps the old number reachable and answers with the new
+        #: repository's url.
+        self.url_repo = url_repo
+        #: The issue TITLE gh interpolates as the final `%s` of BOTH exit-0
+        #: sentences. Operator-supplied data inside the string the classifier
+        #: reads, so a test can make it carry gh's own words.
+        self.close_title = close_title
         #: The 502 shape: the close LANDS and the verification read cannot be
         #: made. rc=0 from `gh issue close` plus an unreadable state.
         self.view_fails_after_close = view_fails_after_close
@@ -1022,7 +1045,8 @@ class _GhSpy:
                 return 1, "", "HTTP 502: Bad gateway"
             payload = {
                 "state": self.states.get(args[3], self.state),
-                "url": f"https://github.com/o/r/{self.url_kind}/{args[3]}",
+                "url": (f"https://github.com/{self.url_repo or _argv_repo(args)}"
+                        f"/{self.url_kind}/{args[3]}"),
             }
             return 0, json.dumps(payload), ""
         if args[:3] == ["gh", "issue", "close"]:
@@ -1044,13 +1068,23 @@ class _GhSpy:
             # express, and which is why "verified by effect" went nine rounds
             # untested against the one scenario where effect and exit code
             # diverge.
+            #
+            # THE REPO IN THE LINE IS THE ONE THE ARGV NAMED, because gh prints
+            # `ghrepo.FullName(baseRepo)` -- the repository it ACTED on. A spy
+            # that printed a constant while the closer passed something else
+            # would agree with itself and disagree with `gh`, and it is exactly
+            # that field the classifier now reads positionally. The title is
+            # `self.close_title` so a test can put gh's OWN SENTENCES inside the
+            # operator-supplied field, which is the forgery the positional read
+            # exists to refuse.
+            title = self.close_title or f"issue {args[3]}"
             if self.states.get(args[3], self.state) == "CLOSED":
                 return 0, "", self.close_err or _gh_already_closed_stderr(
-                    number=args[3], title=f"issue {args[3]}")
+                    repo=_argv_repo(args), number=args[3], title=title)
             if self.takes_effect:
                 self.states[args[3]] = "CLOSED"
             return 0, "", self.close_err or _gh_closed_stderr(
-                number=args[3], title=f"issue {args[3]}")
+                repo=_argv_repo(args), number=args[3], title=title)
         raise AssertionError(f"the closer ran an unexpected command: {args}")
 
     @property
@@ -1129,7 +1163,7 @@ def test_a_refused_receipt_leaves_the_item_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run(conclusion="failure"))
     with pytest.raises(tick.ReceiptRefusedError):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 701, from_pr=None, from_run="123")
+            led, POLICY, "o/r", 701, from_pr=None, from_run="123")
     assert item.state == READY
     assert item.receipt_kind is None
     assert item.receipt_ref is None
@@ -1148,7 +1182,7 @@ def test_a_verified_run_closes_the_item_and_stamps_the_class(tmp_path, monkeypat
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
     _gh(monkeypatch)
     out = tick.record_receipt_from_evidence(
-        led, POLICY, "r", 702, from_pr=None, from_run="123")
+        led, POLICY, "o/r", 702, from_pr=None, from_run="123")
     assert item.state == CLOSED
     assert item.receipt_kind == "g1-browser"
     assert item.receipt_taken_under == "ui-surface"
@@ -1175,9 +1209,9 @@ def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
     led.upsert(703, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
     spy = _gh(monkeypatch)
-    tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="1")
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 703, from_pr=None, from_run="1")
     with pytest.raises(tick.ReceiptRefusedError, match="already closed"):
-        tick.record_receipt_from_evidence(led, POLICY, "r", 703, from_pr=None, from_run="2")
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 703, from_pr=None, from_run="2")
     assert spy.closed == ["703"]
     assert spy.views == ["703", "703"], (
         f"the terminal refusal must come BEFORE the closer: {len(spy.views)} reads "
@@ -1194,7 +1228,7 @@ def test_a_ci_green_item_refuses_a_run_and_asks_for_the_pr(tmp_path):
     led.upsert(704, "a guard", "W6-ci", lane="lane:ci", size=1)
     with pytest.raises(tick.ReceiptRefusedError, match="--from-pr"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 704, from_pr=None, from_run="123")
+            led, POLICY, "o/r", 704, from_pr=None, from_run="123")
 
 
 # -- THE ci-green DECIDE PATH ------------------------------------------------
@@ -1263,7 +1297,7 @@ def test_blocker_the_binding_check_is_actually_called_on_the_record_path(tmp_pat
     _stub_ci_green(monkeypatch, ok=True, binds=False)
     with pytest.raises(tick.ReceiptRefusedError, match="does not reference"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 805, from_pr=4498, from_run=None)
+            led, POLICY, "o/r", 805, from_pr=4498, from_run=None)
     assert item.state == READY
 
 
@@ -1279,7 +1313,7 @@ def test_blocker_a_not_green_ci_green_receipt_does_not_close_the_item(tmp_path, 
     _stub_ci_green(monkeypatch, ok=False, summary="NOT GREEN (FAIL=1)")
     with pytest.raises(tick.ReceiptRefusedError, match="NOT GREEN"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 800, from_pr=4498, from_run=None)
+            led, POLICY, "o/r", 800, from_pr=4498, from_run=None)
     assert item.state == READY
     assert item.receipt_kind is None
 
@@ -1291,7 +1325,7 @@ def test_positive_control_a_green_ci_green_receipt_closes_the_item(tmp_path, mon
     _stub_ci_green(monkeypatch, ok=True)
     _gh(monkeypatch)
     out = tick.record_receipt_from_evidence(
-        led, POLICY, "r", 801, from_pr=4498, from_run=None)
+        led, POLICY, "o/r", 801, from_pr=4498, from_run=None)
     assert item.state == CLOSED
     assert item.receipt_kind == "ci-green"
     assert item.receipt_taken_under == "guard-or-test-only"
@@ -1323,7 +1357,7 @@ def test_an_item_not_in_the_ledger_is_refused(tmp_path):
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     with pytest.raises(tick.ReceiptRefusedError, match="not in the ledger"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 999999, from_pr=None, from_run="1")
+            led, POLICY, "o/r", 999999, from_pr=None, from_run="1")
 
 
 def test_an_item_whose_class_names_no_receipt_kind_is_refused(tmp_path):
@@ -1343,7 +1377,7 @@ def test_an_item_whose_class_names_no_receipt_kind_is_refused(tmp_path):
     item.receipt_class = "guard-or-test-onlyy"  # the typo a hand edit makes
     with pytest.raises(tick.ReceiptRefusedError, match="names no receipt kind"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 804, from_pr=None, from_run="1")
+            led, POLICY, "o/r", 804, from_pr=None, from_run="1")
     assert item.state == READY
 
 
@@ -1354,7 +1388,7 @@ def test_a_run_backed_item_offered_no_evidence_at_all_is_refused(tmp_path):
     led.upsert(803, "a console surface", "W5-console", lane="lane:console", size=1)
     with pytest.raises(tick.ReceiptRefusedError, match="--from-run"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 803, from_pr=None, from_run=None)
+            led, POLICY, "o/r", 803, from_pr=None, from_run=None)
 
 
 def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkeypatch):
@@ -1492,7 +1526,7 @@ def test_blocker_the_github_close_happens_on_the_ci_green_route_too(tmp_path, mo
     _stub_ci_green(monkeypatch, ok=True)
     spy = _gh(monkeypatch)
 
-    tick.record_receipt_from_evidence(led, POLICY, "r", 806, from_pr=4498, from_run=None)
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 806, from_pr=4498, from_run=None)
 
     assert item.state == CLOSED
     assert spy.closed == ["806"], "the ci-green route closed the ledger only"
@@ -1541,7 +1575,7 @@ def test_blocker_a_ci_green_close_does_not_cite_r2_as_licence_for_closing_on_a_m
     _stub_ci_green(monkeypatch, ok=True)
     spy = _gh(monkeypatch)
 
-    tick.record_receipt_from_evidence(led, POLICY, "r", 807, from_pr=4498, from_run=None)
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 807, from_pr=4498, from_run=None)
 
     close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
     body = close[close.index("--comment") + 1]
@@ -1591,7 +1625,7 @@ def test_a_ci_green_comment_claims_no_more_than_policy_says_it_proves(
     _stub_ci_green(monkeypatch, ok=True)
     spy = _gh(monkeypatch)
 
-    tick.record_receipt_from_evidence(led, POLICY, "r", 807, from_pr=4498, from_run=None)
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 807, from_pr=4498, from_run=None)
 
     close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
     body = close[close.index("--comment") + 1]
@@ -1686,7 +1720,7 @@ def test_a_run_backed_comment_does_not_claim_an_r2_satisfaction_it_cannot_establ
     )
     spy = _gh(monkeypatch)
 
-    tick.record_receipt_from_evidence(led, POLICY, "r", 808, from_pr=None, from_run="9")
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 808, from_pr=None, from_run="9")
 
     close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
     body = close[close.index("--comment") + 1]
@@ -1829,7 +1863,7 @@ def test_blocker_the_github_close_happens_before_the_ledger_write(tmp_path, monk
     seen: list[str] = []
     spy = _gh(monkeypatch, on_close=lambda: seen.append(item.state))
 
-    tick.record_receipt_from_evidence(led, POLICY, "r", 711, from_pr=None, from_run="1")
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 711, from_pr=None, from_run="1")
 
     assert spy.closed == ["711"]
     assert seen == [READY], (
@@ -1854,7 +1888,7 @@ def test_blocker_a_failed_github_close_leaves_the_item_non_terminal(tmp_path, mo
     _gh(monkeypatch, close_rc=1, close_err="HTTP 403: Resource not accessible")
 
     with pytest.raises(tick.IssueCloseFailedError, match="403"):
-        tick.record_receipt_from_evidence(led, POLICY, "r", 712, from_pr=None, from_run="1")
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 712, from_pr=None, from_run="1")
 
     assert item.state == READY
     assert item.receipt_kind is None
@@ -1878,7 +1912,7 @@ def test_blocker_gh_being_unrunnable_is_a_refusal_not_a_traceback(tmp_path, monk
     _gh(monkeypatch, raises=FileNotFoundError("gh"))
 
     with pytest.raises(tick.IssueCloseFailedError, match="Nothing was written"):
-        tick.record_receipt_from_evidence(led, POLICY, "r", 713, from_pr=None, from_run="1")
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 713, from_pr=None, from_run="1")
 
     assert item.state == READY
     assert item.receipt_kind is None
@@ -1899,7 +1933,7 @@ def test_blocker_a_close_that_rc0s_but_leaves_the_issue_open_is_refused(tmp_path
     _gh(monkeypatch, takes_effect=False)
 
     with pytest.raises(tick.IssueCloseFailedError, match="still reads OPEN"):
-        tick.record_receipt_from_evidence(led, POLICY, "r", 714, from_pr=None, from_run="1")
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 714, from_pr=None, from_run="1")
 
     assert item.state == READY
     assert item.receipt_kind is None
@@ -1935,7 +1969,7 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
     spy = _gh(monkeypatch, state="CLOSED")
 
     out = tick.record_receipt_from_evidence(
-        led, POLICY, "r", 715, from_pr=None, from_run="1")
+        led, POLICY, "o/r", 715, from_pr=None, from_run="1")
 
     assert spy.closed == [], "an already-closed issue was closed again"
     assert item.state == CLOSED
@@ -1957,7 +1991,7 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
 
 
 def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():
-    """THE POSITIVE CONTROL for the two tests below, in two layers.
+    """THE POSITIVE CONTROL for the two tests below, in three layers.
 
     Those tests feed the closer a stderr string and assert on the note it
     derives. That is circular unless the string is what `gh` actually writes --
@@ -1979,6 +2013,30 @@ def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():
     would silently classify `unknown`, restoring the blocker this change exists
     to fix. Varying repo, number and title kills it: the marker must be the part
     of the sentence that does not move.
+
+    **Layer 3 pins the marker against the FIELD THAT MOVES MOST**, and layer 2
+    could not: the four triples below vary repo, number and title, but NOT ONE
+    of their titles contains either marker -- so nothing in layer 2
+    distinguished a title-safe marker from a title-unsafe one. It varied the
+    fields that do not interact with the markers while holding the one that
+    does at a constant. The final `%s` of BOTH sentences is `issue.Title`, and
+    a bare-substring classifier therefore lets an issue's own title forge the
+    verdict on a close that was genuinely performed. Measured end to end at
+    `f3a2a834460`: 1 comment posted, state CLOSED, and a note stating the
+    opposite of both, written permanently into `Item.history`.
+
+    THE TWO COLLISION CASES KILL THE TWO IDIOM ORDERINGS, which is why both are
+    here and neither is redundant:
+
+    - a PERFORMED line whose title says `is already closed` goes red against
+      the already-closed-first order (round 11's head), and
+    - an ALREADY-CLOSED line whose title says `Closed issue ` goes red against
+      the *swapped* order -- the tempting "fix", which merely moves the
+      collision onto the dangerous side where a close this run did NOT perform
+      is reported as performed.
+
+    Only a POSITIONAL read passes both, because the title can never occupy the
+    start of the line (`csa_loom_parse_by_position_not_by_idiom`).
     """
     assert _gh_already_closed_stderr(
         "fgarofalo56/csa-inabox", 4556,
@@ -1992,21 +2050,88 @@ def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():
         ("o/r", 1, "t"),
         ("some-org/another-repo", 999999, "a title with (parentheses) and #4552 in it"),
         ("x/y", 7, ""),
+        # LAYER 3. The two titles that carry gh's own sentences.
+        ("o/r", 4545, "the refresh reports a park as though it is already closed"),
+        ("o/r", 4545, "Closed issue o/r#4545 (a receipt) was the wrong sentence"),
     ]:
         assert tick._close_outcome(
-            _gh_already_closed_stderr(repo, number, title)
+            _gh_already_closed_stderr(repo, number, title), repo, number
         ) == tick.CLOSE_FOUND_ALREADY_CLOSED, (
             f"gh's short-circuit for {repo}#{number} was not recognised - a marker "
             "that only matches one issue's stderr classifies every OTHER raced "
-            "close as 'unknown', which is the blocker back in a quieter form"
+            "close as 'unknown', which is the blocker back in a quieter form; a "
+            "marker read by IDIOM and swapped to test the success sentence first "
+            "reports a close this run never performed"
         )
         assert tick._close_outcome(
-            _gh_closed_stderr(repo, number, title)
+            _gh_closed_stderr(repo, number, title), repo, number
         ) == tick.CLOSE_PERFORMED, (
             f"gh's success line for {repo}#{number} was not recognised - an "
             "unrecognised success qualifies every ordinary close, which is the "
-            "noise that gets a disclosure ignored"
+            "noise that gets a disclosure ignored; and a marker read by IDIOM "
+            "lets this issue's own TITLE report the close as somebody else's"
         )
+
+
+def test_the_close_outcome_is_read_at_a_fixed_offset_on_the_line_gh_names_us_in():
+    """THE POSITIONAL PROPERTIES, each with the value that breaks it named.
+
+    `_close_outcome` reads `{prefix}{repo}#{number} (` at the offset just past
+    gh's icon token, rather than asking whether a phrase appears anywhere. Six
+    consequences, all asserted here rather than argued in the docstring.
+    """
+    ok = _gh_closed_stderr("o/r", 1, "t")
+
+    # 1. THE ICON IS ONE TOKEN AND IS DROPPED. Breaks if the read anchors at
+    #    offset 0 instead: gh always prints a glyph and a space ahead of the
+    #    marker, so an offset-0 read classifies every real line UNKNOWN.
+    assert tick._close_outcome(ok, "o/r", 1) == tick.CLOSE_PERFORMED
+
+    # 2. COLOUR ESCAPES LIVE INSIDE THAT TOKEN. On a TTY gh wraps the glyph in
+    #    SGR sequences, which contain no space. Breaks if the read counts
+    #    CHARACTERS rather than splitting on the first space.
+    assert tick._close_outcome(
+        "\x1b[0;31m✓\x1b[0m Closed issue o/r#1 (t)\n", "o/r", 1
+    ) == tick.CLOSE_PERFORMED
+
+    # 3. A WARNING AHEAD OF THE MARKER IS TOLERATED, because the scan is
+    #    per-line. Breaks if the read only ever looks at the first line.
+    assert tick._close_outcome(
+        "a deprecation notice from gh\n" + ok, "o/r", 1
+    ) == tick.CLOSE_PERFORMED
+
+    # 4. CRLF DOES NOT GLUE A \r ONTO THE SUFFIX. Breaks if `split("\n")`
+    #    replaces `splitlines()` -- the already-closed arm ends in a suffix
+    #    test, and `"... is already closed\r"` fails it silently.
+    assert tick._close_outcome(
+        _gh_already_closed_stderr("o/r", 1, "t").replace("\n", "\r\n"), "o/r", 1
+    ) == tick.CLOSE_FOUND_ALREADY_CLOSED
+
+    # 5. THE LINE MUST NAME THE OBJECT WE ASKED ABOUT. Breaks if repo and
+    #    number are dropped from the prefix: a line about a DIFFERENT issue
+    #    would then answer for this one.
+    assert tick._close_outcome(ok, "o/r", 2) == tick.CLOSE_OUTCOME_UNKNOWN, (
+        "a success line for a different NUMBER was accepted as this close"
+    )
+    assert tick._close_outcome(ok, "other/repo", 1) == tick.CLOSE_OUTCOME_UNKNOWN, (
+        "a success line for a different REPOSITORY was accepted as this close"
+    )
+    # ... but case alone must not disqualify it, because GitHub resolves
+    #     owner/name case-insensitively and echoes its canonical casing. Breaks
+    #     if the prefix compare becomes case-sensitive, which would classify
+    #     every close UNKNOWN for an operator whose policy spells the repo
+    #     differently.
+    assert tick._close_outcome(
+        _gh_closed_stderr("O/R", 1, "t"), "o/r", 1
+    ) == tick.CLOSE_PERFORMED
+
+    # 6. A REWORDED SENTENCE FAILS HONEST, NOT OPEN. Breaks if the third arm is
+    #    removed (arm GH24): a future gh that rewords :118 would then fall
+    #    through to "I closed it".
+    assert tick._close_outcome(
+        "! Issue o/r#1 (t) has already been closed\n", "o/r", 1
+    ) == tick.CLOSE_OUTCOME_UNKNOWN
+    assert tick._close_outcome("", "o/r", 1) == tick.CLOSE_OUTCOME_UNKNOWN
 
 
 def test_blocker_a_close_performed_by_somebody_else_is_not_reported_as_ours(
@@ -2046,7 +2171,7 @@ def test_blocker_a_close_performed_by_somebody_else_is_not_reported_as_ours(
     spy.on_close = lambda: spy.states.__setitem__("716", "CLOSED")
 
     out = tick.record_receipt_from_evidence(
-        led, POLICY, "r", 716, from_pr=None, from_run="1")
+        led, POLICY, "o/r", 716, from_pr=None, from_run="1")
 
     # The close COMMAND was issued -- this is not the pre-read short-circuit,
     # which would show no close at all. What differs is what gh DID with it.
@@ -2100,7 +2225,7 @@ def test_a_close_whose_outcome_gh_did_not_name_is_reported_as_unknown_not_as_our
     _gh(monkeypatch, close_err="Issue #717 has been shut\n")
 
     out = tick.record_receipt_from_evidence(
-        led, POLICY, "r", 717, from_pr=None, from_run="1")
+        led, POLICY, "o/r", 717, from_pr=None, from_run="1")
 
     assert "CANNOT TELL" in out.close_note, (
         "an unrecognised gh exit was reported as a performed close - the value "
@@ -2110,6 +2235,25 @@ def test_a_close_whose_outcome_gh_did_not_name_is_reported_as_unknown_not_as_our
     assert "MAY NOT have been posted" in out.close_note, (
         "the comment's existence is exactly as unestablished as the authorship"
     )
+    # AND IT NAMES THE ONE ACTION. This branch is TERMINAL -- the ledger write
+    # still runs, so the item goes `closed`, and the record route refuses a
+    # terminal item -- so "I cannot tell" without a next step leaves the
+    # operator stranded in a state the tool will not re-enter
+    # (deploy-integrity R6). THE VALUE THAT BREAKS THIS: the note reverted to
+    # ending at "MAY NOT have been posted" (arm GH27).
+    assert "gh issue view 717 --repo o/r --comments" in out.close_note, (
+        "the unknown-outcome note gives the operator no command to run, from a "
+        "state this tool deliberately refuses to re-enter"
+    )
+    assert "Drain harness: receipt verified" in out.close_note, (
+        "the remediation must say WHAT to look for, or 'read the comments' is "
+        "an instruction with no completion condition"
+    )
+    assert "#4579" in out.close_note, "the gap must be TRACKED where it is disclosed"
+    assert led.load().items[717].state == CLOSED, (
+        "the premise of the remediation is that the item is already terminal - "
+        "if this ever stops being true the note's 'will not re-enter' is false"
+    )
     # PAIRED WITH THE POSITIVE, per assertion-design.md "done" #4: the ordinary
     # success path must still report unqualified, or "fails honest" would be
     # satisfied by qualifying everything.
@@ -2117,11 +2261,128 @@ def test_a_close_whose_outcome_gh_did_not_name_is_reported_as_unknown_not_as_our
     led2.upsert(718, "a console surface", "W5-console", lane="lane:console", size=1)
     _gh(monkeypatch)
     ok = tick.record_receipt_from_evidence(
-        led2, POLICY, "r", 718, from_pr=None, from_run="1")
+        led2, POLICY, "o/r", 718, from_pr=None, from_run="1")
     assert ok.close_note == "#718 closed on GitHub", (
         "a genuine close must still be reported plainly - the value that breaks "
         "this is a classifier that qualifies every outcome, which would make the "
         "assertions above pass while saying nothing"
+    )
+
+
+def test_blocker_an_issues_own_title_cannot_forge_the_close_outcome(
+    tmp_path, monkeypatch
+):
+    """THE TITLE IS INTERPOLATED INTO THE STRING THE CLASSIFIER READS.
+
+    close.go v2.100.0 writes `issue.Title` as the FINAL `%s` of both exit-0
+    sentences (:118, :169). The first revision of `_close_outcome` asked whether
+    `"is already closed"` appeared ANYWHERE in stderr, and asked it FIRST -- so a
+    close this run GENUINELY PERFORMED, on an issue whose title carries that
+    phrase, classified `found-already-closed`. Measured end to end at
+    `f3a2a834460` with a fake that really performs the close: comments posted =
+    1 and state = CLOSED, against a note asserting "this run did NOT close it"
+    and "NO receipt comment was posted", both written permanently into
+    `Item.history` by `_record_close_in_ledger`. Two false statements of fact on
+    the ORDINARY SUCCESS PATH -- R7 in the change whose thesis is R7.
+
+    LATENT, and said as such: zero of the most recent 1000 issue titles in this
+    repository collide (reviewer's measurement at that head; positive control on
+    the same query, 19 titles contain `closed`, the nearest being #4579 --
+    "drain: the already-closed route records a receipt with no public trace at
+    all" -- one hyphen away). The drain's population is 334 issues titled by this
+    lane in long sentences ABOUT ISSUE-CLOSING MACHINERY, so "no title says that
+    today" is a property of the data, not of the code.
+
+    THE VALUE THAT BREAKS THIS TEST is the bare-substring classifier: arm GH26
+    in the head's order fails the first half below, arm GH29 -- the tempting
+    "swap the two ifs" -- fails the second. The title used here is the one the
+    reviewer measured with.
+    """
+    collides = "the refresh reports a park as though it is already closed"
+
+    # HALF ONE: the close is genuinely PERFORMED and the title says otherwise.
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(4545, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch, close_title=collides)
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "o/r", 4545, from_pr=None, from_run="1")
+
+    # GROUND TRUTH, read from the fake rather than from the note under test.
+    assert spy.closed == ["4545"], "this test's premise is that the close was ISSUED"
+    assert spy.states["4545"] == "CLOSED", "the fake really performed the close"
+    comments = [c for c in spy.calls
+                if c[:3] == ["gh", "issue", "close"] and "--comment" in c]
+    assert len(comments) == 1, "the receipt comment really rode along with the close"
+
+    assert out.close_note == "#4545 closed on GitHub", (
+        "an issue's own TITLE forged the close outcome: the run performed the "
+        "close and posted the receipt, and the note said it did neither"
+    )
+    assert "did NOT close it" not in led.load().items[4545].history[-1], (
+        "the forged sentence was written permanently into Item.history, which is "
+        "the artifact this change exists to keep honest"
+    )
+
+    # HALF TWO: the close was NOT performed and the title says it was. This is
+    # the direction the tempting "swap the two ifs" fix breaks, and it is the
+    # dangerous one -- reporting a close this tool did not perform.
+    led2 = Ledger(str(tmp_path / "s2.json"), receipts=POLICY["receipts"])
+    led2.upsert(4546, "a console surface", "W5-console", lane="lane:console", size=1)
+    spy2 = _gh(monkeypatch, close_title="Closed issue o/r#4546 (x) was the wrong line")
+    spy2.on_close = lambda: spy2.states.__setitem__("4546", "CLOSED")
+
+    out2 = tick.record_receipt_from_evidence(
+        led2, POLICY, "o/r", 4546, from_pr=None, from_run="1")
+
+    assert "did NOT close it" in out2.close_note, (
+        "a title containing gh's SUCCESS sentence reported a close this run "
+        "never performed - the swapped-idiom failure, and the worse direction"
+    )
+    assert "NO receipt comment was posted" in out2.close_note
+
+
+def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
+    tmp_path, monkeypatch
+):
+    """A TRANSFERRED ISSUE ANSWERS FROM SOMEWHERE ELSE.
+
+    GitHub keeps a transferred issue's old number reachable and resolves it to
+    the NEW repository's url. The type guard established that `gh issue view`
+    answered about an ISSUE; nothing established it answered about an issue HERE,
+    because only the kind segment was read. Measured at `f3a2a834460`:
+    `https://github.com/other-org/other-repo/issues/9` read `kind='issues'` and
+    was accepted.
+
+    Narrow -- every ledger number originates in `gh issue list --repo` -- but the
+    `--repo` pin on both reads (arm GH22) was argued FROM this exact hazard, and
+    the url that settles it was already parsed. THE VALUE THAT BREAKS THIS: the
+    owner/repo comparison deleted, leaving the argv pin as a hope rather than a
+    verified effect (arm GH28).
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(4547, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch, url_repo="other-org/other-repo")
+
+    with pytest.raises(tick.IssueCloseFailedError, match="answered about"):
+        tick.close_issue_on_github(
+            POLICY, "o/r", 4547, CLOSED, "a receipt", "g1-browser", "ui-surface")
+    assert spy.closed == [], "the closer reached the write over a foreign object"
+
+    # PAIRED WITH THE POSITIVE so the guard cannot be satisfied by refusing
+    # everything, and with a CASE-SHIFTED repo so the comparison cannot be made
+    # case-sensitive without going red: GitHub echoes canonical casing.
+    ok_spy = _gh(monkeypatch, url_repo="O/R")
+    tick.close_issue_on_github(
+        POLICY, "o/r", 4548, CLOSED, "a receipt", "g1-browser", "ui-surface")
+    assert ok_spy.closed == ["4548"], (
+        "the guard refused an issue in the repository it was asked about, "
+        "spelled in the casing GitHub echoes"
+    )
+    assert led.load().items[4547].state != CLOSED, (
+        "the ledger moved over an object in another repository"
     )
 
 
@@ -2156,7 +2417,7 @@ def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
 
     with pytest.raises(tick.IssueCloseFailedError, match="is not an issue"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 4552, from_pr=None, from_run="1")
+            led, POLICY, "o/r", 4552, from_pr=None, from_run="1")
 
     assert spy.closed == [], "a pull request was sent to `gh issue close`"
     assert item.state == READY, "the ledger moved on an object it could not identify"
@@ -2166,7 +2427,7 @@ def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
     led2.upsert(4553, "a console surface", "W5-console", lane="lane:console", size=1)
     ok_spy = _gh(monkeypatch)
     tick.record_receipt_from_evidence(
-        led2, POLICY, "r", 4553, from_pr=None, from_run="1")
+        led2, POLICY, "o/r", 4553, from_pr=None, from_run="1")
     assert ok_spy.closed == ["4553"], "the guard refused an ordinary issue"
 
 
@@ -2199,7 +2460,7 @@ def test_an_unrecognised_object_url_is_refused_rather_than_assumed_to_be_an_issu
 
     with pytest.raises(tick.IssueCloseFailedError, match="is not an issue"):
         tick.record_receipt_from_evidence(
-            led, POLICY, "r", 719, from_pr=None, from_run="1")
+            led, POLICY, "o/r", 719, from_pr=None, from_run="1")
     assert spy.closed == []
 
 
@@ -2229,7 +2490,7 @@ def test_blocker_a_ledger_failure_after_the_close_is_not_reported_as_a_refusal(
     monkeypatch.setattr(led, "transition", refuse)
 
     with pytest.raises(tick.LedgerWriteAfterCloseError) as caught:
-        tick.record_receipt_from_evidence(led, POLICY, "r", 716, from_pr=None, from_run="1")
+        tick.record_receipt_from_evidence(led, POLICY, "o/r", 716, from_pr=None, from_run="1")
 
     assert spy.closed == ["716"], "the close must have LANDED for this to be the case under test"
     assert "closed on GitHub" in str(caught.value)
@@ -2444,7 +2705,7 @@ def test_blocker_a_park_is_never_closed_on_github(monkeypatch):
     for state in (PARKED, DECLINED):
         with pytest.raises(tick.IssueCloseFailedError, match="only"):
             tick.close_issue_on_github(
-                POLICY, "r", 4535, state, "blocked on a tenant",
+                POLICY, "o/r", 4535, state, "blocked on a tenant",
                 "g1-browser", "ui-surface")
     assert spy.calls == [], "the closer reached GitHub before deciding it must not"
 
@@ -2465,7 +2726,7 @@ def test_the_close_is_refused_when_the_policy_does_not_permit_it(monkeypatch):
     spy = _gh(monkeypatch)
     with pytest.raises(tick.IssueCloseFailedError, match="close-on-receipt"):
         tick.close_issue_on_github(
-            thin, "r", 4545, CLOSED, "a receipt", "ci-green", "guard-or-test-only")
+            thin, "o/r", 4545, CLOSED, "a receipt", "ci-green", "guard-or-test-only")
     assert spy.calls == []
 
 
@@ -2483,7 +2744,7 @@ def test_blocker_a_harness_close_survives_the_next_refresh(tmp_path, monkeypatch
     item = led.upsert(720, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
     spy = _gh(monkeypatch)
-    tick.record_receipt_from_evidence(led, POLICY, "r", 720, from_pr=None, from_run="1")
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 720, from_pr=None, from_run="1")
 
     tick.refresh_from_github(led, {}, spy.live([720, 730]))
 
@@ -2510,7 +2771,7 @@ def test_positive_control_a_real_reopen_still_voids_the_receipt(tmp_path, monkey
     item = led.upsert(721, "a console surface", "W5-console", lane="lane:console", size=1)
     monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
     spy = _gh(monkeypatch)
-    tick.record_receipt_from_evidence(led, POLICY, "r", 721, from_pr=None, from_run="1")
+    tick.record_receipt_from_evidence(led, POLICY, "o/r", 721, from_pr=None, from_run="1")
     assert item.state == CLOSED
 
     spy.states["721"] = "OPEN"          # a human reopened it
