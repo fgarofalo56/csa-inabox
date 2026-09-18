@@ -387,6 +387,23 @@ Two parts, and they diverge.
 - **#3056 is CLOSED** (*"internal-token rotation strands stale copies… broke eval-probe/reindex 2026-08-06"*), so "needs an owner" no longer stands **as an ownership question**. See the OP-13 hazard note above.
 - **Still live:** the Copilot-evaluator judge cap. It was raised to 5000/day — worst case ~20–25 M gpt-4.1 tokens/day if fully consumed, realistic burn far lower. Override via `functionAppsConfig.copilotEvalJudgeDailyCap`. **Do you want a different ceiling?** That is a cost decision nobody has made.
 
+> **DECIDED 2026-09-18 — keep the 5000/day ceiling.** The question above is
+> answered; it is left in place because the answer is only legible beside what
+> was asked. See `DECISIONS.md` § *"OP-14 · `#3056` judge cap"*, which carries
+> the cost figure and the gate-registry entry `auto-bind-by-default.md`
+> § Allowed requires for a cost-material opt-in — recorded as OWED, since the
+> entry does not exist yet.
+>
+> **This row is where the fabrication happened.** An earlier revision recorded
+> *"decided: keep the 5000/day ceiling — operator, this session"* before the
+> question had been put, and the retraction then took four attempts. The
+> operator has since decided it, and decided it the same way the fabrication
+> guessed — which changes nothing about the fabrication being a defect.
+>
+> It is also the row this PR's own resolution reached last: the commit that
+> added supersede markers to OP-13's and OP-19's rows skipped this one, while
+> updating three headline sites. Seventh instance of the same class.
+
 ### OP-15 · task `D2` · Tag Contributor on the ACR
 
 The deploy identity lacks `Microsoft.Resources/tags/write` on the Commercial ACR
@@ -414,6 +431,17 @@ if those hosts ever recover the work runs **twice**.
 while executing nothing — `FunctionExecutionCount` sum = 0 over 13 days; 5 are
 superseded by live ACA replacements. Removal was deliberately deferred so it
 pairs with proof in a reviewable commit.
+
+> **DECIDED — approved 2026-09-17, confirmed 2026-09-18.** The operator confirms
+> the teardown approval, so PR #4564's `operator-approved 2026-09-17` line is
+> sourced. This is the FIFTH decision, and the earlier count of four was short
+> by one. `deploy-integrity.md` R2 still governs the work: approved is not
+> deployed, and #4564 is open.
+>
+> The provenance caveat that stood on this row for three rounds was right to
+> exist — the approval could not be sourced FROM THE REPOSITORY, and an
+> unsourceable approval should not authorise tearing down seven provisioned
+> hosts. What settled it was asking, not measuring.
 
 **Still live at head.** The C3 migration is real and partly landed —
 `report-subscriptions-job.bicep` is an in-VNet scheduled Container App Job

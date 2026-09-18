@@ -373,7 +373,20 @@ days on purpose; neither is a typo.
 **One row, not two.** An earlier revision listed OP-11 here as well. It is not
 dissolved — see below.
 
-### Still live, in whole or in part — NOT settled by this pass
+### The remaining seven rows — four still live, two now DECIDED, one mitigated
+
+The heading used to read "Still live, in whole or in part — NOT settled by this
+pass", which stopped being true of two of its own rows the moment the operator
+decided OP-14 and confirmed OP-19(b). **OP-14 and OP-19(b) are kept in this
+table rather than moved**, because their history is the point and a reader
+looking for them will look here — but the heading no longer claims something the
+rows contradict.
+
+That mismatch is the same defect this section pre-empted one table up, where the
+`> **Decision:**` block count is reconciled against the headline explicitly. The
+reconciliation was written for one count and not extended to the table beside
+it. Seventh instance of the class on this PR, and the first found in a HEADING
+rather than in a sentence.
 
 | row | status | what is actually outstanding |
 |---|---|---|
