@@ -110,6 +110,29 @@ function stripHeredocBodies(s) {
     const m = line.match(/(?<!<)<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
     if (!m) { out.push(line); continue; }
 
+    // THE `<<` MUST BE SHELL SYNTAX, NOT TEXT. Third instance of the silencing
+    // class, and the one that showed the earlier fix was aimed at the symptom.
+    //
+    // Requiring the delimiter to reappear downstream was not enough: the check
+    // asked whether the PHANTOM delimiter reappears ANYWHERE, not whether it
+    // reappears BEFORE the hazard. So a `<<EOF` inside a comment or a quoted
+    // string found its terminator in a LATER, REAL heredoc and blanked
+    // everything between.
+    //
+    // The four arms written for that fix passed only because their hazard used
+    // the delimiter `Z`. Measured: switch the hazard to `EOF` and three of the
+    // four flip to ALLOWED -- and `EOF` is 91 of 171 heredoc-opener tokens in
+    // this repo (53%, five times the next). The population this rule serves is
+    // agents quoting the prohibition, which supplies that collision by default.
+    //
+    // `maskQuoted` PRESERVES LENGTH, so the character at the same offset tells
+    // us whether the `<<` was inside quotes. An unquoted `#` earlier on the
+    // line means the rest is a comment.
+    const masked = maskQuoted(line);
+    if (masked[m.index] !== '<') { out.push(line); continue; }   // quoted
+    const hash = masked.indexOf('#');
+    if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
+
     // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
     //
     // Second live instance of the same silencing class, found by review. This
@@ -298,8 +321,15 @@ const RULES = [
           // Residual, disclosed: a lone `<` anywhere else in the segment --
           // e.g. an unquoted `$(grep x < f)` beside a real heredoc -- still
           // exempts. Narrowing that needs real word-splitting, not a regex.
-          const stdinSupplied =
-            /<<</.test(seg) || /(?<![0-9<])<(?!<)/.test(seg);
+          // THE HEREDOC WINS ON FD 0, WHATEVER THE ORDER. `python - < f <<'E'`
+          // reads as "stdin supplied" if you only look for a lone `<`, but bash
+          // gives fd 0 to the heredoc — the last redirect to a descriptor wins,
+          // and the heredoc is the hazard. Checking for a heredoc FIRST is what
+          // makes the exemption order-independent; M12 fixed the fd-digit half
+          // of this and the order half arrived through the same door.
+          const hasHeredoc = /(?<!<)<<(?!<)/.test(seg);
+          const stdinSupplied = !hasHeredoc &&
+            (/<<</.test(seg) || /(?<![0-9<])<(?!<)/.test(seg));
           if (prevSep !== '|' && !stdinSupplied && CMD.test(seg)) {
             return rawLines[i].trim().slice(0, 90);
           }

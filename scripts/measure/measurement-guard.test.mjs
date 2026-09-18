@@ -287,11 +287,23 @@ test('NEGATIVE: a FILE redirect supplies stdin too, and reaches EOF', () => {
 
 test('POSITIVE: a redirect on a NON-stdin fd does not exempt a real heredoc', () => {
   // The lone-`<` exemption was too wide: `2<err.txt` redirects fd 2 and leaves
-  // fd 0 on the terminal, so the heredoc hazard is fully present. The
-  // `(?<![0-9<])` lookbehind is what confines the exemption to fd 0.
-  // WHAT MAKES THIS FAIL: drop the `[0-9]` from that lookbehind.
+  // fd 0 on the terminal, so the heredoc hazard is fully present.
   assert.ok(has(`python - 2<err.txt <<'EOF'\nEOF`, 'python-dash-repl'));
   assert.ok(has(`python - 3<in.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: a NON-stdin fd redirect with NO heredoc is still a hazard', () => {
+  // THIS is what pins the `[0-9]` in the `(?<![0-9<])` lookbehind, and the two
+  // assertions above no longer do. Once heredoc-precedence landed, those were
+  // caught by `hasHeredoc` whatever the fd logic did — mutation M12 survived,
+  // which is how the lost witness surfaced. Third time in this file that a
+  // broader check silently retired an older arm's kill power.
+  //
+  // Here there is no heredoc at all: fd 2 is redirected, fd 0 is still the
+  // terminal, and `python -` becomes a REPL.
+  // WHAT MAKES THIS FAIL: drop the `[0-9]` from that lookbehind.
+  assert.ok(has(`python - 2>err.txt 2<in.txt`, 'python-dash-repl'));
+  assert.ok(has(`python - 3<in.txt`, 'python-dash-repl'));
 });
 
 // ---- BLINDING, second class: an opener that is not a redirect --------------
@@ -303,26 +315,43 @@ test('POSITIVE: a redirect on a NON-stdin fd does not exempt a real heredoc', ()
 // These four are not hypothetical: two of them are verbatim shapes from this
 // very test file, and the population this rule serves is "agents quoting the
 // prohibition" — exactly the traffic that writes such a line.
+//
+// EVERY ONE USES `EOF` AS THE HAZARD DELIMITER, DELIBERATELY. An earlier
+// version used `Z` and all four passed for that reason alone: the terminator
+// check asked whether the phantom delimiter reappears ANYWHERE downstream, not
+// BEFORE the hazard, so a rare delimiter avoided the collision. Measured —
+// switching the hazard to `EOF` flipped three of the four to ALLOWED. `EOF` is
+// 91 of 171 heredoc-opener tokens in this repo (53%, five times the next), so
+// the rare choice was the unrealistic one.
 test('BLINDING: a `<<IDENT` in a COMMENT must not silence the rest', () => {
-  const cmd = `# see the <<EOF trap\npython - <<'Z'\nZ`;
+  const cmd = `# see the <<EOF trap\npython - <<'EOF'\nEOF`;
   assert.ok(has(cmd, 'python-dash-repl'), 'a comment must not blank the command');
 });
 
 test('BLINDING: a `<<IDENT` inside a QUOTED STRING must not silence the rest', () => {
-  const cmd = `echo "never write <<EOF here"\npython - <<'Z'\nZ`;
+  const cmd = `echo "never write <<EOF here"\npython - <<'EOF'\nEOF`;
   assert.ok(has(cmd, 'python-dash-repl'));
 });
 
 test('BLINDING: a `<<IDENT` in a grep PATTERN must not silence the rest', () => {
-  const cmd = `grep -n '<<EOF' notes.md\npython - <<'Z'\nZ`;
+  const cmd = `grep -n '<<EOF' notes.md\npython - <<'EOF'\nEOF`;
   assert.ok(has(cmd, 'python-dash-repl'));
 });
 
 test('BLINDING: an UNTERMINATED opener must not swallow the command', () => {
   // The general form: no matching terminator downstream means it was never a
-  // heredoc. Failing this way makes a miss LOUD instead of silent.
-  const cmd = `echo start <<NOPE\npython - <<'Z'\nZ`;
+  // heredoc. Failing this way makes a miss LOUD instead of silent. This one
+  // held even under the `Z` delimiter, because `NOPE` genuinely never recurs.
+  const cmd = `echo start <<NOPE\npython - <<'EOF'\nEOF`;
   assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('POSITIVE: a heredoc wins fd 0 even when a `< file` precedes it', () => {
+  // The lone-`<` exemption ignored redirect ORDER. bash gives fd 0 to the LAST
+  // redirect, and the heredoc is the hazard. Same defect M12 addressed for the
+  // fd digit, reached through ordering instead.
+  // WHAT MAKES THIS FAIL: drop the `hasHeredoc` precedence check.
+  assert.ok(has(`python - < in.txt <<'EOF'\nEOF`, 'python-dash-repl'));
 });
 
 test('CONTROL: a REAL terminated heredoc still exempts its body', () => {
