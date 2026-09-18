@@ -91,14 +91,26 @@
  *      under this contract, not a blind test. The real evidence for all of them
  *      is produced by the job running them on every execution. They are not
  *      counted as proof of kill power.
- *   3. THE COMPILE IS NOT A REQUIRED CONTEXT. `Bicep Params Compile` is not one
- *      of main's 15 required status checks and no ruleset requires it, so a RED
- *      compile does not block a merge today — only `guardrails`, i.e. THIS
- *      file, blocks, and this file judges the job's SHAPE, never the compile's
- *      RESULT. #4466's premise (nothing parses il5.bicepparam) is closed; the
- *      stronger claim (a broken il5.bicepparam cannot reach main) needs an
- *      operator to add the context to branch protection. Deliberately not done
- *      from here.
+ *   3. THE COMPILE IS A REQUIRED CONTEXT AS OF 2026-09-18 — and this block said
+ *      the opposite until then, while line 889 of this same file already said
+ *      the new thing. `Bicep Params Compile` is now one of main's 17 required
+ *      status checks (it was 15 before; the brain security-graph check was
+ *      added in the same change). So a RED compile blocks an ORDINARY merge.
+ *
+ *      IT DOES NOT MAKE THE PATH UNREACHABLE. `enforce_admins.enabled` is
+ *      `false` on this repo and `--admin` merging is standing practice, so an
+ *      admin merge bypasses every required context. #4466's premise (nothing
+ *      parses il5.bicepparam) was already closed; its stronger claim (a broken
+ *      il5.bicepparam cannot reach main) is NOT closed by required-ness, and
+ *      nothing short of `enforce_admins: true` would close it.
+ *
+ *      This file still judges the job's SHAPE, never the compile's RESULT —
+ *      that part was and remains true.
+ *
+ *      Verify rather than trust these two sentences; they are the kind that rot,
+ *      and this one rotted inside the commit that corrected its sibling:
+ *        gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+ *          --jq '.required_status_checks.contexts | length, .enforce_admins.enabled'
  *   4. WHAT NO RULE HERE CAN SEE: a change to branch protection, and a change to
  *      the workflow's `on:` verbs (removing `pull_request:` outright).
  *

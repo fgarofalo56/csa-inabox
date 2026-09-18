@@ -33,8 +33,9 @@ on:
       # `paths:`, so the PR path was never affected — this only closes the
       # push-to-main arm.
       #
-      # SIDE EFFECT, NAMED. validate.yml publishes 4 of the 15 required contexts
-      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene), and the drain
+      # SIDE EFFECT, NAMED. validate.yml publishes 5 of the 17 required contexts
+      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene, and — since
+      # 2026-09-18 — Bicep Params Compile; it was 4 of 15 before), and the drain
       # harness excuses exactly those on a merged sha BECAUSE this push trigger
       # was path-filtered (tools/drain/gates.py, policy.json `push_event_runs`).
       # Widening it means a merge touching any .bicep/.bicepparam now really
