@@ -2172,29 +2172,39 @@ export function buildHealRequests(perApp = [], { boundary = 'commercial', lanes 
 // wait is a new outage introduced by a fix. Distinct keys, distinct mutex; the
 // two never interact.
 //
-// WHERE THE RECORD LIVES, AND WHY THAT IS SAFE ONLY SINCE #3681. The lease is
-// four ARM tags on the admin-plane ACR, merge-patched with
-// `az tag update --operation Merge` so the write never rewrites the registry
-// body. ARM tags were already the repo's chosen store for a cross-lane mutex
+// WHERE THE RECORD LIVES, AND WHY IT IS NOT THE REGISTRY (#4448). The lease is
+// four ARM tags on the SUBSCRIPTION that holds the admin-plane ACR,
+// merge-patched with `az tag update --operation Merge`. ARM tags were already
+// the repo's chosen store for a cross-lane mutex
 // (acr-firewall-lease.sh) because the CONTROL plane is reachable from both
 // lanes with no data-plane dependency and no eventual-consistency index in the
 // way — the property whose absence made the Actions-API population come back
 // empty three minutes fifty after the roll it was missing.
 //
-// The precondition is that an apply must not DELETE them. It used to: an ARM
-// resource PUT replaces a resource's top-level `tags`, which is how the
-// firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:` from
-// the ACR resource in registry.bicep for exactly that reason, and compliance
-// tags now arrive out-of-band through the same Merge patch. That is a
-// PRECONDITION OF THIS MUTEX, not a coincidence, so roll-race.test.mjs asserts
-// it directly against registry.bicep — if that `tags:` ever comes back, this
-// lease degrades to nothing and the guard goes red instead.
+// The precondition is that an apply must not DELETE them, and the ACR CANNOT
+// satisfy it. An ARM resource PUT writes the tag dictionary the template body
+// hands it, and a body that hands it none writes NONE — so a template that
+// declares the ACR at all erases that registry's tags on every apply, whether
+// or not it declares `tags:`. #3681 removed `tags:` from the ACR in
+// registry.bicep believing that closed the hole; it did not. Measured
+// 2026-09-17 on the live Commercial estate: the ACR (declared WITHOUT `tags:`)
+// carried only the four `loomAcrFw*` values a LATER lane had written back and
+// zero compliance tags, while `pe-<acr>` (declared WITH `tags:
+// complianceTags`, same module, same apply) carried all five. Six consecutive
+// scheduled deploys, 2026-09-12 to 2026-09-17, died on the release step
+// reporting that erasure, and every one of those reports was true.
+//
+// A subscription-scope deployment never PUTs the subscription, so the carrier
+// moved there. It is derived from the registry's own resource id in the lease
+// step, never taken as an input, so no lane can arbitrate against a different
+// estate by passing a stale parameter.
 //
 // WHAT THIS DOES NOT ESTABLISH. Nothing here has been observed arbitrating two
 // live runs; a genuine two-writer race cannot be manufactured off the estate.
 // The decisions below are unit-tested, the shell that drives them is EXECUTED
 // against a stubbed `az` in roll-race.test.mjs, and the live receipt is a
-// scheduled Commercial run — which had not happened when this shipped.
+// scheduled Commercial run — which had not happened when this shipped, and has
+// still not happened for the subscription carrier.
 
 /**
  * The four ARM tags that ARE the lease. Deliberately NOT the `loomAcrFw*` set:
@@ -2345,7 +2355,7 @@ export function decideEstateImageLeaseAcquire({
       action: 'unknown',
       holder: state.owner,
       holderUrl: state.holderUrl,
-      reason: `the lease records owner '${state.owner}' (${state.holderUrl || 'no holder url'}) but ${ESTATE_IMAGE_LEASE_TAGS.expires}=${JSON.stringify(state.expiresRaw)} is not a unix timestamp, so it CANNOT be established whether that holder is still live. Clear it once you have confirmed that run is finished: az tag update --resource-id <acr-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
+      reason: `the lease records owner '${state.owner}' (${state.holderUrl || 'no holder url'}) but ${ESTATE_IMAGE_LEASE_TAGS.expires}=${JSON.stringify(state.expiresRaw)} is not a unix timestamp, so it CANNOT be established whether that holder is still live. Clear it once you have confirmed that run is finished: az tag update --resource-id <lease-carrier-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
     };
   }
   if (state.expiresEpoch <= nowEpoch) {
@@ -2390,8 +2400,8 @@ export function decideEstateImageLeaseAcquire({
  *
  * THREE INPUT STATES, NOT TWO. `held` is "the read-back CONFIRMED this run as
  * the holder". `claimed` is "the claim write returned 0 and the confirmation
- * could not be taken" — the registry may therefore still carry this run's owner
- * id even though the run holds nothing. That state MUST reach this function: a
+ * could not be taken" — the lease carrier may therefore still carry this run's
+ * owner id even though the run holds nothing. That state MUST reach this function: a
  * claim that lands and is never cleared strands the mutex for a full TTL and
  * every write on the other lane queues behind a run that has already exited,
  * which is the outage this lease exists to prevent. The two states differ in
@@ -2421,7 +2431,7 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
       holder: '',
       reason: confirmed
         ? `this run holds the estate image-write lease and the tags could NOT be read back, so it is NOT established whether it still holds it: ${String(readError).slice(0, 400)}`
-        : `this run's claim write LANDED but it was never confirmed as the holder, and now the tags could NOT be read back either, so whether this run's owner id is still stranded in the registry is NOT established: ${String(readError).slice(0, 400)}. If it is, the other image writer queues behind a run that has already exited until the lease expires. Clear it once this run is finished: az tag update --resource-id <acr-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
+        : `this run's claim write LANDED but it was never confirmed as the holder, and now the tags could NOT be read back either, so whether this run's owner id is still stranded in the lease carrier is NOT established: ${String(readError).slice(0, 400)}. If it is, the other image writer queues behind a run that has already exited until the lease expires. Clear it once this run is finished: az tag update --resource-id <lease-carrier-resource-id> --operation Merge --tags ${ESTATE_IMAGE_LEASE_TAGS.owner}=${LEASE_OWNER_NONE} ${ESTATE_IMAGE_LEASE_TAGS.expires}=0`,
     };
   }
   const parsed = readEstateImageLease(doc);
@@ -2434,7 +2444,7 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
       holder: owner,
       reason: confirmed
         ? `this run ('${owner}') is the recorded holder — clearing the estate image-write lease.`
-        : `this run ('${owner}') never CONFIRMED the estate image-write lease, but its claim write is what the registry still records — clearing it, because leaving it would block the other image writer behind a run that has already exited. Nothing is asserted here about whether this run's write (if it made one) was exclusive; it was not established either way.`,
+        : `this run ('${owner}') never CONFIRMED the estate image-write lease, but its claim write is what the lease carrier still records — clearing it, because leaving it would block the other image writer behind a run that has already exited. Nothing is asserted here about whether this run's write (if it made one) was exclusive; it was not established either way.`,
     };
   }
   if (!parsed.owner || parsed.owner === LEASE_OWNER_NONE) {
@@ -2442,20 +2452,20 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
       return {
         action: 'noop',
         holder: '',
-        reason: `this run ('${owner}') wrote a claim it never confirmed, and the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' — nothing of this run's is left stranded, so there is nothing to clear. This is NOT the erasure case: this run never established that it held the mutex, so no exclusivity was lost.`,
+        reason: `this run ('${owner}') wrote a claim it never confirmed, and the lease carrier now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' — nothing of this run's is left stranded, so there is nothing to clear. This is NOT the erasure case: this run never established that it held the mutex, so no exclusivity was lost.`,
       };
     }
     return {
       action: 'erased',
       holder: '',
-      reason: `THE ESTATE IMAGE-WRITE LEASE WAS ERASED WHILE THIS RUN ('${owner}') HELD IT: the registry now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' and no other holder took over. The mutex did NOT hold for this write, so another lane may have written the same image field concurrently. What removed the tags is NOT established here; the shapes to check are a template that PUTs the ACR resource (an ARM PUT replaces a resource's tags — this is why registry.bicep carries no 'tags:' since #3681) and a manual 'az tag' write.`,
+      reason: `THE ESTATE IMAGE-WRITE LEASE WAS ERASED WHILE THIS RUN ('${owner}') HELD IT: the lease carrier now records ${ESTATE_IMAGE_LEASE_TAGS.owner}='${parsed.owner || '(unset)'}' and no other holder took over. The mutex did NOT hold for this write, so another lane may have written the same image field concurrently. What removed the tags is NOT established here; the shapes to check are a deployment that PUTs the resource CARRYING the lease (an ARM PUT writes the tag dictionary the template body hands it, and a body that declares no tags writes none — that is why #4448 moved this lease off the ACR, which every apply PUTs, onto the subscription, which a subscription-scope deployment does not) and a manual 'az tag' write.`,
     };
   }
   if (!confirmed) {
     return {
       action: 'noop',
       holder: parsed.owner,
-      reason: `this run ('${owner}') wrote a claim it never confirmed and the registry now records '${parsed.owner}' (${parsed.holderUrl || 'no holder url'}) — that is what LOSING the claim race looks like, and those tags belong to that run. NOT clearing them. This run holds nothing to release and asserted no exclusivity.`,
+      reason: `this run ('${owner}') wrote a claim it never confirmed and the lease carrier now records '${parsed.owner}' (${parsed.holderUrl || 'no holder url'}) — that is what LOSING the claim race looks like, and those tags belong to that run. NOT clearing them. This run holds nothing to release and asserted no exclusivity.`,
     };
   }
   return {
@@ -2544,7 +2554,7 @@ export function decideEstateImageLeaseRelease({ doc = null, readError = '', me =
 //   node scripts/ci/reconcile-policy.mjs estate-image-lease-release
 //        (--tags <file> | --tags-error <text>) --me <holder-id>
 //        --state held|claimed|none
-//        Exit 0 = CLEAR the tags (this run is what the registry records),
+//        Exit 0 = CLEAR the tags (this run is what the lease carrier records),
 //        5 = nothing to clear and that is correct (this run never claimed, or
 //        it claimed without confirming and lost the race — the tags belong to
 //        another run and clearing them would strand IT), 1 = erased / stolen /
@@ -3127,7 +3137,7 @@ export function cliMain(argv, io) {
         return 2;
       }
       if (v.action === 'reentrant') {
-        log(`::notice::estate-image-lease: CONFIRMED — the registry records '${me}' as the estate image-write lease holder. This run may write Container App images.`);
+        log(`::notice::estate-image-lease: CONFIRMED — the lease carrier records '${me}' as the estate image-write lease holder. This run may write Container App images.`);
         return 0;
       }
       // R7: the acquire path's `reason` MAY NOT be forwarded from here. It is
@@ -3145,7 +3155,7 @@ export function cliMain(argv, io) {
       //     sentence where it means nothing.
       // So the confirmation states its own facts. What is true on every one of
       // these branches, and is the operator-actionable part, is factored out.
-      const claimTagNote = 'This run has written NO Container App image. It HAS written its own claim tags, so the registry may still record this run — the release step clears them (its `if:` reads `claimed`).';
+      const claimTagNote = 'This run has written NO Container App image. It HAS written its own claim tags, so the lease carrier may still record this run — the release step clears them (its `if:` reads `claimed`).';
       if (v.action === 'unknown') {
         log(`::warning::estate-image-lease: NOT confirmed — the claim read-back did not establish an owner: ${v.reason} — ${claimTagNote}`);
         return 1;
