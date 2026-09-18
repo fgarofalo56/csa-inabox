@@ -86,7 +86,7 @@ Verdicts used below:
 |---|---|
 | **OBSOLETE** | the thing the question was about has happened, or its premise is gone. No decision needed. Evidence given per row. |
 | **NARROWED** | part of the question answered itself; a smaller decision remains. |
-| **LIVE** | still stands as asked. |
+| **LIVE** | still stands as asked — **as first measured 2026-08-06**, not a claim about head. Six of the ten so-verdicted rows have since been settled; each carries a supersede marker at its own row. |
 
 Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
@@ -111,8 +111,15 @@ the exact value: ten-to-four and ten-to-six are the same observation, which is
 why it was stated while the count was still disputed.
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
-been discharged. They are filed under LIVE because a real decision survives in
-each, but the discharged part is marked at the row so it is not re-litigated.
+been discharged, and the discharged part is marked at the row so it is not
+re-litigated. **They are no longer alike, and an earlier revision of this
+sentence said they were**, claiming "a real decision survives in each" 277 lines
+above OP-14's own DECIDED marker — the same headline-versus-row shape this PR
+has now committed eight times. At head: **OP-13** is the one with a live
+decision (the attended dispatch, untouched), while **OP-14's** surviving
+question — the judge cap — was **decided on 2026-09-18**. What survives in OP-14
+is not a decision but OWED WORK: the gate-registry entry
+`auto-bind-by-default.md` § Allowed requires for a cost-material opt-in.
 The counts are of *questions*, not of sub-asks; several rows bundle two or three.
 
 Source of the original text: `.harness/archive/2026-08-08/state.json`,
@@ -293,7 +300,27 @@ against the 2026-08-06 framing. Note `loom_optional_severity_is_the_defect`:
 
 ---
 
-## LIVE — still stands as asked
+## LIVE as first measured — six of these ten rows have since been settled
+
+The heading used to read **"LIVE — still stands as asked"**, which is the
+unswept mirror of the heading corrected one file over at
+`PRPs/active/drain-2026-08-31/DECISIONS.md` (grep: "The heading used to read").
+Both are fixed in the same commit this time; the sibling was fixed alone in the
+round before — another instance of this PR's own defect class, a resolution
+reaching one site and not the matching one.
+
+Ten rows were measured LIVE. At head: **OP-15 is DISSOLVED**, **six carry an
+operator decision in whole or in part** (OP-3, OP-7, OP-8, OP-9 item 2, OP-14,
+OP-19(b)), and **four still carry something live** (OP-5, OP-9's items 1/3/5/7,
+OP-11, OP-13). OP-9 and OP-19 appear on both lists because each bundles
+sub-asks that were answered separately.
+
+**Every settled row carries a supersede marker at its own row**, below. Rows are
+kept in this section rather than moved, because the question text is what this
+page is for and a reader looking for a row will look where it was filed — but
+the heading no longer claims something its own rows contradict. Five of those
+markers were added in this round; two rows (OP-14, OP-19) already had one from
+earlier rounds, which is precisely how the gap was found.
 
 ### OP-3 · task `D17` · clean-sub acceptance runs
 
@@ -307,6 +334,17 @@ other's. The R8 docs half of `D17` is **done**
 (`docs/fiab/deployment/greenfield.md`, `brownfield.md`,
 `failure-recovery.md`, `resource-groups.md`); this is the part that only an
 operator can unblock.
+
+> **DECIDED 2026-09-18 — land #4561 first, THEN take the attended window.** Do
+> not dispatch into the red supply-chain gate: a greenfield run stops there and
+> cannot produce an R4 receipt. The question above is left as asked because the
+> decision is only legible beside it. See `DECISIONS.md` § *"OP-3 ·
+> clean-subscription acceptance runs"*, which records the precondition as the
+> tracked item **#4561** rather than the wider class "the Trivy CRITICAL fixes".
+>
+> **The decision does not discharge the row's consequence.** The window has not
+> happened, so per `deploy-integrity.md` R4 greenfield remains **UNVERIFIED, not
+> working** — that part is still owed and is not a decision anyone can make.
 
 ### OP-5 · task `C12` · GOV-3 / model-strategy §7 / TPM raises
 
@@ -324,6 +362,15 @@ mistaken for an answer: `lib/editors/report/map-visual.tsx:28` records a
 *separate* decision that ArcGIS/Esri stay out of the report map visual as
 third-party. That does not settle the GeoAnalytics license question.
 
+> **DECIDED 2026-09-18 — DECLINED. No first-party Esri license; GEO-2/3/4 stay
+> bring-your-own-license.** See `DECISIONS.md` § *"OP-7 (and OP-9 item 6) · Esri
+> GeoAnalytics license"*. Nothing in the drain waits on this, and the archived
+> `geo-graph-ml` program already sequences GEO-2 last and assumes a
+> customer-supplied license.
+>
+> The `map-visual.tsx:28` note above is still a **separate** decision about a
+> different subject and is not settled by this one, in either direction.
+
 ### OP-8 · task `C6` · help-program D6 visual captures
 
 Screenshots and recordings, operator-produced per the privacy workflow. The
@@ -332,12 +379,25 @@ written half of `C6` is **done and re-measured** —
 already complete (142/142 item guides, 29/29 app tutorials). Visual captures are
 the outstanding piece and are operator-gated by design.
 
+> **DECIDED 2026-09-18 — agent-captured in a real browser, operator
+> privacy-reviews before anything publishes.** See `DECISIONS.md` § *"OP-8 (and
+> OP-9 item 4) · help-program visual captures"*. Two constraints the decision
+> does not relax: nothing auto-publishes, and capture pairs with a deploy window
+> because a screenshot of a local dev server is not evidence about the estate
+> (`ux-baseline.md` G1).
+>
+> **The captures themselves are still owed.** The 0-of-159-published figure is
+> the **2026-08-06** audit number carried forward and was NOT re-measured in this
+> pass; separately, `docs/fiab/help-inventory-2026-08-08.md:172` records 121 of
+> 142 *landing* captures, which is a different thing from a published tutorial
+> set. Deciding who holds the camera did not produce a capture.
+
 ### OP-9 · task `C1` · loom-apex operator items 1–7
 
 Verbatim from the archived `loom-apex/PRP.md:180-186`:
 
 1. Entra CA exclusion for `svc-loom-synthetic@limitlessdata.ai` → V1 login probe online.
-2. I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05). **That window has passed.** It needs a fresh decision, not a silent roll-forward — and it is now six weeks staler than when that warning was written.
+2. I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05). **That window has passed.** It needs a fresh decision, not a silent roll-forward — and it is now six weeks staler than when that warning was written. **[DECIDED 2026-09-18 — see the marker below. The fresh decision this item asked for has been made: re-run the shadow window. The sentence is kept as asked, not as an open ask.]**
 3. S2 FIC flip on the prod app reg.
 4. Visual-tutorial capture runs + privacy review — the same work as OP-8. Quantified then as 0/159 published (items 0/142, features 0/17).
 5. RisingWave image-tag confirm + Trino Helm install (opt-ins).
@@ -345,6 +405,17 @@ Verbatim from the archived `loom-apex/PRP.md:180-186`:
 7. The 10 operator actions in the archived `loom-apex/research/gates-zero.md`.
 
 Items 4 and 6 are duplicates of OP-8 and OP-7; answer them once.
+
+> **PARTLY DECIDED 2026-09-18 — item 2 is answered; items 1, 3, 5 and 7 are
+> not.** Item 2: **re-run the clean-shadow window** against today's estate, then
+> decide; do not roll forward on the 2026-08-05 sign-off, whose evidence has
+> expired. See `DECISIONS.md` § *"OP-9 item 2 · I6/I7 enforce flip"*. Items 4
+> and 6 are discharged by the OP-8 and OP-7 decisions above, being the same two
+> questions.
+>
+> **Items 1, 3, 5 and 7 were neither measured nor asked in this pass** — that is
+> a gap, not a verdict. This row is therefore counted on BOTH sides of the
+> headline count, and the headline says so.
 
 ### OP-11 · task `D18` · #2678 audience registration
 
@@ -406,18 +477,58 @@ Two parts, and they diverge.
 
 ### OP-15 · task `D2` · Tag Contributor on the ACR
 
-The deploy identity lacks `Microsoft.Resources/tags/write` on the Commercial ACR
+> **DISSOLVED 2026-09-18 — BOTH halves of the premise below are FALSE. Do not
+> act on the paragraph that follows; it is preserved as the question was asked,
+> not as an instruction.**
+>
+> This marker leads the row rather than trailing it, unlike every other marker on
+> this page. The reason is specific: the surviving text is an **actionable
+> instruction** ("granting Tag Contributor … makes leases race-free") sitting
+> under a heading that used to read "still stands as asked". A trailing marker
+> would be read after the action. Consistency of placement loses to that.
+>
+> 1. **The identity does not lack `Microsoft.Resources/tags/write`.**
+>    `limitlessdata_deploy` (oid `b9c3cc65-522e-49c9-ad02-914676aa5a6b`) holds
+>    **Owner** at `/providers/Microsoft.Management/managementGroups/d1fc0498-f208-4b49-8376-beb9293acdf6`,
+>    the tenant-root management group — measured read-only on 2026-09-18 via
+>    `az role assignment list --all --include-inherited`. `Owner` is
+>    `actions: ["*"]`, `notActions: []`, so it already carries `tags/write`.
+> 2. **The grant would not make leases race-free.** Per issue 4563 the lease tags
+>    are erased by every subscription-scope apply regardless — the apply PUTs the
+>    registry and `registry.bicep` declares no `tags:`. Granting the role would
+>    have produced a confident *"leases are race-free now"* with the race
+>    entirely intact.
+>
+> **Eighth instance of this PR's defect class, and the worst of the eight.** The
+> banner at the top of this page, `DECISIONS.md` § *"Dissolved outright"*,
+> `DECISIONS.md` § *"OP-15 is the one worth reading twice"* and the PR body all
+> already said this. The row itself — the only site a reader would act from —
+> was never touched: **nine commits on this branch edited this file and not one
+> of them edited these lines**, measured with
+> `git log -L 407,414:PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md`,
+> which returns a single commit — `0094903daea`, the one that created the file.
+> See `DECISIONS.md` for the full evidence. The #4285 contention context below is
+> unaffected and still stands.
+
+**[SUPERSEDED — the two sentences in this paragraph are the false premise. Kept
+verbatim; see the marker above.]** The deploy identity lacks
+`Microsoft.Resources/tags/write` on the Commercial ACR
 (name in `.harness/archive/2026-08-08/config.json`, `estate.commercial.acr`), so
 #2603 firewall leases run in legacy-fallback
 (unleased) mode. Granting Tag Contributor on the registry makes leases
 race-free.
 
-#2603 itself is CLOSED, but the grant is an estate action a merge cannot
-perform, so closing the issue did not perform it. Context that raises the
+**[SUPERSEDED — first sentence only.]** #2603 itself is CLOSED, but the grant is
+an estate action a merge cannot
+perform, so closing the issue did not perform it. *(There is no grant
+outstanding: the identity already holds Owner at the tenant-root MG. The
+sentence was written on the false premise above.)* Context that raises the
 stakes rather than lowering them: **#4285 is OPEN** — *"ACR firewall lease: ~13
 Commercial claimants on one per-registry mutex, none serialized, with a 25-min
 wait budget below the builder's 36-min median hold."* Unleased fallback under
-that much contention is the #3676 shape.
+that much contention is the #3676 shape. **That contention is real and is NOT
+dissolved** — what dissolved is the idea that a role grant addresses it. Tracked
+as issue 4563.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 

@@ -373,7 +373,7 @@ days on purpose; neither is a typo.
 **One row, not two.** An earlier revision listed OP-11 here as well. It is not
 dissolved — see below.
 
-### The remaining seven rows — four still live, two now DECIDED, one mitigated
+### The remaining six rows — four still live, OP-14 DECIDED, OP-19 split (a) mitigated / (b) DECIDED
 
 The heading used to read "Still live, in whole or in part — NOT settled by this
 pass", which stopped being true of two of its own rows the moment the operator
@@ -381,6 +381,19 @@ decided OP-14 and confirmed OP-19(b). **OP-14 and OP-19(b) are kept in this
 table rather than moved**, because their history is the point and a reader
 looking for them will look here — but the heading no longer claims something the
 rows contradict.
+
+**SIX rows, SEVEN table lines — OP-19's two asks are listed separately for
+legibility and counted once.** The heading said "seven rows" for two rounds,
+which reached seven by counting OP-19(a) and OP-19(b) as two. That is the exact
+split retracted 24 lines above (grep: "counting OP-19's two asks as two rows")
+and forbidden in terms by `PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md`
+(grep: "The counts are of"): *"The counts are of questions, not of sub-asks."*
+Counted by question the remainder is **six**: OP-5, OP-9, OP-11, OP-13, OP-14,
+OP-19. Ten LIVE minus OP-15, the one dissolved outright, leaves nine — of which
+OP-3, OP-7 and OP-8 have their own decision blocks below, leaving these six.
+The error was committed in the same section that retracts it — another instance
+of a correction reaching a sentence and not its sibling, which is now the
+dominant shape on this PR rather than an incident within it.
 
 That mismatch is the same defect this section pre-empted one table up, where the
 `> **Decision:**` block count is reconciled against the headline explicitly. The
@@ -563,13 +576,24 @@ Filed separately rather than fixed here.
 
 ### Method note
 
-Two of the fourteen original rows had already been measured earlier in the
+Two of the **ten LIVE** rows had already been measured earlier in the
 session without spending operator time — OP-15's grant (genuinely resolved) and
 OP-19(a)'s timers (disabled on the estate, but only by an out-of-band app
 setting, so mitigated rather than resolved; the row says so and this line must
 not say otherwise).
 That result is what motivated running the pass over all ten rather than
 forwarding the list as written.
+
+**The denominator was wrong and it was a FOURTH one.** This line read "two of
+the fourteen original rows" for eight rounds. There is no set of fourteen
+anywhere in this work: the harness queue held **19** questions, the first
+measurement split them **5 OBSOLETE · 4 NARROWED · 10 LIVE**, and the
+measure-first pass ran over the **10 LIVE** — which is the population both OP-15
+and OP-19(a) belong to, and the only denominator that makes "two of" mean
+anything. `git log -S"fourteen original rows"` traces it to `832b46530f9`, the
+round-1 draft whose headline was "7 of 10 dissolved"; the headline was corrected
+and this denominator was not. Same class as the rest: the correction reached the
+count and not the sentence that shared its arithmetic.
 
 **The ratio did NOT hold, and an earlier revision of this line said it did.**
 It read "The ratio held: **7 of 10 dissolved**" — the same claim retracted at the
