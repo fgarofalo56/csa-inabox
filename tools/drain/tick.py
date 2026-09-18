@@ -575,9 +575,22 @@ RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})
 def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     """The comment `gh issue close --comment` posts. THE PERMANENT PUBLIC RECORD.
 
-    This string is the receipt's only trace on the artifact a human reads, on up
-    to 334 issues, forever. It is not log output and it is not revisable, so it
-    is built deliberately rather than formatted in place.
+    This string is the receipt's only trace on the artifact a human reads
+    whenever a comment is posted at all, on up to 334 issues, and it is not
+    revisable, so it is built deliberately rather than formatted in place.
+
+    **WHERE NO COMMENT IS POSTED, AND THE SENTENCE ABOVE USED TO DENY IT.** That
+    sentence read "is the receipt's only trace on the artifact a human reads, on
+    up to 334 issues, forever", with no qualifier. It is FALSE on the
+    already-closed short-circuit in `close_issue_on_github`: that route issues
+    `gh issue view` and nothing else, so no comment exists, and
+    `tools/drain/state.json` is untracked -- the receipt's whole existence is a
+    local gitignored file. Not a corner, and that is why the claim mattered: all
+    7 items the live ledger holds as `closed` are in exactly that state, and the
+    route is the one `close_issue_on_github`'s own docstring names as
+    motivating. Posting the receipt there too is #4579, deliberately not done
+    here; the claim is corrected rather than left standing over the route the
+    whole current population takes.
 
     **WHY IT NAMES `kind` AND `issue_class`.** The previous text was identical on
     both routes and cited `deploy-integrity` R2 on both: "Closing this issue on
@@ -591,9 +604,27 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     while `policy.json` carries `report-a-merge-as-a-fix` in its `never` list.
     A merge-based receipt therefore says what it establishes and, explicitly,
     what it did not look at; R2 appears as the reason such a receipt is
-    confined to one class, never as the licence for the close. A receipt taken
-    from a RUN may cite R2 as satisfied, because a run is an observation and not
-    a merge.
+    confined to one class, never as the licence for the close.
+
+    **AND WHY THE RUN-BACKED BRANCH NO LONGER CLAIMS R2 SATISFIED.** It used to
+    end "an observation of something that ran, not a merge, which is what
+    deploy-integrity R2 (merged is not done) asks of this class" -- an assertion
+    of SATISFACTION, and the code does not establish it. `_run_evidence` never
+    requests `createdAt` and `verify_run_backed_receipt` never compares
+    `headSha` to anything, so the run is bound to this issue by nothing at all:
+    not by reference, not by time, not by sha. Measured rather than argued --
+    run `33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`)
+    passes every check today, and 147 of the 351 currently-open issues were
+    filed AFTER it. An outside reader six months from now takes "what R2 asks of
+    this class" to mean the estate was observed carrying this issue's change;
+    R7 governs implication and the artifact is unrevisable. The asymmetry was
+    the tell: the merge branch volunteers its own two gaps and the run branch --
+    the one whose binding is WEAKER, since `--from-pr` at least goes through
+    `_pr_references_item` -- volunteered one of three. R2 now appears on this
+    branch as the reason the class takes a run rather than a merge, which is
+    true, and the binding gap is disclosed in the comment with #4578 tracking
+    the repair (fetch the run's date, compare it to the item's, refuse a run
+    that predates it; the sha half waits on #4489 with the rest of the binding).
 
     The two branches are written out rather than assembled from fragments: a
     sentence this permanent should be readable in full at the place it is
@@ -637,13 +668,22 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
             "permanent public comment that would assert one of them by default"
         )
     return (
-        f"{head} The evidence is a completed run of the only workflow policy "
-        f"accepts as the {kind} producer, with every step that kind requires "
-        "observed green - an observation of something that ran, not a merge, "
-        "which is what deploy-integrity R2 (merged is not done) asks of this "
-        "class. DISCLOSED: this tool verifies the run establishes the kind, "
-        "not that the run was ABOUT this issue - that binding is #4489. "
-        "Closing this issue on that evidence."
+        f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: the evidence is a "
+        f"completed run of the only workflow policy accepts as the {kind} "
+        "producer, with every step that kind requires observed green. It "
+        "establishes that THAT RUN ran and that those steps passed - an "
+        "observation of something that ran, not a merge, which is why "
+        f"deploy-integrity R2 (merged is not done) makes the {issue_class} class "
+        "take a receipt of this shape rather than a CI-green one. "
+        "DISCLOSED, and this is the part R2 would additionally need: nothing "
+        "here establishes the run carried THIS issue's change. The run is not "
+        "bound to the issue - a workflow run names no issue at all, and that "
+        "binding is #4489 - and it is bound to no TIME and no SHA either: no "
+        "run date is fetched and no head sha is compared, so a run that "
+        "PREDATES this issue is accepted exactly as one that postdates it "
+        "(#4578). Read this as 'the declared producer ran green', not as 'the "
+        "estate was observed carrying this change'. "
+        "Closing this issue on that evidence, and on nothing wider than it."
     )
 
 
@@ -671,6 +711,23 @@ def close_issue_on_github(
     -- no second close, no second comment, no noise on an issue a human may have
     closed by hand (which is exactly how #4535 was worked around).
 
+    THE PRICE OF THAT, DISCLOSED because the route is the COMMON one and the
+    cost is invisible from here: on the already-closed path this function issues
+    `gh issue view` and NOTHING ELSE, so no receipt comment is posted -- and
+    `tools/drain/state.json` is untracked, which leaves the receipt existing
+    solely in a local gitignored file. All 7 items the live ledger currently
+    holds as `closed` are in that state. The short-circuit conflates two worlds:
+    *the harness already commented here*, correct to skip, and *a human closed
+    it silently*, where no comment exists and none ever will. Posting the
+    receipt on this route -- read the comments, post with `gh issue comment`
+    when none begins `Drain harness: receipt verified` -- is #4579 and is
+    deliberately NOT done in this change: it adds two `gh` calls, hence two new
+    failure routes, to the one route the entire current population takes, and
+    that route's seven-shape failure behaviour was independently measured clean
+    at this head. Re-deriving that matrix over a new write is its own work. What
+    IS done here is that the returned note says so, rather than reporting a
+    receipt whose public trace does not exist.
+
     Verified BY EFFECT, not by exit code: the state is read back after the
     close, because rc=0 from a wrapper that did nothing is a false success this
     repo has already paid for. If the issue is not closed afterwards, this
@@ -690,7 +747,16 @@ def close_issue_on_github(
 
     try:
         if _issue_state_on_github(repo, number) == "CLOSED":
-            return f"#{number} was already closed on GitHub - left alone"
+            # THE NOTE SAYS WHAT DID NOT HAPPEN. "left alone" alone reads as
+            # "nothing needed doing", which is true of the close and false of
+            # the receipt: no comment is posted on this route, so the operator
+            # would otherwise be told a receipt was recorded with no hint that
+            # its only trace is a gitignored local file (#4579).
+            return (
+                f"#{number} was already closed on GitHub - left alone, so NO "
+                "receipt comment was posted: on this route the receipt exists "
+                "only in the local ledger, which is untracked (#4579)"
+            )
         # THE COMMENT CLAIMS ONLY WHAT IS TRUE WHEN IT IS POSTED, because `gh`
         # posts it BEFORE it closes anything (#4545 finding 11; cli/cli
         # `pkg/cmd/issue/close/close.go` at v2.100.0 -- `CommentableRun` :158,
@@ -987,7 +1053,8 @@ class Recorded(NamedTuple):
 
     `summary` is the whole-operation line -- "#N closed on a <kind> receipt ...
     (<close_note>)" -- and `close_note` is the UPSTREAM half alone, either
-    "#N closed on GitHub" or "#N was already closed on GitHub - left alone".
+    "#N closed on GitHub" or the already-closed note, which says both that the
+    issue was left alone AND that no receipt comment was posted on it (#4579).
 
     They are separate because `main()`'s save-failure arm needs the upstream
     half and only the upstream half. It used to interpolate `summary` under the

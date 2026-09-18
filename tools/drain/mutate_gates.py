@@ -245,6 +245,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if was_state in REOPEN_DISPUTES:",
         "            if was_state in REOPEN_DISPUTES and existing.receipt_kind:",
     ),
+    (
+        ("L30 a TERMINAL item keeps its stale audit reason, so the ledger reads "
+         "`state=closed reason='departed'` and a cold reader cannot tell that "
+         "label from a live one. Pre-existing, and it becomes the COMMON shape "
+         "once recovering an audited item by re-taking its receipt is the "
+         "normal path (#4545) rather than a curiosity"),
+        "ledger.py",
+        "        if state in TERMINAL:\n            item.audit_reason = None\n",
+        "",
+    ),
     # -- the cycle ---------------------------------------------------------
     (
         "T1 the refresh invents a receipt and closes what left GitHub",
@@ -525,6 +535,64 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         'f"GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
         'f"GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+    ),
+    (
+        ("GH19 THE RUN-BACKED TEXT GOES BACK TO CLAIMING R2 SATISFIED. The "
+         "sentence 'an observation of something that ran, not a merge, which is "
+         "what deploy-integrity R2 (merged is not done) ASKS OF THIS CLASS' "
+         "asserts that the estate was observed carrying this issue's change, "
+         "and nothing in the receipt path establishes it: `_run_evidence` never "
+         "requests `createdAt` and `verify_run_backed_receipt` compares "
+         "`headSha` to nothing. MEASURED rather than argued -- run 33238747458 "
+         "(loom-roll-and-validate, 2026-08-29, headSha 70ca3d1) passes every "
+         "check today, and 147 of the 351 issues open on 2026-09-18 were filed "
+         "AFTER it. The mutation restores the exact shipped sentence, which is "
+         "the defect rather than a proxy for it, on an artifact that is public "
+         "and unrevisable"),
+        "tick.py",
+        ('        "observation of something that ran, not a merge, which is why "\n'
+         '        f"deploy-integrity R2 (merged is not done) makes the {issue_class} class "\n'
+         '        "take a receipt of this shape rather than a CI-green one. "'),
+        ('        "observation of something that ran, not a merge, which is what "\n'
+         '        "deploy-integrity R2 (merged is not done) asks of this class. "'),
+    ),
+    (
+        ("GH20 THE TIME/SHA DISCLOSURE IS DELETED while the softened R2 line "
+         "stays. The one-sided shape this package keeps producing, and the half "
+         "a reader cannot detect: the comment still reads correctly, still "
+         "cites #4489 for the reference binding, and silently stops saying that "
+         "the run is bound to no TIME and no SHA. Told apart from GH19 by "
+         "MEASUREMENT, not by construction: each arm was applied to a sandbox "
+         "copy and all five predicates of the run-backed test evaluated by "
+         "rendering the comment directly, since pytest stops at the first "
+         "failing assert and cannot see this. GH19 falsifies predicates 1+2, "
+         "GH20 falsifies 3+4, and neither touches 5 -- disjoint, so one arm "
+         "cannot pass for the other. GH20 additionally turns "
+         "`test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes` "
+         "red, which is a second independent killer"),
+        "tick.py",
+        ('        "binding is #4489 - and it is bound to no TIME and no SHA either: no "\n'
+         '        "run date is fetched and no head sha is compared, so a run that "\n'
+         '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
+         '        "(#4578). Read this as \'the declared producer ran green\', not as \'the "\n'
+         '        "estate was observed carrying this change\'. "\n'),
+        ('        "binding is #4489. "\n'),
+    ),
+    (
+        ("GH21 the already-closed note reverts to a bare 'left alone', so the "
+         "operator is told a receipt was recorded with no hint that NOTHING WAS "
+         "PUBLISHED. That route issues `gh issue view` and nothing else, and "
+         "`tools/drain/state.json` is untracked, so the receipt's whole "
+         "existence is a local gitignored file -- the state all 7 currently "
+         "ledger-closed items are in. Posting there is #4579; saying so is the "
+         "part that is not deferrable"),
+        "tick.py",
+        ('            return (\n'
+         '                f"#{number} was already closed on GitHub - left alone, so NO "\n'
+         '                "receipt comment was posted: on this route the receipt exists "\n'
+         '                "only in the local ledger, which is untracked (#4579)"\n'
+         '            )'),
+        ('            return f"#{number} was already closed on GitHub - left alone"'),
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (

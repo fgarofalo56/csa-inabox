@@ -185,6 +185,21 @@ The third row says "settled", not "the GitHub write LANDED", because the closer
 may have found the issue **already closed** and left it alone. The note it
 quotes says which.
 
+**On that already-closed route nothing is published at all**, and the note says
+so rather than leaving the operator to infer it. That route issues `gh issue
+view` and no other command, so no receipt comment is posted — and
+`tools/drain/state.json` is untracked, which leaves the receipt existing solely
+in a local gitignored file. It is not a corner: all 7 items the live ledger
+currently holds as `closed` are in exactly that state, and it is the route
+`close_issue_on_github` was written for (#4535 was hand-closed). The
+short-circuit conflates *the harness already commented here*, where skipping is
+right, with *a human closed it silently*, where no comment exists and none ever
+will. Posting the receipt there too — read the comments, `gh issue comment` when
+none begins `Drain harness: receipt verified` — is tracked as #4579 and is
+deliberately not done here: it adds two `gh` calls, hence two new failure
+routes, to the one route the whole current population takes, and that route's
+seven-shape failure behaviour was independently measured clean.
+
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
 before any work is done — and `drained: true` is this program's documented exit
@@ -202,6 +217,20 @@ condition. `--status` now refuses outright when no ledger file exists, because
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
+
+**A run-backed receipt is bound to the issue by NOTHING, and the comment it
+posts says so.** `verify_run_backed_receipt` matches the producer workflow,
+`status`, `conclusion` and every declared step — and compares the run to the
+item on no axis at all. `_run_evidence` does not request `createdAt`, and
+`headSha` is read only to be interpolated into the ref. Measured: run
+`33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
+every check today, and **147 of the 351 issues open on 2026-09-18 were filed
+after it**. So the receipt establishes *the declared producer ran green*, not
+*the estate was observed carrying this change* — the comment no longer cites
+deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
+rather than a merge, and it discloses the time and sha gap in terms. Binding it
+is #4578 (fetch the run's date, compare it to the item's, refuse a run that
+predates it); the sha half waits on #4489 with the rest of the binding.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane

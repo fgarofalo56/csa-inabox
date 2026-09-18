@@ -549,6 +549,21 @@ class Ledger:
             )
 
         item.state = state
+        # A TERMINAL ITEM CARRIES NO AUDIT REASON. `audit_reason` is a scalar
+        # set on the way IN to `needs-audit` and cleared only by the departure
+        # rescue in `upsert`, so recovering an audited item the other way --
+        # re-record its receipt, reach `closed` -- left it reading
+        # `state=closed reason='departed'`: a cold reader sees a closed item
+        # still labelled as having vanished. Pre-existing, and this change makes
+        # the recover-from-`needs-audit` path the NORMAL one, so the stale label
+        # becomes the common shape rather than a curiosity. Nothing reads
+        # `audit_reason` on a terminal item -- `refresh_from_github` skips
+        # `TERMINAL` outright and `upsert`'s rescue `elif` requires
+        # `was_state == NEEDS_AUDIT` -- and a later reopen rewrites it to
+        # `reopened` before anything can read it, so clearing is safe as well as
+        # honest.
+        if state in TERMINAL:
+            item.audit_reason = None
         item.history.append(f"{_now()} -> {state}" + (f" ({why})" if why else ""))
         return item
 
