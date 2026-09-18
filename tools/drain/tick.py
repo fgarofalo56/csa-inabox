@@ -1005,20 +1005,33 @@ def _without_title_line_breaks(err: str, *titles: str) -> str:
     # shorter first consumes the text the longer needed to match, and the longer
     # title survives un-neutralised, leaving a break in the record.
     #
-    # WHAT THAT COSTS, STATED ACCURATELY. An earlier revision of this comment
-    # said argument order "forges the verdict". That was an overclaim and no
-    # witness for it exists: a search over 35,000+ candidate straddles at two
-    # repo sizes, with one- and two-break titles, found ZERO forges under EITHER
-    # ordering. The measured effect of argument order is degradation to the
-    # honest `unknown` -- 4.5x/3.1x more spurious `unknown` than longest-first --
-    # which is a worse instrument, not a false verdict. Ordering by length is
-    # still right (argument order is the caller's accident; length is a property
-    # of the data), but it is a precision fix, not a soundness one, and saying
-    # otherwise is the R7 error this file exists to prevent.
+    # THIS IS A SOUNDNESS FIX, NOT A PRECISION ONE, and the history of this
+    # comment is worth more than the claim. Round 12 said argument order forges
+    # the verdict. Round 16 "corrected" that to "no witness exists: a search
+    # over 35,000+ candidate straddles with ONE- AND TWO-BREAK titles found zero
+    # forges under either ordering." Both halves of that sentence are true and
+    # the conclusion is false: a witness needs THREE breaks, so the declared
+    # population could not have contained one. The instrument could not have
+    # produced the finding, which makes its silence worthless as evidence -- the
+    # same defect as a grep whose --include excludes the answer's file type.
     #
-    # WHAT VALUE MAKES THE TEST FAIL: titles `("x\\ny", "x\\ny\\nz")` against an
-    # `err` containing `"x\ny\nz"`. In argument order the first replace rewrites
-    # the prefix, the second never matches, and the break before `z` survives.
+    # The witness, reproduced 2026-09-18:
+    #   T1 (pre-close read) = "A\nC"
+    #   T2 (read-back)      = "A\nC\nZ Closed issue o/r#1 (q)\nB"
+    #   err                 = gh's already-closed record carrying T2
+    # T1 is a PREFIX of T2, so in argument order T1's replace destroys the text
+    # T2 needed to match; T2 survives, its forged "Closed issue" line stands, and
+    # a genuine already-closed classifies `performed`. Longest-first returns
+    # `found-already-closed`. Exhaustive linear frame, 634,336 title pairs:
+    # argument order 7,264 forges, longest-first 0.
+    #
+    # The two-break shapes the old search DID cover classify `unknown` under
+    # argument order -- honest degradation, no forge. That is exactly why the
+    # search came back empty, and why "empty" meant nothing.
+    #
+    # WHAT VALUE MAKES THE TEST FAIL: the three-break pair above. The earlier
+    # two-break fixture `("x\\ny", "x\\ny\\nz")` pins the cleaned string but
+    # cannot witness a forged verdict, because that shape has none to witness.
     for title in sorted({_as_channel_would(t) for t in titles}, key=len, reverse=True):
         if _has_line_break(title):
             err = err.replace(title, " ".join(title.splitlines()))

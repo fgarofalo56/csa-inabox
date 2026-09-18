@@ -2743,7 +2743,8 @@ def test_the_close_outcome_reads_lines_the_way_gh_wrote_them():
     apply GH38 and deselect BOTH constructed CRLF sites -- the two assertions
     below, AND item 4 of
     `test_the_close_outcome_is_read_at_a_fixed_offset_on_the_line_gh_names_us_in`
-    -- and GH38 **SURVIVES** (546 passed, 4 deselected, rc 0). A first attempt at
+    -- and GH38 **SURVIVES** (550 passed, 4 deselected, rc 0 — measured at this head; an
+    earlier revision said 546, counted before `origin/main` was taken). A first attempt at
     this probe deselected only ONE of the two sites and wrongly concluded GH38
     had other kill power; naming the second site is the whole content of the
     finding.
@@ -2841,26 +2842,53 @@ def test_a_cr_bearing_title_is_neutralised_against_the_translated_err():
 def test_a_substring_title_cannot_shadow_the_longer_one():
     """Replace LONGEST FIRST: argument order is the caller's accident.
 
-    ROUND 13'S SECOND BLOCKER. The two titles are the pre-close read and the
-    read-back, and one title edit inside the close window is enough to make one
-    a prefix of the other. Replacing the shorter first consumes the text the
-    longer needed to match, so the longer survives un-neutralised and its break
-    still splits the record.
+    ROUND 13'S SECOND BLOCKER, and the arm that had to be rewritten because the
+    first version could not witness the thing it was named for.
 
-    THE VALUE THAT BREAKS IT: iterating `titles` in argument order. With the
-    fixture below that leaves `"x y\\nz"` -- the break before `z` survives,
-    because the short replace already destroyed the long one's match.
+    The two titles are the pre-close read and the read-back, and one title edit
+    inside the close window makes one a prefix of the other. Replacing the
+    shorter first consumes the text the longer needed to match, so the longer
+    survives un-neutralised and its break still splits the record.
+
+    THE FIXTURE NEEDS **THREE** BREAKS. A two-break pair degrades to the honest
+    `unknown` under argument order -- no forged verdict -- so a two-break
+    fixture pins only the cleaned string and would stay green against a real
+    forge. An earlier revision of this test used exactly that, and an earlier
+    revision of the code comment concluded from a one- and two-break search that
+    no witness existed at all. The search was sound; its population could not
+    contain the answer.
+
+    THE VALUE THAT MAKES THIS FAIL: iterating `titles` in argument order. The
+    pair below then classifies `performed` against a `gh` record whose ground
+    truth is `found-already-closed` -- a forged verdict, which is what gets
+    written permanently into `Item.history`.
     """
-    short = "x\ny"
-    longer = "x\ny\nz"
-    err = "issue #1 (" + longer + ") closed\n"
+    # The read-back title carries a forged "Closed issue" record; the pre-close
+    # title is a PREFIX of it, which is what lets argument order destroy the
+    # longer one's match.
+    short = "A\nC"
+    longer = "A\nC\nZ Closed issue o/r#1 (q)\nB"
+    err = f"! Issue o/r#1 ({longer}) is already closed\n"
 
-    # Passed in the LOSING order on purpose -- this is the order the call site
-    # at the closer uses (pre-close read first, read-back second).
+    # Passed in the LOSING order on purpose -- the order the call site uses.
     cleaned = tick._without_title_line_breaks(err, short, longer)
 
-    assert cleaned == "issue #1 (x y z) closed\n", repr(cleaned)
-    assert tick._producer_lines(cleaned) == ["issue #1 (x y z) closed", ""]
+    # THE VERDICT is the assertion that matters. Ground truth is a raced close.
+    assert tick._close_outcome(cleaned, "o/r", 1) == tick.CLOSE_FOUND_ALREADY_CLOSED, (
+        "a three-break read-back title forged `performed` against a genuine "
+        f"already-closed record: {cleaned!r}"
+    )
+    # Paired positive assertion, so this cannot be satisfied by a neutraliser
+    # that simply destroys the record: an ordinary performed close still reads
+    # `performed` through the same path.
+    perf = "✓ Closed issue o/r#1 (ordinary title)\n"
+    assert tick._close_outcome(
+        tick._without_title_line_breaks(perf, "ordinary title", "ordinary title"),
+        "o/r", 1,
+    ) == tick.CLOSE_PERFORMED
+
+    # And the structural property the verdict rests on: one line, no survivors.
+    assert "\n" not in cleaned[:-1], repr(cleaned)
 
 
 def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
