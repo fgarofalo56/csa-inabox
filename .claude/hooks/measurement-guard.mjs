@@ -24,8 +24,13 @@
  *      RESOURCE EXHAUSTION. A heredoc that misses stdin leaves an interactive
  *      REPL looping on a traceback: 65 GB written in one measured case, and
  *      8.3 GB of IO with ZERO file growth in another. It is here because it
- *      recurred eight times in one session despite being documented, and per
- *      the global operating rules only a hook executes.
+ *      recurred repeatedly in one session despite being documented. An exact
+ *      running total is deliberately NOT asserted here: an earlier version
+ *      said "eight" in one place and "six" in another, which is R7 in the
+ *      file whose third rule enforces R7. The itemised record lives in the
+ *      project memory for this hazard; this file cites it rather than
+ *      duplicating a number that drifts. Per the global operating rules,
+ *      only a hook executes.
  *
  * Design notes:
  *  - DENY, not warn. A warning in a tool result is easy to skim past, and the
@@ -61,18 +66,24 @@
  * caller while fixing this one. A quoted `#` still masks to `_`, which makes
  * that caller strictly more accurate.
  *
- * KNOWN RESIDUAL — and an earlier version of this file named the WRONG one.
- * It disclosed a backslash-escaped-quote case. Measured across 190 tracked
- * `.sh` scripts, **zero** of the 7 that still swallow the hazard are that;
- * all 7, and both known false positives, have a single root cause:
+ * KNOWN RESIDUALS — and BOTH earlier versions of this note named them wrongly.
+ * Round 7 disclosed only a backslash-escaped-quote case. Round 8 declared that
+ * "the WRONG one" and named command substitution instead. Round 9 measured that
+ * BOTH are real:
  *
- *     maskQuoted has NO COMMAND-SUBSTITUTION awareness.
+ *   1. NO COMMAND-SUBSTITUTION AWARENESS. `$( ... )` and backticks are walked
+ *      as ordinary text, so quotes opened inside a substitution are paired
+ *      against quotes outside it. Root cause of 7 of 190 tracked `.sh` scripts
+ *      still swallowing the hazard, and of both known false positives.
  *
- * `$( ... )` and backticks are walked as ordinary text, so quotes opened inside
- * a substitution are paired against quotes outside it. That is the real
- * boundary of this function, it is pre-existing and non-regressive, and it is
- * named here rather than in a commit message because a disclosure that does not
- * describe the actual limitation is an R7 defect in the guard's own voice.
+ *   2. A BACKSLASH-ESCAPED QUOTE OUTSIDE QUOTES is mis-paired, with no command
+ *      substitution anywhere. Verified that bash runs such a line and executes
+ *      a hazard on the next one.
+ *
+ * The census that demoted (2) counted TRACKED `.sh` FILES. A PreToolUse hook
+ * judges COMMAND STRINGS composed by agents — a different population, and one
+ * that census could not sample. Reporting a file-corpus rate as if it bounded
+ * the hook's real exposure was the error, not the arithmetic.
  */
 function maskQuoted(s) {
   let out = '';
@@ -144,8 +155,20 @@ function stripHeredocBodies(s) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (delim !== null) {
+      // bash requires the terminator at COLUMN 0 — tabs-only stripped for the
+      // `<<-` form, nothing else. An earlier version compared with `.trim()`,
+      // which accepts the delimiter at ANY indentation, so an indented
+      // lookalike INSIDE the body ended the heredoc early, un-blanked the rest
+      // of the command and DENIED a legitimate file write. Verified against a
+      // real bash run: the command is a pure file write at exit 0 with all
+      // body lines landing in the file.
+      //
+      // This also brings `allowIndent` and the tab-strip back to life. They
+      // were DEAD CODE under `.trim()` — which is why three mutation arms read
+      // as "equivalent": the deadness was hiding the defect, not proving
+      // there wasn't one.
       const probe = allowIndent ? line.replace(/^\t+/, '') : line;
-      if (probe.trim() === delim) { delim = null; out.push(line); continue; }
+      if (probe === delim) { delim = null; out.push(line); continue; }
       out.push(''); // body line -> blanked, line count preserved
       continue;
     }
@@ -210,13 +233,22 @@ function stripHeredocBodies(s) {
     // was DENIED — a false positive on real work, which is the pressure that
     // gets a guard deleted. `v2#final.md` is a filename.
     //
-    // THIS CLASS DELIBERATELY DIFFERS FROM maskQuoted's: it includes `)` and
-    // `}`, which close a control structure so a following `#` IS a comment.
-    // maskQuoted must NOT include them, because `echo $(echo a)#BOOM` prints
-    // `a#BOOM` — there the `)` closes a SUBSTITUTION and the `#` is literal.
-    // Two narrow checks that disagree about `)` are correct here where one wide
-    // one is not; making them agree broke both `)` arms when it was tried.
-    const hm = /(?:^|[\s;|&()}])#/.exec(masked);
+    // THIS CLASS DELIBERATELY DIFFERS FROM maskQuoted's: it includes `)`, which
+    // closes a control structure so a following `#` IS a comment. maskQuoted
+    // must NOT include it, because `echo $(echo a)#BOOM` prints `a#BOOM` —
+    // there the `)` closes a SUBSTITUTION and the `#` is literal. Measured on
+    // Git Bash 5.3.15: `echo $(echo a)#note with a | tr a-z A-Z` →
+    // `A#NOTE WITH A`, so the `|` is a real pipe that maskQuoted must leave
+    // visible for `rc-after-pipe`. Arms M19 and M22 pin both directions of
+    // that disagreement — an earlier version asserted it with only one.
+    //
+    // `}` IS DELIBERATELY ABSENT, and an earlier version wrongly included it on
+    // the claim that `}` closing a control structure starts a comment. It does
+    // not: `{ true; }#BOOM` is a SYNTAX ERROR (`bash -n` rejects it), because
+    // `}` is a reserved word only as a standalone word. Defending against a
+    // shape bash cannot parse bought a real false positive —
+    // `cat > temp/v2}#final.md <<'MD'` was DENIED.
+    const hm = /(?:^|[\s;|&()])#/.exec(masked);
     const hash = hm ? hm.index + hm[0].length - 1 : -1;
     if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
 
@@ -241,7 +273,7 @@ function stripHeredocBodies(s) {
     const d = m[3];
     const terminated = lines.slice(i + 1).some((l) => {
       const p = m[1] === '-' ? l.replace(/^\t+/, '') : l;
-      return p.trim() === d;
+      return p === d;   // column 0, per bash — see the body-scan note above
     });
     if (terminated) { allowIndent = m[1] === '-'; delim = d; }
     out.push(line);
@@ -375,9 +407,19 @@ const RULES = [
       // Requires the bare `-` to be the interpreter's FIRST argument, which is
       // what keeps `python tools/fmt.py -` allowed — there the `-` belongs to
       // the script, not to python.
+      // The bare `-` need not be the FIRST argument. An earlier version required
+      // it to be, so `python -u -`, `python -B -`, `python -X dev -` and
+      // `py -3 -` were all ALLOWED carrying the identical hazard — the option
+      // run in front of the dash hid it.
+      //
+      // Options are skipped EXCEPT `-c` and `-m`, which make the interpreter
+      // read from their argument rather than from stdin and so cannot become a
+      // REPL. `-W`/`-X`-style options that take a separate word are covered by
+      // the optional non-dash token.
       const CMD = new RegExp(
         '^\\s*(?:\\w+=\\S*\\s+)*(?:env\\s+(?:\\w+=\\S*\\s+)*)?' +
         '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
+        '(?:\\s+(?!-[cm](?:\\s|$))-\\S+(?:\\s+[^-\\s]\\S*)?)*' +
         '\\s+-(?=\\s|$|[<>&|])',
       );
 
@@ -439,9 +481,11 @@ const RULES = [
       `       mentions the pattern is not blocked.\n` +
       `       A true one-liner is fine as  python -c "..."  and a herestring\n` +
       `       (\`python - <<<'...'\`) is allowed -- it has no delimiter to mismatch.\n` +
-      `  There is NO safe inline heredoc shape. Redirecting stdout does not help --\n` +
+      `  Inline heredocs into python are unsafe IN PRACTICE here -- though not\n` +
+      `  impossible in principle; this repo ships 8 tracked files using one\n` +
+      `  safely. Redirecting stdout does not help --\n` +
       `  the REPL's loop is on STDERR. An empty body does not help either; two of\n` +
-      `  the eight occurrences were deliberate no-ops that still hung for 120s.\n` +
+      `  several occurrences were deliberate no-ops that still hung for 120s.\n` +
       `  Measured: 65 GB written in one case; 8.3 GB of IO and zero file growth in\n` +
       `  another, which is the shape no size check can see.`,
   },
@@ -543,8 +587,17 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || proc
     // No payload reached us, so there is no command to judge. Denying here would
     // block every Bash call on a harness fault, which is worse than the guard
     // being absent -- so this allows, but says so on stderr where it is visible.
-    // Stated plainly because the previous version claimed otherwise: THIS PATH
-    // FAILS OPEN, deliberately, and it is the only one that does.
+    // Stated plainly because a previous version claimed otherwise: THIS PATH
+    // FAILS OPEN, deliberately.
+    //
+    // AND IT IS NOT THE ONLY ONE. That claim was false and is corrected here
+    // rather than deleted. Measured: an import-time throw exits 1, a syntax
+    // error exits 1, a missing node exits 127 -- and ALL THREE produce EMPTY
+    // STDOUT, which the harness treats as non-blocking. So the guard fails
+    // open on every environment fault, not only on an unreadable payload.
+    // That is a property of the hook contract rather than of this file, and
+    // it is precisely why the test suite must stay discovered by CI: a hook
+    // that cannot load is indistinguishable from a hook that approved.
     process.stderr.write('measurement-guard: no payload readable — ALLOWING unjudged\n');
     process.exit(0);
   }

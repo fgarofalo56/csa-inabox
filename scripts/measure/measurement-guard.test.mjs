@@ -396,6 +396,36 @@ test('POSITIVE: the no-space heredoc `python -<<EOF` fires (M7 witness)', () => 
   assert.ok(has(`python -<<EOF\nEOF`, 'python-dash-repl'));
 });
 
+test('POSITIVE: an OPTION RUN in front of the dash does not hide it', () => {
+  // The dash need not be the first argument. All of these were ALLOWED while
+  // carrying the identical hazard — the options in front concealed it.
+  // WHAT MAKES THIS FAIL: require the `-` to follow the interpreter directly.
+  assert.ok(has(`python -u - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -B - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -X dev - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`py -3 - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: -c and -m still do NOT fire, even with options in front', () => {
+  // The option run must not swallow `-c`/`-m`: those read from their argument,
+  // never from stdin, so they cannot become a REPL. Without this control the
+  // widening above would deny the sanctioned escape route.
+  assert.equal(has(`python -u -c "print(1)"`, 'python-dash-repl'), false);
+  assert.equal(has(`python -B -m pytest -q`, 'python-dash-repl'), false);
+  assert.equal(has(`python -u script.py`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: an INDENTED delimiter lookalike must not end the heredoc', () => {
+  // bash requires the terminator at COLUMN 0 (tabs-only for `<<-`). Comparing
+  // with `.trim()` accepted it at any indentation, so an indented lookalike in
+  // the BODY ended the heredoc early, un-blanked the rest, and DENIED a pure
+  // file write — verified against a real bash run at exit 0.
+  // WHAT MAKES THIS FAIL: compare with `.trim()` instead of `===`.
+  const cmd = `cat > temp/doc.md <<'MD'\nexample:\n    MD\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'an indented `MD` inside the body is not the terminator');
+});
+
 // ------------------------------------------------- the deny text is R7-bound
 // These exist because a reviewer mutated the headline in BOTH directions and
 // both mutants survived the whole suite: the rule-aware framing was a
@@ -492,8 +522,32 @@ test('BLINDING: a comment after `)` closing a control structure', () => {
   assert.ok(has(`(true)#<<EOF\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
 });
 
-test('BLINDING: a comment after `}` closing a control structure', () => {
-  assert.ok(has(`{ true; }#<<EOF\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+test('CONTROL: `}` does NOT start a comment — `{ true; }#x` is a syntax error', () => {
+  // An earlier version had a BLINDING arm for `}` and put `}` in the hash
+  // class. Measured with `bash -n` on Git Bash 5.3.15: `{ true; }#BOOM` is a
+  // SYNTAX ERROR, because `}` is a reserved word only as a standalone word.
+  // Defending a shape bash cannot parse bought a real false positive.
+  // WHAT MAKES THIS FAIL: put `}` back in the hash class.
+  const cmd = `cat > temp/v2}#final.md <<'MD'\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a `}` in a filename must not be read as a comment boundary');
+});
+
+test('the `)` disagreement is witnessed in BOTH directions', () => {
+  // The code asserts the two comment classes must disagree about `)`. M19 pins
+  // one direction (dropping `)` from the HASH class). The other — ADDING `)` to
+  // maskQuoted's class — passed 75/75, so the assertion was half unwitnessed:
+  // a blind test, not an equivalent mutant, which is the exact category the
+  // previous round fixed, recurring inside the commit that fixed it.
+  //
+  // Measured premise: `echo $(echo a)#note with a | tr a-z A-Z` prints
+  // `A#NOTE WITH A`, so that `|` is a REAL pipe. If maskQuoted treated `)` as a
+  // comment boundary it would mask the pipe and `rc-after-pipe` would go BLIND
+  // on correct-to-flag code.
+  // WHAT MAKES THIS FAIL: add `)` to maskQuoted's boundary class.
+  const cmd = `echo $(echo a)#x | tr a-z A-Z\nRC=$?`;
+  assert.ok(has(cmd, 'rc-after-pipe'),
+    'a pipe after a substitution-closing `)` must stay visible');
 });
 
 test('CONTROL: `)` closing a SUBSTITUTION does not start a comment', () => {
