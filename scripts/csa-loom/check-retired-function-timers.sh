@@ -33,18 +33,38 @@
 # is what an operator writes, `isDisabled` is what the Functions host computed
 # from it. Agreement between them is the evidence; either alone could be stale.
 #
-# POSITIVE CONTROL: the script first proves it can SEE a function definition at
-# all (the apps index 3 definitions between them). A host that has gone away, or
-# an `az` that cannot reach it, must not read as "disabled" — absence is
-# reported as UNKNOWN and exits non-zero (deploy-integrity.md R7).
+# ABSENCE IS NOT UNREADABILITY. An earlier revision collapsed the two and so
+# broke itself on its own remediation: both hosts are on the OP-19 delete list,
+# and once they are deleted every definition read fails, every target takes the
+# UNKNOWN arm, and the script exits 2 forever — "the hazard is permanently
+# retired because the host is gone" reported as "I could not measure". That is
+# the R7 distinction this header preaches, applied one level up. So each target
+# is first resolved against a host LISTING:
+#
+#   list succeeds, host absent   -> GONE     the hazard is retired by teardown (rc 0)
+#   list succeeds, host present  -> read the definition; OK / ENABLED / UNKNOWN
+#   list FAILS                   -> UNKNOWN  we could not measure (never GONE)
+#
+# The listing is the discriminator precisely because it answers with an empty
+# set when the host is gone and with a non-zero exit when we cannot reach ARM.
+#
+# EXIT CODES (a caller reading only the status can tell these apart):
+#   0  every target is OK or GONE — no live hazard
+#   1  at least one ENABLED target — a live double-execution hazard
+#   2  no ENABLED target, but at least one UNKNOWN — refusing a verdict
+# ENABLED outranks UNKNOWN deliberately: a confirmed live hazard is strictly
+# more actionable than an unmeasured one, and hiding it behind "could not
+# measure" would send the operator to debug `az` instead of re-disabling a timer.
+# The tally line is printed on EVERY path, so a partial-coverage run states its
+# own partiality even when rc is 1.
 #
 # Usage:
 #   scripts/csa-loom/check-retired-function-timers.sh            # verify only
 #   scripts/csa-loom/check-retired-function-timers.sh --apply    # re-disable
 #
-# --apply writes app settings only. It never deletes anything. Teardown of the
-# hosts themselves is a separate operator action — see
-# docs/fiab/deployment/functions-to-aca-jobs.md §7.
+# --apply writes app settings only. It never deletes anything, and it skips a
+# host that is GONE. Teardown of the hosts themselves is a separate operator
+# action — see docs/fiab/deployment/functions-to-aca-jobs.md §7.
 set -euo pipefail
 
 SUB="${LOOM_ADMIN_SUBSCRIPTION:-e093f4fd-5047-4ee4-968d-a56942c665f3}"
@@ -70,43 +90,80 @@ TARGETS=(
   "func-cpeval-k6mvh5sm6z7do|copilotEvaluatorHttp"
 )
 
-rc=0
-seen=0
+ok=0
+gone=0
+enabled=0
+unknown=0
 for t in "${TARGETS[@]}"; do
   APP="${t%%|*}"; FN="${t##*|}"
   SETTING="AzureWebJobs.${FN}.Disabled"
+
+  # Step 1 — does the host still exist? A LIST that fails is not an absence.
+  if ! LISTED="$(az functionapp list -g "$RG" --subscription "$SUB" \
+                   --query "[?name=='${APP}'].name | [0]" -o tsv)"; then
+    echo "  UNKNOWN  ${APP}/${FN}: the host listing failed, so absence could not be distinguished from unreachability — NOT the same as disabled, and NOT the same as deleted." >&2
+    unknown=$((unknown + 1))
+    continue
+  fi
+  LISTED="${LISTED//$'\r'/}"
+  if [[ -z "$LISTED" ]]; then
+    echo "  GONE     ${APP}/${FN}: host is absent from a successful listing of ${RG} — the double-execution hazard is retired by teardown."
+    gone=$((gone + 1))
+    continue
+  fi
 
   if [[ $APPLY -eq 1 ]]; then
     az functionapp config appsettings set -g "$RG" -n "$APP" --subscription "$SUB" \
       --settings "${SETTING}=true" -o none
   fi
 
-  # Read 1 — the app setting an operator writes.
-  VAL="$(az functionapp config appsettings list -g "$RG" -n "$APP" --subscription "$SUB" \
-          --query "[?name=='${SETTING}'].value | [0]" -o tsv)"
-  # Read 2 — what the Functions host computed from it. A host that cannot be
-  # reached fails here rather than yielding a convenient empty string.
-  if ! SHOWN="$(az functionapp function show -g "$RG" -n "$APP" --subscription "$SUB" \
-                  --function-name "$FN" --query isDisabled -o tsv)"; then
-    echo "  UNKNOWN  ${APP}/${FN}: the definition could not be read — NOT the same as disabled." >&2
-    rc=1
+  # Read 1 — the app setting an operator writes. GUARDED: under `set -e` a bare
+  # `VAL="$(az …)"` aborts the whole script on a failed read, which is how the
+  # PRE-FIX revision actually behaved once the hosts were deleted — it died here
+  # with a bare az error and rc=1 (the ENABLED code), never reaching its own
+  # UNKNOWN arm or its refusal. Classify instead of aborting.
+  if ! VAL="$(az functionapp config appsettings list -g "$RG" -n "$APP" --subscription "$SUB" \
+                --query "[?name=='${SETTING}'].value | [0]" -o tsv)"; then
+    echo "  UNKNOWN  ${APP}/${FN}: the host EXISTS but its app settings could not be read — NOT the same as disabled." >&2
+    unknown=$((unknown + 1))
     continue
   fi
-  seen=$((seen + 1))
+  # Read 2 — what the Functions host computed from it. A host that exists but
+  # cannot be read fails here rather than yielding a convenient empty string.
+  if ! SHOWN="$(az functionapp function show -g "$RG" -n "$APP" --subscription "$SUB" \
+                  --function-name "$FN" --query isDisabled -o tsv)"; then
+    echo "  UNKNOWN  ${APP}/${FN}: the host EXISTS but its definition could not be read — NOT the same as disabled." >&2
+    unknown=$((unknown + 1))
+    continue
+  fi
 
   if [[ "$VAL" == "true" && "$SHOWN" == "true" ]]; then
     echo "  OK       ${APP}/${FN}: ${SETTING}=${VAL}, isDisabled=${SHOWN}"
+    ok=$((ok + 1))
   else
     echo "  ENABLED  ${APP}/${FN}: ${SETTING}=${VAL:-<unset>}, isDisabled=${SHOWN:-<unset>} — DOUBLE-EXECUTION HAZARD against its ACA job twin. Re-run with --apply." >&2
-    rc=1
+    enabled=$((enabled + 1))
   fi
 done
 
-# Positive control: if we resolved NO definition at all, the loop above proved
-# nothing and a rc=0 would be a green over an empty set.
-if [[ "$seen" -eq 0 ]]; then
-  echo "REFUSING a verdict: zero function definitions were readable, so this run measured nothing." >&2
+# Positive control: if NOTHING resolved to a definite state, the loop proved
+# nothing and an rc=0 would be a green over an empty set. A host confirmed GONE
+# IS a definite state — that is the terminal good state of the OP-19 teardown,
+# not a failure to measure.
+resolved=$((ok + gone + enabled))
+echo "targets=${#TARGETS[@]} ok=${ok} gone=${gone} enabled=${enabled} unknown=${unknown}"
+if [[ "$resolved" -eq 0 ]]; then
+  echo "REFUSING a verdict: no target resolved to a definite state, so this run measured nothing." >&2
   exit 2
 fi
-echo "definitions read: ${seen}/${#TARGETS[@]}"
-exit "$rc"
+if [[ "$enabled" -gt 0 ]]; then
+  exit 1
+fi
+if [[ "$unknown" -gt 0 ]]; then
+  echo "REFUSING a verdict: ${unknown} target(s) were unreadable, so 'no hazard' is not established for them." >&2
+  exit 2
+fi
+if [[ "$gone" -eq "${#TARGETS[@]}" ]]; then
+  echo "RETIRED: every target host is gone. The OP-19 (a) hazard cannot recur without a redeploy."
+fi
+exit 0

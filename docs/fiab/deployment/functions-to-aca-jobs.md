@@ -410,9 +410,14 @@ settings (`copilot-evaluator-function.bicep` and
 `secret-expiry-monitor-function.bicep` were deleted in #2556), no script, no
 workflow, no issue, no PR. So a re-enable would be silent.
 `scripts/csa-loom/check-retired-function-timers.sh` is the standing check:
-read-only by default, fail-closed, `--apply` re-disables. It refuses a verdict
-when zero definitions were readable, and an unreadable definition is `UNKNOWN`
-rather than "disabled" (`deploy-integrity.md` R7).
+read-only by default, fail-closed, `--apply` re-disables. It separates three
+states rather than collapsing them (`deploy-integrity.md` R7) — a host absent
+from a *successful* listing is `GONE` and the hazard is retired by teardown
+(rc 0); a host that exists but cannot be read is `UNKNOWN` (rc 2, verdict
+refused); a readable-but-not-disabled definition is `ENABLED` (rc 1). A failed
+listing is never reported as absence. That matters because §8.3 deletes both
+hosts: without the `GONE` arm the check would fail permanently on its own
+remediation.
 
 The ACA twins are executing — `loom-secret-expiry-monitor` Succeeded at 06:00 UTC
 on 2026-09-14/15/16/17; `loom-report-subscriptions` Succeeded on its `*/15`.
@@ -434,10 +439,13 @@ from-scratch deploy re-creates them and removal is purely an estate action.
 | `func-loom-prpt-renderer-*` | `azure-functions/paginated-report-renderer/deploy/main.bicep` | Console `LOOM_PAGINATED_RENDER_URL` / `LOOM_PAGINATED_RENDER_KEY` | superseded by Container App `loom-prpt-r3` / `integration/prpt-renderer.bicep` — same shape, see 8.4 |
 
 Operator commands for the three unblocked deletes (run in the DMLZ
-subscription; each is idempotent and removes only the app, not its RG):
+subscription; each is idempotent and removes only the app, not its RG). Use the
+DMLZ subscription id — `check-retired-function-timers.sh` carries it as the
+default for `LOOM_ADMIN_SUBSCRIPTION`, and the published docs site may not
+(`scripts/ci/check-docs-hygiene.mjs`):
 
 ```bash
-SUB=e093f4fd-5047-4ee4-968d-a56942c665f3; RG=rg-csa-loom-admin-centralus
+SUB=<subscription-id>; RG=rg-csa-loom-admin-centralus
 az functionapp delete --subscription "$SUB" -g "$RG" -n func-cpeval-k6mvh5sm6z7do
 az functionapp delete --subscription "$SUB" -g "$RG" -n func-secexp-k6mvh5sm6z7do
 az functionapp delete --subscription "$SUB" -g "$RG" -n func-rptsub-k6mvh5sm6z7do

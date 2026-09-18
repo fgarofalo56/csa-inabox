@@ -41,19 +41,33 @@ nothing and would prove nothing.
 What was missing was any record, so a re-enable would have been silent. Added:
 
 * `scripts/csa-loom/check-retired-function-timers.sh` — read-only by default,
-  `--apply` re-disables, Commercial-boundary guard, fail-closed. It refuses a
-  verdict when zero definitions are readable, and treats an unreadable
-  definition as `UNKNOWN` rather than "disabled" (`deploy-integrity.md` R7).
-  Proved to have teeth against a sandbox copy: pointed at a genuinely enabled,
-  genuinely executing function (`func-csa-inabox-copilot-fg/chat`) it exits 1 and
-  prints `ENABLED`; pointed at an unreadable definition it exits 2 and refuses.
+  `--apply` re-disables, Commercial-boundary guard, fail-closed. It distinguishes
+  three states that an earlier revision collapsed (`deploy-integrity.md` R7):
+  a host **absent from a successful listing** is `GONE` and the hazard is retired
+  by teardown (rc 0); a host that **exists** but whose settings or definition
+  cannot be read is `UNKNOWN` (rc 2, verdict refused); a readable definition that
+  is not disabled is `ENABLED` (rc 1). `ENABLED` outranks `UNKNOWN` because a
+  confirmed live hazard is more actionable than an unmeasured one, and the tally
+  line prints on every path so a partial-coverage run states its own partiality.
+  Without the `GONE` arm the script would have broken on its OWN remediation:
+  part (b) deletes both hosts, after which every read fails.
+  Proved to have teeth against a sandbox copy, all arms run (`temp/timers-probe.sh`,
+  a stub `az` on `PATH`; the pre-fix script extracted to a sandbox copy and run
+  against the identical stub for the counterfactual):
+  all-hosts-deleted 1 → 0, partial-unreadable 1 → 2, genuine `ENABLED` 1 → 1
+  (unchanged), failed listing → 2 and never `GONE`, all-disabled 0 → 0.
+  Measured, not predicted: the pre-fix script did not reach its own rc=2 refusal
+  once the hosts were gone — its app-settings read was unguarded, so `set -e`
+  killed it at the first target with rc=1, the same code as a live hazard. Both
+  reads are guarded now.
 * The four in-tree comments asserting "ENABLED timers" corrected at their sites,
   not just in the doc: `admin-plane/main.bicep`, `report-subscriptions-job.bicep`,
   `scripts/csa-loom/deploy-report-subscriptions-job.sh`,
   `azure-functions/report-subscriptions/src/main.ts`.
 
 **Obliges:** run the check before any claim that the hazard is retired; if the
-Console ever grows an estate-drift surface, this belongs on it.
+Console ever grows an estate-drift surface, this belongs on it. After part (b)
+lands the check keeps passing — it reports `RETIRED`, not a refusal.
 
 ### (b) Teardown of the seven Function Apps — APPROVED, partly unblocked
 

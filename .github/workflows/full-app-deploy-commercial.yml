@@ -1288,11 +1288,19 @@ jobs:
           JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
           API=2024-03-01
 
-          # Does the job exist? `copilotEvaluatorEnabled` is opt-OUT, so absence
-          # is a legitimate configuration state and NOT a deploy failure — but it
-          # is reported as absence, never as a skipped success.
+          # Does the job exist? The job is deployed only when ALL THREE conjuncts
+          # of `copilotEvaluatorActive` hold (admin-plane/main.bicep:8735):
+          #   copilotEvaluatorEnabled && containerPlatform == 'containerApps'
+          #                           && deployAppsEnabled
+          # so absence is a legitimate configuration state and NOT a deploy
+          # failure — but it is reported as absence, never as a skipped success.
+          # R7: name every cause that could actually hold, and do not assert
+          # which one does. `containerPlatform != 'containerApps'` is the
+          # boundary-dependent one (cloud-parity.md) and was previously omitted,
+          # which pointed a non-containerApps operator at a knob that was not
+          # the one holding it.
           if ! az rest --method get --url "https://management.azure.com${JOB_ID}?api-version=$API" > job.json; then
-            echo "::warning::Container App Job $JOB not readable in $RG (opt-out via functionAppsConfig.copilotEvaluatorEnabled=false, or the identity lacks read on it) — post-deploy eval re-baseline NOT started. The nightly schedule is unaffected."
+            echo "::warning::Container App Job $JOB not readable in $RG. This run did not establish which cause applies; any of these will produce it — functionAppsConfig.copilotEvaluatorEnabled=false (opt-out), containerPlatform != 'containerApps' (the job is Container-Apps-only), deployAppsEnabled=false, or the deploy identity lacking read on the job. Post-deploy eval re-baseline NOT started. The nightly schedule is unaffected."
             exit 0
           fi
 
@@ -1308,16 +1316,35 @@ jobs:
           # The same four knobs the Console's "Run now" sets
           # (lib/azure/copilot-evaluator-client.ts mergeRunEnv). Empty SURFACES =
           # every surface, which is what the retired per-surface loop covered.
-          jq -c '{containers: [.properties.template.containers[]
-                 | .env = ((.env // []) | map(select(.name | startswith("COPILOT_EVAL_") | not)))
-                         + [{name:"COPILOT_EVAL_MODE",value:"copilot"},
-                            {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
-                            {name:"COPILOT_EVAL_SURFACES",value:""},
-                            {name:"COPILOT_EVAL_DOMAINS",value:""}]]}' job.json > override.json
+          #
+          # The strip list is DERIVED from the override list ($ovn), exactly as
+          # mergeRunEnv derives it (`!overrides.some((o) => o.name === e.name)`),
+          # so the two cannot drift. An earlier revision stripped every
+          # `COPILOT_EVAL_*` by prefix, which is NOT what mergeRunEnv does: a
+          # fifth COPILOT_EVAL_* added to copilot-evaluator-job.bicep would have
+          # been dropped here while "Run now" kept it — the two start paths
+          # diverging exactly where this comment promises they cannot. Benign at
+          # the time (the live job carries exactly two, MODE and TRIGGER, both in
+          # the four), which is why only the contract, not a symptom, catches it.
+          jq -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
+                  {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
+                  {name:"COPILOT_EVAL_SURFACES",value:""},
+                  {name:"COPILOT_EVAL_DOMAINS",value:""}] as $ov
+                 | ($ov | map(.name)) as $ovn
+                 | {containers: [.properties.template.containers[]
+                   | .env = ((.env // []) | map(select(.name | IN($ovn[]) | not))) + $ov]}' \
+            job.json > override.json
 
           az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
             --headers "Content-Type=application/json" --body @override.json > start.json
           EXEC=$(jq -r '.name // .id // "unknown"' start.json)
+          # `// "unknown"` covers a MISSING key, not an EMPTY body: on an empty
+          # start.json jq emits nothing and exits 0, leaving EXEC="" and a notice
+          # reading "execution  started". ACA start answers 200 or 202, and a
+          # 202-with-no-body is the realistic path — precisely the case the
+          # default was written for. Empty-but-present is a distinct state from
+          # absent, so close it here rather than in the jq.
+          EXEC=${EXEC:-unknown}
           echo "::notice::copilot-evaluator execution $EXEC started (mode=copilot trigger=corpus, all surfaces) — scores land in Cosmos loom-copilot-evals; copilot-quality-evals.yml + /admin/copilot-quality read them."
           echo "copilot-evaluator re-baseline execution: \`$EXEC\`" >> "$GITHUB_STEP_SUMMARY"
 
