@@ -302,7 +302,10 @@ for (const abs of [...walk(path.join(APP_ROOT, 'app')), ...walk(path.join(APP_RO
   if (rel === SELF) continue;
   const raw = fs.readFileSync(abs, 'utf8');
   const code = codeOnly(raw);
-  const lines = code.split('\n');
+  // `/\r?\n/`, not `'\n'`: codeOnly preserves offsets EXACTLY and does not
+  // normalise line endings, and this working tree is CRLF — splitting on '\n'
+  // alone would leave a trailing '\r' on every line.
+  const lines = code.split(/\r?\n/);
   const usesWorkspaces = /workspacesContainer\s*\(/.test(code);
   const comparesOwner = OWNER_CMP_RE.test(code);
   let n = 0;

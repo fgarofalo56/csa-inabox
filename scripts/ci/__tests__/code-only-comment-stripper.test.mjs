@@ -12,6 +12,20 @@
  * negative control that fix shipped without: it pins that prose cannot decide
  * membership, on every shape, on BOTH arms, in BOTH guards.
  *
+ * ROUND 2 ADDED THE REGRESSION ARMS. The first attempt at closing the other
+ * three shapes was a hand-rolled scanner that entered string mode on any quote
+ * and did not track REGEX LITERALS — so a quote inside a regex character class
+ * opened a phantom string and the rest was SKIPPED rather than masked, making it
+ * WEAKER THAN MAIN on the very shape #4467 closed (1 file / 19 lines in the
+ * route corpus; 35 / 370 in the owner-only corpus). The lexer is now #3468's
+ * `maskNonCode`, hosted in _code-only.mjs and shared with
+ * check-external-origin-urls, and the arms below pin both failure directions.
+ *
+ * THE ROUND-1 CENSUS COULD NOT HAVE CAUGHT THAT, which is why the corpus test
+ * here is written the other way round: it looks for lines the stripper FAILS to
+ * mask, not only for files it un-cloaks. A probe that can only find un-cloaking
+ * is blind to a stripper that silently stops stripping.
+ *
  * EVERY REGEX HERE IS IMPORTED, NOT TRANSCRIBED (assertion-design.md "done" #3)
  * — a typo in a transcribed copy is how a probe silently stops agreeing with
  * the implementation it claims to measure.
@@ -23,7 +37,7 @@
  *     return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
  *   }).join('\n');
  * and the B/C/D shape tests, the code-line-starting-with-'*' test and the
- * line-count test all go RED. Measured, not asserted — receipt in the PR body.
+ * offset tests all go RED. Measured, not asserted — receipt in the PR body.
  *
  * Run: node --test scripts/ci/__tests__/code-only-comment-stripper.test.mjs
  */
@@ -34,7 +48,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { codeOnly, blankComments } from '../_code-only.mjs';
+import { codeOnly, blankComments, maskNonCode } from '../_code-only.mjs';
 import {
   MUTATING_EXPORT_RE,
   GET_EXPORT_RE,
@@ -147,11 +161,64 @@ test('blankComments and codeOnly are the SAME function, not two dialects', () =>
   assert.equal(blankComments, codeOnly);
 });
 
-test('CRLF input is normalised, so a line rule cannot be defeated by a stray CR', () => {
-  // FAILS IF: the \r\n normalisation is dropped — out would contain '\r'.
-  const out = codeOnly('const a = 1;\r\n// withSession(x)\r\nconst b = 2;\r\n');
-  assert.equal(out.includes('\r'), false);
+test('CRLF input keeps its offsets AND still has its comments masked', () => {
+  // codeOnly no longer NORMALISES line endings — it preserves offsets exactly,
+  // which is what check-external-origin-urls needs for its `line=` annotations.
+  // FAILS IF: the stripper rewrites \r\n (length changes), or misses the comment.
+  const src = 'const a = 1;\r\n// withSession(x)\r\nconst b = 2;\r\n';
+  const out = codeOnly(src);
+  assert.equal(out.length, src.length, 'offsets must survive CRLF');
+  assert.equal(out.includes('withSession'), false);
   assert.equal(out.includes('const b = 2;'), true); // paired positive
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 2b. REGEX LITERALS — the round-2 regression, in BOTH directions.
+//     A hand-rolled scanner that enters string mode on any quote desyncs on a
+//     regex character class and SKIPS (rather than masks) what follows. That is
+//     fail-OPEN: the #4467 defect reintroduced by its own fix.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('a QUOTE inside a regex character class does not cloak a following comment', () => {
+  // THE ROUND-2 REGRESSION. FAILS IF: regex-literal tracking is removed — the
+  // `"` opens a phantom string, the scanner runs to EOL/EOF in string mode, and
+  // the comment survives verbatim. Measured live at
+  // app/api/items/report/[id]/visual-data/route.ts:311 -> :332.
+  const out = codeOnly('const re = /["]/; // withSession(x)\n');
+  assert.equal(out.includes('withSession'), false);
+  assert.equal(out.includes('const re ='), true); // paired positive
+});
+
+test("an APOSTROPHE inside a regex body does not cloak a later comment", () => {
+  // FAILS IF: regex-literal tracking is removed.
+  const out = codeOnly("const re = /it's/;\n// withSession(x)\n");
+  assert.equal(out.includes('withSession'), false);
+  assert.equal(out.includes('const re ='), true); // paired positive
+});
+
+test('a regex character class holding // does not EAT the code after it', () => {
+  // The other direction: the round-2 scanner read `/[//]/` as a line comment and
+  // blanked the rest of the line, deleting a real data surface — which removes a
+  // file from the population for the opposite wrong reason.
+  // FAILS IF: regex-literal tracking is removed.
+  const out = codeOnly('const re = /[//]/; export async function POST(req) {}\n');
+  assert.match(out, MUTATING_EXPORT_RE);
+});
+
+test('a pure line comment is masked even when the PREVIOUS line ends in a colon', () => {
+  // #3468's `://` exemption keyed on the last SIGNIFICANT character, which
+  // survives newlines, so a comment line ending in ':' protected the next line.
+  // Measured at this head before narrowing it: 6 files / 12 lines in the route
+  // corpus, e.g. app/api/azure/connectables/route.ts:78-81.
+  // FAILS IF: the adjacency narrowing (`s[i-1] !== ':'`) is reverted to `prev`.
+  const out = codeOnly('// proven reliable here:\n//   GET {ARM}/subscriptions\n');
+  assert.equal(out.trim(), '');
+});
+
+test('a real https:// URL outside a string is still NOT read as a comment', () => {
+  // The case the `://` exemption exists for — narrowing it must not break it.
+  // FAILS IF: the exemption is deleted outright.
+  assert.equal(codeOnly('<a>https://example.com/x</a>\n').includes('example.com'), true);
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -248,12 +315,65 @@ test('that witness is actually IN the shipped population (the guard consumes the
   );
 });
 
+test('THE ROUND-2 LIVE WITNESS: a real file whose regex char class desynced the scanner', () => {
+  // app/api/items/report/[id]/visual-data/route.ts:311 holds a regex character
+  // class containing `"`. The round-2 hand-rolled scanner desynced there and ran
+  // in string mode for ~28 lines, so the pure line comment at :332 came out
+  // BYTE-IDENTICAL — i.e. the stripper was WEAKER THAN MAIN on the one shape
+  // #4467 closed. This anchors the real file, not a synthetic reconstruction.
+  // FAILS IF: regex-literal tracking is removed from the lexer.
+  const raw = fs.readFileSync(
+    path.join(APP_ROOT, 'app/api/items/report/[id]/visual-data/route.ts'), 'utf8');
+  const out = codeOnly(raw);
+  assert.equal(raw.includes('// Power BI export row caps'), true,
+    'fixture drifted: the witness comment is no longer in the file — re-aim this anchor');
+  assert.equal(out.includes('// Power BI export row caps'), false,
+    'the comment survived codeOnly() — the scanner desynced on the regex at :311');
+});
+
+test('NO pure line-comment line survives codeOnly() anywhere in the route corpus', () => {
+  // The class reviewer 2 measured, as a standing regression guard rather than a
+  // one-off count. A line whose trim() starts with `//` and is NOT string or
+  // template data must be masked. Asserts the ROW SET, not a bare count.
+  // FAILS IF: any lexer desync returns (measured 1 file / 19 lines before the
+  // regex fix, and 6 files / 12 lines before the `://` adjacency narrowing).
+  const files = execSync('git ls-files "app/api/**/route.ts"', { cwd: APP_ROOT, encoding: 'utf8' })
+    .split('\n').map((s) => s.trim()).filter(Boolean);
+  const survivors = [];
+  for (const f of files) {
+    const raw = fs.readFileSync(path.join(APP_ROOT, f), 'utf8');
+    const kept = codeOnly(raw).split(/\r?\n/);
+    // masked WITH strings: blank there => the text was string/template DATA,
+    // which keepStrings is supposed to preserve. Only real comments count.
+    const full = maskNonCode(raw).split(/\r?\n/);
+    kept.forEach((l, i) => {
+      if (l.trim().startsWith('//') && full[i] !== undefined && full[i].trim() !== '') {
+        survivors.push(`${f}:${i + 1}`);
+      }
+    });
+  }
+  assert.deepEqual(survivors, []);
+});
+
+test('keepStrings is REQUIRED, not a preference — without it the population is ZERO', () => {
+  // This is the measurement that decides the design. check-route-toolkit's
+  // include arm matches a MODULE PATH INSIDE A STRING:
+  //   import { getSession } from '@/lib/auth/session'
+  // so masking string bodies (maskNonCode's default, correct for
+  // check-external-origin-urls) takes the population from 1002 to 0 — a
+  // merge-blocking ratchet reporting green over an empty set.
+  // FAILS IF: codeOnly stops passing keepStrings, or the arms stop needing it.
+  const sample = "import { getSession } from '@/lib/auth/session';\nexport async function POST(req) {}\n";
+  assert.match(codeOnly(sample), AUTH_SESSION_IMPORT_RE);
+  assert.doesNotMatch(maskNonCode(sample), AUTH_SESSION_IMPORT_RE);
+});
+
 // ───────────────────────────────────────────────────────────────────────────
 // 6. THE SIBLING GUARD CONSUMES THE SAME HELPER — so the fix cannot be applied
 //    to one side of the symmetry and left off the other (#4467 acceptance box).
 // ───────────────────────────────────────────────────────────────────────────
 
-test('both raw-source guards import the SHARED stripper, not a local copy', () => {
+test('both ratchet guards import the SHARED stripper, not a local copy', () => {
   // The #4467 body asked for a sibling sweep rather than a one-guard fix. This
   // pins the outcome of that sweep mechanically.
   // FAILS IF: either guard re-inlines its own isComment/isCommentLine filter,
@@ -264,3 +384,19 @@ test('both raw-source guards import the SHARED stripper, not a local copy', () =
     assert.doesNotMatch(src, /const is[Cc]omment(Line)? = /, `${g} must not re-inline a local comment filter`);
   }
 });
+
+test('check-external-origin-urls has NO second copy of the lexer', () => {
+  // #3468's `maskNonCode` now lives in _code-only.mjs and this guard imports it.
+  // Two implementations of one idea is how the line-prefix filters diverged, and
+  // how a WEAKER maskNonCode (check-bff-errors.mjs:176, no regex-literal or
+  // template tracking) already exists alongside the strong one.
+  // FAILS IF: someone re-inlines the lexer body here.
+  const src = fs.readFileSync(path.join(HERE, '..', 'check-external-origin-urls.mjs'), 'utf8');
+  assert.match(src, /import \{ maskNonCode as maskNonCodeShared \} from '\.\/_code-only\.mjs'/);
+  assert.doesNotMatch(src, /const canEndExpression = /, 'the lexer body was re-inlined here');
+  // PAIRED POSITIVE: it must still EXPORT maskNonCode — its tests and callers
+  // import it by that name, so deleting the export would satisfy the absence
+  // assertion above while breaking the guard.
+  assert.match(src, /export function maskNonCode\(src\)/);
+});
+
