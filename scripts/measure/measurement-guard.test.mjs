@@ -211,6 +211,78 @@ test('NEGATIVE: the trap INSIDE quotes is not a command (quote-masking)', () => 
   assert.equal(has(`# python - <<'EOF' is forbidden`, 'python-dash-repl'), false);
 });
 
+// ---- false positives found by review; each one denied REAL work ------------
+// The first version matched a bare `-` anywhere on the line. These six are the
+// shapes that cost, and the first is the one that matters most: a heredoc is
+// the only way an agent with no Write tool creates a file, and the rule's own
+// FIX text pointed at that tool. A guard that blocks its own documented
+// workaround gets deleted, and then it protects nothing.
+test('NEGATIVE: writing a FILE whose body mentions the pattern is allowed', () => {
+  // Measured: a reviewer was denied twice writing their own verdict file.
+  const cmd = `cat > temp/notes.md <<'MD'\nNever run python - <<'EOF'\nit becomes a REPL\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false, 'heredoc BODIES must be exempt');
+});
+
+test('NEGATIVE: a heredoc body line starting AT COLUMN 1 is still exempt', () => {
+  // THIS is the arm that pins stripHeredocBodies, and the one above is not.
+  // Caught by mutation M9: deleting the heredoc strip failed NOTHING, because
+  // the body line there reads "Never run python - ..." and command-position
+  // anchoring already rejects it. The test passed for a reason it did not
+  // claim — the defect this repo keeps paying for.
+  //
+  // Here the body line IS `python - <<'EOF'` at column 1, which anchoring
+  // alone cannot distinguish from a real command. Remove stripHeredocBodies
+  // and this goes RED; that is the value that makes it fail.
+  const cmd = `cat > temp/doc.md <<'MD'\npython - <<'EOF'\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a documented sample at column 1 inside a heredoc must not be read as a command');
+});
+
+test('NEGATIVE: a pipe-fed `python -` cannot become a REPL', () => {
+  // stdin is a pipe; it reaches EOF. The hazard requires stdin on a terminal.
+  assert.equal(has(`cat s.py | python -`, 'python-dash-repl'), false);
+  assert.equal(has(`gh api x --jq '.a' | python -`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: a herestring supplies stdin and has no delimiter to mismatch', () => {
+  assert.equal(has(`python - <<<'print(1)'`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: a `-` belonging to the SCRIPT, not to python, is allowed', () => {
+  // `-` here means "read input from stdin" to fmt.py; python is not the reader.
+  assert.equal(has(`python tools/fmt.py -`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: the pattern after a trailing `#` comment is allowed', () => {
+  assert.equal(has(`ls temp/ # python - <<EOF is the trap`, 'python-dash-repl'), false);
+});
+
+// ---- false NEGATIVES closed by anchoring at command position ---------------
+test('POSITIVE: versioned and .exe interpreters no longer slip through', () => {
+  // Substring matching missed both. Position matching catches them for free.
+  assert.ok(has(`python3.11 - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python.exe - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: env assignments and a path prefix do not hide it', () => {
+  assert.ok(has(`PYTHONPATH=lib python - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`/usr/bin/python - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`env python - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: `||`, `&&`, `;` and `&` do NOT supply stdin, so they still fire', () => {
+  // Only a BARE `|` is exculpatory. An earlier draft excluded all of these.
+  assert.ok(has(`test -f x || python - <<'E'\nE`, 'python-dash-repl'));
+  assert.ok(has(`cd /tmp && python - <<'E'\nE`, 'python-dash-repl'));
+  assert.ok(has(`echo hi ; python - <<'E'\nE`, 'python-dash-repl'));
+});
+
+test('POSITIVE: the no-space heredoc `python -<<EOF` fires (M7 witness)', () => {
+  // This branch of the lookahead had NO test, so deleting `[<>&|]` from it
+  // survived the whole suite. Named here as the arm that kills that mutant.
+  assert.ok(has(`python -<<EOF\nEOF`, 'python-dash-repl'));
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule

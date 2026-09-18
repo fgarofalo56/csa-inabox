@@ -2,9 +2,10 @@
 /**
  * measurement-guard.mjs — PreToolUse hook for Bash.
  *
- * Blocks the three shell shapes that have produced FALSE MEASUREMENTS in this
- * repo — each one returns a value indistinguishable from a real answer, which
- * is why they are worth blocking rather than warning about:
+ * Blocks four shell shapes. The first three have produced FALSE MEASUREMENTS in
+ * this repo — each returns a value indistinguishable from a real answer, which
+ * is why they are worth blocking rather than warning about. The fourth is a
+ * different hazard and is labelled as such below:
  *
  *   1. `RC=$?` after a pipeline. `$?` is the LAST element's status, so
  *      `R=$(az ... | tr -d '\r'); RC=$?` reports `tr` succeeding while az failed.
@@ -18,6 +19,13 @@
  *   3. `2>/dev/null` on a measurement command. Discarding stderr converts a
  *      permission denial into an empty string and the empty string into a
  *      confident false claim. Explicitly forbidden by deploy-integrity R7.
+ *
+ *   4. `python -` at command position. NOT a false-measurement shape -- it is
+ *      RESOURCE EXHAUSTION. A heredoc that misses stdin leaves an interactive
+ *      REPL looping on a traceback: 65 GB written in one measured case, and
+ *      8.3 GB of IO with ZERO file growth in another. It is here because it
+ *      recurred eight times in one session despite being documented, and per
+ *      the global operating rules only a hook executes.
  *
  * Design notes:
  *  - DENY, not warn. A warning in a tool result is easy to skim past, and the
@@ -49,6 +57,46 @@ function maskQuoted(s) {
     out += c;
   }
   return out;
+}
+
+/**
+ * Blank out HEREDOC BODIES, preserving line count.
+ *
+ * Without this, writing a file whose CONTENT mentions a blocked pattern is
+ * denied — and a heredoc is the only way an agent with no Write tool can
+ * create a file at all. Measured: a reviewer of the python-dash-repl rule was
+ * denied twice while writing their own verdict file, and the rule's FIX text
+ * pointed them at a tool they may not have. A guard that blocks its own
+ * documented workaround is worse than no guard.
+ *
+ * Deliberately scoped to the rule that asked for it rather than applied to
+ * every rule: the other three predate this and changing what they see is a
+ * behaviour change none of their tests cover. A heredoc body containing
+ * `az ... 2>/dev/null` therefore still trips `discarded-stderr` — known, and
+ * left alone on purpose.
+ *
+ * Residual, disclosed rather than hidden: only the FIRST heredoc opener on a
+ * line is tracked, so `cat <<A > x; cat <<B > y` on one line is handled for A
+ * only. Multi-heredoc single lines do not occur in this repo's traffic.
+ */
+function stripHeredocBodies(s) {
+  const lines = s.split(/\r?\n/);
+  const out = [];
+  let delim = null;
+  let allowIndent = false;
+  for (const line of lines) {
+    if (delim !== null) {
+      const probe = allowIndent ? line.replace(/^\t+/, '') : line;
+      if (probe.trim() === delim) { delim = null; out.push(line); continue; }
+      out.push(''); // body line -> blanked, line count preserved
+      continue;
+    }
+    // `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`. NOT `<<<` (herestring: no body).
+    const m = line.match(/<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
+    if (m) { allowIndent = m[1] === '-'; delim = m[3]; }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 const RULES = [
@@ -158,32 +206,70 @@ const RULES = [
     // writing a comment about a different trap. Per the global operating rules,
     // automatic behaviour requires a hook -- memory only informs.
     test: (raw) => {
-      const cmd = maskQuoted(raw);
-      // A BARE `-` argument only. The lookahead is what keeps `python -c` and
-      // `python -m` usable: those have a letter immediately after the dash, so
-      // there is no whitespace/redirect boundary for it to match.
+      // Heredoc bodies first (see stripHeredocBodies), THEN quote masking.
+      // Order matters: the delimiter itself is often quoted (`<<'EOF'`), and
+      // masking first would hide it from the opener match.
+      const rawLines = raw.split(/\r?\n/);
+      const cmd = maskQuoted(stripHeredocBodies(raw));
+
+      // ANCHORED AT COMMAND POSITION, and pipe-fed invocations excluded.
       //
-      // WHAT MAKES THIS FIRE (assertion-design.md): `python - <<'EOF'`,
-      // `python3 - "$@" <<X`, `python - > out 2>&1 <<X`, and a bare `python -`.
-      // WHAT MUST NOT: `python -c "..."`, `python -m pytest`, `python --version`,
-      // and `python -` inside quotes (maskQuoted removes it).
-      const RE = /\b(?:python|python3|py)\s+-(?=\s|$|[<>|&])/;
-      for (const line of cmd.split(/\r?\n/)) {
+      // The first version tested the whole line for a bare `-` anywhere. That
+      // denied six legitimate shapes, including `cmd | python -` — which
+      // CANNOT become a REPL, because its stdin is a pipe that reaches EOF.
+      // Matching position rather than substring also closes two false
+      // negatives for free: `python3.11 -` and `python.exe -`.
+      //
+      // Accepts before the interpreter: env assignments (`PYTHONPATH=x`),
+      // `env`, and any path prefix (`/usr/bin/`, `./venv/bin/`).
+      // Requires the bare `-` to be the interpreter's FIRST argument, which is
+      // what keeps `python tools/fmt.py -` allowed — there the `-` belongs to
+      // the script, not to python.
+      const CMD = new RegExp(
+        '^\\s*(?:\\w+=\\S*\\s+)*(?:env\\s+(?:\\w+=\\S*\\s+)*)?' +
+        '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
+        '\\s+-(?=\\s|$|[<>&|])',
+      );
+
+      const lines = cmd.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         if (/^\s*#/.test(line)) continue;
-        if (RE.test(line)) return line.trim().slice(0, 90);
+        // Split keeping separators. Only a BARE `|` supplies stdin; `||`,
+        // `&&`, `;` and `&` leave stdin on the terminal, so they still fire.
+        const parts = line.split(/(\|\||&&|;|\||&)/);
+        let prevSep = '';
+        for (let p = 0; p < parts.length; p += 2) {
+          const seg = parts[p];
+          // A HERESTRING supplies stdin and has no delimiter to mismatch, so it
+          // cannot degrade into a REPL the way a heredoc can. `python - <<<'x'`
+          // is safe and must stay usable.
+          const herestring = /<<</.test(seg);
+          if (prevSep !== '|' && !herestring && CMD.test(seg)) {
+            return rawLines[i].trim().slice(0, 90);
+          }
+          prevSep = parts[p + 1] || '';
+        }
       }
       return null;
     },
     message: (hit) =>
       `\`python -\` becomes an interactive REPL when the heredoc misses stdin.\n` +
       `  offending: ${hit}\n` +
-      `  FIX: write the script to a file and run it:\n` +
-      `         Write tool -> temp/thing.py ; then  python temp/thing.py\n` +
-      `       A true one-liner is fine as  python -c "..."  (this rule allows it).\n` +
-      `  There is NO safe inline shape. Redirecting stdout does not help -- the\n` +
-      `  REPL's loop is on STDERR. An empty body does not help either; two of the\n` +
-      `  six occurrences were deliberate no-ops that still hung for 120s and left\n` +
-      `  a REPL to be killed.\n` +
+      `  FIX: put the script in a file and run it.\n` +
+      `       Write tool -> temp/thing.py, OR (no Write tool) a heredoc that\n` +
+      `       writes the FILE rather than feeding python:\n` +
+      `         cat > temp/thing.py <<'PY'\n` +
+      `         ...\n` +
+      `         PY\n` +
+      `         python temp/thing.py\n` +
+      `       Heredoc BODIES are exempt from this rule, so a file whose content\n` +
+      `       mentions the pattern is not blocked.\n` +
+      `       A true one-liner is fine as  python -c "..."  and a herestring\n` +
+      `       (\`python - <<<'...'\`) is allowed -- it has no delimiter to mismatch.\n` +
+      `  There is NO safe inline heredoc shape. Redirecting stdout does not help --\n` +
+      `  the REPL's loop is on STDERR. An empty body does not help either; two of\n` +
+      `  the eight occurrences were deliberate no-ops that still hung for 120s.\n` +
       `  Measured: 65 GB written in one case; 8.3 GB of IO and zero file growth in\n` +
       `  another, which is the shape no size check can see.`,
   },
@@ -274,12 +360,26 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || proc
   if (findings.length === 0) {
     process.exit(0); // allow
   }
+  // The headline and the footer are RULE-AWARE. Asserting "a measurement you
+  // cannot trust" over a python-dash-repl finding is false -- that rule is
+  // about resource exhaustion, not a wrong number -- and pointing at
+  // measure.mjs for it is advice that does not apply. Stating a cause the
+  // code did not establish is the R7 defect this file exists to police, so it
+  // must not appear in the file's own output.
+  const MEASUREMENT_RULES = new Set(['rc-after-pipe', 'msys-arm-id', 'discarded-stderr']);
+  const anyMeasurement = findings.some((f) => MEASUREMENT_RULES.has(f.id));
+  const headline = anyMeasurement
+    ? 'BLOCKED — this command would produce a measurement you cannot trust.'
+    : 'BLOCKED — this command carries a known hazard.';
+  const footer = anyMeasurement
+    ? `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
+      `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
+      `  refused unless a positive control proves the query path works.`
+    : '';
   const body =
-    `BLOCKED — this command would produce a measurement you cannot trust.\n\n` +
+    `${headline}\n\n` +
     findings.map((f, i) => `${i + 1}. [${f.id}] ${f.message}`).join('\n\n') +
-    `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
-    `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
-    `  refused unless a positive control proves the query path works.`;
+    footer;
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
