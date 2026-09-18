@@ -2,9 +2,10 @@
 /**
  * measurement-guard.mjs — PreToolUse hook for Bash.
  *
- * Blocks the three shell shapes that have produced FALSE MEASUREMENTS in this
- * repo — each one returns a value indistinguishable from a real answer, which
- * is why they are worth blocking rather than warning about:
+ * Blocks four shell shapes. The first three have produced FALSE MEASUREMENTS in
+ * this repo — each returns a value indistinguishable from a real answer, which
+ * is why they are worth blocking rather than warning about. The fourth is a
+ * different hazard and is labelled as such below:
  *
  *   1. `RC=$?` after a pipeline. `$?` is the LAST element's status, so
  *      `R=$(az ... | tr -d '\r'); RC=$?` reports `tr` succeeding while az failed.
@@ -18,6 +19,18 @@
  *   3. `2>/dev/null` on a measurement command. Discarding stderr converts a
  *      permission denial into an empty string and the empty string into a
  *      confident false claim. Explicitly forbidden by deploy-integrity R7.
+ *
+ *   4. `python -` at command position. NOT a false-measurement shape -- it is
+ *      RESOURCE EXHAUSTION. A heredoc that misses stdin leaves an interactive
+ *      REPL looping on a traceback: 65 GB written in one measured case, and
+ *      8.3 GB of IO with ZERO file growth in another. It is here because it
+ *      recurred repeatedly in one session despite being documented. An exact
+ *      running total is deliberately NOT asserted here: an earlier version
+ *      said "eight" in one place and "six" in another, which is R7 in the
+ *      file whose third rule enforces R7. The itemised record lives in the
+ *      project memory for this hazard; this file cites it rather than
+ *      duplicating a number that drifts. Per the global operating rules,
+ *      only a hook executes.
  *
  * Design notes:
  *  - DENY, not warn. A warning in a tool result is easy to skim past, and the
@@ -33,6 +46,44 @@
  * was denied because of the jq pipe. Quote-awareness is not optional here — a
  * guard that blocks correct commands is the pressure that gets it deleted.
  * Length is preserved so any offsets/offending-text stay meaningful.
+ *
+ * COMMENT AWARENESS IS ALSO NOT OPTIONAL, and its absence was a SILENCING bug
+ * in every rule in this file, not just the newest one.
+ *
+ * An apostrophe inside a `#` comment opened a phantom single-quote that masked
+ * everything to the next apostrophe — or to end of input. `# don't do it` on
+ * one line blanked `python - <<'EOF'` on the next, and a real `bash` run
+ * confirms bash executes precisely the line the guard had blanked. It blinded
+ * `rc-after-pipe` too, the rule this file was originally built for.
+ *
+ * Measured reachability: 708 comment lines carry an odd apostrophe count
+ * across 840 tracked shell/workflow/scripts files. That is this repo's
+ * dominant comment style, not an edge case — and the population these rules
+ * serve writes exactly that line.
+ *
+ * The `#` itself is PRESERVED rather than masked, because stripHeredocBodies
+ * locates comments with a word-boundary `#` scan; masking it would break that
+ * caller while fixing this one. A quoted `#` still masks to `_`, which makes
+ * that caller strictly more accurate.
+ *
+ * KNOWN RESIDUALS — and BOTH earlier versions of this note named them wrongly.
+ * Round 7 disclosed only a backslash-escaped-quote case. Round 8 declared that
+ * "the WRONG one" and named command substitution instead. Round 9 measured that
+ * BOTH are real:
+ *
+ *   1. NO COMMAND-SUBSTITUTION AWARENESS. `$( ... )` and backticks are walked
+ *      as ordinary text, so quotes opened inside a substitution are paired
+ *      against quotes outside it. Root cause of 7 of 190 tracked `.sh` scripts
+ *      still swallowing the hazard, and of both known false positives.
+ *
+ *   2. A BACKSLASH-ESCAPED QUOTE OUTSIDE QUOTES is mis-paired, with no command
+ *      substitution anywhere. Verified that bash runs such a line and executes
+ *      a hazard on the next one.
+ *
+ * The census that demoted (2) counted TRACKED `.sh` FILES. A PreToolUse hook
+ * judges COMMAND STRINGS composed by agents — a different population, and one
+ * that census could not sample. Reporting a file-corpus rate as if it bounded
+ * the hook's real exposure was the error, not the arithmetic.
  */
 function maskQuoted(s) {
   let out = '';
@@ -40,15 +91,194 @@ function maskQuoted(s) {
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (quote) {
-      if (c === '\\' && quote === '"') { out += '__'; i++; continue; }
+      // PRESERVE THE NEWLINE, not just the length. This branch used to emit
+      // `__` for backslash+anything, which keeps the character count but
+      // DESTROYS A LINE when the escaped character is a newline. `rawLines[i]`
+      // then desyncs from the masked lines and the deny message names an
+      // innocent line: measured end-to-end through the real CLI, a command
+      // whose actual hazard was `python - <<'EOF'` reported
+      // `offending: echo INNOCENT_BYSTANDER`. R7, in the file whose third rule
+      // exists to enforce R7.
+      if (c === '\\' && quote === '"') {
+        if (i + 1 >= s.length) { out += '_'; continue; }
+        out += '_' + (s[i + 1] === '\n' ? '\n' : '_');
+        i++;
+        continue;
+      }
       if (c === quote) { quote = null; out += c; continue; }
       out += c === '\n' ? '\n' : '_';
       continue;
+    }
+    // bash starts a comment at `#` only when it begins a WORD — start of input,
+    // or after whitespace or a control operator. `file#1` is not a comment.
+    if (c === '#') {
+      const prev = i === 0 ? '\n' : s[i - 1];
+      if (/[\s;|&(]/.test(prev)) {
+        out += '#';
+        i++;
+        while (i < s.length && s[i] !== '\n') { out += '_'; i++; }
+        if (i < s.length) out += '\n';
+        continue;
+      }
     }
     if (c === '"' || c === "'") { quote = c; out += c; continue; }
     out += c;
   }
   return out;
+}
+
+/**
+ * Blank out HEREDOC BODIES, preserving line count.
+ *
+ * Without this, writing a file whose CONTENT mentions a blocked pattern is
+ * denied — and a heredoc is the only way an agent with no Write tool can
+ * create a file at all. Measured: a reviewer of the python-dash-repl rule was
+ * denied twice while writing their own verdict file, and the rule's FIX text
+ * pointed them at a tool they may not have. A guard that blocks its own
+ * documented workaround is worse than no guard.
+ *
+ * Deliberately scoped to the rule that asked for it rather than applied to
+ * every rule: the other three predate this and changing what they see is a
+ * behaviour change none of their tests cover. A heredoc body containing
+ * `az ... 2>/dev/null` therefore still trips `discarded-stderr` — known, and
+ * left alone on purpose.
+ *
+ * Residual, disclosed rather than hidden: only the FIRST heredoc opener on a
+ * line is tracked, so `cat <<A > x; cat <<B > y` on one line is handled for A
+ * only. Multi-heredoc single lines do not occur in this repo's traffic.
+ */
+function stripHeredocBodies(s) {
+  const lines = s.split(/\r?\n/);
+  const out = [];
+  let delim = null;
+  let allowIndent = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (delim !== null) {
+      // bash requires the terminator at COLUMN 0 — tabs-only stripped for the
+      // `<<-` form, nothing else. An earlier version compared with `.trim()`,
+      // which accepts the delimiter at ANY indentation, so an indented
+      // lookalike INSIDE the body ended the heredoc early, un-blanked the rest
+      // of the command and DENIED a legitimate file write. Verified against a
+      // real bash run: the command is a pure file write at exit 0 with all
+      // body lines landing in the file.
+      //
+      // This also brings `allowIndent` and the tab-strip back to life. They
+      // were DEAD CODE under `.trim()` — which is why three mutation arms read
+      // as "equivalent": the deadness was hiding the defect, not proving
+      // there wasn't one.
+      const probe = allowIndent ? line.replace(/^\t+/, '') : line;
+      if (probe === delim) { delim = null; out.push(line); continue; }
+      out.push(''); // body line -> blanked, line count preserved
+      continue;
+    }
+    // `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`. NOT `<<<` (herestring: no body).
+    //
+    // THE LOOKBEHIND IS LOAD-BEARING. An earlier version wrote `<<(?!<)` and
+    // was blind: a negative LOOKAHEAD only guards the leftmost match attempt,
+    // so against `<<<x` the engine retries at offset 1, matches `<<` on
+    // characters 1-2, sees `x` at 3, and reads a heredoc whose delimiter is
+    // `x`. Everything after was then blanked as "body" and this rule stopped
+    // watching entirely — strictly worse than a false positive, because the
+    // guard stays installed while seeing nothing.
+    //
+    // Measured, and the measurement is the point: `<<<'print(1)'` did NOT
+    // reproduce it (the `(` breaks the `\2` backreference) while `<<<'x'` did.
+    // The shipped test used the former, so it passed for a reason it did not
+    // claim — the same defect the M9 arm exists to catch, recurring inside the
+    // fix for it.
+    const m = line.match(/(?<!<)<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
+    if (!m) { out.push(line); continue; }
+
+    // THE `<<` MUST BE SHELL SYNTAX, NOT TEXT. Third instance of the silencing
+    // class, and the one that showed the earlier fix was aimed at the symptom.
+    //
+    // Requiring the delimiter to reappear downstream was not enough: the check
+    // asked whether the PHANTOM delimiter reappears ANYWHERE, not whether it
+    // reappears BEFORE the hazard. So a `<<EOF` inside a comment or a quoted
+    // string found its terminator in a LATER, REAL heredoc and blanked
+    // everything between.
+    //
+    // The four arms written for that fix passed only because their hazard used
+    // the delimiter `Z`. Measured: switch the hazard to `EOF` and three of the
+    // four flip to ALLOWED -- and `EOF` is 91 of 171 heredoc-opener tokens in
+    // this repo (53%, five times the next). The population this rule serves is
+    // agents quoting the prohibition, which supplies that collision by default.
+    //
+    // `maskQuoted` PRESERVES LENGTH, so the character at the same offset tells
+    // us whether the `<<` was shell syntax. It is masked when the `<<` sat
+    // inside quotes OR inside a `#` comment.
+    //
+    // THE EXPLICIT COMMENT CHECK IS BACK, AND DELETING IT WAS A REASONING
+    // ERROR I WANT ON THE RECORD. It was removed on the strength of mutation
+    // M15 surviving at 68/0, read as "equivalent mutant". The correct reading
+    // was "THE SUITE HAS NO WITNESS" — a green mutation is ambiguous between a
+    // blind test, a weak mutation and a genuine equivalent, and
+    // `.claude/rules/assertion-design.md` forbids picking one without ruling
+    // out the others. I picked one.
+    //
+    // It was not equivalent. bash starts a comment after `)` and `}` closing a
+    // control structure, and maskQuoted's word-boundary class omits both, so
+    // `(true)#<<EOF` and `{ true; }#<<EOF` were BLIND with it gone.
+    //
+    // AND THE OBVIOUS REPAIR IS WRONG: `)` is context-dependent —
+    // `echo $(echo a)#BOOM` yields `a#BOOM`, NOT a comment — so widening
+    // maskQuoted's class would silence the guard in the other direction. Two
+    // narrow checks that disagree about `)` are correct here where one wide one
+    // is not.
+    const masked = maskQuoted(line);
+    if (masked[m.index] !== '<') { out.push(line); continue; }   // quoted
+    // The `#` must begin a WORD to be a comment. A bare `indexOf('#')` matched
+    // any `#` at all, so `cat > temp/v2#final.md <<MD` with a `python -` body
+    // was DENIED — a false positive on real work, which is the pressure that
+    // gets a guard deleted. `v2#final.md` is a filename.
+    //
+    // THIS CLASS DELIBERATELY DIFFERS FROM maskQuoted's: it includes `)`, which
+    // closes a control structure so a following `#` IS a comment. maskQuoted
+    // must NOT include it, because `echo $(echo a)#BOOM` prints `a#BOOM` —
+    // there the `)` closes a SUBSTITUTION and the `#` is literal. Measured on
+    // Git Bash 5.3.15: `echo $(echo a)#note with a | tr a-z A-Z` →
+    // `A#NOTE WITH A`, so the `|` is a real pipe that maskQuoted must leave
+    // visible for `rc-after-pipe`. Arms M19 and M22 pin both directions of
+    // that disagreement — an earlier version asserted it with only one.
+    //
+    // `}` IS DELIBERATELY ABSENT, and an earlier version wrongly included it on
+    // the claim that `}` closing a control structure starts a comment. It does
+    // not: `{ true; }#BOOM` is a SYNTAX ERROR (`bash -n` rejects it), because
+    // `}` is a reserved word only as a standalone word. Defending against a
+    // shape bash cannot parse bought a real false positive —
+    // `cat > temp/v2}#final.md <<'MD'` was DENIED.
+    const hm = /(?:^|[\s;|&()])#/.exec(masked);
+    const hash = hm ? hm.index + hm[0].length - 1 : -1;
+    if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
+
+    // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
+    //
+    // Second live instance of the same silencing class, found by review. This
+    // scan runs on the RAW line — before quote masking, with no comment
+    // handling — so ANY `<<IDENT` that is not a redirect set `delim` and
+    // blanked the rest of the command: inside a `#` comment, inside a quoted
+    // string, in a grep pattern, or as a C-style shift operator.
+    //
+    // The proof that this was not theoretical: two of the blinding prefixes
+    // were, VERBATIM, lines in this file's own test suite — each asserted safe
+    // in isolation while silencing the guard for everything after it. And the
+    // population this rule exists for is "agents quoting the prohibition",
+    // which is exactly the traffic that writes such a line.
+    //
+    // A real heredoc always has a terminator. Requiring one converts every
+    // future opener MISS into a false positive rather than a silence, which is
+    // the asymmetry that matters: a false positive is visible and gets fixed;
+    // a silence leaves the guard installed and watching nothing.
+    const d = m[3];
+    const terminated = lines.slice(i + 1).some((l) => {
+      const p = m[1] === '-' ? l.replace(/^\t+/, '') : l;
+      return p === d;   // column 0, per bash — see the body-scan note above
+    });
+    if (terminated) { allowIndent = m[1] === '-'; delim = d; }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 const RULES = [
@@ -77,12 +307,19 @@ const RULES = [
       return null;
     },
     message: (hit) =>
-      `\`$?\` after a pipeline reports the LAST element's status, not the command you care about.\n` +
+      `a \`$?\` capture follows a pipeline here — where \`$?\` is the LAST element's status.\n` +
       `  offending: ${hit}\n` +
       `  FIX: capture on the line immediately after the SUBJECT, with no pipe:\n` +
       `       az ... > out.json 2>err.txt\n` +
       `       RC=$?\n` +
-      `  This exact shape reported seven apps at "0 requests, rc=0" from a query that never ran.`,
+      `  STATED CAREFULLY: this rule sees a pipeline and a \`$?\` capture in the\n` +
+      `  same command. It does NOT establish that the capture is READ, nor that\n` +
+      `  the pipeline is a measurement — they may merely co-occur, e.g. both sit\n` +
+      `  in a heredoc body being written to a file. It also does not know whether\n` +
+      `  \`set -o pipefail\` is in scope, which would make the capture CORRECT\n` +
+      `  (tracked as issue 4581).\n` +
+      `  When it IS live, this exact shape reported seven apps at "0 requests,\n` +
+      `  rc=0" from a query that never ran.`,
   },
   {
     id: 'msys-arm-id',
@@ -94,11 +331,19 @@ const RULES = [
       return m ? m[2].slice(0, 70) : null;
     },
     message: (hit) =>
-      `Git Bash rewrites a leading-slash path before az/gh sees it, so this resource id never arrives.\n` +
+      `a leading-slash path co-occurs with az/gh here, and Git Bash rewrites it\n` +
+      `before the command sees it.\n` +
       `  offending: ${hit}...\n` +
       `  FIX: prefix the command with MSYS_NO_PATHCONV=1\n` +
-      `  Symptom when you don't: "usage error: --resource ID | --resource NAME ..." for a\n` +
-      `  perfectly well-formed id, and metrics that come back null and get read as zero.`,
+      `  STATED CAREFULLY: this rule sees a leading-slash ARM id and an az/gh\n` +
+      `  token in the same command. It does NOT establish that the id is being\n` +
+      `  passed to that command — they may merely co-occur, e.g. the id sits in a\n` +
+      `  heredoc body being written to a file. An earlier version asserted "this\n` +
+      `  resource id never arrives", which is a cause it had not established, and\n` +
+      `  it said so to a reviewer who was passing nothing to az at all.\n` +
+      `  Symptom when the id IS being passed: "usage error: --resource ID |\n` +
+      `  --resource NAME ..." for a perfectly well-formed id, and metrics that\n` +
+      `  come back null and get read as zero.`,
   },
   {
     id: 'discarded-stderr',
@@ -136,15 +381,248 @@ const RULES = [
       return null;
     },
     message: (hit) =>
-      `discarding stderr on a measurement throws away the reason it failed.\n` +
+      `stderr is being discarded on a segment that also carries az/gh/kubectl.\n` +
       `  offending: ${hit}\n` +
       `  FIX: send stderr to a file and read it on failure:  cmd > out 2>err ; RC=$?\n` +
-      `  Precedent: a discarded stderr turned "I could not reach the registry" into\n` +
-      `  "the tag does not exist" and sent two investigations down the wrong path (R7).`,
+      `  STATED CAREFULLY: this rule sees a stderr-discarding redirect and a\n` +
+      `  measurement binary in the same segment. It does NOT establish that the\n` +
+      `  redirect belongs to that binary, nor that the command runs at all — both\n` +
+      `  may sit in a heredoc body being written to a file. NOTE: no exit from\n` +
+      `  this rule is known for that case; \`python -c\` is denied too. Say so\n` +
+      `  rather than looping.\n` +
+      `  When it IS live: a discarded stderr turned "I could not reach the\n` +
+      `  registry" into "the tag does not exist" and sent two investigations down\n` +
+      `  the wrong path (R7).`,
+  },
+  {
+    id: 'python-dash-repl',
+    // `python -` that does not cleanly attach to stdin becomes an INTERACTIVE
+    // REPL. It then loops on a traceback forever. Measured twice, same session:
+    //   stderr -> a file   : 69,887,069,161 bytes (~65 GB), stdout 0 bytes
+    //   stderr -> /dev/null: 8.3 GB of write IO, ~1h CPU, and NO file grew at all
+    // The second is worse. It is invisible to every size check and to
+    // `git status` (temp/ is gitignored), so it is found only by listing
+    // processes -- usually after something unrelated gets killed for memory.
+    //
+    // This rule exists because KNOWING the rule demonstrably does not prevent
+    // it: it has recurred repeatedly in one session, including by agents who
+    // were actively quoting the prohibition at the time, by reviewers of this
+    // very rule, and by its own author. No total is asserted here — see the
+    // header; the itemised record is the project memory for this hazard, and
+    // this file cites it rather than duplicating a number that drifts.
+    // Per the global operating rules, automatic behaviour requires a hook --
+    // memory only informs.
+    test: (raw) => {
+      // Heredoc bodies first (see stripHeredocBodies), THEN quote masking.
+      // Order matters: the delimiter itself is often quoted (`<<'EOF'`), and
+      // masking first would hide it from the opener match.
+      const rawLines = raw.split(/\r?\n/);
+      const cmd = maskQuoted(stripHeredocBodies(raw));
+
+      // ANCHORED AT COMMAND POSITION, and pipe-fed invocations excluded.
+      //
+      // "COMMAND POSITION" HERE MEANS: the start of a line, or the start of a
+      // `;` / `&&` / `||` / `&` segment. THAT IS NARROWER THAN BASH'S, and the
+      // gap is a real, MEASURED blind spot rather than a theoretical one.
+      // Sixteen shapes carry the FULL hazard and are ALLOWED (measured at this
+      // head, each with the hazard genuinely present):
+      //
+      //   same-line compound openers   { ( then do else
+      //   wrapper programs             timeout nohup time stdbuf exec
+      //   nested shells                bash -c "..."   xargs sh -c "..."
+      //   command substitution         $( ... )  and  ` ... `
+      //   a leading redirect           > out.txt python - <<'EOF'
+      //   a line continuation          python \<newline>  - <<'EOF'
+      //
+      // The reassuring half, also measured: when the hazard BEGINS ITS OWN LINE
+      // inside any of those compounds, it IS caught. So the exposure is
+      // same-line composition, not compounds as such.
+      //
+      // This is disclosed rather than fixed because catching it needs real
+      // word-splitting, not a regex — and because a list that reads complete
+      // while being partial is the defect this file exists to police. An
+      // earlier revision of this comment described the boundary without naming
+      // what falls outside it, which read as completeness.
+      //
+      // The first version tested the whole line for a bare `-` anywhere. That
+      // denied six legitimate shapes, including `cmd | python -` — which
+      // CANNOT become a REPL, because its stdin is a pipe that reaches EOF.
+      // Matching position rather than substring also closes two false
+      // negatives: `python3.11 -` and `python.exe -`.
+      //
+      // Accepts before the interpreter: env assignments (`PYTHONPATH=x`),
+      // `env`, and any path prefix (`/usr/bin/`, `./venv/bin/`).
+      // Requires the bare `-` to be the interpreter's FIRST argument, which is
+      // what keeps `python tools/fmt.py -` allowed — there the `-` belongs to
+      // the script, not to python.
+      // The bare `-` need not be the FIRST argument. An earlier version required
+      // it to be, so `python -u -`, `python -B -`, `python -X dev -` and
+      // `py -3 -` were all ALLOWED carrying the identical hazard — the option
+      // run in front of the dash hid it.
+      //
+      // Options are skipped EXCEPT `-c` and `-m`, which make the interpreter
+      // read from their argument rather than from stdin and so cannot become a
+      // REPL.
+      //
+      // OPTIONS THAT CONSUME A SEPARATE WORD: `-W`, `-X`, and the long form
+      // `--check-hash-based-pycs`. An earlier version said "ONLY -W and -X",
+      // which was false and cost a FALSE NEGATIVE: measured on this box,
+      // TWO FIXES FROM THE ROUND-1 REVIEW, both measured on the interpreter
+      // rather than reasoned about.
+      //
+      // 1. `-c`/`-m` EXCLUSION COVERS THE ATTACHED SPELLING. It was
+      //    `(?!-[cm](?:\s|$))`, and that trailing `(?:\s|$)` confined it to the
+      //    space-separated form. CPython also accepts `-cCODE` and `-mMOD`
+      //    attached, and those fell through the option-skip loop so the
+      //    following bare dash fired. Measured on 3.13.15:
+      //      python "-cprint(2)" - < /dev/null   ->  prints 2, rc=0, NO REPL
+      //    i.e. the hook denied a command carrying zero hazard. A false DENIAL
+      //    in a PreToolUse hook stops work outright, so it is worse here than
+      //    in a reporting guard. `--check-hash-based-pycs` is unaffected: its
+      //    second character is `-`, not `c` or `m`.
+      //
+      // 2. `env` MAY CARRY A PATH. `/usr/bin/env python -` was ALLOWED — a
+      //    fail-OPEN — because the `env` alternative required the bare word at
+      //    that position while the path-prefix group sat after it. The adjacent
+      //    comment claimed `/usr/bin/` was accepted, which was true only of
+      //    `/usr/bin/python`, not of `/usr/bin/env python`.
+      //
+      // `python --check-hash-based-pycs always -` accepts the word AND still
+      // reads the program from stdin, so it is the full hazard — and an earlier
+      // head fired on it while a narrowed one allowed it.
+      //
+      // That narrowing itself was right: allowing an optional non-dash token
+      // after ANY option swallowed the SCRIPT PATH, newly denying
+      // `python -u tools/fmt.py -`. The error was enumerating the
+      // arg-consuming set from memory instead of from the interpreter.
+      const CMD = new RegExp(
+        '^\\s*(?:\\w+=\\S*\\s+)*(?:(?:\\S*[\\/\\\\])?env\\s+(?:\\w+=\\S*\\s+)*)?' +
+        '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
+        '(?:\\s+(?!-[cm])' +
+        '(?:(?:-[WX]|--check-hash-based-pycs)\\s+[^-\\s]\\S*|-\\S+))*' +
+        '\\s+-(?=\\s|$|[<>&|])',
+      );
+
+      const lines = cmd.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*#/.test(line)) continue;
+        // Split keeping separators. Only a BARE `|` supplies stdin; `||`,
+        // `&&`, `;` and `&` leave stdin on the terminal, so they still fire.
+        const parts = line.split(/(\|\||&&|;|\||&)/);
+        let prevSep = '';
+        for (let p = 0; p < parts.length; p += 2) {
+          const seg = parts[p];
+          // STDIN SUPPLIED FROM SOMETHING THAT ENDS. Either form removes the
+          // hazard, because the REPL requires stdin to stay open on a terminal:
+          //   `<<<str`   herestring  -- no delimiter to mismatch
+          //   `< file`   redirect ON FD 0 -- reaches EOF
+          // A HEREDOC (`<<DELIM`) is deliberately NOT in this set: it is the
+          // one that degrades into a REPL when the delimiter does not land.
+          //
+          // THE FD DIGIT MATTERS. An earlier version tested any lone `<`, which
+          // exempted genuine hazards: `python - 2<err.txt <<'EOF'` redirects
+          // fd 2, leaves fd 0 on the terminal, and still carries a heredoc --
+          // yet read as "stdin supplied". `(?<![0-9<])` is what confines the
+          // exemption to fd 0. Measured shapes that must STILL fire:
+          // `2<err.txt`, `3<in.txt`.
+          //
+          // Residual, disclosed: a lone `<` anywhere else in the segment --
+          // e.g. an unquoted `$(grep x < f)` beside a real heredoc -- still
+          // exempts. Narrowing that needs real word-splitting, not a regex.
+          // THE HEREDOC WINS ON FD 0, WHATEVER THE ORDER. `python - < f <<'E'`
+          // reads as "stdin supplied" if you only look for a lone `<`, but bash
+          // gives fd 0 to the heredoc — the last redirect to a descriptor wins,
+          // and the heredoc is the hazard. Checking for a heredoc FIRST is what
+          // makes the exemption order-independent; M12 fixed the fd-digit half
+          // of this and the order half arrived through the same door.
+          const hasHeredoc = /(?<!<)<<(?!<)/.test(seg);
+          const stdinSupplied = !hasHeredoc &&
+            (/<<</.test(seg) || /(?<![0-9<])<(?!<)/.test(seg));
+          if (prevSep !== '|' && !stdinSupplied && CMD.test(seg)) {
+            return rawLines[i].trim().slice(0, 90);
+          }
+          prevSep = parts[p + 1] || '';
+        }
+      }
+      return null;
+    },
+    message: (hit) =>
+      `\`python -\` becomes an interactive REPL when the heredoc misses stdin.\n` +
+      `  offending: ${hit}\n` +
+      `  FIX: put the script in a file and run it.\n` +
+      `       Write tool -> temp/thing.py, OR (no Write tool) a heredoc that\n` +
+      `       writes the FILE rather than feeding python:\n` +
+      `         cat > temp/thing.py <<'PY'\n` +
+      `         ...\n` +
+      `         PY\n` +
+      `         python temp/thing.py\n` +
+      `       CAVEAT, and it is MEASURED this time because three earlier\n` +
+      `       versions of it were each wrong: this rule exempts heredoc BODIES,\n` +
+      `       the other three do NOT, and the working exit DIFFERS PER RULE.\n` +
+      `         body carries a pipeline + $?   -> rule 1 denies; python -c works\n` +
+      `         body carries an ARM id + az    -> rule 2 denies; prefix the\n` +
+      `                                           command MSYS_NO_PATHCONV=1\n` +
+      `         body carries az ... 2>/dev/null -> rule 3 denies, and python -c\n` +
+      `                                           is denied TOO. No exit is known\n` +
+      `                                           for this one. Say so rather\n` +
+      `                                           than looping.\n` +
+      `       A Write tool, where the caller has one, bypasses all four.\n` +
+      `       A true one-liner is fine as  python -c "..."  and a herestring\n` +
+      `       (\`python - <<<'...'\`) is allowed -- it has no delimiter to mismatch.\n` +
+      `  Inline heredocs into python are unsafe IN PRACTICE here -- though not\n` +
+      `  impossible in principle; this repo ships 8 tracked files using one\n` +
+      `  safely. Redirecting stdout does not help --\n` +
+      `  the REPL's loop is on STDERR. An empty body does not help either; two of\n` +
+      `  several occurrences were deliberate no-ops that still hung for 120s.\n` +
+      `  Measured: 65 GB written in one case; 8.3 GB of IO and zero file growth in\n` +
+      `  another, which is the shape no size check can see.`,
   },
 ];
 
 import { readFileSync } from 'node:fs';
+
+/**
+ * Build the deny text for a set of findings.
+ *
+ * EXPORTED so it can be tested. It was inline in `main()`, which put it beyond
+ * `evaluate()`'s reach — a reviewer mutated the headline in both directions and
+ * both mutants survived 48/48, i.e. the R7 fix had no kill power and that was
+ * not disclosed. An untestable correctness fix is the shape this file polices.
+ */
+export function denyBody(findings) {
+  // RULE-AWARE. Asserting "a measurement you cannot trust" over a
+  // python-dash-repl finding is false — that rule is about resource
+  // exhaustion, not a wrong number — and recommending measure.mjs for it is
+  // advice that does not apply. Stating a cause the code did not establish is
+  // the R7 defect this file exists to police, so it must not appear in the
+  // file's own output.
+  //
+  // FAILS TOWARD THE MEASUREMENT TEXT for an unknown id, deliberately: a new
+  // measurement rule added without updating this set still gets the (correct)
+  // measurement framing, and only a new NON-measurement rule would be
+  // mislabelled. The test below pins that direction so the choice is visible.
+  // Classify on the BASE id, not the decorated one. `${rule.id}-ERRORED` is not
+  // in NON_MEASUREMENT_RULES, so a crashed python-dash-repl rule was labelled
+  // as a false-measurement finding — the exact R7 this branch exists to avoid,
+  // reached through the error path nobody reads until it fires.
+  const baseId = (f) => String(f.id).replace(/-ERRORED$/, '');
+  const anyMeasurement = findings.some((f) => !NON_MEASUREMENT_RULES.has(baseId(f)));
+  const headline = anyMeasurement
+    ? 'BLOCKED — this command would produce a measurement you cannot trust.'
+    : 'BLOCKED — this command carries a known hazard.';
+  const footer = anyMeasurement
+    ? `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
+      `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
+      `  refused unless a positive control proves the query path works.`
+    : '';
+  return `${headline}\n\n` +
+    findings.map((f, i) => `${i + 1}. [${f.id}] ${f.message}`).join('\n\n') +
+    footer;
+}
+
+/** Rules that are NOT about a false measurement. See denyBody(). */
+const NON_MEASUREMENT_RULES = new Set(['python-dash-repl']);
 
 /**
  * Read the hook payload from fd 0.
@@ -198,8 +676,17 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || proc
     // No payload reached us, so there is no command to judge. Denying here would
     // block every Bash call on a harness fault, which is worse than the guard
     // being absent -- so this allows, but says so on stderr where it is visible.
-    // Stated plainly because the previous version claimed otherwise: THIS PATH
-    // FAILS OPEN, deliberately, and it is the only one that does.
+    // Stated plainly because a previous version claimed otherwise: THIS PATH
+    // FAILS OPEN, deliberately.
+    //
+    // AND IT IS NOT THE ONLY ONE. That claim was false and is corrected here
+    // rather than deleted. Measured: an import-time throw exits 1, a syntax
+    // error exits 1, a missing node exits 127 -- and ALL THREE produce EMPTY
+    // STDOUT, which the harness treats as non-blocking. So the guard fails
+    // open on every environment fault, not only on an unreadable payload.
+    // That is a property of the hook contract rather than of this file, and
+    // it is precisely why the test suite must stay discovered by CI: a hook
+    // that cannot load is indistinguishable from a hook that approved.
     process.stderr.write('measurement-guard: no payload readable — ALLOWING unjudged\n');
     process.exit(0);
   }
@@ -229,12 +716,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || proc
   if (findings.length === 0) {
     process.exit(0); // allow
   }
-  const body =
-    `BLOCKED — this command would produce a measurement you cannot trust.\n\n` +
-    findings.map((f, i) => `${i + 1}. [${f.id}] ${f.message}`).join('\n\n') +
-    `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
-    `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
-    `  refused unless a positive control proves the query path works.`;
+  const body = denyBody(findings);
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
