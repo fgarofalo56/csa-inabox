@@ -96,16 +96,27 @@ node scripts/measure/mutate.mjs      # every arm must report CAUGHT
 node scripts/measure/__tests__/injection-arms.mjs   # every arm must match its documented verdict
 ```
 
-On Windows that is 152 tests, 0 skipped — MEASURED, `rc=0`, with the exact command block
-above. It was 94 before the `python-dash-repl` rule landed; that figure is corrected here
-rather than left to rot, because a stale count in a file whose subject is false measurement
-is the defect it documents. On a Linux CI runner it is four fewer, with the win32-only
-cmd.exe tests skipped; that figure is derived from the
-measured 94 and the measured skip set, not observed on a Linux host. Forcing
-`process.platform` to `'linux'` on a Windows box reports 89 pass / 5 skipped instead,
-because the one test that spawns a real child refuses to run under a forged platform —
-see the injection suite's header for exactly which properties survive the Linux lane
-and which do not.
+On Windows that is **156 tests, 0 skipped** — MEASURED, `rc=0`, with the exact command
+block above, at the commit that added this line. It was 94 before the `python-dash-repl`
+rule landed.
+
+**Treat that number as a re-measurement instruction, not a fact.** It moved 94 → 152 → 156
+within a single pull request, and the 152 was stale before the commit that wrote it had
+finished. Run the block above rather than trusting the figure; if they disagree, the block
+is right. A stale count in a file whose subject is false measurement is the defect it
+documents.
+
+On a Linux CI runner it is four fewer, with the win32-only cmd.exe tests skipped — derived
+from the measured total and the measured skip set, not observed on a Linux host. Forcing
+`process.platform` to `'linux'` on a Windows box reports 5 skipped, because the one test
+that spawns a real child refuses to run under a forged platform — see the injection suite's
+header for exactly which properties survive the Linux lane and which do not.
+
+> An earlier revision corrected the headline count and left two figures DERIVED from it
+> behind: "derived from the measured 94", and "89 pass / 5 skipped", which sums to the old
+> total. Correcting a number without correcting what was derived from it leaves the
+> arithmetic pointing at the retracted value, which is harder to spot than the original
+> error — so the derived figures here are stated as relationships rather than as numbers.
 
 `injection-arms.mjs` **refuses to run on a non-win32 host** (`rc=2`). Its `win32` column
 means "the un-forced column on this host", which on an ubuntu runner would silently be

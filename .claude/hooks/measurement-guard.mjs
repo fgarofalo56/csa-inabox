@@ -307,12 +307,19 @@ const RULES = [
       return null;
     },
     message: (hit) =>
-      `\`$?\` after a pipeline reports the LAST element's status, not the command you care about.\n` +
+      `a \`$?\` capture follows a pipeline here — where \`$?\` is the LAST element's status.\n` +
       `  offending: ${hit}\n` +
       `  FIX: capture on the line immediately after the SUBJECT, with no pipe:\n` +
       `       az ... > out.json 2>err.txt\n` +
       `       RC=$?\n` +
-      `  This exact shape reported seven apps at "0 requests, rc=0" from a query that never ran.`,
+      `  STATED CAREFULLY: this rule sees a pipeline and a \`$?\` capture in the\n` +
+      `  same command. It does NOT establish that the capture is READ, nor that\n` +
+      `  the pipeline is a measurement — they may merely co-occur, e.g. both sit\n` +
+      `  in a heredoc body being written to a file. It also does not know whether\n` +
+      `  \`set -o pipefail\` is in scope, which would make the capture CORRECT\n` +
+      `  (tracked as issue 4581).\n` +
+      `  When it IS live, this exact shape reported seven apps at "0 requests,\n` +
+      `  rc=0" from a query that never ran.`,
   },
   {
     id: 'msys-arm-id',
@@ -374,11 +381,18 @@ const RULES = [
       return null;
     },
     message: (hit) =>
-      `discarding stderr on a measurement throws away the reason it failed.\n` +
+      `stderr is being discarded on a segment that also carries az/gh/kubectl.\n` +
       `  offending: ${hit}\n` +
       `  FIX: send stderr to a file and read it on failure:  cmd > out 2>err ; RC=$?\n` +
-      `  Precedent: a discarded stderr turned "I could not reach the registry" into\n` +
-      `  "the tag does not exist" and sent two investigations down the wrong path (R7).`,
+      `  STATED CAREFULLY: this rule sees a stderr-discarding redirect and a\n` +
+      `  measurement binary in the same segment. It does NOT establish that the\n` +
+      `  redirect belongs to that binary, nor that the command runs at all — both\n` +
+      `  may sit in a heredoc body being written to a file. NOTE: no exit from\n` +
+      `  this rule is known for that case; \`python -c\` is denied too. Say so\n` +
+      `  rather than looping.\n` +
+      `  When it IS live: a discarded stderr turned "I could not reach the\n` +
+      `  registry" into "the tag does not exist" and sent two investigations down\n` +
+      `  the wrong path (R7).`,
   },
   {
     id: 'python-dash-repl',
@@ -500,12 +514,17 @@ const RULES = [
       `         ...\n` +
       `         PY\n` +
       `         python temp/thing.py\n` +
-      `       CAVEAT, stated because an earlier version claimed otherwise: this\n` +
-      `       rule exempts heredoc BODIES, but the other three rules in this file\n` +
-      `       do NOT. A body containing a leading-slash ARM id, a pipeline with\n` +
-      `       $?, or a discarded stderr can still be denied by rules 1-3 — and a\n` +
-      `       Write tool is not available to every caller. If you are denied\n` +
-      `       writing the script itself, the remaining escape is python -c.\n` +
+      `       CAVEAT, and it is MEASURED this time because three earlier\n` +
+      `       versions of it were each wrong: this rule exempts heredoc BODIES,\n` +
+      `       the other three do NOT, and the working exit DIFFERS PER RULE.\n` +
+      `         body carries a pipeline + $?   -> rule 1 denies; python -c works\n` +
+      `         body carries an ARM id + az    -> rule 2 denies; prefix the\n` +
+      `                                           command MSYS_NO_PATHCONV=1\n` +
+      `         body carries az ... 2>/dev/null -> rule 3 denies, and python -c\n` +
+      `                                           is denied TOO. No exit is known\n` +
+      `                                           for this one. Say so rather\n` +
+      `                                           than looping.\n` +
+      `       A Write tool, where the caller has one, bypasses all four.\n` +
       `       A true one-liner is fine as  python -c "..."  and a herestring\n` +
       `       (\`python - <<<'...'\`) is allowed -- it has no delimiter to mismatch.\n` +
       `  Inline heredocs into python are unsafe IN PRACTICE here -- though not\n` +

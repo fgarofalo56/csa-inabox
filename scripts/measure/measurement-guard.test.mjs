@@ -696,6 +696,63 @@ test('R7: a lost newline must not make the message accuse an innocent line', () 
   assert.doesNotMatch(hit.message, /INNOCENT_BYSTANDER/, 'it must not accuse another line');
 });
 
+// ------------------------------------------------- every MESSAGE is R7-bound
+// `denyBody` was exported in round 9 precisely so message text could be pinned,
+// after the rule-aware headline was found to have zero kill power. Two later
+// rounds then fixed message text WITHOUT witnesses, and four message mutations
+// survived the whole suite. These arms close that door for all four rules.
+test('message R7: rule 1 does not assert the capture is READ or the pipeline measured', () => {
+  // WHAT MAKES THIS FAIL: restore "reports the LAST element's status, not the
+  // command you care about" as an unqualified claim.
+  const body = denyBody(evaluate(`a | b\nRC=$?`));
+  assert.match(body, /STATED CAREFULLY/);
+  assert.match(body, /does NOT establish/);
+  assert.match(body, /pipefail/, 'the pipefail caveat must survive (issue 4581)');
+  assert.doesNotMatch(body, /not the command you care about/);
+});
+
+test('message R7: rule 2 asserts CO-OCCURRENCE, not that the id reaches az', () => {
+  // The defect that fired against a reviewer: the message said "so this
+  // resource id never arrives" while nothing was passed to az at all.
+  //
+  // The absence check is scoped to the HEADLINE — the first line, where the
+  // claim lived. A blunt `doesNotMatch(/never arrives/)` over the whole body
+  // fails against the fix itself, because the correction QUOTES the retracted
+  // sentence in order to retract it. Keying an assertion to a spelling that the
+  // remedy legitimately contains is the same label-vs-site error this file
+  // keeps finding, pointed inward.
+  // WHAT MAKES THIS FAIL: restore "so this resource id never arrives" as the
+  // opening claim.
+  const body = denyBody(evaluate(`az x --resource /subscriptions/a/rg`));
+  const headline = body.split('\n').find((l) => l.includes('[msys-arm-id]')) ?? '';
+  assert.match(headline, /co-occurs/i, 'the opening claim must be co-occurrence');
+  assert.doesNotMatch(headline, /never arrives/, 'and must not assert the cause');
+  assert.match(body, /does NOT establish/);
+  assert.match(body, /An earlier version asserted/,
+    'the retraction is kept as a record, not deleted');
+});
+
+test('message R7: rule 3 discloses that it has NO known exit', () => {
+  // Measured: for a heredoc body carrying `az ... 2>/dev/null`, both the
+  // heredoc write AND `python -c` are denied. Telling a caller to use
+  // `python -c` there would loop it.
+  // WHAT MAKES THIS FAIL: delete the no-known-exit sentence.
+  const body = denyBody(evaluate(`az account show 2>/dev/null`));
+  assert.match(body, /no exit from\s+this rule is known|No exit is known/i);
+  assert.match(body, /does NOT establish/);
+});
+
+test('message R7: rule 4 names the PER-RULE exits, measured not reasoned', () => {
+  // Three earlier versions of this caveat were each wrong. The exits differ by
+  // rule: python -c works for rule 1, MSYS_NO_PATHCONV=1 for rule 2, and
+  // nothing is known for rule 3.
+  // WHAT MAKES THIS FAIL: collapse it back to "the remaining escape is python -c".
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF`));
+  assert.match(body, /MSYS_NO_PATHCONV=1/);
+  assert.match(body, /No exit is known/);
+  assert.match(body, /MEASURED this time/);
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule
