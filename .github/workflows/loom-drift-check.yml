@@ -499,10 +499,26 @@ jobs:
           # full-app-deploy-commercial.yml; both are pinned by
           # scripts/ci/__tests__/workflow-command-injection.test.mjs.
           #
+          # THE `\r` EXPRESSION IS LOAD-BEARING AND MUST STAY FIRST. The runner
+          # reads output with `StreamReader.ReadLine()` (ProcessInvoker.cs:511)
+          # and TextReader ends a line on a bare CR (0x0D) as well as LF, while
+          # `sed` splits on LF only — so without it, one CR turns a sed line
+          # into TWO runner lines and `s|^|az> |` prefixes only the first.
+          # That is REACHABLE HERE SPECIFICALLY: the script echoes the raw
+          # `AzureWebJobs.<fn>.Disabled` app-setting value on its ENABLED arm,
+          # and an app-setting value is an arbitrary string writable by exactly
+          # the out-of-band portal persona this job exists to detect. A
+          # `stop-commands` directive planted there would otherwise suppress
+          # the `::error::` below that names the hazard — the detector silenced
+          # by the thing it detects. CR is rewritten to the literal `%0D` (the
+          # runner's own escape, ActionCommand.cs:12) rather than deleted, so
+          # nothing is joined or truncated. Full rationale at the `defuse_cmds`
+          # definition in full-app-deploy-commercial.yml.
+          #
           # rc is read out of PIPESTATUS, not `$?`: after a pipeline `$?` is
           # the LAST stage's status, which here is tee's and is always 0.
           bash scripts/csa-loom/check-retired-function-timers.sh 2>&1 \
-            | sed -e 's|^|az> |' -e 's|##\[|## [|g' \
+            | sed -e 's|\r|%0D|g' -e 's|^|az> |' -e 's|##\[|## [|g' \
             | tee op19.txt
           rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_STEP_SUMMARY"

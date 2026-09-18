@@ -28,9 +28,23 @@
 //   src/Runner.Common/ActionCommand.cs:132     (TryParse, the `##[` form)
 //       int prefixIndex = message.IndexOf(Prefix);   // UNANCHORED — anywhere
 //
+// AND WHAT A "LINE" IS, which round 7 found this file had wrong:
+//   src/Runner.Worker/Handlers/ProcessInvoker.cs:511
+//       while (!reader.EndOfStream) { string line = reader.ReadLine();
+//   dotnet-api-docs xml/System.IO/TextReader.xml:1096 — "A line is defined as
+//   a sequence of characters followed by a carriage return (0x000d), a line
+//   feed (0x000a), a carriage return followed by a line feed, ... or the end
+//   of the reader's input."
+// So a BARE CR ends a runner line and `sed` does not split on one. Modelling
+// runner lines as LF-split — which this file did — made a CR-bearing attack
+// unrepresentable, so the guard could not fail on it. `runnerLines()` below is
+// the fix, and the CR entry in ATTACKS is what exercises it.
+//
 // Only `set-env` and `add-path` consult ACTIONS_ALLOW_UNSECURE_COMMANDS
-// (ActionCommandManager.cs). `add-mask`, `stop-commands`, `add-matcher`,
-// `error` and `notice` are live on a default runner, in a PUBLIC repo.
+// (ActionCommandManager.cs:244 and :463 — the only two reads). `add-mask`,
+// `stop-commands`, `add-matcher` and `error` are live on a default runner, in
+// a PUBLIC repo. `notice` is NOT: ActionCommandManager.cs:75-79 drops it
+// unless the server sets `DistributedTask.EnhancedAnnotations`.
 //
 // NOT A TAUTOLOGY. The sed under test is LIFTED OUT OF THE WORKFLOW at run
 // time, never transcribed, so a typo in the workflow cannot pass here. Both
@@ -84,6 +98,22 @@ function argvOf(cmdline) {
   return [...cmdline.matchAll(/'([^']*)'|(\S+)/g)].map((m) => (m[1] !== undefined ? m[1] : m[2]));
 }
 
+/**
+ * Split text the way the RUNNER does, not the way `sed` does.
+ *
+ * TextReader.ReadLine() ends a line on CR, LF, or CRLF (cited in the header),
+ * so this is `/\r\n|\r|\n/` and NOT `split('\n')`. The difference is the whole
+ * of round 7's blocker: `sed 's|^|az> |'` prefixes per LF-line, so one 0x0D
+ * inside a sed line yields a SECOND runner line that carries no prefix.
+ *
+ * WHAT VALUE WOULD MAKE A CALLER OF THIS FAIL: any defused output still
+ * containing a raw 0x0D before a `::` — which is exactly what the live sed
+ * produced before the `s|\r|%0D|g` expression was added.
+ */
+function runnerLines(text) {
+  return text.replace(/(?:\r\n|\r|\n)$/, '').split(/\r\n|\r|\n/);
+}
+
 /** Run a real sed with the given args over `input`, failing closed if sed did not run. */
 function runSed(args, input) {
   const r = spawnSync('sed', args, { input, encoding: 'utf8' });
@@ -91,7 +121,9 @@ function runSed(args, input) {
   // "produced no dangerous output". Blind-instrument class, csa-inabox memory.
   assert.equal(r.error, undefined, `sed did not run (${r.error && r.error.message}) — this file measured NOTHING`);
   assert.equal(r.status, 0, `sed exited ${r.status}: ${r.stderr}`);
-  return r.stdout.replace(/\n$/, '').split('\n');
+  // Deliberately the RUNNER's line rule. Splitting on LF here is what made the
+  // CR attack below unrepresentable; do not "simplify" it back.
+  return runnerLines(r.stdout);
 }
 
 // --- The mitigation, LIFTED from the workflow (never transcribed) ------------
@@ -125,6 +157,16 @@ const ATTACKS = [
   '::error::forged by ARM',
   '##[add-mask]AAAAAAAAAAAA',
   'ERROR: the resource ##[stop-commands]x9f2a1 was not found', // `##[` mid-line: unanchored
+  // ROUND 7. A BARE CR, mid-line. `sed` sees ONE line and prefixes it once;
+  // the runner's ReadLine() sees TWO and the second begins `::`. Reachable at
+  // the op19 site: check-retired-function-timers.sh echoes the raw
+  // `AzureWebJobs.<fn>.Disabled` app-setting value on its ENABLED arm, and an
+  // app-setting value is writable by exactly the out-of-band portal persona
+  // that job exists to detect — so a stop-commands directive planted there
+  // would suppress the `::error::` that names the hazard.
+  // WHAT VALUE MAKES THE LIVE-DEFUSE TEST FAIL: this one, against any sed that
+  // lacks the `s|\r|%0D|g` expression. Demonstrated RED in the PR receipt.
+  'ERROR: bad\r::stop-commands::x9f2a1',
 ];
 const BENIGN = [
   'ERROR: (AuthorizationFailed) The client does not have authorization',
@@ -136,9 +178,43 @@ test('positive control: an UNDEFENDED attack line IS parsed as a workflow comman
   // WHAT VALUE MAKES THIS FAIL: any ATTACKS entry that is not actually a
   // command. Without this arm, a simulator that had lost the ability to ever
   // return non-false would report the mitigation perfect.
-  for (const line of ATTACKS) {
-    assert.notEqual(runnerWouldParse(line), false, `undefended attack read as harmless: ${line}`);
+  //
+  // Split through runnerLines() first, because that IS the runner's rule — the
+  // CR entry is a command only on the second runner line it produces, and
+  // asserting on the undefended string whole would read it as harmless.
+  for (const attack of ATTACKS) {
+    const lines = runnerLines(attack);
+    assert.ok(
+      lines.some((l) => runnerWouldParse(l) !== false),
+      `undefended attack read as harmless: ${JSON.stringify(attack)}`,
+    );
   }
+});
+
+test('negative control: a PREFIX-ONLY sed is defeated by one bare CR (the round-7 defect)', () => {
+  // The round-7 blocker, pinned as its own fact so a future 'simplification'
+  // of runnerLines() back to split(LF) goes red HERE, with a message that says
+  // why, rather than silently disarming the CR arm in ATTACKS.
+  // WHAT VALUE MAKES THIS FAIL: a runnerLines() that splits on LF only (then
+  // out.length is 1 and the assertion on the second line throws), or a
+  // TextReader that did not end a line on 0x0D -- TextReader.xml:1096 says it
+  // does.
+  assert.deepEqual(runnerLines('a\rb'), ['a', 'b'], 'runnerLines() must end a line on a bare CR (TextReader.xml:1096)');
+  assert.deepEqual(runnerLines('a\r\nb'), ['a', 'b'], 'CRLF is ONE terminator, not two');
+
+  // The mitigation as it stood BEFORE this round: prefix + hash-bracket, no CR
+  // expression. sed emits ONE line; the runner reads TWO; the second is a live
+  // command. This is the exact shape the live sed must no longer produce, and
+  // it is what the CR entry in ATTACKS catches over there.
+  const PREFIX_ONLY_SED = ['-e', 's|^|az> |', '-e', 's|##\\[|## [|g'];
+  const out = runSed(PREFIX_ONLY_SED, 'ERROR: bad\r::stop-commands::x9f2a1\n');
+  assert.equal(out.length, 2, 'the CR fixture must yield TWO runner lines out of ONE sed line');
+  assert.equal(out[0], 'az> ERROR: bad', 'only the FIRST runner line got the prefix');
+  assert.equal(
+    runnerWouldParse(out[1]),
+    'v2',
+    `the unprefixed second runner line must still be a command, or this control proves nothing: ${JSON.stringify(out[1])}`,
+  );
 });
 
 test('negative control: the RETIRED indent mitigation does NOT stop a command (this is the round-5 defect)', () => {
@@ -157,9 +233,16 @@ test('negative control: the RETIRED indent mitigation does NOT stop a command (t
 
 test('the LIVE defuse_cmds neutralises every attack shape, on stdout AND stderr alike', () => {
   // WHAT VALUE MAKES THIS FAIL: a defuse_cmds whose prefix is whitespace (it
-  // would be trimmed), or that leaves `##[` intact anywhere in the line.
+  // would be trimmed), or that leaves `##[` intact anywhere in the line, or —
+  // the round-7 arm — that leaves a bare CR in place, which splits ONE sed
+  // line into TWO runner lines and prefixes only the first.
   const out = runSed(liveSed(), ATTACKS.join('\n') + '\n');
-  assert.equal(out.length, ATTACKS.length, 'defuse_cmds changed the LINE COUNT — it must not');
+  assert.equal(
+    out.length,
+    ATTACKS.length,
+    `defuse_cmds changed the RUNNER LINE COUNT — it must not. More lines out than attacks in means a ` +
+      `terminator survived defusing (a bare CR is one: TextReader.xml:1096), so some runner line got no prefix.`,
+  );
   out.forEach((line, i) => {
     assert.equal(
       runnerWouldParse(line),

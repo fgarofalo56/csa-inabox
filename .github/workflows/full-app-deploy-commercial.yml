@@ -1321,11 +1321,13 @@ jobs:
           # so a regression here goes red in `guardrails`.
           #
           # NOT gated by ACTIONS_ALLOW_UNSECURE_COMMANDS. Only `set-env` and
-          # `add-path` consult that flag (ActionCommandManager.cs). `add-mask`,
-          # `stop-commands`, `add-matcher`, `error` and `notice` are live in a
-          # default runner — enough to suppress every later annotation, forge
-          # `::error::`/`::notice::`, and mask arbitrary strings out of a
-          # public run log.
+          # `add-path` consult that flag (ActionCommandManager.cs:244 and :463,
+          # the only two reads). `add-mask`, `stop-commands`, `add-matcher` and
+          # `error` are live in a default runner — enough to suppress every
+          # later annotation, forge `::error::`, and mask arbitrary strings out
+          # of a public run log. `notice` is NOT in that list: it carries a
+          # second gate at ActionCommandManager.cs:75-79, which drops it unless
+          # the server sets `DistributedTask.EnhancedAnnotations`.
           #
           # `jq -r` DECODES `\n` in a JSON string and `$( )` strips only
           # TRAILING newlines, so an embedded one survives into `echo` and
@@ -1348,11 +1350,33 @@ jobs:
           # `TrimStart()` has nothing to do with. It also breaks the `##[`
           # token, because that fallback parser is an unanchored `IndexOf`
           # (ActionCommand.cs:132) that a line prefix does not reach.
+          #
+          # A BARE CR IS A RUNNER LINE TERMINATOR, AND `sed` DOES NOT SPLIT ON
+          # ONE. That disagreement is why the CR expression comes FIRST and is
+          # load-bearing, not tidying. ProcessInvoker.cs:511 reads a step's
+          # output with `StreamReader.ReadLine()`, and TextReader defines a
+          # line as terminated by a carriage return (0x0D) as well as by LF,
+          # CRLF or EOF (dotnet-api-docs, xml/System.IO/TextReader.xml:1096).
+          # `sed` splits on LF only, so ONE 0x0D inside a sed line becomes TWO
+          # runner lines and `s|^|az> |` prefixes only the first of them:
+          #
+          #   in   : ERROR: bad<CR>::add-mask::AAAAAAAAAAAA
+          #   sed  : az> ERROR: bad<CR>::add-mask::AAAAAAAAAAAA   <- one prefix
+          #   runner ReadLine(): ["az> ERROR: bad",
+          #                       "::add-mask::AAAAAAAAAAAA"]     <- PARSED
+          #
+          # So the CR is rewritten to the literal text `%0D` BEFORE the anchor
+          # runs, which makes the runner's line count equal sed's and the `^`
+          # prefix reach every line the runner will actually see. Rewritten,
+          # not DELETED: deleting it would silently join two genuine az lines,
+          # which is the truncation this function exists to avoid. `%0D` is the
+          # runner's own escape for CR (ActionCommand.cs:12), so it is lossless
+          # and reads correctly to anyone who knows the format.
           flatten() {       # stdin -> one line, <=400 chars
             tr '\n\r' '  ' | cut -c1-400
           }
           defuse_cmds() {   # stdin -> same text, no line that can BE a command
-            sed -e 's|^|az> |' -e 's|##\[|## [|g'
+            sed -e 's|\r|%0D|g' -e 's|^|az> |' -e 's|##\[|## [|g'
           }
 
           # Bounded retry for a genuinely transient ARM answer (deploy-integrity

@@ -246,12 +246,14 @@ removes them all with their receipts attached.
 schedules identical to their ACA replacements (`0 0 6 * * *` vs `0 6 * * *`;
 `0 0 7 * * *` vs `0 7 * * *`), and nothing in the platform *prevented* them from
 resuming. **Both are disabled now** (§8.2) — done out of band, so §8.2 is the
-only record of it. The standing check is the `op19-retired-timers` job in
-`.github/workflows/loom-drift-check.yml`, which runs
+only record of it. The standing check is **added but never exercised** — the
+`op19-retired-timers` job in `.github/workflows/loom-drift-check.yml` runs
 `scripts/csa-loom/check-retired-function-timers.sh` read-only on the weekly
 drift schedule and fails the job on both "a timer is ENABLED" and "I could not
-measure". The per-app removal disposition, with the reference audit each
-deletion needs, is §8.3.
+measure", but as of this writing it **has not yet produced a run**, so it is
+supported-in-code, never exercised (`cloud-parity.md`) and is not yet evidence
+of anything. §8.2 carries the full disclosure. The per-app removal disposition,
+with the reference audit each deletion needs, is §8.3.
 
 ---
 

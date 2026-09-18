@@ -247,6 +247,14 @@ for t in "${TARGETS[@]}"; do
     unknown=$((unknown + 1))
     continue
   fi
+  # Same CRLF strip as CLOUD and LISTED above. Without it, a Windows `-o tsv`
+  # emits "true\r", the `== "true"` test at the verdict below is FALSE, the S3
+  # lag arm is skipped on its `"$VAL" == "true"` guard, and a correctly
+  # DISABLED timer is reported as an ENABLED double-execution hazard at rc=1,
+  # permanently. Fail-closed in direction, wrong in fact — and this script is
+  # offered as the on-demand verifier an operator runs from a workstation,
+  # which is exactly where that CR comes from.
+  VAL="${VAL//$'\r'/}"
   # Read 2 — what the Functions host computed from it. A host that exists but
   # cannot be read fails here rather than yielding a convenient empty string.
   if ! SHOWN="$(az functionapp function show -g "$RG" -n "$APP" --subscription "$SUB" \
@@ -255,6 +263,7 @@ for t in "${TARGETS[@]}"; do
     unknown=$((unknown + 1))
     continue
   fi
+  SHOWN="${SHOWN//$'\r'/}"   # as at the retry read below; same reason as VAL.
 
   # RESTART LAG, and only in that exact shape. `appsettings set` RESTARTS the
   # Functions host, and read 2 is what the host has RECOMPUTED — so on the run
