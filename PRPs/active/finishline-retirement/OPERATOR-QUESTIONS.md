@@ -1,5 +1,18 @@
 # FINISHLINE operator queue — 19 questions, re-measured 2026-09-17
 
+> **Some of these have since been answered. The answers are in `DECISIONS.md`,
+> beside this file.** Decided there: **OP-3**, **OP-7**, **OP-8**, **OP-9 item
+> 2**, **OP-14**, and **OP-19(b)**. **OP-15** dissolved on measurement — its
+> premise was false and its row must not be acted on. Still carrying something
+> live: **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**, **OP-19(a)**.
+>
+> Read `DECISIONS.md` § "Provenance" before relying on any of it: none of those
+> decisions has an artifact a reader can follow, because on this repository an
+> operator statement and an agent statement are indistinguishable by author.
+>
+> The question text below is left as it was asked. A decision is only legible
+> beside the question it answers.
+
 The FINISHLINE harness (`.harness/`) carried an `operator_queue` of **19
 decisions**. None has been answered since **2026-08-06**. The harness is being
 retired (`Refs #4495`); this page exists so the queue is answerable in one pass
@@ -16,7 +29,7 @@ Verdicts used below:
 |---|---|
 | **OBSOLETE** | the thing the question was about has happened, or its premise is gone. No decision needed. Evidence given per row. |
 | **NARROWED** | part of the question answered itself; a smaller decision remains. |
-| **LIVE** | still stands as asked. |
+| **LIVE** | still stands as asked — as first measured, not a claim about today. See the note at the top of this page. |
 
 Counts: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
@@ -294,6 +307,14 @@ Two parts, and they diverge.
 
 ### OP-15 · task `D2` · Tag Contributor on the ACR
 
+**This question dissolved on measurement. Do not act on it — see
+`DECISIONS.md` § "OP-15".** Both halves of the premise below are false: the
+deploy identity already holds Owner at the tenant-root management group, so it
+does not lack `Microsoft.Resources/tags/write`; and the lease tags are erased by
+every subscription-scope apply regardless, so the grant would not make leases
+race-free. Issue 4563 tracks the real problem. The question text is kept below
+because the answer is only legible beside what was asked.
+
 The deploy identity lacks `Microsoft.Resources/tags/write` on the Commercial ACR
 (name in `.harness/archive/2026-08-08/config.json`, `estate.commercial.acr`), so
 #2603 firewall leases run in legacy-fallback
@@ -305,7 +326,8 @@ perform, so closing the issue did not perform it. Context that raises the
 stakes rather than lowering them: **#4285 is OPEN** — *"ACR firewall lease: ~13
 Commercial claimants on one per-registry mutex, none serialized, with a 25-min
 wait budget below the builder's 36-min median hold."* Unleased fallback under
-that much contention is the #3676 shape.
+that much contention is the #3676 shape. That contention is real and is not
+dissolved; what dissolved is the idea that a role grant addresses it.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
