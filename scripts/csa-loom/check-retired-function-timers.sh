@@ -98,39 +98,57 @@
 # by construct rather than by line number (a line number in this header goes
 # stale the moment this header is edited — it did, mid-fix).
 #
-# RE-MEASURED 2026-09-18 after the corroborating `show` landed. An earlier
-# revision of this header said 5 and 8; it said so correctly WHEN WRITTEN and
-# then the file grew. A bare count in a header is a claim with no owner, so the
-# population is enumerated below and the count is derived from it — check the
-# ROW SET, not the number, and re-run the scoped measurement rather than a raw
-# grep (raw returns 17 and 13 because it counts this prose).
+# RE-MEASURED 2026-09-18 after the corroborating `show` landed, and AGAIN after
+# review found this audit had gone false in the same commit that wrote it. An
+# earlier revision said 5 and 8; it said so correctly WHEN WRITTEN and then the
+# file grew. Worse, the revision that updated it to 8/11 also lifted a
+# substitution OUT of argument position into a bare assignment and went on
+# describing it as argument-position — a false row in the very audit offered as
+# this change's receipt. A bare count in a header is a claim with no owner, so
+# the population is enumerated below BY GUARD SHAPE and the count derived from
+# it. Check the ROW SET, not the number, and re-run the scoped measurement
+# rather than a raw grep (raw returns 17 and 13 because it counts this prose).
 #
-#   8 command substitutions in executable code
-#       CLOUD=   `if !` guarded   <- WAS BARE; this is the fix
-#       LISTED=  `if !` guarded
-#       SHOW_ERR= `if` guarded    <- ADDED 2026-09-18 with the corroboration
-#       VAL=     `if !` guarded
-#       SHOWN=   `if !` guarded, twice (the read and the post-write re-read)
-#       TWO in ARGUMENT position, inside `echo` — the boundary echo's
-#         `$([[ $APPLY -eq 1 ]] && echo apply || echo verify)` and the UNKNOWN
-#         branch's `$(printf … | tr | cut)` that truncates ARM's message. Safe
-#         because a command substitution in argument position never carries its
-#         status to errexit. The reason is NOT that the `||` makes the list
-#         total: an earlier revision of this header said that and it is false by
-#         measurement — `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-`
-#         returns 1, because with the descriptor closed BOTH arms fail. Against
-#         a positive control on the same harness,
-#         `echo "arg-position: $(false)END"` under `set -euo pipefail` exits 0
-#         and the script continues, while `V="$(false)"` exits 1 and it dies.
-#         Same conclusion, load-bearing for a different reason.
+#   8 command substitutions in executable code, in three shapes:
+#
+#     SIX guarded by `if !` — the failure arm is reachable and tested:
+#       CLOUD=     `if !`   <- WAS BARE; this is the original fix
+#       LISTED=    `if !`
+#       SHOW_TAIL= `if !`   <- WAS BARE after the 2026-09-18 refactor; guarded
+#                              once review caught it. Coreutils-only, so no live
+#                              hazard — guarded because the audit must be true.
+#       VAL=       `if !`
+#       SHOWN=     `if !`, twice (the read and the post-write re-read)
+#
+#     ONE in an OR-LIST that CAPTURES the status rather than discarding it:
+#       SHOW_ERR="$(az … 2>&1)" || SHOW_RC=$?
+#       The `||` makes it a list, so errexit does not fire at the assignment,
+#       and `$?` is preserved for the exit-code-3 discrimination below. This is
+#       NOT the bare shape: a bare `VAR="$(cmd)"` dies AT THE ASSIGNMENT.
+#
+#     ONE in ARGUMENT position, inside `echo`:
+#       the boundary echo's `$([[ $APPLY -eq 1 ]] && echo apply || echo verify)`.
+#       Safe because a command substitution in argument position never carries
+#       its status to errexit. The reason is NOT that the `||` makes the list
+#       total: an earlier revision of this header said that and it is false by
+#       measurement — `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-`
+#       returns 1, because with the descriptor closed BOTH arms fail. Against
+#       a positive control on the same harness,
+#       `echo "arg-position: $(false)END"` under `set -euo pipefail` exits 0
+#       and the script continues, while `V="$(false)"` exits 1 and it dies.
+#       Same conclusion, load-bearing for a different reason.
+#
+#   ZERO bare `VAR="$(cmd)"` assignments. That is the claim this audit exists
+#   to make, and it is the one that went false without anyone noticing.
+#
 #   1 `az` command outside a substitution
 #       `appsettings set`, guarded by `&& ! az` in an `if` condition
 #                                     <- WAS BARE; this is the other half
 #   0 bare `az` at line start (`grep -cE '^[[:space:]]*az '` == 0)
-#   11 arithmetic expansions `$((…))`, measured NOT to carry a command status —
+#   12 arithmetic expansions `$((…))`, measured NOT to carry a command status —
 #       including the zero-valued `resolved=$((0))` — against a negative control
 #       (`V="$(false)"`) that did abort, so the zero is a result and not a
-#       blind probe. Three were added with the corroboration branch.
+#       blind probe. Four were added with the corroboration branch.
 #   1 `[[ … ]] && APPLY=1`, measured safe: a short-circuited AND-list mid-script
 #       does not trip errexit
 #
@@ -245,7 +263,21 @@ for t in "${TARGETS[@]}"; do
     SHOW_ERR=""; SHOW_RC=0
     SHOW_ERR="$(az functionapp show -n "$APP" -g "$RG" --subscription "$SUB" -o none 2>&1)" \
       || SHOW_RC=$?
-    SHOW_TAIL="$(printf '%s' "$SHOW_ERR" | tr '\n' ' ' | cut -c1-240)"
+    # GUARDED, like every other substitution in this file. An earlier revision
+    # lifted this out of the UNKNOWN `echo` into a BARE assignment — creating a
+    # new instance of the exact defect class this script exists to close, in the
+    # same commit whose header certified it safe as "argument position". It was
+    # argument-position before the refactor; it was not after. Measured: bare
+    # assignment on a failing pipeline dies at rc=127 before the tally, while
+    # the same expression in argument position continues at rc=0.
+    #
+    # The pipeline is coreutils-only so there is no live hazard, and the honest
+    # reason to guard it anyway is that the audit below is offered as this PR's
+    # receipt — a false row in it is worse than the risk it describes.
+    SHOW_TAIL=""
+    if ! SHOW_TAIL="$(printf '%s' "$SHOW_ERR" | tr '\n' ' ' | cut -c1-240)"; then
+      SHOW_TAIL="<could not be summarised>"
+    fi
     if [ "$SHOW_RC" -eq 0 ]; then
       echo "  WARN     ${APP}/${FN}: the host listing did not contain it, but a direct read FOUND it — the listing was incomplete (RBAC-filtered or paged). Treating the host as PRESENT and continuing to read its definition." >&2
     elif [ "$SHOW_RC" -eq 3 ] \

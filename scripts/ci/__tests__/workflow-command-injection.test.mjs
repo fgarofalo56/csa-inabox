@@ -484,6 +484,81 @@ test('reachability: EVERY response-derived sink in the step is defused, not just
   assert.deepEqual(bareJq, [], 'a jq call publishes its own stderr without defuse_cmds');
   const defusedJq = lines.filter((r) => /jq_defused\s/.test(r.t) && !/^jq_defused\(\)/.test(r.t));
   assert.equal(defusedJq.length, 5, `expected 5 jq_defused call sites, found ${defusedJq.length} — "zero bare jq" must not be satisfiable by deleting jq`);
+
+  // --- (e) NO BARE COMMAND SUBSTITUTION ASSIGNMENT anywhere in this step.
+  //
+  // THE GUARDS HAD NO WITNESS. Rounds 8 and 9 each fixed a bare
+  // `VAR="$(...)"` — the COUNT read and the EXEC flatten — and review measured
+  // that REVERTING EITHER ONE left this file 11/11 GREEN. Two guards, two
+  // rounds, zero coverage: `assert.deepEqual(bareJq, [])` above is about jq's
+  // stderr and says nothing about how the result is assigned.
+  //
+  // Under `set -euo pipefail` a bare assignment whose command fails kills the
+  // step AT THE ASSIGNMENT, so the `::error::` written to explain it never
+  // prints and the log carries only the tool's own stderr. That is the defect
+  // this step keeps re-acquiring, most recently in the commit whose header
+  // certified it absent.
+  //
+  // WHAT VALUE MAKES THIS FAIL: reverting either guard to `VAR=$(...)`. Both
+  // were verified to turn this red, and the unmutated file green, before this
+  // assertion shipped — an arm that has never failed has never been shown to
+  // work.
+  //
+  // SAFE SHAPES, deliberately allowed and each for a stated reason:
+  //   `if ! VAR=$(...)` / `if VAR=$(...)`  — the substitution is an `if`
+  //       CONDITION, where errexit is suppressed and the caller handles it.
+  //   `VAR=$(...) || RC=$?`                — an OR-list, likewise not bare, and
+  //       it preserves the status instead of discarding it.
+  //   `echo "... $(...) ..."`              — ARGUMENT position never carries
+  //       its status to errexit.
+  //   `local x; x=$(...)` inside a function — function-local, and the wrapper
+  //       bodies are excluded below because they are audited separately.
+  //
+  // ONE FURTHER EXCLUSION, AND THE ASSERTION THAT MAKES IT SOUND.
+  // `arm_get()` contains `safe_url="$(printf … | flatten)"`, which IS bare.
+  // It is safe ONLY because every call site invokes the function in an `if`
+  // CONDITION, where errexit is suppressed for the whole body — a failing
+  // assignment then just returns non-zero from `arm_get`, which both callers
+  // already handle. That is a property of the CALLERS, not of the function, so
+  // excluding it silently would be an unsound exclusion of exactly the kind
+  // this file keeps finding. The call sites are pinned immediately below; add a
+  // bare `arm_get …` anywhere and that assertion goes red, which is the signal
+  // that this exclusion has stopped being true.
+  const BARE_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(")?\$\((?!\()/;
+  const armGetCalls = lines.filter((r) => /(^|[^_\w])arm_get\s+\S/.test(r.t) && !/^arm_get\(\)/.test(r.t));
+  assert.ok(armGetCalls.length >= 2, `expected arm_get to still be called, found ${armGetCalls.length}`);
+  const unguardedArmGet = armGetCalls
+    .filter((r) => !/^if\s+!?\s*arm_get\s/.test(r.t))
+    .map((r) => `${r.n}: ${r.t.slice(0, 110)}`);
+  assert.deepEqual(
+    unguardedArmGet, [],
+    'arm_get is called OUTSIDE an `if` condition, so errexit is no longer suppressed '
+    + 'inside it — and its internal bare `safe_url="$(...)"` becomes a silent '
+    + 'verdictless exit. Either guard the call or guard the assignment.',
+  );
+  const armGetBody = liveFnBody('arm_get').split('\n').map((s) => s.trim());
+  const wrapperBodies = ['jq_defused', 'arm_err', 'defuse_cmds', 'flatten']
+    .flatMap((fn) => liveFnBody(fn).split('\n').map((s) => s.trim()))
+    .concat(armGetBody);
+  const bareAssign = lines
+    .filter((r) => BARE_ASSIGN.test(r.t))
+    .filter((r) => !/\|\|\s*\w+=\$\?/.test(r.t))      // OR-list that captures rc
+    .filter((r) => !wrapperBodies.includes(r.t))
+    .map((r) => `${r.n}: ${r.t.slice(0, 110)}`);
+  assert.deepEqual(
+    bareAssign, [],
+    'a bare VAR="$(...)" under `set -euo pipefail` dies AT THE ASSIGNMENT, so the '
+    + '::error:: written to explain it never prints. Guard it with `if ! VAR=$(...)` '
+    + 'or capture the status with `|| RC=$?`.',
+  );
+  // Paired POSITIVE assertion: "zero bare assignments" is trivially satisfied
+  // by a step with no substitutions at all. Pin that the guarded ones exist.
+  const guardedAssign = lines.filter((r) => /^if !? ?[A-Za-z_][A-Za-z0-9_]*=(")?\$\(/.test(r.t));
+  assert.ok(
+    guardedAssign.length >= 3,
+    `expected at least 3 GUARDED command-substitution assignments, found ${guardedAssign.length} — `
+    + '"zero bare" must not be satisfiable by deleting the reads',
+  );
   assert.match(liveFnBody('jq_defused'), /defuse_cmds < jq_err\.txt >&2/, 'jq_defused no longer routes jq stderr through defuse_cmds');
   assert.match(liveFnBody('jq_defused'), /jq "\$@" 2> jq_err\.txt/, 'jq_defused no longer captures jq stderr');
 
