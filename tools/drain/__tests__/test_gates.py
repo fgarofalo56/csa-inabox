@@ -910,6 +910,70 @@ def test_negative_control_an_advisory_red_blocks_while_every_required_is_green()
     assert "brain security graph" in why
 
 
+def test_every_red_conclusion_blocks_the_advisory_path_not_just_FAILURE():
+    """EACH member of `RED_CONCLUSIONS` pinned SEPARATELY, on the advisory path.
+
+    ROUND 1'S BLOCKER, and the sharpest part of it is WHICH member was
+    unwitnessed. Before this test, `classify_advisory_checks`' red branch was
+    pinned only by FAILURE (and ERROR via the StatusContext shape). Review
+    measured two mutations SURVIVING the whole suite:
+
+        `... and verdict != "CANCELLED"`        -> rc=0, 531 passed
+        `if verdict in ("FAILURE", "ERROR")`    -> rc=0, 531 passed
+
+    and showed the mutant is behaviourally live: a lone CANCELLED advisory run
+    answers `ok=True, "1 clean of 1 advisory"`.
+
+    THE REASON IT MATTERS IS NOT COVERAGE ARITHMETIC. The reviewer re-ran
+    `advisory_verdict` against the live rollups of the last 40 PRs: exactly ONE
+    NO-GO, #4492, **and both of its reds are CANCELLED**. So the only production
+    behaviour this arm exhibits today is the one nothing witnessed, while the PR
+    body stated the CANCELLED-stays-red decision as an explicit commitment with
+    zero kill power behind it.
+
+    A CANCELLED required check is already recorded here as an ABSENCE rather
+    than a pass; the advisory side has to agree, or the same run reads red on
+    one path and clean on the other.
+
+    WHAT MAKES EACH ARM FAIL: removing that conclusion from `RED_CONCLUSIONS`,
+    or narrowing the branch to a literal subset. Each is checked on its own so a
+    single surviving member cannot hide behind the others.
+    """
+    for conclusion in sorted(gates.RED_CONCLUSIONS):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("CodeQL", "SUCCESS"),
+            _adv(f"advisory-{conclusion.lower()}", conclusion),
+        ]
+        assert gates.classify_checks(checks, REQUIRED)[0], (
+            f"{conclusion}: the required half must be GREEN, or this arm is "
+            "measuring the wrong thing"
+        )
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion} did NOT block the advisory path. Every member of "
+            f"RED_CONCLUSIONS must, or a run reads red for a required context "
+            f"and clean for an advisory one. why={why!r}"
+        )
+        assert f"advisory-{conclusion.lower()}" in why, (
+            f"{conclusion} blocked but the message does not NAME the check "
+            f"(deploy-integrity R6: say which). why={why!r}"
+        )
+
+    # PAIRED POSITIVE, and not optional: "every conclusion blocks" is trivially
+    # satisfiable by a branch that blocks on everything. Pin that the buckets
+    # which must NOT block still do not.
+    for benign in ("SUCCESS", "SKIPPED", "NEUTRAL"):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{benign.lower()}", benign),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, (
+            f"{benign} must NOT block the advisory path — advisory checks skip "
+            f"routinely on path filters and a control that fires on everything "
+            f"teaches its reader to skim it. why={why!r}"
+        )
+
+
 def test_negative_control_an_in_progress_advisory_check_is_not_red():
     """The recorded mistake from the first build of this split, for
     `merge-eligible.py`: classifying `in_progress` as red cries wolf on every
