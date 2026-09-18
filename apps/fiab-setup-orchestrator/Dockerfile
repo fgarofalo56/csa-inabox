@@ -35,10 +35,20 @@ FROM python:3.12-slim AS base
 # earlier version of this comment named only one of them:
 #   1. this archive upgrade — chosen, because it is in-repo and immediate;
 #   2. moving to a `-bookworm` base tag — ALSO available to this repo and
-#      already exercised elsewhere (platform/runners/script-runner is on
-#      `python:3.12-slim-bookworm`; fiab-mcp-bridge's `node:22-bookworm-slim`
-#      scans debian 12.15 at 0). Not chosen here: it changes the Python/OS
-#      pairing for a CVE fix, which is a larger blast radius than one RUN line.
+#      already exercised elsewhere. The NON-CIRCULAR exemplar is
+#      platform/runners/script-runner: `python:3.12-slim-bookworm`, with NO
+#      dist-upgrade of its own (measured 2026-09-18: 0 occurrences in that
+#      Dockerfile), built by full-app-deploy-commercial.yml under the same
+#      blocking Trivy gate. Its 0 is attributable to the base tag.
+#      fiab-mcp-bridge was cited here as a second exemplar and should NOT be:
+#      its own Dockerfile:21-24 says in terms that "the leading dist-upgrade
+#      pulls the distro's security patches ahead of the pinned base tag", so its
+#      0 comes from its own upgrade rather than from being bookworm. Citing it
+#      for lever 2 is circular — the same shape as testing a base-layer
+#      hypothesis against an image's own base, which this repo has already paid
+#      for once.
+#      Not chosen here: it changes the Python/OS pairing for a CVE fix, which is
+#      a larger blast radius than one RUN line.
 #   3. an upstream base rebuild — not available to this repo, and this line
 #      exists so we do not wait for it.
 # An earlier revision said the archive upgrade was "the only lever available to

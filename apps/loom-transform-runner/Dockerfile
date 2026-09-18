@@ -25,17 +25,43 @@ FROM python:3.11-slim
 # AHEAD of the pinned base tag, which is how OS-layer CRITICALs get cleared here
 # without waiting for a base rebuild.
 #
-# DO NOT REMOVE THIS LINE. It is LOAD-BEARING, not prophylactic. An earlier
-# revision of this comment said "the debian 13.6 layer of this image scans
-# 0 CRITICAL today — this is prophylactic", which inverts the causation: this
-# image is `FROM python:3.11-slim`, which IS debian 13.6 carrying the vulnerable
-# `perl-base`, and it scans 0 CRITICAL *because of* this line. Measured
-# 2026-09-17 on the two sibling images that lacked it — same base, three
-# CRITICALs each (#4547).
+# DO NOT REMOVE THIS LINE. It is LOAD-BEARING TODAY, whatever it was when it
+# was written. An earlier revision said "the debian 13.6 layer of this image
+# scans 0 CRITICAL today — this is prophylactic". A revision after THAT said the
+# first one "inverts the causation" — which asserts a mistake that was never
+# established, and is itself the R7 overshoot it was correcting.
 #
-# This image is built by full-app-deploy-commercial.yml:435-436, the canonical
-# from-scratch app path in no-vaporware.md, under the same Trivy gate. Trimming
-# this line on the word "prophylactic" reds that path.
+# What git says: `git log -S` for BOTH "prophylactic" and "dist-upgrade" on this
+# file returns the same commit, 38f4ac6f6e9 (2026-07-28). The word and the line
+# landed together, and the `perl-base` CRITICALs did not enter the Trivy database
+# until 2026-09-15 (apps/loom-migrate/Dockerfile records that date). So the
+# original sentence was true of its date and went stale seven weeks later: a
+# dated record that lost its date, not an inverted causation.
+#
+# What IS established, measured 2026-09-17 (#4547): this image is
+# `FROM python:3.11-slim`, which resolved that day to debian 13.6 carrying the
+# vulnerable `perl-base`; it scans 0 CRITICAL with this line, while the two
+# sibling images lacking it scanned three CRITICALs each off the same base. That
+# is a claim about 2026-09-17, dated here so the next reader does not inherit it
+# as timeless the way the last one did.
+#
+# WHERE TRIMMING IT IS CAUGHT — AND WHERE IT IS NOT. This matters more than the
+# archaeology above.
+#   Commercial: built by full-app-deploy-commercial.yml:435-436, the canonical
+#   from-scratch app path in no-vaporware.md, under the SC1 Trivy CRITICAL gate.
+#   Trimming this line reds that path.
+#
+#   GCC-High / IL5: this image is ALSO built by
+#   gov-provision-runner-images.yml:264/:312 — and that lane has NO
+#   supply-chain gate whatsoever. Measured 2026-09-18: zero matches for trivy,
+#   cosign or "supply" in that workflow, against 9 / 36 / 31 in the Commercial
+#   lane. On the sovereign boundaries, trimming this line reds nothing and ships
+#   three CRITICALs silently.
+#
+# So the deterrent is inverted exactly where cloud-parity.md says the need is
+# greatest. That gap belongs to the GOV LANE, not to this file, and is NOT fixed
+# by this comment — it is issue #4584. Recorded here because a reader of this
+# file would otherwise conclude the gate has them covered on every boundary.
 RUN apt-get update && apt-get dist-upgrade -y \
     && apt-get install -y --no-install-recommends curl gnupg2 apt-transport-https ca-certificates unixodbc-dev gcc g++ git \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
