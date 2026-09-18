@@ -153,9 +153,11 @@ test('NEGATIVE: a non-measurement discarding stderr is still allowed', () => {
 
 // ------------------------------------------------ `python -` interactive REPL
 // `python - <<'EOF'` that misses stdin becomes an interactive REPL and loops on
-// a traceback forever. Six occurrences in one session, three of them by agents
-// quoting the prohibition at the time — which is why this is a hook and not a
-// note. The POSITIVE cases below are the literal shapes that were run.
+// a traceback forever. It has recurred repeatedly in one session, including by
+// agents quoting the prohibition at the time — which is why this is a hook and
+// not a note. No count is asserted here: the hook header explains why, and the
+// itemised record is the project memory for this hazard.
+// The POSITIVE cases below are the literal shapes that were run.
 test('POSITIVE: the canonical heredoc is blocked', () => {
   assert.ok(has(`python - <<'EOF'\nprint(1)\nEOF`, 'python-dash-repl'));
 });
@@ -413,6 +415,60 @@ test('CONTROL: -c and -m still do NOT fire, even with options in front', () => {
   assert.equal(has(`python -u -c "print(1)"`, 'python-dash-repl'), false);
   assert.equal(has(`python -B -m pytest -q`, 'python-dash-repl'), false);
   assert.equal(has(`python -u script.py`, 'python-dash-repl'), false);
+});
+
+test('the -c/-m EXCLUSION has a witness — a trailing bare dash', () => {
+  // Found by review to have NONE: deleting the exclusion left the suite at
+  // 79/0, because the control above never reaches it — with no trailing dash,
+  // neither version matches. The discriminating input needs the dash present.
+  //
+  // `python -c "x" -` must NOT fire: `-c` means the interpreter reads its
+  // program from the argument, so stdin is never a REPL however the rest looks.
+  // WHAT MAKES THIS FAIL: remove the `(?!-[cm](?:\s|$))` lookahead.
+  assert.equal(has(`python -c "print(1)" -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -m mod -`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: an option run must not swallow the SCRIPT PATH', () => {
+  // A regression introduced by the option-run widening: the optional non-dash
+  // token was allowed after ANY option, so the script path was eaten and the
+  // trailing `-` (which belongs to the SCRIPT) read as the interpreter's.
+  // `python tools/fmt.py -` was already covered; the sibling WITH an option in
+  // front was not, so the break was silent.
+  // WHAT MAKES THIS FAIL: allow the non-dash token after any option.
+  assert.equal(has(`python -u tools/fmt.py -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -B setup.py -`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: -W and -X DO consume a word, and the dash after still fires', () => {
+  // The paired positive for the narrowing above — without it, restricting the
+  // arg-consuming set could be satisfied by removing the branch entirely.
+  assert.ok(has(`python -X dev - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -W ignore - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('the `<<-` TAB-STRIP has a witness — bash really runs the hazard', () => {
+  // `allowIndent` and both tab-strips were dead code under `.trim()` and were
+  // revived in round 9. Review found the revival had ZERO witness: two mutants
+  // survived 79/0 and BOTH install a SILENCE rather than a false positive —
+  // measured against real bash, the hazard EXECUTES after a tab-indented
+  // dash-form terminator. The suite contained no dash-form heredocs at all.
+  //
+  // Here the body's terminator is tab-indented under `<<-`, which bash accepts,
+  // so the heredoc really ends there and the `python -` on the next line is a
+  // real command.
+  // WHAT MAKES THIS FAIL: delete the `replace(/^\t+/, '')` in the body scan.
+  const cmd = `cat > temp/d.md <<-'MD'\nbody\n\tMD\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'a tab-indented dash-form terminator ends the heredoc, exposing the hazard');
+});
+
+test('CONTROL: a tab-indented terminator under PLAIN `<<` does NOT end it', () => {
+  // Pairs with the above: bash strips tabs only for the `<<-` form. Without
+  // this control the tab-strip could be applied unconditionally and still pass.
+  const cmd = `cat > temp/d.md <<'MD'\nbody\n\tMD\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'under plain `<<` a tab-indented lookalike is body, not the terminator');
 });
 
 test('NEGATIVE: an INDENTED delimiter lookalike must not end the heredoc', () => {

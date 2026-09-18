@@ -383,10 +383,13 @@ const RULES = [
     // processes -- usually after something unrelated gets killed for memory.
     //
     // This rule exists because KNOWING the rule demonstrably does not prevent
-    // it: six occurrences in one session, three by agents who were actively
-    // quoting the prohibition at the time, and one by the coordinator while
-    // writing a comment about a different trap. Per the global operating rules,
-    // automatic behaviour requires a hook -- memory only informs.
+    // it: it has recurred repeatedly in one session, including by agents who
+    // were actively quoting the prohibition at the time, by reviewers of this
+    // very rule, and by its own author. No total is asserted here — see the
+    // header; the itemised record is the project memory for this hazard, and
+    // this file cites it rather than duplicating a number that drifts.
+    // Per the global operating rules, automatic behaviour requires a hook --
+    // memory only informs.
     test: (raw) => {
       // Heredoc bodies first (see stripHeredocBodies), THEN quote masking.
       // Order matters: the delimiter itself is often quoted (`<<'EOF'`), and
@@ -414,12 +417,18 @@ const RULES = [
       //
       // Options are skipped EXCEPT `-c` and `-m`, which make the interpreter
       // read from their argument rather than from stdin and so cannot become a
-      // REPL. `-W`/`-X`-style options that take a separate word are covered by
-      // the optional non-dash token.
+      // REPL.
+      //
+      // ONLY `-W` AND `-X` CONSUME A SEPARATE WORD. An earlier version allowed
+      // an optional non-dash token after ANY option, which swallowed the SCRIPT
+      // PATH: `python -u tools/fmt.py -` and `python -B setup.py -` were newly
+      // DENIED, and the suite's explicit negative for the no-option sibling did
+      // not catch it because that fixture has no option in front. Widening the
+      // arg-consuming set to "any option" was the error.
       const CMD = new RegExp(
         '^\\s*(?:\\w+=\\S*\\s+)*(?:env\\s+(?:\\w+=\\S*\\s+)*)?' +
         '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
-        '(?:\\s+(?!-[cm](?:\\s|$))-\\S+(?:\\s+[^-\\s]\\S*)?)*' +
+        '(?:\\s+(?!-[cm](?:\\s|$))(?:-[WX]\\s+[^-\\s]\\S*|-\\S+))*' +
         '\\s+-(?=\\s|$|[<>&|])',
       );
 
