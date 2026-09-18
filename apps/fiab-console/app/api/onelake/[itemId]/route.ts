@@ -4,15 +4,17 @@
  *   DELETE /api/onelake/[itemId]
  *     body (optional JSON): {
  *       itemType?: string,                       // one of ONELAKE_TYPES; inferred when omitted
- *       adlsHints?: [{ container, path }]         // explicit ADLS folders to soft-delete
+ *       adlsHints?: [{ container, path }]         // narrows the derived folder set
  *     }
  *
  * Soft-delete = Cosmos state._recycled stamp + best-effort ADLS Gen2 (HNS) blob
  * soft-delete of the item's folders. The item then appears in the Recycle bin
  * (GET /api/onelake/recycle) and is recoverable until its retention window
- * elapses. When no adlsHints are supplied the route derives them from the item's
- * OneLake security roles (their container + concrete folder paths) — the same
- * folders the item's data-access is scoped to.
+ * elapses. The folders are ALWAYS derived from the item's own OneLake security
+ * roles (their container + concrete folder paths) — the same folders the item's
+ * data-access is scoped to. `adlsHints` is a narrowing filter over that derived
+ * set, not an independent list: an entry that does not name one of the item's
+ * own folders is dropped (see resolveAdlsHints).
  *
  * Azure-native only; Cosmos is the source of truth, ADLS soft-delete is the
  * recoverable backing. No Fabric/Power BI dependency.
@@ -63,6 +65,51 @@ async function deriveAdlsHints(itemId: string): Promise<Array<{ container: strin
   }
 }
 
+/**
+ * Canonical key for a container + path pair, normalised with the same normPath()
+ * deriveAdlsHints() applies to a role path — so a supplied `/Tables/orders/` and
+ * a derived `Tables/orders` in the same container compare equal.
+ */
+function hintKey(container: string, path: string): string {
+  return `${container}::${normPath(path)}`;
+}
+
+/**
+ * Resolve which ADLS folders this soft-delete may touch.
+ *
+ * `derived` is the item's own folder set from deriveAdlsHints(). `supplied` is
+ * the optional `adlsHints` array off the request body, and it may only NARROW
+ * that set: every supplied entry is looked up in the derived set by normalised
+ * container + path and dropped when it is not a member, so the resolved set is
+ * always a subset of the item's own folders. The pair carried forward is the
+ * DERIVED one, never the caller's string, so a differently-spelled-but-equal
+ * hint cannot change the path handed to the ADLS call.
+ *
+ * With no supplied array, an empty one, or no usable entries in it, the result
+ * is the plain derived set / empty — the behaviour the OneLake page relies on,
+ * since it sends `itemType` only.
+ */
+function resolveAdlsHints(
+  derived: Array<{ container: string; path: string }>,
+  supplied: unknown,
+): Array<{ container: string; path: string }> {
+  if (!Array.isArray(supplied) || supplied.length === 0) return derived;
+  const allowed = new Map(derived.map((h) => [hintKey(h.container, h.path), h]));
+  const out: Array<{ container: string; path: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of supplied as Array<{ container?: unknown; path?: unknown }>) {
+    const container = typeof raw?.container === 'string' ? raw.container : '';
+    const path = typeof raw?.path === 'string' ? raw.path : '';
+    if (!container || !path) continue;
+    const key = hintKey(container, path);
+    const match = allowed.get(key);
+    if (!match || seen.has(key)) continue;
+    seen.add(key);
+    out.push(match);
+  }
+  return out;
+}
+
 export const DELETE = withSession<{ itemId: string }>(async (req: NextRequest, { session: s, params }) => {
 
   const { itemId } = params;
@@ -101,9 +148,9 @@ export const DELETE = withSession<{ itemId: string }>(async (req: NextRequest, {
     itemType = found.itemType;
   }
 
-  const adlsHints = Array.isArray(body.adlsHints) && body.adlsHints.length
-    ? body.adlsHints.filter((h) => h?.container && h?.path)
-    : await deriveAdlsHints(itemId);
+  // The item's OWN folders are the only ones this delete may touch; a body
+  // `adlsHints` array narrows that derived set and nothing else.
+  const adlsHints = resolveAdlsHints(await deriveAdlsHints(itemId), body.adlsHints);
 
   const deletedBy = s.claims.upn || s.claims.email || s.claims.oid;
   const recycled = await softDeleteOwnedItem(itemId, itemType, s.claims.oid, deletedBy, adlsHints);
