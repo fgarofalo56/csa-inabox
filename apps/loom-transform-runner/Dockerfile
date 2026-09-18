@@ -32,11 +32,23 @@ FROM python:3.11-slim
 # established, and is itself the R7 overshoot it was correcting.
 #
 # What git says: `git log -S` for BOTH "prophylactic" and "dist-upgrade" on this
-# file returns the same commit, 38f4ac6f6e9 (2026-07-28). The word and the line
-# landed together, and the `perl-base` CRITICALs did not enter the Trivy database
-# until 2026-09-15 (apps/loom-migrate/Dockerfile records that date). So the
+# file returns the same INTRODUCING commit, 38f4ac6f6e9 (2026-07-28). (Each
+# returns several commits today — later ones move the word; it is the earliest
+# that matters, and it is shared.) The word and the line landed together, and
+# the `perl-base` CRITICALs were not gate-visible here until at least
+# 2026-09-15: the earliest RED build recorded for the sibling images is
+# 2026-09-15 (apps/loom-migrate/Dockerfile:24, #4547 — an OBSERVATION WINDOW,
+# not a database date; both gates run `ignore-unfixed: true`, so a CRITICAL only
+# becomes gate-visible once Debian publishes its fix). So the
 # original sentence was true of its date and went stale seven weeks later: a
 # dated record that lost its date, not an inverted causation.
+#
+# An earlier revision of THIS paragraph said the CVEs "did not enter the Trivy
+# database until 2026-09-15" and cited that same file for it. The file records
+# no such thing, nothing in this repo measured Trivy's database, and the claim
+# asserts an unestablished negative over the whole 2026-07-28 → 2026-09-14
+# window. An R7 overshoot inside the paragraph correcting an R7 overshoot; the
+# conclusion survives all readings, only the mechanism was invented.
 #
 # What IS established, measured 2026-09-17 (#4547): this image is
 # `FROM python:3.11-slim`, which resolved that day to debian 13.6 carrying the

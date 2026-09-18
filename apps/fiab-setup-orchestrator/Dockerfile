@@ -39,7 +39,10 @@ FROM python:3.12-slim AS base
 #      platform/runners/script-runner: `python:3.12-slim-bookworm`, with NO
 #      dist-upgrade of its own (measured 2026-09-18: 0 occurrences in that
 #      Dockerfile), built by full-app-deploy-commercial.yml under the same
-#      blocking Trivy gate. Its 0 is attributable to the base tag.
+#      blocking Trivy gate. Nothing in its Dockerfile clears an OS CVE and it
+#      passes that gate, so its clean scan is attributable to the base tag by
+#      ELIMINATION, not by direct measurement — the measured half is the
+#      dist-upgrade count, and that distinction is the whole point here.
 #      fiab-mcp-bridge was cited here as a second exemplar and should NOT be:
 #      its own Dockerfile:21-24 says in terms that "the leading dist-upgrade
 #      pulls the distro's security patches ahead of the pinned base tag", so its
