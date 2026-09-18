@@ -3,8 +3,16 @@
 > **Some of these have since been answered. The answers are in `DECISIONS.md`,
 > beside this file.** Decided there: **OP-3**, **OP-7**, **OP-8**, **OP-9 item
 > 2**, **OP-14**, and **OP-19(b)**. **OP-15** dissolved on measurement — its
-> premise was false and its row must not be acted on. Still carrying something
-> live: **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**, **OP-19(a)**.
+> premise was false and its row must not be acted on. **OP-19(a)** is already
+> done on the estate, out of band — its row must not be acted on either.
+>
+> **Still carrying something live — and this includes NARROWED rows, not just
+> LIVE ones:** **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**,
+> **OP-19(a)**'s IaC gap, and the *"Remaining decision"* on each of **OP-2**,
+> **OP-4**, **OP-16** and **OP-6**. A NARROWED verdict means part of the question
+> answered itself, not that the row is finished. **OP-4**'s remainder is the same
+> class as OP-14's — a cost-material opt-in owing a gate-registry entry
+> (**#4612**).
 >
 > Read `DECISIONS.md` § "Provenance" before relying on any of it: none of those
 > decisions has an artifact a reader can follow, because on this repository an
@@ -290,6 +298,11 @@ happened, and there is a new obstacle the question predates: the six most recent
 `schedule` — are **all `failure`**, already tracked as **#4448**. An attended
 dispatch into a red lane is unlikely to produce the receipt.
 
+*(No longer true at head: the next scheduled run, 2026-09-18T10:52:38Z, returned
+`success`. One green after six reds is a recovery, not a record — #4448 is still
+OPEN — but the lane is not currently red. The #3056 re-check the watch-list asks
+for below has also been done; its answer is in `DECISIONS.md` § "OP-13".)*
+
 The watch-list in the original ask is still worth carrying verbatim into
 whenever the window opens:
 
@@ -331,6 +344,16 @@ dissolved; what dissolved is the idea that a role grant addresses it.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
+**(a) is already done — do not perform it. See `DECISIONS.md` § "OP-19 (a)".**
+All three function definitions are disabled on the live estate, measured
+2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
+`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
+`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
+with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
+setting**, not the work of #4564, which is open and unmerged — so the mitigation
+holds but nothing in IaC re-asserts it. The ask text is kept below because the
+answer is only legible beside what was asked.
+
 **(a) Cheap mitigation, needn't wait for the removal PR.** Disable the two
 enabled function definitions on `func-secexp` (timer `0 0 6 * * *`) and
 `func-cpeval` (`0 0 7 * * *`). They are identical to their live ACA job crons
@@ -349,7 +372,11 @@ that `func-secexp`/`func-cpeval` *"DO hold enabled timers."* Function Apps are
 still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`,
 `monitor-ops-agent.bicep`, `scc-labels-function.bicep`), and
 `full-app-deploy-commercial.yml:1259` still looks up `func-cpeval-*` at deploy
-time. Nothing has disabled the duplicate timers.
+time. Nothing has disabled the duplicate timers. *(That last sentence was true
+when written and is **false at head** — the timers are disabled, out of band; see
+the note at the top of this row. Everything before it still holds, and the bicep
+sentences being accurate is exactly why the state is fragile: nothing in IaC
+asserts the disable, so nothing would notice it being undone.)*
 
 ---
 
