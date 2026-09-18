@@ -92,10 +92,20 @@
  *      is produced by the job running them on every execution. They are not
  *      counted as proof of kill power.
  *   3. THE COMPILE IS A REQUIRED CONTEXT AS OF 2026-09-18 — and this block said
- *      the opposite until then, while line 889 of this same file already said
- *      the new thing. `Bicep Params Compile` is now one of main's 17 required
- *      status checks (it was 15 before; the brain security-graph check was
- *      added in the same change). So a RED compile blocks an ORDINARY merge.
+ *      the opposite until then, while the R11 failure message near the bottom of
+ *      this same file (grep: "The compile IS a required status check") already
+ *      said the new thing. `Bicep Params Compile` is now one of main's 17
+ *      required status checks (it was 15 before; the brain security-graph check
+ *      was added in the same change). So a RED compile blocks an ORDINARY merge.
+ *
+ *      That cross-reference is deliberately a GREP, not a line number. The
+ *      revision that first wrote it cited "line 889" and, in the same commit,
+ *      added 12 lines above the thing it pointed at — so the citation was stale
+ *      before it was ever read, and pointed at a different real line. This file
+ *      is already indexed by line number from outside (the committed
+ *      security-graph artifact records its sink line numbers, and that required
+ *      context went red for exactly this reason). Do not add a third line-number
+ *      dependency pointing at itself.
  *
  *      IT DOES NOT MAKE THE PATH UNREACHABLE. `enforce_admins.enabled` is
  *      `false` on this repo and `--admin` merging is standing practice, so an

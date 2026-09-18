@@ -39,7 +39,7 @@ on:
       # harness excuses exactly those on a merged sha BECAUSE this push trigger
       # was path-filtered (tools/drain/gates.py, policy.json `push_event_runs`).
       # Widening it means a merge touching any .bicep/.bicepparam now really
-      # runs those four instead of being excused. That is the good direction —
+      # runs those five instead of being excused. That is the good direction —
       # fewer excuses, more measurement — but it is a change to a receipt's
       # accounting and is recorded here rather than discovered later.
       - '**/*.bicep'
@@ -49,15 +49,21 @@ on:
     branches: [main]
   # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
   # GITHUB_TOKEN and GitHub suppresses the `pull_request` trigger on it, so the
-  # four required contexts published here (Secret Scan, PowerShell Lint, Python
-  # Lint, Repo Hygiene) never ran and were replaced by synthetic statuses.
+  # required contexts published here never ran and were replaced by synthetic
+  # statuses. That set was FOUR when #3393 was fixed (Secret Scan, PowerShell
+  # Lint, Python Lint, Repo Hygiene); it is FIVE since 2026-09-18, when Bicep
+  # Params Compile became required.
   # `workflow_dispatch` is the documented exception GITHUB_TOKEN *may* trigger,
   # so release-please.yml dispatches this workflow against the release branch.
-  # None of those four jobs read PR context, and none of them `needs:` the
-  # `changes` job, so they behave identically under a dispatch.
+  # None of those five jobs read PR context, and none of them `needs:` the
+  # `changes` job, so they behave identically under a dispatch. Re-measured
+  # 2026-09-18 for all five, not extended from the original four by assumption:
+  # zero references to `github.event.pull_request.*`, `github.event.number`,
+  # `github.head_ref` or `github.base_ref` in any of the five job bodies.
   workflow_dispatch:
-  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene are
-  # REQUIRED contexts, and a merge group is gated on the SAME required set as a
+  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene /
+  # Bicep Params Compile are REQUIRED contexts, and a merge group is gated on
+  # the SAME required set as a
   # PR. A required context that never reports in a merge group does not fail the
   # group — it leaves it pending until the queue times out and ejects the PR, so
   # a missing trigger here would stall every merge in the repo.
@@ -65,16 +71,19 @@ on:
   # DELIBERATELY BARE — no `branches:`, no `paths:`. The `paths:` list above
   # belongs to `push:` only; inheriting a path filter here would reintroduce the
   # same stall by another route (a merge group touching no matching path would
-  # never produce the context). All four jobs are event-agnostic: none has a
+  # never produce the context). All five jobs are event-agnostic: none has a
   # job-level `if:`, none reads `github.event.pull_request.*`, and none `needs:`
   # the path-filtered `changes` job. They behave identically here.
   merge_group:
 
 concurrency:
-  # #3426 — per-SHA on push/dispatch. This lane publishes FOUR required
-  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan), and with
+  # #3426 — per-SHA on push/dispatch. This lane publishes FIVE required
+  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan, and —
+  # since 2026-09-18 — Bicep Params Compile), and with
   # a ref-keyed group + cancel-in-progress:true every merge cancelled the
   # previous commit's run: 4 of the last 30 main runs cancelled (2026-08-14).
+  # That 4-of-30 is a DATED measurement of the incident, not the context count;
+  # do not "correct" it to five.
   # A cancelled required check is an ABSENCE, not a pass. See
   # scripts/ci/check-required-lane-concurrency.mjs, which now enforces this.
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
