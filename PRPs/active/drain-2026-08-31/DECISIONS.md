@@ -326,8 +326,8 @@ another route, in which case four is short by one; or that line is unsourced, in
 which case OP-19(b) is not approved at all. See the OP-19(b) row below.
 
 That caveat was written at the OP-19(b) row as "resolve the provenance before
-anyone cites either count" and then **this headline cited the count flat**, 38
-lines above its own instruction — while the caveat was propagated to the PR
+anyone cites either count" and then **this headline cited the count flat**, far
+above its own instruction — while the caveat was propagated to the PR
 title, the PR body and `OPERATOR-QUESTIONS.md` and never back to the source. A
 reviewer found it in the file that issued the instruction. Fifth round, same
 class: the retraction reaches every surface except the one being read as
@@ -533,6 +533,14 @@ answer that looks authoritative and changes nothing.
 
 The second generalisable form, learned the expensive way in this document:
 **retracting a claim at its headline does not retract it at its sites.** This
-section stated the corrected count at line 321 and the old one at line 463, in
+section stated the corrected count in its headline and the old one far below, in
 one commit, and a reviewer had to find the survivor. Grep for the retracted
-CLAIM, not for the place you remember writing it.
+CLAIM, not for the place you remember writing it — and grep it MULTILINE, across
+blockquote markers: six escapes on this PR went unfound by line-anchored sweeps,
+including one where "No such / decision was made" wrapped inside a `>` block.
+
+(An earlier revision of this very sentence cited "line 321" and "line 463". Both
+were wrong — off by four on arrival and carried through four rounds — in the
+sentence stating the lesson. Line numbers into a document that is being edited
+are invalidated by the next edit above them, including the edit that writes
+them.)

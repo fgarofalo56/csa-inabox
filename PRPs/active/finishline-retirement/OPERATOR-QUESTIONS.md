@@ -37,9 +37,13 @@
 > | **OP-7** / OP-9 item 6 Esri license | **DECLINED** — GEO-2/3/4 stay bring-your-own-license |
 > | **OP-8** / OP-9 item 4 visual captures | agent-captured in a real browser, operator privacy-reviews before anything publishes |
 >
-> **OP-14 was NOT one of them.** An earlier revision of DECISIONS.md filed it as
-> *"decided: keep the 5000/day ceiling — operator, this session"*. No such
-> decision was made. The row stands as asked.
+> **OP-14 was NOT one of the four.** An earlier revision of DECISIONS.md filed
+> it as *"decided: keep the 5000/day ceiling — operator, this session"*, and an
+> earlier revision of THIS line said "No such decision was made". Neither is
+> supportable: what is checkable is that **no decision is RECORDED** for OP-14 —
+> DECISIONS.md carries exactly four `> **Decision:**` blocks and none is OP-14's.
+> Absence from a file is absence of a record, not proof about what was said. The
+> row stands as asked.
 >
 > The most useful row is **OP-15**, which asked whether to grant Tag Contributor
 > so ACR firewall leases stop running unleased. Both halves of its premise were
@@ -414,9 +418,11 @@ still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`
 time.
 
 **Superseded, 2026-09-18.** This row ended "Nothing has disabled the duplicate
-timers." That was true when written and is now false, and it was falsified by
-this very PR's own measurement earlier in this file (grep: "AzureWebJobs").
-Measured read-only in DMLZ:
+timers." That was true when written and is now false, falsified by this PR's own
+live-estate measurement, which follows immediately below rather than "earlier in
+this file" — an earlier revision of this sentence pointed backwards and anchored
+on a string that occurs only here and five lines later. Measured read-only in
+DMLZ:
 `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
 `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
 `copilotEvaluatorHttp` all report `isDisabled=true` with
