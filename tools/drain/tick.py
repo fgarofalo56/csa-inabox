@@ -891,6 +891,32 @@ def _has_line_break(text: str) -> bool:
     return "".join(text.splitlines()) != text
 
 
+def _as_channel_would(text: str) -> str:
+    """Apply the newline translation `sh()`'s pipe ALREADY applied to `err`.
+
+    THE ROUND-13 BLOCKER, and the reason three rounds of careful parse-hardening
+    walked straight past it: the defect was never in the parse, it was in the
+    CHANNEL. `sh()` runs `subprocess.run(..., text=True)`, and text mode means
+    UNIVERSAL NEWLINES -- Python wraps the pipe in a `TextIOWrapper` with
+    `newline=None`, which translates CRLF and lone CR to LF on the way in. So by
+    the time `gh`'s stderr reaches any of this code, it contains no CR at all.
+
+    The TITLES did not come through that channel. They arrive as JSON string
+    values from `--json title`, bytes intact. A title carrying a CR therefore
+    cannot match its own copy inside `err` -- `err` has an LF where the title
+    has a CR -- and `err.replace(title, ...)` silently does nothing. The
+    neutraliser was a no-op on exactly the separator a caller is most likely to
+    paste, while every test in the suite passed, because no test took `err` from
+    a real capture.
+
+    WHAT VALUE MAKES THIS FAIL: a title containing `"\\r"`. Before this
+    translation it is returned unchanged and the caller's replace misses; after
+    it, the CR reads as the LF the channel actually delivered. `"\\r\\n"` is
+    handled first so a CRLF collapses to ONE LF rather than two.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _producer_lines(err: str) -> list[str]:
     """Split `err` the way `gh` JOINED it, not the way Python can split it.
 
@@ -908,14 +934,23 @@ def _producer_lines(err: str) -> list[str]:
     the extra separators do not delimit anything the producer meant, so every
     one of them is a place the data can pretend to be structure.
 
-    CRLF IS STILL HANDLED, and that is why this is not simply `split("\\n")`,
-    which is what `splitlines()` was chosen over in round 12 and rightly so: a
-    bare LF split leaves a `\\r` glued to the end of the line, and the
-    already-closed arm ends in a SUFFIX test that then fails silently
-    (`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`).
-    `removesuffix` takes off exactly the one CR a CRLF terminator contributes
-    -- so a CR *inside* the title is now an ordinary character rather than a
-    line boundary, which is the whole point.
+    CRLF, AND THE DISCLOSURE THAT GOES WITH IT. `removesuffix("\\r")` takes off
+    exactly the one CR a CRLF terminator contributes, so a CR *inside* a title
+    would be an ordinary character rather than a line boundary. That is the
+    right shape -- but through `sh()` it is UNREACHABLE, and saying so is the
+    point. `sh()` reads the pipe in text mode, i.e. universal newlines, so
+    Python has already translated every CRLF and every lone CR to LF before this
+    function sees `err`; there is no CR left to strip. See `_as_channel_would`.
+
+    So: this `removesuffix` is DEFENSIVE, not coverage. No input reachable
+    through `sh()` distinguishes it from a bare `split("\\n")`, which makes it an
+    equivalent mutant under any arm that feeds `err` from the real producer, and
+    it is not counted toward the claim that CRLF is handled
+    (`.claude/rules/assertion-design.md` "done" #5). It is kept because a future
+    caller passing `newline=""`, or reading a file, or capturing bytes and
+    decoding by hand, WOULD deliver a CR -- and then it is load-bearing. An arm
+    that pins it must construct `err` directly and say that it does, rather than
+    claiming to exercise the producer.
     """
     return [line.removesuffix("\r") for line in err.split("\n")]
 
@@ -953,12 +988,28 @@ def _without_title_line_breaks(err: str, *titles: str) -> str:
       external service and called itself "title-proof by construction".
     - **A title CHANGED between this run's reads and gh's render.** Both titles
       this run observed are neutralised -- the pre-close read's and the
-      read-back's -- so defeating it needs the title to carry a literal LF at
-      the instant `gh` rendered its record while carrying none at EITHER read,
-      i.e. two edits inside the close window. That is a narrower residual, not
-      an absent one, and it is stated as a residual.
+      read-back's -- so defeating it needs the title to carry a break at the
+      instant `gh` rendered its record while carrying none at EITHER read. An
+      earlier revision of this paragraph said that took TWO edits inside the
+      close window; measured, ONE suffices, because the two titles are replaced
+      against a single `err` and the ordering below is what decides whether the
+      second one still matches. The count was wrong; the residual is real and is
+      stated as a residual.
     """
-    for title in titles:
+    # TRANSLATE FIRST. `err` arrived through a universal-newlines pipe and the
+    # titles did not -- see `_as_channel_would`. Comparing untranslated titles
+    # against translated `err` is the round-13 blocker.
+    #
+    # LONGEST FIRST, and de-duplicated. The two titles are the pre-close read
+    # and the read-back. If one is a SUBSTRING of the other, replacing the
+    # shorter first consumes the text the longer needed to match, and the longer
+    # title survives un-neutralised -- so a single title edit inside the close
+    # window forges the verdict with BOTH titles known and both passed. Argument
+    # order is the caller's accident; length is a property of the data.
+    # WHAT VALUE MAKES THIS FAIL: titles `("a\\nb", "a\\nb c")` against an `err`
+    # containing `"a\nb c"`. In argument order the first replace rewrites the
+    # prefix and the second never matches; longest-first neutralises both.
+    for title in sorted({_as_channel_would(t) for t in titles}, key=len, reverse=True):
         if _has_line_break(title):
             err = err.replace(title, " ".join(title.splitlines()))
     return err

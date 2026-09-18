@@ -2725,6 +2725,17 @@ def test_the_close_outcome_reads_lines_the_way_gh_wrote_them():
     THE VALUES THAT BREAK IT: `err.splitlines()` (GH30) makes the first
     assertion red; dropping `removesuffix("\\r")` (GH32) makes the CRLF
     assertion red. They are opposite mistakes and the pair pins both.
+
+    DISCLOSURE, because the distinction cost round 13 a blocker. Every `err`
+    here is CONSTRUCTED. The last two assertions feed shapes that `sh()` CANNOT
+    DELIVER: it reads the pipe in text mode, so Python translates CRLF and lone
+    CR to LF before any caller sees them, and no CR reaches `_producer_lines`
+    through the real producer at all. These two arms are unit tests of the
+    helper against a hypothetical caller, NOT evidence that the producer path
+    handles CRLF, and GH32 being "killed" by them says only that the helper
+    still behaves as written. The channel itself is pinned by
+    `test_gh_stderr_reaches_the_classifier_with_cr_already_translated_to_lf`,
+    which is the arm that takes `err` from a real capture.
     """
     # A non-LF separator is CONTENT, not structure: one line, not two.
     assert tick._producer_lines("a\u2028b\n") == ["a\u2028b", ""]
@@ -2737,6 +2748,94 @@ def test_the_close_outcome_reads_lines_the_way_gh_wrote_them():
     # ... but a CR INSIDE the line is left alone, which is the difference
     # between undoing a terminator and rewriting content.
     assert tick._producer_lines("a\rb\r\n") == ["a\rb", ""]
+
+
+def test_gh_stderr_reaches_the_classifier_with_cr_already_translated_to_lf():
+    """THE CHANNEL, pinned from a REAL capture instead of a constructed string.
+
+    THE GAP THAT LET THE ROUND-13 BLOCKER THROUGH. Every other arm in this file
+    builds `err` by hand, so every one of them describes a producer that does
+    not exist. Three rounds hardened the PARSE while the defect sat in the
+    CHANNEL: `sh()` passes `text=True`, Python wraps the pipe with
+    `newline=None`, and universal-newline translation turns CRLF and lone CR
+    into LF before any caller sees a byte of it. The titles arrive by a
+    different route (`--json title`) with their bytes intact, so a CR-bearing
+    title could never match its own copy in `err` -- and no test could notice,
+    because no test asked the real channel what it delivers.
+
+    THE VALUE THAT BREAKS THIS: `sh()` switching to `newline=""`, to
+    `universal_newlines=False`, or to capturing bytes and decoding by hand. Any
+    of those makes `err` carry a CR again, which simultaneously invalidates
+    `_as_channel_would` (it would then over-translate) and promotes
+    `_producer_lines`'s `removesuffix("\\r")` from defensive to load-bearing.
+    This arm is the one that would go red, and it is the reason both of those
+    docstrings point at it by name.
+    """
+    # Write BYTES from the child so the child's own text layer cannot translate
+    # anything on the way out -- otherwise this would measure the wrong end.
+    prog = (
+        "import sys; sys.stderr.buffer.write(b'A\\rB\\r\\nC\\n');"
+        " sys.stderr.buffer.flush()"
+    )
+    rc, _out, err = tick.sh([sys.executable, "-c", prog])
+
+    assert rc == 0, f"probe child failed: rc={rc} err={err!r}"
+    assert "\r" not in err, (
+        "sh() no longer translates CR to LF. _as_channel_would now "
+        "over-translates the title, and _producer_lines's removesuffix is "
+        f"load-bearing rather than defensive. Captured: {err!r}"
+    )
+    # Exact, not just "no CR": a lone CR becomes ONE LF and a CRLF becomes ONE
+    # LF, so three written line boundaries arrive as three.
+    assert err == "A\nB\nC\n", repr(err)
+
+
+def test_a_cr_bearing_title_is_neutralised_against_the_translated_err():
+    """A CR in the title must be matched as the LF the channel actually handed us.
+
+    ROUND 13'S FIRST BLOCKER, end to end at the helper. The title comes from
+    JSON with a real CR; `err` comes from the pipe with that CR already an LF.
+    Comparing the two untranslated is a replace that cannot match, and the
+    neutraliser silently does nothing on the separator a caller is most likely
+    to paste.
+
+    THE VALUE THAT BREAKS IT: deleting the `_as_channel_would` call from
+    `_without_title_line_breaks`. The title then still carries `\\r`, does not
+    occur in `err`, and the surviving LF leaves the record split in two.
+    """
+    title_from_json = "bug\rfix"
+    # `err` as the CHANNEL delivers it -- the same title, CR already LF.
+    err = "issue #1 (" + title_from_json.replace("\r", "\n") + ") closed\n"
+
+    cleaned = tick._without_title_line_breaks(err, title_from_json)
+
+    assert cleaned == "issue #1 (bug fix) closed\n", repr(cleaned)
+    assert tick._producer_lines(cleaned) == ["issue #1 (bug fix) closed", ""]
+
+
+def test_a_substring_title_cannot_shadow_the_longer_one():
+    """Replace LONGEST FIRST: argument order is the caller's accident.
+
+    ROUND 13'S SECOND BLOCKER. The two titles are the pre-close read and the
+    read-back, and one title edit inside the close window is enough to make one
+    a prefix of the other. Replacing the shorter first consumes the text the
+    longer needed to match, so the longer survives un-neutralised and its break
+    still splits the record.
+
+    THE VALUE THAT BREAKS IT: iterating `titles` in argument order. With the
+    fixture below that leaves `"x y\\nz"` -- the break before `z` survives,
+    because the short replace already destroyed the long one's match.
+    """
+    short = "x\ny"
+    longer = "x\ny\nz"
+    err = "issue #1 (" + longer + ") closed\n"
+
+    # Passed in the LOSING order on purpose -- this is the order the call site
+    # at the closer uses (pre-close read first, read-back second).
+    cleaned = tick._without_title_line_breaks(err, short, longer)
+
+    assert cleaned == "issue #1 (x y z) closed\n", repr(cleaned)
+    assert tick._producer_lines(cleaned) == ["issue #1 (x y z) closed", ""]
 
 
 def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
