@@ -1637,6 +1637,14 @@ jobs:
             # non-objects is not a job collection, so it errors like any other
             # unparseable listing. An EMPTY array still passes (`any` over
             # nothing is false), because an empty page is legitimate.
+            # `$n` below is a JQ variable bound by `--arg n`, not a shell one,
+            # so the single quotes are REQUIRED. shellcheck recognises `jq` and
+            # knows its argument is a program; it does not recognise
+            # `jq_defused`, so the wrapper costs one SC2016 directive at each
+            # call site. That is the whole cost of routing jq's own stderr
+            # through defuse_cmds, and it is paid at the SITE rather than by
+            # widening the actionlint ratchet baseline.
+            # shellcheck disable=SC2016
             if ! PAGE_COUNTS=$(jq_defused -er --arg n "$JOB" '
                    if (.value | type) != "array" then error("no .value array")
                    elif (.value | map(type) | any(. != "object")) then error("not a job collection")
@@ -1803,6 +1811,9 @@ jobs:
           # nothing, which deploy-integrity R6 forbids in those words. Closing
           # a finding at the LABEL and not at every SITE is the specific error;
           # this is the site.
+          # `$ov`/`$ovn` below are JQ variables bound by `as $ov` / `as $ovn`,
+          # not shell ones — same reason as the listing jq above.
+          # shellcheck disable=SC2016
           if ! jq_defused -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
                   {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
                   {name:"COPILOT_EVAL_SURFACES",value:""},
