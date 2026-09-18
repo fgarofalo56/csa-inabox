@@ -16,7 +16,7 @@
 > both carries a decision and has four items nobody answered.
 >
 > Earlier revisions claimed **seven dissolved**, then **two**. Seven was reached
-> by counting OP-19's two asks and OP-9's items as separate rows, which line 61
+> by counting OP-19's two asks and OP-9's items as separate rows, which line 91
 > of this very file forbids. Two counted OP-11, which is implemented in the
 > bootstrap script but NOT in `entra-app-registration.bicep` — one of the two
 > creators issue 2678 names. The four asked and answered:
@@ -43,7 +43,13 @@
 > `deploy-integrity.md` R4 greenfield remains **unverified, not working**; OP-8's
 > 159 captures stood at 0 published as of the 2026-08-06 audit and have not been
 > re-measured since; and OP-19(a)'s timers are disabled only by an out-of-band
-> app setting that a bicep re-apply would drop.
+> app setting, which nothing in IaC re-asserts. An earlier revision of this line
+> said "a bicep re-apply would drop" it — that mechanism was retracted in
+> `DECISIONS.md` and survived here, one file over, in the same commit. It cannot
+> operate: nothing in `platform/fiab/bicep` declares `func-secexp-*` or
+> `func-cpeval-*`, and nothing deploys in Complete mode, so an incremental apply
+> cannot touch an undeclared resource. The real exposure is the mirror — those
+> hosts sit outside IaC, so no gate would notice the disable being undone.
 
 The FINISHLINE harness (`.harness/`) carried an `operator_queue` of **19
 decisions**. None has been answered since **2026-08-06**. The harness is being
@@ -386,7 +392,18 @@ that `func-secexp`/`func-cpeval` *"DO hold enabled timers."* Function Apps are
 still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`,
 `monitor-ops-agent.bicep`, `scc-labels-function.bicep`), and
 `full-app-deploy-commercial.yml:1259` still looks up `func-cpeval-*` at deploy
-time. Nothing has disabled the duplicate timers.
+time.
+
+**Superseded, 2026-09-18.** This row ended "Nothing has disabled the duplicate
+timers." That was true when written and is now false, and it was falsified by
+this very PR's own measurement 345 lines above. Measured read-only in DMLZ:
+`func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
+`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
+`copilotEvaluatorHttp` all report `isDisabled=true` with
+`AzureWebJobs.<fn>.Disabled=true`. The disabling is an out-of-band app setting,
+NOT the work of PR #4564, which is open and unmerged — and the bicep sentences
+above remain accurate, which is exactly why the state is fragile: nothing in IaC
+asserts the disable, so nothing would notice it being undone.
 
 ---
 
