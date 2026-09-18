@@ -96,17 +96,26 @@
 #
 # Audited 2026-09-17 across the WHOLE file rather than at the two reported sites,
 # by construct rather than by line number (a line number in this header goes
-# stale the moment this header is edited — it did, mid-fix):
+# stale the moment this header is edited — it did, mid-fix).
 #
-#   5 command substitutions in executable code
+# RE-MEASURED 2026-09-18 after the corroborating `show` landed. An earlier
+# revision of this header said 5 and 8; it said so correctly WHEN WRITTEN and
+# then the file grew. A bare count in a header is a claim with no owner, so the
+# population is enumerated below and the count is derived from it — check the
+# ROW SET, not the number, and re-run the scoped measurement rather than a raw
+# grep (raw returns 17 and 13 because it counts this prose).
+#
+#   8 command substitutions in executable code
 #       CLOUD=   `if !` guarded   <- WAS BARE; this is the fix
 #       LISTED=  `if !` guarded
+#       SHOW_ERR= `if` guarded    <- ADDED 2026-09-18 with the corroboration
 #       VAL=     `if !` guarded
-#       SHOWN=   `if !` guarded
-#       the `$([[ $APPLY -eq 1 ]] && echo apply || echo verify)` inside the
-#         boundary echo — safe because the substitution sits in an ARGUMENT of
-#         `echo`, and a command substitution in argument position never carries
-#         its status to errexit. The reason is NOT that the `||` makes the list
+#       SHOWN=   `if !` guarded, twice (the read and the post-write re-read)
+#       TWO in ARGUMENT position, inside `echo` — the boundary echo's
+#         `$([[ $APPLY -eq 1 ]] && echo apply || echo verify)` and the UNKNOWN
+#         branch's `$(printf … | tr | cut)` that truncates ARM's message. Safe
+#         because a command substitution in argument position never carries its
+#         status to errexit. The reason is NOT that the `||` makes the list
 #         total: an earlier revision of this header said that and it is false by
 #         measurement — `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-`
 #         returns 1, because with the descriptor closed BOTH arms fail. Against
@@ -118,10 +127,10 @@
 #       `appsettings set`, guarded by `&& ! az` in an `if` condition
 #                                     <- WAS BARE; this is the other half
 #   0 bare `az` at line start (`grep -cE '^[[:space:]]*az '` == 0)
-#   8 arithmetic expansions `$((…))`, measured NOT to carry a command status —
+#   11 arithmetic expansions `$((…))`, measured NOT to carry a command status —
 #       including the zero-valued `resolved=$((0))` — against a negative control
 #       (`V="$(false)"`) that did abort, so the zero is a result and not a
-#       blind probe
+#       blind probe. Three were added with the corroboration branch.
 #   1 `[[ … ]] && APPLY=1`, measured safe: a short-circuited AND-list mid-script
 #       does not trip errexit
 #
@@ -221,20 +230,38 @@ for t in "${TARGETS[@]}"; do
     # says at :41-45 is unestablished until the lane's first run.
     #
     # So corroborate absence with a DIRECT read, where ARM distinguishes the two
-    # for us: ResourceNotFound is an absence, AuthorizationFailed/Forbidden is a
-    # blindness (csa_loom_count_is_an_oracle_when_caller_picks_scope — 404, not
+    # for us (csa_loom_count_is_an_oracle_when_caller_picks_scope — 404, not
     # 403). A `show` that SUCCEEDS proves the list was filtered and the host is
     # present, which is the third outcome and must not be silently dropped.
-    SHOW_ERR=""
-    if SHOW_ERR="$(az functionapp show -n "$APP" -g "$RG" --subscription "$SUB" \
-                     -o none 2>&1)"; then
+    #
+    # KEYED ON THE EXIT CODE FIRST, prose second. `az` exits 3 for
+    # resource-not-found, which is a contract; the message text is a third
+    # party's prose that can be reworded or localised. An earlier revision
+    # matched prose ONLY, which fails closed — but it fails closed into the
+    # PERMANENTLY RED state, because once the OP-19 deletes land every target
+    # depends on that match to reach GONE. The exit code keeps the terminal good
+    # state reachable; the prose match stays as a fallback for an az that
+    # reports absence some other way.
+    SHOW_ERR=""; SHOW_RC=0
+    SHOW_ERR="$(az functionapp show -n "$APP" -g "$RG" --subscription "$SUB" -o none 2>&1)" \
+      || SHOW_RC=$?
+    SHOW_TAIL="$(printf '%s' "$SHOW_ERR" | tr '\n' ' ' | cut -c1-240)"
+    if [ "$SHOW_RC" -eq 0 ]; then
       echo "  WARN     ${APP}/${FN}: the host listing did not contain it, but a direct read FOUND it — the listing was incomplete (RBAC-filtered or paged). Treating the host as PRESENT and continuing to read its definition." >&2
-    elif printf '%s' "$SHOW_ERR" | grep -qiE 'ResourceNotFound|was not found|could not be found'; then
-      echo "  GONE     ${APP}/${FN}: absent from the listing AND a direct read returns ResourceNotFound — the double-execution hazard is retired by teardown."
+    elif [ "$SHOW_RC" -eq 3 ] \
+         || printf '%s' "$SHOW_ERR" | grep -qiE 'ResourceNotFound|was not found|could not be found'; then
+      echo "  GONE     ${APP}/${FN}: absent from the listing AND a direct read reports the resource does not exist (az rc=${SHOW_RC}) — the double-execution hazard is retired by teardown."
       gone=$((gone + 1))
       continue
+    elif printf '%s' "$SHOW_ERR" | grep -qiE 'AuthorizationFailed|does not have authorization|Forbidden|\(403\)'; then
+      # R6: name the role AND the scope — but only where a PERMISSION failure was
+      # actually established. An earlier revision printed this remediation on
+      # EVERY non-404, which asserts a cause the code had not determined (R7).
+      echo "  UNKNOWN  ${APP}/${FN}: absent from the listing, and the direct read was DENIED — this is blindness, not deletion. Grant the running identity Reader on ${RG} (subscription ${SUB}) and re-run. ARM said: ${SHOW_TAIL}" >&2
+      unknown=$((unknown + 1))
+      continue
     else
-      echo "  UNKNOWN  ${APP}/${FN}: absent from the listing, and a direct read did NOT establish absence — it failed for another reason, so this is blindness, not deletion. Grant the running identity Reader on ${RG} (subscription ${SUB}) and re-run. ARM said: $(printf '%s' "$SHOW_ERR" | tr '\n' ' ' | cut -c1-240)" >&2
+      echo "  UNKNOWN  ${APP}/${FN}: absent from the listing, and a direct read did NOT establish absence — it failed with az rc=${SHOW_RC} for a reason this script has not classified, so it is neither a deletion nor a confirmed permission problem. Read the message before assuming either. ARM said: ${SHOW_TAIL}" >&2
       unknown=$((unknown + 1))
       continue
     fi

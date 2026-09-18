@@ -64,13 +64,17 @@ case "\$*" in
       if [ "\$n" -ge "\${AZ_SHOW_TRUE_FROM:-999}" ]; then emit "true"; else emit "false"; fi
       exit 0 ;;
   *"functionapp show"*)
-      # The HOST-level read used to corroborate an empty listing. ARM
-      # distinguishes absence from blindness here and the script keys on that:
-      # ResourceNotFound is a deletion, anything else is not.
+      # The HOST-level read used to corroborate an empty listing. The script
+      # keys on az's EXIT CODE first (3 = resource-not-found, a contract) and on
+      # the message text only as a fallback, so the shim models both — including
+      # an az whose prose does NOT match, which is what wording drift or a
+      # localised CLI looks like.
       case "\${AZ_SHOW_APP:-found}" in
         found)     exit 0 ;;
         notfound)  echo "(ResourceNotFound) The Resource 'Microsoft.Web/sites/func-secexp-k6mvh5sm6z7do' under resource group 'rg-csa-loom-admin-centralus' was not found." >&2; exit 3 ;;
-        forbidden) echo "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Web/sites/read' over scope." >&2; exit 3 ;;
+        notfound_rc_only) echo "la ressource est introuvable" >&2; exit 3 ;;
+        forbidden) echo "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Web/sites/read' over scope." >&2; exit 1 ;;
+        other)     echo "(ServiceUnavailable) the service is temporarily unavailable" >&2; exit 1 ;;
       esac ;;
 esac
 echo "shim: unhandled az invocation: $*" >&2
@@ -163,15 +167,73 @@ test('an EMPTY listing whose host IS found means the listing was incomplete, not
   // paged, the host exists, and the script must go on to read its definition
   // rather than scoring the target at all on the strength of the listing.
   //
-  // WHAT VALUE MAKES THIS FAIL: treating a successful `show` as absence, or
-  // `continue`-ing past the definition read. The setting is 'true' here, so a
-  // correct run reaches the ENABLED hazard; a short-circuit reports neither.
+  // WHAT VALUE MAKES THIS FAIL: a `continue` inserted after the WARN echo, so
+  // the target is dropped instead of scored. Measured on review: the absence
+  // assertions below do NOT catch that — the mutant survived 10/10 — because
+  // "no GONE" and "warning present" are both still true of a dropped target.
+  // The ENABLED assertion is what kills it, and it is the reason this arm is
+  // coverage rather than decoration (`assertion-design.md` "done" #4: an
+  // absence-only assertion is satisfied by deleting the feature).
+  //
+  // `AZ_SETTING_VALUE: 'false'` means `AzureWebJobs.<fn>.Disabled=false`, i.e.
+  // the timer is NOT disabled — so a correct run reaches the ENABLED hazard.
+  // A dropped target reaches nothing, and `resolved=$((ok+gone+enabled))` then
+  // ignores a live host entirely.
   const dir = makeShimDir();
   try {
     const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'found', AZ_SETTING_VALUE: 'false' }, dir);
     const all = r.stdout + r.stderr;
     assert.doesNotMatch(all, /GONE/, 'a host a direct read FOUND is not gone');
     assert.match(all, /listing was incomplete/i, `expected the incomplete-listing warning, got:\n${all}`);
+    assert.match(all, /ENABLED/, (
+      'the run must go on to SCORE the target, not just warn about the listing — '
+      + `a dropped target is counted by nothing at all:\n${all}`
+    ));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a reworded az still reports GONE, because the EXIT CODE is the oracle', () => {
+  // The prose match alone fails closed — but it fails closed INTO THE
+  // PERMANENTLY RED state: once the OP-19 deletes land, every target depends on
+  // reaching GONE, so a reworded or localised `az` would make the terminal good
+  // state unreachable forever. az exits 3 for resource-not-found and that is a
+  // contract, so it is checked first.
+  //
+  // WHAT VALUE MAKES THIS FAIL: dropping the `[ "$SHOW_RC" -eq 3 ]` arm and
+  // keeping only the grep. This fixture's message matches no English pattern.
+  const dir = makeShimDir();
+  try {
+    const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'notfound_rc_only' }, dir);
+    const all = r.stdout + r.stderr;
+    assert.match(all, /GONE/, `rc=3 must establish absence on its own:\n${all}`);
+    assert.equal(r.status, 0, `a retired host is the terminal GOOD state:\n${all}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unclassified failure does NOT print a permission remediation it never established', () => {
+  // R7. An earlier revision printed "Grant the running identity Reader on <RG>"
+  // on EVERY non-404 — asserting a cause the code had not determined. A 503 is
+  // not a permission problem and saying so sends the operator to the wrong fix.
+  //
+  // WHAT VALUE MAKES THIS FAIL: collapsing the AuthorizationFailed arm and the
+  // catch-all back into one branch. The Reader string then appears here too.
+  const dir = makeShimDir();
+  try {
+    const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'other' }, dir);
+    const all = r.stdout + r.stderr;
+    assert.match(all, /UNKNOWN/, `an unclassified failure is UNKNOWN:\n${all}`);
+    assert.doesNotMatch(all, /GONE/, 'an unclassified failure is never a deletion');
+    assert.doesNotMatch(all, /Grant the running identity Reader/, (
+      `R7: a permission remediation was printed for a failure that was not a `
+      + `permission failure:\n${all}`
+    ));
+    // Paired positive: it must still say something actionable rather than going
+    // quiet — the absence assertion above is satisfied by printing nothing.
+    assert.match(all, /has not classified/, 'the message must name its own uncertainty');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

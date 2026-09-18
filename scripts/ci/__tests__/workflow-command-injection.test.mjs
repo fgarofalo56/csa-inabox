@@ -448,7 +448,16 @@ test('reachability: EVERY response-derived sink in the step is defused, not just
   assert.deepEqual(rawPublished, [], 'a response-derived value reaches a published line without flatten/defuse_cmds');
 
   // --- (b) $EXEC is published only AFTER it has been flattened.
-  const flattenExec = lines.findIndex((r) => /^EXEC="\$\(printf .* \| flatten\)"$/.test(r.t));
+  // The anchor accepts BOTH the bare assignment and the `if !`-guarded form.
+  // Round 9 wrapped this substitution to stop it dying at the assignment under
+  // errexit, and that broke the old exact-shape anchor — a hardening change
+  // silently retiring an older arm's witness, which is a defect class this repo
+  // has paid for. Widened deliberately, and NOT into uselessness: the pattern
+  // still requires `printf`, the pipe, and `flatten` by name, so deleting the
+  // flatten (the thing this arm exists to notice) still fails. Verified in both
+  // directions when it was widened.
+  const flattenExec = lines.findIndex((r) =>
+    /^(?:if ! )?EXEC="\$\(printf .* \| flatten\)"(?:; then)?$/.test(r.t));
   assert.ok(flattenExec >= 0, 'the EXEC flatten is gone — $EXEC now reaches the notice and the job summary raw');
   const execEarly = published
     .filter((r) => /\$\{?EXEC\b/.test(r.t) && lines.indexOf(r) < flattenExec)

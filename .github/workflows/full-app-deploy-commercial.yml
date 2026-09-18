@@ -1789,7 +1789,7 @@ jobs:
           # The two are now genuinely distinguished, because they are different
           # failures and the operator needs different things from each.
           if ! COUNT=$(jq_defused '(.properties.template.containers // []) | length' job.json); then
-            echo "::error::Could not PARSE the job GET for $JOB — jq failed on job.json, so the container list was never read. That is a malformed or truncated response body, NOT an empty container list; this run DID establish which, and it is the former. Retry the step; if it repeats, the ARM response itself is bad. No execution was started."
+            echo "::error::Could not PARSE the job GET for $JOB — the JSON parse of job.json failed, so the container list was never read. That is a malformed or truncated response body, NOT an empty container list; this run DID establish which, and it is the former. Retry the step; if it repeats, the ARM response itself is bad. No execution was started."
             exit 1
           fi
           # Still load-bearing after the guard above: on a 200-with-EMPTY body jq
@@ -1890,7 +1890,15 @@ jobs:
           # it raw and a `.name` of "exec-1\n::add-mask::…" started a line with
           # an injected command on the SUCCESS path, where nothing looks wrong.
           # Flatten before it reaches either the annotation or the job summary.
-          EXEC="$(printf '%s' "$EXEC" | flatten)"
+          # Guarded for the same reason as the COUNT read above: a bare
+          # `VAR="$(cmd | cmd)"` under `set -euo pipefail` dies AT THE
+          # ASSIGNMENT, so any message below it never prints. Review found this
+          # one still bare after the COUNT site was fixed — four of five closed,
+          # again, at a different address.
+          if ! EXEC="$(printf '%s' "$EXEC" | flatten)"; then
+            echo "::error::Could not flatten the execution name for $JOB before emitting it. The start call itself SUCCEEDED — an execution may well be running — but its name could not be made safe to print, so it is deliberately not echoed. Check the job's executions in the portal rather than trusting this step's output."
+            exit 1
+          fi
           # `// "unknown"` covers a MISSING key, not an EMPTY body: on an empty
           # start.json jq emits nothing and exits 0, leaving EXEC="" and a notice
           # reading "execution  started". ACA start answers 200 or 202, and a
