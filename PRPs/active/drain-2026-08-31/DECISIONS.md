@@ -314,19 +314,36 @@ operator, on the principle that an operator's time is the scarcest input in this
 drain and a question whose premise is already false is worse than no question —
 it extracts a decision that changes nothing.
 
-**Seven of the ten dissolved under measurement.** Only four were asked.
+**Two of the ten dissolved outright. Four carry an operator decision. Five still
+carry something live.** Those add to more than ten because OP-9 does both: one
+of its seven items was decided and four were never answered.
 
-### The seven that needed no decision
+An earlier revision of this section said "seven of the ten dissolved" and listed
+seven table rows. It reached seven by counting OP-19's two asks as two rows and
+OP-9's items as a third — which
+`PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md:61` forbids in terms:
+*"The counts are of questions, not of sub-asks; several rows bundle two or
+three."* Splitting the sub-asks is what made the queue look emptier than it is,
+so the count is now stated per row with a status, and the rows that are only
+PARTLY settled say so.
+
+### Dissolved outright — no decision needed, both halves measured
 
 | row | why it is no longer a question | evidence |
 |---|---|---|
 | **OP-11** audience registration | option (a) is already implemented **in code** | `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058` reads `identifierUris` and sets `api://${APP_ID}` when absent |
-| **OP-13** `#3056` token hazard | the hazard the watch-list warns about cannot occur | `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` now state an adopt-never-mint contract; empty is the greenfield case only |
-| **OP-14** judge cap | decided: keep the 5000/day ceiling | operator, this session |
-| **OP-15** Tag Contributor on the ACR | premise false twice over | the deploy identity already holds Owner at the tenant-root management group; and per issue 4563 the lease tags are erased by every apply regardless, so the grant would have been a no-op against the stated goal |
-| **OP-19 (a)** duplicate timers | already disabled | measured on the live estate |
-| **OP-19 (b)** teardown | approved; PR carries the proof | in flight |
-| **OP-9 items 4 and 6** | duplicates of OP-8 and OP-7 | answered once, below |
+| **OP-15** Tag Contributor on the ACR | premise false twice over | the deploy identity does not lack `tags/write`: `limitlessdata_deploy` (oid `b9c3cc65…`) holds **Owner** at `/providers/Microsoft.Management/managementGroups/d1fc0498…`, the tenant-root MG — measured 2026-09-18 via `az role assignment list --all --include-inherited`. And per issue 4563 the lease tags are erased by every apply regardless, so the grant would have been a no-op against the stated goal. An earlier revision asserted the first half with no measurement attached |
+
+### Still live, in whole or in part — NOT settled by this pass
+
+| row | status | what is actually outstanding |
+|---|---|---|
+| **OP-5** `task C12` | **untouched** | GOV-3 / model-strategy §7 / TPM raises. Not measured, not asked, not dissolved. An earlier revision of this section omitted it entirely while claiming all ten rows were accounted for — the omission is the reason the arithmetic appeared to close |
+| **OP-9** items 1, 3, 5, 7 | **no verdict** | item 2 was decided by the operator (below) and items 4 and 6 are duplicates of OP-8 and OP-7. The remaining four were neither measured nor asked |
+| **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about cannot occur — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
+| **OP-14** `#3056` owner + judge cap | **never asked** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **The operator did not decide it.** Four questions were put to the operator and this was not one of them. The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
+| **OP-19 (a)** duplicate timers | **mitigated out-of-band, and fragile** | measured on the live estate 2026-09-18: both timers ARE disabled — `func-secexp/secretExpiryMonitor` and `func-cpeval/copilotEvaluatorTimer` each report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`. But that is an **app setting applied out of band, not the result of PR #4564, which is open and unmerged**, and `main.bicep:8650` still carries the opposite measurement. A bicep re-apply drops out-of-band state, so this is mitigated, not closed |
+| **OP-19 (b)** teardown | approved; PR carries the proof | in flight — `deploy-integrity.md` R2: in flight is not deployed |
 
 **OP-15 is the one worth reading twice.** The question asked whether to grant
 Tag Contributor so that ACR firewall leases stop running unleased. Both halves of
@@ -339,15 +356,28 @@ watches. Tracked as issue 4563.
 
 ### OP-3 · clean-subscription acceptance runs — **land the image fixes first**
 
-> **Decision:** merge the Trivy CRITICAL fixes, confirm the build lane is green,
-> **then** take the attended window. Do not dispatch into the red gate.
+> **Decision:** land **#4561** first, confirm the build lane is green, **then**
+> take the attended window. Do not dispatch into the red gate.
+
+Recorded as the operator gave it: the precondition is the tracked item **#4561**,
+not the open-ended class "the Trivy CRITICAL fixes". An earlier revision wrote
+the class, which is wider than what was decided and would have let any unrelated
+Trivy work be read as satisfying it.
 
 `full-app-deploy-commercial.yml` is the canonical from-scratch app path in
-`no-vaporware.md`, and it goes red on at least three images today. A greenfield
-run dispatched now stops at the supply-chain gate, which means it cannot produce
-an R4 receipt and cannot tell you anything about the deploy path it is meant to
-exercise. The ordering is not caution; it is the difference between a run whose
-red result is informative and one whose red result is already known.
+`no-vaporware.md`. A greenfield run dispatched into a red supply-chain gate stops
+there, which means it cannot produce an R4 receipt and cannot tell you anything
+about the deploy path it is meant to exercise. The ordering is not caution; it is
+the difference between a run whose red result is informative and one whose red
+result is already known.
+
+**How many images are red is NOT established here.** An earlier revision said
+"at least three images today", which was a transposition of the three-CVE count
+from #4560, not an image count. What is measured: #4560 fixed **two** images
+(`loom-migrate`, `fiab-setup-orchestrator`) and is merged with the estate rolled;
+#4561 tracks five more and says in its own body that they *"are not currently
+red"*. Neither of those adds up to three red images, and no count is claimed in
+its place — the decision does not rest on one.
 
 Consequence to carry: **R4 remains unverified until that window happens.**
 Greenfield is a supported path with no current receipt, and per `cloud-parity.md`
@@ -389,9 +419,14 @@ settle that. Two decisions, same vendor, different subjects.
 > the live console; the operator privacy-reviews the set before anything
 > publishes. Nothing auto-publishes.
 
-Standing at decision time: **0 of 159 published** (0/142 item guides, 0/17
-features), against a written half that is complete and re-measured at 33/33
-baseline items, 142/142 item guides, 29/29 app tutorials.
+Standing **as measured 2026-08-06** (the FINISHLINE audit figure, carried
+forward, NOT re-measured at decision time): **0 of 159 published** (0/142 item
+guides, 0/17 features), against a written half recorded as complete at 33/33
+baseline items, 142/142 item guides, 29/29 app tutorials. An earlier revision
+presented the 0-of-159 as current; it is six weeks old and nothing in this pass
+re-established it. The decision does not depend on the figure being current — it
+would read the same at any published count — but the date belongs with it, or
+the next reader inherits a stale number as a live one.
 
 Two constraints this decision does **not** relax:
 

@@ -1,32 +1,48 @@
 # FINISHLINE operator queue — 19 questions, re-measured 2026-09-17
 
-> ## ANSWERED 2026-09-17 — this page is now a record, not a queue
+> ## PARTLY ANSWERED 2026-09-17 — still a queue, and shorter than it was
 >
-> All 19 rows are settled. The decisions live in
+> **Not all 19 rows are settled.** An earlier revision of this banner said they
+> were; that was wrong, and it was wrong in the direction that makes a queue look
+> empty. The decisions live in
 > `PRPs/active/drain-2026-08-31/DECISIONS.md` § *"Operator decisions, 2026-09-17"*,
 > which is the authoritative copy — this page is kept for the question text and
 > the evidence trail behind each verdict.
 >
 > **A measure-first pass ran against all ten LIVE rows before any was put to the
-> operator. Seven dissolved**: their premise had gone false, or the decision had
-> already been made in code. Four were asked and answered:
+> operator.** Of the ten: **two dissolved outright** (OP-11, OP-15), **four carry
+> an operator decision**, and **five still carry something live** — OP-5, OP-9's
+> unanswered items, OP-13, OP-14 and OP-19. Those overlap because OP-9 both
+> carries a decision and has four items nobody answered.
+>
+> An earlier revision claimed **seven dissolved**. It reached seven by counting
+> OP-19's two asks and OP-9's items as separate rows, which line 61 of this very
+> file forbids: *"The counts are of questions, not of sub-asks."* The four asked
+> and answered:
 >
 > | row | decision |
 > |---|---|
-> | **OP-3** clean-sub acceptance | land the image CVE fixes first, **then** take the attended window — do not dispatch into the red gate |
+> | **OP-3** clean-sub acceptance | land **#4561** first, **then** take the attended window — do not dispatch into the red gate |
 > | **OP-9 item 2** I6/I7 enforce flip | re-run the shadow window; the 2026-08-05 evidence has expired |
 > | **OP-7** / OP-9 item 6 Esri license | **DECLINED** — GEO-2/3/4 stay bring-your-own-license |
 > | **OP-8** / OP-9 item 4 visual captures | agent-captured in a real browser, operator privacy-reviews before anything publishes |
 >
+> **OP-14 was NOT one of them.** An earlier revision of DECISIONS.md filed it as
+> *"decided: keep the 5000/day ceiling — operator, this session"*. No such
+> decision was made. The row stands as asked.
+>
 > The most useful row is **OP-15**, which asked whether to grant Tag Contributor
 > so ACR firewall leases stop running unleased. Both halves of its premise were
-> false — the identity already held the role, and the lease tags are erased by
-> every apply regardless, so the grant would have produced a confident
-> "leases are race-free now" with the race entirely intact. Tracked as issue 4563.
+> false — the identity already held Owner at the tenant-root management group
+> (measured 2026-09-18), and the lease tags are erased by every apply regardless,
+> so the grant would have produced a confident "leases are race-free now" with
+> the race entirely intact. Tracked as issue 4563.
 >
-> **Two rows still owe work, and neither is a decision:** OP-3's window has not
-> happened, so `deploy-integrity.md` R4 greenfield remains **unverified, not
-> working**; and OP-8's 159 captures stand at 0 published.
+> **Still owing work, none of it a decision:** OP-3's window has not happened, so
+> `deploy-integrity.md` R4 greenfield remains **unverified, not working**; OP-8's
+> 159 captures stood at 0 published as of the 2026-08-06 audit and have not been
+> re-measured since; and OP-19(a)'s timers are disabled only by an out-of-band
+> app setting that a bicep re-apply would drop.
 
 The FINISHLINE harness (`.harness/`) carried an `operator_queue` of **19
 decisions**. None has been answered since **2026-08-06**. The harness is being
@@ -49,10 +65,15 @@ Verdicts used below:
 Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
 After the 2026-09-17 measure-first pass, the ten LIVE rows resolved to
-**7 dissolved on measurement · 3 decided by the operator** (OP-3, OP-7, OP-8),
-plus **OP-9 item 2** decided as its own sub-ask. The original counts are kept
-above rather than overwritten, because the drop from ten to four is the
-finding — it is the measurement of how much of an operator queue goes stale in
+**2 dissolved outright** (OP-11, OP-15) · **3 decided by the operator** (OP-3,
+OP-7, OP-8) plus **OP-9 item 2** decided as its own sub-ask · and **5 still
+carrying something live** (OP-5, OP-9's four unanswered items, OP-13, OP-14,
+OP-19). An earlier revision recorded "7 dissolved on measurement" and reached it
+by splitting sub-asks into rows, against the rule stated two paragraphs below.
+
+The original counts are kept above rather than overwritten, because the drop from
+ten LIVE to four decisions is still the finding — it is the measurement of how
+much of an operator queue goes stale in
 six weeks, and rewriting the number would erase it.
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
