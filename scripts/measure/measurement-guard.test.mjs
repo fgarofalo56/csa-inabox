@@ -477,6 +477,46 @@ test('CONTROL: a QUOTED apostrophe still masks normally', () => {
   assert.equal(has(cmd, 'rc-after-pipe'), false, 'a jq pipe must still not read as a shell pipe');
 });
 
+// ---- the witness M15 never had -------------------------------------------
+// The explicit comment check in stripHeredocBodies was deleted once because
+// mutation M15 survived at 68/0, read as "equivalent mutant". It was not: the
+// SUITE HAD NO WITNESS. bash starts a comment after `)` and `}` closing a
+// control structure, and maskQuoted's word-boundary class omits both.
+//
+// WHAT MAKES THESE FAIL: delete the `masked.indexOf('#')` check again.
+//
+// The obvious alternative — widening maskQuoted's class to include `)` — is
+// WRONG and must not be adopted: `)` is context-dependent, and the control at
+// the bottom of this block is what pins that.
+test('BLINDING: a comment after `)` closing a control structure', () => {
+  assert.ok(has(`(true)#<<EOF\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('BLINDING: a comment after `}` closing a control structure', () => {
+  assert.ok(has(`{ true; }#<<EOF\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: `)` closing a SUBSTITUTION does not start a comment', () => {
+  // `echo $(echo a)#BOOM` prints `a#BOOM` — bash does not treat that `#` as a
+  // comment. This is why the fix is a second narrow check rather than widening
+  // maskQuoted's word-boundary class: widening would silence the guard here.
+  const cmd = `echo $(echo a)#BOOM\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'), 'a substitution `)` must not blank the command');
+});
+
+// ---- the deny message must name the RIGHT line ----------------------------
+test('R7: a lost newline must not make the message accuse an innocent line', () => {
+  // maskQuoted's double-quote escape branch emitted `__` for backslash+anything,
+  // preserving LENGTH but destroying a LINE when the escape was a newline. The
+  // raw-line index then desynced and the deny text named the wrong command.
+  // WHAT MAKES THIS FAIL: restore `out += '__'` in that branch.
+  const cmd = `echo "a\\\nb"\necho INNOCENT_BYSTANDER\npython - <<'EOF'\nEOF`;
+  const hit = evaluate(cmd).find((f) => f.id === 'python-dash-repl');
+  assert.ok(hit, 'the hazard must still be detected');
+  assert.match(hit.message, /python -/, 'the offending line must be the hazard');
+  assert.doesNotMatch(hit.message, /INNOCENT_BYSTANDER/, 'it must not accuse another line');
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule

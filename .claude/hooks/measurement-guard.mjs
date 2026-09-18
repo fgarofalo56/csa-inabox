@@ -67,7 +67,20 @@ function maskQuoted(s) {
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (quote) {
-      if (c === '\\' && quote === '"') { out += '__'; i++; continue; }
+      // PRESERVE THE NEWLINE, not just the length. This branch used to emit
+      // `__` for backslash+anything, which keeps the character count but
+      // DESTROYS A LINE when the escaped character is a newline. `rawLines[i]`
+      // then desyncs from the masked lines and the deny message names an
+      // innocent line: measured end-to-end through the real CLI, a command
+      // whose actual hazard was `python - <<'EOF'` reported
+      // `offending: echo INNOCENT_BYSTANDER`. R7, in the file whose third rule
+      // exists to enforce R7.
+      if (c === '\\' && quote === '"') {
+        if (i + 1 >= s.length) { out += '_'; continue; }
+        out += '_' + (s[i + 1] === '\n' ? '\n' : '_');
+        i++;
+        continue;
+      }
       if (c === quote) { quote = null; out += c; continue; }
       out += c === '\n' ? '\n' : '_';
       continue;
@@ -158,19 +171,29 @@ function stripHeredocBodies(s) {
     //
     // `maskQuoted` PRESERVES LENGTH, so the character at the same offset tells
     // us whether the `<<` was shell syntax. It is masked when the `<<` sat
-    // inside quotes OR inside a `#` comment — maskQuoted now handles both, so
-    // this one check covers both cases.
+    // inside quotes OR inside a `#` comment.
     //
-    // An explicit comment check lived here too (`masked.indexOf('#') < m.index`)
-    // and has been REMOVED as dead code, not merely left in. Once maskQuoted
-    // gained comment awareness the two overlapped completely: mutation M15
-    // replaced the comment condition with `false` and the suite stayed at 68/0,
-    // which is the measurement that it pinned nothing. Per
-    // `.claude/rules/assertion-design.md` an un-killable branch is disclosed or
-    // removed — and dead code in a guard is worse than in ordinary code,
-    // because it reads as defence that is not there.
+    // THE EXPLICIT COMMENT CHECK IS BACK, AND DELETING IT WAS A REASONING
+    // ERROR I WANT ON THE RECORD. It was removed on the strength of mutation
+    // M15 surviving at 68/0, read as "equivalent mutant". The correct reading
+    // was "THE SUITE HAS NO WITNESS" — a green mutation is ambiguous between a
+    // blind test, a weak mutation and a genuine equivalent, and
+    // `.claude/rules/assertion-design.md` forbids picking one without ruling
+    // out the others. I picked one.
+    //
+    // It was not equivalent. bash starts a comment after `)` and `}` closing a
+    // control structure, and maskQuoted's word-boundary class omits both, so
+    // `(true)#<<EOF` and `{ true; }#<<EOF` were BLIND with it gone.
+    //
+    // AND THE OBVIOUS REPAIR IS WRONG: `)` is context-dependent —
+    // `echo $(echo a)#BOOM` yields `a#BOOM`, NOT a comment — so widening
+    // maskQuoted's class would silence the guard in the other direction. Two
+    // narrow checks that disagree about `)` are correct here where one wide one
+    // is not.
     const masked = maskQuoted(line);
-    if (masked[m.index] !== '<') { out.push(line); continue; }
+    if (masked[m.index] !== '<') { out.push(line); continue; }   // quoted
+    const hash = masked.indexOf('#');
+    if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
 
     // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
     //
