@@ -350,7 +350,7 @@ dissolved — see below.
 | **OP-9** items 1, 3, 5, 7 | **no verdict** | item 2 was decided by the operator (below) and items 4 and 6 are duplicates of OP-8 and OP-7. The remaining four were neither measured nor asked |
 | **OP-11** audience registration | **stands as asked** | an earlier revision filed this as dissolved on the grounds that "option (a) is already implemented in code", citing `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058`. That is ONE of the two creators. Issue 2678's option (a) requires the identifier URI in **both** creators plus `az ad sp create` on the bicep path, and `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:138` still runs `az ad app create --display-name … --sign-in-audience AzureADMyOrg` with **zero** `--identifier-uris` and **zero** `az ad sp create` (measured 2026-09-18; the bootstrap script's single `identifierUris` is the positive control showing the probe is not blind). Issue 2678 is OPEN and its body prefers option (b). This PR's own row at `OPERATOR-QUESTIONS.md:331` says "stands exactly as asked" — the dissolution contradicted a line in the same PR |
 | **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about is much narrower than the row implies — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. "Cannot occur" was too strong: `deploy-fiab-commercial.yml:1265` is an `else` that WARNS and proceeds with a mint. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
-| **OP-14** `#3056` owner + judge cap | **never asked** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **The operator did not decide it.** The four questions put via the live prompt were OP-3, OP-7, OP-8 and OP-9 item 2; this was not among them. That ENUMERATION, not the bare number, is what carries the retraction — see the OP-19(b) row for why the count itself is not safe to lean on. The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
+| **OP-14** `#3056` owner + judge cap | **never asked** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **The operator did not decide it.** The anchor is IN THIS DOCUMENT and is checkable: it carries exactly four `> **Decision:**` blocks, at OP-3, OP-9 item 2, OP-7 and OP-8, and there is none for OP-14 — `grep -c '^> \*\*Decision:\*\*'` returns 4. An earlier revision re-anchored this on a bare ENUMERATION, which was as unsourced as the count it replaced; a reviewer was right to say so (`git log --all -S "operator-approved"` returns only this PR's own commit, and operator and agents share the `fgarofalo56` identity, so authorship proves nothing either way). The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
 | **OP-19 (a)** duplicate timers | **mitigated out-of-band; fragile for the OPPOSITE reason first claimed** | measured on the live estate 2026-09-18: the timers ARE disabled — `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor` and `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` both report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`, as does a third, `copilotEvaluatorHttp`, which an earlier revision omitted. It is an app setting applied out of band, **not** the result of PR #4564, which is open and unmerged. An earlier revision then said "a bicep re-apply drops out-of-band state" — that mechanism CANNOT operate here: nothing in `platform/fiab/bicep` declares `func-secexp-*` or `func-cpeval-*` at all (their modules were deleted and replaced by Container App Jobs, e.g. `secret-expiry-monitor-job.bicep:24`), and nothing deploys in Complete mode, so an incremental apply cannot touch an undeclared resource. The real fragility is the mirror image: these hosts sit OUTSIDE IaC, so nothing re-asserts the disable either, and no gate would notice it being undone |
 | **OP-19 (b)** teardown | **approved — by a route this document does not record** | the row says "approved; PR carries the proof", and PR #4564's body line 3 reads `Refs #4495 · task C3 · operator-approved 2026-09-17` — the same day the four questions above were put. **This document does not establish where that approval came from**, and an approval with no recorded provenance is the OP-14 defect one row up. Two readings, and nothing written here separates them: either the teardown was a FIFTH operator decision taken by another route, in which case the headline "four" is short by one; or #4564's "operator-approved" is itself unsourced, in which case OP-19(b) is not approved and belongs with the unanswered rows. Either way it is NOT settled by this pass. Resolve the provenance before anyone cites either count |
 
@@ -383,10 +383,27 @@ result is already known.
 **How many images are red is NOT established here.** An earlier revision said
 "at least three images today", which was a transposition of the three-CVE count
 from #4560, not an image count. What is measured: #4560 fixed **two** images
-(`loom-migrate`, `fiab-setup-orchestrator`) and is merged with the estate rolled;
-#4561 tracks five more and says in its own body that they *"are not currently
-red"*. Neither of those adds up to three red images, and no count is claimed in
-its place — the decision does not rest on one.
+(`loom-migrate`, `loom-setup-orchestrator`) and is merged with the estate
+rolled; #4561 tracks five more.
+
+**#4561's own words, quoted in full this time**, because an earlier revision cut
+them at the comma and inverted the meaning: those five *"are not currently red
+**only because nothing has scanned them since the CVEs published**."* That is
+the opposite of clean — it is unmeasured. Truncating it turned "nobody has
+looked" into "they are fine", and then used that to argue the red-image count is
+lower than claimed. No image count is asserted here in either direction; the
+decision does not rest on one, and the honest state is that five of them are
+unscanned rather than green.
+
+(An earlier revision wrote `fiab-setup-orchestrator` here, and a round-3 request
+to correct it was DECLINED on the grounds that `apps/fiab-setup-orchestrator` is
+the real directory. It is — but the subject of this sentence is IMAGES, and its
+sibling `loom-migrate` is an image name.
+`.github/workflows/build-fiab-images-acr-tasks.yml:260` maps image
+`loom-setup-orchestrator` to context `./apps/fiab-setup-orchestrator`, and `:293`
+confirms the stem. So the image is `loom-setup-orchestrator` and merge commit
+`690333e83b7`'s subject was right all along. I checked what the directory is
+called and never checked what the sentence was about.)
 
 Consequence to carry: **R4 remains unverified until that window happens.**
 Greenfield is a supported path with no current receipt, and per `cloud-parity.md`

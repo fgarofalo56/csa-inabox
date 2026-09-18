@@ -15,6 +15,15 @@
 > unanswered items, OP-11, OP-13, OP-14 and OP-19. Those overlap because OP-9
 > both carries a decision and has four items nobody answered.
 >
+> **The "four" is DISPUTED and the caveat travels with it.** OP-19(b) is filed
+> approved with no recorded provenance, and PR #4564's body says
+> `operator-approved 2026-09-17` — the same day. Either the teardown was a fifth
+> decision by another route (four is short by one), or that line is unsourced
+> (OP-19(b) is not approved at all). See `DECISIONS.md` § OP-19(b). An earlier
+> revision wrote "resolve the provenance before anyone cites either count" in
+> one file and then cited the count flat in this one — the caveat has to
+> accompany the number, or it protects nothing.
+>
 > Earlier revisions claimed **seven dissolved**, then **two**. Seven was reached
 > by counting OP-19's two asks and OP-9's items as separate rows, which line 91
 > of this very file forbids. Two counted OP-11, which is implemented in the
@@ -75,14 +84,16 @@ After the 2026-09-17 measure-first pass, the ten LIVE rows resolved to
 **1 dissolved outright** (OP-15) · **3 decided by the operator** (OP-3,
 OP-7, OP-8) plus **OP-9 item 2** decided as its own sub-ask · and **6 still
 carrying something live** (OP-5, OP-9's four unanswered items, OP-11, OP-13,
-OP-14, OP-19). Two earlier revisions got this wrong in the same direction:
-"7 dissolved on measurement", by splitting sub-asks into rows against the rule
-stated two paragraphs below; then "2 dissolved", by counting OP-11, which is
-implemented in the bootstrap script but not in `entra-app-registration.bicep`.
+OP-14, OP-19). **The decided count is disputed — see the banner above and
+`DECISIONS.md` § OP-19(b).** Two earlier revisions got the dissolved count wrong
+in the same direction: "7 dissolved on measurement", by splitting sub-asks into
+rows against the rule stated two paragraphs below; then "2 dissolved", by
+counting OP-11, which is implemented in the bootstrap script but not in
+`entra-app-registration.bicep`.
 
 The original counts are kept above rather than overwritten, because the drop from
-ten LIVE to four decisions is still the finding — it is the measurement of how
-much of an operator queue goes stale in
+ten LIVE to roughly four decisions is still the finding — it is the measurement
+of how much of an operator queue goes stale in
 six weeks, and rewriting the number would erase it.
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
