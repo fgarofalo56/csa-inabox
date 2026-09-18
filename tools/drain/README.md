@@ -115,6 +115,112 @@ look. That demotion has a legal escape — close the issue and the decline stand
 A park has none: closing a blocked item's issue is how a backlog lies about
 itself (`deploy-integrity.md` R2).
 
+**A ledger close now REACHES GitHub, which is the precondition that branch
+always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
+all, so an item the harness closed on its own evidence stayed open upstream, the
+next refresh read that as a reopen, and the receipt recorded minutes earlier was
+**voided**. Measured on #4535 — the first item the harness ever closed itself —
+which bounced to `needs-audit` on the very next cycle, so `drained()` was
+unreachable for anything the drain closed rather than inherited.
+
+`record_receipt_from_evidence` closes the issue **before** it writes the ledger,
+and the order is not arbitrary. The two writes fail independently:
+
+| ordering | if the second write fails |
+|---|---|
+| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, holding **no** receipt (nothing was written) — the upstream evidence is untouched, so `--record-receipt` re-measures it and succeeds |
+| ledger, then GitHub | item `closed` here, open there → **#4545 verbatim**: false reopen, receipt destroyed next cycle |
+
+Only `CLOSES_ON_GITHUB` — `closed`, and nothing else — gets a close. A park is
+blocked, not done. `declined` is deliberately out too, although it is *in*
+`REOPEN_DISPUTES`: there is no unattended decline path, and its disposal carries
+a `--reason not-planned` resting on a judgement no program made. The close is
+idempotent (an already-closed issue is read first and left alone — which is how
+#4535's hand-closed workaround is met), is gated on `close-on-receipt` in
+`permitted_unattended`, and is verified **by reading the state back**, not by
+`gh`'s exit code — which establishes that the issue *is* closed, but not by
+whom; see the paragraph below. A close that cannot be observed raises
+`IssueCloseFailedError`, nothing is written, and the item stays non-terminal.
+
+**Reading the state back is not enough on its own, and the note says so.**
+A read-back establishes a property of the *world* — the issue is closed — not an
+effect of *this* invocation. If a human or a second lane closes the issue in the
+window between the pre-read and the close, `gh` exits 0 having posted **nothing**
+(cli/cli v2.100.0 `close.go` re-fetches at `:112` and returns at `:117-120`,
+above the comment block at `:148`), and the read-back sees CLOSED because
+somebody else made it so. So the returned note is keyed on `gh`'s own stderr
+sentence for which of the two things it did — three outcomes, and the third is
+`unknown`:
+
+| what `gh` said | what the note reports |
+|---|---|
+| `Closed issue …` (`close.go:169`) | `#N closed on GitHub` — unqualified; the receipt comment was posted |
+| `… is already closed` (`close.go:118`) | this run did **not** close it, and **no** receipt comment was posted (#4579) |
+| neither sentence | the issue **is** closed, and this run cannot tell which of the two happened, so the comment **may not** have been posted |
+
+The third exists so that a future `gh` rewording fails **honest** rather than
+open: keying only on the already-closed sentence would let a changed string fall
+through to "I closed it", which is the false claim this whole section exists to
+prevent.
+
+**Each failure says which half of the pair moved.** Three outcomes, three
+messages, because the operator's next action differs:
+
+| what failed | what it prints | the world |
+|---|---|---|
+| anything before the close | `RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER` | both records untouched |
+| the close itself | `GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says. It claims neither direction: a read-back that 502s means the close **landed** and cannot be observed, and `gh issue close` also posts the comment, so even a non-zero exit does not establish that nothing happened |
+| the ledger write, after the close | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`, with the exception TYPE | issue settled upstream, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
+
+The third is not hypothetical: a lost CAS against another lane is the realistic
+failure, because the drain runs four. It used to print `RECEIPT NOT RECORDED` —
+the wording for "nothing happened" — and a ledger refusal after the same close
+used to print `RECEIPT REFUSED`, the wording for "your evidence was rejected".
+Both were false in the half that matters, which is the R7 defect inside the R7
+fix. Everything after the close is now wrapped in `LedgerWriteAfterCloseError`,
+which is also what makes "nothing was written" true in the first row: a bare
+refusal can only escape from *before* the close. That claim covers the call and
+**not** `main()`'s save step, which is why the save arm is bound to `Exception`
+and not to `LedgerChangedError`: with the narrow bound, `os.replace` raising
+`PermissionError` escaped `main()` uncaught while the issue was closed
+upstream — the silent failure this whole split exists to prevent, one layer
+down. **Correction (round 7):** this paragraph, and five other sites, used to
+say the escape left an **empty stderr**. It does not. `tick.py` ends in
+`raise SystemExit(main())`, so the exception reaches the interpreter and prints
+a traceback; the emptiness was an artifact of measuring through pytest's
+`capsys`. Measured as a real process against a sandbox copy carrying arm GH12:
+exit 1 and **~650 bytes of traceback** naming `os.replace`, against **~520 bytes**
+of the intended message unmutated. Those totals are **environment-dependent** —
+they move with sandbox path length and run id, and an independent reviewer
+re-measuring on a different sandbox got 647 / 579 — so read them as orders of
+magnitude, not constants. What is invariant is **exit 1 either way**, which is
+the whole point: what the width actually buys is the
+difference between those two texts — under the narrow bound the operator gets a
+file-rename traceback that never mentions the upstream close, at the *same* exit
+code, so neither the status nor the message says the two records disagree. The
+width is safe to claim because the save is a temp file plus an `os.replace`:
+either the replace happened and nothing after it can raise, or the file is
+untouched.
+
+The third row says "settled", not "the GitHub write LANDED", because the closer
+may have found the issue **already closed** and left it alone. The note it
+quotes says which.
+
+**On that already-closed route nothing is published at all**, and the note says
+so rather than leaving the operator to infer it. That route issues `gh issue
+view` and no other command, so no receipt comment is posted — and
+`tools/drain/state.json` is untracked, which leaves the receipt existing solely
+in a local gitignored file. It is not a corner: all 7 items the live ledger
+currently holds as `closed` are in exactly that state, and it is the route
+`close_issue_on_github` was written for (#4535 was hand-closed). The
+short-circuit conflates *the harness already commented here*, where skipping is
+right, with *a human closed it silently*, where no comment exists and none ever
+will. Posting the receipt there too — read the comments, `gh issue comment` when
+none begins `Drain harness: receipt verified` — is tracked as #4579 and is
+deliberately not done here: it adds two `gh` calls, hence two new failure
+routes, to the one route the whole current population takes, and that route's
+seven-shape failure behaviour was independently measured clean.
+
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
 before any work is done — and `drained: true` is this program's documented exit
@@ -132,6 +238,20 @@ condition. `--status` now refuses outright when no ledger file exists, because
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
+
+**A run-backed receipt is bound to the issue by NOTHING, and the comment it
+posts says so.** `verify_run_backed_receipt` matches the producer workflow,
+`status`, `conclusion` and every declared step — and compares the run to the
+item on no axis at all. `_run_evidence` does not request `createdAt`, and
+`headSha` is read only to be interpolated into the ref. Measured: run
+`33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
+every check today, and **147 of the 351 issues open on 2026-09-18 were filed
+after it**. So the receipt establishes *the declared producer ran green*, not
+*the estate was observed carrying this change* — the comment no longer cites
+deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
+rather than a merge, and it discloses the time and sha gap in terms. Binding it
+is #4578 (fetch the run's date, compare it to the item's, refuse a run that
+predates it); the sha half waits on #4489 with the rest of the binding.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -323,7 +443,9 @@ concludes green having captured nothing.
 stops a green roll being recorded against a second deploy-path item it never
 touched; the operator supplies that pairing, and the harness cannot check it
 until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
-ledger is byte-identical afterwards, verified by digest.
+ledger is byte-identical afterwards, verified by digest, **and no GitHub write
+happens either**, because the close runs only after every refusal has been
+passed.
 
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from
