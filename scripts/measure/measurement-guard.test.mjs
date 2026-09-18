@@ -265,10 +265,71 @@ test('BLINDING: a SHORT herestring must not silence the rule for the rest of the
     'a herestring must not blank the lines after it');
 });
 
+test('BLINDING: a herestring whose delimiter REAPPEARS later still must not blind', () => {
+  // The terminator requirement added later subsumes the simple case above, so
+  // that arm alone stopped killing the lookbehind mutant — a surviving arm
+  // meaning the TEST SET is short, not that the code is right.
+  //
+  // Here `x` genuinely reappears at the end. Without the `(?<!<)` lookbehind
+  // the herestring is read as an opener with delimiter `x`, the terminator
+  // check is SATISFIED, and every line between is blanked — hiding the hazard
+  // on line 2. WHAT MAKES THIS FAIL: revert the lookbehind.
+  const cmd = `python - <<<'x'\npython - <<'EOF'\nEOF\nx`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'lookbehind and terminator check are both load-bearing, for different inputs');
+});
+
 test('NEGATIVE: a FILE redirect supplies stdin too, and reaches EOF', () => {
   // Same reasoning as the herestring: the hazard needs stdin open on a
   // terminal. `<` is distinguished from `<<` and `<<<` by lookarounds.
   assert.equal(has(`python - < script.py`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: a redirect on a NON-stdin fd does not exempt a real heredoc', () => {
+  // The lone-`<` exemption was too wide: `2<err.txt` redirects fd 2 and leaves
+  // fd 0 on the terminal, so the heredoc hazard is fully present. The
+  // `(?<![0-9<])` lookbehind is what confines the exemption to fd 0.
+  // WHAT MAKES THIS FAIL: drop the `[0-9]` from that lookbehind.
+  assert.ok(has(`python - 2<err.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python - 3<in.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+// ---- BLINDING, second class: an opener that is not a redirect --------------
+// stripHeredocBodies scans the RAW line, before quote masking and with no
+// comment handling, so any `<<IDENT` set delim and blanked the rest of the
+// command. Requiring the delimiter to REAPPEAR downstream fixes it, and turns
+// every future opener miss into a false positive rather than a silence.
+//
+// These four are not hypothetical: two of them are verbatim shapes from this
+// very test file, and the population this rule serves is "agents quoting the
+// prohibition" — exactly the traffic that writes such a line.
+test('BLINDING: a `<<IDENT` in a COMMENT must not silence the rest', () => {
+  const cmd = `# see the <<EOF trap\npython - <<'Z'\nZ`;
+  assert.ok(has(cmd, 'python-dash-repl'), 'a comment must not blank the command');
+});
+
+test('BLINDING: a `<<IDENT` inside a QUOTED STRING must not silence the rest', () => {
+  const cmd = `echo "never write <<EOF here"\npython - <<'Z'\nZ`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: a `<<IDENT` in a grep PATTERN must not silence the rest', () => {
+  const cmd = `grep -n '<<EOF' notes.md\npython - <<'Z'\nZ`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: an UNTERMINATED opener must not swallow the command', () => {
+  // The general form: no matching terminator downstream means it was never a
+  // heredoc. Failing this way makes a miss LOUD instead of silent.
+  const cmd = `echo start <<NOPE\npython - <<'Z'\nZ`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('CONTROL: a REAL terminated heredoc still exempts its body', () => {
+  // Pairs with the four above — without this, requiring a terminator could be
+  // satisfied by disabling the exemption entirely.
+  const cmd = `cat > temp/doc.md <<'MD'\npython - <<'EOF'\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false);
 });
 
 test('NEGATIVE: a `-` belonging to the SCRIPT, not to python, is allowed', () => {

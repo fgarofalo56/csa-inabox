@@ -84,7 +84,8 @@ function stripHeredocBodies(s) {
   const out = [];
   let delim = null;
   let allowIndent = false;
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (delim !== null) {
       const probe = allowIndent ? line.replace(/^\t+/, '') : line;
       if (probe.trim() === delim) { delim = null; out.push(line); continue; }
@@ -107,7 +108,32 @@ function stripHeredocBodies(s) {
     // claim — the same defect the M9 arm exists to catch, recurring inside the
     // fix for it.
     const m = line.match(/(?<!<)<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
-    if (m) { allowIndent = m[1] === '-'; delim = m[3]; }
+    if (!m) { out.push(line); continue; }
+
+    // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
+    //
+    // Second live instance of the same silencing class, found by review. This
+    // scan runs on the RAW line — before quote masking, with no comment
+    // handling — so ANY `<<IDENT` that is not a redirect set `delim` and
+    // blanked the rest of the command: inside a `#` comment, inside a quoted
+    // string, in a grep pattern, or as a C-style shift operator.
+    //
+    // The proof that this was not theoretical: two of the blinding prefixes
+    // were, VERBATIM, lines in this file's own test suite — each asserted safe
+    // in isolation while silencing the guard for everything after it. And the
+    // population this rule exists for is "agents quoting the prohibition",
+    // which is exactly the traffic that writes such a line.
+    //
+    // A real heredoc always has a terminator. Requiring one converts every
+    // future opener MISS into a false positive rather than a silence, which is
+    // the asymmetry that matters: a false positive is visible and gets fixed;
+    // a silence leaves the guard installed and watching nothing.
+    const d = m[3];
+    const terminated = lines.slice(i + 1).some((l) => {
+      const p = m[1] === '-' ? l.replace(/^\t+/, '') : l;
+      return p.trim() === d;
+    });
+    if (terminated) { allowIndent = m[1] === '-'; delim = d; }
     out.push(line);
   }
   return out.join('\n');
@@ -258,12 +284,22 @@ const RULES = [
           // STDIN SUPPLIED FROM SOMETHING THAT ENDS. Either form removes the
           // hazard, because the REPL requires stdin to stay open on a terminal:
           //   `<<<str`   herestring  -- no delimiter to mismatch
-          //   `< file`   redirect    -- reaches EOF
+          //   `< file`   redirect ON FD 0 -- reaches EOF
           // A HEREDOC (`<<DELIM`) is deliberately NOT in this set: it is the
-          // one that degrades into a REPL when the delimiter does not land,
-          // which is the whole reason this rule exists.
-          // The lookarounds are what separate a lone `<` from `<<` and `<<<`.
-          const stdinSupplied = /<<</.test(seg) || /(?<!<)<(?!<)/.test(seg);
+          // one that degrades into a REPL when the delimiter does not land.
+          //
+          // THE FD DIGIT MATTERS. An earlier version tested any lone `<`, which
+          // exempted genuine hazards: `python - 2<err.txt <<'EOF'` redirects
+          // fd 2, leaves fd 0 on the terminal, and still carries a heredoc --
+          // yet read as "stdin supplied". `(?<![0-9<])` is what confines the
+          // exemption to fd 0. Measured shapes that must STILL fire:
+          // `2<err.txt`, `3<in.txt`.
+          //
+          // Residual, disclosed: a lone `<` anywhere else in the segment --
+          // e.g. an unquoted `$(grep x < f)` beside a real heredoc -- still
+          // exempts. Narrowing that needs real word-splitting, not a regex.
+          const stdinSupplied =
+            /<<</.test(seg) || /(?<![0-9<])<(?!<)/.test(seg);
           if (prevSep !== '|' && !stdinSupplied && CMD.test(seg)) {
             return rawLines[i].trim().slice(0, 90);
           }
