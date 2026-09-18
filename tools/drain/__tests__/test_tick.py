@@ -935,6 +935,49 @@ def test_the_capture_step_must_have_concluded_success_not_merely_appeared():
 # close calls and each assertion names that as the value that breaks it.
 
 
+#: VERBATIM stderr from the REAL `gh 2.100.0`, captured 2026-09-18 by running
+#: `gh issue close 4556 --repo fgarofalo56/csa-inabox` against an issue that was
+#: already closed. Measured: rc=0, stdout EMPTY, state unchanged before and
+#: after -- close.go :117-120 returns above BOTH the comment block (:148) and
+#: the close itself (:164), so that command is a read in everything but name.
+_REAL_GH_ALREADY_CLOSED_STDERR = (
+    "! Issue fgarofalo56/csa-inabox#4556 (synthetic-monitor: journeys failing "
+    "(Failed)) is already closed\n"
+)
+
+
+def _gh_already_closed_stderr(repo="o/r", number=1, title="t") -> str:
+    """close.go v2.100.0 `:118` RENDERED, not a remembered sentence.
+
+        fmt.Fprintf(opts.IO.ErrOut, "%s Issue %s#%d (%s) is already closed\\n", ...)
+
+    Rendering it means the spy below emits a DIFFERENT line for every issue,
+    exactly as `gh` does. The previous revision of this fixture held ONE
+    captured string and handed it to every test -- and a measured mutant walked
+    straight through that: a marker over-fitted to the captured line,
+    `"(Failed)) is already closed"`, matched the single fixture and SURVIVED
+    the suite, while in production it would match no other issue's stderr at
+    all and every raced close would silently classify `unknown`. A probe
+    anchored to one realisation of a format string tests the realisation.
+    """
+    return f"! Issue {repo}#{number} ({title}) is already closed\n"
+
+
+def _gh_closed_stderr(repo="o/r", number=1, title="t") -> str:
+    """close.go v2.100.0 `:169` RENDERED. The success half of the pair.
+
+        fmt.Fprintf(opts.IO.ErrOut, "%s Closed issue %s#%d (%s)\\n", ...)
+
+    NOT OBSERVED, and said so rather than implied: producing this line requires
+    closing a live issue, which the already-closed capture above deliberately
+    does not. The leading glyph is `cs.SuccessIconWithColor(cs.Red)` and is
+    written here as an ASCII stand-in, which is safe only because the marker
+    the closer keys on (`Closed issue `) does not include it -- if it ever did,
+    this fixture would be agreeing with a transcription instead of with `gh`.
+    """
+    return f"v Closed issue {repo}#{number} ({title})\n"
+
+
 class _GhSpy:
     """Stub the `gh` SEAM (`tick.sh`), never the closer itself.
 
@@ -950,7 +993,8 @@ class _GhSpy:
     """
 
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
-                 on_close=None, raises=None, view_fails_after_close=False):
+                 on_close=None, raises=None, view_fails_after_close=False,
+                 url_kind="issues"):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -958,6 +1002,12 @@ class _GhSpy:
         self.takes_effect = takes_effect
         self.on_close = on_close
         self.raises = raises
+        #: Which OBJECT `gh issue view` resolves the number to. `gh issue view`
+        #: answers for pull requests too -- measured live on #4552, which came
+        #: back `{"state":"OPEN","url":".../pull/4552"}` -- so the payload
+        #: carries the url the real command returns and the closer's type guard
+        #: is in the path rather than stubbed away.
+        self.url_kind = url_kind
         #: The 502 shape: the close LANDS and the verification read cannot be
         #: made. rc=0 from `gh issue close` plus an unreadable state.
         self.view_fails_after_close = view_fails_after_close
@@ -970,13 +1020,37 @@ class _GhSpy:
         if args[:3] == ["gh", "issue", "view"]:
             if self.view_fails_after_close and self.closed:
                 return 1, "", "HTTP 502: Bad gateway"
-            return 0, json.dumps({"state": self.states.get(args[3], self.state)}), ""
+            payload = {
+                "state": self.states.get(args[3], self.state),
+                "url": f"https://github.com/o/r/{self.url_kind}/{args[3]}",
+            }
+            return 0, json.dumps(payload), ""
         if args[:3] == ["gh", "issue", "close"]:
             if self.on_close is not None:
                 self.on_close()
-            if self.close_rc == 0 and self.takes_effect:
+            if self.close_rc != 0:
+                return self.close_rc, "", self.close_err
+            # EXIT-0 STDERR, MODELLED ON close.go RATHER THAN INVENTED -- and
+            # the model is what makes the concurrent-closer race expressible at
+            # all. `gh` re-fetches the issue (:112) and then takes ONE OF TWO
+            # exits, both rc=0: the short-circuit at :117-120 when it finds the
+            # issue already CLOSED, which prints "is already closed" and posts
+            # NOTHING because it returns above the comment block at :148; or
+            # the close at :164 followed by "Closed issue" at :169. Deriving
+            # the branch from the state this spy holds AT CLOSE TIME means an
+            # `on_close` that flips the state to CLOSED reproduces exactly the
+            # world in which another writer won the race -- which the previous
+            # spy, holding one fixed `state` for the whole call, could not
+            # express, and which is why "verified by effect" went nine rounds
+            # untested against the one scenario where effect and exit code
+            # diverge.
+            if self.states.get(args[3], self.state) == "CLOSED":
+                return 0, "", self.close_err or _gh_already_closed_stderr(
+                    number=args[3], title=f"issue {args[3]}")
+            if self.takes_effect:
                 self.states[args[3]] = "CLOSED"
-            return self.close_rc, "", self.close_err
+            return 0, "", self.close_err or _gh_closed_stderr(
+                number=args[3], title=f"issue {args[3]}")
         raise AssertionError(f"the closer ran an unexpected command: {args}")
 
     @property
@@ -1308,6 +1382,32 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
     close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
     assert "--repo" in close
     assert close[close.index("--repo") + 1] == "fgarofalo56/csa-inabox"
+    # THE SAME PIN ON THE READS, which had NO witness at all until round 10.
+    # MEASURED in a sandbox copy: dropping `--repo` and its value from the
+    # `gh issue view` argv in `_issue_state_on_github` survived 527/527, while
+    # the identical drop on the CLOSE argv above went RED at this test by name
+    # -- the positive control proving that survival was a real gap and not a
+    # blind instrument. It is not a symmetry complaint: `sh`'s docstring says
+    # `--repo` is explicit because `gh` otherwise resolves the repository from
+    # the working directory, so without it the PRE-READ can short-circuit on a
+    # FOREIGN repo's closed issue (receipt recorded, nothing closed, nothing
+    # commented) and the READ-BACK can satisfy the verification vacuously --
+    # #4545's failure mode restored through the verification instead of through
+    # the write. THE VALUE THAT BREAKS THIS: a view argv built without `--repo`
+    # (arm GH22).
+    for view in [c for c in spy.calls if c[:3] == ["gh", "issue", "view"]]:
+        assert "--repo" in view, "a read that lets gh pick the repository is unpinned"
+        assert view[view.index("--repo") + 1] == "fgarofalo56/csa-inabox"
+        # AND THE FIELDS, because the type guard is only in the path if `url`
+        # is actually requested. `gh issue view` resolves PULL REQUESTS too
+        # (measured live on #4552), and `gh issue close` routes a PR number to
+        # `api.PullRequestClose` (close.go :175-177), so a read that asks for
+        # `state` alone cannot tell the closer what it is about to close. The
+        # value that breaks this: `--json state` (arm GH25).
+        assert "--json" in view
+        assert view[view.index("--json") + 1] == "state,url", (
+            "the read must ask for the url, or the object's TYPE is never established"
+        )
     # THE POSITIVE PAIR for the comment. `…_no_comment_is_appended` is named
     # for the receipt comment and asserts only its ABSENCE on the
     # already-closed path -- which, per assertion-design.md "done" #4, is
@@ -1854,6 +1954,253 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
     assert "#4579" in out.close_note, (
         "the missing-trace gap must be TRACKED where it is disclosed"
     )
+
+
+def test_the_already_closed_marker_is_pinned_to_real_gh_output_not_to_the_spy():
+    """THE POSITIVE CONTROL for the two tests below, in two layers.
+
+    Those tests feed the closer a stderr string and assert on the note it
+    derives. That is circular unless the string is what `gh` actually writes --
+    a marker transcribed from the same mistaken memory as the spy would agree
+    with itself and disagree with reality, which is the blindness
+    `assertion-design.md` "done" #3 names.
+
+    **Layer 1 pins the RENDERER against an observation.** `_gh_already_closed_
+    stderr` must reproduce, byte for byte, a line captured from the installed
+    `gh 2.100.0` (provenance at the constant). THE VALUE THAT BREAKS IT: any
+    drift between the format string this suite renders and the one close.go
+    prints -- a lost `#`, a dropped paren, `Issue` lowercased.
+
+    **Layer 2 pins the MARKER against MANY renderings**, and layer 1 alone was
+    measured insufficient. With a single captured fixture, the mis-transcription
+    `_GH_FOUND_ALREADY_CLOSED = "(Failed)) is already closed"` -- a marker
+    over-fitted to that one issue's title -- SURVIVED the whole suite, while in
+    production it would match no other issue's stderr and every raced close
+    would silently classify `unknown`, restoring the blocker this change exists
+    to fix. Varying repo, number and title kills it: the marker must be the part
+    of the sentence that does not move.
+    """
+    assert _gh_already_closed_stderr(
+        "fgarofalo56/csa-inabox", 4556,
+        "synthetic-monitor: journeys failing (Failed)",
+    ) == _REAL_GH_ALREADY_CLOSED_STDERR, (
+        "the renderer has drifted from the one line of real gh output this "
+        "suite has actually seen"
+    )
+    for repo, number, title in [
+        ("fgarofalo56/csa-inabox", 4556, "synthetic-monitor: journeys failing (Failed)"),
+        ("o/r", 1, "t"),
+        ("some-org/another-repo", 999999, "a title with (parentheses) and #4552 in it"),
+        ("x/y", 7, ""),
+    ]:
+        assert tick._close_outcome(
+            _gh_already_closed_stderr(repo, number, title)
+        ) == tick.CLOSE_FOUND_ALREADY_CLOSED, (
+            f"gh's short-circuit for {repo}#{number} was not recognised - a marker "
+            "that only matches one issue's stderr classifies every OTHER raced "
+            "close as 'unknown', which is the blocker back in a quieter form"
+        )
+        assert tick._close_outcome(
+            _gh_closed_stderr(repo, number, title)
+        ) == tick.CLOSE_PERFORMED, (
+            f"gh's success line for {repo}#{number} was not recognised - an "
+            "unrecognised success qualifies every ordinary close, which is the "
+            "noise that gets a disclosure ignored"
+        )
+
+
+def test_blocker_a_close_performed_by_somebody_else_is_not_reported_as_ours(
+    tmp_path, monkeypatch
+):
+    """THE RACE THE READ-BACK CANNOT SEE, and the reason "verified by effect"
+    was an over-claim for nine rounds.
+
+    A human -- or a second lane; the drain runs four -- closes the issue in the
+    window between the pre-read at the top of `close_issue_on_github` and the
+    `gh issue close` below it. close.go v2.100.0 re-fetches at :112 and returns
+    at :117-120, ABOVE the comment block at :148, so `gh` exits 0 having posted
+    NOTHING. The read-back then reads CLOSED -- truthfully, because somebody
+    else made it so -- and the head at 070a9d4f9a8 returned `#716 closed on
+    GitHub`, which is false twice over: this run did not close it, and the
+    receipt comment whose atomicity is the entire justification for the
+    single-command argv was never published. That sentence was then written
+    permanently into `Item.history`.
+
+    THE VALUE THAT BREAKS THIS TEST is the code at head: a note keyed on the
+    read-back alone rather than on `_close_outcome`, which returns
+    `#716 closed on GitHub` here and fails all three assertions below (arm
+    GH23). It is also broken by a classifier that keys on the WRONG string --
+    see the positive control above.
+
+    The seam is `on_close`, which fires INSIDE the spy's close before it
+    decides which of gh's two exits to take: flipping the state to CLOSED there
+    is precisely "another writer won".
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(716, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch)
+    # The other writer, landing in the window. `takes_effect` is irrelevant
+    # here and left at its default: the state is already CLOSED by the time the
+    # spy's close branch looks, so it takes gh's short-circuit exit.
+    spy.on_close = lambda: spy.states.__setitem__("716", "CLOSED")
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "r", 716, from_pr=None, from_run="1")
+
+    # The close COMMAND was issued -- this is not the pre-read short-circuit,
+    # which would show no close at all. What differs is what gh DID with it.
+    assert spy.closed == ["716"], "this test's premise is that the close was ISSUED"
+    assert "did NOT close it" in out.close_note, (
+        "a close performed by somebody else was reported as this run's own - the "
+        "value that breaks this is the head's read-back-only note, which says "
+        "'closed on GitHub' over a close it did not perform"
+    )
+    assert "NO receipt comment was posted" in out.close_note, (
+        "gh short-circuits above its comment block, so the receipt the argv "
+        "carried does not exist - a note that omits this reports a published "
+        "receipt with no public trace"
+    )
+    assert "#4579" in out.close_note, (
+        "this route lands in the same no-public-trace world the pre-read route "
+        "discloses, and must point at the same tracked gap"
+    )
+    # AND THE FALSE SENTENCE MUST NOT REACH THE LEDGER, which is where the head
+    # wrote it. `Item.history` is the audit trail; a wrong line there outlives
+    # the console output that carried it.
+    assert item.state == CLOSED
+    assert not any("closed on GitHub" in h for h in item.history), (
+        "the history recorded a close this run did not perform"
+    )
+
+
+def test_a_close_whose_outcome_gh_did_not_name_is_reported_as_unknown_not_as_ours(
+    tmp_path, monkeypatch
+):
+    """THE THIRD ARM, and the reason the classifier is three-valued.
+
+    A two-valued classifier keyed on the already-closed sentence alone fails
+    OPEN: a future `gh` that rewords that line falls straight through to "I
+    closed it", restoring the false claim from outside this repository, where
+    no test here would see it. So an stderr carrying NEITHER of gh's two
+    sentences answers `unknown`, and the note says the state is settled while
+    the authorship is not (deploy-integrity R7 -- an error must not state as
+    fact something it did not establish).
+
+    THE VALUE THAT BREAKS THIS: an `else` that falls through to
+    `#N closed on GitHub` whenever the already-closed marker is absent (arm
+    GH24). That is the two-valued version, and it is green on every other test
+    in this file.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(717, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    # A `gh` that closed the issue and said something this code does not
+    # recognise -- a reworded success line, a localised build, a wrapper.
+    _gh(monkeypatch, close_err="Issue #717 has been shut\n")
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "r", 717, from_pr=None, from_run="1")
+
+    assert "CANNOT TELL" in out.close_note, (
+        "an unrecognised gh exit was reported as a performed close - the value "
+        "that breaks this is a two-valued classifier whose else-branch claims "
+        "authorship it did not establish"
+    )
+    assert "MAY NOT have been posted" in out.close_note, (
+        "the comment's existence is exactly as unestablished as the authorship"
+    )
+    # PAIRED WITH THE POSITIVE, per assertion-design.md "done" #4: the ordinary
+    # success path must still report unqualified, or "fails honest" would be
+    # satisfied by qualifying everything.
+    led2 = Ledger(str(tmp_path / "s2.json"), receipts=POLICY["receipts"])
+    led2.upsert(718, "a console surface", "W5-console", lane="lane:console", size=1)
+    _gh(monkeypatch)
+    ok = tick.record_receipt_from_evidence(
+        led2, POLICY, "r", 718, from_pr=None, from_run="1")
+    assert ok.close_note == "#718 closed on GitHub", (
+        "a genuine close must still be reported plainly - the value that breaks "
+        "this is a classifier that qualifies every outcome, which would make the "
+        "assertions above pass while saying nothing"
+    )
+
+
+def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
+    tmp_path, monkeypatch
+):
+    """`gh issue view` ANSWERS FOR PULL REQUESTS, and `gh issue close` closes them.
+
+    Measured live on 2026-09-18, read-only:
+    `gh issue view 4552 --repo fgarofalo56/csa-inabox --json state,url` returned
+    `{"state":"OPEN","url":"https://github.com/fgarofalo56/csa-inabox/pull/4552"}`
+    -- #4552 being the pull request this change shipped in. close.go :175-177
+    then routes a PR number to `api.PullRequestClose`, so a type-blind read-first
+    would let the harness close a PULL REQUEST and post the permanent receipt
+    comment on it.
+
+    LATENT TODAY, pinned anyway: every ledger number originates in
+    `gh issue list --state open`, but `state.json` is hand-editable and the
+    README documents hand edits, so the only thing standing between the harness
+    and this is a convention outside the file. The read-first is presented as
+    what makes the write safe; a read that cannot tell what it read does not.
+
+    THE VALUE THAT BREAKS IT: a `_issue_state_on_github` that returns the state
+    without inspecting the url -- which is the code at round 9's head, and is
+    arm GH25. Note the close must NOT be issued: the refusal has to land on the
+    PRE-read, before anything is written.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    item = led.upsert(4552, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch, url_kind="pull")
+
+    with pytest.raises(tick.IssueCloseFailedError, match="is not an issue"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 4552, from_pr=None, from_run="1")
+
+    assert spy.closed == [], "a pull request was sent to `gh issue close`"
+    assert item.state == READY, "the ledger moved on an object it could not identify"
+    # PAIRED WITH THE POSITIVE so the guard cannot be satisfied by refusing
+    # everything: the same path with an `issues` url still closes.
+    led2 = Ledger(str(tmp_path / "s2.json"), receipts=POLICY["receipts"])
+    led2.upsert(4553, "a console surface", "W5-console", lane="lane:console", size=1)
+    ok_spy = _gh(monkeypatch)
+    tick.record_receipt_from_evidence(
+        led2, POLICY, "r", 4553, from_pr=None, from_run="1")
+    assert ok_spy.closed == ["4553"], "the guard refused an ordinary issue"
+
+
+def test_an_unrecognised_object_url_is_refused_rather_than_assumed_to_be_an_issue(
+    tmp_path, monkeypatch
+):
+    """FAIL CLOSED on a shape `_object_kind_from_url` does not know.
+
+    The guard reads the kind BY POSITION -- the third path segment of
+    `/{owner}/{repo}/{kind}/{number}` -- rather than asking whether "pull"
+    appears in the string, because a repository named `pull` would satisfy the
+    substring test and answer the wrong question. A url with no such segment
+    yields "", and "" must refuse: treating an unparseable url as an issue is
+    the same guess the rest of this module exists to refuse.
+
+    THE VALUE THAT BREAKS IT: `if "pull" in url:` in place of the positional
+    read, which lets every unrecognised shape through -- and, on a repository
+    named `pull`, refuses every legitimate issue.
+    """
+    assert tick._object_kind_from_url("https://github.com/o/r/pull/9") == "pull"
+    assert tick._object_kind_from_url("https://github.com/o/r/issues/9") == "issues"
+    # The repository literally named `pull` -- an issue, and it must read as one.
+    assert tick._object_kind_from_url("https://github.com/o/pull/issues/9") == "issues"
+    assert tick._object_kind_from_url("https://github.com/o/r") == ""
+
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(719, "a console surface", "W5-console", lane="lane:console", size=1)
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    spy = _gh(monkeypatch, url_kind="discussions")
+
+    with pytest.raises(tick.IssueCloseFailedError, match="is not an issue"):
+        tick.record_receipt_from_evidence(
+            led, POLICY, "r", 719, from_pr=None, from_run="1")
+    assert spy.closed == []
 
 
 def test_blocker_a_ledger_failure_after_the_close_is_not_reported_as_a_refusal(

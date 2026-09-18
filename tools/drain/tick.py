@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -523,6 +524,22 @@ class LedgerWriteAfterCloseError(Exception):
     """
 
 
+def _object_kind_from_url(url: str) -> str:
+    """The `issues` / `pull` segment of a github.com object URL, BY POSITION.
+
+    `.../{owner}/{repo}/{kind}/{number}` -- the kind is the third path segment,
+    read positionally rather than by asking whether "pull" appears anywhere in
+    the string. A repository legitimately named `pull` would satisfy the
+    substring test and answer the wrong question, which is the shape recorded
+    in `csa_loom_parse_by_position_not_by_idiom`.
+
+    Returns "" when the URL has no such segment, so the caller fails CLOSED on
+    a shape this function does not recognise rather than guessing "issues".
+    """
+    parts = [p for p in urllib.parse.urlparse(url).path.split("/") if p]
+    return parts[2] if len(parts) >= 4 else ""
+
+
 def _issue_state_on_github(repo: str, number: int) -> str:
     """Read ONE issue's OPEN/CLOSED state. Raises rather than guessing.
 
@@ -530,9 +547,23 @@ def _issue_state_on_github(repo: str, number: int) -> str:
     convenient one -- the roll that reported "the tag does not exist" when the
     truth was "I could not reach the registry" is the shape being avoided here
     (deploy-integrity R7).
+
+    IT ALSO ESTABLISHES THAT THE NUMBER IS AN ISSUE, which the state alone does
+    not. `gh issue view` RESOLVES A PULL REQUEST -- measured live on 2026-09-18,
+    `gh issue view 4552 --json state,url` answered
+    `{"state":"OPEN","url":".../pull/4552"}` -- and `gh issue close` then routes
+    that number to `api.PullRequestClose` (close.go v2.100.0 :175-177). So a
+    type-blind read would let the harness close a PULL REQUEST and post the
+    permanent receipt comment on it.
+
+    LATENT TODAY and fixed anyway, because this read is the thing the write is
+    justified by: every ledger number originates in `gh issue list --state open`
+    via `build_inventory`, but `state.json` is hand-editable and the README
+    documents hand edits, so the only barrier is a convention outside this file.
+    A read-first that cannot tell what it read does not make a write safe.
     """
     rc, out, err = sh(
-        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "state"]
+        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "state,url"]
     )
     if rc != 0:
         raise IssueCloseFailedError(
@@ -544,6 +575,16 @@ def _issue_state_on_github(repo: str, number: int) -> str:
         parsed = json.loads(out)
     except json.JSONDecodeError as exc:
         raise IssueCloseFailedError(f"unparseable state for #{number}: {exc}") from exc
+    url = str((parsed or {}).get("url") or "")
+    kind = _object_kind_from_url(url)
+    if kind != "issues":
+        raise IssueCloseFailedError(
+            f"#{number} in {repo} is not an issue: `gh issue view` resolved it to "
+            f"{url!r} ({kind or 'an unrecognised shape'}). `gh issue close` would "
+            "route a pull-request number to `api.PullRequestClose` and post the "
+            "receipt comment on the PR, so this tool refuses to act on an object "
+            "whose type it has not established"
+        )
     state = str((parsed or {}).get("state") or "").upper()
     if state not in ("OPEN", "CLOSED"):
         raise IssueCloseFailedError(
@@ -687,6 +728,74 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     )
 
 
+#: `gh`'s OWN WORDS for the two things `gh issue close` can do, both written to
+#: stderr, BOTH AT EXIT 0. Lifted from cli/cli v2.100.0
+#: `pkg/cmd/issue/close/close.go` -- :118 for the first, :169 for the second --
+#: and MEASURED against the installed `gh 2.100.0` on 2026-09-18 by running
+#: `gh issue close 4556 --repo fgarofalo56/csa-inabox` against an issue that was
+#: already closed: rc=0, stdout EMPTY, stderr
+#: `! Issue fgarofalo56/csa-inabox#4556 (...) is already closed`, state
+#: unchanged. The success sentence is not exercised that way for the obvious
+#: reason -- it would require closing a live issue to watch it print.
+_GH_FOUND_ALREADY_CLOSED = "is already closed"
+_GH_PERFORMED_CLOSE = "Closed issue "
+
+#: The three answers `_close_outcome` can give. `UNKNOWN` is not a failure
+#: mode; it is the honest answer when `gh` said neither sentence.
+CLOSE_PERFORMED = "performed"
+CLOSE_FOUND_ALREADY_CLOSED = "found-already-closed"
+CLOSE_OUTCOME_UNKNOWN = "unknown"
+
+
+def _close_outcome(err: str) -> str:
+    """Which of the two exit-0 outcomes `gh issue close` just had.
+
+    THE DISTINCTION THE READ-BACK CANNOT DRAW, and the reason this function
+    exists. Reading the state back establishes a property of the WORLD -- the
+    issue is closed -- not an effect of THIS invocation. A concurrent writer
+    supplies that property for free: close.go v2.100.0 re-fetches the issue at
+    :112 and, at :117-120, prints "is already closed" and `return nil`s. That
+    early return sits ABOVE the comment block at :148. So when a human or a
+    second lane takes the issue in the window between this tool's pre-read and
+    its close, `gh` exits 0 having posted NOTHING, the read-back reads CLOSED
+    because somebody else made it so, and "verified by effect" reports a close
+    that this invocation did not perform and a receipt comment that does not
+    exist. Measured end-to-end by a reviewer with only `tick.sh` stubbed: 0
+    comments posted, `state=closed`, and the false note written permanently
+    into `Item.history`.
+
+    NO NEW `gh` CALL. `err` is already captured at the close call site and was
+    being discarded on the rc=0 path; the two sentences above are the only
+    signal `gh` offers, and they are free.
+
+    WHY STDERR RATHER THAN THE ALTERNATIVES, decided rather than inherited:
+
+    - **A pre-close state read** cannot help. That read already happens, and
+      the race window is precisely BETWEEN it and the close.
+    - **Reading the comments back** would answer directly, but it is a new `gh`
+      call on the write path -- a new failure route added to the route the
+      whole current population takes, which is the same cost this change
+      declined to pay for #4579.
+    - **`closedAt`** is second-granular and has no pre-value to compare against
+      on an open issue, so it would trade one race for a narrower one.
+
+    FAILS HONEST, NOT OPEN, which is the whole reason this is three-valued
+    rather than two. Keying only on the already-closed sentence would mean a
+    future `gh` that rewords it falls through to "I closed it" -- the false
+    claim restored by a change outside this repository. So an stderr carrying
+    NEITHER sentence answers `UNKNOWN`, and the caller says it does not know
+    (deploy-integrity R7: an error message must not state as fact something it
+    did not establish). The cost is a qualified note if `gh` ever stops writing
+    to stderr at all; that is noise the operator sees immediately, rather than
+    a false statement they do not.
+    """
+    if _GH_FOUND_ALREADY_CLOSED in err:
+        return CLOSE_FOUND_ALREADY_CLOSED
+    if _GH_PERFORMED_CLOSE in err:
+        return CLOSE_PERFORMED
+    return CLOSE_OUTCOME_UNKNOWN
+
+
 def close_issue_on_github(
     policy: dict, repo: str, number: int, target_state: str, detail: str,
     kind: str, issue_class: str,
@@ -728,10 +837,18 @@ def close_issue_on_github(
     IS done here is that the returned note says so, rather than reporting a
     receipt whose public trace does not exist.
 
-    Verified BY EFFECT, not by exit code: the state is read back after the
-    close, because rc=0 from a wrapper that did nothing is a false success this
-    repo has already paid for. If the issue is not closed afterwards, this
-    raises -- silence is not an option a close may take.
+    Verified BY EFFECT AS FAR AS THAT IS POSSIBLE, and the qualification is
+    load-bearing. The state is read back after the close, because rc=0 from a
+    wrapper that did nothing is a false success this repo has already paid for;
+    if the issue is not closed afterwards, this raises, because silence is not
+    an option a close may take. But a read-back establishes a property of the
+    WORLD, not an effect of THIS invocation -- a concurrent closer supplies
+    CLOSED for free while `gh` short-circuits above its comment step. So the
+    returned note is keyed on `_close_outcome`, which reads `gh`'s own sentence
+    for which of the two things it did, and says it does not know when `gh`
+    said neither. An earlier revision of this docstring said "Verified BY
+    EFFECT, not by exit code" flatly, which over-claimed in exactly the
+    direction this change exists to remove.
     """
     if target_state not in CLOSES_ON_GITHUB:
         raise IssueCloseFailedError(
@@ -784,14 +901,24 @@ def close_issue_on_github(
         #
         # NOT "BOUNDED", and an earlier revision of this comment said that word.
         # Nothing in the CODE bounds it: under a persistent close failure each
-        # operator re-run adds a copy, and two lanes racing the same item can
-        # both pass the already-closed read above and post two comments. What
-        # limits it is the call graph -- `--record-receipt` has no cron, no
-        # loop and no driver, its only reference outside the tests being
-        # `operating_point.py`, which prints the command rather than running it
-        # -- so the ceiling is operator patience, not an invariant. Saying
-        # "bounded" claimed a control that does not exist, which is the R7
-        # defect this change is about, in the comment explaining the change.
+        # operator re-run adds a copy. What limits it is the call graph --
+        # `--record-receipt` has no cron, no loop and no driver, its only
+        # reference outside the tests being `operating_point.py`, which prints
+        # the command rather than running it -- so the ceiling is operator
+        # patience, not an invariant. Saying "bounded" claimed a control that
+        # does not exist, which is the R7 defect this change is about, in the
+        # comment explaining the change.
+        #
+        # TWO LANES RACING THE SAME ITEM SPLIT INTO TWO SUB-CASES, and an
+        # earlier revision of this comment named only the benign one -- it said
+        # they "can both pass the already-closed read above and post two
+        # comments", which is the OPPOSITE of what close.go produces in the
+        # sub-case that matters. If the first close FAILS, yes: both post. If
+        # the first close LANDS, close.go :117 short-circuits the loser ABOVE
+        # its comment block at :148, so the loser posts ZERO comments and exits
+        # 0 over an issue somebody else closed. That is the outcome
+        # `_close_outcome` exists to name, two lines above the citation of the
+        # very function that decides it.
         rc, _out, err = sh(
             ["gh", "issue", "close", str(number), "--repo", repo,
              "--comment", _receipt_comment(kind, issue_class, detail)]
@@ -815,6 +942,7 @@ def close_issue_on_github(
                 "version -- but this says 're-run' without knowing whether now is "
                 "a good time, and that is a limitation rather than a verdict"
             )
+        outcome = _close_outcome(err)
         after = _issue_state_on_github(repo, number)
     except OSError as exc:
         # `gh` missing or unexecutable. Without this the record path dies on a
@@ -828,6 +956,30 @@ def close_issue_on_github(
             f"`gh issue close {number}` returned 0 but the issue still reads {after} - "
             "reporting a close this tool cannot observe would be the defect #4545 is "
             "about, one layer down"
+        )
+    if outcome == CLOSE_FOUND_ALREADY_CLOSED:
+        # THE RACE LANDED ON US. Somebody closed it between the pre-read and
+        # this close, so `gh` short-circuited above its comment step: the issue
+        # is closed, but not BY this run, and the receipt comment the argv
+        # carried was never posted. Reporting "closed on GitHub" here would be
+        # #4545's own defect restored through the verification -- a close
+        # reported that this tool did not perform, with the sentence then
+        # written permanently into `Item.history`.
+        return (
+            f"#{number} was ALREADY CLOSED by the time `gh` looked - this run did "
+            "NOT close it and NO receipt comment was posted (`gh` short-circuits "
+            "above its comment step), so the receipt exists only in the local "
+            "ledger, which is untracked (#4579)"
+        )
+    if outcome == CLOSE_OUTCOME_UNKNOWN:
+        # `gh` exited 0 and said NEITHER of its two sentences. The state is
+        # settled; the authorship is not. Saying which would be asserting a
+        # cause this code did not establish (deploy-integrity R7).
+        return (
+            f"#{number} is closed on GitHub, but this run CANNOT TELL whether it "
+            "performed the close or found it already closed: `gh` exited 0 without "
+            "either sentence it uses to say which (close.go v2.100.0 :118 / :169), "
+            "so the receipt comment MAY NOT have been posted"
         )
     return f"#{number} closed on GitHub"
 

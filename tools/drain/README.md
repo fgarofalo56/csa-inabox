@@ -138,9 +138,30 @@ a `--reason not-planned` resting on a judgement no program made. The close is
 idempotent (an already-closed issue is read first and left alone — which is how
 #4535's hand-closed workaround is met), is gated on `close-on-receipt` in
 `permitted_unattended`, and is verified **by reading the state back**, not by
-`gh`'s exit code. A close that cannot be observed raises `IssueCloseFailedError`,
-nothing is written, and the item stays non-terminal — a close that did not happen
-is never reported as one.
+`gh`'s exit code — which establishes that the issue *is* closed, but not by
+whom; see the paragraph below. A close that cannot be observed raises
+`IssueCloseFailedError`, nothing is written, and the item stays non-terminal.
+
+**Reading the state back is not enough on its own, and the note says so.**
+A read-back establishes a property of the *world* — the issue is closed — not an
+effect of *this* invocation. If a human or a second lane closes the issue in the
+window between the pre-read and the close, `gh` exits 0 having posted **nothing**
+(cli/cli v2.100.0 `close.go` re-fetches at `:112` and returns at `:117-120`,
+above the comment block at `:148`), and the read-back sees CLOSED because
+somebody else made it so. So the returned note is keyed on `gh`'s own stderr
+sentence for which of the two things it did — three outcomes, and the third is
+`unknown`:
+
+| what `gh` said | what the note reports |
+|---|---|
+| `Closed issue …` (`close.go:169`) | `#N closed on GitHub` — unqualified; the receipt comment was posted |
+| `… is already closed` (`close.go:118`) | this run did **not** close it, and **no** receipt comment was posted (#4579) |
+| neither sentence | the issue **is** closed, and this run cannot tell which of the two happened, so the comment **may not** have been posted |
+
+The third exists so that a future `gh` rewording fails **honest** rather than
+open: keying only on the already-closed sentence would let a changed string fall
+through to "I closed it", which is the false claim this whole section exists to
+prevent.
 
 **Each failure says which half of the pair moved.** Three outcomes, three
 messages, because the operator's next action differs:

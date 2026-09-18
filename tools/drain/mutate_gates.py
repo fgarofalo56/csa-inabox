@@ -594,6 +594,67 @@ ARMS: list[tuple[str, str, str, str]] = [
          '            )'),
         ('            return f"#{number} was already closed on GitHub - left alone"'),
     ),
+    # -- round 10: "verified by effect" verified a property of the WORLD ----
+    #
+    # Nine rounds of this change argued that reading the state back beats
+    # trusting rc=0. It does -- and it still cannot tell THIS invocation's
+    # effect from a concurrent writer's. close.go v2.100.0 re-fetches at :112
+    # and returns at :117-120, ABOVE the comment block at :148, so a lane that
+    # loses the race exits 0 having posted nothing while the read-back reads
+    # CLOSED. GH23 is that defect verbatim; GH24 is the two-valued classifier
+    # that would let a future `gh` rewording restore it from outside this
+    # repository; GH22 and GH25 are the two reads the write is justified by.
+    (
+        ("GH22 the verification READ stops pinning `--repo`, so `gh` resolves "
+         "the repository from the working directory. MEASURED AT ROUND 9'S "
+         "HEAD: this exact edit survived 527/527 -- the close argv was pinned "
+         "and neither read was. The pre-read can then short-circuit on a "
+         "FOREIGN repo's closed issue (receipt recorded, nothing closed, "
+         "nothing commented) and the read-back can satisfy the verification "
+         "vacuously: #4545's failure mode restored through the verification "
+         "instead of through the write"),
+        "tick.py",
+        ('        ["gh", "issue", "view", str(number), "--repo", repo, '
+         '"--json", "state,url"]'),
+        ('        ["gh", "issue", "view", str(number), "--json", "state,url"]'),
+    ),
+    (
+        ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
+         "performed by a human or by a second lane is reported as this run's "
+         "own -- over an issue where `gh` short-circuited above its comment "
+         "step and published NOTHING. The false sentence then lands in "
+         "`Item.history` permanently. This is the round-9 head, and the whole "
+         "PR exists to stop a close being reported that never reached GitHub"),
+        "tick.py",
+        "        outcome = _close_outcome(err)",
+        "        outcome = CLOSE_PERFORMED",
+    ),
+    (
+        ("GH24 the classifier goes TWO-VALUED -- anything that is not the "
+         "already-closed sentence is assumed to be our close. Fails OPEN by "
+         "construction: a future `gh` that rewords :169, a localised build or "
+         "a wrapper silently restores GH23 from OUTSIDE this repository, where "
+         "nothing in this suite watches. The third arm is the difference "
+         "between failing honest and failing open"),
+        "tick.py",
+        ("    if _GH_PERFORMED_CLOSE in err:\n"
+         "        return CLOSE_PERFORMED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        "    return CLOSE_PERFORMED",
+    ),
+    (
+        ("GH25 the read stops establishing the object's TYPE, so a number that "
+         "resolves to a PULL REQUEST is closed as though it were an issue and "
+         "the permanent receipt comment is posted on the PR. `gh issue view` "
+         "answers for PRs (measured live on #4552) and close.go :175-177 routes "
+         "them to `api.PullRequestClose`. Latent while every number comes from "
+         "`gh issue list`, but the read-first is what the write's safety is "
+         "argued from, so a read that cannot say what it read is the argument "
+         "failing rather than a missing nicety"),
+        "tick.py",
+        '    url = str((parsed or {}).get("url") or "")',
+        '    url = "https://github.com/o/r/issues/0"',
+    ),
     # -- the composed caller: the file that actually decides a merge -------
     (
         "MG1 the verdict is reduced over an EMPTY finding set (the rubber stamp)",
