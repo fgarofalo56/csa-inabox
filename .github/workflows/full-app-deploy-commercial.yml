@@ -1293,33 +1293,66 @@ jobs:
           JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
           API=2024-03-01
 
-          # RESPONSE-SOURCED TEXT NEVER REACHES COLUMN 1. The runner reads a
-          # workflow command off a line that BEGINS with `::`, so a `\n` inside
-          # a value that came out of a RESPONSE BODY is an injection primitive
-          # (`::add-mask::`, `::stop-commands::`) and this repo is public.
+          # RESPONSE-SOURCED TEXT NEVER BEGINS A LINE. The runner reads a
+          # workflow command off a line that begins with `::` AFTER LEADING
+          # WHITESPACE HAS BEEN TRIMMED, so a `\n` inside a value that came out
+          # of a RESPONSE BODY is an injection primitive (`::add-mask::`,
+          # `::stop-commands::`) and this repo is public.
+          #
+          # "AFTER TRIMMING" is a CORRECTION to what rounds 4 and 5 of this PR
+          # said, recorded rather than quietly swapped. Round 5 wrote the rule
+          # as "never reaches COLUMN 1" and mitigated two sites by INDENTING
+          # them. That mitigates nothing: actions/runner
+          # src/Runner.Common/ActionCommand.cs:62-64 is
+          #     message = message.TrimStart();
+          #     if (!message.StartsWith(_commandKey)) { return false; }
+          # which removes exactly the spaces an indent adds.
+          #
+          # Round 5 also declined to claim that the runner command-parses
+          # STDERR, on the grounds that it had only established public-log
+          # publication. It DOES command-parse stderr:
+          # src/Runner.Worker/Handlers/ScriptHandler.cs:332-336 gives stdout
+          # AND stderr an `OutputManager` each, both constructed with the SAME
+          # `ActionCommandManager`; OutputManager.cs:83 hands any line
+          # containing `::` (or `##[`) to ActionCommandManager.cs:70-71. So
+          # every `>&2` in this step is a command sink, not just a log sink.
+          # Lifted from actions/runner source rather than transcribed, and
+          # pinned by scripts/ci/__tests__/workflow-command-injection.test.mjs
+          # so a regression here goes red in `guardrails`.
+          #
+          # NOT gated by ACTIONS_ALLOW_UNSECURE_COMMANDS. Only `set-env` and
+          # `add-path` consult that flag (ActionCommandManager.cs). `add-mask`,
+          # `stop-commands`, `add-matcher`, `error` and `notice` are live in a
+          # default runner — enough to suppress every later annotation, forge
+          # `::error::`/`::notice::`, and mask arbitrary strings out of a
+          # public run log.
+          #
           # `jq -r` DECODES `\n` in a JSON string and `$( )` strips only
           # TRAILING newlines, so an embedded one survives into `echo` and
-          # lands at column 1 on its own line. Measured, not reasoned about —
-          # round 4 shipped exactly that on the off-origin arm and on the
-          # `::notice::` that names the execution; both are in the round-5
-          # receipt with the pre-fix output.
+          # begins a line of its own. Measured, not reasoned about — round 4
+          # shipped exactly that on the off-origin arm and on the `::notice::`
+          # that names the execution; both are in the round-5 receipt with the
+          # pre-fix output.
           #
           # The repo already holds this rule on the TypeScript side
           # (`lib/util/log-safe.ts`, enforced by `scripts/ci/check-log-injection.mjs`),
           # and that guard states its own scope honestly: `app/api` and
           # `app/auth`. A workflow `run:` block is outside it, which is how
-          # this shipped. Tracked as its own item; the fix here is at the sites.
+          # this shipped. Tracked as #4576; the fix here is at the sites.
           #
           # ONE spelling, two shapes. `flatten` is for a value going INTO a
-          # line: LF and CR to spaces, capped at 400 chars. `indent_cmds` is
+          # line: LF and CR to spaces, capped at 400 chars. `defuse_cmds` is
           # for text that must keep its full shape for triage (az's own
-          # stderr): it truncates nothing and only pushes a leading `::` off
-          # column 1.
+          # stderr): it truncates nothing, and rather than MOVING a leading
+          # `::` it puts a NON-whitespace marker in front of it, which
+          # `TrimStart()` has nothing to do with. It also breaks the `##[`
+          # token, because that fallback parser is an unanchored `IndexOf`
+          # (ActionCommand.cs:132) that a line prefix does not reach.
           flatten() {       # stdin -> one line, <=400 chars
             tr '\n\r' '  ' | cut -c1-400
           }
-          indent_cmds() {   # stdin -> same text, no line beginning with `::`
-            sed 's/^::/  ::/'
+          defuse_cmds() {   # stdin -> same text, no line that can BE a command
+            sed -e 's|^|az> |' -e 's|##\[|## [|g'
           }
 
           # Bounded retry for a genuinely transient ARM answer (deploy-integrity
@@ -1333,7 +1366,7 @@ jobs:
           # reading identically. Classifying by that text instead would be the
           # bare-substring misclassification this repo has been bitten by, so the
           # STATUS is what routes and the TEXT is only reported. It goes through
-          # `indent_cmds` rather than `cat`: it is response-derived, and it is
+          # `defuse_cmds` rather than `cat`: it is response-derived, and it is
           # re-emitted in FULL because a truncated az diagnostic is the thing
           # this block exists to stop losing.
           #
@@ -1350,7 +1383,7 @@ jobs:
               if az rest --method get --url "$url" > "$out" 2> arm_err.txt; then
                 return 0
               fi
-              indent_cmds < arm_err.txt >&2
+              defuse_cmds < arm_err.txt >&2
               if [ "$n" -ge 3 ]; then
                 echo "ARM GET failed on all $n attempts: $url" >&2
                 return 1
@@ -1431,7 +1464,7 @@ jobs:
           # echoed the rejected `nextLink` verbatim — LOOSER than
           # `same-origin-url.ts`, which refuses to reflect it, and looser on
           # exactly the property that module exists to hold. It is not echoed
-          # now; see the column-1 rule at the top of this step.
+          # now; see the never-begins-a-line rule at the top of this step.
           #
           # ORIGIN CHECK. `nextLink` is attacker-shaped: an absolute URL read
           # out of a RESPONSE BODY, to which `az rest` would attach a
@@ -1524,8 +1557,8 @@ jobs:
             # A URL cannot contain a control character, and a shell `*` DOES
             # match a newline — so without this first arm a `nextLink` carrying
             # the right prefix passes the origin glob below, reaches
-            # `az rest --url`, and lands its embedded `\n::add-mask::…` at
-            # column 1 in arm_get's diagnostics. Measured. This arm is also
+            # `az rest --url`, and its embedded `\n::add-mask::…` BEGINS a line
+            # of its own in arm_get's diagnostics. Measured. This arm is also
             # what lets arm_get echo `$url` unflattened.
             case "$NEXT" in
               *[[:cntrl:]]*)
@@ -1665,27 +1698,34 @@ jobs:
           # **Container Apps Jobs Contributor**.
           if ! az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
                --headers "Content-Type=application/json" --body @override.json > start.json 2> arm_err.txt; then
-            indent_cmds < arm_err.txt >&2
+            defuse_cmds < arm_err.txt >&2
             echo "::error::Could not START $JOB — no execution was created and the re-baseline did NOT run. ARM said: $(arm_err). A 403 here means the deploy identity lacks Microsoft.App/jobs/start/action on ${JOB_ID}; grant it Container Apps Jobs Operator (read/start/stop) or Container Apps Jobs Contributor at that scope. A 429/5xx is transient and this run can simply be re-dispatched; a 404 means the job vanished between the GET above and this POST."
             exit 1
           fi
-          # GUARDED, and deliberately NOT fatal — R7 in the direction that is
-          # easy to get backwards. The POST above ALREADY SUCCEEDED, so an
-          # execution IS running; a malformed 200 makes a bare
-          # `EXEC=$(jq …)` exit rc=5 under errexit with ZERO annotations
-          # (measured with a body of `not json at all`), and the operator reads
-          # a red step and concludes the re-baseline did not run. That is a
-          # claim this run did not establish and the opposite of what it did.
-          # So: say "started, name unreadable", and keep exit 0.
+          # GUARDED, and deliberately NOT fatal. A bare `EXEC=$(jq …)` exits
+          # rc=5 under errexit with ZERO annotations (measured with a body of
+          # `not json at all`), so the operator reads a red step and concludes
+          # the re-baseline did not run — a claim this run did not establish
+          # and the opposite of what it did. The MESSAGE is what carries that,
+          # not the exit code: `exit 1` under this same text would also have
+          # been truthful, and `continue-on-error: true` on the job (:1274)
+          # means the only difference is a red step versus a yellow annotation.
+          # The discriminator is NOT "a non-zero status asserts it did not
+          # run" — the step header uses the opposite framing eight lines up to
+          # justify failing closed everywhere else, and both cannot be the
+          # general rule. It is that this is the ONE arm where the
+          # deploy-relevant outcome ALREADY SUCCEEDED, so a red step buys
+          # triage attention for nothing. Say "started, name unreadable", hand
+          # over a runnable next step, and keep exit 0.
           if ! EXEC=$(jq -r '.name // .id // "unknown"' start.json); then
             echo "::warning::$JOB WAS started — the start POST returned success, so an execution IS running — but its 200 body is not readable JSON and this run cannot name the execution. jq's own message is on stderr above. Nothing downstream depends on the name; find the execution with: az containerapp job execution list -n $JOB -g $RG."
             EXEC=unknown
           fi
           # `.name` comes out of a RESPONSE BODY, so it is subject to the
-          # column-1 rule at the top of this step: round 4 emitted it raw and a
-          # `.name` of "exec-1\n::add-mask::…" put an injected command at
-          # column 1 on the SUCCESS path, where nothing looks wrong. Flatten
-          # before it reaches either the annotation or the job summary.
+          # never-begins-a-line rule at the top of this step: round 4 emitted
+          # it raw and a `.name` of "exec-1\n::add-mask::…" started a line with
+          # an injected command on the SUCCESS path, where nothing looks wrong.
+          # Flatten before it reaches either the annotation or the job summary.
           EXEC="$(printf '%s' "$EXEC" | flatten)"
           # `// "unknown"` covers a MISSING key, not an EMPTY body: on an empty
           # start.json jq emits nothing and exits 0, leaving EXEC="" and a notice

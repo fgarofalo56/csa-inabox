@@ -246,8 +246,11 @@ removes them all with their receipts attached.
 schedules identical to their ACA replacements (`0 0 6 * * *` vs `0 6 * * *`;
 `0 0 7 * * *` vs `0 7 * * *`), and nothing in the platform *prevented* them from
 resuming. **Both are disabled now** (§8.2) — done out of band, so §8.2 is the
-only record of it and `scripts/csa-loom/check-retired-function-timers.sh` is the
-standing check. The per-app removal disposition, with the reference audit each
+only record of it. The standing check is the `op19-retired-timers` job in
+`.github/workflows/loom-drift-check.yml`, which runs
+`scripts/csa-loom/check-retired-function-timers.sh` read-only on the weekly
+drift schedule and fails the job on both "a timer is ENABLED" and "I could not
+measure". The per-app removal disposition, with the reference audit each
 deletion needs, is §8.3.
 
 ---
@@ -409,13 +412,40 @@ host computed from it. They agree.
 settings (`copilot-evaluator-function.bicep` and
 `secret-expiry-monitor-function.bicep` were deleted in #2556), no script, no
 workflow, no issue, no PR. So a re-enable would be silent.
-`scripts/csa-loom/check-retired-function-timers.sh` is the standing check:
-read-only by default, fail-closed, `--apply` re-disables. It separates three
+
+**What notices it** is the `op19-retired-timers` job in
+`.github/workflows/loom-drift-check.yml` — weekly, on the same schedule as live
+bicep-drift detection, because an out-of-band app-setting change is exactly the
+unmanaged portal change that lane exists to catch and is exactly what
+`az deployment sub what-if` cannot see (the settings are not in `main.bicep`).
+The job runs `scripts/csa-loom/check-retired-function-timers.sh` read-only and
+goes red on **both** non-zero codes, so "I could not measure" is a failure and
+not a quiet pass. **That job has not yet produced a run** as of the commit that
+added it — supported-in-code, never exercised (`cloud-parity.md`); its first
+scheduled run is what establishes whether the Commercial deploy SP can read the
+DMLZ admin RG the script targets. An earlier revision of this page called the
+script itself "the standing check" while nothing invoked it; that was
+`deploy-integrity.md` R3 and is corrected here rather than quietly dropped.
+
+The script is that job's instrument, and the on-demand verifier for an
+operator: read-only by default, fail-closed, `--apply` re-disables. It
+separates three
 states rather than collapsing them (`deploy-integrity.md` R7) — a host absent
 from a *successful* listing is `GONE` and the hazard is retired by teardown
 (rc 0); a host that exists but cannot be read is `UNKNOWN` (verdict refused); a
 readable-but-not-disabled definition is `ENABLED` (rc 1). A failed listing is
 never reported as absence.
+
+**An `--apply` verdict is re-measured, not scored on the first read.** Writing
+the app setting restarts the Functions host, and `isDisabled` is what the host
+recomputed — so the write's own run could otherwise report its own fix as a
+`DOUBLE-EXECUTION HAZARD`. When (and only when) the write succeeded and the
+setting now reads `true` while `isDisabled` does not, the host read is repeated
+up to three times with backoff. It fails closed: a host that never agrees is
+still `ENABLED` (rc 1), carrying a note that the restart-lag explanation was
+tested and rejected. Pinned by
+`scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs`, which drives
+all four arms against a shim `az` and never touches the estate.
 
 **The exit code is a per-RUN verdict, not a per-target label, and `ENABLED`
 outranks `UNKNOWN`.** A run carrying one `ENABLED` and one `UNKNOWN` exits **1**,

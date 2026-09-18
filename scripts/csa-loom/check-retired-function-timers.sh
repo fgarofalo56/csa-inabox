@@ -24,8 +24,28 @@
 # `AzureWebJobs.copilotEvaluatorHttp.Disabled=true`, and
 # `az functionapp function show` reports `isDisabled: true` for all three. That
 # was done OUT OF BAND: nothing in this repo sets those settings and no issue or
-# PR records it, so nothing would notice a re-enable. This script is that
-# notice.
+# PR records it, so nothing would notice a re-enable.
+#
+# WHAT ACTUALLY NOTICES. Not this file on its own — a script a human has to
+# remember to run notices nothing, which is deploy-integrity.md R3 ("surfaced
+# where the operator looks") and no-vaporware.md's control-that-does-nothing.
+# An earlier revision of this header called itself "the standing check" while
+# NOTHING invoked it; that claim was false and is corrected here rather than
+# quietly dropped (PR #4564 round 6 review, S1). The notice is the
+# `op19-retired-timers` job in .github/workflows/loom-drift-check.yml, weekly
+# on the same schedule as live bicep-drift detection, read-only, failing closed
+# on both "a timer is ENABLED" (rc 1) and "I could not measure" (rc 2). This
+# file is the instrument that job runs, and the on-demand verifier an operator
+# runs by hand.
+#
+# THAT JOB HAS NOT YET PRODUCED A RUN as of the commit that added it —
+# "supported-in-code, never exercised" in cloud-parity.md's sense. Its first
+# scheduled run is what establishes whether the Commercial deploy SP can read
+# the DMLZ admin RG this script targets. Do not quote the lane as evidence
+# before reading that run.
+#
+# Once the OP-19 §8.3 deletes land, every target resolves GONE and the job
+# stays green on the terminal good state rather than going quiet.
 #
 # WHAT WOULD MAKE THIS SCRIPT FAIL (assertion-design.md): any of the three
 # settings absent or not "true", or `isDisabled` not true on the corresponding
@@ -117,6 +137,15 @@ RG="${LOOM_ADMIN_RG:-rg-csa-loom-admin-centralus}"
 APPLY=0
 [[ "${1:-}" == "--apply" ]] && APPLY=1
 
+# Backoff unit for the post-write restart-lag re-read below: waits are
+# 1x, 2x, 3x this (default 5s, 10s, 15s). Overridable ONLY so the tracked
+# harness scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs can
+# exercise that arm in seconds rather than minutes. It is NOT a bypass:
+# shortening it makes the script give up SOONER and therefore report ENABLED
+# more readily — the fail-closed direction. No value of it can turn a
+# confirmed hazard into an OK.
+RETRY_UNIT="${LOOM_OP19_RETRY_UNIT_SECONDS:-5}"
+
 # Boundary guard (mirrors scripts/measure/estate-resume.mjs): this is the
 # Commercial admin plane by construction. Per csa_loom_gov_verify_via_actions a
 # sovereign boundary is never touched from a workstation `az`, so refuse rather
@@ -164,6 +193,8 @@ for t in "${TARGETS[@]}"; do
   # DENIED write, "re-run with --apply" is the one thing already known not to
   # work, so the ENABLED line points at the role instead.
   FIXHINT="Re-run with --apply."
+  WROTE=0        # did the --apply write SUCCEED on this run, for this target?
+  LAGNOTE=""     # set only when a post-write re-read still disagrees
 
   # Step 1 — does the host still exist? A LIST that fails is not an absence.
   if ! LISTED="$(az functionapp list -g "$RG" --subscription "$SUB" \
@@ -190,11 +221,19 @@ for t in "${TARGETS[@]}"; do
   # reported ENABLED (rc 1) rather than downgraded to UNKNOWN — this file's own
   # precedence (see EXIT CODES) says a confirmed hazard outranks an unmeasured
   # one, and a failed write is a reason to distrust the FIX, not the MEASUREMENT.
-  if [[ $APPLY -eq 1 ]] && ! az functionapp config appsettings set -g "$RG" -n "$APP" \
-       --subscription "$SUB" --settings "${SETTING}=true" -o none; then
-    echo "  APPLYFAIL ${APP}/${FN}: could not write ${SETTING} — the definition was NOT changed. Needs Microsoft.Web/sites/config/write (built-in role: Website Contributor) on /subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Web/sites/${APP}." >&2
-    applyfail=$((applyfail + 1))
-    FIXHINT="--apply was already tried on this run and was DENIED — grant the role named in the APPLYFAIL line above, then re-run with --apply."
+  #
+  # Split into if/else rather than the old `[[ … ]] && ! az …` so the SUCCESS of
+  # the write is recordable. WROTE is what the restart-lag arm after the reads
+  # keys on, and "APPLY was off" must not look like "the write succeeded".
+  if [[ $APPLY -eq 1 ]]; then
+    if az functionapp config appsettings set -g "$RG" -n "$APP" \
+         --subscription "$SUB" --settings "${SETTING}=true" -o none; then
+      WROTE=1
+    else
+      echo "  APPLYFAIL ${APP}/${FN}: could not write ${SETTING} — the definition was NOT changed. Needs Microsoft.Web/sites/config/write (built-in role: Website Contributor) on /subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Web/sites/${APP}." >&2
+      applyfail=$((applyfail + 1))
+      FIXHINT="--apply was already tried on this run and was DENIED — grant the role named in the APPLYFAIL line above, then re-run with --apply."
+    fi
   fi
 
   # Read 1 — the app setting an operator writes. GUARDED: under `set -e` a bare
@@ -217,11 +256,48 @@ for t in "${TARGETS[@]}"; do
     continue
   fi
 
+  # RESTART LAG, and only in that exact shape. `appsettings set` RESTARTS the
+  # Functions host, and read 2 is what the host has RECOMPUTED — so on the run
+  # that writes the setting, read 2 can still answer with the pre-write value
+  # and a correct --apply reports its own fix as a DOUBLE-EXECUTION HAZARD
+  # (rc 1) seconds after disabling the timer. The two-independent-reads design
+  # is kept; what is added is that a disagreement is re-measured ONCE THE WRITE
+  # IS KNOWN TO HAVE LANDED, rather than scored immediately.
+  #
+  # FAILS CLOSED, deliberately. This arm cannot turn a real hazard into an OK:
+  # a host that is genuinely still running the timer keeps answering `false`,
+  # the loop exhausts, and the verdict is ENABLED exactly as before — carrying
+  # LAGNOTE, which says the lag explanation was tested and rejected. A read
+  # that FAILS mid-retry empties SHOWN rather than leaving the stale value, so
+  # "unreadable" never presents as "disabled".
+  #
+  # WHAT VALUE MAKES THIS ARM RUN: SHOWN="false" on the first read after a
+  # successful write. WHAT VALUE STILL FAILS THE RUN: SHOWN="false" on all
+  # three. WHAT VALUE SKIPS IT ENTIRELY: WROTE=0 — a verify-only run is scored
+  # exactly as it was, so the default read-only path is unchanged.
+  if [[ $WROTE -eq 1 && "$VAL" == "true" && "$SHOWN" != "true" ]]; then
+    for attempt in 1 2 3; do
+      sleep $((attempt * RETRY_UNIT))
+      if ! SHOWN="$(az functionapp function show -g "$RG" -n "$APP" --subscription "$SUB" \
+                      --function-name "$FN" --query isDisabled -o tsv)"; then
+        SHOWN=""
+        break
+      fi
+      SHOWN="${SHOWN//$'\r'/}"
+      if [[ "$SHOWN" == "true" ]]; then
+        break
+      fi
+    done
+    if [[ "$SHOWN" != "true" ]]; then
+      LAGNOTE=" The --apply write on this run SUCCEEDED and ${SETTING} reads true, and isDisabled was re-read ${attempt} more time(s) over ~$((RETRY_UNIT * 6))s without agreeing — so this is NOT a host-restart lag."
+    fi
+  fi
+
   if [[ "$VAL" == "true" && "$SHOWN" == "true" ]]; then
     echo "  OK       ${APP}/${FN}: ${SETTING}=${VAL}, isDisabled=${SHOWN}"
     ok=$((ok + 1))
   else
-    echo "  ENABLED  ${APP}/${FN}: ${SETTING}=${VAL:-<unset>}, isDisabled=${SHOWN:-<unset>} — DOUBLE-EXECUTION HAZARD against its ACA job twin. ${FIXHINT}" >&2
+    echo "  ENABLED  ${APP}/${FN}: ${SETTING}=${VAL:-<unset>}, isDisabled=${SHOWN:-<unset>} — DOUBLE-EXECUTION HAZARD against its ACA job twin.${LAGNOTE} ${FIXHINT}" >&2
     enabled=$((enabled + 1))
   fi
 done
