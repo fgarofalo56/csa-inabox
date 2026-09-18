@@ -40,6 +40,28 @@
 // unrepresentable, so the guard could not fail on it. `runnerLines()` below is
 // the fix, and the CR entry in ATTACKS is what exercises it.
 //
+// THE FORM SPACE, and why this file kept shipping one cell short. Rounds 5, 6
+// and 7 each closed ONE cell of a cross-product and each believed it had closed
+// the class:
+//
+//   delivery shape        | Form A `::` | Form B `##[` | closed by
+//   ----------------------+-------------+--------------+------------------
+//   anchored at column 1  | YES         | YES          | the `az> ` prefix (r5)
+//   leading whitespace    | YES         | YES          | ditto, non-space marker
+//   split by an LF        | YES         | YES          | prefix is per-sed-line
+//   split by a bare CR    | YES         | YES          | `s|\r|%0D|g`      (r7)
+//   unanchored, mid-line  | n/a         | YES          | `s|##\[|## [|g`   (r8)
+//
+// Nine reachable cells. Form A cannot use the mid-line shape, because
+// TryParseV2 tests StartsWith AFTER TrimStart. ROUND 8 is the bottom-right
+// cell, and it needed no fix to `defuse_cmds` at all — that function already
+// carried the `##[` expression. What it needed was REACHABILITY: two site
+// classes published response-derived text without going through any defuser,
+// and the arm in this file that calls itself "the reachability half" counted
+// only `arm_err.txt` sites, so it passed green over both. That arm is now
+// scoped to every response-derived sink in the step, and `flatten` — the
+// value-shaped sibling, which had NO `##[` stage — is exercised here too.
+//
 // Only `set-env` and `add-path` consult ACTIONS_ALLOW_UNSECURE_COMMANDS
 // (ActionCommandManager.cs:244 and :463 — the only two reads). `add-mask`,
 // `stop-commands`, `add-matcher` and `error` are live on a default runner, in
@@ -132,20 +154,77 @@ let _lifted;
 /** Pull defuse_cmds()'s real sed argv out of the workflow. Memoized. */
 function liveSed() {
   if (_lifted) return _lifted;
-  const fnMatch = SRC.match(/\n[ \t]*defuse_cmds\(\)[ \t]*\{[^\n]*\n([\s\S]*?)\n[ \t]*\}\n/);
-  assert.ok(
-    fnMatch,
-    'defuse_cmds() is not defined in full-app-deploy-commercial.yml. FAILS IF: the function is renamed or deleted — in which case nothing here measured the live mitigation.',
-  );
-  const sedLine = fnMatch[1]
+  const body = liveFnBody('defuse_cmds');
+  const sedLine = body
     .split('\n')
     .map((s) => s.trim())
     .find((s) => s.startsWith('sed '));
-  assert.ok(sedLine, `defuse_cmds() has no sed line; body was:\n${fnMatch[1]}`);
+  assert.ok(sedLine, `defuse_cmds() has no sed line; body was:\n${body}`);
   const argv = argvOf(sedLine);
   assert.equal(argv[0], 'sed', `expected defuse_cmds to shell out to sed, got: ${sedLine}`);
   _lifted = argv.slice(1);
   return _lifted;
+}
+
+/**
+ * Lift a shell function's BODY out of the workflow by name.
+ *
+ * WHAT VALUE MAKES A CALLER FAIL: the function being renamed or deleted — at
+ * which point nothing downstream measured the live mitigation, so this throws
+ * rather than returning an empty body that would read as "nothing dangerous".
+ */
+function liveFnBody(name) {
+  const m = SRC.match(new RegExp(`\\n[ \\t]*${name}\\(\\)[ \\t]*\\{[^\\n]*\\n([\\s\\S]*?)\\n[ \\t]*\\}\\n`));
+  assert.ok(m, `${name}() is not defined in full-app-deploy-commercial.yml — nothing here measured the live mitigation.`);
+  return m[1];
+}
+
+/**
+ * Run a LIFTED shell function over `input`, failing closed if it did not run.
+ *
+ * `flatten` is a PIPELINE (tr | sed | cut), not a single sed, so it cannot be
+ * exercised through runSed(). This runs the real body in a real bash.
+ */
+function runLiveFn(name, input) {
+  const body = liveFnBody(name);
+  const script = `${name}() {\n${body}\n}\n${name}`;
+  const r = spawnSync('bash', ['-c', script], { input, encoding: 'utf8' });
+  assert.equal(r.error, undefined, `bash did not run (${r.error && r.error.message}) — this arm measured NOTHING`);
+  assert.equal(r.status, 0, `${name}() exited ${r.status}: ${r.stderr}`);
+  return runnerLines(r.stdout);
+}
+
+// --- The STEP body, for the reachability arms --------------------------------
+
+let _step;
+/**
+ * The eval-re-baseline step's `run:` block, as EXECUTABLE lines — comments and
+ * blanks dropped, because a `##[` inside a comment is not a sink and counting
+ * one would be the "a guard matching raw source is satisfied by a comment"
+ * defect (#4467), inverted.
+ */
+function stepLines() {
+  if (_step) return _step;
+  const all = SRC.split('\n');
+  const start = all.findIndex((l) => /^\s*- name: Start a corpus re-baseline/.test(l));
+  assert.ok(start >= 0, 'the eval-re-baseline step is gone from full-app-deploy-commercial.yml');
+  let end = all.length;
+  for (let i = start + 1; i < all.length; i++) {
+    if (/^ {1,6}\S/.test(all[i])) {
+      end = i;
+      break;
+    }
+  }
+  const body = all.slice(start, end);
+  _step = body
+    .map((l, i) => ({ n: start + i + 1, t: l.trim() }))
+    .filter((r) => r.t.length > 0 && !r.t.startsWith('#'));
+  return _step;
+}
+
+/** A line the RUNNER will command-parse: anything reaching stdout or stderr. */
+function isPublished(t) {
+  return />&2/.test(t) || /^echo "::/.test(t);
 }
 
 // The retired round-5 mitigation, kept ONLY as the negative control.
@@ -271,16 +350,150 @@ test('defuse_cmds leaves benign az output readable', () => {
   });
 });
 
-test('both ARM-stderr sites go through defuse_cmds, and the retired name is gone', () => {
-  // WHAT VALUE MAKES THIS FAIL: a third `cat arm_err.txt >&2` added later, or
-  // either existing site reverted to `cat`. This is the reachability half —
-  // the mitigation being correct is worth nothing if a site bypasses it.
+test('the LIVE flatten also neutralises every attack shape (the round-8 arm)', () => {
+  // `flatten` is the VALUE-shaped sibling of defuse_cmds, and until round 8 it
+  // carried no `##[` expression at all: `tr '\n\r' '  ' | cut -c1-400` closes
+  // every LINE-SPLIT delivery shape and none of the unanchored one. Every
+  // response-derived value interpolated into a line of this step's own goes
+  // through it, so that hole was the whole of the round-8 blocker.
+  //
+  // MEASURED IN CONTEXT, not in isolation, and the distinction is the point.
+  // `flatten` deliberately does NOT move a leading `::` — that is defuse_cmds'
+  // job, and mangling the head of a value would corrupt it for triage. What
+  // makes flatten sufficient at ITS sinks is that the value is interpolated
+  // MID-LINE, after text of ours, so Form A is structurally unreachable there.
+  // So this arm runs the attack through the live flatten and then through the
+  // REAL echo templates, LIFTED from the workflow rather than transcribed. An
+  // isolated `flatten('::add-mask::…')` still reads as a command and SHOULD.
+  const templates = stepLines()
+    .filter((r) => /^echo "ARM GET failed/.test(r.t))
+    .map((r) => r.t);
+  assert.equal(templates.length, 2, `expected arm_get's 2 diagnostics, found ${templates.length} — re-pin them, do not delete this arm`);
+  for (const t of templates) {
+    assert.match(t, /\$\{?safe_url\b/, `arm_get diagnostic no longer interpolates the FLATTENED url: ${t}`);
+  }
+
+  for (const attack of ATTACKS) {
+    const out = runLiveFn('flatten', attack + '\n');
+    assert.equal(out.length, 1, `flatten must collapse to ONE runner line, got ${out.length}: ${JSON.stringify(out)}`);
+    for (const t of templates) {
+      const line = t.replace(/\$safe_url/g, out[0]);
+      assert.equal(
+        runnerWouldParse(line),
+        false,
+        `flatten left a parseable command at an arm_get sink: ${JSON.stringify(attack)} -> ${JSON.stringify(line.slice(0, 140))}`,
+      );
+    }
+  }
+});
+
+test('negative control: the ROUND-7 flatten (tr + cut, no ##[ stage) does NOT stop a command', () => {
+  // Transcribed on purpose — this is the RETIRED spelling, and its job is to
+  // prove the arm above is not vacuous. If this ever reads "harmless", the
+  // simulator has lost the ability to say "command" and the arm above proves
+  // nothing. Run through the same mid-line sink, so the two arms differ in
+  // EXACTLY one thing: the `##[` stage.
+  const RETIRED_FLATTEN = "tr '\\n\\r' '  ' | cut -c1-400";
+  const ATTACK = 'https://management.azure.com/subscriptions/s/jobs?api-version=1##[stop-commands]x9f2a1';
+  const r = spawnSync('bash', ['-c', RETIRED_FLATTEN], { input: ATTACK + '\n', encoding: 'utf8' });
+  assert.equal(r.status, 0, `bash exited ${r.status}: ${r.stderr}`);
+  const [value] = runnerLines(r.stdout);
+  const line = `echo "ARM GET failed on all 3 attempts: ${value}" >&2`;
+  assert.equal(runnerWouldParse(line), 'v1', `the retired flatten was supposed to be defeated here: ${JSON.stringify(line)}`);
+
+  // Paired POSITIVE assertion: flatten must not be "fixed" by deleting the
+  // value. The live one has to still carry the whole URL through.
+  const live = runLiveFn('flatten', ATTACK + '\n');
+  assert.ok(live[0].includes('api-version=1'), `the live flatten ate the value instead of defusing it: ${JSON.stringify(live[0])}`);
+});
+
+test('reachability: EVERY response-derived sink in the step is defused, not just arm_err.txt', () => {
+  // THIS ARM'S SCOPE WAS THE ROUND-8 BLOCKER'S SECOND HALF. It used to count
+  // `arm_err.txt` sites only, while calling itself "the reachability half" —
+  // so it passed green at the round-7 head with TWO site classes bypassing the
+  // mitigation entirely (arm_get's `$url` echoes, and jq's own stderr). A
+  // guard that names itself the reachability check and measures a third of the
+  // sites is the defect class this file exists to remove.
+  //
+  // The rule it now holds: no executable line of the step may PUBLISH a
+  // response-derived value that has not been through flatten or defuse_cmds.
+  const lines = stepLines();
+
+  // --- INSTRUMENT CONTROLS. Every assertion below is an emptiness claim, and
+  // an emptiness claim from a blind enumerator is worthless.
+  assert.ok(lines.length > 100, `the step enumerator found only ${lines.length} executable lines — it is not reading the step`);
+  const published = lines.filter((r) => isPublished(r.t));
+  assert.ok(published.length >= 10, `only ${published.length} published lines found; the isPublished() predicate is not biting`);
+  // The predicate must DETECT a violation, or "no violations" means nothing.
+  assert.ok(
+    isPublished('echo "boom: $NEXT" >&2') && /\$\{?NEXT\b/.test('echo "boom: $NEXT" >&2'),
+    'the violation predicate does not fire on a synthetic violation',
+  );
+  // And must NOT fire on the fixed spelling, or it would be unsatisfiable.
+  assert.equal(/\$\{?url\b/.test('echo "x: $safe_url" >&2'), false, 'the predicate false-positives on $safe_url');
+
+  // --- (a) Response-derived variables must never be published RAW.
+  // Each name is asserted to OCCUR in the step, so a rename cannot silently
+  // empty this check — the "chase a guard's silence" rule.
+  const RAW = ['url', 'NEXT', 'PAGE_COUNTS', 'COUNT'];
+  for (const v of RAW) {
+    assert.ok(
+      lines.some((r) => new RegExp(`\\$\\{?${v}\\b`).test(r.t)),
+      `$${v} no longer occurs in the step — if it was renamed, rename it HERE too rather than leaving this arm watching nothing`,
+    );
+  }
+  const rawPublished = published
+    .filter((r) => RAW.some((v) => new RegExp(`\\$\\{?${v}\\b`).test(r.t)))
+    .map((r) => `${r.n}: ${r.t.slice(0, 110)}`);
+  assert.deepEqual(rawPublished, [], 'a response-derived value reaches a published line without flatten/defuse_cmds');
+
+  // --- (b) $EXEC is published only AFTER it has been flattened.
+  const flattenExec = lines.findIndex((r) => /^EXEC="\$\(printf .* \| flatten\)"$/.test(r.t));
+  assert.ok(flattenExec >= 0, 'the EXEC flatten is gone — $EXEC now reaches the notice and the job summary raw');
+  const execEarly = published
+    .filter((r) => /\$\{?EXEC\b/.test(r.t) && lines.indexOf(r) < flattenExec)
+    .map((r) => `${r.n}: ${r.t.slice(0, 110)}`);
+  assert.deepEqual(execEarly, [], '$EXEC is published BEFORE it is flattened');
+
+  // --- (c) $(arm_err) is safe BY CONSTRUCTION, so pin the construction.
+  assert.match(
+    liveFnBody('arm_err'),
+    /flatten < arm_err\.txt/,
+    'arm_err() no longer pipes through flatten, so every `ARM said: $(arm_err)` annotation is now a raw sink',
+  );
+
+  // --- (d) EVERY jq call goes through jq_defused. jq embeds the offending
+  // RESPONSE VALUE in its own stderr (`Cannot iterate over string ("…")`,
+  // measured on jq 1.8.2), and none of the five calls captured it before
+  // round 8.
+  const wrapperBody = liveFnBody('jq_defused')
+    .split('\n')
+    .map((s) => s.trim());
+  const bareJq = lines
+    .filter((r) => /(^|[^_\w])jq\s/.test(r.t) && !/jq_defused/.test(r.t) && !wrapperBody.includes(r.t))
+    .map((r) => `${r.n}: ${r.t.slice(0, 110)}`);
+  assert.deepEqual(bareJq, [], 'a jq call publishes its own stderr without defuse_cmds');
+  const defusedJq = lines.filter((r) => /jq_defused\s/.test(r.t) && !/^jq_defused\(\)/.test(r.t));
+  assert.equal(defusedJq.length, 5, `expected 5 jq_defused call sites, found ${defusedJq.length} — "zero bare jq" must not be satisfiable by deleting jq`);
+  assert.match(liveFnBody('jq_defused'), /defuse_cmds < jq_err\.txt >&2/, 'jq_defused no longer routes jq stderr through defuse_cmds');
+  assert.match(liveFnBody('jq_defused'), /jq "\$@" 2> jq_err\.txt/, 'jq_defused no longer captures jq stderr');
+
+  // --- (e) arm_err.txt itself — the original arm, kept.
   const defused = [...SRC.matchAll(/^[ \t]*defuse_cmds < arm_err\.txt >&2$/gm)];
   assert.equal(defused.length, 2, `expected 2 defuse_cmds sites over arm_err.txt, found ${defused.length}`);
   const raw = [...SRC.matchAll(/^[ \t]*(?:cat|tee|printf|echo)[^\n]*arm_err\.txt[^\n]*>&2/gm)];
   assert.deepEqual(raw.map((m) => m[0].trim()), [], 'arm_err.txt reaches stderr without defuse_cmds');
   assert.equal(SRC.includes('indent_cmds'), false, 'the retired indent_cmds name is still present');
   assert.equal(/sed [^\n]*\^::/.test(SRC), false, 'an indent-only `^::` defence has come back');
+});
+
+test('the nextLink refusal covers BOTH command forms, not just the control-character one', () => {
+  // The closed direction at the SOURCE, paired with the flatten at the sink.
+  // WHAT VALUE MAKES THIS FAIL: deleting either `case` arm. Both are needed —
+  // a `##[` is not a control character, and a bare CR is not a `##[`.
+  const step = stepLines().map((r) => r.t).join('\n');
+  assert.match(step, /\*\[\[:cntrl:\]\]\*\)/, 'the control-character nextLink arm is gone');
+  assert.match(step, /\*'##\['\*\)/, 'the hash-bracket nextLink arm is gone — an ACCEPTED nextLink can carry one');
 });
 
 // --- The second site in this class: loom-drift-check.yml's op19 step ---------

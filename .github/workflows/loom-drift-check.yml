@@ -531,6 +531,16 @@ jobs:
           exit "$rc"
 
       - name: Upload the OP-19 verdict
+        # `op19.txt` is written by `tee` INSIDE the shell, so it never passes
+        # through the runner's secret masker — masking applies to what the
+        # runner reads off stdout/stderr, not to a file the step wrote itself.
+        # Today the content is app-setting NAMES plus true/false plus az
+        # diagnostics, so there is nothing to mask and this is not a finding.
+        # It is recorded because the property is not obvious: if a future
+        # revision teaches the script to read a secret-bearing value, that
+        # value lands in a PUBLIC artifact unmasked even though the same text
+        # would be redacted in the log. Add a `defuse`-style scrub before the
+        # tee, or drop the artifact, rather than assuming the masker covers it.
         if: always()
         uses: actions/upload-artifact@v7
         with:

@@ -251,9 +251,26 @@ for t in "${TARGETS[@]}"; do
   # emits "true\r", the `== "true"` test at the verdict below is FALSE, the S3
   # lag arm is skipped on its `"$VAL" == "true"` guard, and a correctly
   # DISABLED timer is reported as an ENABLED double-execution hazard at rc=1,
-  # permanently. Fail-closed in direction, wrong in fact — and this script is
-  # offered as the on-demand verifier an operator runs from a workstation,
-  # which is exactly where that CR comes from.
+  # permanently. Fail-closed in direction, wrong in fact.
+  #
+  # WHICH WORKSTATION SHELL, narrowed — the round-7 revision of this comment
+  # said "this script is offered as the on-demand verifier an operator runs
+  # from a workstation, which is exactly where that CR comes from", and that
+  # is not true of every workstation shell. Measured 2026-09-18:
+  #   Git Bash / MSYS : `V="$(printf 'a\r\n')"` yields `a`   — $() strips the
+  #                     trailing CR as well as the LF, so VAL never carries one
+  #                     and these strips are INERT there.
+  #   Linux / WSL     : the same yields `a\r`                — $() strips LF
+  #                     only, so the CR survives and these strips are the only
+  #                     thing standing between a disabled timer and a false
+  #                     hazard.
+  # The reachable case is therefore WSL (or any Linux shell) driving a Windows
+  # `az.exe`, plus the ubuntu-latest runner that op19 executes on — not Git
+  # Bash. The strips are correct and load-bearing; the sentence justifying them
+  # named the wrong shell, and is corrected rather than quietly dropped.
+  # Witnessed by scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs
+  # (`AZ_CR=1`), which is a REAL witness only on Linux for the same reason —
+  # both strip deletions survive on Git Bash and are killed on WSL Ubuntu.
   VAL="${VAL//$'\r'/}"
   # Read 2 — what the Functions host computed from it. A host that exists but
   # cannot be read fails here rather than yielding a convenient empty string.

@@ -1342,14 +1342,51 @@ jobs:
           # `app/auth`. A workflow `run:` block is outside it, which is how
           # this shipped. Tracked as #4576; the fix here is at the sites.
           #
-          # ONE spelling, two shapes. `flatten` is for a value going INTO a
-          # line: LF and CR to spaces, capped at 400 chars. `defuse_cmds` is
-          # for text that must keep its full shape for triage (az's own
-          # stderr): it truncates nothing, and rather than MOVING a leading
-          # `::` it puts a NON-whitespace marker in front of it, which
-          # `TrimStart()` has nothing to do with. It also breaks the `##[`
-          # token, because that fallback parser is an unanchored `IndexOf`
-          # (ActionCommand.cs:132) that a line prefix does not reach.
+          # THE FORM SPACE, enumerated — because rounds 5, 6 and 7 each fixed
+          # ONE CELL of it and shipped believing they had fixed the class. The
+          # runner has TWO command forms and a payload can reach either through
+          # several delivery shapes; a mitigation is only complete when it
+          # covers the whole cross-product.
+          #
+          #   Form A `::cmd::`  TryParseV2 — TrimStart() THEN StartsWith("::").
+          #                     Needs the payload at the START of a runner line.
+          #   Form B `##[cmd]`  TryParse   — unanchored IndexOf (cs:132).
+          #                     Needs NOTHING; anywhere in the line will do.
+          #
+          #   delivery shape        | Form A | Form B | closed by
+          #   ----------------------+--------+--------+---------------------------
+          #   anchored at column 1  | YES    | YES    | the `az> ` prefix  (round 5)
+          #   leading whitespace    | YES    | YES    | ditto — a NON-space marker,
+          #                         |        |        |   which TrimStart cannot eat
+          #   split by an LF        | YES    | YES    | prefix is per-sed-line, and
+          #                         |        |        |   sed DOES split on LF
+          #   split by a bare CR    | YES    | YES    | `s|\r|%0D|g`       (round 7)
+          #   unanchored, mid-line  | n/a    | YES    | `s|##\[|## [|g`    (round 8)
+          #
+          # Nine reachable cells; Form A cannot use the mid-line shape at all,
+          # because TryParseV2 tests StartsWith after trimming. ROUND 8 is the
+          # last column's last row: `##[` needs neither a line start nor a line
+          # break, so NEITHER the prefix NOR the CR rewrite touches it, and two
+          # site classes in this step were publishing response-derived text with
+          # no `##[` expression at all (arm_get's `$url` echoes, and jq's own
+          # stderr). Both are closed below.
+          #
+          # ONE rule, two shapes — and BOTH shapes now cover all nine cells.
+          # They differ only in what they preserve:
+          #   `flatten`     a value going INTO a line we compose. LF and CR to
+          #                 SPACES (so no split shape survives), `##[` broken,
+          #                 capped at 400 chars. The cap is deliberate: the
+          #                 value is attacker-chosen in LENGTH as well as in
+          #                 content, and an unbounded echo is a log flood.
+          #   `defuse_cmds` a whole STREAM that must keep its full shape for
+          #                 triage (az's own stderr, jq's own stderr). Truncates
+          #                 nothing; rather than MOVING a leading `::` it puts a
+          #                 NON-whitespace marker in front of it, which
+          #                 `TrimStart()` has nothing to do with.
+          # A value interpolated mid-line into text of ours that does not begin
+          # `::` cannot reach Form A at all — but `flatten` does not lean on
+          # that, because the coupling would break the first time someone moved
+          # the interpolation to the front of a line.
           #
           # A BARE CR IS A RUNNER LINE TERMINATOR, AND `sed` DOES NOT SPLIT ON
           # ONE. That disagreement is why the CR expression comes FIRST and is
@@ -1370,13 +1407,47 @@ jobs:
           # prefix reach every line the runner will actually see. Rewritten,
           # not DELETED: deleting it would silently join two genuine az lines,
           # which is the truncation this function exists to avoid. `%0D` is the
-          # runner's own escape for CR (ActionCommand.cs:12), so it is lossless
-          # and reads correctly to anyone who knows the format.
-          flatten() {       # stdin -> one line, <=400 chars
-            tr '\n\r' '  ' | cut -c1-400
+          # runner's own escape for CR (ActionCommand.cs:12), so it reads
+          # correctly to anyone who knows the format. REVERSIBLE, not
+          # "lossless": the mapping is not injective, because an az diagnostic
+          # that genuinely contained the three characters `%0D` is now
+          # indistinguishable from one that contained a CR. That costs nothing
+          # in fact and the weaker word is the true one.
+          flatten() {       # stdin -> ONE line, <=400 chars, no command in ANY form
+            tr '\n\r' '  ' | sed 's|##\[|## [|g' | cut -c1-400
           }
           defuse_cmds() {   # stdin -> same text, no line that can BE a command
             sed -e 's|\r|%0D|g' -e 's|^|az> |' -e 's|##\[|## [|g'
+          }
+          # jq's OWN stderr is response-derived and was being published raw at
+          # every call site in this step. Measured on jq 1.8.2: the
+          # `Cannot iterate over <type> (<value>)` family embeds the offending
+          # RESPONSE VALUE verbatim —
+          #     jq: error (at job.json:0): Cannot iterate over string ("##[stop-commands]x9f2a1")
+          # — which is Form B, mid-line, and reaches the parser through the
+          # unanchored IndexOf. The `Cannot index <type> with string ("key")`
+          # family embeds our own KEY and the `error("literal")` and parse-error
+          # families embed nothing, so TODAY only the override build below is
+          # demonstrably live. jq's message catalogue is not a pinned contract
+          # and this runner does not pin a jq version, so every call is wrapped
+          # rather than the one that was measured — closing this at the SITES
+          # and not at the LABEL (assertion-design.md).
+          #
+          # Deliberately NOT `2>/dev/null`: the three annotations below say
+          # "jq's own message is on stderr above" and that must stay TRUE.
+          # `jq_err.txt` is distinct from `arm_err.txt` so a jq failure cannot
+          # overwrite the ARM diagnostic an annotation is about to quote.
+          #
+          # jq's lines therefore come out carrying `defuse_cmds`' `az> ` marker.
+          # That marker means "output of a subprocess this step ran, and NOT a
+          # workflow command" — it is not a claim about which subprocess. Noted
+          # rather than given a second spelling: two markers means two seds, and
+          # the second one is the one that drifts.
+          jq_defused() {    # jq, with its own stderr routed through defuse_cmds
+            local ok=0
+            if jq "$@" 2> jq_err.txt; then ok=1; fi
+            defuse_cmds < jq_err.txt >&2
+            [ "$ok" = 1 ]
           }
 
           # Bounded retry for a genuinely transient ARM answer (deploy-integrity
@@ -1394,13 +1465,30 @@ jobs:
           # re-emitted in FULL because a truncated az diagnostic is the thing
           # this block exists to stop losing.
           #
-          # `$url` is echoed unflattened on purpose — every value that reaches
-          # here is either built from workflow inputs ($SUB/$RG/$JOB_ID) or a
-          # `nextLink` that the control-character arm below has already
-          # rejected, so it cannot carry a newline. That coupling is stated in
-          # both places; do not delete one without the other.
+          # `$url` IS RESPONSE-DERIVED AND IS DEFUSED BEFORE IT IS ECHOED. Round
+          # 5 stopped echoing the `nextLink` this step REJECTS; it went on
+          # echoing the one it ACCEPTS, raw, on both diagnostics below. The
+          # justification here used to be "the control-character arm has already
+          # rejected it, so it cannot carry a newline". That half is TRUE and
+          # still holds — and it is not the whole rule, because a mid-line `##[`
+          # needs no newline (see the form-space table at the top of this step).
+          # Measured: a `nextLink` of
+          #   https://management.azure.com/subscriptions/s/jobs?api-version=1##[stop-commands]x9f2a1
+          # passes BOTH the `[[:cntrl:]]` arm and the origin glob, with positive
+          # controls proving each of those guards bites.
+          #
+          # Closed in two places, on purpose. Here the value is `flatten`ed, so
+          # the sink is safe whatever reaches it; at the refusal `case` below a
+          # `nextLink` carrying `##[` is REFUSED outright, so the value never
+          # travels. Either alone would do; both means loosening one does not
+          # silently re-open the other. The 400-char cap is the cost, and it is
+          # accepted: a truncated URL still identifies the page, and the length
+          # of this value is attacker-chosen too.
           arm_get() {   # arm_get <url> <outfile>  ->  0 = read it, 1 = did not
-            local url="$1" out="$2" n=0
+            local url="$1" out="$2" n=0 safe_url
+            # Assigned on its own line, not in the `local` list: `local x=$(…)`
+            # takes `local`'s exit status and would swallow a failure here.
+            safe_url="$(printf '%s' "$url" | flatten)"
             : > arm_err.txt
             while :; do
               n=$((n + 1))
@@ -1409,10 +1497,10 @@ jobs:
               fi
               defuse_cmds < arm_err.txt >&2
               if [ "$n" -ge 3 ]; then
-                echo "ARM GET failed on all $n attempts: $url" >&2
+                echo "ARM GET failed on all $n attempts: $safe_url" >&2
                 return 1
               fi
-              echo "ARM GET failed (attempt $n/3), retrying in $((n * 10))s: $url" >&2
+              echo "ARM GET failed (attempt $n/3), retrying in $((n * 10))s: $safe_url" >&2
               sleep $((n * 10))
             done
           }
@@ -1549,7 +1637,7 @@ jobs:
             # non-objects is not a job collection, so it errors like any other
             # unparseable listing. An EMPTY array still passes (`any` over
             # nothing is false), because an empty page is legitimate.
-            if ! PAGE_COUNTS=$(jq -er --arg n "$JOB" '
+            if ! PAGE_COUNTS=$(jq_defused -er --arg n "$JOB" '
                    if (.value | type) != "array" then error("no .value array")
                    elif (.value | map(type) | any(. != "object")) then error("not a job collection")
                    else "\(.value | length) \([.value[] | select(.name == $n)] | length)" end' jobs.json); then
@@ -1559,7 +1647,7 @@ jobs:
             TOTAL=$((TOTAL + ${PAGE_COUNTS%% *}))
             MATCH=$((MATCH + ${PAGE_COUNTS##* }))
 
-            if ! NEXT=$(jq -r '.nextLink // "" | tostring' jobs.json); then
+            if ! NEXT=$(jq_defused -r '.nextLink // "" | tostring' jobs.json); then
               echo "::error::The job listing for $RG returned 200 on page $PAGES but its nextLink could not be read, so the collection was not fully walked and absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
               exit 1
             fi
@@ -1582,11 +1670,31 @@ jobs:
             # match a newline — so without this first arm a `nextLink` carrying
             # the right prefix passes the origin glob below, reaches
             # `az rest --url`, and its embedded `\n::add-mask::…` BEGINS a line
-            # of its own in arm_get's diagnostics. Measured. This arm is also
-            # what lets arm_get echo `$url` unflattened.
+            # of its own in arm_get's diagnostics. Measured.
+            #
+            # The SECOND arm is round 8's, and it is the other command form: a
+            # `##[` token needs no line break at all, so the control-character
+            # arm does not see it and a mid-line `##[stop-commands]…` rode an
+            # ACCEPTED nextLink into arm_get's echoes. An ARM `nextLink` never
+            # contains one, and refusing is the closed direction. Kept as a
+            # separate `case` from the control-character arm so the two
+            # annotations can name different causes — an operator reading
+            # "control character" when the value carried `##[` is the
+            # bare-substring misclassification this repo has been bitten by.
+            #
+            # `::` is deliberately NOT refused here: the sinks compose it into
+            # text of theirs that does not begin `::`, so Form A is unreachable
+            # for it, and a skip token containing `::` would be a legitimate
+            # value to refuse wrongly. The sink-side `flatten` is what makes
+            # that safe to leave alone.
             case "$NEXT" in
               *[[:cntrl:]]*)
                 echo "::error::The job listing for $RG handed back a nextLink containing a control character at page $PAGES, which is not a URL. Refusing to fetch it, and refusing to conclude absence from the $TOTAL job(s) read so far. The value is NOT echoed — it is attacker-chosen. Post-deploy eval re-baseline NOT started."
+                exit 1 ;;
+            esac
+            case "$NEXT" in
+              *'##['*)
+                echo "::error::The job listing for $RG handed back a nextLink containing the sequence '##[' at page $PAGES. That is not a URL ARM emits, and it is the runner's unanchored workflow-command prefix (ActionCommand.cs:132), so it is refused rather than carried into a diagnostic. Refusing to conclude absence from the $TOTAL job(s) read so far. The value is NOT echoed — it is attacker-chosen. Post-deploy eval re-baseline NOT started."
                 exit 1 ;;
             esac
             case "$NEXT" in
@@ -1660,7 +1768,7 @@ jobs:
           # errexit is suppressed and the error reads as FALSE — so the guard
           # this comment calls a real gap would be SKIPPED and the step would
           # exit 0 with a notice. Same shape as the EXEC default below.
-          COUNT=$(jq '(.properties.template.containers // []) | length' job.json)
+          COUNT=$(jq_defused '(.properties.template.containers // []) | length' job.json)
           COUNT=${COUNT:-0}
           if [ "$COUNT" -eq 0 ]; then
             echo "::error::No container template could be read for $JOB from its GET (an empty or malformed body reads the same way here as a genuinely empty container list, and this run did not establish which). If the job is deployed and its list really is empty, its image has not been built/pushed, so no execution can start — build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh. Either way no execution was started."
@@ -1695,7 +1803,7 @@ jobs:
           # nothing, which deploy-integrity R6 forbids in those words. Closing
           # a finding at the LABEL and not at every SITE is the specific error;
           # this is the site.
-          if ! jq -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
+          if ! jq_defused -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
                   {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
                   {name:"COPILOT_EVAL_SURFACES",value:""},
                   {name:"COPILOT_EVAL_DOMAINS",value:""}] as $ov
@@ -1741,7 +1849,7 @@ jobs:
           # deploy-relevant outcome ALREADY SUCCEEDED, so a red step buys
           # triage attention for nothing. Say "started, name unreadable", hand
           # over a runnable next step, and keep exit 0.
-          if ! EXEC=$(jq -r '.name // .id // "unknown"' start.json); then
+          if ! EXEC=$(jq_defused -r '.name // .id // "unknown"' start.json); then
             echo "::warning::$JOB WAS started — the start POST returned success, so an execution IS running — but its 200 body is not readable JSON and this run cannot name the execution. jq's own message is on stderr above. Nothing downstream depends on the name; find the execution with: az containerapp job execution list -n $JOB -g $RG."
             EXEC=unknown
           fi
