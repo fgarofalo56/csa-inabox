@@ -1293,6 +1293,35 @@ jobs:
           JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
           API=2024-03-01
 
+          # RESPONSE-SOURCED TEXT NEVER REACHES COLUMN 1. The runner reads a
+          # workflow command off a line that BEGINS with `::`, so a `\n` inside
+          # a value that came out of a RESPONSE BODY is an injection primitive
+          # (`::add-mask::`, `::stop-commands::`) and this repo is public.
+          # `jq -r` DECODES `\n` in a JSON string and `$( )` strips only
+          # TRAILING newlines, so an embedded one survives into `echo` and
+          # lands at column 1 on its own line. Measured, not reasoned about —
+          # round 4 shipped exactly that on the off-origin arm and on the
+          # `::notice::` that names the execution; both are in the round-5
+          # receipt with the pre-fix output.
+          #
+          # The repo already holds this rule on the TypeScript side
+          # (`lib/util/log-safe.ts`, enforced by `scripts/ci/check-log-injection.mjs`),
+          # and that guard states its own scope honestly: `app/api` and
+          # `app/auth`. A workflow `run:` block is outside it, which is how
+          # this shipped. Tracked as its own item; the fix here is at the sites.
+          #
+          # ONE spelling, two shapes. `flatten` is for a value going INTO a
+          # line: LF and CR to spaces, capped at 400 chars. `indent_cmds` is
+          # for text that must keep its full shape for triage (az's own
+          # stderr): it truncates nothing and only pushes a leading `::` off
+          # column 1.
+          flatten() {       # stdin -> one line, <=400 chars
+            tr '\n\r' '  ' | cut -c1-400
+          }
+          indent_cmds() {   # stdin -> same text, no line beginning with `::`
+            sed 's/^::/  ::/'
+          }
+
           # Bounded retry for a genuinely transient ARM answer (deploy-integrity
           # R6). Fails CLOSED on exhaustion: this returns 1 and BOTH callers turn
           # that into `::error::` + exit 1, never a warning. It is deliberately
@@ -1303,7 +1332,16 @@ jobs:
           # the real cause on the ANNOTATION rather than leaving a 429 and a 403
           # reading identically. Classifying by that text instead would be the
           # bare-substring misclassification this repo has been bitten by, so the
-          # STATUS is what routes and the TEXT is only reported.
+          # STATUS is what routes and the TEXT is only reported. It goes through
+          # `indent_cmds` rather than `cat`: it is response-derived, and it is
+          # re-emitted in FULL because a truncated az diagnostic is the thing
+          # this block exists to stop losing.
+          #
+          # `$url` is echoed unflattened on purpose — every value that reaches
+          # here is either built from workflow inputs ($SUB/$RG/$JOB_ID) or a
+          # `nextLink` that the control-character arm below has already
+          # rejected, so it cannot carry a newline. That coupling is stated in
+          # both places; do not delete one without the other.
           arm_get() {   # arm_get <url> <outfile>  ->  0 = read it, 1 = did not
             local url="$1" out="$2" n=0
             : > arm_err.txt
@@ -1312,7 +1350,7 @@ jobs:
               if az rest --method get --url "$url" > "$out" 2> arm_err.txt; then
                 return 0
               fi
-              cat arm_err.txt >&2
+              indent_cmds < arm_err.txt >&2
               if [ "$n" -ge 3 ]; then
                 echo "ARM GET failed on all $n attempts: $url" >&2
                 return 1
@@ -1323,7 +1361,7 @@ jobs:
           }
           arm_err() {   # the last ARM error, flattened for an annotation
             local e
-            e="$(tr '\n' ' ' < arm_err.txt | cut -c1-400)"
+            e="$(flatten < arm_err.txt)"
             echo "${e:-<az produced no stderr>}"
           }
 
@@ -1388,6 +1426,13 @@ jobs:
           # `::error::` + exit 1 here, never a shorter list and never an
           # absence.
           #
+          # That claim was FALSE as written in round 4, at one site, and is
+          # recorded rather than quietly corrected. The off-origin annotation
+          # echoed the rejected `nextLink` verbatim — LOOSER than
+          # `same-origin-url.ts`, which refuses to reflect it, and looser on
+          # exactly the property that module exists to hold. It is not echoed
+          # now; see the column-1 rule at the top of this step.
+          #
           # ORIGIN CHECK. `nextLink` is attacker-shaped: an absolute URL read
           # out of a RESPONSE BODY, to which `az rest` would attach a
           # management-plane bearer token. lib/util/same-origin-url.ts explains
@@ -1401,6 +1446,18 @@ jobs:
           # those. $ARM_BASE is also the literal $LIST_URL is built from, so the
           # endpoint has one spelling in this step rather than two that can
           # drift.
+          #
+          # The glob is also CASE-SENSITIVE and ABSOLUTE-ONLY, which the
+          # enumeration above does not imply: `https://MANAGEMENT.AZURE.COM/x`
+          # and a relative `/subscriptions/…` `nextLink` are both refused. ARM
+          # emits neither, and refusing is the closed direction, so that is
+          # stated for completeness rather than defended.
+          #
+          # UNCOVERED, stated rather than asserted away: the glob checks the
+          # URL this step ASKS FOR, not the host `az rest` ENDS AT. The CLI
+          # follows redirects, and whether its transport strips `Authorization`
+          # across a host change was not established here — so this check
+          # bounds the first hop only, and does not claim more.
           ARM_BASE=https://management.azure.com
           MAX_PAGES=50            # armListAll() MAX_ARM_PAGES
           MAX_PAGING_SECONDS=60   # armListAll() MAX_ARM_PAGING_MS
@@ -1455,10 +1512,30 @@ jobs:
             # is an error and none of them is an absence: a walk that stopped
             # early cannot tell "not in the collection" from "not in the part
             # that was read".
+            #
+            # That reason is about ABSENCE, and it stops applying once
+            # MATCH > 0 — at which point a late page failure costs a
+            # re-baseline that could have run. Kept fail-closed on purpose:
+            # continuing past a read failure would mean starting the job from
+            # a collection this step cannot describe, and the cost is one
+            # re-dispatch. Named here so the next reader does not have to
+            # re-derive that it was a choice.
+            #
+            # A URL cannot contain a control character, and a shell `*` DOES
+            # match a newline — so without this first arm a `nextLink` carrying
+            # the right prefix passes the origin glob below, reaches
+            # `az rest --url`, and lands its embedded `\n::add-mask::…` at
+            # column 1 in arm_get's diagnostics. Measured. This arm is also
+            # what lets arm_get echo `$url` unflattened.
+            case "$NEXT" in
+              *[[:cntrl:]]*)
+                echo "::error::The job listing for $RG handed back a nextLink containing a control character at page $PAGES, which is not a URL. Refusing to fetch it, and refusing to conclude absence from the $TOTAL job(s) read so far. The value is NOT echoed — it is attacker-chosen. Post-deploy eval re-baseline NOT started."
+                exit 1 ;;
+            esac
             case "$NEXT" in
               "$ARM_BASE"/*) ;;
               *)
-                echo "::error::The job listing for $RG handed back a nextLink that is not on $ARM_BASE at page $PAGES ('$NEXT'). Refusing to carry a management-plane token off-origin (lib/util/same-origin-url.ts), and refusing to conclude absence from the $TOTAL job(s) read so far. Post-deploy eval re-baseline NOT started."
+                echo "::error::The job listing for $RG handed back a nextLink that is not on $ARM_BASE at page $PAGES. Refusing to carry a management-plane token off-origin, and refusing to conclude absence from the $TOTAL job(s) read so far. The rejected value is NOT echoed: it is attacker-chosen, and lib/util/same-origin-url.ts declines to reflect one for exactly that reason. Post-deploy eval re-baseline NOT started."
                 exit 1 ;;
             esac
             case "$SEEN_LINKS" in
@@ -1471,6 +1548,14 @@ jobs:
               echo "::error::The job listing for $RG is still paginating after $MAX_PAGES page(s) ($TOTAL job(s) read). The collection was not fully walked, so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
               exit 1
             fi
+            # WALL-CLOCK, and that deliberately INCLUDES arm_get's backoff: a
+            # single transient page can burn 10s (one retry) or 30s (two)
+            # before this line is next consulted, so one 429 on a genuinely
+            # multi-page RG can spend half the budget without turning a page.
+            # It is a bound on how long this step may take, not on how long
+            # paging may take, and it fails closed either way — but it means a
+            # "passed 60s" red is a plausible transient outcome and not proof
+            # of an unbounded listing.
             if [ "$((SECONDS - PAGING_STARTED))" -ge "$MAX_PAGING_SECONDS" ]; then
               echo "::error::Walking the job listing for $RG passed ${MAX_PAGING_SECONDS}s at page $PAGES ($TOTAL job(s) read). The collection was not fully walked, so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
               exit 1
@@ -1545,14 +1630,25 @@ jobs:
           # literals in two languages, and nothing in CI compares them. Adding a
           # fifth override KNOB to mergeRunEnv does not reach this jq. That
           # residual is #4566, not this block.
-          jq -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
+          # GUARDED, for the reason the LISTING body already is. Round 4
+          # shape-checked the listing and left its sibling one guard
+          # downstream: a job body whose `containers` are not objects (measured
+          # with `containers:["c"]`) died at rc=5 carrying only jq's stack
+          # trace and ZERO annotations — a start that did not happen and said
+          # nothing, which deploy-integrity R6 forbids in those words. Closing
+          # a finding at the LABEL and not at every SITE is the specific error;
+          # this is the site.
+          if ! jq -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
                   {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
                   {name:"COPILOT_EVAL_SURFACES",value:""},
                   {name:"COPILOT_EVAL_DOMAINS",value:""}] as $ov
                  | ($ov | map(.name)) as $ovn
                  | {containers: [.properties.template.containers[]
                    | .env = ((.env // []) | map(select(.name | IN($ovn[]) | not))) + $ov]}' \
-            job.json > override.json
+                 job.json > override.json; then
+            echo "::error::$JOB IS present, but the execution override could not be built from its GET body — .properties.template.containers is not a list of container objects, so this run cannot describe what it would start. jq's own message is on stderr above. NO execution was started and the re-baseline did NOT run."
+            exit 1
+          fi
 
           # The one WRITE in this step, and the only `az` here that mutates
           # anything. GUARDED for the same reason the script's `--apply` write
@@ -1569,11 +1665,28 @@ jobs:
           # **Container Apps Jobs Contributor**.
           if ! az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
                --headers "Content-Type=application/json" --body @override.json > start.json 2> arm_err.txt; then
-            cat arm_err.txt >&2
+            indent_cmds < arm_err.txt >&2
             echo "::error::Could not START $JOB — no execution was created and the re-baseline did NOT run. ARM said: $(arm_err). A 403 here means the deploy identity lacks Microsoft.App/jobs/start/action on ${JOB_ID}; grant it Container Apps Jobs Operator (read/start/stop) or Container Apps Jobs Contributor at that scope. A 429/5xx is transient and this run can simply be re-dispatched; a 404 means the job vanished between the GET above and this POST."
             exit 1
           fi
-          EXEC=$(jq -r '.name // .id // "unknown"' start.json)
+          # GUARDED, and deliberately NOT fatal — R7 in the direction that is
+          # easy to get backwards. The POST above ALREADY SUCCEEDED, so an
+          # execution IS running; a malformed 200 makes a bare
+          # `EXEC=$(jq …)` exit rc=5 under errexit with ZERO annotations
+          # (measured with a body of `not json at all`), and the operator reads
+          # a red step and concludes the re-baseline did not run. That is a
+          # claim this run did not establish and the opposite of what it did.
+          # So: say "started, name unreadable", and keep exit 0.
+          if ! EXEC=$(jq -r '.name // .id // "unknown"' start.json); then
+            echo "::warning::$JOB WAS started — the start POST returned success, so an execution IS running — but its 200 body is not readable JSON and this run cannot name the execution. jq's own message is on stderr above. Nothing downstream depends on the name; find the execution with: az containerapp job execution list -n $JOB -g $RG."
+            EXEC=unknown
+          fi
+          # `.name` comes out of a RESPONSE BODY, so it is subject to the
+          # column-1 rule at the top of this step: round 4 emitted it raw and a
+          # `.name` of "exec-1\n::add-mask::…" put an injected command at
+          # column 1 on the SUCCESS path, where nothing looks wrong. Flatten
+          # before it reaches either the annotation or the job summary.
+          EXEC="$(printf '%s' "$EXEC" | flatten)"
           # `// "unknown"` covers a MISSING key, not an EMPTY body: on an empty
           # start.json jq emits nothing and exits 0, leaving EXEC="" and a notice
           # reading "execution  started". ACA start answers 200 or 202, and a
