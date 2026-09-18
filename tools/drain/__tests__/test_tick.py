@@ -1007,7 +1007,8 @@ class _GhSpy:
 
     def __init__(self, *, state="OPEN", close_rc=0, close_err="", takes_effect=True,
                  on_close=None, raises=None, view_fails_after_close=False,
-                 url_kind="issues", url_repo="", close_title=""):
+                 url_kind="issues", url_repo="", close_title="",
+                 view_title_before=""):
         self.state = state
         self.states: dict[str, str] = {}
         self.close_rc = close_rc
@@ -1031,10 +1032,19 @@ class _GhSpy:
         #: sentences. Operator-supplied data inside the string the classifier
         #: reads, so a test can make it carry gh's own words.
         self.close_title = close_title
+        #: The title the PRE-CLOSE view answers, when it must differ from the
+        #: one `gh` renders. Empty means "the same one", which is the ordinary
+        #: world. They differ when the title is EDITED inside the close window
+        #: -- the residual `_without_title_line_breaks` names, and the reason
+        #: the read-back's title joins the neutralisation set as well as the
+        #: pre-read's. Without this seam that second title is an unwitnessed
+        #: construct: dropping it from the set survived the suite (arm GH37).
+        self.view_title_before = view_title_before
         #: The 502 shape: the close LANDS and the verification read cannot be
         #: made. rc=0 from `gh issue close` plus an unreadable state.
         self.view_fails_after_close = view_fails_after_close
         self.calls: list[list[str]] = []
+        self.view_titles: list[str | None] = []
 
     def __call__(self, args):
         self.calls.append(list(args))
@@ -1045,10 +1055,36 @@ class _GhSpy:
                 return 1, "", "HTTP 502: Bad gateway"
             payload = {
                 "state": self.states.get(args[3], self.state),
+                # THE SAME TITLE THE CLOSE BRANCH RENDERS. A spy whose view
+                # answered a different title from the one it interpolates into
+                # stderr would make `_without_title_line_breaks` look like it
+                # works while neutralising a string that is not there -- the
+                # probe agreeing with itself instead of with `gh`. Both read it
+                # from `self.close_title`, so a test that puts a line break in
+                # the title puts it in BOTH places, exactly as GitHub does.
+                "title": (
+                    self.view_title_before
+                    if self.view_title_before and not self.closed
+                    else (self.close_title or f"issue {args[3]}")
+                ),
                 "url": (f"https://github.com/{self.url_repo or _argv_repo(args)}"
                         f"/{self.url_kind}/{args[3]}"),
             }
-            return 0, json.dumps(payload), ""
+            # ANSWER ONLY WHAT WAS ASKED FOR, because that is what `gh` does --
+            # `--json state,url` returns those two keys and nothing else. A spy
+            # that hands back every field regardless of the argv makes DROPPING
+            # a field from the argv invisible: the closer would still receive a
+            # title it never requested, and the mutation that stops requesting
+            # it would survive on a behaviour it never had. Same lesson as
+            # `_stub_ci_green`, where stubbing the binding CHECK left its call
+            # site deletable by a green suite.
+            asked = args[args.index("--json") + 1].split(",") if "--json" in args else []
+            answered = {k: v for k, v in payload.items() if k in asked}
+            #: What this view ACTUALLY answered for `title`, so a test can
+            #: establish its premise by observation rather than by repeating
+            #: the spy's own configuration back at itself.
+            self.view_titles.append(answered.get("title"))
+            return 0, json.dumps(answered), ""
         if args[:3] == ["gh", "issue", "close"]:
             if self.on_close is not None:
                 self.on_close()
@@ -1418,7 +1454,7 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
     assert close[close.index("--repo") + 1] == "fgarofalo56/csa-inabox"
     # THE SAME PIN ON THE READS, which had NO witness at all until round 10.
     # MEASURED in a sandbox copy: dropping `--repo` and its value from the
-    # `gh issue view` argv in `_issue_state_on_github` survived 527/527, while
+    # `gh issue view` argv in `_read_issue_on_github` survived 527/527, while
     # the identical drop on the CLOSE argv above went RED at this test by name
     # -- the positive control proving that survival was a real gap and not a
     # blind instrument. It is not a symmetry complaint: `sh`'s docstring says
@@ -1432,16 +1468,31 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
     for view in [c for c in spy.calls if c[:3] == ["gh", "issue", "view"]]:
         assert "--repo" in view, "a read that lets gh pick the repository is unpinned"
         assert view[view.index("--repo") + 1] == "fgarofalo56/csa-inabox"
-        # AND THE FIELDS, because the type guard is only in the path if `url`
-        # is actually requested. `gh issue view` resolves PULL REQUESTS too
-        # (measured live on #4552), and `gh issue close` routes a PR number to
-        # `api.PullRequestClose` (close.go :175-177), so a read that asks for
-        # `state` alone cannot tell the closer what it is about to close. The
-        # value that breaks this: `--json state` (arm GH25).
+        # AND THE FIELDS, because each one puts a different guard in the path.
+        # Asserted one at a time rather than as a single exact string, so a
+        # failure names WHICH field went missing -- the same reason the
+        # `--comment` body below is split (PT018).
         assert "--json" in view
-        assert view[view.index("--json") + 1] == "state,url", (
+        asked = view[view.index("--json") + 1].split(",")
+        # `gh issue view` resolves PULL REQUESTS too (measured live on #4552),
+        # and `gh issue close` routes a PR number to `api.PullRequestClose`
+        # (close.go :175-177), so a read that asks for `state` alone cannot tell
+        # the closer what it is about to close. Breaks on `--json state` (GH25).
+        assert "url" in asked, (
             "the read must ask for the url, or the object's TYPE is never established"
         )
+        # The TITLE is what makes gh's stderr safe to classify: it is the field
+        # `_without_title_line_breaks` takes back out of the line before
+        # `_close_outcome` reads it, and without it a title carrying a literal
+        # LF creates a line of pure operator-supplied content that the
+        # classifier then reads as gh's own. Breaks on an argv that stops
+        # asking for it (GH31) -- and breaks BEHAVIOURALLY too, because the spy
+        # answers only the fields the argv names, exactly as `gh` does.
+        assert "title" in asked, (
+            "the read must ask for the title, or the close classifier has nothing "
+            "to neutralise and the issue's own title can forge the verdict"
+        )
+        assert "state" in asked, "the read must ask for the state it is named for"
     # THE POSITIVE PAIR for the comment. `…_no_comment_is_appended` is named
     # for the receipt comment and asserts only its ABSENCE on the
     # already-closed path -- which, per assertion-design.md "done" #4, is
@@ -2116,6 +2167,27 @@ def test_the_close_outcome_is_read_at_a_fixed_offset_on_the_line_gh_names_us_in(
     assert tick._close_outcome(ok, "other/repo", 1) == tick.CLOSE_OUTCOME_UNKNOWN, (
         "a success line for a different REPOSITORY was accepted as this close"
     )
+    #    BOTH HALVES, because only the PERFORMED half was asserted here and the
+    #    claim above covers both prefixes. Measured: dropping repo and number
+    #    from the ALREADY-CLOSED prefix alone survived all 531 tests, so the
+    #    comment named a value that did not in fact break it -- the forbidden
+    #    case in `.claude/rules/assertion-design.md`, reporting a suite as
+    #    covering a behaviour no input distinguishes. Not an equivalent mutant:
+    #    under it, `"! Issue other/repo#999 (x) is already closed"` reads
+    #    `found-already-closed` for `o/r#1` instead of `unknown`, so somebody
+    #    else's raced close would be reported as ours (arm GH35).
+    already = _gh_already_closed_stderr("o/r", 2, "t")
+    assert tick._close_outcome(already, "o/r", 1) == tick.CLOSE_OUTCOME_UNKNOWN, (
+        "an already-closed line for a different NUMBER was accepted as this close"
+    )
+    assert tick._close_outcome(
+        _gh_already_closed_stderr("other/repo", 1, "t"), "o/r", 1
+    ) == tick.CLOSE_OUTCOME_UNKNOWN, (
+        "an already-closed line for a different REPOSITORY was accepted as this close"
+    )
+    #    PAIRED WITH THE POSITIVE so the already-closed arm cannot satisfy the
+    #    two above by never matching anything at all.
+    assert tick._close_outcome(already, "o/r", 2) == tick.CLOSE_FOUND_ALREADY_CLOSED
     # ... but case alone must not disqualify it, because GitHub resolves
     #     owner/name case-insensitively and echoes its canonical casing. Breaks
     #     if the prefix compare becomes case-sensitive, which would classify
@@ -2343,6 +2415,330 @@ def test_blocker_an_issues_own_title_cannot_forge_the_close_outcome(
     assert "NO receipt comment was posted" in out2.close_note
 
 
+#: The code points `str.splitlines()` treats as line breaks, ASKED OF PYTHON
+#: rather than transcribed from its documentation. Round 12 reasoned about this
+#: set from memory, concluded the title "can never occupy the start of a line",
+#: and was wrong by a factor of ten -- so the probe that tests the fix derives
+#: the set the same way `tick._has_line_break` does, and a Python that grows an
+#: eleventh separator grows an eleventh arm here on the same day.
+#:
+#: Range chosen to cover U+2028/U+2029, the two highest; nothing above U+2029
+#: is a separator in any Python, and the loop costs a few milliseconds once.
+_SPLITLINES_SEPARATORS = tuple(
+    chr(c) for c in range(0x3000) if len(f"a{chr(c)}b".splitlines()) > 1
+)
+
+
+def test_the_derived_separator_set_is_the_one_the_splitter_actually_honours():
+    """POSITIVE CONTROL FOR THE PROBE BELOW, run before it is believed.
+
+    A separator set derived by a loop that silently found nothing would make
+    every arm in the forgery test below vacuous -- zero iterations, green,
+    proving nothing. This pins the derivation itself.
+
+    THE VALUE THAT BREAKS IT: a derivation that misses a separator (a range
+    stopping below U+2028 gives 8), or one that finds none (a predicate with
+    the comparison inverted gives 0). Both leave the forgery test green.
+    """
+    assert len(_SPLITLINES_SEPARATORS) == 10, (
+        "str.splitlines() honours ten code points on every Python this repo "
+        f"runs on; the derivation found {len(_SPLITLINES_SEPARATORS)}, so the "
+        "forgery arms below are iterating over the wrong set"
+    )
+    # The two that make the point: ordinary text characters with no reason to
+    # be stripped anywhere, and the ones round 12's `splitlines()` let through.
+    # Written as ESCAPES, never as literals: a literal U+2028 in a source
+    # file is invisible in every diff and every review, which is a poor way
+    # to spell the character this whole test is about.
+    assert "\u2028" in _SPLITLINES_SEPARATORS, "LS is not in the derived set"
+    assert "\u2029" in _SPLITLINES_SEPARATORS, "PS is not in the derived set"
+    # ... and the one `_producer_lines` CANNOT help with, because it is gh's own.
+    assert "\n" in _SPLITLINES_SEPARATORS
+    # `tick` must be looking at the same set. Not a re-derivation -- an
+    # agreement check between the probe and the implementation.
+    for sep in _SPLITLINES_SEPARATORS:
+        assert tick._has_line_break(f"a{sep}b"), (
+            f"tick._has_line_break does not see U+{ord(sep):04X} as a break, so "
+            "a title carrying it would not be neutralised"
+        )
+    assert not tick._has_line_break("an ordinary title (with parens) #4552")
+    assert not tick._has_line_break(""), (
+        "an empty title must not count as carrying a break, or the neutraliser "
+        "calls str.replace('', ...) and shreds the line at every position"
+    )
+
+
+@pytest.mark.parametrize("sep", _SPLITLINES_SEPARATORS,
+                         ids=lambda s: f"U+{ord(s):04X}")
+def test_blocker_a_line_break_in_the_title_cannot_forge_the_close_outcome(
+    sep, tmp_path, monkeypatch
+):
+    """THE TITLE CANNOT START A LINE GH WROTE -- BUT IT CAN CREATE ONE.
+
+    Round 12 fixed the idiom read by reading POSITIONALLY, and claimed at
+    `tick.py` that the result was "title-proof by construction: the title is
+    interpolated at the END of the line, inside `(...)`, and can never occupy
+    the start of one". The first clause is true and the conclusion does not
+    follow. `err.splitlines()` honours TEN separators against the one `gh`
+    writes with, so a title carrying any of the other nine splits gh's
+    single-line record into several and the classifier reads a line whose
+    entire content is operator-supplied.
+
+    Two separators are needed, not one: the first OPENS the crafted line and
+    the second TERMINATES it, so the forged line ends in the OTHER sentence's
+    suffix instead of trailing off into the record's own tail. That detail is
+    why a single-separator probe reads `unknown` and looks safe.
+
+    MEASURED AT `4ce05224585`, the round-12 head: all ten separators forge, in
+    BOTH directions, 20 of 20, with a plain-title control green on the same
+    path. End to end through the closer, a U+2028 title returned
+    `#4547 closed on GitHub` over a run that closed nothing and posted no
+    comment, and `_record_close_in_ledger` wrote that sentence permanently into
+    `Item.history`.
+
+    LATENT, NOT LIVE, and the distinction is stated rather than relied on: a
+    complete census of all 1065 issues in this repository (reviewer's
+    measurement, cross-checked against GraphQL `totalCount` and
+    positive-controlled on a synthetic U+2028 string) found ZERO titles
+    carrying any of the ten. Whether GitHub would ACCEPT one is NOT
+    established, in either direction -- finding out needs a write nobody made.
+    The fix does not rest on the answer, which is the entire point: round 12's
+    safety rested on an unmeasured property of an external service.
+
+    THE VALUES THAT BREAK THIS TEST, one per arm:
+      - `_producer_lines` back to `err.splitlines()` (GH30) -- the nine
+        non-LF separators go red.
+      - `_without_title_line_breaks` deleted from the call site (GH31) -- the
+        LF arm goes red, because LF is gh's OWN separator and splitting
+        correctly cannot help with it.
+      - the neutraliser narrowed to one code point, which is round 12's error
+        repeated one layer down (GH32) -- the LF arm goes red.
+    """
+    repo = "o/r"
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+
+    # DIRECTION A: gh took its already-closed SHORT-CIRCUIT (somebody else won
+    # the race), and the title forges the PERFORMED sentence. The dangerous
+    # direction -- it reports a close this run did not make, over a receipt
+    # comment that does not exist.
+    led = Ledger(str(tmp_path / "a.json"), receipts=POLICY["receipts"])
+    led.upsert(4547, "a console surface", "W5-console", lane="lane:console", size=1)
+    forge_performed = f"A{sep}x Closed issue {repo}#4547 (B){sep}C"
+    spy = _gh(monkeypatch, close_title=forge_performed)
+    spy.on_close = lambda: spy.states.__setitem__("4547", "CLOSED")
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, repo, 4547, from_pr=None, from_run="1")
+
+    # GROUND TRUTH from the fake, never from the note under test. The racer set
+    # the state before gh's close branch looked, so gh took its short-circuit
+    # exit at close.go :117-120 -- ABOVE the comment block at :148, which is
+    # why "no receipt comment exists" is true here however the note reads.
+    assert spy.closed == ["4547"], "this arm's premise is that the close was ISSUED"
+    assert spy.states["4547"] == "CLOSED", "the racer won, which is the premise"
+    assert "did NOT close it" in out.close_note, (
+        f"a title carrying U+{ord(sep):04X} forged gh's SUCCESS sentence: the "
+        "run closed nothing and posted no receipt, and the note claimed a close"
+    )
+    assert "closed on GitHub - left alone" not in out.close_note
+    assert "did NOT close it" in led.load().items[4547].history[-1], (
+        "the forged sentence went into Item.history, which is permanent"
+    )
+
+    # DIRECTION B: the close was GENUINELY PERFORMED and the receipt really
+    # rode with it, and the title forges the already-closed sentence -- which
+    # denies a receipt comment that does exist, on a public artifact.
+    led2 = Ledger(str(tmp_path / "b.json"), receipts=POLICY["receipts"])
+    led2.upsert(4548, "a console surface", "W5-console", lane="lane:console", size=1)
+    forge_already = f"A{sep}x Issue {repo}#4548 (B) is already closed{sep}C"
+    spy2 = _gh(monkeypatch, close_title=forge_already)
+
+    out2 = tick.record_receipt_from_evidence(
+        led2, POLICY, repo, 4548, from_pr=None, from_run="1")
+
+    assert spy2.states["4548"] == "CLOSED", "the fake really performed the close"
+    assert len([c for c in spy2.calls
+                if c[:3] == ["gh", "issue", "close"] and "--comment" in c]) == 1, (
+        "the receipt comment really rode along with the close"
+    )
+    assert out2.close_note == "#4548 closed on GitHub", (
+        f"a title carrying U+{ord(sep):04X} forged gh's ALREADY-CLOSED sentence: "
+        "the run performed the close and published the receipt, and the note "
+        f"said it did neither -- got {out2.close_note!r}"
+    )
+
+
+def test_a_plain_title_still_classifies_both_outcomes_unqualified(
+    tmp_path, monkeypatch
+):
+    """THE POSITIVE CONTROL for the arms above, per assertion-design "done" #4.
+
+    Every assertion in `..._cannot_forge_the_close_outcome` is satisfied by a
+    classifier that answers correctly for reasons unrelated to the title -- or
+    by a neutraliser so aggressive it rewrites ordinary records into
+    unrecognisability. Both halves of the ordinary world are pinned here.
+
+    THE VALUE THAT BREAKS IT: an unconditional `err.replace(title, ...)`. With
+    a title of `"o"` that rewrites every `o` in `Closed issue o/r#N (o)`, the
+    prefix stops matching and a genuine close reports `unknown` -- a guard that
+    manufactures the failure it exists to prevent. That is why
+    `_without_title_line_breaks` acts only on titles that carry a break.
+    """
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    for number, title in [(4549, "o"), (4550, "a normal (parenthesised) title")]:
+        led = Ledger(str(tmp_path / f"p{number}.json"), receipts=POLICY["receipts"])
+        led.upsert(number, "a console surface", "W5-console",
+                   lane="lane:console", size=1)
+        _gh(monkeypatch, close_title=title)
+        out = tick.record_receipt_from_evidence(
+            led, POLICY, "o/r", number, from_pr=None, from_run="1")
+        assert out.close_note == f"#{number} closed on GitHub", (
+            f"a plain title {title!r} stopped an ordinary close being reported "
+            f"plainly - got {out.close_note!r}"
+        )
+
+    # And the already-closed half, so "unqualified" cannot be achieved by
+    # reporting every outcome as a performed close.
+    led = Ledger(str(tmp_path / "raced.json"), receipts=POLICY["receipts"])
+    led.upsert(4551, "a console surface", "W5-console", lane="lane:console", size=1)
+    spy = _gh(monkeypatch, close_title="a normal title")
+    spy.on_close = lambda: spy.states.__setitem__("4551", "CLOSED")
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "o/r", 4551, from_pr=None, from_run="1")
+    assert "did NOT close it" in out.close_note
+
+
+def test_a_title_edited_inside_the_close_window_is_neutralised_by_the_read_back(
+    tmp_path, monkeypatch
+):
+    """BOTH TITLES THIS RUN READ ARE NEUTRALISED, not just the pre-close one.
+
+    `_without_title_line_breaks` can only take out a title it was given, and
+    the title it is given comes from reads -- so a title EDITED between the
+    pre-close read and gh's render is not covered by that read. The read-back
+    that already runs to verify the close covers it, at no extra call: here the
+    pre-read sees a plain title, `gh` renders one carrying a literal LF, and
+    the read-back is what supplies the string to neutralise.
+
+    LF specifically, because LF is the one separator `_producer_lines` cannot
+    help with -- it is the producer's OWN terminator, so a title carrying one
+    genuinely creates a line and only knowing the title recovers the record.
+
+    THE VALUE THAT BREAKS IT: `_without_title_line_breaks(err, before.title)`,
+    the read-back's title dropped from the set (arm GH37). Measured before this
+    test existed: that mutation SURVIVED the whole suite, which is why the
+    construct is witnessed here rather than argued for in a docstring.
+
+    THE RESIDUAL IS STILL REAL and is not claimed away: a title carrying a
+    literal LF at gh's render and carrying none at EITHER read -- two edits
+    inside the close window -- is not covered by anything here. Narrower than
+    round 12's, not absent. Whether GitHub accepts an LF in a title at all is
+    not established in either direction.
+    """
+    monkeypatch.setattr(tick, "_run_evidence", lambda *_: _g1_run())
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(4554, "a console surface", "W5-console", lane="lane:console", size=1)
+    forged = "A\nx Issue o/r#4554 (B) is already closed\nC"
+    spy = _gh(monkeypatch, close_title=forged,
+              view_title_before="an ordinary title nobody edited yet")
+
+    out = tick.record_receipt_from_evidence(
+        led, POLICY, "o/r", 4554, from_pr=None, from_run="1")
+
+    # GROUND TRUTH: the close really happened and the receipt really rode with it.
+    assert spy.states["4554"] == "CLOSED"
+    assert len([c for c in spy.calls
+                if c[:3] == ["gh", "issue", "close"] and "--comment" in c]) == 1
+    # PREMISE, OBSERVED rather than restated from the spy's configuration: the
+    # two reads really did answer different titles, or this test is the
+    # ordinary one-title case wearing a different name.
+    assert len(spy.view_titles) == 2, (
+        f"expected a pre-read and a read-back, saw {len(spy.view_titles)}"
+    )
+    assert spy.view_titles[1] == forged, (
+        f"the read-back answered {spy.view_titles[1]!r}, not the title `gh` "
+        "rendered - there is nothing for the second neutralisation to take out"
+    )
+    assert spy.view_titles[0] != forged, (
+        "the pre-read already answered the crafted title, so this is the "
+        "ordinary one-title case wearing a different name"
+    )
+    assert out.close_note == "#4554 closed on GitHub", (
+        "a title edited inside the close window forged gh's already-closed "
+        f"sentence - got {out.close_note!r}"
+    )
+
+
+def test_the_sentence_predicate_refuses_a_body_too_short_to_hold_both_ends():
+    """THE LENGTH GUARD'S ONLY WITNESS, and the disclosure that goes with it.
+
+    `_sentence_is`'s `len(body) >= len(prefix) + len(suffix)` is an EQUIVALENT
+    MUTANT at the two (prefix, suffix) pairs `_close_outcome` supplies: an
+    exhaustive differential over 200 candidate bodies -- every prefix, suffix,
+    concatenation and case variant of both rendered sentences -- finds no input
+    whose verdict it changes at either real pair, with a positive control on an
+    artificially overlapping pair that DOES diverge. At `4ce05224585`, deleting
+    it survived the whole suite. Round 12's docstring presented it as doing
+    work there anyway, and cited an example that fails the suffix test with or
+    without it -- a control asserted to do something it does not, in the change
+    whose thesis is that controls must do something
+    (`.claude/rules/assertion-design.md` "done" #5).
+
+    It is disclosed at its site and pinned HERE, at the predicate's own
+    contract rather than at a call site: `_sentence_is` takes the pair as
+    PARAMETERS, so an overlapping pair is expressible even though neither
+    current caller supplies one. That is a real property with a real breaking
+    value, and it is not counted as coverage of `_close_outcome`.
+
+    THE VALUE THAT BREAKS IT: the length term deleted (arm GH33). `"abc"` then
+    satisfies prefix `"abc"` and suffix `"bc"` simultaneously, reading as a
+    complete sentence a string that is only its opening.
+    """
+    # The overlapping pair. This is the divergent input the exhaustive
+    # differential over the REAL pairs could not find, which is exactly why the
+    # guard needs a contract-level witness rather than a call-site one.
+    assert not tick._sentence_is("abc", "abc", "bc"), (
+        "a body shorter than prefix+suffix satisfied both ends at once - the "
+        "length guard is gone and `_sentence_is` now reads an opening fragment "
+        "as a whole sentence"
+    )
+    # PAIRED WITH THE POSITIVE, or the guard is satisfied by refusing
+    # everything: one more character and the two ends no longer overlap.
+    assert tick._sentence_is("abcbc", "abc", "bc")
+    # And the real pairs still read, so the guard has not been tightened into
+    # rejecting the sentences it exists alongside.
+    assert tick._sentence_is(
+        "Closed issue o/r#1 (t)", "Closed issue o/r#1 (", ")")
+    assert tick._sentence_is(
+        "Issue o/r#1 (t) is already closed", "Issue o/r#1 (", " is already closed")
+
+
+def test_the_close_outcome_reads_lines_the_way_gh_wrote_them():
+    """`_producer_lines` splits by the PRODUCER's rule, not by Python's widest.
+
+    `gh` terminates each record with exactly one `\\n`. Reading it back with a
+    rule that honours ten separators means nine of them delimit nothing the
+    producer meant -- and every one is reachable from the title. This pins the
+    narrower split directly, alongside the CRLF behaviour that `splitlines()`
+    was originally chosen for and which a naive `split("\\n")` would lose.
+
+    THE VALUES THAT BREAK IT: `err.splitlines()` (GH30) makes the first
+    assertion red; dropping `removesuffix("\\r")` (GH32) makes the CRLF
+    assertion red. They are opposite mistakes and the pair pins both.
+    """
+    # A non-LF separator is CONTENT, not structure: one line, not two.
+    assert tick._producer_lines("a\u2028b\n") == ["a\u2028b", ""]
+    assert tick._producer_lines("a\x0bb\x1eC\n") == ["a\x0bb\x1eC", ""]
+    # LF is structure, because gh wrote it.
+    assert tick._producer_lines("a\nb\n") == ["a", "b", ""]
+    # CRLF contributes exactly one CR, and it comes off -- or the already-closed
+    # arm's SUFFIX test fails silently on a `\r`-terminated line.
+    assert tick._producer_lines("a\r\nb\r\n") == ["a", "b", ""]
+    # ... but a CR INSIDE the line is left alone, which is the difference
+    # between undoing a terminator and rewriting content.
+    assert tick._producer_lines("a\rb\r\n") == ["a\rb", ""]
+
+
 def test_the_closer_refuses_an_issue_that_resolves_to_another_repository(
     tmp_path, monkeypatch
 ):
@@ -2405,7 +2801,7 @@ def test_blocker_the_closer_refuses_a_number_that_resolves_to_a_pull_request(
     and this is a convention outside the file. The read-first is presented as
     what makes the write safe; a read that cannot tell what it read does not.
 
-    THE VALUE THAT BREAKS IT: a `_issue_state_on_github` that returns the state
+    THE VALUE THAT BREAKS IT: a `_read_issue_on_github` that returns the state
     without inspecting the url -- which is the code at round 9's head, and is
     arm GH25. Note the close must NOT be issued: the refusal has to land on the
     PRE-read, before anything is written.

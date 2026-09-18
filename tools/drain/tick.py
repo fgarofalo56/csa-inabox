@@ -568,8 +568,22 @@ def _object_repo_from_url(url: str) -> str:
     return f"{parts[0]}/{parts[1]}" if len(parts) >= 4 else ""
 
 
-def _issue_state_on_github(repo: str, number: int) -> str:
-    """Read ONE issue's OPEN/CLOSED state. Raises rather than guessing.
+class _IssueRead(NamedTuple):
+    """What ONE `gh issue view` established, carried together.
+
+    The TITLE rides along with the state because it is not decoration: it is
+    operator-supplied data that `gh` interpolates into the very stderr line
+    `_close_outcome` classifies, and knowing its value is what lets the caller
+    take it back out again before reading `gh`'s prose. It costs no extra call
+    -- one more field on a `--json` list that was already being fetched.
+    """
+
+    state: str
+    title: str
+
+
+def _read_issue_on_github(repo: str, number: int) -> _IssueRead:
+    """Read ONE issue's OPEN/CLOSED state AND title. Raises rather than guessing.
 
     Never discards stderr and never turns an unreadable answer into a
     convenient one -- the roll that reported "the tag does not exist" when the
@@ -589,9 +603,17 @@ def _issue_state_on_github(repo: str, number: int) -> str:
     via `build_inventory`, but `state.json` is hand-editable and the README
     documents hand edits, so the only barrier is a convention outside this file.
     A read-first that cannot tell what it read does not make a write safe.
+
+    IT ALSO CARRIES THE TITLE BACK, which is what makes `_close_outcome`'s
+    classification title-safe without a second `gh` call: see
+    `_without_title_line_breaks`. `title` is read as `--json title`, so it is
+    the value GitHub holds, not a value parsed back out of gh's prose -- parsing
+    it out of the prose would be reading the attacker's data to decide how to
+    read the attacker's data.
     """
     rc, out, err = sh(
-        ["gh", "issue", "view", str(number), "--repo", repo, "--json", "state,url"]
+        ["gh", "issue", "view", str(number), "--repo", repo,
+         "--json", "state,title,url"]
     )
     if rc != 0:
         raise IssueCloseFailedError(
@@ -633,7 +655,11 @@ def _issue_state_on_github(repo: str, number: int) -> str:
             f"#{number} reported state {state!r}, which is neither OPEN nor CLOSED - "
             "an answer this tool cannot interpret is not an answer"
         )
-    return state
+    # The title is NOT validated, deliberately: any string GitHub holds is a
+    # legitimate title, and there is nothing here to refuse. It is neutralised
+    # at the point of USE instead (`_without_title_line_breaks`), because the
+    # hazard is not the value -- it is the value being read as structure.
+    return _IssueRead(state, str((parsed or {}).get("title") or ""))
 
 
 #: The receipt kinds whose evidence is a MERGE rather than an observation of
@@ -810,15 +836,132 @@ def _sentence_is(body: str, prefix: str, suffix: str) -> bool:
     `UNKNOWN`. Case has no bearing on the forgery this read exists to stop --
     POSITION does.
 
-    The length guard keeps prefix and suffix from overlapping on a truncated
-    line, so `"Issue o/r#1 ("` cannot satisfy both ends of a sentence it is only
-    the beginning of.
+    The length guard keeps prefix and suffix from OVERLAPPING on a body too
+    short to hold both, so a string that is only the beginning of a sentence
+    cannot satisfy both ends of it.
+
+    DISCLOSED, because the previous revision of this paragraph presented that
+    guard as doing work here and it does none: at the two (prefix, suffix)
+    pairs `_close_outcome` actually passes, the guard is an EQUIVALENT MUTANT.
+    Measured two ways at `4ce05224585` -- an exhaustive differential over 200
+    candidate bodies (every prefix, suffix, concatenation and case variant of
+    both rendered sentences) against both real pairs found ZERO inputs whose
+    verdict the guard changes, positive control first on an artificially
+    overlapping pair that DOES diverge; and deleting it survived the whole
+    suite. The example the old paragraph cited was wrong on its own terms:
+    `"Issue o/r#1 ("` fails `endswith(" is already closed")` whether the guard
+    is there or not, so the guard is not what refuses it.
+    (`.claude/rules/assertion-design.md` "done" #5 -- an un-killable construct
+    is disclosed, not counted.)
+
+    It is KEPT, and it is not counted as coverage of the call sites. It is a
+    precondition of THIS FUNCTION'S OWN CONTRACT -- `_sentence_is` takes the
+    pair as parameters, so an overlapping pair is expressible even though
+    neither current call site supplies one -- and that contract is now what
+    `test_the_sentence_predicate_refuses_a_body_too_short_to_hold_both_ends`
+    pins, with an overlapping pair that DOES diverge (arm GH33). So the "it
+    survived the suite" measurement above is a statement about the head this
+    was found at, not about this one: the guard is killable from here on,
+    at the contract, and still an equivalent mutant at the two call sites.
     """
     return (
         len(body) >= len(prefix) + len(suffix)
         and body[:len(prefix)].casefold() == prefix.casefold()
         and body.endswith(suffix)
     )
+
+
+def _has_line_break(text: str) -> bool:
+    """Does `text` carry a code point `str.splitlines()` treats as a break?
+
+    ASKED OF THE SPLITTER ITSELF rather than transcribed from its
+    documentation. `str.splitlines()` honours TEN separators -- LF, CR, VT, FF,
+    FS, GS, RS, NEL, LS, PS -- and a transcribed list of them is a probe that
+    can disagree with the implementation it is supposed to describe, which is
+    the defect `.claude/rules/assertion-design.md` "done" #3 forbids. Round 12
+    reasoned about this set from memory and got the SIZE of the hazard wrong by
+    a factor of ten.
+
+    Exact, including the two cases that look like corners: a TRAILING separator
+    is detected (`"a\\n"` -> `["a"]`, which rejoins to `"a"`), and the empty
+    string is not (`""` -> `[]` -> `""`), which is what keeps
+    `_without_title_line_breaks` from ever calling `str.replace("", ...)` --
+    an empty needle matches at every position and would shred the line.
+    """
+    return "".join(text.splitlines()) != text
+
+
+def _producer_lines(err: str) -> list[str]:
+    """Split `err` the way `gh` JOINED it, not the way Python can split it.
+
+    THIS IS THE ROUND-12 BLOCKER'S FIX, one of two halves. `gh` writes each
+    record with a single trailing `\\n` (`fmt.Fprintf(..., "...\\n", ...)` at
+    close.go :118 and :169) -- so `\\n` is the producer's entire separator
+    alphabet. Round 12 read those records back with `str.splitlines()`, which
+    honours TEN separators, and the extra nine are all reachable from the
+    issue TITLE that `gh` interpolates into the record. A title carrying one
+    split gh's single-line record into several, and the classifier then read a
+    line whose whole content was operator-supplied -- forging the verdict in
+    BOTH directions, measured 20/20 at `4ce05224585`.
+
+    Reading with a WIDER rule than the writer wrote with is the general shape:
+    the extra separators do not delimit anything the producer meant, so every
+    one of them is a place the data can pretend to be structure.
+
+    CRLF IS STILL HANDLED, and that is why this is not simply `split("\\n")`,
+    which is what `splitlines()` was chosen over in round 12 and rightly so: a
+    bare LF split leaves a `\\r` glued to the end of the line, and the
+    already-closed arm ends in a SUFFIX test that then fails silently
+    (`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`).
+    `removesuffix` takes off exactly the one CR a CRLF terminator contributes
+    -- so a CR *inside* the title is now an ordinary character rather than a
+    line boundary, which is the whole point.
+    """
+    return [line.removesuffix("\r") for line in err.split("\n")]
+
+
+def _without_title_line_breaks(err: str, *titles: str) -> str:
+    """Take the TITLE's line breaks back out of `err` before anything reads it.
+
+    THE OTHER HALF OF THE ROUND-12 BLOCKER'S FIX, and the half that covers LF
+    -- the one separator `_producer_lines` cannot help with, because LF is the
+    producer's own. If GitHub accepts a literal LF in an issue title, then a
+    title carrying one genuinely creates a line in gh's output, indistinguishable
+    by position from a line gh wrote itself. No amount of careful splitting
+    recovers that; the only thing that does is knowing what the title was.
+
+    WE DO KNOW: `_read_issue_on_github` fetches `--json state,title,url` on a
+    call the closer was already making, so the titles arrive free. Each one
+    that carries a break is replaced, in `err`, by ITSELF WITH THE BREAKS TURNED
+    INTO SPACES -- structure removed, content and surrounding punctuation left
+    exactly where `gh` put them, so the record collapses back to the single line
+    it was written as.
+
+    ONLY TITLES THAT CARRY A BREAK ARE TOUCHED, which matters more than it
+    looks. An unconditional `err.replace(title, ...)` on an ordinary title like
+    `"o"` would rewrite every `o` in the record and turn a true verdict into
+    `UNKNOWN` -- a guard that manufactures the failure it exists to prevent.
+    A title with no break needs no neutralising, so the ordinary path is
+    byte-for-byte untouched.
+
+    WHAT THIS DOES NOT ESTABLISH, said plainly rather than left implied:
+
+    - **Whether GitHub accepts any of those ten code points in a title at all.**
+      Establishing it requires WRITING an issue; that was not done, so it is not
+      claimed in either direction. The fix does not rest on the answer, which is
+      the point -- round 12's safety rested on an unmeasured property of an
+      external service and called itself "title-proof by construction".
+    - **A title CHANGED between this run's reads and gh's render.** Both titles
+      this run observed are neutralised -- the pre-close read's and the
+      read-back's -- so defeating it needs the title to carry a literal LF at
+      the instant `gh` rendered its record while carrying none at EITHER read,
+      i.e. two edits inside the close window. That is a narrower residual, not
+      an absent one, and it is stated as a residual.
+    """
+    for title in titles:
+        if _has_line_break(title):
+            err = err.replace(title, " ".join(title.splitlines()))
+    return err
 
 
 def _close_outcome(err: str, repo: str, number: int) -> str:
@@ -857,19 +1000,37 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
     defect the round-10 arm GH23 models. Both sentences differ at a FIXED
     OFFSET, immediately after gh's icon token, so they are read there. That is
     the discipline `_object_kind_from_url` applies earlier in this module
-    (`csa_loom_parse_by_position_not_by_idiom`), and it is title-proof by
-    construction: the title is interpolated at the END of the line, inside
-    `(...)`, and can never occupy the start of one.
+    (`csa_loom_parse_by_position_not_by_idiom`).
+
+    A POSITIONAL READ IS NOT TITLE-PROOF ON ITS OWN, and round 12's docstring
+    claimed here that it was -- "the title is interpolated at the END of the
+    line, inside `(...)`, and can never occupy the start of one". FALSE, and
+    structurally rather than at the margin: the title cannot START a line gh
+    wrote, but it can CREATE one, and then it starts that one. Round 12 read
+    the records back with `str.splitlines()`, which honours ten separators
+    against the producer's one, so any of the other nine inside a title split
+    gh's single-line record into several and handed the classifier a line that
+    was entirely operator-supplied. Measured at `4ce05224585`: all ten forge,
+    in BOTH directions, 20 of 20, with a plain-title positive control green on
+    the same path -- and end to end through the closer, a U+2028 title returned
+    `#4547 closed on GitHub` over a run that closed nothing and posted no
+    comment, written permanently into `Item.history`. R7 restored through the
+    title field for the third round running.
+
+    So the title is dealt with WHERE IT IS DATA rather than argued about here.
+    THIS FUNCTION REQUIRES ITS CALLER TO HAVE NEUTRALISED IT: the production
+    call site passes `err` through `_without_title_line_breaks` with both
+    titles this run read, and `_producer_lines` below splits by the producer's
+    rule rather than Python's wider one. Neither is optional, and neither is
+    stated as a property of this function -- arms GH30 and GH31 delete them
+    independently and the separator-set test goes red for each.
 
     The repo and number are interpolated into both prefixes, so the read
     additionally establishes that `gh` acted on the object this tool asked
     about, and the two prefixes (`Closed issue ` / `Issue `) discriminate
     completely at that offset -- which is why the ORDER of the two tests below
     no longer carries any meaning. The scan is PER LINE, so a warning ahead of
-    the marker is tolerated, and it uses `splitlines()` rather than
-    `split("\\n")` so a CRLF stream does not leave a `\\r` glued to the suffix
-    (`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`, the
-    same defect in another language).
+    the marker is tolerated.
 
     NO NEW `gh` CALL. `err` is already captured at the close call site and was
     being discarded on the rc=0 path; the two sentences above are the only
@@ -899,13 +1060,24 @@ def _close_outcome(err: str, repo: str, number: int) -> str:
     """
     already = f"{_GH_ALREADY_CLOSED_PREFIX}{repo}#{number} ("
     performed = f"{_GH_PERFORMED_PREFIX}{repo}#{number} ("
-    for line in err.splitlines():
+    for line in _producer_lines(err):
         # DROP gh'S ICON, which is one whitespace-delimited token and the only
         # thing ahead of the marker: `cs.Yellow("!")` at :118 and
         # `cs.SuccessIconWithColor(cs.Red)` at :169, each followed by a literal
-        # space in the format string. Colour escapes live inside that token and
-        # contain no space, so the marker starts at the same offset on a TTY and
-        # under NO_COLOR alike.
+        # space in the format string.
+        #
+        # WHAT THIS ESTABLISHES IS THE COLOUR HALF ONLY, and the previous
+        # revision of this comment concluded more than it showed -- it said
+        # "the marker starts at the same offset on a TTY and under NO_COLOR
+        # alike", which reads as robustness to the token's SHAPE. It is true of
+        # the SGR escapes, which contain no space and so cannot move the split
+        # (verified: a real coloured check-glyph line classifies `performed`).
+        # It says nothing about the icon being ABSENT or differently spaced,
+        # and those are not handled -- they are merely handled HONESTLY: no
+        # icon at all, two spaces after the icon, a tab after it, and a
+        # localised icon-plus-word prefix all answer `unknown` rather than
+        # guessing, which is the third arm doing its job. Arm GH34 deletes this
+        # drop entirely.
         body = line.split(" ", 1)[1] if " " in line else line
         if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):
             return CLOSE_PERFORMED
@@ -981,7 +1153,8 @@ def close_issue_on_github(
         )
 
     try:
-        if _issue_state_on_github(repo, number) == "CLOSED":
+        before = _read_issue_on_github(repo, number)
+        if before.state == "CLOSED":
             # THE NOTE SAYS WHAT DID NOT HAPPEN. "left alone" alone reads as
             # "nothing needed doing", which is true of the close and false of
             # the receipt: no comment is posted on this route, so the operator
@@ -1060,8 +1233,19 @@ def close_issue_on_github(
                 "version -- but this says 're-run' without knowing whether now is "
                 "a good time, and that is a limitation rather than a verdict"
             )
-        outcome = _close_outcome(err, repo, number)
-        after = _issue_state_on_github(repo, number)
+        # THE READ-BACK COMES FIRST so its title joins the neutralisation set.
+        # The order of these two statements is not cosmetic: `_close_outcome`
+        # classifies gh's prose, and the titles this run observed are what make
+        # that prose safe to read. Taking BOTH -- the pre-close read's and this
+        # one's -- means a title carrying a literal LF has to be present at
+        # gh's render and absent at both reads to survive, rather than merely
+        # absent at one of them. Neither read costs an extra call; the title is
+        # one more field on a `--json` list that was already fetched.
+        after = _read_issue_on_github(repo, number)
+        outcome = _close_outcome(
+            _without_title_line_breaks(err, before.title, after.title),
+            repo, number,
+        )
     except OSError as exc:
         # `gh` missing or unexecutable. Without this the record path dies on a
         # traceback from inside `subprocess`, which is loud but says nothing
@@ -1069,11 +1253,11 @@ def close_issue_on_github(
         raise IssueCloseFailedError(
             f"cannot run `gh` to close #{number}: {exc}. Nothing was written."
         ) from exc
-    if after != "CLOSED":
+    if after.state != "CLOSED":
         raise IssueCloseFailedError(
-            f"`gh issue close {number}` returned 0 but the issue still reads {after} - "
-            "reporting a close this tool cannot observe would be the defect #4545 is "
-            "about, one layer down"
+            f"`gh issue close {number}` returned 0 but the issue still reads "
+            f"{after.state} - reporting a close this tool cannot observe would be "
+            "the defect #4545 is about, one layer down"
         )
     if outcome == CLOSE_FOUND_ALREADY_CLOSED:
         # THE RACE LANDED ON US. Somebody closed it between the pre-read and

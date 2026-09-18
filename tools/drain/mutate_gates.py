@@ -392,14 +392,14 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("GH6 rc=0 is trusted instead of reading the state back, so a wrapper "
          "that did nothing reports a close"),
         "tick.py",
-        "        after = _issue_state_on_github(repo, number)",
-        '        after = "CLOSED"',
+        "        after = _read_issue_on_github(repo, number)",
+        '        after = _IssueRead("CLOSED", "")',
     ),
     (
         ("GH7 the already-closed short circuit goes, so a human's hand-closed "
          "issue is closed again and re-commented on"),
         "tick.py",
-        '        if _issue_state_on_github(repo, number) == "CLOSED":',
+        "        if before.state == \"CLOSED\":",
         "        if False:",
     ),
     (
@@ -614,9 +614,10 @@ ARMS: list[tuple[str, str, str, str]] = [
          "vacuously: #4545's failure mode restored through the verification "
          "instead of through the write"),
         "tick.py",
-        ('        ["gh", "issue", "view", str(number), "--repo", repo, '
-         '"--json", "state,url"]'),
-        ('        ["gh", "issue", "view", str(number), "--json", "state,url"]'),
+        ('        ["gh", "issue", "view", str(number), "--repo", repo,\n'
+         '         "--json", "state,title,url"]'),
+        ('        ["gh", "issue", "view", str(number),\n'
+         '         "--json", "state,title,url"]'),
     ),
     (
         ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
@@ -626,7 +627,10 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`Item.history` permanently. This is the round-9 head, and the whole "
          "PR exists to stop a close being reported that never reached GitHub"),
         "tick.py",
-        "        outcome = _close_outcome(err, repo, number)",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
         "        outcome = CLOSE_PERFORMED",
     ),
     (
@@ -668,8 +672,10 @@ ARMS: list[tuple[str, str, str, str]] = [
     # genuinely performed: 1 comment posted, state CLOSED, and a note saying
     # neither happened, written permanently into `Item.history`. GH26 is that
     # defect verbatim; GH29 is the tempting "swap the two ifs", which merely
-    # moves the collision onto the dangerous side. Only a POSITIONAL read
-    # survives both, because the title can never start a line.
+    # moves the collision onto the dangerous side. A POSITIONAL read survives
+    # both -- and NOT, as this comment claimed for a round, "because the title
+    # can never start a line". It cannot start a line gh WROTE; it can create
+    # one of its own, which is what GH30-GH32 below are about.
     (
         ("GH26 THE CLASSIFIER GOES BACK TO READING BY IDIOM -- a bare substring "
          "over the whole of stderr, already-closed first. This is round 10's "
@@ -739,6 +745,134 @@ ARMS: list[tuple[str, str, str, str]] = [
          "    if answered.casefold() != repo.casefold():"),
         ("    answered = _object_repo_from_url(url)\n"
          "    if False:"),
+    ),
+    # -- round 13: the title did not have to START a line. It CREATED one ----
+    #
+    # Round 12 fixed the idiom read and claimed the positional result was
+    # "title-proof by construction … [the title] can never occupy the start of
+    # one [line]". True of a line gh WROTE, and the conclusion does not follow:
+    # `str.splitlines()` honours TEN separators against the one `gh` terminates
+    # its records with, so a title carrying any of the other nine splits that
+    # single-line record into several and hands the classifier a line whose
+    # whole content is operator-supplied. Measured at 4ce05224585: all ten
+    # forge, in BOTH directions, 20 of 20, with a plain-title control green --
+    # and end to end through `_GhSpy` on the raced-close path a U+2028 title
+    # returned `#4547 closed on GitHub` over a run that closed nothing and
+    # posted no comment, written permanently into `Item.history`.
+    #
+    # WHY FIVE ARMS AND NOT ONE. The round-12 error was not a missing character
+    # in a list; it was fixing the trigger instead of the class. An arm per
+    # CONSTRUCT is what makes that visible: the narrow split, the neutraliser,
+    # the neutraliser's breadth, the field that feeds it, and the second read
+    # that covers an edit inside the close window. The review that found this
+    # said it plainly -- `killed=304 of 304` was true and green while the
+    # blocker shipped, because no arm pointed at `splitlines()`, at the icon
+    # drop, or at the length guard. A complete matrix over an incomplete arm
+    # set is the shape this repo keeps paying for.
+    (
+        ("GH30 THE SPLIT WIDENS BACK TO `str.splitlines()` -- round 12's head "
+         "verbatim. Ten separators read back out of a stream joined with one, "
+         "so the nine gh never writes delimit nothing it meant and every one "
+         "is reachable from the TITLE. Reading with a wider rule than the "
+         "writer wrote with is the whole defect; narrowing the trigger "
+         "character is what round 12 did instead"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        "    return err.splitlines()",
+    ),
+    (
+        ("GH38 THE CRLF TERMINATOR STOPS BEING UNDONE -- the OPPOSITE mistake "
+         "to GH30, and the one `splitlines()` was rightly chosen over a bare "
+         "`split(\"\\\\n\")` to avoid in round 12. A `\\\\r` left glued to the end "
+         "of the line fails the already-closed arm's SUFFIX test SILENTLY, so "
+         "every raced close on a CRLF stream classifies `unknown`. Narrowing "
+         "the split is only correct WITH this, which is why the pair is armed "
+         "rather than just the widening "
+         "(`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`)"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        '    return err.split("\\n")',
+    ),
+    (
+        ("GH31 THE TITLE NEUTRALISATION IS DELETED from the call site, so LF -- "
+         "gh's OWN terminator, the one separator a narrower split cannot help "
+         "with -- creates a line of pure operator-supplied content again. This "
+         "is the half of the fix that does not depend on how the stream is "
+         "split, and it is the half that costs nothing: the titles arrive on a "
+         "`--json` list the closer was already fetching"),
+        "tick.py",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
+        "        outcome = _close_outcome(err, repo, number)",
+    ),
+    (
+        ("GH32 THE NEUTRALISER IS NARROWED TO ONE CODE POINT -- round 12's "
+         "error committed one layer down, and the reason `_has_line_break` "
+         "asks the splitter rather than transcribing its documentation. A "
+         "hand-written separator list is a probe that can disagree with the "
+         "implementation it describes (assertion-design 'done' #3)"),
+        "tick.py",
+        "        if _has_line_break(title):",
+        '        if "\\u2028" in title:',
+    ),
+    (
+        ("GH33 THE LENGTH GUARD IN `_sentence_is` IS DELETED. Disclosed at its "
+         "site as an EQUIVALENT MUTANT at the two pairs `_close_outcome` "
+         "supplies -- 0 divergent inputs over 200 candidates, positive control "
+         "diverging -- and killable at the PREDICATE'S OWN CONTRACT, which is "
+         "where it is now pinned. The arm exists because round 12 presented it "
+         "as load-bearing with no witness at all; an un-killable construct is "
+         "disclosed, not counted, and a disclosed one still gets an arm"),
+        "tick.py",
+        ("        len(body) >= len(prefix) + len(suffix)\n"
+         "        and body[:len(prefix)].casefold() == prefix.casefold()"),
+        "        body[:len(prefix)].casefold() == prefix.casefold()",
+    ),
+    (
+        ("GH34 GH'S ICON TOKEN STOPS BEING DROPPED, so the marker is read at "
+         "offset 0 and every real line classifies UNKNOWN -- a classifier that "
+         "qualifies every outcome, which is how 'fails honest' gets satisfied "
+         "by saying nothing. No arm pointed at this construct before round 13 "
+         "even though the suite killed it: an arm set that omits a construct "
+         "makes a 100%-killed headline a claim about the arms, not the code"),
+        "tick.py",
+        '        body = line.split(" ", 1)[1] if " " in line else line',
+        "        body = line",
+    ),
+    (
+        ("GH35 REPO AND NUMBER ARE DROPPED FROM THE ALREADY-CLOSED PREFIX, so "
+         "a short-circuit line about SOMEBODY ELSE'S issue answers for ours. "
+         "The positional property claimed both prefixes and only the PERFORMED "
+         "half was asserted, so this survived all 531 tests -- naming a value "
+         "that does not in fact break the assertion, which is "
+         "assertion-design's forbidden case"),
+        "tick.py",
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}{repo}#{number} ("',
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}"',
+    ),
+    (
+        ("GH36 THE READ STOPS ASKING FOR THE TITLE, so the neutraliser is "
+         "handed an empty string and neutralises nothing. Killed "
+         "BEHAVIOURALLY, not merely by an argv assertion, because `_GhSpy` "
+         "answers only the fields the argv names -- exactly as `gh` does. A "
+         "spy that returns every field regardless would let this survive on a "
+         "behaviour the real command does not have"),
+        "tick.py",
+        '         "--json", "state,title,url"]',
+        '         "--json", "state,url"]',
+    ),
+    (
+        ("GH37 THE READ-BACK'S TITLE IS DROPPED from the neutralisation set, "
+         "leaving only the pre-close read's -- so a title EDITED inside the "
+         "close window is rendered by gh and neutralised by nobody. Measured "
+         "SURVIVING the suite before its witness existed, which is why the "
+         "second title is pinned by a test with a title-change seam rather "
+         "than argued for in a docstring"),
+        "tick.py",
+        "            _without_title_line_breaks(err, before.title, after.title),",
+        "            _without_title_line_breaks(err, before.title),",
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (
