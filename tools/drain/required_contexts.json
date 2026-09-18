@@ -5,20 +5,22 @@
   "measured": "2026-09-13",
   "source": "repos/fgarofalo56/csa-inabox/branches/main/protection/required_status_checks",
   "contexts": [
+    "Bicep Params Compile",
+    "PowerShell Lint",
     "Python Lint",
     "Python Tests (3.10)",
     "Python Tests (3.11)",
     "Python Tests (3.12)",
-    "PowerShell Lint",
-    "Secret Scan",
     "Repo Hygiene",
-    "dbt Compile (shared)",
+    "Secret Scan",
+    "brain security graph — committed artifact matches the tree",
+    "changelog parser can read every commit message",
     "dbt Compile (finance)",
     "dbt Compile (inventory)",
     "dbt Compile (sales)",
-    "next build (node 20)",
+    "dbt Compile (shared)",
     "guardrails",
-    "vitest (node 20)",
-    "changelog parser can read every commit message"
+    "next build (node 20)",
+    "vitest (node 20)"
   ]
 }
