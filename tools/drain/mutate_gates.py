@@ -458,16 +458,62 @@ ARMS: list[tuple[str, str, str, str]] = [
          "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
     ),
     (
+        ("GH16 BOTH ROUTES COLLAPSE INTO THE MERGE TEXT -- the other half of the "
+         "GH15 symmetry, and it SURVIVED 519/519. One token: `if kind in "
+         "MERGE_BASED_KINDS:` becomes `if True:`. Under it every RUN-BACKED "
+         "close publishes, permanently and publicly, that its evidence is 'CI "
+         "green at the MERGED sha - a merge, not a deploy', that 'the live "
+         "estate was never checked', and -- on a g1-browser receipt taken from a "
+         "browser run -- that the reader should go obtain a g1-browser receipt "
+         "instead. That is WORSE than the text GH15 models, which at least never "
+         "claimed 'not a deploy' over a deploy observation. Nothing killed it "
+         "because the only route-sensitive assertion on the run-backed test was "
+         "`deploy-integrity R2`, which BOTH templates carry"),
+        "tick.py",
+        "    if kind in MERGE_BASED_KINDS:",
+        "    if True:",
+    ),
+    (
+        ("GH17 `ci-green` IS RECLASSIFIED AS RUN-BACKED, so the merge route "
+         "acquires the estate-observing sentence: 'an observation of something "
+         "that ran, not a merge' rendered over a merge, citing R2 as SATISFIED "
+         "by the one thing R2 forbids. It is the two-declarations hazard written "
+         "out -- merge-ness is stated at MERGE_BASED_KINDS and again at `if kind "
+         "== \"ci-green\":` in record_receipt_from_evidence -- and it moves BOTH "
+         "declarations because moving only the first now hits the round-7 "
+         "fail-closed raise instead, which is the point of that raise. It is "
+         "also the mutation that finally runs value 3 of the ci-green test's "
+         "'FOUR VALUES BREAK THIS' red: GH15 stops at assertion 1, so 3 had "
+         "never been exercised by any shipped arm"),
+        "tick.py",
+        ('RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})'),
+        ('RUN_BACKED_KINDS = frozenset({"ci-green", "deploy-run", "estate", "g1-browser"})\n'
+         'MERGE_BASED_KINDS = frozenset()  # rebound HERE, after the original binding'),
+    ),
+    (
+        ("GH18 the merge text DROPS ITS NON-CLAIM ABOUT THE ESTATE, so a "
+         "ci-green close reads as though the live estate were part of the "
+         "evidence -- the implication the sentence exists to refuse. Value 4 of "
+         "the same 'FOUR VALUES BREAK THIS', also never exercised before round 7"),
+        "tick.py",
+        ('            "The live estate was never checked and nothing here claims anything "\n'
+         '            "about it. "\n'),
+        (""),
+    ),
+    (
         ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
          "failure after a landed close -- os.replace raising PermissionError -- "
          "ESCAPES main() UNCAUGHT while the issue is closed upstream: #4545 "
          "with extra steps, inside the fix for it. WHAT THE OPERATOR SEES, "
          "measured as a real process rather than under capsys (which is how an "
          "earlier revision of this line came to say 'an EMPTY stderr', and it "
-         "was false): exit 1 and 655 bytes of TRACEBACK naming os.replace and "
-         "saying nothing about the upstream close, against 522 bytes of the "
-         "intended message unmutated -- same exit code, so neither the status "
-         "nor the text reports that the two records now disagree"),
+         "was false): exit 1 and ~650 bytes of TRACEBACK naming os.replace and "
+         "saying nothing about the upstream close, against ~520 bytes of the "
+         "intended message unmutated -- byte totals ENVIRONMENT-DEPENDENT (they "
+         "move with sandbox path length and run id; an independent re-measure "
+         "on another sandbox read 647/579), so the load-bearing invariant is "
+         "the SAME EXIT CODE either way, meaning neither "
+         "the status nor the text reports that the two records now disagree"),
         "tick.py",
         "        except Exception as exc:  # the WIDTH is the point, see below",
         "        except LedgerChangedError as exc:",

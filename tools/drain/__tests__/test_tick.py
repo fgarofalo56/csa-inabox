@@ -1332,9 +1332,40 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
     # these: a comment built from `detail` alone, which is what shipped.
     assert "kind=g1-browser" in body, "the comment must name the RECEIPT KIND"
     assert "class=ui-surface" in body, "the comment must name the ISSUE CLASS"
+    # THE ROUTE, not merely the citation (arm GH16). `"deploy-integrity R2"`
+    # below is in BOTH templates and therefore has ZERO power to tell the two
+    # routes apart -- disclosed at its own site. This pair is the assertion that
+    # does. THE VALUE THAT BREAKS IT: `if kind in MERGE_BASED_KINDS:` collapsing
+    # to `if True:`, which renders the MERGE text here and makes this
+    # `g1-browser` receipt -- taken from a run of a browser workflow -- assert
+    # publicly that its evidence is "a merge, not a deploy", that "the live
+    # estate was never checked", and that the reader should go obtain a
+    # g1-browser receipt instead. That mutation SURVIVED 519/519 at round 6's
+    # head, where neither this pair nor
+    # `test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting`
+    # existed. MEASURED round 7, GH16 applied to a sandbox copy: this is the
+    # assertion that goes red, by name and with this message; deleting just
+    # this pair leaves GH16 caught by that other test's positive pair, so the
+    # two are independent killers rather than one restated. The negative is
+    # paired with the positive rather than standing alone, per
+    # assertion-design.md "done" #4.
+    assert "an observation of something that ran, not a merge" in body, (
+        "a run-backed receipt must say its evidence is an OBSERVATION - the "
+        "value that breaks this is the merge-based branch's text rendered here, "
+        "i.e. both routes collapsed into the template that disclaims the estate"
+    )
+    assert "a merge, not a deploy" not in body, (
+        "a run-backed close must not disclaim its own evidence as a merge"
+    )
     # A RUN-BACKED receipt is an observation rather than a merge, so it may
     # cite R2 as satisfied. The ci-green route may not, and that is asserted at
     # its own site below.
+    #
+    # DISCLOSED, per assertion-design.md "done" #5: this assertion has NO power
+    # to distinguish the two routes. `deploy-integrity R2` is cited by both
+    # templates -- as satisfied here, as a confinement there -- so no collapse
+    # of the split can make it fail. It pins that the citation exists at all
+    # (arms GH14 and GH15 break it); the route is pinned by the pair above.
     assert "deploy-integrity R2" in body
     assert "closed on GitHub" in out.summary
 
@@ -1377,13 +1408,26 @@ def test_blocker_a_ci_green_close_does_not_cite_r2_as_licence_for_closing_on_a_m
     1. a comment that does not name the kind (arm GH15),
     2. a comment that does not name the class (arm GH15),
     3. a ci-green comment that carries the run-backed sentence -- i.e. the two
-       branches collapsed back into one template, which is the defect,
-    4. a ci-green comment that drops the non-claim about the estate.
+       branches collapsed back into one template, which is the defect (arm
+       GH17, which reclassifies `ci-green` as run-backed the way editing
+       `record_receipt_from_evidence`'s `if kind == "ci-green":` and not
+       `MERGE_BASED_KINDS` would),
+    4. a ci-green comment that drops the non-claim about the estate (arm GH18).
 
-    The POSITIVE CONTROL for 3 is the run-backed test above, which asserts the
-    estate-observing sentence IS present on its own route: an assertion that
-    only ever checks for absence is satisfied by deleting the feature
-    (assertion-design.md "done" #4).
+    CORRECTION (round 7). This docstring used to say: "The POSITIVE CONTROL for
+    3 is the run-backed test above, which asserts the estate-observing sentence
+    IS present on its own route." **It did not.** That test's only comment
+    assertion beyond kind/class/detail was `"deploy-integrity R2" in body`, and
+    that string is in BOTH templates -- zero power to tell the routes apart, so
+    the named pairing did not exist. It is the same shape as the `"NOT BOUNDED"`
+    correction this diff makes elsewhere: a control asserted in prose that the
+    code did not provide. The positive control NOW EXISTS and is a different
+    assertion: `test_blocker_a_ledger_close_also_closes_the_issue_on_github`
+    pins `"an observation of something that ran, not a merge"`, a string unique
+    to the run-backed template, so deleting the split in EITHER direction turns
+    one of the two tests red. The other direction -- both routes collapsing into
+    the MERGE text -- is arm GH16, and it survived 519/519 until that assertion
+    was added.
     """
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     led.upsert(807, "a guard", "W6-ci", lane="lane:ci", size=1)
@@ -1405,6 +1449,102 @@ def test_blocker_a_ci_green_close_does_not_cite_r2_as_licence_for_closing_on_a_m
         "a ci-green close must state what it did NOT look at; without it the "
         "comment implies an estate state this route never measured"
     )
+
+
+def test_a_ci_green_comment_claims_no_more_than_policy_says_it_proves(
+    tmp_path, monkeypatch
+):
+    """THE PUBLIC ARTIFACT MUST NOT OUTRUN `policy.json` (round 7).
+
+    The merge-based text said: "It establishes that the guards and tests this
+    issue is about pass in CI." Two overclaims in one sentence, both contradicted
+    by the policy this very receipt is taken under:
+
+    - `ci_green_rule.not_proven_by_this_receipt` says a green context is NOT
+      evidence it measured a non-empty POPULATION -- green-over-zero-items (the
+      #4451 shape) "remains an owed capability, not a claim". "the guards and
+      tests pass" asserts exactly the thing the policy declines to assert.
+    - "this issue is about" asserts a BINDING that
+      `record_receipt_from_evidence`'s own docstring calls weaker than
+      `Item.pr`: a PR that REFERENCES an item is not necessarily that item's
+      lane (#4489).
+
+    The asymmetry is what made it worth repairing rather than noting: the
+    run-backed branch carries an explicit `DISCLOSED:` clause for its own
+    binding gap, and the merge branch -- the route whose evidence is WEAKER --
+    carried none.
+
+    THE VALUES THAT BREAK THIS: restoring that sentence breaks both assertions
+    below; deleting the `DISCLOSED:` clause while leaving the softened claim
+    breaks the first. The negative is paired with a positive per
+    assertion-design.md "done" #4.
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(807, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True)
+    spy = _gh(monkeypatch)
+
+    tick.record_receipt_from_evidence(led, POLICY, "r", 807, from_pr=4498, from_run=None)
+
+    close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
+    body = close[close.index("--comment") + 1]
+    # The policy's own words, so a future edit to either side shows up as a
+    # disagreement rather than as drift nobody reads.
+    assert "remains an owed capability, not a claim" in POLICY["receipts"][
+        "ci_green_rule"
+    ]["not_proven_by_this_receipt"], (
+        "the policy text this assertion mirrors moved; re-reconcile the comment"
+    )
+    assert "an owed capability, not a claim" in body, (
+        "a merge-based close must disclose that a green context is not proof it "
+        "measured a non-empty POPULATION - the value that breaks this is the "
+        "comment claiming the guards and tests PASS, which policy.json declines "
+        "to claim"
+    )
+    assert "#4489" in body, (
+        "a merge-based close must disclose that the PR-to-issue binding is by "
+        "REFERENCE, not by lane"
+    )
+    assert "the guards and tests this issue is about pass in CI" not in body, (
+        "the removed overclaim is back"
+    )
+
+
+def test_a_receipt_kind_in_neither_category_refuses_rather_than_defaulting():
+    """THE THIRD CASE, which used to fall through to the RUN-BACKED text.
+
+    `_receipt_comment`'s merge branch had an unconditional `return` as its else,
+    so a kind classified in neither set got precisely the estate-observing
+    sentence -- while the `#:` comment on `MERGE_BASED_KINDS` claimed a future
+    merge-based kind "cannot acquire the estate-observing sentence by being
+    added elsewhere". That claim was false for the exact case it named.
+
+    Latent rather than live, and the input is named: today's five kinds are
+    `ci-green`, `deploy-run`, `estate`, `g1-browser` and `operator`; `operator`
+    is refused earlier by `verify_run_backed_receipt` so it never renders, and
+    the other four are classified correctly. It goes LIVE the moment merge-ness
+    is edited at `record_receipt_from_evidence`'s `if kind == "ci-green":` and
+    not at `MERGE_BASED_KINDS` -- two declarations, one artifact, permanent.
+
+    THE VALUE THAT BREAKS THIS: restoring the unconditional `return`, which
+    turns the refusal into the run-backed text over a kind nothing classified.
+    """
+    assert "operator" not in tick.MERGE_BASED_KINDS | tick.RUN_BACKED_KINDS, (
+        "this test's premise is that an UNCLASSIFIED kind exists to probe with"
+    )
+    with pytest.raises(tick.ReceiptRefusedError) as exc:
+        tick._receipt_comment("operator", "guard-or-test-only", "d")
+    assert "neither" in str(exc.value), (
+        "the refusal must say WHY - a kind classified by nothing is not the "
+        "same diagnosis as a kind the policy refuses"
+    )
+    # The POSITIVE PAIR: the two classified routes still render, so the refusal
+    # above cannot be satisfied by making `_receipt_comment` raise on
+    # everything. The value that breaks these is exactly that.
+    assert "a merge, not a deploy" in tick._receipt_comment(
+        "ci-green", "guard-or-test-only", "d")
+    assert "an observation of something that ran, not a merge" in tick._receipt_comment(
+        "g1-browser", "ui-surface", "d")
 
 
 def test_blocker_the_github_close_happens_before_the_ledger_write(tmp_path, monkeypatch):
@@ -1651,9 +1791,13 @@ def test_blocker_a_non_cas_save_failure_after_a_landed_close_is_not_silent(
     `raise SystemExit(main())`, so an exception that escapes `main()` escapes to
     the interpreter and prints a traceback; the emptiness was an artifact of
     measuring through `capsys`. Measured as a real process against a sandbox
-    copy carrying arm GH12: exit 1 and 655 bytes of traceback naming
-    `led.save(if_unchanged=True)` and `os.replace`, against 522 bytes of the
-    intended message on the unmutated source. What is actually wrong under the
+    copy carrying arm GH12: exit 1 and ~650 bytes of traceback naming
+    `led.save(if_unchanged=True)` and `os.replace`, against ~520 bytes of the
+    intended message on the unmutated source. Those byte totals are
+    ENVIRONMENT-DEPENDENT -- they move with sandbox path length and run id, and
+    an independent re-measurement on a different sandbox read 647 / 579 -- so
+    they are orders of magnitude, not constants. The invariant is that the exit
+    code is 1 EITHER WAY. What is actually wrong under the
     narrow bound is that the operator is handed a file-rename traceback that
     never mentions the issue being closed upstream, at the SAME exit code.
 

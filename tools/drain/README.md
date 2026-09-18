@@ -168,8 +168,12 @@ say the escape left an **empty stderr**. It does not. `tick.py` ends in
 `raise SystemExit(main())`, so the exception reaches the interpreter and prints
 a traceback; the emptiness was an artifact of measuring through pytest's
 `capsys`. Measured as a real process against a sandbox copy carrying arm GH12:
-exit 1 and **655 bytes of traceback** naming `os.replace`, against **522 bytes**
-of the intended message unmutated. What the width actually buys is the
+exit 1 and **~650 bytes of traceback** naming `os.replace`, against **~520 bytes**
+of the intended message unmutated. Those totals are **environment-dependent** —
+they move with sandbox path length and run id, and an independent reviewer
+re-measuring on a different sandbox got 647 / 579 — so read them as orders of
+magnitude, not constants. What is invariant is **exit 1 either way**, which is
+the whole point: what the width actually buys is the
 difference between those two texts — under the narrow bound the operator gets a
 file-rename traceback that never mentions the upstream close, at the *same* exit
 code, so neither the status nor the message says the two records disagree. The

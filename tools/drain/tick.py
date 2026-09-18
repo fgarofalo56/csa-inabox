@@ -559,6 +559,18 @@ def _issue_state_on_github(repo: str, number: int) -> str:
 #: cannot acquire the estate-observing sentence by being added elsewhere.
 MERGE_BASED_KINDS = frozenset({"ci-green"})
 
+#: The receipt kinds whose evidence IS an observation of something that ran.
+#: Declared as a POSITIVE set rather than left implicit as `_receipt_comment`'s
+#: else-branch, because merge-ness is stated in TWO places -- here and the
+#: `if kind == "ci-green":` branch in `record_receipt_from_evidence` -- and an
+#: else-branch default means editing only the second one publishes "an
+#: observation of something that ran, not a merge" over a merge, permanently
+#: and on up to 334 public artifacts. A kind in NEITHER set now RAISES rather
+#: than rendering either sentence: the same fail-closed shape
+#: `verify_run_backed_receipt` already uses, and the reason the `#:` comment
+#: above can claim what it claims.
+RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})
+
 
 def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     """The comment `gh issue close --comment` posts. THE PERMANENT PUBLIC RECORD.
@@ -587,18 +599,42 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     sentence this permanent should be readable in full at the place it is
     decided, and a shared template is how the two routes came to say the same
     wrong thing in the first place.
+
+    **AND WHY A THIRD KIND RAISES.** Until round 7 the merge branch's else was
+    an unconditional `return` of the run-backed text, so a kind in neither
+    category got precisely the estate-observing sentence -- while the comment on
+    `MERGE_BASED_KINDS` claimed a future merge-based kind "cannot acquire" it.
+    That claim was false for the case it named. Latent, not live: the four
+    renderable kinds are classified correctly and `operator` is refused earlier
+    by `verify_run_backed_receipt`. It goes live the moment a second merge-based
+    kind is added at `record_receipt_from_evidence`'s `if kind == "ci-green":`
+    and not here. Failing closed is chosen over correcting the docstring because
+    the output is PERMANENT and PUBLIC: a loud refusal before anything is
+    written is recoverable, and a wrong sentence on a closed issue is not.
     """
     head = f"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}."
     if kind in MERGE_BASED_KINDS:
         return (
             f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: the evidence is "
             "CI green at the MERGED sha - a merge, not a deploy. It establishes "
-            "that the guards and tests this issue is about pass in CI. The live "
-            "estate was never checked and nothing here claims anything about it. "
+            "that every required context that could run at the merged sha was green. "
+            "The live estate was never checked and nothing here claims anything "
+            "about it. "
+            "DISCLOSED: a green context is not evidence it measured a non-empty "
+            "POPULATION - green-over-zero-items stays invisible to this receipt "
+            "and remains an owed capability, not a claim - and the PR is bound "
+            "to this issue by REFERENCE, not by lane (#4489). "
             "Per deploy-integrity R2 (merged is not done) a merge-based receipt "
             f"closes only the {issue_class} class; an issue about deployed "
             "behaviour takes a deploy-run, estate or g1-browser receipt instead. "
             "Closing this issue on that evidence, and on nothing wider than it."
+        )
+    if kind not in RUN_BACKED_KINDS:
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} is in neither MERGE_BASED_KINDS nor "
+            "RUN_BACKED_KINDS, so this tool cannot say whether its evidence is a "
+            "merge or an observation of something that ran - refusing to post a "
+            "permanent public comment that would assert one of them by default"
         )
     return (
         f"{head} The evidence is a completed run of the only workflow policy "
@@ -970,7 +1006,7 @@ class Recorded(NamedTuple):
 def record_receipt_from_evidence(
     led: Ledger, policy: dict, repo: str, number: int,
     *, from_pr: int | None, from_run: str | None,
-) -> str:
+) -> Recorded:
     """Record a receipt this tool has MEASURED, close the issue, close the item.
 
     THE CLOSE IS ONE TRANSACTION ACROSS BOTH RECORDS (#4545). Before this, the
@@ -1268,10 +1304,17 @@ def main() -> int:
             # exception that escapes `main()` escapes to the interpreter, which
             # prints a traceback. Measured as a REAL PROCESS in a sandbox copy
             # carrying arm GH12, `os.replace` raising `PermissionError`:
-            # **exit 1, 655 bytes of traceback** naming `led.save(if_unchanged=
+            # **exit 1, ~650 bytes of traceback** naming `led.save(if_unchanged=
             # True)` and `os.replace` in `ledger.py`. Positive control, same
-            # driver against the unmutated source: exit 1, 522 bytes of the
+            # driver against the unmutated source: exit 1, ~520 bytes of the
             # intended `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`.
+            # THE BYTE TOTALS ARE ENVIRONMENT-DEPENDENT, not constants: they
+            # move with sandbox PATH LENGTH (the traceback quotes absolute
+            # paths) and with the run id in the message. An independent
+            # reviewer re-ran the same measurement on a different sandbox and
+            # got 647 / 579. What is invariant, and what the argument rests on,
+            # is the pair below: **exit 1 either way**, and a traceback about a
+            # file rename versus the intended sentence.
             #
             # THE REAL REASON FOR THE WIDTH is what those two outputs differ
             # ON, not silence. Under the narrow bound the operator gets a
