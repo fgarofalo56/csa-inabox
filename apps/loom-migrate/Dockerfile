@@ -32,8 +32,20 @@ FROM python:3.11-slim
 # as "debian 13 is inherently red".
 #
 # `perl-base` is a base-layer package no instruction in this file installs, so
-# the only lever AVAILABLE TO THIS REPO is the archive upgrade — the other
-# lever is an upstream base rebuild, which this line exists not to wait for.
+# it cannot be fixed by an `apt-get install` here. THREE levers exist, and an
+# earlier version of this comment named only one of them:
+#   1. this archive upgrade — chosen, because it is in-repo and immediate;
+#   2. moving to a `-bookworm` base tag — ALSO available to this repo and
+#      already exercised elsewhere (platform/runners/script-runner is on
+#      `python:3.12-slim-bookworm`; fiab-mcp-bridge's `node:22-bookworm-slim`
+#      scans debian 12.15 at 0). Not chosen here: it changes the Python/OS
+#      pairing for a CVE fix, which is a larger blast radius than one RUN line.
+#   3. an upstream base rebuild — not available to this repo, and this line
+#      exists so we do not wait for it.
+# An earlier revision said the archive upgrade was "the only lever available to
+# this repo". That was false; lever 2 is ours. Recorded rather than edited away,
+# because the sentence was introduced BY a review round asking for more
+# precision — a narrowing that produced a more precise falsehood.
 # If a republished base ships the fix, this line becomes a no-op rather than
 # wrong, and the OS-version claim above should be re-measured before being
 # quoted again.

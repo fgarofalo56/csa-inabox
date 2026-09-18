@@ -23,9 +23,19 @@ FROM python:3.11-slim
 # The leading `dist-upgrade` is the repo-standard SC1 hardening (same as
 # apps/fiab-mcp-bridge/Dockerfile): it pulls the distro's security patches
 # AHEAD of the pinned base tag, which is how OS-layer CRITICALs get cleared here
-# without waiting for a base rebuild. The debian 13.6 layer of this image scans
-# 0 CRITICAL today — this is prophylactic, so the next base-tag lag doesn't
-# re-block the gate.
+# without waiting for a base rebuild.
+#
+# DO NOT REMOVE THIS LINE. It is LOAD-BEARING, not prophylactic. An earlier
+# revision of this comment said "the debian 13.6 layer of this image scans
+# 0 CRITICAL today — this is prophylactic", which inverts the causation: this
+# image is `FROM python:3.11-slim`, which IS debian 13.6 carrying the vulnerable
+# `perl-base`, and it scans 0 CRITICAL *because of* this line. Measured
+# 2026-09-17 on the two sibling images that lacked it — same base, three
+# CRITICALs each (#4547).
+#
+# This image is built by full-app-deploy-commercial.yml:435-436, the canonical
+# from-scratch app path in no-vaporware.md, under the same Trivy gate. Trimming
+# this line on the word "prophylactic" reds that path.
 RUN apt-get update && apt-get dist-upgrade -y \
     && apt-get install -y --no-install-recommends curl gnupg2 apt-transport-https ca-certificates unixodbc-dev gcc g++ git \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
