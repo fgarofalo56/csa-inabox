@@ -24,14 +24,23 @@ measured 2026-09-18. That is the same login and the same type the operator
 carries. One authenticated identity, two kinds of author, no field that tells
 them apart.
 
-*(The read-side confirmation — fetching #4565's comments and showing the
-agent-written closing comment attributed to that login — could not be completed
-at this revision. `repos/:owner/:repo/issues/4565/comments` returned **HTTP 403,
-secondary rate limit**, while `gh api rate_limit` reported
-`core: {limit: 5000, remaining: 5000, used: 0}`. The primary counter is a blind
-instrument for the secondary limit. A reviewer hit the same 403 four times over
-~5 minutes and flagged it rather than letting silence read as verification; this
-note does the same. The posting-side measurement above is independent of it.)*
+**Confirmed on a second, independent API surface.** GraphQL is not subject to the
+limiter that blocked the REST route, and `gh api graphql -f query='{viewer{login
+__typename}}'` from an agent session returns
+`{"__typename":"User","login":"fgarofalo56"}` — measured 2026-09-18. Two
+different APIs, same answer: the identity an agent acts through is the operator's
+own `User` account.
+
+Stated precisely, so nobody reads more into it than it carries: what is
+established is the **identity** — from two surfaces — not a fetch of one specific
+comment's author record. The REST comments endpoint stayed unavailable
+(`repos/:owner/:repo/issues/4565/comments` → **HTTP 403, secondary rate limit**,
+while `gh api rate_limit` reported
+`core: {limit: 5000, remaining: 5000, used: 0}`). **The primary counter is a
+blind instrument for the secondary limit** — worth recording on its own account,
+because a reader checking `rate_limit` before concluding "not throttled" would be
+reading an instrument that cannot see the thing throttling them. The conclusion
+above does not depend on that fetch.
 
 What can be stated without over-claiming: **no comment, commit trailer, or file
 anywhere in this tree records any of these decisions in the operator's own hand.**
@@ -100,7 +109,7 @@ The program is archived, GEO-2 is sequenced last within it, and the design
 already assumes a customer-supplied license. Nothing in the drain waits on this.
 
 Kept distinct so it is not later mistaken for the same call:
-`lib/editors/report/map-visual.tsx:28` records a **separate** decision that
+`apps/fiab-console/lib/editors/report/map-visual.tsx:28` records a **separate** decision that
 ArcGIS/Esri stay out of the report map visual as a third-party dependency.
 Neither decision settles the other. Two decisions, same vendor, different
 subjects.
@@ -182,16 +191,23 @@ this is where someone relying on the decision will be standing.
 
 Seven Function Apps remain provisioned and billing while executing nothing
 (`FunctionExecutionCount` sum = 0 across the **2026-07-25 → 2026-08-06** window
-recorded in `docs/fiab/decisions/functions-to-aca-jobs.md:17`); five are
+recorded in `docs/fiab/deployment/functions-to-aca-jobs.md:17`); five are
 superseded by live ACA
 replacements. PR #4564 carries the removal.
 
-**The zero has held on re-measurement.** It is the FINISHLINE audit's original
-figure, but it is not a stale number carried forward untested — #4564 re-measured
-it independently and a reviewer of this work measured it again, both getting
-zero. An earlier revision of this line said it was "not re-measured in this
-pass", which understated the evidence: the pass did not re-measure it, but two
-other parties did.
+**The zero has held on re-measurement, over a different and later window, with a
+positive control.** The figure above is the FINISHLINE audit's, but it is not a
+stale number carried forward untested: **#4564 measured
+2026-08-17 → 2026-09-17** — a separate 31-datapoint window — and got `SUM=0` for
+all seven apps, **and it fired a positive control on the same query**
+(`func-csa-inabox-copilot-fg`, `SUM=73`), which is what distinguishes "these
+apps executed nothing" from "this metric query returns nothing". Two windows,
+two parties, one of them controlled.
+
+An earlier revision of this line said the figure was "not re-measured in this
+pass" and left it there. True of this pass, and it undersold the evidence badly —
+a controlled re-measurement over a later window is stronger support for the
+teardown than the original audit figure it was hedging.
 
 The approval could not be sourced from the repository, and an unsourceable
 approval should not authorise tearing down seven provisioned hosts. What settled
@@ -240,10 +256,19 @@ returns an answer that looks authoritative and changes nothing.
 
 ## Still live — nothing here has been decided
 
-**This list is the complete set of undecided asks on both pages** — not only the
-rows whose verdict is LIVE, and not only the rows that have no decision at all. A
-row can be decided in part and still owe something; a row can be filed NARROWED
-and still carry an explicit *"Remaining decision"*. Both kinds are below.
+**This list is the complete set of undecided ASKS on both pages** — not only the
+rows whose verdict is LIVE, and not only the rows with no decision at all. A row
+filed NARROWED can still carry an explicit *"Remaining decision"*, and a row
+headed by a decision can still have an undecided half; both kinds are below.
+
+**It is a list of decisions nobody has made, NOT of work nobody has done.** Those
+are different, and an earlier revision's wording ("a row can be decided in part
+and still owe something") blurred them — it promised a scope this list does not
+have. Three rows are settled as questions and still owe work, and each says so at
+its own row rather than here: **OP-8**'s captures are decided and unproduced;
+**OP-14**'s gate-registry entry is decided and unwritten (**#4612**); and
+**OP-19(b)**'s teardown is approved and undeployed, which `deploy-integrity.md`
+R2 governs. None of them needs a decision, so none of them is below.
 
 ### From the LIVE rows
 
@@ -333,14 +358,19 @@ and still carry an explicit *"Remaining decision"*. Both kinds are below.
   apply it to exactly this shape and conclude the disable is about to be
   reverted. Measured: the only occurrences of those names anywhere under
   `platform/fiab/bicep` are **two comments** —
-  `modules/admin-plane/main.bicep:8650` and
-  `modules/admin-plane/report-subscriptions-job.bicep:27` — and no resource
+  `platform/fiab/bicep/modules/admin-plane/main.bicep:8650` and
+  `platform/fiab/bicep/modules/admin-plane/report-subscriptions-job.bicep:27` — and no resource
   declaration; their modules were deleted and replaced by Container App Jobs
-  (`modules/admin-plane/secret-expiry-monitor-job.bicep:24`: *"This module
+  (`platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-job.bicep:24`: *"This module
   REPLACES secret-expiry-monitor-function.bicep, which is deleted."*). And
-  `.github/workflows/deploy-fiab-commercial.yml` never deploys in Complete mode
-  (zero matches for `--mode Complete`). An incremental apply cannot touch a
-  resource that is not declared.
+  `.github/workflows/deploy-fiab-commercial.yml` deploys at ARM's **Incremental
+  default**: it sets **no deployment mode at all** — zero occurrences of `--mode`
+  or `-m` anywhere in the file, on a pattern that fires on all three synthetic
+  variants (`--mode Complete`, `-m Incremental`, a bare `--mode Incremental`).
+  That is a stronger measurement than the absence of the literal string
+  `--mode Complete`, which an earlier revision cited: absence of one string is
+  satisfied by any rewording, whereas absence of the flag entirely establishes
+  the mode. An incremental apply cannot touch a resource that is not declared.
 
   So the exposure is the **mirror** of the familiar one: not that a re-apply
   will undo the disable, but that nothing will ever re-assert it.
