@@ -431,6 +431,124 @@ jobs:
             }
 
   # ------------------------------------------------------------------
+  # OP-19 (a): retired Function-host timers (Commercial only, #4495)
+  # ------------------------------------------------------------------
+  # WHY THIS LIVES HERE. `func-secexp-*` and `func-cpeval-*` are retired
+  # Function hosts whose indexed timers fire on schedules IDENTICAL to their
+  # live ACA job replacements. They were disabled OUT OF BAND — no bicep, no
+  # script, no issue records it — so a re-enable is exactly the unmanaged
+  # portal change this workflow exists to catch. `az deployment sub what-if`
+  # cannot see it: the settings are not in main.bicep, which is the whole
+  # reason the hazard was invisible.
+  #
+  # `check-retired-function-timers.sh` was written for #4495 and called "the
+  # standing check" while nothing invoked it. PR #4564 round 6 review named
+  # that as deploy-integrity.md R3 (a control nobody runs) and no-vaporware.md
+  # (a control that does nothing). This job is the wiring; the sentence in the
+  # script and in docs/fiab/deployment/functions-to-aca-jobs.md now points at
+  # this lane rather than at an operator's memory.
+  #
+  # NEVER EXERCISED AS OF THIS COMMIT. It is added, not demonstrated — the
+  # cloud-parity.md "supported-in-code, never exercised" distinction. The first
+  # scheduled run is what establishes whether the Commercial deploy SP can read
+  # the DMLZ admin RG at all. Read the first run's result before quoting this
+  # lane as evidence of anything.
+  #
+  # READ-ONLY by construction: no `--apply`, so this job never writes a setting.
+  # FAILS CLOSED: the script exits 1 on a confirmed hazard and 2 when it could
+  # not measure, and BOTH are non-zero, so an unmeasurable run is a red job
+  # rather than a warning nobody reads. rc 0 covers the two terminal good
+  # states (disabled, or GONE by teardown).
+  op19-retired-timers:
+    name: Retired Function-host timers still disabled (Commercial)
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Verify the retired timers are still disabled
+        id: op19
+        run: |
+          set -uo pipefail
+          # errexit is deliberately NOT set: the three exit codes are the
+          # SIGNAL and each gets its own annotation. The step still ends
+          # non-zero on 1 and 2 — see the explicit `exit "$rc"` below.
+          #
+          # THE SCRIPT'S OUTPUT IS DEFUSED, including az's own stderr. Running
+          # this script from a workflow is what makes that stderr reachable by
+          # the runner's command parser for the first time, so the defence
+          # lands in the same commit that creates the reachability. The runner
+          # command-parses a `run:` step's stderr as well as its stdout
+          # (actions/runner ScriptHandler.cs:332-336), and a leading-whitespace
+          # defence does NOT work — ActionCommand.cs:62-64 is
+          # `message.TrimStart()` THEN `StartsWith("::")`. Hence a
+          # NON-whitespace prefix, plus breaking the unanchored `##[` form
+          # (ActionCommand.cs:132). Same shape as `defuse_cmds` in
+          # full-app-deploy-commercial.yml; both are pinned by
+          # scripts/ci/__tests__/workflow-command-injection.test.mjs.
+          #
+          # THE `\r` EXPRESSION IS LOAD-BEARING AND MUST STAY FIRST. The runner
+          # reads output with `StreamReader.ReadLine()` (ProcessInvoker.cs:511)
+          # and TextReader ends a line on a bare CR (0x0D) as well as LF, while
+          # `sed` splits on LF only — so without it, one CR turns a sed line
+          # into TWO runner lines and `s|^|az> |` prefixes only the first.
+          # That is REACHABLE HERE SPECIFICALLY: the script echoes the raw
+          # `AzureWebJobs.<fn>.Disabled` app-setting value on its ENABLED arm,
+          # and an app-setting value is an arbitrary string writable by exactly
+          # the out-of-band portal persona this job exists to detect. A
+          # `stop-commands` directive planted there would otherwise suppress
+          # the `::error::` below that names the hazard — the detector silenced
+          # by the thing it detects. CR is rewritten to the literal `%0D` (the
+          # runner's own escape, ActionCommand.cs:12) rather than deleted, so
+          # nothing is joined or truncated. Full rationale at the `defuse_cmds`
+          # definition in full-app-deploy-commercial.yml.
+          #
+          # rc is read out of PIPESTATUS, not `$?`: after a pipeline `$?` is
+          # the LAST stage's status, which here is tee's and is always 0.
+          bash scripts/csa-loom/check-retired-function-timers.sh 2>&1 \
+            | sed -e 's|\r|%0D|g' -e 's|^|az> |' -e 's|##\[|## [|g' \
+            | tee op19.txt
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_STEP_SUMMARY"
+          case "$rc" in
+            0) echo "::notice::OP-19: every retired Function timer is still disabled (or its host is gone). No double-execution hazard against the ACA job twins." ;;
+            1) echo "::error::OP-19: a retired Function timer is ENABLED again — it now fires on the same schedule as its ACA job twin, so credential-expiry monitoring and/or the Copilot evaluator run TWICE concurrently. See the ENABLED line(s) in the step log. Remediate with: scripts/csa-loom/check-retired-function-timers.sh --apply (needs Website Contributor on the admin RG)." ;;
+            2) echo "::error::OP-19: the check REFUSED a verdict — it could not measure, which is NOT the same as 'no hazard'. This step does not know which cause applies; the script's own REFUSING/UNKNOWN line(s) in the log above name what could not be read. On this lane the first thing to check is whether the deploy SP has Reader on the DMLZ admin subscription/RG that check-retired-function-timers.sh targets, since that has never been exercised." ;;
+            *) echo "::error::OP-19: the check exited $rc, which is outside its documented 0/1/2 contract. Treat as unmeasured." ;;
+          esac
+          exit "$rc"
+
+      - name: Upload the OP-19 verdict
+        # `op19.txt` is written by `tee` INSIDE the shell, so it never passes
+        # through the runner's secret masker — masking applies to what the
+        # runner reads off stdout/stderr, not to a file the step wrote itself.
+        # Today the content is app-setting NAMES plus true/false plus az
+        # diagnostics, so there is nothing to mask and this is not a finding.
+        # It is recorded because the property is not obvious: if a future
+        # revision teaches the script to read a secret-bearing value, that
+        # value lands in a PUBLIC artifact unmasked even though the same text
+        # would be redacted in the log. Add a `defuse`-style scrub before the
+        # tee, or drop the artifact, rather than assuming the masker covers it.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: op19-retired-timers
+          path: op19.txt
+          if-no-files-found: warn
+
+  # ------------------------------------------------------------------
   # Gov (GCC-High) estate — gov SP secrets pattern (AZURE_GOV_*)
   # ------------------------------------------------------------------
   precheck-gov:

@@ -8647,10 +8647,31 @@ module reportSubscriptionLogicApp '../integration/report-subscription-logicapp.b
 // seven Function Apps in the admin RG — errorCode=Success, 13/13 datapoints with
 // an explicit total of 0.0, none absent. func-rptsub-… additionally indexes no
 // functions at all (`function list` → [], exit 0), so this timer never fired.
-// The estate is not uniform — func-secexp/func-cpeval DO hold enabled timers and
-// func-loom-prpt-renderer's list call returns Bad Request (unknown, not empty) —
-// so the execution metric, not `function list`, is the evidence. No root cause is
-// asserted: two hosts index fine under the same policy regime.
+// The estate is not uniform — func-secexp/func-cpeval still INDEX their timer
+// definitions where four hosts return [], and func-loom-prpt-renderer's list
+// call returns Bad Request (unknown, not empty) — so the execution metric, not
+// `function list`, is the evidence. No root cause is asserted: two hosts index
+// fine under the same policy regime.
+//
+// OP-19 re-measurement 2026-09-17 (#4495): still ZERO, on a wider window and a
+// live control. FunctionExecutionCount 2026-08-17→2026-09-17 (P1D, Total) is 0
+// for all seven, 31/31 datapoints each carrying an explicit 0.0, absent=0,
+// errorCode=Success — against func-csa-inabox-copilot-fg at 73 over the same
+// window, metric and code path, so a broken query could not read as a quiet
+// one. (P1D retention is ~31 days, so 2026-08-06..08-17 is no longer queryable;
+// and `--start-time` WITHOUT `--end-time` returns exactly ONE datapoint, which
+// is how a one-day sample gets published under a 31-day label.)
+//
+// What DID change: the two timer definitions are now DISABLED on the estate.
+// `AzureWebJobs.secretExpiryMonitor.Disabled=true`,
+// `AzureWebJobs.copilotEvaluatorTimer.Disabled=true` and
+// `AzureWebJobs.copilotEvaluatorHttp.Disabled=true` are set, and
+// `az functionapp function show` reports `isDisabled: true` for all three. That
+// retires the double-execution hazard these comments used to name. It was done
+// OUT OF BAND — nothing in this repo sets those settings and no issue or PR
+// records it — so it is written down here, where the code can see it, and a
+// re-enable would be silent. Verify with
+// scripts/csa-loom/check-retired-function-timers.sh.
 //
 // Running as the CONSOLE UAMI removes the entire post-deploy RBAC step the
 // Function needed: grant-navigator-rbac.sh had to grant the Function's own
