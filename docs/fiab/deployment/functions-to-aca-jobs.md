@@ -413,9 +413,20 @@ workflow, no issue, no PR. So a re-enable would be silent.
 read-only by default, fail-closed, `--apply` re-disables. It separates three
 states rather than collapsing them (`deploy-integrity.md` R7) — a host absent
 from a *successful* listing is `GONE` and the hazard is retired by teardown
-(rc 0); a host that exists but cannot be read is `UNKNOWN` (rc 2, verdict
-refused); a readable-but-not-disabled definition is `ENABLED` (rc 1). A failed
-listing is never reported as absence. That matters because §8.3 deletes both
+(rc 0); a host that exists but cannot be read is `UNKNOWN` (verdict refused); a
+readable-but-not-disabled definition is `ENABLED` (rc 1). A failed listing is
+never reported as absence.
+
+**The exit code is a per-RUN verdict, not a per-target label, and `ENABLED`
+outranks `UNKNOWN`.** A run carrying one `ENABLED` and one `UNKNOWN` exits **1**,
+not 2 — a confirmed live hazard is strictly more actionable than an unmeasured
+one, and reporting 2 would send the operator to debug `az` instead of
+re-disabling a live timer. rc 2 means *nothing was ENABLED and the requested
+outcome could not be certified*: at least one `UNKNOWN` target, or a `--apply`
+write that was denied, or a boundary that could not be read at all. The script
+header states the same precedence, as does `DECISIONS.md:49`.
+
+That matters because §8.3 deletes both
 hosts: without the `GONE` arm the check would fail permanently on its own
 remediation.
 

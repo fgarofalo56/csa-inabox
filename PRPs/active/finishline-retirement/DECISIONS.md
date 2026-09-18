@@ -45,10 +45,12 @@ What was missing was any record, so a re-enable would have been silent. Added:
   three states that an earlier revision collapsed (`deploy-integrity.md` R7):
   a host **absent from a successful listing** is `GONE` and the hazard is retired
   by teardown (rc 0); a host that **exists** but whose settings or definition
-  cannot be read is `UNKNOWN` (rc 2, verdict refused); a readable definition that
+  cannot be read is `UNKNOWN` (verdict refused); a readable definition that
   is not disabled is `ENABLED` (rc 1). `ENABLED` outranks `UNKNOWN` because a
-  confirmed live hazard is more actionable than an unmeasured one, and the tally
-  line prints on every path so a partial-coverage run states its own partiality.
+  confirmed live hazard is more actionable than an unmeasured one.
+  rc 2 is the "could not certify the requested outcome" class and has three
+  members: at least one `UNKNOWN` target, a `--apply` write that was DENIED, or
+  a boundary that could not be read at all.
   Without the `GONE` arm the script would have broken on its OWN remediation:
   part (b) deletes both hosts, after which every read fails.
   Proved to have teeth against a sandbox copy, all arms run (`temp/timers-probe.sh`,
@@ -58,12 +60,62 @@ What was missing was any record, so a re-enable would have been silent. Added:
   (unchanged), failed listing → 2 and never `GONE`, all-disabled 0 → 0.
   Measured, not predicted: the pre-fix script did not reach its own rc=2 refusal
   once the hosts were gone — its app-settings read was unguarded, so `set -e`
-  killed it at the first target with rc=1, the same code as a live hazard. Both
-  reads are guarded now.
+  killed it at the first target with rc=1, the same code as a live hazard.
+
+  **Correction (round 3, 2026-09-17).** An earlier revision of this bullet said
+  *"Both reads are guarded now."* That was **false by a count**, and it is
+  recorded here rather than quietly edited because the way it was false is the
+  point. There were never two `az` reads in that file — there were **five `az`
+  invocations**, and the fix had guarded three. The two it missed were the
+  **boundary read** (`CLOUD="$(az account show …)"`, a bare assignment that died
+  at rc=1 — the ENABLED code — with no verdict, no tally and no refusal: bit for
+  bit the pre-fix behaviour the paragraph above claims was caught) and the
+  **`--apply` write** (a bare `az … appsettings set`, which on a 403 died
+  mid-loop naming no role, violating R6). Both are now guarded and both are
+  measured.
+
+  The reason the round-2 receipt could not have caught either: **all seven of
+  its rows held `az account show` at success and none exercised `--apply`**, so
+  the table was SILENT at exactly the two sites, not clean. Asking what result
+  an instrument could not have produced is the check that would have found it;
+  asking whether the rows passed is not.
+
+  The file now carries a **counted, whole-file audit** of the class in its
+  header (5 command substitutions in code, 1 guarded bare `az`, 0 unguarded, 8
+  arithmetic expansions measured not to carry a command status against a
+  negative control that did abort) rather than an impression of it, and the
+  receipt varies the boundary read and the `--apply` write across twelve arms
+  including the two that discriminate the new design: a `--apply` write denied
+  on a host that is `GONE` must still tally `applyfail=0` (proving the write is
+  genuinely skipped, not merely un-403'd), and a denied write on a genuinely
+  `ENABLED` timer must still exit **1**, not 2, preserving the documented
+  precedence.
 * The four in-tree comments asserting "ENABLED timers" corrected at their sites,
   not just in the doc: `admin-plane/main.bicep`, `report-subscriptions-job.bicep`,
   `scripts/csa-loom/deploy-report-subscriptions-job.sh`,
   `azure-functions/report-subscriptions/src/main.ts`.
+* `full-app-deploy-commercial.yml` `post-deploy-evals` — **the same
+  absence-vs-unreadability conflation this change removes from the script was
+  present in the workflow one file over, introduced by this very PR.** Measured
+  by rendering the `run:` block out of the YAML by position and executing it
+  against a stubbed `az rest`: a 404, a 429 and a 403 all produced the SAME
+  green warning and exit 0. A 403 therefore meant the re-baseline silently never
+  ran, deploy after deploy — the `deploy-integrity.md` R3 invisibility shape.
+  Fixed with the discriminator the script already uses: resolve absence against
+  a **listing**, never against a failed GET. A list that fails is unreadability
+  (`::error::`, exit 1, after a bounded retry that fails CLOSED per R6); a list
+  that succeeds *without* the job is genuine absence (warning, exit 0); and once
+  the job IS in the listing, a failed GET on it can only be unreadability,
+  because absence has already been excluded. A 200 whose body is not a job
+  collection is also an error, since a parse that yields nothing is not an
+  absence either. Eleven arms measured; the only exit-0-without-a-start path is
+  the proven-absent one.
+
+  Two consequences recorded at their sites: the warning's cause list is now
+  **narrower** (the read-failure cause was routed to the error path, so only the
+  three configuration causes survive), and the sentence *"The nightly schedule
+  is unaffected"* is gone — R7, since three of the four causes it sat behind
+  mean the job does not exist and so there is no schedule to be unaffected.
 
 **Obliges:** run the check before any claim that the hazard is retired; if the
 Console ever grows an estate-drift surface, this belongs on it. After part (b)

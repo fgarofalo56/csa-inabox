@@ -1259,8 +1259,13 @@ jobs:
   # would drop the image, the resources and the secretRef env.
   #
   # deploy-integrity.md R6/R7: no `2>/dev/null`, no `|| true`, and no fabricated
-  # "dispatched" notice. A start that did not happen exits non-zero and says
-  # why; `continue-on-error` keeps that visible without failing the deploy.
+  # "dispatched" notice. A start that did not happen because something could not
+  # be READ exits non-zero and says so; the ONE path that did not start and still
+  # exits 0 is a job proven ABSENT by a successful listing, which is a
+  # configuration state rather than a failure. `continue-on-error` keeps a
+  # non-zero step visible without failing the deploy — which is exactly why
+  # failing closed here costs nothing and buys a red step instead of a warning
+  # nobody reads.
   post-deploy-evals:
     name: Post-deploy Copilot quality evals (ACA job start)
     needs: [resolve, redeploy-with-apps]
@@ -1288,26 +1293,117 @@ jobs:
           JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
           API=2024-03-01
 
-          # Does the job exist? The job is deployed only when ALL THREE conjuncts
-          # of `copilotEvaluatorActive` hold (admin-plane/main.bicep:8735):
+          # Bounded retry for a genuinely transient ARM answer (deploy-integrity
+          # R6). Fails CLOSED on exhaustion: this returns 1 and BOTH callers turn
+          # that into `::error::` + exit 1, never a warning. It is deliberately
+          # not used to decide absence — see the next block for why.
+          #
+          # ARM's own stderr is captured to a file and then re-emitted (NOT
+          # discarded — no `2>/dev/null` anywhere here), so the caller can put
+          # the real cause on the ANNOTATION rather than leaving a 429 and a 403
+          # reading identically. Classifying by that text instead would be the
+          # bare-substring misclassification this repo has been bitten by, so the
+          # STATUS is what routes and the TEXT is only reported.
+          arm_get() {   # arm_get <url> <outfile>  ->  0 = read it, 1 = did not
+            local url="$1" out="$2" n=0
+            : > arm_err.txt
+            while :; do
+              n=$((n + 1))
+              if az rest --method get --url "$url" > "$out" 2> arm_err.txt; then
+                return 0
+              fi
+              cat arm_err.txt >&2
+              if [ "$n" -ge 3 ]; then
+                echo "ARM GET failed on all $n attempts: $url" >&2
+                return 1
+              fi
+              echo "ARM GET failed (attempt $n/3), retrying in $((n * 10))s: $url" >&2
+              sleep $((n * 10))
+            done
+          }
+          arm_err() {   # the last ARM error, flattened for an annotation
+            local e
+            e="$(tr '\n' ' ' < arm_err.txt | cut -c1-400)"
+            echo "${e:-<az produced no stderr>}"
+          }
+
+          # ABSENCE IS NOT UNREADABILITY -- the same distinction OP-19 (a) exists
+          # to make in scripts/csa-loom/check-retired-function-timers.sh, applied
+          # here because this step used to break it. An earlier revision GET the
+          # job directly and collapsed EVERY failure into one warning + exit 0:
+          # measured against a stubbed `az rest`, a 404 (genuinely absent), a 429
+          # (ARM throttling) and a 403 (deploy identity lost read) produced the
+          # SAME green warning. A 403 therefore meant the re-baseline silently
+          # never ran, deploy after deploy -- the deploy-integrity R3 invisibility
+          # shape, committed one file away from the fix that removes it.
+          #
+          # So resolve absence against a LISTING, never against a failed GET. A
+          # list that fails is unreadability (error, exit 1); a list that
+          # succeeds WITHOUT the job is genuine absence (warning, exit 0). The
+          # listing is the discriminator precisely because it answers with an
+          # empty array when the job is gone and non-zero when ARM is unreachable.
+          #
+          # This is the same rule scripts/ci/_arm-absence.mjs holds for the
+          # sovereign estate preflights, and deliberately NOT a third inline copy
+          # of its error-code classifier: that helper is a Node module and this is
+          # a `run:` block, so instead of re-deriving "which az error means
+          # absent" this step never asks. It gates on the STATUS and lets a
+          # SUCCESSFUL listing answer the absence question, which sidesteps the
+          # trap that helper documents — `az` emitting a well-formed empty `[]` on
+          # stdout alongside a non-zero exit and a ResourceGroupNotFound. Arm 7 of
+          # the receipt is exactly that case and it exits 1, not 0.
+          LIST_URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs?api-version=$API"
+          if ! arm_get "$LIST_URL" jobs.json; then
+            echo "::error::Could not LIST Container App Jobs in $RG after 3 attempts, so this run established NOTHING about whether $JOB exists and it is NOT reported as absent. ARM said: $(arm_err) — a 429/5xx is transient (it was already retried), a 403 means the deploy identity lost Reader on $RG, a 404 means the resource group itself is gone. Post-deploy eval re-baseline NOT started."
+            exit 1
+          fi
+
+          # A parse that yields nothing is also not an absence. Require the
+          # collection SHAPE before concluding anything from its contents.
+          if ! TOTAL=$(jq -e 'if (.value | type) == "array" then (.value | length) else error("no .value array") end' jobs.json); then
+            echo "::error::The job listing for $RG returned 200 but is not a job collection (no .value array), so absence cannot be concluded from it. Post-deploy eval re-baseline NOT started."
+            exit 1
+          fi
+          MATCH=$(jq --arg n "$JOB" '[.value[] | select(.name == $n)] | length' jobs.json)
+          MATCH=${MATCH:-0}
+
+          # Only now can absence be asserted, and the cause list is narrower than
+          # it used to be BECAUSE it can be: every read-failure cause was just
+          # routed to the error path above, so the causes that survive here are
+          # exactly the configuration ones. The job is deployed only when ALL
+          # THREE conjuncts of `copilotEvaluatorActive` hold
+          # (admin-plane/main.bicep:8735):
           #   copilotEvaluatorEnabled && containerPlatform == 'containerApps'
           #                           && deployAppsEnabled
-          # so absence is a legitimate configuration state and NOT a deploy
-          # failure — but it is reported as absence, never as a skipped success.
-          # R7: name every cause that could actually hold, and do not assert
-          # which one does. `containerPlatform != 'containerApps'` is the
-          # boundary-dependent one (cloud-parity.md) and was previously omitted,
-          # which pointed a non-containerApps operator at a knob that was not
-          # the one holding it.
-          if ! az rest --method get --url "https://management.azure.com${JOB_ID}?api-version=$API" > job.json; then
-            echo "::warning::Container App Job $JOB not readable in $RG. This run did not establish which cause applies; any of these will produce it — functionAppsConfig.copilotEvaluatorEnabled=false (opt-out), containerPlatform != 'containerApps' (the job is Container-Apps-only), deployAppsEnabled=false, or the deploy identity lacking read on the job. Post-deploy eval re-baseline NOT started. The nightly schedule is unaffected."
+          # so absence here is a legitimate configuration state and NOT a deploy
+          # failure -- but it is reported as absence, never as a skipped success.
+          # R7: name every cause that can actually hold, and do not assert which
+          # one does.
+          if [ "$MATCH" -eq 0 ]; then
+            echo "::warning::Container App Job $JOB is absent from a successful listing of $RG ($TOTAL job(s) listed). This run did not establish WHICH cause applies; any of these will produce it — functionAppsConfig.copilotEvaluatorEnabled=false (opt-out), containerPlatform != 'containerApps' (the job is Container-Apps-only), or deployAppsEnabled=false. Post-deploy eval re-baseline NOT started. Each of those causes means the job does not exist, so there is no nightly schedule for this step to have affected; if the job is later deployed, its schedule comes from bicep and nothing here changed it."
             exit 0
+          fi
+
+          # The job IS in the listing. From here a failed GET can only be
+          # unreadability -- absence has already been excluded by the line above,
+          # which is the whole point of doing it in that order.
+          if ! arm_get "https://management.azure.com${JOB_ID}?api-version=$API" job.json; then
+            echo "::error::$JOB IS present in the $RG listing but its own GET failed after 3 attempts — that is unreadable, not absent. ARM said: $(arm_err). Post-deploy eval re-baseline NOT started."
+            exit 1
           fi
 
           # A start REPLACES the execution template, so build the override FROM
           # the job's current containers. An empty container list means the image
           # has never been built — that is a real gap, not a quiet no-op.
-          COUNT=$(jq '.properties.template.containers | length' job.json)
+          #
+          # `// []` and `${COUNT:-0}` are load-bearing, not belt-and-braces: on a
+          # 200-with-empty-body jq emits NOTHING, COUNT is empty, and `[ "" -eq 0
+          # ]` raises "integer expected". Because that sits in an `if` CONDITION
+          # errexit is suppressed and the error reads as FALSE — so the guard
+          # this comment calls a real gap would be SKIPPED and the step would
+          # exit 0 with a notice. Same shape as the EXEC default below.
+          COUNT=$(jq '(.properties.template.containers // []) | length' job.json)
+          COUNT=${COUNT:-0}
           if [ "$COUNT" -eq 0 ]; then
             echo "::error::$JOB has no container template — its image has not been built/pushed, so no execution can start. Build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh."
             exit 1
@@ -1319,13 +1415,20 @@ jobs:
           #
           # The strip list is DERIVED from the override list ($ovn), exactly as
           # mergeRunEnv derives it (`!overrides.some((o) => o.name === e.name)`),
-          # so the two cannot drift. An earlier revision stripped every
-          # `COPILOT_EVAL_*` by prefix, which is NOT what mergeRunEnv does: a
-          # fifth COPILOT_EVAL_* added to copilot-evaluator-job.bicep would have
-          # been dropped here while "Run now" kept it — the two start paths
-          # diverging exactly where this comment promises they cannot. Benign at
-          # the time (the live job carries exactly two, MODE and TRIGGER, both in
-          # the four), which is why only the contract, not a symptom, catches it.
+          # so THE STRIP LIST CANNOT DRIFT FROM THE OVERRIDE LIST. An earlier
+          # revision stripped every `COPILOT_EVAL_*` by prefix, which is NOT what
+          # mergeRunEnv does: a fifth COPILOT_EVAL_* added to
+          # copilot-evaluator-job.bicep would have been dropped here while "Run
+          # now" kept it — the two start paths diverging exactly where this
+          # comment promises they cannot. Benign at the time (the live job
+          # carries exactly two, MODE and TRIGGER, both in the four), which is
+          # why only the contract, not a symptom, catches it.
+          #
+          # What that claim does NOT cover, stated so the comment is not
+          # overread: this `$ov` and the TS `overrides` are two independent
+          # literals in two languages, and nothing in CI compares them. Adding a
+          # fifth override KNOB to mergeRunEnv does not reach this jq. That
+          # residual is #4566, not this block.
           jq -c '[{name:"COPILOT_EVAL_MODE",value:"copilot"},
                   {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
                   {name:"COPILOT_EVAL_SURFACES",value:""},
