@@ -53,3 +53,54 @@ updates:
   # CSA-0048: portal/static-webapp was archived on 2026-04-15; its
   # dependabot entry was removed here so PRs aren't opened against a
   # non-existent directory.
+
+  # apps/loom-directlake is the repo's ONLY Rust crate, and until this entry it
+  # carried an OPEN security alert with no version-update lane at all
+  # (#3982: thrift < 0.23.0, GHSA-2f9f-gq7v-9h6m, dependabot alert #94).
+  #
+  # It is NOT the only manifest in that state — measured 2026-09-18, six npm
+  # manifest paths (apps/fiab-console, apps/loom-sdk, apps/loom-embed,
+  # apps/loom-cli, apps/fiab-label-propagation, azure-functions/secret-expiry-
+  # monitor) also carry open alerts and are absent here, since the only npm
+  # entry above is /portal/react-webapp. That is tracked separately; it is
+  # named here so this comment does not read as "coverage is now complete".
+  #
+  # Security ALERTS come from the dependency graph and fire without a
+  # dependabot.yml entry — which is why #94 was raised at all. Version-update
+  # PRs do NOT. So the crate was being watched for "you are vulnerable" and never
+  # for "a fix is now available", and that gap is the whole problem here:
+  #
+  # thrift cannot leave this graph today. Measured with a real resolver
+  # (cargo 1.98.0, 2026-09-18): arrow-rs dropped the thrift crate at parquet
+  # 59.0.0, but delta-rs has NOT followed — deltalake-core 0.32.4, the newest
+  # published, still pins `arrow ^58` / `parquet ^58` / `datafusion ^53.1.0`,
+  # and parquet 58 still depends on `thrift ^0.17`. The fix therefore arrives
+  # upstream, on delta-rs's schedule, in a release nobody here is watching for.
+  # This entry is that watch.
+  - package-ecosystem: "cargo"
+    directory: "/apps/loom-directlake"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "rust"]
+    open-pull-requests-limit: 5
+    # The arrow stack moves as ONE unit or not at all — the same lockstep
+    # argument as the codeql-action group above, and measured rather than
+    # assumed. Cargo.toml's own comment states the invariant ("the whole graph
+    # resolves to ONE arrow + ONE datafusion (no split)"); resolving
+    # parquet 59 + datafusion 55 + deltalake 0.32 together violates it, and
+    # cargo does not error — it silently links BOTH majors side by side:
+    #
+    #   arrow 58.4.0 AND 59.3.0 · datafusion 53.1.0 AND 55.1.0
+    #   parquet 58.4.0 AND 59.3.0 · thrift 0.17.0 still present via parquet 58
+    #
+    # Two datafusion majors in one graph means two distinct `TableProvider`
+    # traits, so `ctx.register_table(Arc::new(delta_table))` in src/scan.rs stops
+    # compiling. Ungrouped bumps would raise exactly that PR, one crate at a
+    # time, and each would look reasonable on its own.
+    groups:
+      arrow-stack:
+        patterns:
+          - "arrow*"
+          - "parquet*"
+          - "datafusion*"
+          - "deltalake*"
