@@ -434,7 +434,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the only test named for the comment asserted its ABSENCE"),
         "tick.py",
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
-         '             "--comment", f"Closed by the drain harness on a verified receipt: {detail}"]'),
+         '             "--comment", (f"Drain harness: receipt verified - {detail}. "\n'
+         '                           "Closing this issue on that evidence (deploy-integrity R2).")]'),
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
          "             ]"),
     ),

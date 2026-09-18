@@ -582,17 +582,47 @@ def close_issue_on_github(
     try:
         if _issue_state_on_github(repo, number) == "CLOSED":
             return f"#{number} was already closed on GitHub - left alone"
+        # THE COMMENT CLAIMS ONLY WHAT IS TRUE WHEN IT IS POSTED, because `gh`
+        # posts it BEFORE it closes anything (#4545 finding 11; cli/cli
+        # `pkg/cmd/issue/close/close.go` at v2.100.0 -- `CommentableRun` :158,
+        # then `apiClose` :164, and a comment failure `return err`s so the close
+        # is never attempted). It used to read "Closed by the drain harness on a
+        # verified receipt", which on the comment-landed/close-failed path is a
+        # FALSE STATEMENT sitting on a public artifact -- the R7 defect this
+        # change is about, published rather than printed.
+        #
+        # ARGV ORDERING, DECIDED RATHER THAN INHERITED. The alternative is to
+        # close first and post the receipt with a SECOND command. Rejected:
+        # a second command is a second failure window, and its failure mode is
+        # WORSE and PERMANENT -- a closed issue whose receipt comment never
+        # landed is never repaired, because the next run reads CLOSED and
+        # short-circuits above without ever reaching the comment. Silent and
+        # unrepairable beats loud and duplicated in exactly the wrong
+        # direction. So the single command stays, and the sentence is what got
+        # fixed.
+        #
+        # RESIDUAL, disclosed: on the comment-landed/close-failed path a re-run
+        # posts the note again, because the issue is still OPEN. Bounded and
+        # visible -- the ledger stays non-terminal, the operator sees GITHUB
+        # CLOSE NOT CONFIRMED, and the item stays in the queue -- and every
+        # copy is a true statement about a receipt rather than a false one
+        # about a close.
         rc, _out, err = sh(
             ["gh", "issue", "close", str(number), "--repo", repo,
-             "--comment", f"Closed by the drain harness on a verified receipt: {detail}"]
+             "--comment", (f"Drain harness: receipt verified - {detail}. "
+                           "Closing this issue on that evidence (deploy-integrity R2).")]
         )
         if rc != 0:
             raise IssueCloseFailedError(
                 f"`gh issue close {number}` failed (rc={rc}): {err[:200]}. The ledger "
-                "was NOT written and the item stays non-terminal. This does not "
-                "establish that the issue is still open: that one command both "
-                "closes and comments, so a non-zero exit can follow a close that "
-                "landed - re-run and the read-first short circuit will settle it"
+                "was NOT written and the item stays non-terminal. THE UPSTREAM STATE "
+                "IS NOT ESTABLISHED BY THIS: `gh` comments first and closes second "
+                "(close.go v2.100.0 - CommentableRun :158, apiClose :164), so rc!=0 "
+                "is most often a close that did NOT land, with the receipt comment "
+                "already posted on a still-open issue; but a close whose mutation "
+                "reached the server and whose response did not reach the client "
+                "exits the same way with the issue CLOSED. Re-run - the read-first "
+                "short circuit settles which of the two happened"
             )
         after = _issue_state_on_github(repo, number)
     except OSError as exc:
@@ -1130,6 +1160,21 @@ def main() -> int:
             # `os.replace`, so either the replace happened -- and nothing after
             # it can raise -- or the file on disk is untouched. "LEDGER NOT
             # WRITTEN" is therefore true whatever came out.
+            #
+            # ESTABLISHED BY MEASUREMENT, NOT BY CONSTRUCTION, and the
+            # difference is tracked in **#4559**. A reviewer lifted the source
+            # at runtime (exactly one statement follows `os.replace`; `blob` is
+            # already-materialised bytes; `hashlib.sha256` is bound at import;
+            # `Ledger` is non-slotted so the bind cannot dispatch into user
+            # code) and injected failures at `makedirs`, `mkstemp`, `fsync` and
+            # `replace` -- each left the target byte-identical. That is a
+            # measurement of TODAY'S `ledger.save()`, which lives in another
+            # module this diff does not touch, so the invariant asserted here
+            # is not enforced where it is implemented. #4559 carries the
+            # structural version: COMPUTE the digest before the replace and
+            # BIND it after. Binding before is the wrong shape -- a failed
+            # replace would leave the object holding a digest for bytes that
+            # never landed, and every later guarded save would refuse itself.
             #
             # THE CAUSE IS NOT GUESSED. The exception's TYPE is printed, so a
             # lost CAS (`LedgerChangedError`, the expected one with four lanes
