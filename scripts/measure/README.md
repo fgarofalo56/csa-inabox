@@ -184,7 +184,11 @@ right one — belt and braces — but not for the reason claimed.
 ## The hook
 
 `.claude/hooks/measurement-guard.mjs` is a **PreToolUse** hook (wired in `.claude/settings.json`)
-that **denies** Bash commands carrying the four shapes above, naming the fix in each case. It
+`.claude/hooks/measurement-guard.mjs` is a **PreToolUse** hook (wired in `.claude/settings.json`)
+that **denies** Bash commands carrying four shapes — `$?` after a pipeline, a leading-slash ARM
+id passed to az/gh from Git Bash, a discarded stderr on a measurement, and `python -` at command
+position — naming the fix in each case. ("the four shapes above" previously had no antecedent
+matching those rules; they are enumerated here instead.) It
 denies rather than warns because the entire failure mode is that the wrong answer looks fine —
 a warning in a tool result is easy to skim past.
 

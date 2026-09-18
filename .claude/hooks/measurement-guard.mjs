@@ -421,11 +421,34 @@ const RULES = [
 
       // ANCHORED AT COMMAND POSITION, and pipe-fed invocations excluded.
       //
+      // "COMMAND POSITION" HERE MEANS: the start of a line, or the start of a
+      // `;` / `&&` / `||` / `&` segment. THAT IS NARROWER THAN BASH'S, and the
+      // gap is a real, MEASURED blind spot rather than a theoretical one.
+      // Sixteen shapes carry the FULL hazard and are ALLOWED (measured at this
+      // head, each with the hazard genuinely present):
+      //
+      //   same-line compound openers   { ( then do else
+      //   wrapper programs             timeout nohup time stdbuf exec
+      //   nested shells                bash -c "..."   xargs sh -c "..."
+      //   command substitution         $( ... )  and  ` ... `
+      //   a leading redirect           > out.txt python - <<'EOF'
+      //   a line continuation          python \<newline>  - <<'EOF'
+      //
+      // The reassuring half, also measured: when the hazard BEGINS ITS OWN LINE
+      // inside any of those compounds, it IS caught. So the exposure is
+      // same-line composition, not compounds as such.
+      //
+      // This is disclosed rather than fixed because catching it needs real
+      // word-splitting, not a regex — and because a list that reads complete
+      // while being partial is the defect this file exists to police. An
+      // earlier revision of this comment described the boundary without naming
+      // what falls outside it, which read as completeness.
+      //
       // The first version tested the whole line for a bare `-` anywhere. That
       // denied six legitimate shapes, including `cmd | python -` — which
       // CANNOT become a REPL, because its stdin is a pipe that reaches EOF.
       // Matching position rather than substring also closes two false
-      // negatives for free: `python3.11 -` and `python.exe -`.
+      // negatives: `python3.11 -` and `python.exe -`.
       //
       // Accepts before the interpreter: env assignments (`PYTHONPATH=x`),
       // `env`, and any path prefix (`/usr/bin/`, `./venv/bin/`).

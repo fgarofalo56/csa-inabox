@@ -753,6 +753,50 @@ test('message R7: rule 4 names the PER-RULE exits, measured not reasoned', () =>
   assert.match(body, /MEASURED this time/);
 });
 
+// ---- the DISCLOSED boundary, pinned so the disclosure cannot rot -----------
+// Rule 4's command position is narrower than bash's. Sixteen shapes carry the
+// full hazard and are ALLOWED, and the file now names them. These arms pin that
+// the disclosure stays TRUE in both directions: if a future change starts
+// catching one of these, the disclosure is stale and must be narrowed; if one
+// of the caught cases stops firing, that is a regression.
+test('DISCLOSED: same-line compound openers are NOT caught', () => {
+  // Measured, not assumed — and disclosed in the rule comment. Changing any of
+  // these to FIRES means the comment overstates the blind spot.
+  assert.equal(has(`{ python - <<'EOF'\nEOF\n}`, 'python-dash-repl'), false);
+  assert.equal(has(`if true; then python - <<'EOF'\nEOF\nfi`, 'python-dash-repl'), false);
+});
+
+test('DISCLOSED: wrapper programs and nested shells are NOT caught', () => {
+  assert.equal(has(`timeout 60 python - <<'EOF'\nEOF`, 'python-dash-repl'), false);
+  assert.equal(has(`bash -c "python - <<'EOF'"`, 'python-dash-repl'), false);
+});
+
+test('CONTROL: the hazard on its OWN line inside a compound IS caught', () => {
+  // The reassuring half, and the reason the boundary is same-line composition
+  // rather than compounds as such. Without this pair the two tests above could
+  // be satisfied by the rule catching nothing at all.
+  assert.ok(has(`{\npython - <<'EOF'\nEOF\n}`, 'python-dash-repl'));
+  assert.ok(has(`if true; then\npython - <<'EOF'\nEOF\nfi`, 'python-dash-repl'));
+});
+
+test('the TERMINATOR-lookahead column-0 rule has its own witness', () => {
+  // There are TWO column-0 comparisons — the body scan (`:171`) and the
+  // terminator lookahead (`:276`) that decides whether an opener is honoured at
+  // all. Round 12 witnessed only the body one; mutating the lookahead to
+  // `.trim()` survived the whole suite, and its direction is SILENCING.
+  //
+  // Here the only `MD`-looking line inside the body is INDENTED, so under
+  // bash's column-0 rule the heredoc is never terminated — the opener is not
+  // honoured, the body is not blanked, and the `python -` in it is a real
+  // command. Under `.trim()` the lookahead accepts the indented lookalike,
+  // honours the opener, blanks the body, and the hazard disappears.
+  // WHAT MAKES THIS FAIL: change `p === d` to `p.trim() === d` at the
+  // terminator lookahead.
+  const cmd = `cat > temp/d.md <<'MD'\npython - <<'EOF'\n  MD\necho ok`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'an indented lookalike must not terminate the heredoc in the lookahead either');
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule
