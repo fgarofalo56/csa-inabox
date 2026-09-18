@@ -345,15 +345,18 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
         "tick.py",
-        "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
         '    close_note = "the ledger is the only record"',
     ),
     (
         ("GH2 the close fires on ONE ROUTE only: ci-green items are closed "
          "upstream and every run-backed item is left open"),
         "tick.py",
-        "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)",
-        ("    close_note = (close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+        ("    close_note = (close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
          '                  if from_pr else "run-backed items close quietly")'),
     ),
     (
@@ -400,12 +403,14 @@ ARMS: list[tuple[str, str, str, str]] = [
          "failed close leaves the item closed here and open there, which is "
          "#4545 reproduced by the fix for it"),
         "tick.py",
-        ("    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
         ("    _record_close_in_ledger(\n"
          '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
          "    )\n"
-         "    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)\n"
+         "    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
          "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
     ),
     (
@@ -434,16 +439,35 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the only test named for the comment asserted its ABSENCE"),
         "tick.py",
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
-         '             "--comment", (f"Drain harness: receipt verified - {detail}. "\n'
-         '                           "Closing this issue on that evidence (deploy-integrity R2).")]'),
+         '             "--comment", _receipt_comment(kind, issue_class, detail)]'),
         ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
          "             ]"),
     ),
     (
+        ("GH15 the receipt comment goes back to naming neither the KIND nor the "
+         "CLASS and citing deploy-integrity R2 on BOTH routes. That is the text "
+         "that shipped, and on the ci-green route the evidence IS a merge -- so "
+         "it cited 'merged is never done' in support of closing on a merge, on "
+         "up to 334 permanent public artifacts, while policy.json carries "
+         "`report-a-merge-as-a-fix` in its `never` list. The mutation collapses "
+         "the two branches back into the single template, which is the exact "
+         "shape of the defect rather than a proxy for it"),
+        "tick.py",
+        "    head = f\"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}.\"",
+        ("    head = f\"Drain harness: receipt verified - {detail}.\"\n"
+         "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
+    ),
+    (
         ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
          "failure after a landed close -- os.replace raising PermissionError -- "
-         "escapes main() UNCAUGHT with an EMPTY stderr while the issue is "
-         "closed upstream: #4545 with extra steps, inside the fix for it"),
+         "ESCAPES main() UNCAUGHT while the issue is closed upstream: #4545 "
+         "with extra steps, inside the fix for it. WHAT THE OPERATOR SEES, "
+         "measured as a real process rather than under capsys (which is how an "
+         "earlier revision of this line came to say 'an EMPTY stderr', and it "
+         "was false): exit 1 and 655 bytes of TRACEBACK naming os.replace and "
+         "saying nothing about the upstream close, against 522 bytes of the "
+         "intended message unmutated -- same exit code, so neither the status "
+         "nor the text reports that the two records now disagree"),
         "tick.py",
         "        except Exception as exc:  # the WIDTH is the point, see below",
         "        except LedgerChangedError as exc:",

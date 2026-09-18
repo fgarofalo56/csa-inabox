@@ -71,7 +71,10 @@ Scope and autonomy are already decided — do not re-ask them:
     non-terminal — re-run it, the closer reads the state first. If the close
     settles and the ledger write then fails (a lost CAS against another lane is
     the realistic one, but ANY failure is caught — a narrow bound once let a
-    `PermissionError` escape with an empty stderr), it prints `LEDGER NOT
+    `PermissionError` escape as a bare traceback that named `os.replace` and
+    never mentioned the upstream close; earlier revisions of this line said
+    "with an empty stderr", which was a `capsys` artifact and is corrected in
+    `README.md`), it prints `LEDGER NOT
     WRITTEN - THE ISSUE IS CLOSED UPSTREAM` with the exception type and says to
     re-run: the closer sees CLOSED and short-circuits, so there is no second
     close and no second comment.

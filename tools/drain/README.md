@@ -161,11 +161,21 @@ which is also what makes "nothing was written" true in the first row: a bare
 refusal can only escape from *before* the close. That claim covers the call and
 **not** `main()`'s save step, which is why the save arm is bound to `Exception`
 and not to `LedgerChangedError`: with the narrow bound, `os.replace` raising
-`PermissionError` escaped `main()` uncaught with an **empty stderr** while the
-issue was closed upstream — the silent failure this whole split exists to
-prevent, one layer down. The width is safe to claim because the save is a temp
-file plus an `os.replace`: either the replace happened and nothing after it can
-raise, or the file is untouched.
+`PermissionError` escaped `main()` uncaught while the issue was closed
+upstream — the silent failure this whole split exists to prevent, one layer
+down. **Correction (round 7):** this paragraph, and five other sites, used to
+say the escape left an **empty stderr**. It does not. `tick.py` ends in
+`raise SystemExit(main())`, so the exception reaches the interpreter and prints
+a traceback; the emptiness was an artifact of measuring through pytest's
+`capsys`. Measured as a real process against a sandbox copy carrying arm GH12:
+exit 1 and **655 bytes of traceback** naming `os.replace`, against **522 bytes**
+of the intended message unmutated. What the width actually buys is the
+difference between those two texts — under the narrow bound the operator gets a
+file-rename traceback that never mentions the upstream close, at the *same* exit
+code, so neither the status nor the message says the two records disagree. The
+width is safe to claim because the save is a temp file plus an `os.replace`:
+either the replace happened and nothing after it can raise, or the file is
+untouched.
 
 The third row says "settled", not "the GitHub write LANDED", because the closer
 may have found the issue **already closed** and left it alone. The note it

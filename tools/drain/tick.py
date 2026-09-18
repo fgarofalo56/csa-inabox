@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -262,6 +263,19 @@ def refresh_from_github(led: Ledger, streams: dict, live: list[dict]) -> tuple[i
     # again evidence that a HUMAN reopened it. The demotion and the void are
     # deliberately untouched: the fix is to stop manufacturing false reopens,
     # not to stop noticing real ones.
+    #
+    # THAT ARGUMENT RESTS ON AN ASSUMPTION, stated here because it was load-
+    # bearing and unwritten: that `gh issue list`, which produces `live`, is
+    # READ-AFTER-WRITE CONSISTENT with the `gh issue close` this harness just
+    # issued. If a list read lagged a close by a cycle, this cell would fire on
+    # the harness's own close again and void the receipt -- the original #4545
+    # symptom from a different cause, and it would look identical. The risk is
+    # low and not zero: `gh issue list` reads the issues endpoint rather than
+    # the search index, and the closer's own read-back observed CLOSED through
+    # that same endpoint before the ledger was written at all. It is NOT
+    # mitigated in code. The mitigation, if a lagging read is ever observed, is
+    # to require the reopen to postdate the close's own timestamp in the issue
+    # history rather than to infer it from a single list read.
     #
     # The `parked`/departed cell is the one with no obvious right answer: the
     # issue being closed does not establish that the blocker lifted, and there
@@ -539,8 +553,67 @@ def _issue_state_on_github(repo: str, number: int) -> str:
     return state
 
 
+#: The receipt kinds whose evidence is a MERGE rather than an observation of
+#: anything running. `ci-green` is the only one today; the membership is
+#: declared here rather than inferred from a name so a future merge-based kind
+#: cannot acquire the estate-observing sentence by being added elsewhere.
+MERGE_BASED_KINDS = frozenset({"ci-green"})
+
+
+def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
+    """The comment `gh issue close --comment` posts. THE PERMANENT PUBLIC RECORD.
+
+    This string is the receipt's only trace on the artifact a human reads, on up
+    to 334 issues, forever. It is not log output and it is not revisable, so it
+    is built deliberately rather than formatted in place.
+
+    **WHY IT NAMES `kind` AND `issue_class`.** The previous text was identical on
+    both routes and cited `deploy-integrity` R2 on both: "Closing this issue on
+    that evidence (deploy-integrity R2)." A reader of a closed issue could not
+    tell whether it closed on a live-estate receipt or on CI green at a merged
+    sha -- which is the ONE distinction R2 exists to draw.
+
+    **AND WHY THE R2 CITATION IS NOW CONDITIONAL, which is the real defect.** R2
+    is "merged is never done". On the `ci-green` route the evidence IS a merge,
+    so the old sentence cited that rule in support of precisely what it forbids,
+    while `policy.json` carries `report-a-merge-as-a-fix` in its `never` list.
+    A merge-based receipt therefore says what it establishes and, explicitly,
+    what it did not look at; R2 appears as the reason such a receipt is
+    confined to one class, never as the licence for the close. A receipt taken
+    from a RUN may cite R2 as satisfied, because a run is an observation and not
+    a merge.
+
+    The two branches are written out rather than assembled from fragments: a
+    sentence this permanent should be readable in full at the place it is
+    decided, and a shared template is how the two routes came to say the same
+    wrong thing in the first place.
+    """
+    head = f"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}."
+    if kind in MERGE_BASED_KINDS:
+        return (
+            f"{head} WHAT THIS ESTABLISHES, AND WHAT IT DOES NOT: the evidence is "
+            "CI green at the MERGED sha - a merge, not a deploy. It establishes "
+            "that the guards and tests this issue is about pass in CI. The live "
+            "estate was never checked and nothing here claims anything about it. "
+            "Per deploy-integrity R2 (merged is not done) a merge-based receipt "
+            f"closes only the {issue_class} class; an issue about deployed "
+            "behaviour takes a deploy-run, estate or g1-browser receipt instead. "
+            "Closing this issue on that evidence, and on nothing wider than it."
+        )
+    return (
+        f"{head} The evidence is a completed run of the only workflow policy "
+        f"accepts as the {kind} producer, with every step that kind requires "
+        "observed green - an observation of something that ran, not a merge, "
+        "which is what deploy-integrity R2 (merged is not done) asks of this "
+        "class. DISCLOSED: this tool verifies the run establishes the kind, "
+        "not that the run was ABOUT this issue - that binding is #4489. "
+        "Closing this issue on that evidence."
+    )
+
+
 def close_issue_on_github(
-    policy: dict, repo: str, number: int, target_state: str, detail: str
+    policy: dict, repo: str, number: int, target_state: str, detail: str,
+    kind: str, issue_class: str,
 ) -> str:
     """Close the GitHub issue for an item the ledger is about to make terminal.
 
@@ -602,15 +675,24 @@ def close_issue_on_github(
         # fixed.
         #
         # RESIDUAL, disclosed: on the comment-landed/close-failed path a re-run
-        # posts the note again, because the issue is still OPEN. Bounded and
-        # visible -- the ledger stays non-terminal, the operator sees GITHUB
-        # CLOSE NOT CONFIRMED, and the item stays in the queue -- and every
-        # copy is a true statement about a receipt rather than a false one
-        # about a close.
+        # posts the note again, because the issue is still OPEN. VISIBLE -- the
+        # ledger stays non-terminal, the operator sees GITHUB CLOSE NOT
+        # CONFIRMED, and the item stays in the queue -- and every copy is a true
+        # statement about a receipt rather than a false one about a close.
+        #
+        # NOT "BOUNDED", and an earlier revision of this comment said that word.
+        # Nothing in the CODE bounds it: under a persistent close failure each
+        # operator re-run adds a copy, and two lanes racing the same item can
+        # both pass the already-closed read above and post two comments. What
+        # limits it is the call graph -- `--record-receipt` has no cron, no
+        # loop and no driver, its only reference outside the tests being
+        # `operating_point.py`, which prints the command rather than running it
+        # -- so the ceiling is operator patience, not an invariant. Saying
+        # "bounded" claimed a control that does not exist, which is the R7
+        # defect this change is about, in the comment explaining the change.
         rc, _out, err = sh(
             ["gh", "issue", "close", str(number), "--repo", repo,
-             "--comment", (f"Drain harness: receipt verified - {detail}. "
-                           "Closing this issue on that evidence (deploy-integrity R2).")]
+             "--comment", _receipt_comment(kind, issue_class, detail)]
         )
         if rc != 0:
             raise IssueCloseFailedError(
@@ -622,7 +704,14 @@ def close_issue_on_github(
                 "already posted on a still-open issue; but a close whose mutation "
                 "reached the server and whose response did not reach the client "
                 "exits the same way with the issue CLOSED. Re-run - the read-first "
-                "short circuit settles which of the two happened"
+                "short circuit settles which of the two happened. NOT CLASSIFIED AND "
+                "NOT RETRIED, deliberately and as a known gap: a secondary rate "
+                "limit, a 502 and a revoked token all land here identically, and "
+                "the advice to re-run walks a rate limit straight back into it. "
+                "Failing closed with the ledger untouched is the right default -- "
+                "an unattended backoff loop against a write path is a worse first "
+                "version -- but this says 're-run' without knowing whether now is "
+                "a good time, and that is a limitation rather than a verdict"
             )
         after = _issue_state_on_github(repo, number)
     except OSError as exc:
@@ -857,6 +946,27 @@ def _record_close_in_ledger(
         raise
 
 
+class Recorded(NamedTuple):
+    """What a successful record produced, with the two HALVES kept apart.
+
+    `summary` is the whole-operation line -- "#N closed on a <kind> receipt ...
+    (<close_note>)" -- and `close_note` is the UPSTREAM half alone, either
+    "#N closed on GitHub" or "#N was already closed on GitHub - left alone".
+
+    They are separate because `main()`'s save-failure arm needs the upstream
+    half and only the upstream half. It used to interpolate `summary` under the
+    label "The upstream side is settled", and `summary` leads with the LEDGER
+    close -- which on that exact path is the half that did NOT persist. In a
+    change whose thesis is that every message says which of the two records
+    moved, that was the one message with the label backwards. Returning the
+    halves separately makes the wrong one unreachable rather than merely
+    discouraged.
+    """
+
+    summary: str
+    close_note: str
+
+
 def record_receipt_from_evidence(
     led: Ledger, policy: dict, repo: str, number: int,
     *, from_pr: int | None, from_run: str | None,
@@ -977,7 +1087,8 @@ def record_receipt_from_evidence(
     #
     # The close raises rather than returning a flag, so the ledger write below
     # is unreachable unless the issue is observably closed on GitHub.
-    close_note = close_issue_on_github(policy, repo, number, CLOSED, detail)
+    close_note = close_issue_on_github(
+        policy, repo, number, CLOSED, detail, kind, issue_class)
     # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE, and it is wrapped so
     # it cannot be reported as a refusal. `_record_close_in_ledger` restores the
     # item, so the in-memory ledger is untouched and `main()` saves nothing --
@@ -998,7 +1109,10 @@ def record_receipt_from_evidence(
             "the closer reads the issue state first, sees CLOSED and "
             "short-circuits, so there is no second close and no second comment."
         ) from exc
-    return f"#{number} closed on a {kind} receipt - {detail} ({close_note})"
+    return Recorded(
+        summary=f"#{number} closed on a {kind} receipt - {detail} ({close_note})",
+        close_note=close_note,
+    )
 
 
 def main() -> int:
@@ -1083,7 +1197,7 @@ def main() -> int:
             )
             return 2
         try:
-            summary = record_receipt_from_evidence(
+            recorded = record_receipt_from_evidence(
                 led, policy, repo, args.record_receipt,
                 from_pr=args.from_pr, from_run=args.from_run,
             )
@@ -1145,15 +1259,30 @@ def main() -> int:
             # BOUND TO `Exception`, NOT TO `LedgerChangedError`, and the width
             # is the fix rather than sloppiness.
             #
-            # A reviewer measured the narrow version: with `os.replace` raising
-            # `PermissionError`, the exception escaped `main()` UNCAUGHT, stderr
-            # was EMPTY, and the issue was closed upstream. That is #4545 with
-            # extra steps -- the two records disagree and nothing says so --
-            # inside the change whose whole purpose is to make that state
-            # legible. The asymmetry that allowed it: the wrap inside
-            # `record_receipt_from_evidence` catches `Exception` and this did
-            # not, so a failure one line later had a different fate than the
-            # same failure one line earlier.
+            # CORRECTION (round 7, and the original justification is left in
+            # view rather than edited away). Rounds 1-6 of this comment, plus
+            # five other sites and the PR body, said the narrow bound let
+            # `PermissionError` escape `main()` "with an EMPTY stderr". That is
+            # FALSE, and it was an artifact of measuring through pytest's
+            # `capsys`: the module tail is `raise SystemExit(main())`, so an
+            # exception that escapes `main()` escapes to the interpreter, which
+            # prints a traceback. Measured as a REAL PROCESS in a sandbox copy
+            # carrying arm GH12, `os.replace` raising `PermissionError`:
+            # **exit 1, 655 bytes of traceback** naming `led.save(if_unchanged=
+            # True)` and `os.replace` in `ledger.py`. Positive control, same
+            # driver against the unmutated source: exit 1, 522 bytes of the
+            # intended `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`.
+            #
+            # THE REAL REASON FOR THE WIDTH is what those two outputs differ
+            # ON, not silence. Under the narrow bound the operator gets a
+            # traceback about a FILE RENAME that never mentions the issue being
+            # closed upstream, and the exit code is 1 either way -- so neither
+            # the status nor the text tells them the two records now disagree.
+            # That is #4545 with extra steps, inside the change whose purpose is
+            # to make that state legible. The asymmetry that allowed it: the
+            # wrap inside `record_receipt_from_evidence` catches `Exception` and
+            # this did not, so a failure one line later had a different fate
+            # than the same failure one line earlier.
             #
             # THE STATE CLAIM HOLDS FOR ANY EXCEPTION FROM `save()`, which is
             # what licenses the width (R7): the write is a temp file plus an
@@ -1182,14 +1311,16 @@ def main() -> int:
             # rather than flattened into one story this code cannot tell apart.
             print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: "
                   f"{type(exc).__name__}: {exc}\n"
-                  f"  The upstream side is settled - {summary} - and only the ledger "
-                  "write did not happen, so the two records disagree until this is "
-                  "re-run. RE-RUN THE SAME COMMAND: the closer reads the issue state "
-                  "first, sees CLOSED and short-circuits - no second close, no second "
-                  "comment - and the ledger then records the receipt.",
+                  f"  The upstream side is settled - {recorded.close_note} - and "
+                  "only the ledger write did not happen, so the two records "
+                  "disagree until this is re-run. RE-RUN THE SAME COMMAND: the "
+                  "closer reads the issue state first, sees CLOSED and "
+                  "short-circuits - no second close, no second comment - and the "
+                  "ledger then records the receipt.\n"
+                  f"  The receipt that did not persist: {recorded.summary}",
                   file=sys.stderr)
             return 1
-        print(summary)
+        print(recorded.summary)
         return 0
 
     live = read_live_issues(repo)

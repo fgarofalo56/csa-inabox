@@ -486,7 +486,7 @@ def test_blocker_the_record_path_guards_its_save_too(monkeypatch, tmp_path):
         rival.record_receipt(901, "ci-green", "green at sha")
         rival.transition(901, CLOSED, "the rival closed it")
         rival.save()
-        return "recorded"
+        return tick.Recorded(summary="recorded", close_note="#900 closed on GitHub")
 
     monkeypatch.setattr(tick, "record_receipt_from_evidence", record_then_a_rival_writes)
     monkeypatch.setattr(tick, "STATE_PATH", state)
@@ -1078,7 +1078,7 @@ def test_a_verified_run_closes_the_item_and_stamps_the_class(tmp_path, monkeypat
     assert item.state == CLOSED
     assert item.receipt_kind == "g1-browser"
     assert item.receipt_taken_under == "ui-surface"
-    assert "g1-browser" in out
+    assert "g1-browser" in out.summary
 
 
 def test_an_already_terminal_item_is_not_re_receipted(tmp_path, monkeypatch):
@@ -1155,7 +1155,7 @@ def _stub_ci_green(monkeypatch, *, ok, summary="GREEN (green-at-merge=15)", bind
     monkeypatch.setattr(
         tick, "gh_json_local",
         lambda *_a, **_k: {
-            "body": "Refs #800 #801 #802 #804 #806" if binds else "entirely unrelated work",
+            "body": "Refs #800 #801 #802 #804 #806 #807" if binds else "entirely unrelated work",
             "commits": [], "closingIssuesReferences": [],
         },
     )
@@ -1222,7 +1222,7 @@ def test_positive_control_a_green_ci_green_receipt_closes_the_item(tmp_path, mon
     assert item.receipt_kind == "ci-green"
     assert item.receipt_taken_under == "guard-or-test-only"
     assert item.receipt_ref == "deadbeefcafe"  # the MERGED sha, not the PR number
-    assert "ci-green" in out
+    assert "ci-green" in out.summary
 
 
 def test_blocker_a_pr_that_never_names_the_item_is_refused(tmp_path, monkeypatch):
@@ -1325,7 +1325,18 @@ def test_blocker_a_ledger_close_also_closes_the_issue_on_github(tmp_path, monkey
         "that breaks this is a close whose comment does not name the evidence"
     )
     assert "123" in body, "the comment must name the RUN the receipt was measured from"
-    assert "closed on GitHub" in out
+    # THE KIND AND THE CLASS, on the permanent artifact (arm GH15). Without
+    # them the two routes posted IDENTICAL text and a reader of a closed issue
+    # could not tell a live-estate receipt from CI green at a merged sha --
+    # which is the one distinction R2 exists to draw. The value that breaks
+    # these: a comment built from `detail` alone, which is what shipped.
+    assert "kind=g1-browser" in body, "the comment must name the RECEIPT KIND"
+    assert "class=ui-surface" in body, "the comment must name the ISSUE CLASS"
+    # A RUN-BACKED receipt is an observation rather than a merge, so it may
+    # cite R2 as satisfied. The ci-green route may not, and that is asserted at
+    # its own site below.
+    assert "deploy-integrity R2" in body
+    assert "closed on GitHub" in out.summary
 
 
 def test_blocker_the_github_close_happens_on_the_ci_green_route_too(tmp_path, monkeypatch):
@@ -1347,6 +1358,53 @@ def test_blocker_the_github_close_happens_on_the_ci_green_route_too(tmp_path, mo
 
     assert item.state == CLOSED
     assert spy.closed == ["806"], "the ci-green route closed the ledger only"
+
+
+def test_blocker_a_ci_green_close_does_not_cite_r2_as_licence_for_closing_on_a_merge(
+    tmp_path, monkeypatch
+):
+    """THE PERMANENT PUBLIC ARTIFACT, and the finding that mattered most.
+
+    Both routes used to post the SAME sentence: "Closing this issue on that
+    evidence (deploy-integrity R2)." On the `ci-green` route the evidence IS a
+    merge, and R2's one-line form is "merged is never done" -- so the comment
+    cited the rule in support of exactly what the rule forbids, on up to 334
+    permanent public artifacts, while `policy.json` carries
+    `report-a-merge-as-a-fix` in its `never` list.
+
+    FOUR VALUES BREAK THIS, each named at its assertion:
+
+    1. a comment that does not name the kind (arm GH15),
+    2. a comment that does not name the class (arm GH15),
+    3. a ci-green comment that carries the run-backed sentence -- i.e. the two
+       branches collapsed back into one template, which is the defect,
+    4. a ci-green comment that drops the non-claim about the estate.
+
+    The POSITIVE CONTROL for 3 is the run-backed test above, which asserts the
+    estate-observing sentence IS present on its own route: an assertion that
+    only ever checks for absence is satisfied by deleting the feature
+    (assertion-design.md "done" #4).
+    """
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(807, "a guard", "W6-ci", lane="lane:ci", size=1)
+    _stub_ci_green(monkeypatch, ok=True)
+    spy = _gh(monkeypatch)
+
+    tick.record_receipt_from_evidence(led, POLICY, "r", 807, from_pr=4498, from_run=None)
+
+    close = next(c for c in spy.calls if c[:3] == ["gh", "issue", "close"])
+    body = close[close.index("--comment") + 1]
+    assert "kind=ci-green" in body, "the comment must name the RECEIPT KIND"
+    assert "class=guard-or-test-only" in body, "the comment must name the ISSUE CLASS"
+    assert "a merge, not a deploy" in body, (
+        "a merge-based receipt must say its evidence is a merge - the value that "
+        "breaks this is the run-backed branch's sentence rendered here, i.e. the "
+        "two templates collapsed back into the one that said the same wrong thing"
+    )
+    assert "The live estate was never checked" in body, (
+        "a ci-green close must state what it did NOT look at; without it the "
+        "comment implies an estate state this route never measured"
+    )
 
 
 def test_blocker_the_github_close_happens_before_the_ledger_write(tmp_path, monkeypatch):
@@ -1466,7 +1524,7 @@ def test_an_already_closed_issue_is_not_closed_again_and_no_comment_is_appended(
 
     assert spy.closed == [], "an already-closed issue was closed again"
     assert item.state == CLOSED
-    assert "already closed" in out
+    assert "already closed" in out.summary
 
 
 def test_blocker_a_ledger_failure_after_the_close_is_not_reported_as_a_refusal(
@@ -1584,15 +1642,27 @@ def test_blocker_a_non_cas_save_failure_after_a_landed_close_is_not_silent(
 
     The save arm used to catch `LedgerChangedError` only. With `os.replace`
     raising `PermissionError` -- an antivirus scan, a locked file, a full disk
-    -- the exception escaped `main()` UNCAUGHT, **stderr was empty**, and the
-    issue was closed upstream. That is #4545 with extra steps: the two records
-    disagree and nothing says so.
+    -- the exception escaped `main()` UNCAUGHT while the issue was closed
+    upstream: #4545 with extra steps, the two records disagreeing and nothing
+    saying so.
 
-    The value that makes this fail is the narrow bound: with
-    `except LedgerChangedError`, `PermissionError` propagates and this test
-    ERRORS instead of reading rc=1 (arm GH12). It also fails if the message
-    stops naming the exception TYPE -- a lost CAS and a filesystem failure are
-    different diagnoses and this code cannot tell the reader apart otherwise.
+    CORRECTION (round 7). This docstring, and five other sites, said the escape
+    left an **empty stderr**. It does not. `tick.py` ends in
+    `raise SystemExit(main())`, so an exception that escapes `main()` escapes to
+    the interpreter and prints a traceback; the emptiness was an artifact of
+    measuring through `capsys`. Measured as a real process against a sandbox
+    copy carrying arm GH12: exit 1 and 655 bytes of traceback naming
+    `led.save(if_unchanged=True)` and `os.replace`, against 522 bytes of the
+    intended message on the unmutated source. What is actually wrong under the
+    narrow bound is that the operator is handed a file-rename traceback that
+    never mentions the issue being closed upstream, at the SAME exit code.
+
+    THE VALUE THAT MAKES THIS FAIL is therefore `tick.main()` RAISING instead of
+    returning 1, and the `try` below is what turns that into a named failure
+    rather than an error four lines from the assertion that claims to catch it.
+    It also fails if the message stops naming the exception TYPE -- a lost CAS
+    and a filesystem failure are different diagnoses and this code cannot tell
+    the reader apart otherwise.
     """
     seed = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
     seed.upsert(722, "a console surface", "W5-console", lane="lane:console", size=1)
@@ -1612,10 +1682,26 @@ def test_blocker_a_non_cas_save_failure_after_a_landed_close_is_not_silent(
     # the failure the reviewer measured.
     monkeypatch.setattr(ledger_module.os, "replace", no_replace)
 
-    assert tick.main() == 1
+    try:
+        rc = tick.main()
+    except BaseException as exc:  # the ESCAPE is the defect this arm produces
+        pytest.fail(
+            f"main() let {type(exc).__name__} ESCAPE instead of returning 1 "
+            "(arm GH12). The operator gets an unhandled traceback naming "
+            "os.replace and NOTHING saying the issue is closed upstream, at the "
+            "same exit code as the handled path."
+        )
     err = capsys.readouterr().err
+    assert rc == 1
     assert spy.closed == ["722"], "the close must have LANDED for this to be the case under test"
-    assert err.strip(), "the failure was SILENT - stderr was empty while the issue was closed"
+    # DISCLOSED, NOT COUNTED (assertion-design.md "done" #5). This assertion has
+    # NO KILL POWER AGAINST GH12: under the narrow bound the `try` above fails
+    # the test first, so `readouterr()` is never reached on that input. It is a
+    # regression guard against a DIFFERENT shape -- an arm that keeps `return 1`
+    # and drops the `print` -- which no arm in `mutate_gates.py` expresses
+    # today. It is not evidence for the width of the `except`; the `try` above
+    # is.
+    assert err.strip(), "a `return 1` with no message would be a silent failure"
     assert "THE ISSUE IS CLOSED UPSTREAM" in err
     assert "PermissionError" in err, "a lost CAS and a filesystem failure are different diagnoses"
     final = Ledger(state, receipts=POLICY["receipts"]).load()
@@ -1677,7 +1763,9 @@ def test_blocker_a_park_is_never_closed_on_github(monkeypatch):
     spy = _gh(monkeypatch)
     for state in (PARKED, DECLINED):
         with pytest.raises(tick.IssueCloseFailedError, match="only"):
-            tick.close_issue_on_github(POLICY, "r", 4535, state, "blocked on a tenant")
+            tick.close_issue_on_github(
+                POLICY, "r", 4535, state, "blocked on a tenant",
+                "g1-browser", "ui-surface")
     assert spy.calls == [], "the closer reached GitHub before deciding it must not"
 
 
@@ -1696,7 +1784,8 @@ def test_the_close_is_refused_when_the_policy_does_not_permit_it(monkeypatch):
     ]
     spy = _gh(monkeypatch)
     with pytest.raises(tick.IssueCloseFailedError, match="close-on-receipt"):
-        tick.close_issue_on_github(thin, "r", 4545, CLOSED, "a receipt")
+        tick.close_issue_on_github(
+            thin, "r", 4545, CLOSED, "a receipt", "ci-green", "guard-or-test-only")
     assert spy.calls == []
 
 
