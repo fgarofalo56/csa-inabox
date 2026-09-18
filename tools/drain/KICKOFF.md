@@ -61,7 +61,24 @@ Scope and autonomy are already decided — do not re-ask them:
     `policy.receipt_required_steps` names a step, that step must have concluded
     success too (a `loom-ui-verify` run with a blank `target_route` skips the
     capture step and is green having captured nothing). A refusal writes
-    nothing. It does NOT check the evidence is ABOUT the item — that binding
+    nothing. It CLOSES THE GITHUB ISSUE in the same transaction, before the
+    ledger write (#4545) — until that landed, the ledger close never reached
+    GitHub, so the next refresh read the harness's own close as a REOPEN and
+    voided the receipt; every self-closed item un-closed itself one cycle later.
+    Only `closed` gets a GitHub close: a park is supposed to stay open. If the
+    close cannot be confirmed, the command prints `GITHUB CLOSE NOT CONFIRMED -
+    NOTHING WRITTEN TO THE LEDGER`, writes nothing, and the item stays
+    non-terminal — re-run it, the closer reads the state first. If the close
+    settles and the ledger write then fails (a lost CAS against another lane is
+    the realistic one, but ANY failure is caught — a narrow bound once let a
+    `PermissionError` escape as a bare traceback that named `os.replace` and
+    never mentioned the upstream close; earlier revisions of this line said
+    "with an empty stderr", which was a `capsys` artifact and is corrected in
+    `README.md`), it prints `LEDGER NOT
+    WRITTEN - THE ISSUE IS CLOSED UPSTREAM` with the exception type and says to
+    re-run: the closer sees CLOSED and short-circuits, so there is no second
+    close and no second comment.
+    It does NOT check the evidence is ABOUT the item — that binding
     needs `Item.pr`, which still has no writer (#4489). Measure the operating
     point with `python tools/drain/operating_point.py --merge-gate`.
     Run the gate from the PRIMARY checkout if you can; from a worktree it falls

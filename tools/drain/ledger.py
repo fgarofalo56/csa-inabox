@@ -62,6 +62,36 @@ ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMI
 #   for anything that must be parked.
 REOPEN_DISPUTES = (CLOSED, DECLINED)
 
+# WHICH TERMINAL STATES THE HARNESS CLOSES ON GITHUB ITSELF. This is the
+# PRECONDITION `REOPEN_DISPUTES` assumes and never established (#4545): the
+# ledger close never reached GitHub, so the next `refresh_from_github` saw a
+# `closed` item open upstream, read the harness's OWN close as a reopen,
+# demoted it to `needs-audit` and VOIDED the receipt. Measured on #4535 -- the
+# first item the harness ever closed on its own evidence -- which bounced on
+# the cycle after it was recorded. Every self-closed item un-closed itself, so
+# `drained()`, this program's exit condition, was unreachable.
+#
+# It is NOT the same tuple as `REOPEN_DISPUTES` and must not be collapsed into
+# it. That one asks "does being open again DISPUTE this state?"; this one asks
+# "should this state have made the issue not-open in the first place?".
+# `declined` is the item that separates them:
+#
+# - `closed` -- IN. The ledger says done; GitHub must agree, or the backlog
+#   lies about itself in the direction R2 exists to prevent.
+# - `parked` -- OUT, and this is the constraint #4535 was about. A park is
+#   blocked, not done, and its issue is SUPPOSED to stay open. Closing it would
+#   re-create the exact lie that issue refused, from the other side.
+# - `declined` -- OUT, although it IS in `REOPEN_DISPUTES`. There is no
+#   unattended decline path to hang a close on: `transition(DECLINED)` demands
+#   a recorded decision naming WHO decided, and the disposal that state's own
+#   comment describes is `gh issue close --reason not-planned` -- a different
+#   close, with a different reason, resting on a judgement no program made. A
+#   harness that auto-closed declines would be inventing that judgement. When a
+#   decline path exists it adds itself here deliberately, the way this line was
+#   added; until then a decline's demotion has the escape that comment names
+#   (close the issue by hand and the decline stands) and a park has none.
+CLOSES_ON_GITHUB = (CLOSED,)
+
 # Why an item is in `needs-audit`. The two have OPPOSITE resolutions when the
 # issue turns up open again, so collapsing them made the state one-way.
 AUDIT_DEPARTED = "departed"   # vanished from the live set; nobody said why
@@ -519,6 +549,21 @@ class Ledger:
             )
 
         item.state = state
+        # A TERMINAL ITEM CARRIES NO AUDIT REASON. `audit_reason` is a scalar
+        # set on the way IN to `needs-audit` and cleared only by the departure
+        # rescue in `upsert`, so recovering an audited item the other way --
+        # re-record its receipt, reach `closed` -- left it reading
+        # `state=closed reason='departed'`: a cold reader sees a closed item
+        # still labelled as having vanished. Pre-existing, and this change makes
+        # the recover-from-`needs-audit` path the NORMAL one, so the stale label
+        # becomes the common shape rather than a curiosity. Nothing reads
+        # `audit_reason` on a terminal item -- `refresh_from_github` skips
+        # `TERMINAL` outright and `upsert`'s rescue `elif` requires
+        # `was_state == NEEDS_AUDIT` -- and a later reopen rewrites it to
+        # `reopened` before anything can read it, so clearing is safe as well as
+        # honest.
+        if state in TERMINAL:
+            item.audit_reason = None
         item.history.append(f"{_now()} -> {state}" + (f" ({why})" if why else ""))
         return item
 
