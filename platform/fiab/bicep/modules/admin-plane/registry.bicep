@@ -113,12 +113,49 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
 // so it can never clobber a concurrently-held lease — a strictly stronger
 // guarantee than the read-then-write race #3691's comment openly conceded.
 //
-// IF THAT STEP IS SKIPPED: this registry keeps whatever tags it already has
-// (nothing in this module removes tags any more), so an existing estate does
-// not lose its compliance tags — but a NEWLY created registry comes up with
-// NONE, and stays untagged until a deploy runs that step. That is a real,
-// disclosed gap, not a silent one: the script is fail-closed and the lanes do
-// not `|| true` it, so a failure to tag fails the deploy loudly.
+// IF THAT STEP IS SKIPPED, THIS REGISTRY ENDS THE APPLY WITH NO COMPLIANCE TAGS
+// AT ALL — including on an estate that had them a minute earlier (#4448).
+//
+// An earlier revision of this comment said the opposite: "this registry keeps
+// whatever tags it already has (nothing in this module removes tags any more),
+// so an existing estate does not lose its compliance tags". That was asserted,
+// never measured, and it is FALSE. An ARM PUT writes the tag dictionary the
+// template body hands it, and a body that hands it none writes NONE. Omitting
+// `tags:` does not preserve a resource's tags; it clears them.
+//
+// MEASURED 2026-09-17 against the live Commercial estate, with the private
+// endpoint below as the positive control — same module, same apply, the only
+// difference being that it DOES declare `tags:`:
+//
+//   acrloomk6mvh5sm6z7do      (no `tags:`)  -> loomAcrFwExpiresEpoch,
+//     loomAcrFwHolderUrl, loomAcrFwOwner, loomAcrFwSinceUtc. All four written
+//     back AFTER the apply by the next lane to take the firewall lease. ZERO
+//     compliance tags.
+//   pe-acrloomk6mvh5sm6z7do   (`tags: complianceTags`) -> CSA_Loom,
+//     Data_Classification, Environment, FedRAMP_Level, loom-estate-id.
+//
+// Two consequences, both real:
+//
+//   1. Compliance tags on THIS registry survive only until the next apply and
+//      are restored by the post-apply step named above. If that step does not
+//      run — and it does not run when an earlier step in the job has already
+//      failed — the registry stays untagged until one does.
+//   2. NO CROSS-LANE MUTEX MAY BE STORED ON THIS RESOURCE. The apply destroys
+//      it. #4448 moved the estate image-write lease to the registry's
+//      SUBSCRIPTION, which a subscription-scope deployment never PUTs. The
+//      `loomAcrFw*` firewall lease in scripts/csa-loom/acr-firewall-lease.sh is
+//      STILL stored here and is still erased by every apply — measured on run
+//      35215007789, where build-fiab-images-acr-tasks read it as free and
+//      opened the firewall 2 minutes before this lane's apply finished, with 26
+//      minutes still on the claim. That is tracked separately; do not read this
+//      module's lack of `tags:` as protecting it.
+//
+// Re-adding `tags:` here is still forbidden, for the ORIGINAL #3676/#3681
+// reason and not for the one the old comment gave: a declared `tags:` would
+// stamp complianceTags over a CONCURRENTLY-HELD firewall lease mid-apply and
+// deny an in-flight `az acr build` push. Erasing the dictionary and replacing
+// the dictionary are both fatal to a lease stored in it; only the second also
+// writes a plausible-looking wrong value.
 //
 // A `Microsoft.Resources/deploymentScripts` resource would also give true
 // PATCH-Merge atomicity, and is deliberately NOT used: `front-door.bicep`
