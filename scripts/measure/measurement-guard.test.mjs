@@ -437,6 +437,46 @@ test('deny text: an UNKNOWN rule id fails toward the measurement framing', () =>
   assert.match(body, /measurement you cannot trust/);
 });
 
+// ---- BLINDING, fourth class: an apostrophe inside a `#` comment -----------
+// `maskQuoted` had no comment awareness, so an apostrophe in a comment opened a
+// phantom single-quote that masked everything to the next apostrophe or to end
+// of input. Confirmed against a real `bash` run: bash executes precisely the
+// line the guard blanked.
+//
+// This one blinded EVERY rule in the file, not just the newest — including
+// `rc-after-pipe`, the rule the file was originally built for. Measured
+// reachability: 708 comment lines with an odd apostrophe count across 840
+// tracked shell/workflow/scripts files. The repo's dominant comment style.
+//
+// WHAT MAKES THESE FAIL: remove the `#` word-boundary branch from maskQuoted.
+test('BLINDING: an apostrophe in a comment must not blank the next line', () => {
+  assert.ok(has(`# don't do it\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('BLINDING: an apostrophe in a comment must not blank a LATER line', () => {
+  const cmd = `# agent's note\necho one\necho two\necho three\npython -`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: the same defect silenced rc-after-pipe, the original rule', () => {
+  // The other maskQuoted consumer. It had no witness for this at all.
+  const cmd = `# it's fine\nR=$(az monitor metrics list --resource "$ID" -o tsv | tr -d '\\r')\nRC=$?`;
+  assert.ok(has(cmd, 'rc-after-pipe'), 'a comment apostrophe must not blind the pipeline rule');
+});
+
+test('CONTROL: a `#` that does NOT begin a word is not a comment', () => {
+  // bash starts a comment only at a word boundary. Without this control the fix
+  // could widen into "any # blanks the rest", which would mask real arguments.
+  assert.ok(has(`python - file#1 <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: a QUOTED apostrophe still masks normally', () => {
+  // Pairs with the four above — the comment branch must not disturb ordinary
+  // quote handling, which is what keeps the jq false positive fixed.
+  const cmd = `gh api "repos/o/r/x" --jq '.a[] | .b' > out.json 2>err.txt\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false, 'a jq pipe must still not read as a shell pipe');
+});
+
 // ------------------------------------------------------- rule-level failure
 test('a rule that THROWS becomes a finding — it is not silently a pass', () => {
   // A crashing rule produced no verdict. Swallowing the throw made a broken rule

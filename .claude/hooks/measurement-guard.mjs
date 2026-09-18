@@ -41,6 +41,25 @@
  * was denied because of the jq pipe. Quote-awareness is not optional here — a
  * guard that blocks correct commands is the pressure that gets it deleted.
  * Length is preserved so any offsets/offending-text stay meaningful.
+ *
+ * COMMENT AWARENESS IS ALSO NOT OPTIONAL, and its absence was a SILENCING bug
+ * in every rule in this file, not just the newest one.
+ *
+ * An apostrophe inside a `#` comment opened a phantom single-quote that masked
+ * everything to the next apostrophe — or to end of input. `# don't do it` on
+ * one line blanked `python - <<'EOF'` on the next, and a real `bash` run
+ * confirms bash executes precisely the line the guard had blanked. It blinded
+ * `rc-after-pipe` too, the rule this file was originally built for.
+ *
+ * Measured reachability: 708 comment lines carry an odd apostrophe count
+ * across 840 tracked shell/workflow/scripts files. That is this repo's
+ * dominant comment style, not an edge case — and the population these rules
+ * serve writes exactly that line.
+ *
+ * The `#` itself is PRESERVED rather than masked, because stripHeredocBodies
+ * locates comments with `masked.indexOf('#')`; masking it would break that
+ * caller while fixing this one. A quoted `#` still masks to `_`, which makes
+ * that caller strictly more accurate.
  */
 function maskQuoted(s) {
   let out = '';
@@ -52,6 +71,18 @@ function maskQuoted(s) {
       if (c === quote) { quote = null; out += c; continue; }
       out += c === '\n' ? '\n' : '_';
       continue;
+    }
+    // bash starts a comment at `#` only when it begins a WORD — start of input,
+    // or after whitespace or a control operator. `file#1` is not a comment.
+    if (c === '#') {
+      const prev = i === 0 ? '\n' : s[i - 1];
+      if (/[\s;|&(]/.test(prev)) {
+        out += '#';
+        i++;
+        while (i < s.length && s[i] !== '\n') { out += '_'; i++; }
+        if (i < s.length) out += '\n';
+        continue;
+      }
     }
     if (c === '"' || c === "'") { quote = c; out += c; continue; }
     out += c;
@@ -126,12 +157,20 @@ function stripHeredocBodies(s) {
     // agents quoting the prohibition, which supplies that collision by default.
     //
     // `maskQuoted` PRESERVES LENGTH, so the character at the same offset tells
-    // us whether the `<<` was inside quotes. An unquoted `#` earlier on the
-    // line means the rest is a comment.
+    // us whether the `<<` was shell syntax. It is masked when the `<<` sat
+    // inside quotes OR inside a `#` comment — maskQuoted now handles both, so
+    // this one check covers both cases.
+    //
+    // An explicit comment check lived here too (`masked.indexOf('#') < m.index`)
+    // and has been REMOVED as dead code, not merely left in. Once maskQuoted
+    // gained comment awareness the two overlapped completely: mutation M15
+    // replaced the comment condition with `false` and the suite stayed at 68/0,
+    // which is the measurement that it pinned nothing. Per
+    // `.claude/rules/assertion-design.md` an un-killable branch is disclosed or
+    // removed — and dead code in a guard is worse than in ordinary code,
+    // because it reads as defence that is not there.
     const masked = maskQuoted(line);
-    if (masked[m.index] !== '<') { out.push(line); continue; }   // quoted
-    const hash = masked.indexOf('#');
-    if (hash !== -1 && hash < m.index) { out.push(line); continue; }  // comment
+    if (masked[m.index] !== '<') { out.push(line); continue; }
 
     // THE DELIMITER MUST REAPPEAR DOWNSTREAM, or this is not a heredoc.
     //
