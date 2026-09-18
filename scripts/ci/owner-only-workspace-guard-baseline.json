@@ -31,7 +31,6 @@
     "apps/fiab-console/app/api/lakehouse/references/paths/route.ts": 1,
     "apps/fiab-console/app/api/lakehouse/references/route.ts": 1,
     "apps/fiab-console/app/api/learn/notebook-import/route.ts": 1,
-    "apps/fiab-console/app/api/onelake/[itemId]/route.ts": 1,
     "apps/fiab-console/app/api/onelake/lifecycle/route.ts": 1,
     "apps/fiab-console/app/api/onelake/recycle/route.ts": 1,
     "apps/fiab-console/app/api/onelake/storage/route.ts": 1,

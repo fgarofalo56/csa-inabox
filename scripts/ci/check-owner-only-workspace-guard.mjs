@@ -185,7 +185,7 @@ const TOUCH_EXEMPT = new Map([
   // `loadRecycledItem`; #3753's hunks are the import line plus `resolveDomainName`
   // /`domainScopeFor`, and contain none of them.
   ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
-   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and migrating loadRecycledItem would WIDEN recycle-bin restore/purge — separate PR"],
+   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and loadRecycledItem stays owner-only BY DECISION (#3706) — enforced by recycle-bin-tenancy.test.ts, not by this guard"],
   // REMOVED 2026-09-07 (#3941): `items/[type]/[id]/access-mode/route.ts`. The
   // deferral this entry recorded — "migrating it would WIDEN who can change an
   // item's data-access mode — separate PR" — is DONE. That route's `loadItem`
@@ -257,35 +257,6 @@ const TOUCH_EXEMPT = new Map([
   // check fails CLOSED, so deferring it leaks nothing.
   ['apps/fiab-console/app/api/items/mirrored-databricks/route.ts',
    '2026-09-07 · #3878/#4183: pairing-failure envelope + an auth-neutral withSession migration; loadWs’s baselined owner-only point read is untouched (0 of 127 changed lines match either detector predicate, and both predicates still match exactly 1 line each in the file — a live negative, not a dead check), and migrating it would WIDEN who may CREATE a mirror to admins + shared-ACL members — separate PR'],
-  // 2026-09-18: this PR touched the route for ONE thing, which takes no
-  // authorization decision — DELETE's `adlsHints` request-body array is now
-  // resolved against `deriveAdlsHints(itemId)` (the folders the item's own
-  // OneLake security roles cover) instead of being forwarded verbatim, so a body
-  // entry that does not name one of the item's own folders is dropped. That is
-  // input validation on an already-authorized request; it admits nobody.
-  //
-  // THE BASELINED OCCURRENCE IS NOT IN THIS PR'S DIFF. Measured, not assumed: of
-  // the 61 changed lines in this file (54 added / 7 removed in
-  // `git diff origin/main`), ZERO match either of this guard's own two
-  // predicates (`POINT_READ_RE`, `OWNER_CMP_RE`). That zero is a LIVE negative
-  // rather than a dead check — run both REs over the file as it stands and they
-  // match exactly one line each, and those two lines are the baselined pair
-  // itself. Stated by FUNCTION rather than by line number, for the reason the
-  // item-crud entry above records: it is the `ws.item(found.workspaceId,
-  // s.claims.oid).read<any>()` + `resource.tenantId !== s.claims.oid` pair
-  // inside DELETE's itemType-INFERENCE branch (the branch a body without
-  // `itemType` takes).
-  //
-  // Migrating it WIDENS access, which is why this is an exemption and not a fix.
-  // DELETE is a mutating handler, so `authorizeItemWorkspace` could not pass
-  // `allowReadRoles` — but it would still newly admit tenant admins and
-  // shared-ACL write members to soft-delete a OneLake item in a workspace they
-  // did not create. Widening who may delete is a real access change needing its
-  // own review and its own tests, not a drive-by inside a PR whose subject is
-  // request-body validation. The current check fails CLOSED, so deferring it
-  // changes nothing for anyone.
-  ['apps/fiab-console/app/api/onelake/[itemId]/route.ts',
-   '2026-09-18: DELETE body `adlsHints` is now resolved against the item’s derived folder set; the baselined owner-only point read is untouched (0 of 61 changed lines match either detector predicate, and both predicates still match exactly 1 line each in the file — a live negative, not a dead check), and migrating it would WIDEN who may soft-delete a OneLake item to admins + shared-ACL write members — separate PR'],
 ]);
 
 /** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */

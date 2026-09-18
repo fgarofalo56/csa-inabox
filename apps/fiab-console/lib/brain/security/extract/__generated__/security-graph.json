@@ -15819,6 +15819,25 @@
           }
         },
         {
+          "id": "sec:verdict-call:apps/fiab-console/app/api/onelake/[itemid]/route.ts#DELETE:authorizeItemWorkspace:41",
+          "kind": "verdict-call",
+          "provenance": "declared",
+          "label": "DELETE /api/onelake/[itemId] -> authorizeItemWorkspace",
+          "facet": {
+            "kind": "verdict-call",
+            "callSite": "DELETE /api/onelake/[itemId]:41",
+            "symbol": "authorizeItemWorkspace",
+            "returnsVerdictUnion": true,
+            "pathsToPrivilegedSink": 0,
+            "pathsConsumingAsRefusal": 0,
+            "consumption": "returned",
+            "allowlisted": true,
+            "allowlistPremiseTested": false,
+            "sinkPrivileged": false,
+            "sinkKind": "none"
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -48627,6 +48646,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:verdict-call:apps/fiab-console/app/api/onelake/[itemid]/route.ts#DELETE:authorizeItemWorkspace:41",
+          "codeModuleId": "code:apps/fiab-console/app/api/onelake/[itemid]/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/setup/deploy-preflight/route.ts#GET:enforceCapability:6",
           "codeModuleId": "code:apps/fiab-console/app/api/setup/deploy-preflight/route.ts",
           "deployedAs": "loom-console"
@@ -49917,15 +49941,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-18T12:31:55.749Z",
-      "commit": "f084eaec2b340c9c9d0cad0beef03dbe7ebf1aa2",
-      "inputsDigest": "5a5969324945a0b8",
+      "generatedAt": "2026-09-18T21:42:53.445Z",
+      "commit": "54e1ce4572af2290ebdbfa09793e5e05fad9ba1b",
+      "inputsDigest": "0dd78bbd9317346f",
       "filesScanned": 2111,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1698,
-          "nodesEmitted": 705
+          "nodesEmitted": 706
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
