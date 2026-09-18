@@ -245,6 +245,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if was_state in REOPEN_DISPUTES:",
         "            if was_state in REOPEN_DISPUTES and existing.receipt_kind:",
     ),
+    (
+        ("L30 a TERMINAL item keeps its stale audit reason, so the ledger reads "
+         "`state=closed reason='departed'` and a cold reader cannot tell that "
+         "label from a live one. Pre-existing, and it becomes the COMMON shape "
+         "once recovering an audited item by re-taking its receipt is the "
+         "normal path (#4545) rather than a curiosity"),
+        "ledger.py",
+        "        if state in TERMINAL:\n            item.audit_reason = None\n",
+        "",
+    ),
     # -- the cycle ---------------------------------------------------------
     (
         "T1 the refresh invents a receipt and closes what left GitHub",
@@ -308,6 +318,561 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
         "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+    ),
+    # -- #4545: the ledger close must REACH GITHUB -------------------------
+    #
+    # The defect: `tools/drain/` contained no `gh issue close` at all, so a
+    # ledger close was invisible upstream and the next refresh read the
+    # harness's OWN close as a reopen -- demoting the item and VOIDING the
+    # receipt. Measured on #4535, the first item the harness ever closed on its
+    # own evidence; it bounced on the next cycle.
+    #
+    # Per this file's own lesson, the arms that matter are not the ones that
+    # weaken a check. GH2 narrows the POPULATION to one of the two routes, GH3
+    # widens the STATE set so a park is dragged along (#4535 from the other
+    # side), GH4 narrows it to nothing, and GH9 swaps the ORDER of the two
+    # writes -- which is the mutation that reproduces the original defect
+    # exactly, because a ledger-first pair whose second half fails IS #4545.
+    #
+    # ONE MUTANT IN THIS AREA IS NOT IN THIS LIST, and the next person reading
+    # `killed=N of N` needs to know before they trust it. A reviewer moved
+    # `if item.state in TERMINAL: raise` from above the evidence branches to
+    # BELOW the GitHub close -- the terminal refusal firing too late, so a
+    # second `--record-receipt` on an already-closed item reaches GitHub. That
+    # is a DELETE-HERE / INSERT-THERE edit, and the `(name, file, old, new)`
+    # shape cannot express it without an anchor that swallows the whole
+    # function body. Generalising the arm form inside a P0 pre-flight fix is
+    # the worse trade, so it was not generalised.
+    #
+    # What pins it instead: `test_an_already_terminal_item_is_not_re_receipted`
+    # asserts on the READ COUNT -- 2 `gh issue view` at head, 3 under that
+    # mutant, the numbers in the assertion message -- because the CLOSE count
+    # cannot see it (a closer meeting an already-closed issue short-circuits
+    # and issues no close). It was proven RED against the mutant ONCE, BY HAND,
+    # in a sandbox copy, by two people independently. That is a test with a
+    # named discriminator, not a standing arm, and this matrix's totals must
+    # not be read as claiming otherwise.
+    (
+        "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+        '    close_note = "the ledger is the only record"',
+    ),
+    (
+        ("GH2 the close fires on ONE ROUTE only: ci-green items are closed "
+         "upstream and every run-backed item is left open"),
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+        ("    close_note = (close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         '                  if from_pr else "run-backed items close quietly")'),
+    ),
+    (
+        ("GH3 the state set widens to every terminal state, so a PARK -- which "
+         "is SUPPOSED to stay open on GitHub -- gets closed too (#4535)"),
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = TERMINAL",
+    ),
+    (
+        "GH4 the state set narrows to nothing, so no item ever closes upstream",
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = ()",
+    ),
+    (
+        "GH5 the close's exit code stops being read (the `|| true` shape)",
+        "tick.py",
+        "        if rc != 0:",
+        "        if rc != 0 and False:",
+    ),
+    (
+        ("GH6 rc=0 is trusted instead of reading the state back, so a wrapper "
+         "that did nothing reports a close"),
+        "tick.py",
+        "        after = _read_issue_on_github(repo, number)",
+        '        after = _IssueRead("CLOSED", "")',
+    ),
+    (
+        ("GH7 the already-closed short circuit goes, so a human's hand-closed "
+         "issue is closed again and re-commented on"),
+        "tick.py",
+        "        if before.state == \"CLOSED\":",
+        "        if False:",
+    ),
+    (
+        "GH8 the autonomy contract stops being consulted before the write",
+        "tick.py",
+        '    permitted, why = gates.action_is_permitted("close-on-receipt", policy)',
+        '    permitted, why = True, "assumed"',
+    ),
+    (
+        ("GH9 the ORDER is reversed -- ledger first, GitHub second -- so a "
+         "failed close leaves the item closed here and open there, which is "
+         "#4545 reproduced by the fix for it"),
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+        ("    _record_close_in_ledger(\n"
+         '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
+         "    )\n"
+         "    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+    ),
+    (
+        ("GH10 a lost CAS after a SUCCESSFUL upstream close is reported as "
+         "`RECEIPT NOT RECORDED` -- the words for 'nothing happened', over a "
+         "world where the issue IS closed on GitHub (R7, inside the R7 fix)"),
+        "tick.py",
+        ('            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
+        ('            print(f"RECEIPT NOT RECORDED: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
+    ),
+    (
+        ("GH11 a ledger failure AFTER the close stops being wrapped, so it "
+         "escapes as a bare ValueError and `main()` prints RECEIPT REFUSED -- "
+         "'your evidence was rejected' -- over a landed GitHub write"),
+        "tick.py",
+        "    except Exception as exc:\n        raise LedgerWriteAfterCloseError(",
+        "    except SystemExit as exc:\n        raise LedgerWriteAfterCloseError(",
+    ),
+    (
+        ("GH14 the close posts NO RECEIPT COMMENT, so a closed issue carries no "
+         "trace of which evidence closed it -- 334 issues closed silently, "
+         "which is the R2 shape the #4535 hand-close avoided by quoting the "
+         "receipt. It SURVIVED 518/518 until the positive assertion existed: "
+         "the only test named for the comment asserted its ABSENCE"),
+        "tick.py",
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         '             "--comment", _receipt_comment(kind, issue_class, detail)]'),
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         "             ]"),
+    ),
+    (
+        ("GH15 the receipt comment goes back to naming neither the KIND nor the "
+         "CLASS and citing deploy-integrity R2 on BOTH routes. That is the text "
+         "that shipped, and on the ci-green route the evidence IS a merge -- so "
+         "it cited 'merged is never done' in support of closing on a merge, on "
+         "up to 334 permanent public artifacts, while policy.json carries "
+         "`report-a-merge-as-a-fix` in its `never` list. The mutation collapses "
+         "the two branches back into the single template, which is the exact "
+         "shape of the defect rather than a proxy for it"),
+        "tick.py",
+        "    head = f\"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}.\"",
+        ("    head = f\"Drain harness: receipt verified - {detail}.\"\n"
+         "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
+    ),
+    (
+        ("GH16 BOTH ROUTES COLLAPSE INTO THE MERGE TEXT -- the other half of the "
+         "GH15 symmetry, and it SURVIVED 519/519. One token: `if kind in "
+         "MERGE_BASED_KINDS:` becomes `if True:`. Under it every RUN-BACKED "
+         "close publishes, permanently and publicly, that its evidence is 'CI "
+         "green at the MERGED sha - a merge, not a deploy', that 'the live "
+         "estate was never checked', and -- on a g1-browser receipt taken from a "
+         "browser run -- that the reader should go obtain a g1-browser receipt "
+         "instead. That is WORSE than the text GH15 models, which at least never "
+         "claimed 'not a deploy' over a deploy observation. Nothing killed it "
+         "because the only route-sensitive assertion on the run-backed test was "
+         "`deploy-integrity R2`, which BOTH templates carry"),
+        "tick.py",
+        "    if kind in MERGE_BASED_KINDS:",
+        "    if True:",
+    ),
+    (
+        ("GH17 `ci-green` IS RECLASSIFIED AS RUN-BACKED, so the merge route "
+         "acquires the estate-observing sentence: 'an observation of something "
+         "that ran, not a merge' rendered over a merge, citing R2 as SATISFIED "
+         "by the one thing R2 forbids. It is the two-declarations hazard written "
+         "out -- merge-ness is stated at MERGE_BASED_KINDS and again at `if kind "
+         "== \"ci-green\":` in record_receipt_from_evidence -- and it moves BOTH "
+         "declarations because moving only the first now hits the round-7 "
+         "fail-closed raise instead, which is the point of that raise. It is "
+         "also the mutation that finally runs value 3 of the ci-green test's "
+         "'FOUR VALUES BREAK THIS' red: GH15 stops at assertion 1, so 3 had "
+         "never been exercised by any shipped arm"),
+        "tick.py",
+        ('RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})'),
+        ('RUN_BACKED_KINDS = frozenset({"ci-green", "deploy-run", "estate", "g1-browser"})\n'
+         'MERGE_BASED_KINDS = frozenset()  # rebound HERE, after the original binding'),
+    ),
+    (
+        ("GH18 the merge text DROPS ITS NON-CLAIM ABOUT THE ESTATE, so a "
+         "ci-green close reads as though the live estate were part of the "
+         "evidence -- the implication the sentence exists to refuse. Value 4 of "
+         "the same 'FOUR VALUES BREAK THIS', also never exercised before round 7"),
+        "tick.py",
+        ('            "The live estate was never checked and nothing here claims anything "\n'
+         '            "about it. "\n'),
+        (""),
+    ),
+    (
+        ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
+         "failure after a landed close -- os.replace raising PermissionError -- "
+         "ESCAPES main() UNCAUGHT while the issue is closed upstream: #4545 "
+         "with extra steps, inside the fix for it. WHAT THE OPERATOR SEES, "
+         "measured as a real process rather than under capsys (which is how an "
+         "earlier revision of this line came to say 'an EMPTY stderr', and it "
+         "was false): exit 1 and ~650 bytes of TRACEBACK naming os.replace and "
+         "saying nothing about the upstream close, against ~520 bytes of the "
+         "intended message unmutated -- byte totals ENVIRONMENT-DEPENDENT (they "
+         "move with sandbox path length and run id; an independent re-measure "
+         "on another sandbox read 647/579), so the load-bearing invariant is "
+         "the SAME EXIT CODE either way, meaning neither "
+         "the status nor the text reports that the two records now disagree"),
+        "tick.py",
+        "        except Exception as exc:  # the WIDTH is the point, see below",
+        "        except LedgerChangedError as exc:",
+    ),
+    (
+        ("GH13 the close-failure headline goes back to claiming the close DID "
+         "NOT COMPLETE, which is false when rc=0 and only the read-back failed "
+         "-- the close landed and the tool cannot say so"),
+        "tick.py",
+        'f"GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+        'f"GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+    ),
+    (
+        ("GH19 THE RUN-BACKED TEXT GOES BACK TO CLAIMING R2 SATISFIED. The "
+         "sentence 'an observation of something that ran, not a merge, which is "
+         "what deploy-integrity R2 (merged is not done) ASKS OF THIS CLASS' "
+         "asserts that the estate was observed carrying this issue's change, "
+         "and nothing in the receipt path establishes it: `_run_evidence` never "
+         "requests `createdAt` and `verify_run_backed_receipt` compares "
+         "`headSha` to nothing. MEASURED rather than argued -- run 33238747458 "
+         "(loom-roll-and-validate, 2026-08-29, headSha 70ca3d1) passes every "
+         "check today, and 147 of the 351 issues open on 2026-09-18 were filed "
+         "AFTER it. The mutation restores the exact shipped sentence, which is "
+         "the defect rather than a proxy for it, on an artifact that is public "
+         "and unrevisable"),
+        "tick.py",
+        ('        "observation of something that ran, not a merge, which is why "\n'
+         '        f"deploy-integrity R2 (merged is not done) makes the {issue_class} class "\n'
+         '        "take a receipt of this shape rather than a CI-green one. "'),
+        ('        "observation of something that ran, not a merge, which is what "\n'
+         '        "deploy-integrity R2 (merged is not done) asks of this class. "'),
+    ),
+    (
+        ("GH20 THE TIME/SHA DISCLOSURE IS DELETED while the softened R2 line "
+         "stays. The one-sided shape this package keeps producing, and the half "
+         "a reader cannot detect: the comment still reads correctly, still "
+         "cites #4489 for the reference binding, and silently stops saying that "
+         "the run is bound to no TIME and no SHA. Told apart from GH19 by "
+         "MEASUREMENT, not by construction: each arm was applied to a sandbox "
+         "copy and all five predicates of the run-backed test evaluated by "
+         "rendering the comment directly, since pytest stops at the first "
+         "failing assert and cannot see this. GH19 falsifies predicates 1+2, "
+         "GH20 falsifies 3+4, and neither touches 5 -- disjoint, so one arm "
+         "cannot pass for the other. GH20 additionally turns "
+         "`test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes` "
+         "red, which is a second independent killer"),
+        "tick.py",
+        ('        "binding is #4489 - and it is bound to no TIME and no SHA either: no "\n'
+         '        "run date is fetched and no head sha is compared, so a run that "\n'
+         '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
+         '        "(#4578). Read this as \'the declared producer ran green\', not as \'the "\n'
+         '        "estate was observed carrying this change\'. "\n'),
+        ('        "binding is #4489. "\n'),
+    ),
+    (
+        ("GH21 the already-closed note reverts to a bare 'left alone', so the "
+         "operator is told a receipt was recorded with no hint that NOTHING WAS "
+         "PUBLISHED. That route issues `gh issue view` and nothing else, and "
+         "`tools/drain/state.json` is untracked, so the receipt's whole "
+         "existence is a local gitignored file -- the state all 7 currently "
+         "ledger-closed items are in. Posting there is #4579; saying so is the "
+         "part that is not deferrable"),
+        "tick.py",
+        ('            return (\n'
+         '                f"#{number} was already closed on GitHub - left alone, so NO "\n'
+         '                "receipt comment was posted: on this route the receipt exists "\n'
+         '                "only in the local ledger, which is untracked (#4579)"\n'
+         '            )'),
+        ('            return f"#{number} was already closed on GitHub - left alone"'),
+    ),
+    # -- round 10: "verified by effect" verified a property of the WORLD ----
+    #
+    # Nine rounds of this change argued that reading the state back beats
+    # trusting rc=0. It does -- and it still cannot tell THIS invocation's
+    # effect from a concurrent writer's. close.go v2.100.0 re-fetches at :112
+    # and returns at :117-120, ABOVE the comment block at :148, so a lane that
+    # loses the race exits 0 having posted nothing while the read-back reads
+    # CLOSED. GH23 is that defect verbatim; GH24 is the two-valued classifier
+    # that would let a future `gh` rewording restore it from outside this
+    # repository; GH22 and GH25 are the two reads the write is justified by.
+    (
+        ("GH22 the verification READ stops pinning `--repo`, so `gh` resolves "
+         "the repository from the working directory. MEASURED AT ROUND 9'S "
+         "HEAD: this exact edit survived 527/527 -- the close argv was pinned "
+         "and neither read was. The pre-read can then short-circuit on a "
+         "FOREIGN repo's closed issue (receipt recorded, nothing closed, "
+         "nothing commented) and the read-back can satisfy the verification "
+         "vacuously: #4545's failure mode restored through the verification "
+         "instead of through the write"),
+        "tick.py",
+        ('        ["gh", "issue", "view", str(number), "--repo", repo,\n'
+         '         "--json", "state,title,url"]'),
+        ('        ["gh", "issue", "view", str(number),\n'
+         '         "--json", "state,title,url"]'),
+    ),
+    (
+        ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
+         "performed by a human or by a second lane is reported as this run's "
+         "own -- over an issue where `gh` short-circuited above its comment "
+         "step and published NOTHING. The false sentence then lands in "
+         "`Item.history` permanently. This is the round-9 head, and the whole "
+         "PR exists to stop a close being reported that never reached GitHub"),
+        "tick.py",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
+        "        outcome = CLOSE_PERFORMED",
+    ),
+    (
+        ("GH24 the classifier goes TWO-VALUED -- anything that is not the "
+         "already-closed sentence is assumed to be our close. Fails OPEN by "
+         "construction: a future `gh` that rewords :169, a localised build or "
+         "a wrapper silently restores GH23 from OUTSIDE this repository, where "
+         "nothing in this suite watches. The third arm is the difference "
+         "between failing honest and failing open"),
+        "tick.py",
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        ("        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_PERFORMED"),
+    ),
+    (
+        ("GH25 the read stops establishing the object's TYPE, so a number that "
+         "resolves to a PULL REQUEST is closed as though it were an issue and "
+         "the permanent receipt comment is posted on the PR. `gh issue view` "
+         "answers for PRs (measured live on #4552) and close.go :175-177 routes "
+         "them to `api.PullRequestClose`. Latent while every number comes from "
+         "`gh issue list`, but the read-first is what the write's safety is "
+         "argued from, so a read that cannot say what it read is the argument "
+         "failing rather than a missing nicety"),
+        "tick.py",
+        '    url = str((parsed or {}).get("url") or "")',
+        '    url = "https://github.com/o/r/issues/0"',
+    ),
+    # -- round 11: the classifier read by IDIOM, and the TITLE is in the line --
+    #
+    # close.go interpolates `issue.Title` as the final `%s` of BOTH exit-0
+    # sentences (:118, :169). Round 10's classifier asked whether a phrase
+    # appeared ANYWHERE in stderr, so an issue's own title could forge the
+    # verdict -- measured end to end at f3a2a834460 on a close that was
+    # genuinely performed: 1 comment posted, state CLOSED, and a note saying
+    # neither happened, written permanently into `Item.history`. GH26 is that
+    # defect verbatim; GH29 is the tempting "swap the two ifs", which merely
+    # moves the collision onto the dangerous side. A POSITIONAL read survives
+    # both -- and NOT, as this comment claimed for a round, "because the title
+    # can never start a line". It cannot start a line gh WROTE; it can create
+    # one of its own, which is what GH30-GH32 below are about.
+    (
+        ("GH26 THE CLASSIFIER GOES BACK TO READING BY IDIOM -- a bare substring "
+         "over the whole of stderr, already-closed first. This is round 10's "
+         "head. `issue.Title` is the last field of both sentences, so a close "
+         "this run GENUINELY PERFORMED, on an issue whose title contains `is "
+         "already closed`, is reported as somebody else's with its receipt "
+         "comment denied -- two false statements of fact on the ORDINARY "
+         "SUCCESS PATH, then written into `Item.history`. Latent only because "
+         "no current title collides; the population is 334 issues titled by "
+         "this lane about issue-closing machinery"),
+        "tick.py",
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        ("        if _GH_ALREADY_CLOSED_SUFFIX in err:\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+    ),
+    (
+        ("GH29 THE SAME IDIOM WITH THE TWO TESTS SWAPPED -- the fix that looks "
+         "like a fix. It cures GH26's direction and creates the worse one: an "
+         "already-closed line whose title contains `Closed issue ` now reports "
+         "a close this run did NOT perform, which is GH23 restored through the "
+         "title field. Told apart from GH26 by which half of "
+         "`test_blocker_an_issues_own_title_cannot_forge_the_close_outcome` "
+         "goes red -- GH26 fails half one, GH29 fails half two -- so neither "
+         "arm can pass for the other"),
+        "tick.py",
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+    ),
+    (
+        ("GH27 THE UNKNOWN-OUTCOME NOTE DROPS ITS REMEDIATION, leaving the "
+         "operator told only that the tool cannot tell -- from a state it "
+         "deliberately refuses to re-enter, because the ledger write below "
+         "makes the item terminal and the record route refuses a terminal "
+         "item. Honest and unactionable is not R6 satisfied: the note has to "
+         "name the one action (read the comments, post the receipt by hand if "
+         "none begins `Drain harness: receipt verified`)"),
+        "tick.py",
+        ('            "so the receipt comment MAY NOT have been posted. DO THIS: read the "\n'
+         '            f"issue\'s comments (`gh issue view {number} --repo {repo} --comments`) "\n'
+         '            "and, if none begins `Drain harness: receipt verified`, post the "\n'
+         '            "receipt by hand - this tool will not re-enter the path, because the "\n'
+         '            "ledger write below makes the item terminal and the record route "\n'
+         '            "refuses a terminal item (#4579 tracks closing that gap in code)"'),
+        '            "so the receipt comment MAY NOT have been posted"',
+    ),
+    (
+        ("GH28 THE READ STOPS ESTABLISHING WHICH REPOSITORY ANSWERED, so a "
+         "TRANSFERRED issue -- whose old number stays reachable and resolves "
+         "to the NEW repository -- is closed, and permanently commented on, in "
+         "a repository this tool was never asked about. The `--repo` pin that "
+         "arm GH22 protects was argued from exactly this hazard; without the "
+         "comparison it is a hope about `gh` rather than a verified effect, "
+         "and the url that settles it is already parsed two lines up"),
+        "tick.py",
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if answered.casefold() != repo.casefold():"),
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if False:"),
+    ),
+    # -- round 13: the title did not have to START a line. It CREATED one ----
+    #
+    # Round 12 fixed the idiom read and claimed the positional result was
+    # "title-proof by construction … [the title] can never occupy the start of
+    # one [line]". True of a line gh WROTE, and the conclusion does not follow:
+    # `str.splitlines()` honours TEN separators against the one `gh` terminates
+    # its records with, so a title carrying any of the other nine splits that
+    # single-line record into several and hands the classifier a line whose
+    # whole content is operator-supplied. Measured at 4ce05224585: all ten
+    # forge, in BOTH directions, 20 of 20, with a plain-title control green --
+    # and end to end through `_GhSpy` on the raced-close path a U+2028 title
+    # returned `#4547 closed on GitHub` over a run that closed nothing and
+    # posted no comment, written permanently into `Item.history`.
+    #
+    # WHY FIVE ARMS AND NOT ONE. The round-12 error was not a missing character
+    # in a list; it was fixing the trigger instead of the class. An arm per
+    # CONSTRUCT is what makes that visible: the narrow split, the neutraliser,
+    # the neutraliser's breadth, the field that feeds it, and the second read
+    # that covers an edit inside the close window. The review that found this
+    # said it plainly -- `killed=304 of 304` was true and green while the
+    # blocker shipped, because no arm pointed at `splitlines()`, at the icon
+    # drop, or at the length guard. A complete matrix over an incomplete arm
+    # set is the shape this repo keeps paying for.
+    (
+        ("GH30 THE SPLIT WIDENS BACK TO `str.splitlines()` -- round 12's head "
+         "verbatim. Ten separators read back out of a stream joined with one, "
+         "so the nine gh never writes delimit nothing it meant and every one "
+         "is reachable from the TITLE. Reading with a wider rule than the "
+         "writer wrote with is the whole defect; narrowing the trigger "
+         "character is what round 12 did instead"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        "    return err.splitlines()",
+    ),
+    (
+        ("GH38 THE CRLF TERMINATOR STOPS BEING UNDONE -- the OPPOSITE mistake "
+         "to GH30, and the one `splitlines()` was rightly chosen over a bare "
+         "`split(\"\\\\n\")` to avoid in round 12. A `\\\\r` left glued to the end "
+         "of the line fails the already-closed arm's SUFFIX test SILENTLY, so "
+         "every raced close on a CRLF stream classifies `unknown`. Narrowing "
+         "the split is only correct WITH this, which is why the pair is armed "
+         "rather than just the widening "
+         "(`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`)"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        '    return err.split("\\n")',
+    ),
+    (
+        ("GH31 THE TITLE NEUTRALISATION IS DELETED from the call site, so LF -- "
+         "gh's OWN terminator, the one separator a narrower split cannot help "
+         "with -- creates a line of pure operator-supplied content again. This "
+         "is the half of the fix that does not depend on how the stream is "
+         "split, and it is the half that costs nothing: the titles arrive on a "
+         "`--json` list the closer was already fetching"),
+        "tick.py",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
+        "        outcome = _close_outcome(err, repo, number)",
+    ),
+    (
+        ("GH32 THE NEUTRALISER IS NARROWED TO ONE CODE POINT -- round 12's "
+         "error committed one layer down, and the reason `_has_line_break` "
+         "asks the splitter rather than transcribing its documentation. A "
+         "hand-written separator list is a probe that can disagree with the "
+         "implementation it describes (assertion-design 'done' #3)"),
+        "tick.py",
+        "        if _has_line_break(title):",
+        '        if "\\u2028" in title:',
+    ),
+    (
+        ("GH33 THE LENGTH GUARD IN `_sentence_is` IS DELETED. Disclosed at its "
+         "site as an EQUIVALENT MUTANT at the two pairs `_close_outcome` "
+         "supplies -- 0 divergent inputs over 200 candidates, positive control "
+         "diverging -- and killable at the PREDICATE'S OWN CONTRACT, which is "
+         "where it is now pinned. The arm exists because round 12 presented it "
+         "as load-bearing with no witness at all; an un-killable construct is "
+         "disclosed, not counted, and a disclosed one still gets an arm"),
+        "tick.py",
+        ("        len(body) >= len(prefix) + len(suffix)\n"
+         "        and body[:len(prefix)].casefold() == prefix.casefold()"),
+        "        body[:len(prefix)].casefold() == prefix.casefold()",
+    ),
+    (
+        ("GH34 GH'S ICON TOKEN STOPS BEING DROPPED, so the marker is read at "
+         "offset 0 and every real line classifies UNKNOWN -- a classifier that "
+         "qualifies every outcome, which is how 'fails honest' gets satisfied "
+         "by saying nothing. No arm pointed at this construct before round 13 "
+         "even though the suite killed it: an arm set that omits a construct "
+         "makes a 100%-killed headline a claim about the arms, not the code"),
+        "tick.py",
+        '        body = line.split(" ", 1)[1] if " " in line else line',
+        "        body = line",
+    ),
+    (
+        ("GH35 REPO AND NUMBER ARE DROPPED FROM THE ALREADY-CLOSED PREFIX, so "
+         "a short-circuit line about SOMEBODY ELSE'S issue answers for ours. "
+         "The positional property claimed both prefixes and only the PERFORMED "
+         "half was asserted, so this survived all 531 tests -- naming a value "
+         "that does not in fact break the assertion, which is "
+         "assertion-design's forbidden case"),
+        "tick.py",
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}{repo}#{number} ("',
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}"',
+    ),
+    (
+        ("GH36 THE READ STOPS ASKING FOR THE TITLE, so the neutraliser is "
+         "handed an empty string and neutralises nothing. Killed "
+         "BEHAVIOURALLY, not merely by an argv assertion, because `_GhSpy` "
+         "answers only the fields the argv names -- exactly as `gh` does. A "
+         "spy that returns every field regardless would let this survive on a "
+         "behaviour the real command does not have"),
+        "tick.py",
+        '         "--json", "state,title,url"]',
+        '         "--json", "state,url"]',
+    ),
+    (
+        ("GH37 THE READ-BACK'S TITLE IS DROPPED from the neutralisation set, "
+         "leaving only the pre-close read's -- so a title EDITED inside the "
+         "close window is rendered by gh and neutralised by nobody. Measured "
+         "SURVIVING the suite before its witness existed, which is why the "
+         "second title is pinned by a test with a title-change seam rather "
+         "than argued for in a docstring"),
+        "tick.py",
+        "            _without_title_line_breaks(err, before.title, after.title),",
+        "            _without_title_line_breaks(err, before.title),",
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (
