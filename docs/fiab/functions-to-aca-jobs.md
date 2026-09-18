@@ -314,7 +314,12 @@ this item's scope.
   console UAMI `Application.Read.All`, which the secret-expiry inventory needs.
 * **Delete the retired Function apps** (`func-secexp-*`, `func-cpeval-*`) and
   their storage accounts/plans after the jobs are verified green. Bicep no
-  longer manages them, so they will linger as orphans otherwise.
+  longer manages them, so they will linger as orphans otherwise. **Still
+  outstanding at 2026-09-17** — both are provisioned, Running and have executed
+  nothing for 31 days. Their timer definitions are now disabled, so the
+  double-execution hazard is retired; the measurement, the reference audit and
+  the exact delete commands are in
+  `docs/fiab/deployment/functions-to-aca-jobs.md` §8 (OP-19, #4495).
 * **Anyone who pinned `functionAppsConfig.secretExpiryCron` /
   `copilotEvaluatorCron`** must convert the value from 6-field NCRONTAB to
   5-field cron. No `params/*.bicepparam` in this repo sets either, so the

@@ -1226,16 +1226,43 @@ jobs:
 
   # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
   # eval run so EVERY roll re-baselines quality against the freshly-staged
-  # corpus. Fire-and-forget + report: one short POST per surface (the HTTP
-  # response has a ~230s ALB ceiling and a full run far exceeds it; the
-  # Function keeps executing after the client disconnects, one surface per
-  # invocation stays inside the Y1 execution window). Scores land in Cosmos
-  # `loom-copilot-evals` (gating + sticky comments live in
-  # copilot-quality-evals.yml; browse on /admin/copilot-quality once E5 lands).
-  # Token spend is bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP. Never
-  # fails the deploy (continue-on-error).
+  # corpus. Scores land in Cosmos `loom-copilot-evals` (gating + sticky comments
+  # live in copilot-quality-evals.yml; browse on /admin/copilot-quality once E5
+  # lands). Token spend is bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP.
+  # Never fails the deploy (continue-on-error).
+  #
+  # OP-19 (2026-09-17): this step used to resolve `func-cpeval-*` and POST once
+  # per surface to its `copilotEvaluatorHttp` trigger. That Function was retired
+  # by B-FN — copilot-evaluator-function.bicep is DELETED and the runtime is the
+  # in-VNet Container App Job `loom-copilot-evaluator`
+  # (modules/admin-plane/copilot-evaluator-job.bicep) — but the reference here
+  # was never repointed, so the step has been BROKEN since. Measured on the last
+  # successful run of this workflow (31251849951, 2026-08-08, job 93093352285):
+  # the app WAS found, so the "not found -> exit 0" arm never fired; the step
+  # then died on `az functionapp keys list` with
+  #     ERROR: Operation returned an invalid status 'Bad Request'
+  #     ##[error]Process completed with exit code 1.
+  # and `continue-on-error: true` hid that failure behind a green run. The host
+  # is not merely unkeyable, it executes nothing: FunctionExecutionCount over
+  # 2026-08-17..2026-09-17 (P1D, Total) is 0 across 31/31 datapoints each
+  # carrying an explicit 0.0, against a live control of 73 on
+  # func-csa-inabox-copilot-fg measured the same way.
+  #
+  # The per-surface fan-out is gone with it, and deliberately: it existed ONLY
+  # because the HTTP response had a ~230s ALB ceiling and a full run exceeds it.
+  # A job execution has no ingress and no such ceiling, so one start with
+  # COPILOT_EVAL_SURFACES empty ("all surfaces") does what the loop did. The
+  # override contract is the one the Console uses for "Run now"
+  # (lib/azure/copilot-evaluator-client.ts): a start REPLACES the whole
+  # execution template, so the job's CURRENT containers are read first and the
+  # four COPILOT_EVAL_* knobs merged on top — never a hand-built template, which
+  # would drop the image, the resources and the secretRef env.
+  #
+  # deploy-integrity.md R6/R7: no `2>/dev/null`, no `|| true`, and no fabricated
+  # "dispatched" notice. A start that did not happen exits non-zero and says
+  # why; `continue-on-error` keeps that visible without failing the deploy.
   post-deploy-evals:
-    name: Post-deploy Copilot quality evals (fire-and-forget)
+    name: Post-deploy Copilot quality evals (ACA job start)
     needs: [resolve, redeploy-with-apps]
     if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
     runs-on: ubuntu-latest
@@ -1252,32 +1279,47 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Dispatch per-surface eval runs on the copilot-evaluator Function
+      - name: Start a corpus re-baseline execution of the copilot-evaluator job
         run: |
-          set -uo pipefail
+          set -euo pipefail
           RG='${{ needs.resolve.outputs.rg }}'
-          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-cpeval-')].name | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
-          if [ -z "$FUNC" ]; then
-            echo "::warning::copilot-evaluator Function (func-cpeval-*) not found in $RG — svc-copilot-evaluator gate unresolved; post-deploy eval re-baseline skipped."
+          SUB='${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}'
+          JOB=loom-copilot-evaluator
+          JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$JOB"
+          API=2024-03-01
+
+          # Does the job exist? `copilotEvaluatorEnabled` is opt-OUT, so absence
+          # is a legitimate configuration state and NOT a deploy failure — but it
+          # is reported as absence, never as a skipped success.
+          if ! az rest --method get --url "https://management.azure.com${JOB_ID}?api-version=$API" > job.json; then
+            echo "::warning::Container App Job $JOB not readable in $RG (opt-out via functionAppsConfig.copilotEvaluatorEnabled=false, or the identity lacks read on it) — post-deploy eval re-baseline NOT started. The nightly schedule is unaffected."
             exit 0
           fi
-          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
-          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default || masterKey" -o tsv | tr -d '\r')
-          if [ -z "$KEY" ]; then echo "::warning::no function key readable for $FUNC — eval dispatch skipped."; exit 0; fi
-          echo "::add-mask::$KEY"
-          DISPATCHED=""
-          for F in content/evals/*.jsonl; do
-            S=$(basename "$F" .jsonl)
-            case "$S" in _*) continue ;; esac
-            # fire-and-forget: a 15s client timeout only abandons the RESPONSE;
-            # the invocation continues server-side to completion.
-            curl -sS --max-time 15 -o /dev/null \
-              -X POST "https://$HOST/api/copilotEvaluatorHttp?code=$KEY" \
-              -H 'content-type: application/json' \
-              -d "{\"surfaces\":[\"$S\"],\"trigger\":\"corpus\"}" || true
-            DISPATCHED="$DISPATCHED $S"
-          done
-          echo "::notice::post-deploy eval runs dispatched for:$DISPATCHED — scores land in Cosmos loom-copilot-evals (runId trigger=corpus); the copilot-quality-evals workflow + /admin/copilot-quality read them."
+
+          # A start REPLACES the execution template, so build the override FROM
+          # the job's current containers. An empty container list means the image
+          # has never been built — that is a real gap, not a quiet no-op.
+          COUNT=$(jq '.properties.template.containers | length' job.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::$JOB has no container template — its image has not been built/pushed, so no execution can start. Build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh."
+            exit 1
+          fi
+
+          # The same four knobs the Console's "Run now" sets
+          # (lib/azure/copilot-evaluator-client.ts mergeRunEnv). Empty SURFACES =
+          # every surface, which is what the retired per-surface loop covered.
+          jq -c '{containers: [.properties.template.containers[]
+                 | .env = ((.env // []) | map(select(.name | startswith("COPILOT_EVAL_") | not)))
+                         + [{name:"COPILOT_EVAL_MODE",value:"copilot"},
+                            {name:"COPILOT_EVAL_TRIGGER",value:"corpus"},
+                            {name:"COPILOT_EVAL_SURFACES",value:""},
+                            {name:"COPILOT_EVAL_DOMAINS",value:""}]]}' job.json > override.json
+
+          az rest --method post --url "https://management.azure.com${JOB_ID}/start?api-version=$API" \
+            --headers "Content-Type=application/json" --body @override.json > start.json
+          EXEC=$(jq -r '.name // .id // "unknown"' start.json)
+          echo "::notice::copilot-evaluator execution $EXEC started (mode=copilot trigger=corpus, all surfaces) — scores land in Cosmos loom-copilot-evals; copilot-quality-evals.yml + /admin/copilot-quality read them."
+          echo "copilot-evaluator re-baseline execution: \`$EXEC\`" >> "$GITHUB_STEP_SUMMARY"
 
   notify:
     name: Notify final state

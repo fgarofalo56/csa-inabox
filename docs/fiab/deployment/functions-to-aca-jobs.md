@@ -75,13 +75,15 @@ scheduled work) or a **Container App** (for HTTP services), running as the
 
 ### Two live hazards this uncovered
 
-* **Double-execution risk on recovery.** `func-secexp`'s enabled timer
-  `0 0 6 * * *` is *identical* to job `loom-secret-expiry-monitor`'s
-  `0 6 * * *`, and `func-cpeval`'s `0 0 7 * * *` matches
-  `loom-copilot-evaluator`'s `0 7 * * *`. Both function definitions are
-  **enabled**. If those hosts ever start executing, the work runs **twice** —
-  concurrently, on the same schedule. This is an argument for removing the
-  retired hosts sooner rather than later (§5).
+* **Double-execution risk on recovery — RETIRED 2026-09-17, see §8.2.**
+  `func-secexp`'s timer `0 0 6 * * *` is *identical* to job
+  `loom-secret-expiry-monitor`'s `0 6 * * *`, and `func-cpeval`'s `0 0 7 * * *`
+  matches `loom-copilot-evaluator`'s `0 7 * * *`. Both function definitions were
+  **enabled** when this section was written, so a host that resumed would have
+  run the work **twice**, concurrently, on the same schedule. Both are now
+  `isDisabled: true` with `AzureWebJobs.<fn>.Disabled=true` — measured, §8.2.
+  The two hosts still **index** those definitions, so the "`function list` does
+  not generalise" lesson above is unchanged.
 * **Two silently dead capabilities.** `func-loom-posture-refresh` and
   `func-lblprop` are still the **intended** runtime for posture-refresh and
   scc-labels — they index zero functions *and* execute zero. Those capabilities
@@ -239,14 +241,14 @@ only after its replacement is **proven live on the estate**. This PR deletes
 together with the other four superseded hosts, so that a single reviewable change
 removes them all with their receipts attached.
 
-**That follow-up is more urgent than "cleanup" implies.** `func-secexp` and
-`func-cpeval` still hold **enabled** timer definitions on schedules identical to
-their ACA replacements (`0 0 6 * * *` vs `0 6 * * *`; `0 0 7 * * *` vs
-`0 7 * * *`). They execute nothing today, but nothing in the platform *prevents*
-them from resuming — and if they do, credential-expiry monitoring and the Copilot
-evaluator each run **twice, concurrently, on the same schedule**. Disabling those
-function definitions (or deleting the hosts) is the cheap mitigation and should
-not wait for the full removal PR.
+**That follow-up landed as §8 (OP-19, 2026-09-17).** When this was written,
+`func-secexp` and `func-cpeval` still held **enabled** timer definitions on
+schedules identical to their ACA replacements (`0 0 6 * * *` vs `0 6 * * *`;
+`0 0 7 * * *` vs `0 7 * * *`), and nothing in the platform *prevented* them from
+resuming. **Both are disabled now** (§8.2) — done out of band, so §8.2 is the
+only record of it and `scripts/csa-loom/check-retired-function-timers.sh` is the
+standing check. The per-app removal disposition, with the reference audit each
+deletion needs, is §8.3.
 
 ---
 
@@ -339,3 +341,130 @@ ERROR: --registry-identity must be an identity resource ID or 'system' or 'syste
 Git Bash rewrites the leading `/` of `/subscriptions/…` into a Windows path.
 Prefix `MSYS_NO_PATHCONV=1`. CI runs on `ubuntu-latest` and is unaffected — this
 is a workstation-only trap, not a script defect.
+
+---
+
+## 8. Teardown — measured disposition, 2026-09-17 (OP-19, #4495)
+
+§5 deferred removal so it would pair with proof. This is that proof, plus the
+per-app reference audit removal actually needs. **Nothing here deletes an estate
+resource** — the deletions are operator actions, listed with their commands.
+
+### 8.1 Re-measurement (supersedes the 13-day figure in §1)
+
+| app | SUM | errorCode | datapoints | with_value | absent |
+|---|---|---|---|---|---|
+| `func-cpeval-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| `func-secexp-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| `func-rptsub-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| `func-loom-posture-refresh-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| `func-lblprop-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| `func-csa-loom-mcp` | **0** | Success | 31 | 31 | 0 |
+| `func-loom-prpt-renderer-k6mvh5sm6z7do` | **0** | Success | 31 | 31 | 0 |
+| **CONTROL** `func-csa-inabox-copilot-fg` (sub DLZ) | **73** | Success | 31 | 31 | 0 |
+
+`FunctionExecutionCount`, `--aggregation Total --interval P1D`,
+`--start-time 2026-08-17T00:00:00Z --end-time 2026-09-17T12:00:00Z`, subscription
+`e093f4fd…c665f3` (DMLZ — **not** the default subscription), RG
+`rg-csa-loom-admin-centralus`. Run through `scripts/measure/measure.mjs`, so a
+failed `az` throws instead of yielding a value and `null` is `UNKNOWN`, never 0.
+
+**What would falsify it:** any `SUM > 0`; any row where `with_value < datapoints`
+(missing telemetry read as a zero); or a control that is not `> 0`.
+
+**The control is metric-specific, not merely query-path.** It is the same metric,
+aggregation, interval, window and code path on a different Function App, and it
+returns 73. A broken, mis-shaped, mis-parsed or unauthorised
+`FunctionExecutionCount` query could not produce that. The first control tried —
+`MemoryWorkingSet` on the subject apps themselves — returned a *genuine* 0 (these
+hosts are entirely idle) and was therefore useless; `measureWithControl` refused
+to report the subject at all rather than print seven zeros behind it. That
+refusal is the library working.
+
+**Two window traps, both measured here rather than reasoned about:**
+
+* `--start-time` **without** `--end-time` returns exactly **one** datapoint
+  (`dp=1`, `first == last == start-time`). A 31-day claim built on it is a
+  one-day claim wearing a 31-day label. Always pass `--end-time`.
+* P1D data is retained ~31 days. A query for `2026-08-06 → 2026-09-17` silently
+  answers from `2026-08-17`. The §1 window (2026-07-25 → 08-06) is **no longer
+  re-queryable**; this is an independent later window, not a re-run of it.
+
+### 8.2 The §1 double-execution hazard is RETIRED — and was retired out of band
+
+§1 and §5 warn that `func-secexp`/`func-cpeval` hold **enabled** timers on
+schedules identical to their ACA twins. **That is stale at head.** Measured
+2026-09-17, on two independent reads:
+
+```
+func-secexp/secretExpiryMonitor    AzureWebJobs.secretExpiryMonitor.Disabled=true    isDisabled=true
+func-cpeval/copilotEvaluatorTimer  AzureWebJobs.copilotEvaluatorTimer.Disabled=true  isDisabled=true
+func-cpeval/copilotEvaluatorHttp   AzureWebJobs.copilotEvaluatorHttp.Disabled=true   isDisabled=true
+```
+
+The app setting is what an operator writes; `isDisabled` is what the Functions
+host computed from it. They agree.
+
+**Nothing in this repo did that, and nothing records it** — no bicep sets those
+settings (`copilot-evaluator-function.bicep` and
+`secret-expiry-monitor-function.bicep` were deleted in #2556), no script, no
+workflow, no issue, no PR. So a re-enable would be silent.
+`scripts/csa-loom/check-retired-function-timers.sh` is the standing check:
+read-only by default, fail-closed, `--apply` re-disables. It refuses a verdict
+when zero definitions were readable, and an unreadable definition is `UNKNOWN`
+rather than "disabled" (`deploy-integrity.md` R7).
+
+The ACA twins are executing — `loom-secret-expiry-monitor` Succeeded at 06:00 UTC
+on 2026-09-14/15/16/17; `loom-report-subscriptions` Succeeded on its `*/15`.
+
+### 8.3 Per-app reference audit and disposition
+
+"Declaration" = a non-`existing` `Microsoft.Web/sites` that a deploy would
+create. Three of the seven have none: their modules are already deleted, so no
+from-scratch deploy re-creates them and removal is purely an estate action.
+
+| app | declaration | live references | disposition |
+|---|---|---|---|
+| `func-cpeval-*` | **none** (deleted #2556) | `full-app-deploy-commercial.yml` post-deploy-evals — **fixed in this change** | estate delete, unblocked |
+| `func-secexp-*` | **none** (deleted #2556) | none executable (`docs/fiab/runbooks/secret-rotation.md:539` is a runbook line) | estate delete |
+| `func-rptsub-*` | **none** (deleted #3068) | `scripts/csa-loom/grant-navigator-rbac.sh:240` — discovers it and grants Cosmos + Blob + Logic App Contributor to its identity. **No-ops cleanly when absent** (`else … skipping`), so deletion does not break the bootstrap | estate delete; the grant block then becomes dead and should go with it |
+| `func-loom-posture-refresh-*` | `azure-functions/posture-refresh/deploy/main.bicep` | `csa-loom-post-deploy-bootstrap.yml:2248`, `gov-provision-posture.yml:92` — both **deploy targets** | **KEEP.** §4.1: still the *intended* runtime for a live console surface, with no ACA replacement built. Deleting it removes a capability |
+| `func-lblprop-*` | `label-propagation-function.bicep`, wired at `admin-plane/main.bicep:8572` (`labelPropagationEnabled`, default true) | `grant-navigator-rbac.sh:217` (no-ops when absent) | **KEEP.** §4.4: intended runtime, no replacement |
+| `func-csa-loom-mcp` | `builtin-mcp.bicep`, wired at `admin-plane/main.bicep:3234` (`loomBuiltinMcpActive`, default ON) | Console `LOOM_BUILTIN_MCP_URL` (BFF route, env-check, health probe) + the generated `deploy-templates/main.json` | superseded by Container App `loom-mcp`, but removal is a **multi-file Console change** — tracked separately, see 8.4 |
+| `func-loom-prpt-renderer-*` | `azure-functions/paginated-report-renderer/deploy/main.bicep` | Console `LOOM_PAGINATED_RENDER_URL` / `LOOM_PAGINATED_RENDER_KEY` | superseded by Container App `loom-prpt-r3` / `integration/prpt-renderer.bicep` — same shape, see 8.4 |
+
+Operator commands for the three unblocked deletes (run in the DMLZ
+subscription; each is idempotent and removes only the app, not its RG):
+
+```bash
+SUB=e093f4fd-5047-4ee4-968d-a56942c665f3; RG=rg-csa-loom-admin-centralus
+az functionapp delete --subscription "$SUB" -g "$RG" -n func-cpeval-k6mvh5sm6z7do
+az functionapp delete --subscription "$SUB" -g "$RG" -n func-secexp-k6mvh5sm6z7do
+az functionapp delete --subscription "$SUB" -g "$RG" -n func-rptsub-k6mvh5sm6z7do
+```
+
+Their Y1 plans, host storage accounts and Application Insights components are
+separate resources and are **not** removed by that command — check
+`az resource list -g "$RG" --query "[?contains(name,'secexp')||contains(name,'cpeval')||contains(name,'rptsub')]"`
+before declaring the billing gone.
+
+### 8.4 Not done here, and why
+
+* **`func-csa-loom-mcp` / `func-loom-prpt-renderer-*` bicep removal.** Both are
+  genuinely superseded by live Container Apps, but each producer is load-bearing
+  for a Console env var, a health probe and an admin env-check, and
+  `builtin-mcp.bicep` additionally sits behind 19 sites in
+  `admin-plane/main.bicep` plus a Key Vault secret and the generated
+  `deploy-templates/main.json`. That is a Console + orchestrator change, not a
+  Function-App teardown, and it needs its own consumer audit. Deleting the
+  producer without it would break a from-scratch deploy
+  (`deploy-integrity.md` R4).
+* **Drift worth its own item:**
+  `apps/fiab-console/lib/admin/env-checks/ai-copilot.ts:79` already records
+  `provisionedBy: 'modules/admin-plane (built-in MCP **Container App**)'` while
+  `builtin-mcp.bicep` still deploys a **Function App**. The Console and the bicep
+  disagree about what provisions the built-in MCP server today.
+* **`loom-copilot-evaluator` job failures.** Two executions Failed on 2026-09-17
+  (18:22Z, 19:15Z) after one Succeeded at 17:19Z. Per
+  `copilot-evaluator-job.bicep`, a Failed execution is by contract "always a real
+  regression worth paging on". Unrelated to the teardown; not diagnosed here.

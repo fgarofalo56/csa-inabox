@@ -309,6 +309,28 @@ that much contention is the #3676 shape.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
+> **ANSWERED 2026-09-17 — approved, and re-measured at head. Decision recorded in
+> `DECISIONS.md` (this directory); evidence in
+> `docs/fiab/deployment/functions-to-aca-jobs.md` §8.**
+>
+> **(a) is already true.** All three definitions on the two hosts are disabled
+> (`AzureWebJobs.<fn>.Disabled=true` *and* `isDisabled: true`), done out of band
+> with nothing in the repo recording it. Neither host has had a bicep declaration
+> since #2556, so no bicep change could have disabled them — it was an estate
+> action, and the estate already took it.
+> `scripts/csa-loom/check-retired-function-timers.sh` now guards a re-enable.
+>
+> **(b) re-measured ZERO on a wider window with a live control** —
+> `FunctionExecutionCount` 2026-08-17→2026-09-17 (P1D, Total) = 0 for all seven,
+> 31/31 explicit datapoints, against a control of 73. Three apps are unblocked
+> for the operator to delete, two are KEPT (still the intended runtime, no
+> replacement), two are deferred (superseded, but their removal is a Console +
+> orchestrator change). The `full-app-deploy-commercial.yml` reference to
+> `func-cpeval-*` — which had been failing since the Function was retired — is
+> repointed at the live ACA job.
+>
+> **The text below is the original ask, left unedited.**
+
 **(a) Cheap mitigation, needn't wait for the removal PR.** Disable the two
 enabled function definitions on `func-secexp` (timer `0 0 6 * * *`) and
 `func-cpeval` (`0 0 7 * * *`). They are identical to their live ACA job crons
