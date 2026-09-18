@@ -1770,16 +1770,37 @@ jobs:
           # the job's current containers. An empty container list means the image
           # has never been built — that is a real gap, not a quiet no-op.
           #
-          # `// []` and `${COUNT:-0}` are load-bearing, not belt-and-braces: on a
-          # 200-with-empty-body jq emits NOTHING, COUNT is empty, and `[ "" -eq 0
-          # ]` raises "integer expected". Because that sits in an `if` CONDITION
-          # errexit is suppressed and the error reads as FALSE — so the guard
-          # this comment calls a real gap would be SKIPPED and the step would
-          # exit 0 with a notice. Same shape as the EXEC default below.
-          COUNT=$(jq_defused '(.properties.template.containers // []) | length' job.json)
+          # FIVE call sites use `jq_defused`; this was the only unguarded one.
+          # The other four wrap it as `if ! X=$(...)`, which puts the call in an
+          # `if` CONDITION and so suppresses errexit. This one was a BARE
+          # assignment, so under `set -euo pipefail` a malformed `job.json` made
+          # jq exit non-zero and killed the step AT THE ASSIGNMENT — the
+          # `::error::` below never printed and the log carried only
+          # `az> jq: parse error: ...`. Measured side by side: the empty-body arm
+          # reached the annotation (`COUNT=[0]`); the malformed arm did not.
+          #
+          # Worse, the annotation itself asserted "an empty or malformed body
+          # reads the same way here", which was false for precisely the half that
+          # produced no message at all — R6 (a failure whose only output is a
+          # parse error) and R7 (a message claiming what the code did not
+          # establish), in the same three lines. Four of five sites closed is the
+          # exact pattern this step's own header audit exists to prevent.
+          #
+          # The two are now genuinely distinguished, because they are different
+          # failures and the operator needs different things from each.
+          if ! COUNT=$(jq_defused '(.properties.template.containers // []) | length' job.json); then
+            echo "::error::Could not PARSE the job GET for $JOB — jq failed on job.json, so the container list was never read. That is a malformed or truncated response body, NOT an empty container list; this run DID establish which, and it is the former. Retry the step; if it repeats, the ARM response itself is bad. No execution was started."
+            exit 1
+          fi
+          # Still load-bearing after the guard above: on a 200-with-EMPTY body jq
+          # exits 0 having emitted nothing, so COUNT is empty and `[ "" -eq 0 ]`
+          # would raise "integer expected". That error sits in an `if` CONDITION,
+          # where errexit is suppressed and it reads as FALSE — so the guard this
+          # comment calls a real gap would be SKIPPED and the step would exit 0
+          # with a notice. Same shape as the EXEC default below.
           COUNT=${COUNT:-0}
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No container template could be read for $JOB from its GET (an empty or malformed body reads the same way here as a genuinely empty container list, and this run did not establish which). If the job is deployed and its list really is empty, its image has not been built/pushed, so no execution can start — build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh. Either way no execution was started."
+            echo "::error::No container template could be read for $JOB from its GET. The body PARSED and its container list is empty — so if the job is deployed, its image has not been built/pushed and no execution can start. Build it with scripts/csa-loom/deploy-copilot-evaluator-job.sh. No execution was started."
             exit 1
           fi
 

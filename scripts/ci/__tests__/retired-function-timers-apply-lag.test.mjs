@@ -48,7 +48,13 @@ case "\$sub" in
   account) echo "AzureCloud"; exit 0 ;;
 esac
 case "\$*" in
-  *"functionapp list"*)          echo "func-secexp-k6mvh5sm6z7do"; exit 0 ;;
+  *"functionapp list"*)
+      # AZ_LIST_EMPTY=1 models a list that SUCCEEDS but returns nothing — either
+      # the host really is deleted, or the identity cannot read the RG. The
+      # script must not treat those as the same thing, so the arms below drive
+      # the corroborating 'functionapp show' separately.
+      if [ "\${AZ_LIST_EMPTY:-0}" = "1" ]; then printf '\\n'; exit 0; fi
+      echo "func-secexp-k6mvh5sm6z7do"; exit 0 ;;
   *"config appsettings set"*)    exit "\${AZ_SET_RC:-0}" ;;
   *"config appsettings list"*)   emit "\${AZ_SETTING_VALUE:-true}"; exit 0 ;;
   *"functionapp function show"*)
@@ -57,6 +63,15 @@ case "\$*" in
       if [ "\${AZ_SHOW_FAIL_AT:-0}" = "\$n" ]; then echo "shim: show failed" >&2; exit 1; fi
       if [ "\$n" -ge "\${AZ_SHOW_TRUE_FROM:-999}" ]; then emit "true"; else emit "false"; fi
       exit 0 ;;
+  *"functionapp show"*)
+      # The HOST-level read used to corroborate an empty listing. ARM
+      # distinguishes absence from blindness here and the script keys on that:
+      # ResourceNotFound is a deletion, anything else is not.
+      case "\${AZ_SHOW_APP:-found}" in
+        found)     exit 0 ;;
+        notfound)  echo "(ResourceNotFound) The Resource 'Microsoft.Web/sites/func-secexp-k6mvh5sm6z7do' under resource group 'rg-csa-loom-admin-centralus' was not found." >&2; exit 3 ;;
+        forbidden) echo "(AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Web/sites/read' over scope." >&2; exit 3 ;;
+      esac ;;
 esac
 echo "shim: unhandled az invocation: $*" >&2
 exit 64
@@ -83,6 +98,8 @@ function run(env, shimDir) {
       AZ_SETTING_VALUE: env.AZ_SETTING_VALUE ?? 'true',
       AZ_SET_RC: env.AZ_SET_RC ?? '0',
       AZ_CR: env.AZ_CR ?? '0',
+      AZ_LIST_EMPTY: env.AZ_LIST_EMPTY ?? '0',
+      AZ_SHOW_APP: env.AZ_SHOW_APP ?? 'found',
       // Collapses the 5/10/15s backoff to 0/0/0. This is the FAIL-CLOSED
       // direction (the script gives up sooner and reports ENABLED sooner), so
       // the "stuck" and "verify-only" arms below are if anything easier to
@@ -92,6 +109,73 @@ function run(env, shimDir) {
     },
   });
 }
+
+test('an EMPTY listing corroborated by ResourceNotFound is GONE, and exits 0', () => {
+  // Before this arm existed, `gone` was unreachable: the shim's `functionapp
+  // list` was hard-coded to return the host, so no test ever drove the absence
+  // path at all. A branch with no witness is not covered, whatever the total
+  // arm count says.
+  //
+  // WHAT VALUE MAKES THIS FAIL: the corroborating `show` being dropped, or its
+  // ResourceNotFound match being narrowed so a real 404 no longer counts. Then
+  // a genuinely deleted host reports UNKNOWN and the job never reaches its
+  // terminal good state.
+  const dir = makeShimDir();
+  try {
+    const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'notfound' }, dir);
+    const all = r.stdout + r.stderr;
+    assert.match(all, /GONE/, `expected a GONE verdict, got:\n${all}`);
+    assert.doesNotMatch(all, /UNKNOWN/, 'a confirmed 404 must not also report UNKNOWN');
+    assert.equal(r.status, 0, `a retired host is the terminal GOOD state, rc should be 0:\n${all}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an EMPTY listing that CANNOT be corroborated is UNKNOWN, never GONE (the fail-open)', () => {
+  // THE ARM THAT MATTERS. `az functionapp list` exits 0 and returns a FILTERED
+  // view when the identity cannot read the resource group, so "absent from a
+  // successful listing" conflated "deleted" with "invisible to me" — and the
+  // deleted reading is fail-OPEN: rc 0 plus "the double-execution hazard is
+  // retired by teardown" for hosts that are still running their timers.
+  // Measured on review at the previous head: gone=2, rc 0, for two live hosts.
+  //
+  // WHAT VALUE MAKES THIS FAIL: restoring the bare `gone=$((gone+1))` on an
+  // empty listing. The assertions below then see GONE and rc 0.
+  const dir = makeShimDir();
+  try {
+    const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'forbidden' }, dir);
+    const all = r.stdout + r.stderr;
+    assert.match(all, /UNKNOWN/, `an unreadable RG must report UNKNOWN, got:\n${all}`);
+    assert.doesNotMatch(all, /GONE/, 'a 403 must NEVER be reported as a deleted host');
+    assert.notEqual(r.status, 0, `blindness must not exit 0:\n${all}`);
+    // Pair the absence assertion with a positive one: the remediation must name
+    // the role and the scope (deploy-integrity.md R6), or the operator is told
+    // only that something failed.
+    assert.match(all, /Reader/, 'R6: the remediation must name the role to grant');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an EMPTY listing whose host IS found means the listing was incomplete, not absent', () => {
+  // The third outcome, and the one easiest to drop: the list was filtered or
+  // paged, the host exists, and the script must go on to read its definition
+  // rather than scoring the target at all on the strength of the listing.
+  //
+  // WHAT VALUE MAKES THIS FAIL: treating a successful `show` as absence, or
+  // `continue`-ing past the definition read. The setting is 'true' here, so a
+  // correct run reaches the ENABLED hazard; a short-circuit reports neither.
+  const dir = makeShimDir();
+  try {
+    const r = run({ AZ_LIST_EMPTY: '1', AZ_SHOW_APP: 'found', AZ_SETTING_VALUE: 'false' }, dir);
+    const all = r.stdout + r.stderr;
+    assert.doesNotMatch(all, /GONE/, 'a host a direct read FOUND is not gone');
+    assert.match(all, /listing was incomplete/i, `expected the incomplete-listing warning, got:\n${all}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('the shim, not a real az, is what resolves (guards against a live ARM call)', () => {
   // WHAT VALUE MAKES THIS FAIL: a PATH on which the real az wins. Without this

@@ -61,7 +61,13 @@
 # the R7 distinction this header preaches, applied one level up. So each target
 # is first resolved against a host LISTING:
 #
-#   list succeeds, host absent   -> GONE     the hazard is retired by teardown (rc 0)
+#   list succeeds, host absent   -> CORROBORATE with a direct `show`, because a
+#                                   succeeding list returns a FILTERED view when
+#                                   the identity cannot read the RG. 404 -> GONE
+#                                   (rc 0); host found -> present, the list was
+#                                   incomplete; any other failure -> UNKNOWN.
+#                                   An uncorroborated absence was a fail-OPEN:
+#                                   measured gone=2, rc 0, for two live hosts.
 #   list succeeds, host present  -> read the definition; OK / ENABLED / UNKNOWN
 #   list FAILS                   -> UNKNOWN  we could not measure (never GONE)
 #
@@ -205,9 +211,33 @@ for t in "${TARGETS[@]}"; do
   fi
   LISTED="${LISTED//$'\r'/}"
   if [[ -z "$LISTED" ]]; then
-    echo "  GONE     ${APP}/${FN}: host is absent from a successful listing of ${RG} — the double-execution hazard is retired by teardown."
-    gone=$((gone + 1))
-    continue
+    # AN EMPTY RESULT FROM A SUCCEEDING LIST IS NOT AN ABSENCE. `az functionapp
+    # list` exits 0 and returns a FILTERED view when the identity cannot read
+    # the resource group — so "not in the list" conflates "deleted" with "not
+    # visible to me", and the deleted reading is the fail-OPEN one: it reports
+    # rc 0 and "the hazard is retired by teardown" for hosts that still exist.
+    # Measured on review: an RBAC-filtered list produced gone=2, rc 0, for two
+    # live hosts. That lands on exactly the identity whose read scope THIS FILE
+    # says at :41-45 is unestablished until the lane's first run.
+    #
+    # So corroborate absence with a DIRECT read, where ARM distinguishes the two
+    # for us: ResourceNotFound is an absence, AuthorizationFailed/Forbidden is a
+    # blindness (csa_loom_count_is_an_oracle_when_caller_picks_scope — 404, not
+    # 403). A `show` that SUCCEEDS proves the list was filtered and the host is
+    # present, which is the third outcome and must not be silently dropped.
+    SHOW_ERR=""
+    if SHOW_ERR="$(az functionapp show -n "$APP" -g "$RG" --subscription "$SUB" \
+                     -o none 2>&1)"; then
+      echo "  WARN     ${APP}/${FN}: the host listing did not contain it, but a direct read FOUND it — the listing was incomplete (RBAC-filtered or paged). Treating the host as PRESENT and continuing to read its definition." >&2
+    elif printf '%s' "$SHOW_ERR" | grep -qiE 'ResourceNotFound|was not found|could not be found'; then
+      echo "  GONE     ${APP}/${FN}: absent from the listing AND a direct read returns ResourceNotFound — the double-execution hazard is retired by teardown."
+      gone=$((gone + 1))
+      continue
+    else
+      echo "  UNKNOWN  ${APP}/${FN}: absent from the listing, and a direct read did NOT establish absence — it failed for another reason, so this is blindness, not deletion. Grant the running identity Reader on ${RG} (subscription ${SUB}) and re-run. ARM said: $(printf '%s' "$SHOW_ERR" | tr '\n' ' ' | cut -c1-240)" >&2
+      unknown=$((unknown + 1))
+      continue
+    fi
   fi
 
   # The --apply WRITE. GUARDED for the same reason as the three reads: a bare

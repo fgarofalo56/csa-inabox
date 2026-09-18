@@ -19712,7 +19712,7 @@
             "declaredSinkCount": 5,
             "sinks": [
               {
-                "id": "console:member:870",
+                "id": "console:member:892",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19722,7 +19722,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:877",
+                "id": "console:member:899",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19732,7 +19732,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:878",
+                "id": "console:member:900",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19742,7 +19742,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:879",
+                "id": "console:member:901",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19752,7 +19752,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:883",
+                "id": "console:member:905",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -49917,9 +49917,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-18T07:41:52.551Z",
-      "commit": "8db62c6d089146635922416247cd0fc7eb9a0ade",
-      "inputsDigest": "4db31000b28f4e0d",
+      "generatedAt": "2026-09-18T13:29:48.667Z",
+      "commit": "3c06046f4f2f6b4d167891deca8389fe318d6e86",
+      "inputsDigest": "ac45d9bd9eeeceda",
       "filesScanned": 2113,
       "scanScopes": [
         {
