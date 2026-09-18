@@ -14,16 +14,29 @@ FROM python:3.11-slim
 
 # The leading `dist-upgrade` is the repo-standard SC1 hardening (same as
 # apps/fiab-mcp-bridge and apps/loom-transform-runner): it pulls the distro's
-# security patches AHEAD of the pinned base tag, which is how OS-layer CRITICALs
-# get cleared here without waiting for a base rebuild.
+# security patches AHEAD of the pinned base tag.
 #
-# It is NOT prophylactic here (#4547). `python:3.11-slim` resolves to debian
-# 13.6, whose `perl-base` 5.40.1-6 carries THREE CRITICALs that Trivy reports as
-# `fixed` in 5.40.1-6+deb13u1 — CVE-2026-13221, CVE-2026-42496, CVE-2026-8376.
-# Without this line the SC1 gate on the pushed image is RED (`Total: 3
-# (CRITICAL: 3)`), which it was on every build run 2026-09-15 → 2026-09-17.
+# It is NOT prophylactic here (#4547). What is ESTABLISHED, measured 2026-09-17:
+# `python:3.11-slim` resolved that day to debian 13.6, whose `perl-base`
+# 5.40.1-6 carries THREE CRITICALs Trivy reports as `fixed` in
+# 5.40.1-6+deb13u1 — CVE-2026-13221, CVE-2026-42496, CVE-2026-8376. Without
+# this line the SC1 gate on the pushed image was RED (`Total: 3 (CRITICAL: 3)`)
+# on every build run 2026-09-15 → 2026-09-17; with it, the archive upgrade
+# clears all three AT THAT BASE SNAPSHOT (13.6 → 13.7, target row present at 0).
+#
+# What is NOT established, deliberately left open: whether "debian 13" or "this
+# dated base snapshot" is the discriminator. As of 2026-09-17 every debian-13
+# base observable (debian:trixie-slim, python:3.11-slim, python:3.12-slim) is
+# 13.6 with the same vulnerable `perl-base`, so the two readings are
+# observationally identical and this comment does not pick one. Do not read it
+# as "debian 13 is inherently red".
+#
 # `perl-base` is a base-layer package no instruction in this file installs, so
-# the only lever is the archive upgrade.
+# the only lever AVAILABLE TO THIS REPO is the archive upgrade — the other
+# lever is an upstream base rebuild, which this line exists not to wait for.
+# If a republished base ships the fix, this line becomes a no-op rather than
+# wrong, and the OS-version claim above should be re-measured before being
+# quoted again.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
