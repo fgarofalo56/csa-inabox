@@ -96,8 +96,11 @@ node scripts/measure/mutate.mjs      # every arm must report CAUGHT
 node scripts/measure/__tests__/injection-arms.mjs   # every arm must match its documented verdict
 ```
 
-On Windows that is 94 tests, 0 skipped — MEASURED, `rc=0`. On a Linux CI runner it is
-90, with the four win32-only cmd.exe tests skipped; that figure is derived from the
+On Windows that is 152 tests, 0 skipped — MEASURED, `rc=0`, with the exact command block
+above. It was 94 before the `python-dash-repl` rule landed; that figure is corrected here
+rather than left to rot, because a stale count in a file whose subject is false measurement
+is the defect it documents. On a Linux CI runner it is four fewer, with the win32-only
+cmd.exe tests skipped; that figure is derived from the
 measured 94 and the measured skip set, not observed on a Linux host. Forcing
 `process.platform` to `'linux'` on a Windows box reports 89 pass / 5 skipped instead,
 because the one test that spawns a real child refuses to run under a forged platform —
@@ -170,7 +173,7 @@ right one — belt and braces — but not for the reason claimed.
 ## The hook
 
 `.claude/hooks/measurement-guard.mjs` is a **PreToolUse** hook (wired in `.claude/settings.json`)
-that **denies** Bash commands carrying the three shapes above, naming the fix in each case. It
+that **denies** Bash commands carrying the four shapes above, naming the fix in each case. It
 denies rather than warns because the entire failure mode is that the wrong answer looks fine —
 a warning in a tool result is easy to skim past.
 
@@ -198,11 +201,11 @@ an empty file.
 - The hook's first version used `require()` inside an ESM module. It threw, a `catch` swallowed
   it, and the hook **silently allowed everything**. The unit tests passed, because they call
   `evaluate()` directly; only an end-to-end run through the real stdin path caught it.
-- **Fail-open is now split by case, and one case still fails open on purpose.** An unreadable
-  fd 0 means no command arrived, so there is nothing to judge — that path allows, and says so
-  loudly on stderr, because denying every Bash call on a harness fault is worse than the guard
-  being absent. A payload that arrives but does not parse is a different thing: that is an
-  anomaly, and it now **denies**. A rule that throws mid-evaluation also denies — a crashing
+- **Fail-open is split by case — and MORE cases fail open than this file used to admit.** An
+  unreadable fd 0 means no command arrived, so there is nothing to judge: that path allows, and
+  says so loudly on stderr, because denying every Bash call on a harness fault is worse than the
+  guard being absent. A payload that arrives but does not parse is a different thing: that is an
+  anomaly, and it **denies**. A rule that throws mid-evaluation also denies — a crashing
   rule produced no verdict, and treating that as a pass is the gate-that-cannot-fail shape.
 - **Six of its arms proved six things and nothing else.** An independent review wrote fifteen
   fresh mutation arms and eleven survived: every fake-zero refusal in `checkRuns` and

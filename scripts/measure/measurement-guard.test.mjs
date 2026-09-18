@@ -163,7 +163,7 @@ test('POSITIVE: the canonical heredoc is blocked', () => {
 });
 
 test('POSITIVE: an EMPTY body is blocked — "harmless" is not a defence', () => {
-  // Two of the six were deliberate no-ops. They still hung for the full 120s
+  // Several occurrences were deliberate no-ops. They still hung for the full 120s
   // and still left a REPL to be killed. The construct is the hazard, not what
   // it would have run.
   assert.ok(has(`python - <<'NEVER'\nNEVER`, 'python-dash-repl'));
@@ -417,16 +417,43 @@ test('CONTROL: -c and -m still do NOT fire, even with options in front', () => {
   assert.equal(has(`python -u script.py`, 'python-dash-repl'), false);
 });
 
-test('the -c/-m EXCLUSION has a witness — a trailing bare dash', () => {
-  // Found by review to have NONE: deleting the exclusion left the suite at
-  // 79/0, because the control above never reaches it — with no trailing dash,
-  // neither version matches. The discriminating input needs the dash present.
+test('the -c/-m EXCLUSION has a witness — a BARE trailing dash', () => {
+  // SECOND attempt at this witness. The first used `python -c "print(1)" -`,
+  // which stopped discriminating the moment the arg-consuming set was narrowed:
+  // `"print(1)"` is no longer consumed, so the option run ends before the dash
+  // and neither version matches. A test can lose its witness to a change in a
+  // DIFFERENT part of the same regex.
   //
-  // `python -c "x" -` must NOT fire: `-c` means the interpreter reads its
-  // program from the argument, so stdin is never a REPL however the rest looks.
+  // The discriminating shape is a BARE dash directly after `-c`/`-m`. Without
+  // the lookahead, `-c` is skipped as an ordinary option and the dash reads as
+  // the interpreter's — it is not. `-c`'s argument here IS `-`, a one-character
+  // program; stdin is never read.
   // WHAT MAKES THIS FAIL: remove the `(?!-[cm](?:\s|$))` lookahead.
-  assert.equal(has(`python -c "print(1)" -`, 'python-dash-repl'), false);
-  assert.equal(has(`python -m mod -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -c -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -m -`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: --check-hash-based-pycs consumes a word and the dash still fires', () => {
+  // The arg-consuming set was enumerated from memory as "-W and -X only",
+  // which lost a real detection: this option takes a separate word AND the
+  // following dash still makes python read its program from stdin.
+  // WHAT MAKES THIS FAIL: drop `--check-hash-based-pycs` from that set.
+  assert.ok(has(`python --check-hash-based-pycs always - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('the `<<-` TERMINATOR-LOOKAHEAD tab-strip has its own witness', () => {
+  // There are TWO tab-strip sites — the body scan and the terminator lookahead
+  // that decides whether an opener is honoured at all. Round 10's test pinned
+  // only the body one; dropping the lookahead strip survived 84/0.
+  //
+  // Here the ONLY terminator is tab-indented under `<<-`. Without the strip in
+  // the lookahead the opener is judged unterminated, so it is not honoured, the
+  // body is never blanked, and the `python -` inside it is read as a command —
+  // a FALSE POSITIVE on a pure file write.
+  // WHAT MAKES THIS FAIL: delete the `replace(/^\t+/, '')` in the terminator scan.
+  const cmd = `cat > temp/d.md <<-'MD'\npython - <<'EOF'\n\tMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a tab-indented dash-form terminator must be recognised when honouring the opener');
 });
 
 test('NEGATIVE: an option run must not swallow the SCRIPT PATH', () => {

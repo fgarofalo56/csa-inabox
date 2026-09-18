@@ -324,11 +324,19 @@ const RULES = [
       return m ? m[2].slice(0, 70) : null;
     },
     message: (hit) =>
-      `Git Bash rewrites a leading-slash path before az/gh sees it, so this resource id never arrives.\n` +
+      `a leading-slash path co-occurs with az/gh here, and Git Bash rewrites it\n` +
+      `before the command sees it.\n` +
       `  offending: ${hit}...\n` +
       `  FIX: prefix the command with MSYS_NO_PATHCONV=1\n` +
-      `  Symptom when you don't: "usage error: --resource ID | --resource NAME ..." for a\n` +
-      `  perfectly well-formed id, and metrics that come back null and get read as zero.`,
+      `  STATED CAREFULLY: this rule sees a leading-slash ARM id and an az/gh\n` +
+      `  token in the same command. It does NOT establish that the id is being\n` +
+      `  passed to that command — they may merely co-occur, e.g. the id sits in a\n` +
+      `  heredoc body being written to a file. An earlier version asserted "this\n` +
+      `  resource id never arrives", which is a cause it had not established, and\n` +
+      `  it said so to a reviewer who was passing nothing to az at all.\n` +
+      `  Symptom when the id IS being passed: "usage error: --resource ID |\n` +
+      `  --resource NAME ..." for a perfectly well-formed id, and metrics that\n` +
+      `  come back null and get read as zero.`,
   },
   {
     id: 'discarded-stderr',
@@ -419,16 +427,22 @@ const RULES = [
       // read from their argument rather than from stdin and so cannot become a
       // REPL.
       //
-      // ONLY `-W` AND `-X` CONSUME A SEPARATE WORD. An earlier version allowed
-      // an optional non-dash token after ANY option, which swallowed the SCRIPT
-      // PATH: `python -u tools/fmt.py -` and `python -B setup.py -` were newly
-      // DENIED, and the suite's explicit negative for the no-option sibling did
-      // not catch it because that fixture has no option in front. Widening the
-      // arg-consuming set to "any option" was the error.
+      // OPTIONS THAT CONSUME A SEPARATE WORD: `-W`, `-X`, and the long form
+      // `--check-hash-based-pycs`. An earlier version said "ONLY -W and -X",
+      // which was false and cost a FALSE NEGATIVE: measured on this box,
+      // `python --check-hash-based-pycs always -` accepts the word AND still
+      // reads the program from stdin, so it is the full hazard — and the
+      // previous head fired on it while the narrowed one allowed it.
+      //
+      // The narrowing itself was right: allowing an optional non-dash token
+      // after ANY option swallowed the SCRIPT PATH, newly denying
+      // `python -u tools/fmt.py -`. The error was enumerating the
+      // arg-consuming set from memory instead of from the interpreter.
       const CMD = new RegExp(
         '^\\s*(?:\\w+=\\S*\\s+)*(?:env\\s+(?:\\w+=\\S*\\s+)*)?' +
         '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
-        '(?:\\s+(?!-[cm](?:\\s|$))(?:-[WX]\\s+[^-\\s]\\S*|-\\S+))*' +
+        '(?:\\s+(?!-[cm](?:\\s|$))' +
+        '(?:(?:-[WX]|--check-hash-based-pycs)\\s+[^-\\s]\\S*|-\\S+))*' +
         '\\s+-(?=\\s|$|[<>&|])',
       );
 
@@ -486,8 +500,12 @@ const RULES = [
       `         ...\n` +
       `         PY\n` +
       `         python temp/thing.py\n` +
-      `       Heredoc BODIES are exempt from this rule, so a file whose content\n` +
-      `       mentions the pattern is not blocked.\n` +
+      `       CAVEAT, stated because an earlier version claimed otherwise: this\n` +
+      `       rule exempts heredoc BODIES, but the other three rules in this file\n` +
+      `       do NOT. A body containing a leading-slash ARM id, a pipeline with\n` +
+      `       $?, or a discarded stderr can still be denied by rules 1-3 — and a\n` +
+      `       Write tool is not available to every caller. If you are denied\n` +
+      `       writing the script itself, the remaining escape is python -c.\n` +
       `       A true one-liner is fine as  python -c "..."  and a herestring\n` +
       `       (\`python - <<<'...'\`) is allowed -- it has no delimiter to mismatch.\n` +
       `  Inline heredocs into python are unsafe IN PRACTICE here -- though not\n` +
