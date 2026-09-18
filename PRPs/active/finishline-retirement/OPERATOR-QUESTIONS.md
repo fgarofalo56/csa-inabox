@@ -1,5 +1,33 @@
 # FINISHLINE operator queue — 19 questions, re-measured 2026-09-17
 
+> ## ANSWERED 2026-09-17 — this page is now a record, not a queue
+>
+> All 19 rows are settled. The decisions live in
+> `PRPs/active/drain-2026-08-31/DECISIONS.md` § *"Operator decisions, 2026-09-17"*,
+> which is the authoritative copy — this page is kept for the question text and
+> the evidence trail behind each verdict.
+>
+> **A measure-first pass ran against all ten LIVE rows before any was put to the
+> operator. Seven dissolved**: their premise had gone false, or the decision had
+> already been made in code. Four were asked and answered:
+>
+> | row | decision |
+> |---|---|
+> | **OP-3** clean-sub acceptance | land the image CVE fixes first, **then** take the attended window — do not dispatch into the red gate |
+> | **OP-9 item 2** I6/I7 enforce flip | re-run the shadow window; the 2026-08-05 evidence has expired |
+> | **OP-7** / OP-9 item 6 Esri license | **DECLINED** — GEO-2/3/4 stay bring-your-own-license |
+> | **OP-8** / OP-9 item 4 visual captures | agent-captured in a real browser, operator privacy-reviews before anything publishes |
+>
+> The most useful row is **OP-15**, which asked whether to grant Tag Contributor
+> so ACR firewall leases stop running unleased. Both halves of its premise were
+> false — the identity already held the role, and the lease tags are erased by
+> every apply regardless, so the grant would have produced a confident
+> "leases are race-free now" with the race entirely intact. Tracked as issue 4563.
+>
+> **Two rows still owe work, and neither is a decision:** OP-3's window has not
+> happened, so `deploy-integrity.md` R4 greenfield remains **unverified, not
+> working**; and OP-8's 159 captures stand at 0 published.
+
 The FINISHLINE harness (`.harness/`) carried an `operator_queue` of **19
 decisions**. None has been answered since **2026-08-06**. The harness is being
 retired (`Refs #4495`); this page exists so the queue is answerable in one pass
@@ -18,7 +46,14 @@ Verdicts used below:
 | **NARROWED** | part of the question answered itself; a smaller decision remains. |
 | **LIVE** | still stands as asked. |
 
-Counts: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
+Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
+
+After the 2026-09-17 measure-first pass, the ten LIVE rows resolved to
+**7 dissolved on measurement · 3 decided by the operator** (OP-3, OP-7, OP-8),
+plus **OP-9 item 2** decided as its own sub-ask. The original counts are kept
+above rather than overwritten, because the drop from ten to four is the
+finding — it is the measurement of how much of an operator queue goes stale in
+six weeks, and rewriting the number would erase it.
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
 been discharged. They are filed under LIVE because a real decision survives in

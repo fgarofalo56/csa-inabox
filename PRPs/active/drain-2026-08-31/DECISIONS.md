@@ -303,3 +303,131 @@ Recording the check itself, not only its outcome: an issue closing near a
 merge is the shape of an unclaimed-issue auto-close, and the timeline showed
 no `commit_id` on the close event, which rules that mechanism out. Had the
 ancestry check failed, the correct action would have been to reopen.
+
+---
+
+## Operator decisions, 2026-09-17 — the FINISHLINE live questions
+
+`PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md` carried **10 LIVE**
+rows. A measure-first pass ran against each before any of them was put to the
+operator, on the principle that an operator's time is the scarcest input in this
+drain and a question whose premise is already false is worse than no question —
+it extracts a decision that changes nothing.
+
+**Seven of the ten dissolved under measurement.** Only four were asked.
+
+### The seven that needed no decision
+
+| row | why it is no longer a question | evidence |
+|---|---|---|
+| **OP-11** audience registration | option (a) is already implemented **in code** | `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058` reads `identifierUris` and sets `api://${APP_ID}` when absent |
+| **OP-13** `#3056` token hazard | the hazard the watch-list warns about cannot occur | `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` now state an adopt-never-mint contract; empty is the greenfield case only |
+| **OP-14** judge cap | decided: keep the 5000/day ceiling | operator, this session |
+| **OP-15** Tag Contributor on the ACR | premise false twice over | the deploy identity already holds Owner at the tenant-root management group; and per issue 4563 the lease tags are erased by every apply regardless, so the grant would have been a no-op against the stated goal |
+| **OP-19 (a)** duplicate timers | already disabled | measured on the live estate |
+| **OP-19 (b)** teardown | approved; PR carries the proof | in flight |
+| **OP-9 items 4 and 6** | duplicates of OP-8 and OP-7 | answered once, below |
+
+**OP-15 is the one worth reading twice.** The question asked whether to grant
+Tag Contributor so that ACR firewall leases stop running unleased. Both halves of
+its premise are false, and the second is the interesting one: even with the grant,
+the lease tags do not survive, because every subscription-scope apply PUTs the
+registry and `registry.bicep` declares no `tags:`. Granting the role would have
+produced a confident "leases are race-free now" with the race entirely intact.
+That is the exact shape this repo keeps paying for — a control that looks like it
+watches. Tracked as issue 4563.
+
+### OP-3 · clean-subscription acceptance runs — **land the image fixes first**
+
+> **Decision:** merge the Trivy CRITICAL fixes, confirm the build lane is green,
+> **then** take the attended window. Do not dispatch into the red gate.
+
+`full-app-deploy-commercial.yml` is the canonical from-scratch app path in
+`no-vaporware.md`, and it goes red on at least three images today. A greenfield
+run dispatched now stops at the supply-chain gate, which means it cannot produce
+an R4 receipt and cannot tell you anything about the deploy path it is meant to
+exercise. The ordering is not caution; it is the difference between a run whose
+red result is informative and one whose red result is already known.
+
+Consequence to carry: **R4 remains unverified until that window happens.**
+Greenfield is a supported path with no current receipt, and per `cloud-parity.md`
+that must be stated as untested rather than implied working.
+
+### OP-9 item 2 · I6/I7 enforce flip — **re-run the shadow window**
+
+> **Decision:** collect a fresh clean-shadow period against today's estate, then
+> decide. Do not roll forward on the 2026-08-05 sign-off.
+
+The window that justified the flip closed around 2026-08-05 and is now roughly
+six weeks stale. Shadow evidence is a statement about the surfaces that existed
+when it was collected; those have changed underneath it. Flipping on expired
+evidence would surface as user-visible 403s on paths nobody measured, and the
+original ask itself warned this needed a fresh decision rather than a silent
+roll-forward.
+
+Recorded so the staleness cannot repeat silently: **the shadow window's evidence
+has an expiry, and the expiry is a property of the estate changing, not of the
+calendar.** A re-run that is itself six weeks old at flip time is the same defect.
+
+### OP-7 (and OP-9 item 6) · Esri GeoAnalytics license — **DECLINED, stays BYO**
+
+> **Decision:** no first-party Esri license. `geo-graph-ml` GEO-2/3/4 remain
+> bring-your-own-license.
+
+The program is archived, GEO-2 is sequenced last within it, and the design
+already assumes a customer-supplied license. Nothing in the drain waits on this.
+
+Kept distinct so it is not later mistaken for the same call:
+`lib/editors/report/map-visual.tsx:28` records a **separate** decision that
+ArcGIS/Esri stay out of the report map visual as a third-party dependency. That
+decision does not settle the GeoAnalytics license question and this one does not
+settle that. Two decisions, same vendor, different subjects.
+
+### OP-8 (and OP-9 item 4) · help-program visual captures — **agent-captured, operator-reviewed**
+
+> **Decision:** captures are produced by an agent driving a real browser against
+> the live console; the operator privacy-reviews the set before anything
+> publishes. Nothing auto-publishes.
+
+Standing at decision time: **0 of 159 published** (0/142 item guides, 0/17
+features), against a written half that is complete and re-measured at 33/33
+baseline items, 142/142 item guides, 29/29 app tutorials.
+
+Two constraints this decision does **not** relax:
+
+1. **Never auto-publish.** The screenshot privacy workflow requires operator
+   review before publication, and agent capture changes who holds the camera, not
+   who approves the frame.
+2. **The console must be reachable.** Capture is a live-estate activity, so it
+   pairs with a deploy window rather than running against a local build — a
+   screenshot of a local dev server is not evidence about the estate, and per
+   `ux-baseline.md` G1 a receipt that did not touch real data is not a receipt.
+
+### A finding surfaced by the OP-11 measurement, not a decision
+
+`bootstrap-msal-app-reg.sh:1054-1056` sets the Application ID URI as:
+
+```
+az ad app update --id "${APP_ID}" --identifier-uris "api://${APP_ID}" -o none \
+  && echo "    set Application ID URI api://${APP_ID}" \
+  || echo "    WARN: could not set the Application ID URI (app owned elsewhere?) ..."
+```
+
+A failure prints a warning and the script **continues at exit 0**. That is the
+`|| true` family `deploy-integrity.md` forbids in a deploy path: the bootstrap can
+report success while leaving exactly the AADSTS500011 condition OP-11 was written
+about. The remediation the script names ("app owned elsewhere?") is also a guess
+the code did not establish, which is an R7 problem in the same three lines.
+Filed separately rather than fixed here.
+
+### Method note
+
+Two of the fourteen original rows had already been measured as resolved earlier
+in the session (OP-15's grant, OP-19(a)'s timers) without spending operator time.
+That result is what motivated running the pass over all ten rather than
+forwarding the list as written. The ratio held: **7 of 10 dissolved.**
+
+The generalisable form, worth more than any individual row here: **before asking
+an operator to decide, verify the premise of the question at its site.** A
+question is an instrument too, and a question whose premise is stale returns an
+answer that looks authoritative and changes nothing.
