@@ -286,7 +286,7 @@ _note "tags to merge: ${TAG_PAIRS[*]}"
 # mutex? If it does, this script must not send it, whatever the reason.
 LEASE_KEYS_IN_PAYLOAD="$(printf '%s' "$TAGS_JSON" | jq -r '[keys[] | select(startswith("loomAcrFw") or startswith("loomEstateImg"))] | sort | join(" ")')"
 if [ -n "$LEASE_KEYS_IN_PAYLOAD" ]; then
-  _err "the compliance-tag payload names MUTEX key(s): $LEASE_KEYS_IN_PAYLOAD. \`--operation Merge\` cannot delete a key but it DOES replace one, so sending these would overwrite the live holder id of the ACR firewall lease (#2603) and/or the estate image-write lease (#3676 bullet 1) — leaving a mutex that still has all its keys and points at the wrong run. The post-merge read-back watches REMOVALS and would report success. Refusing before the write. Compliance tags and lease tags share this resource and must never share a key."
+  _err "the compliance-tag payload names MUTEX key(s): $LEASE_KEYS_IN_PAYLOAD. \`--operation Merge\` cannot delete a key but it DOES replace one, so sending these would overwrite the live holder id of the ACR firewall lease (#2603) — leaving a mutex that still has all its keys and points at the wrong run. \`loomEstateImg*\` is refused here too, for a different reason: since #4448 the estate image-write lease lives on the registry's SUBSCRIPTION, not on this resource, so a payload carrying that prefix would plant a phantom holder id here that no lane reads and every reader of this registry's tags would then have to disprove. The post-merge read-back watches REMOVALS and would report success in both cases. Refusing before the write. Compliance tags and lease tags must never share a key."
   exit 1
 fi
 
@@ -331,11 +331,39 @@ _note "tags AFTER merge:  $(printf '%s' "$AFTER" | tr -d '\n')"
 # exists to protect, so it is MEASURED and printed, not assumed. A lease that
 # was held before the merge and is absent after it is the #3676 regression.
 #
-# BOTH MUTEXES, NOT JUST THE FIRST ONE. This registry now carries two: the ACR
-# firewall lease (`loomAcrFw*`) and the estate image-write lease
-# (`loomEstateImg*`, #3676 bullet 1). They are distinct keys on the same
-# resource and this step runs on that resource, so a guard that watched only one
-# prefix would let the other be clobbered exactly as silently.
+# ONE LIVE MUTEX ON THIS RESOURCE, NOT TWO (#4448). An earlier revision of this
+# comment said "This registry now carries two: the ACR firewall lease
+# (`loomAcrFw*`) and the estate image-write lease (`loomEstateImg*`)". That is
+# no longer true and this script is the wrong place to learn it from:
+#
+#   * `loomAcrFw*` — the ACR firewall lease — IS still on this registry, is
+#     still written out-of-band by `acr-firewall-lease.sh`, and is what the
+#     `loomAcrFw` arm below genuinely watches. That arm is live coverage.
+#   * `loomEstateImg*` — the estate image-write lease — MOVED OFF this resource
+#     under #4448. It now lives on the registry's SUBSCRIPTION, because every
+#     subscription-scope apply PUTs the registry and an ARM PUT writes the tag
+#     dictionary the template body hands it. Measured on the live Commercial
+#     estate 2026-09-17: `acrloomk6mvh5sm6z7do` carries exactly four tags, all
+#     of them `loomAcrFw*`, and ZERO `loomEstateImg*`.
+#
+# SO THE `loomEstateImg` ARM BELOW CANNOT GO RED ON ANY REAL RUN, AND IS NOT
+# COUNTED AS COVERAGE (assertion-design.md "done" #5). No lane writes that
+# prefix to this resource any more, so `KEYS_BEFORE` for it is `<none>` on every
+# invocation and `DROPPED` can never be non-empty. It was already vacuous on
+# three of this script's four callers — gcc, gcch and il5 never carried that
+# mutex at all; only the two Commercial lanes did.
+#
+# It is KEPT, deliberately, as a residual/future-proofing guard: if the carrier
+# is ever moved back, or a stale `loomEstateImg*` key is left on the registry by
+# an in-flight run from before #4448, this arm resumes watching it with no edit
+# required — and the `<none>` it prints on every other run is the disclosure,
+# visible in the receipt rather than only in this comment. The prefix also still
+# has live meaning to the PRE-WRITE payload guard above (`:287`), which is a
+# different question: that one asks what THIS SCRIPT is about to send, and a
+# payload naming `loomEstateImgOwner` would plant a phantom mutex key here that
+# no lane reads. The roll-race suite's COMPLIANCE TAGS tests drive this arm red
+# by PLANTING `loomEstateImg*` in the before-state, which proves the arm works —
+# it does not prove the state is reachable, and after #4448 it is not.
 #
 # REMOVALS ONLY — before-minus-after, NOT set inequality. The invariant above is
 # "held before and absent after"; an equality test also reds on APPEARANCE, and
@@ -346,6 +374,8 @@ _note "tags AFTER merge:  $(printf '%s' "$AFTER" | tr -d '\n')"
 # is likewise not this guard's subject: only this script's own `--operation
 # Merge` is under test here, and Merge cannot remove a key.
 CLOBBERED=""
+# `loomAcrFw` is the LIVE arm; `loomEstateImg` is the residual one disclosed
+# above and expected to print `<none>` — do not read its silence as a pass.
 for PREFIX in loomAcrFw loomEstateImg; do
   KEYS_BEFORE="$(printf '%s' "${BEFORE:-{\}}" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
   KEYS_AFTER="$(printf '%s' "$AFTER" | jq -r --arg p "$PREFIX" '[to_entries[] | select(.key | startswith($p)) | .key] | sort | join(" ")')"
@@ -374,4 +404,4 @@ if [ -n "$CLOBBERED" ]; then
   exit 4
 fi
 
-_note "OK — '$ACR_NAME' carries every compliance tag, verified by read-back, with the firewall lease and the estate image-write lease intact."
+_note "OK — '$ACR_NAME' carries every compliance tag, verified by read-back, with the ACR firewall lease (\`loomAcrFw*\`) intact. This says NOTHING about the estate image-write lease: since #4448 that mutex lives on the registry's subscription, which this script never addresses."
