@@ -885,8 +885,10 @@ function main() {
       `\`bicep ${COMPILE_VERB}\` at a command position, enumerates them with a bare \`git ls-files\` and ` +
       'reconciles the compiler invocations against an independently re-derived count, carries no `if:`/`needs:` ' +
       `at any level, and is reachable by both triggers (push: ${stats.pushPaths} path pattern(s), pull_request: ` +
-      `${stats.pullRequestPaths || 'no'} path filter). DISCLOSED: this checks the job's SHAPE — the compile ` +
-      'itself is not a required status check, so a RED compile does not block a merge (see the header).',
+      `${stats.pullRequestPaths || 'no'} path filter). DISCLOSED: this checks the job's SHAPE, not the ` +
+      "compile's RESULT. The compile IS a required status check as of 2026-09-18, so an ordinary merge is " +
+      'blocked on a red compile — but `enforce_admins` is false on this repo, so an admin merge is not. ' +
+      'Required-ness stops the ordinary path, not every path.',
   );
   return 0;
 }

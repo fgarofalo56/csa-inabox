@@ -258,8 +258,22 @@ jobs:
   # read "NOT A REQUIRED CONTEXT — STATED PLAINLY … a RED compile here does not
   # block a merge today: what blocks is `guardrails`, which checks this job's
   # SHAPE, never the compile's RESULT." That was true when written and is not
-  # now. #4466's stronger claim — "a broken il5.bicepparam can no longer reach
-  # main" — is consequently CLOSED as well, which it was not before.
+  # now.
+  #
+  # WHAT REQUIRED-NESS DOES *NOT* BUY, stated because the first draft of this
+  # correction overclaimed in the opposite direction. It said #4466's stronger
+  # claim — "a broken il5.bicepparam can no longer reach main" — was therefore
+  # closed. IT IS NOT. Measured 2026-09-18:
+  #
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.enforce_admins.enabled'      ->  false
+  #
+  # so an admin merge bypasses every required context, and `--admin` merging is
+  # this repo's standing practice rather than an exception. Required-ness stops
+  # an ORDINARY merge on a red compile. It does not make the path unreachable,
+  # and no branch-protection setting short of `enforce_admins: true` would.
+  # Retracting one overclaim by writing its mirror is the failure this note now
+  # records against itself.
   #
   # Verify rather than trust this comment; it is the kind that rots:
   #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
