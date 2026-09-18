@@ -1,18 +1,22 @@
 # FINISHLINE operator queue — 19 questions, re-measured 2026-09-17
 
 > **Some of these have since been answered. The answers are in `DECISIONS.md`,
-> beside this file.** Decided there: **OP-3**, **OP-7**, **OP-8**, **OP-9 item
-> 2**, **OP-14**, and **OP-19(b)**. **OP-15** dissolved on measurement — its
-> premise was false and its row must not be acted on. **OP-19(a)** is already
-> done on the estate, out of band — its row must not be acted on either.
+> beside this file.** Decided there: **OP-3** *(Commercial half only — see
+> below)*, **OP-7**, **OP-8**, **OP-9 item 2**, **OP-14**, and **OP-19(b)**.
+> **OP-15** dissolved on measurement — its premise was false and its row must not
+> be acted on. **OP-19(a)** is already done on the estate, out of band — its row
+> must not be acted on either.
 >
 > **Still carrying something live — and this includes NARROWED rows, not just
-> LIVE ones:** **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**,
-> **OP-19(a)**'s IaC gap, and the *"Remaining decision"* on each of **OP-2**,
-> **OP-4**, **OP-16** and **OP-6**. A NARROWED verdict means part of the question
-> answered itself, not that the row is finished. **OP-4**'s remainder is the same
-> class as OP-14's — a cost-material opt-in owing a gate-registry entry
-> (**#4612**).
+> LIVE ones:** **OP-3's Gov half** (the decision covers Commercial only; OP-3
+> asks for Commercial *and* Gov from a fresh subscription, and per
+> `cloud-parity.md` a Commercial receipt proves nothing about Gov — no Gov
+> clean-subscription run is scheduled, decided, or blocked on anything tracked),
+> **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**, **OP-19(a)**'s IaC gap,
+> and the *"Remaining decision"* on each of **OP-2**, **OP-4**, **OP-16** and
+> **OP-6**. A NARROWED verdict means part of the question answered itself, not
+> that the row is finished. **OP-4**'s remainder is the same class as OP-14's — a
+> cost-material opt-in owing a gate-registry entry (**#4612**).
 >
 > Read `DECISIONS.md` § "Provenance" before relying on any of it: none of those
 > decisions has an artifact a reader can follow, because on this repository an

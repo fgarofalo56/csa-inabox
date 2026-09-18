@@ -11,16 +11,27 @@ what came back. `Refs #4495`.
 
 On this repository an operator statement and an agent statement are
 **indistinguishable by author**: both appear as `fgarofalo56`. The GitHub API
-returns an author login and nothing more — it cannot tell you whether a human or
-an agent typed a comment, so no census of comment authors could establish which
-were which, and none is offered here.
+does return `user.type`, and that **does** separate `Bot` accounts —
+`github-actions[bot]` is distinguishable. What it cannot do is separate *agent*
+from *human*, because agents here authenticate as the operator's own account,
+which is `type: User`. No census of comment authors could establish which
+comments an agent wrote, and none is offered.
 
-The demonstration is first-person and checkable rather than statistical: **the
-closing comment on PR #4565 was written by an agent, and the API attributes it to
-`fgarofalo56`** — the same login the operator uses. One comment is enough to show
-the discrimination is impossible; a count would add nothing, and claiming to have
-classified other people's comments would assert exactly the discrimination this
-paragraph says cannot be made.
+The demonstration is from the posting side, where it is checkable without
+classifying anyone: **agents in this repository post through the authenticated
+`gh` CLI, and `gh api user` returns `login: fgarofalo56`, `type: User`** —
+measured 2026-09-18. That is the same login and the same type the operator
+carries. One authenticated identity, two kinds of author, no field that tells
+them apart.
+
+*(The read-side confirmation — fetching #4565's comments and showing the
+agent-written closing comment attributed to that login — could not be completed
+at this revision. `repos/:owner/:repo/issues/4565/comments` returned **HTTP 403,
+secondary rate limit**, while `gh api rate_limit` reported
+`core: {limit: 5000, remaining: 5000, used: 0}`. The primary counter is a blind
+instrument for the secondary limit. A reviewer hit the same 403 four times over
+~5 minutes and flagged it rather than letting silence read as verification; this
+note does the same. The posting-side measurement above is independent of it.)*
 
 What can be stated without over-claiming: **no comment, commit trailer, or file
 anywhere in this tree records any of these decisions in the operator's own hand.**
@@ -63,13 +74,22 @@ CVEs published**."* That is unmeasured, not clean.
 not working.** The window has not happened. Per `cloud-parity.md` that is stated
 as untested rather than implied working.
 
-**And the decision answers only the Commercial half of the question.** OP-13 (and
-OP-3 as asked) covers Commercial **and Gov**, from a fresh subscription, in both
-boundaries. `#4561` and `full-app-deploy-commercial.yml` are Commercial-side
-artifacts; **no Gov clean-subscription run is scheduled, decided, or blocked on
-anything named here.** Per `cloud-parity.md` a Commercial receipt proves nothing
-about Gov, so the Gov half of this question is **still open**, not answered by
-the decision above.
+**And the decision answers only the Commercial half of the question.** OP-3 is
+task **`D17`**, and it asks for clean-subscription acceptance runs "Commercial
+**and** Gov, from a fresh subscription, via the three-step from-scratch path in
+`no-vaporware.md`". `#4561` and `full-app-deploy-commercial.yml` are
+Commercial-side artifacts; **no Gov clean-subscription run is scheduled, decided,
+or blocked on anything named here.** Per `cloud-parity.md` a Commercial receipt
+proves nothing about Gov, so **the Gov half of OP-3 is still open** — it is
+listed under "Still live" below, because a disclosure that appears only beside
+the decision is one a reader scanning the open items will miss.
+
+(An earlier revision of this paragraph attributed the Commercial-and-Gov
+fresh-subscription scope to **OP-13**. That is wrong: OP-13 is task `D4`, an
+attended dispatch of `deploy-fiab-commercial.yml` with `allow_existing_hub=true`
+— a Commercial-only workflow that **adopts an existing hub**, which is the
+opposite of a fresh subscription. OP-13's entry under "Still live" describes it
+correctly and has no Gov half.)
 
 ### OP-7 (and OP-9 item 6) · Esri GeoAnalytics license — DECLINED
 
@@ -161,10 +181,17 @@ this is where someone relying on the decision will be standing.
 > **Decision:** teardown approved **2026-09-17**, confirmed **2026-09-18**.
 
 Seven Function Apps remain provisioned and billing while executing nothing
-(`FunctionExecutionCount` sum = 0 over 13 days — the **2026-08-06** FINISHLINE
-audit figure, carried forward and not re-measured in this pass); five are
+(`FunctionExecutionCount` sum = 0 across the **2026-07-25 → 2026-08-06** window
+recorded in `docs/fiab/decisions/functions-to-aca-jobs.md:17`); five are
 superseded by live ACA
 replacements. PR #4564 carries the removal.
+
+**The zero has held on re-measurement.** It is the FINISHLINE audit's original
+figure, but it is not a stale number carried forward untested — #4564 re-measured
+it independently and a reviewer of this work measured it again, both getting
+zero. An earlier revision of this line said it was "not re-measured in this
+pass", which understated the evidence: the pass did not re-measure it, but two
+other parties did.
 
 The approval could not be sourced from the repository, and an unsourceable
 approval should not authorise tearing down seven provisioned hosts. What settled
@@ -213,13 +240,20 @@ returns an answer that looks authoritative and changes nothing.
 
 ## Still live — nothing here has been decided
 
-**This list covers the whole page, not only its LIVE-verdict rows.** The four
-rows filed NARROWED each carry an explicit *"Remaining decision"* that nobody has
-answered, and a list that omitted them would send a reader away believing the
-queue is shorter than it is.
+**This list is the complete set of undecided asks on both pages** — not only the
+rows whose verdict is LIVE, and not only the rows that have no decision at all. A
+row can be decided in part and still owe something; a row can be filed NARROWED
+and still carry an explicit *"Remaining decision"*. Both kinds are below.
 
 ### From the LIVE rows
 
+- **OP-3 · the Gov half.** The decision above answers Commercial only. OP-3
+  (task `D17`) asks for a clean-subscription acceptance run in **Commercial and
+  Gov**; nothing named in the decision touches Gov, and per `cloud-parity.md` the
+  Commercial receipt will prove nothing about it. **No Gov clean-subscription run
+  is scheduled, decided, or blocked on any tracked item.** This is the one item
+  on this list that a reader could mistake for settled, because its row is headed
+  by a decision.
 - **OP-5** · GOV-3 / model-strategy §7 / TPM raises. Not measured, not asked.
 - **OP-9** items 1, 3, 5 and 7. Neither measured nor asked. (Item 2 is decided
   above; items 4 and 6 are the same questions as OP-8 and OP-7.)
@@ -237,9 +271,13 @@ queue is shorter than it is.
 
   **The #3056 token hazard is narrower than the watch-list implies, but it is not
   gone.** The contract is adopt-never-mint, with empty meaning greenfield only:
-  `platform/fiab/bicep/main.bicep:568` and
-  `platform/fiab/bicep/modules/admin-plane/main.bicep:2372` both say so in terms
-  (*"Empty (the greenfield case — no console to read) => bicep mints one"*).
+  `platform/fiab/bicep/main.bicep:568` states it as
+  *"Empty = greenfield, bicep mints one."*, and
+  `platform/fiab/bicep/modules/admin-plane/main.bicep:2372` states it as
+  *"Empty (the greenfield case — no console to read) => bicep mints one"*. Two
+  sites, two wordings, same contract — quoted separately because an earlier
+  revision attributed the second wording to both lines, and it appears at only
+  one of them.
   "Cannot occur" would be too strong, though:
   `.github/workflows/deploy-fiab-commercial.yml:1265` is an `else` branch that
   emits a `::warning::` and **proceeds without passing the parameter**, which
@@ -263,10 +301,11 @@ queue is shorter than it is.
   the same class as OP-14's judge cap** — a cost-material opt-in that
   `auto-bind-by-default.md` § Allowed permits only with a gate-registry entry
   recording the reason. It is opt-in today *without* that ruling
-  (`main.bicep:4554`; gate at
+  (`platform/fiab/bicep/modules/admin-plane/main.bicep:4554`; gate at
   `apps/fiab-console/lib/gates/registry/azure-services.ts:591`). Tracked with the
   judge cap in **#4612**, because a reader who actions one should see the other.
-  The s3-gateway half of OP-4 resolved itself: `main.bicep:1452` reads
+  The s3-gateway half of OP-4 resolved itself:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep:1452` reads
   `var s3GatewayEnabled = true`.
 - **OP-16** · how many Spark probe lanes should exist and which retire. Both
   `.github/workflows/csa-loom-spark-probe2.yml` and `csa-loom-spark-probe3.yml`
@@ -287,6 +326,24 @@ queue is shorter than it is.
   unmerged. The fragility is that these hosts sit OUTSIDE IaC — nothing in
   `platform/fiab/bicep` declares `func-secexp-*` or `func-cpeval-*` at all, so
   nothing re-asserts the disable and no gate would notice it being undone.
+
+  **Do not reach for "a bicep re-apply drops out-of-band state" on this row.**
+  That is a real standing rule in this repo and it **cannot operate here**,
+  which is worth saying explicitly because a reader who knows the rule will
+  apply it to exactly this shape and conclude the disable is about to be
+  reverted. Measured: the only occurrences of those names anywhere under
+  `platform/fiab/bicep` are **two comments** —
+  `modules/admin-plane/main.bicep:8650` and
+  `modules/admin-plane/report-subscriptions-job.bicep:27` — and no resource
+  declaration; their modules were deleted and replaced by Container App Jobs
+  (`modules/admin-plane/secret-expiry-monitor-job.bicep:24`: *"This module
+  REPLACES secret-expiry-monitor-function.bicep, which is deleted."*). And
+  `.github/workflows/deploy-fiab-commercial.yml` never deploys in Complete mode
+  (zero matches for `--mode Complete`). An incremental apply cannot touch a
+  resource that is not declared.
+
+  So the exposure is the **mirror** of the familiar one: not that a re-apply
+  will undo the disable, but that nothing will ever re-assert it.
 
 ---
 
