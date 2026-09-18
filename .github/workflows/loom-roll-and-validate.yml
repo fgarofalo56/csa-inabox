@@ -1054,11 +1054,39 @@ jobs:
           ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
           URL="$(printf '%s/%s/actions/runs/%s' "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" | tr -c 'A-Za-z0-9._:@/-' '_')"
 
-          # The lease lives on the ACR because #3681 removed `tags:` from that
-          # resource in registry.bicep, so an apply no longer replaces its tag
-          # dictionary. roll-race.test.mjs asserts that precondition directly
-          # against the bicep; if it regresses, the guard goes red rather than
-          # this mutex quietly evaporating.
+          # THE MUTEX DOES NOT LIVE ON THE REGISTRY RESOURCE (#4448). It lives on
+          # the registry's SUBSCRIPTION, which a subscription-scope deployment
+          # never PUTs — and the registry is PUT by every single apply.
+          #
+          # #3681 removed `tags:` from the ACR in registry.bicep on the premise
+          # that a resource whose template body declares no tags KEEPS the tags it
+          # has across an apply. MEASURED 2026-09-17 against the live Commercial
+          # estate, that premise is FALSE. An ARM PUT writes the tag dictionary it
+          # was handed, and a body that hands it none writes none:
+          #
+          #   acrloomk6mvh5sm6z7do      declared WITHOUT `tags:`  -> ONLY the four
+          #     loomAcrFw* tags, all of them written back at 12:16:22Z by the NEXT
+          #     lane to take the firewall lease. Zero compliance tags.
+          #   pe-acrloomk6mvh5sm6z7do   declared WITH `tags: complianceTags`, in
+          #     the SAME module, in the SAME apply -> all five compliance tags.
+          #
+          # That is the positive control: tags the template declares survive,
+          # tags it omits do not. So the mutex was erased by the very apply it
+          # was taken to arbitrate — every run, deterministically. Measured on run
+          # 35215007789: lease CONFIRMED 11:23:59Z, apply 11:24:04Z-11:44:30Z, and
+          # at 11:42:34Z build-fiab-images-acr-tasks (run 35216974444) read the
+          # registry's OTHER mutex as FREE on its first attempt and opened the
+          # firewall mid-apply, though this run's claim had 26 minutes left. Six
+          # consecutive scheduled runs, 2026-09-12 through 2026-09-17, died on the
+          # release step reporting exactly that erasure. The report was TRUE; the
+          # carrier was wrong.
+          #
+          # A subscription id is derived from the registry id rather than taken as
+          # an input, so the carrier still FOLLOWS the registry and no lane can
+          # arbitrate against a different one by passing a stale parameter. Two
+          # Loom estates sharing one subscription would contend on one lease —
+          # that is over-serialisation, not corruption, and there is one admin ACR
+          # per estate by construction.
           READ_ERR=""
           set +e
           ACR_ID=$(az acr show --name "$LEASE_ACR" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} --query id -o tsv 2> "$TAGS_ERR")
@@ -1066,8 +1094,34 @@ jobs:
           set -e
           ACR_ID="$(printf '%s' "$ACR_ID" | tr -d '\r')"
           ACR_ID="${ACR_ID%%$'\n'*}"
-          if [ "$IDRC" -ne 0 ] || [ -z "$ACR_ID" ]; then
-            READ_ERR="az acr show --name ${LEASE_ACR} --query id exited ${IDRC} and returned '${ACR_ID}', so the resource that CARRIES the image-write mutex could not be located. That is not evidence that no other lane is writing. Detail: $(trim400 "$TAGS_ERR")"
+          # SHAPE-MATCH BEFORE DERIVING, and do not trust `cut` to reject.
+          #
+          # An earlier revision of this block took `cut -d/ -f3` and claimed an
+          # id of the wrong shape "yields an EMPTY carrier and is refused". That
+          # claim was FALSE and is the third in-message claim in this session's
+          # PRs to describe a guard's behaviour without running it. MEASURED:
+          #
+          #   printf 'garbage' | cut -d/ -f3   ->  garbage
+          #
+          # `cut` prints the whole line when the delimiter is absent, so a
+          # malformed id produced `/subscriptions/garbage` — a well-formed-looking
+          # id for a subscription that does not exist — and the step proceeded to
+          # take a lease against it. The `case` below is what actually refuses:
+          # the id must carry the full registry shape, and the subscription
+          # segment must be non-empty (`/subscriptions//resourceGroups/...`
+          # matches the glob but leaves field 3 empty, so the -n test still has
+          # work to do).
+          CARRIER_ID=""
+          case "$ACR_ID" in
+            /subscriptions/*/resourceGroups/*/providers/Microsoft.ContainerRegistry/registries/*)
+              CARRIER_SUB="$(printf '%s' "$ACR_ID" | cut -d/ -f3)"
+              if [ -n "$CARRIER_SUB" ]; then
+                CARRIER_ID="/subscriptions/${CARRIER_SUB}"
+              fi
+              ;;
+          esac
+          if [ "$IDRC" -ne 0 ] || [ -z "$ACR_ID" ] || [ -z "$CARRIER_ID" ]; then
+            READ_ERR="az acr show --name ${LEASE_ACR} --query id exited ${IDRC} and returned '${ACR_ID}', from which the subscription that CARRIES the image-write mutex resolved to '${CARRIER_ID}'. An id that does not carry the full /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<name> shape is REFUSED here rather than derived from, because a partial derive produces a plausible subscription id for a subscription nobody checked. The mutex could not be located. That is not evidence that no other lane is writing. Detail: $(trim400 "$TAGS_ERR")"
           fi
 
           HELD=false
@@ -1084,11 +1138,11 @@ jobs:
             else
               : > "$TAGS_ERR"
               set +e
-              az tag list --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+              az tag list --resource-id "$CARRIER_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
               TRC=$?
               set -e
               if [ "$TRC" -ne 0 ]; then
-                ARGS=(--tags-error "az tag list --resource-id ${ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
+                ARGS=(--tags-error "az tag list --resource-id ${CARRIER_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
               else
                 ARGS=(--tags "$TAGS")
               fi
@@ -1160,7 +1214,7 @@ jobs:
             EXPIRES="$(tr -d '\r\n' < "$EXP")"
             : > "$TAGS_ERR"
             set +e
-            az tag update --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+            az tag update --resource-id "$CARRIER_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
               --operation Merge -o none --tags \
               "loomEstateImgOwner=${ME}" \
               "loomEstateImgExpiresEpoch=${EXPIRES}" \
@@ -1169,7 +1223,7 @@ jobs:
             WRC=$?
             set -e
             if [ "$WRC" -ne 0 ]; then
-              READ_ERR="az tag update --operation Merge on ${ACR_ID} exited ${WRC}, so this run does NOT hold the image-write lease. The deploy identity may be missing Microsoft.Resources/tags/write — grant it 'Tag Contributor' on the registry. Detail: $(trim400 "$TAGS_ERR")"
+              READ_ERR="az tag update --operation Merge on ${CARRIER_ID} exited ${WRC}, so this run does NOT hold the image-write lease. The deploy identity may be missing Microsoft.Resources/tags/write — grant it 'Tag Contributor' on the subscription that holds the registry. Detail: $(trim400 "$TAGS_ERR")"
               continue
             fi
             # THE CLAIM LANDED. From here this run's owner id may be recorded in
@@ -1185,13 +1239,13 @@ jobs:
             sleep "${LEASE_SETTLE_SECONDS:-6}"
             : > "$TAGS_ERR"
             set +e
-            az tag list --resource-id "$ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+            az tag list --resource-id "$CARRIER_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
             TRC=$?
             set -e
             CARGS=()
             if [ "$TRC" -ne 0 ]; then
               CONFIRM_READ=unreadable
-              CARGS=(--tags-error "az tag list --resource-id ${ACR_ID} exited ${TRC} on the claim read-back: $(trim400 "$TAGS_ERR")")
+              CARGS=(--tags-error "az tag list --resource-id ${CARRIER_ID} exited ${TRC} on the claim read-back: $(trim400 "$TAGS_ERR")")
             else
               CONFIRM_READ=ok
               CARGS=(--tags "$TAGS")
@@ -1213,7 +1267,7 @@ jobs:
               # there is no established holder at all, and the last id this run
               # put in the registry was its own.
               if [ "$CONFIRM_READ" = "unreadable" ]; then
-                echo "::error::estate-image-lease: the claim read-back could NOT be performed, so whether this run holds the estate image-write lease is UNKNOWN, and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. It HAS written its own claim tags: the release step below clears them if the registry still records this run. If that step also cannot read the tags, clear them by hand once this run is finished: az tag update --resource-id ${ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0"
+                echo "::error::estate-image-lease: the claim read-back could NOT be performed, so whether this run holds the estate image-write lease is UNKNOWN, and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. It HAS written its own claim tags: the release step below clears them if the carrier still records this run. If that step also cannot read the tags, clear them by hand once this run is finished: az tag update --resource-id ${CARRIER_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0"
               else
                 echo "::error::estate-image-lease: lost the claim race — the read-back named another run as the holder — and the ${LEASE_WAIT_SECONDS}s bounded wait is exhausted after ${ATTEMPT} attempt(s). This run has written NO Container App image. Re-run once the holding run finishes."
               fi
@@ -1243,7 +1297,7 @@ jobs:
           {
             echo "held=$HELD"
             echo "claimed=$CLAIMED"
-            echo "acr_id=$ACR_ID"
+            echo "carrier_id=$CARRIER_ID"
           } >> "$GITHUB_OUTPUT"
           if [ "$HELD" = "true" ]; then
             echo "::notice::estate-image-lease: HELD by ${ME} for ${LEASE_TTL_SECONDS}s after ${ATTEMPT} attempt(s). No other lane that can READ this mutex will write a Container App image until this run releases it. That is the whole of what is established: a lane whose LEASE_UNKNOWN_POLICY is 'degrade' and which cannot read the tags at all still writes, loudly, by design."
@@ -1548,8 +1602,8 @@ jobs:
       # rather than being tidied away.
       #
       # AND IT RUNS ON `claimed`, NOT ONLY ON `held`. A claim write that LANDS
-      # and a read-back that then FAILS leaves this run's owner id in the
-      # registry while the acquire step reports held=false. Gating this step on
+      # and a read-back that then FAILS leaves this run's owner id in the lease
+      # carrier while the acquire step reports held=false. Gating this step on
       # `held` alone would leave that id there for the whole TTL and the nightly
       # apply would queue behind a roll that has already exited. The policy file
       # decides what to do with the tags; exit 5 means "correct, and do NOT write
@@ -1557,7 +1611,7 @@ jobs:
       - name: Release the ESTATE IMAGE-WRITE lease (#3676 bullet 1)
         if: always() && (steps.img_lease.outputs.held == 'true' || steps.img_lease.outputs.claimed == 'true')
         env:
-          LEASE_ACR_ID: ${{ steps.img_lease.outputs.acr_id }}
+          LEASE_CARRIER_ID: ${{ steps.img_lease.outputs.carrier_id }}
           # What this run believes about its own lease is an INPUT to the policy
           # file, never something it guesses. `held` = the read-back CONFIRMED
           # this run as the holder. `claimed` = the claim write returned 0 and
@@ -1576,12 +1630,12 @@ jobs:
           ME="$(printf 'gha:%s:%s:%s' "${GITHUB_REPOSITORY:-unknown}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" | tr -c 'A-Za-z0-9._:@/-' '_')"
 
           set +e
-          az tag list --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
+          az tag list --resource-id "$LEASE_CARRIER_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} -o json > "$TAGS" 2> "$TAGS_ERR"
           TRC=$?
           set -e
           ARGS=()
           if [ "$TRC" -ne 0 ]; then
-            ARGS=(--tags-error "az tag list --resource-id ${LEASE_ACR_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
+            ARGS=(--tags-error "az tag list --resource-id ${LEASE_CARRIER_ID} exited ${TRC}: $(trim400 "$TAGS_ERR")")
           else
             ARGS=(--tags "$TAGS")
           fi
@@ -1611,7 +1665,7 @@ jobs:
 
           : > "$TAGS_ERR"
           set +e
-          az tag update --resource-id "$LEASE_ACR_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+          az tag update --resource-id "$LEASE_CARRIER_ID" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
             --operation Merge -o none --tags \
             "loomEstateImgOwner=none" \
             "loomEstateImgExpiresEpoch=0" \
@@ -1620,7 +1674,7 @@ jobs:
           WRC=$?
           set -e
           if [ "$WRC" -ne 0 ]; then
-            echo "::error::estate-image-lease: the registry records THIS run as the estate image-write lease holder and it could NOT be cleared (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_ACR_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
+            echo "::error::estate-image-lease: the lease carrier records THIS run as the estate image-write lease holder and it could NOT be cleared (az tag update exited ${WRC}), so the other lane stays blocked until the TTL expires. Clear it by hand once this run is finished: az tag update --resource-id ${LEASE_CARRIER_ID} --operation Merge --tags loomEstateImgOwner=none loomEstateImgExpiresEpoch=0 . Detail: $(trim400 "$TAGS_ERR")"
             exit 1
           fi
           echo "::notice::estate-image-lease: RELEASED by ${ME}. The other image writer may proceed."
