@@ -86,7 +86,7 @@ Verdicts used below:
 |---|---|
 | **OBSOLETE** | the thing the question was about has happened, or its premise is gone. No decision needed. Evidence given per row. |
 | **NARROWED** | part of the question answered itself; a smaller decision remains. |
-| **LIVE** | still stands as asked — **as first measured 2026-08-06**, not a claim about head. Six of the ten so-verdicted rows have since been settled; each carries a supersede marker at its own row. |
+| **LIVE** | still stands as asked — **as first measured 2026-08-06**, not a claim about head. SEVEN of the ten so-verdicted rows have since been settled (six by an operator decision, OP-15 by dissolution); each carries a supersede marker at its own row. |
 
 Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
@@ -110,17 +110,25 @@ six weeks, and rewriting the number would erase it. The finding never depended o
 the exact value: ten-to-four and ten-to-six are the same observation, which is
 why it was stated while the count was still disputed.
 
-Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
-been discharged, and the discharged part is marked at the row so it is not
-re-litigated. **They are no longer alike, and an earlier revision of this
-sentence said they were**, claiming "a real decision survives in each" 277 lines
-above OP-14's own DECIDED marker — the same headline-versus-row shape this PR
-has now committed eight times. At head: **OP-13** is the one with a live
-decision (the attended dispatch, untouched), while **OP-14's** surviving
-question — the judge cap — was **decided on 2026-09-18**. What survives in OP-14
-is not a decision but OWED WORK: the gate-registry entry
-`auto-bind-by-default.md` § Allowed requires for a cost-material opt-in.
+**SEVEN of the ten LIVE rows now carry a part that has since been discharged**,
+and the discharged part is marked at each row so it is not re-litigated: OP-3,
+OP-7, OP-8, OP-9 item 2, OP-14, OP-15 and OP-19(b). An earlier revision of this
+sentence said **two** (OP-13 and OP-14) and was left behind by the same commit
+that added five of those seven markers — the resolution reaching the rows and
+not the paragraph counting them.
+
+A second correction at the same site: that revision claimed *"a real decision
+survives in each"*, which is false for **OP-14**. At head **OP-13** is the row
+with a live decision (the attended dispatch, untouched — and note it is the one
+row here that has **never** carried a marker of any kind). **OP-14's** surviving
+question, the judge cap, was decided 2026-09-18; what survives in OP-14 is not a
+decision but OWED WORK — the gate-registry entry `auto-bind-by-default.md`
+§ Allowed requires for a cost-material opt-in.
+
 The counts are of *questions*, not of sub-asks; several rows bundle two or three.
+That is also why seven here and six in the heading below are both right: six
+counts operator decisions, seven counts settled rows, and OP-15 dissolved
+without a decision.
 
 Source of the original text: `.harness/archive/2026-08-08/state.json`,
 `operator_queue[]`. The archived program spec is at
@@ -300,27 +308,45 @@ against the 2026-08-06 framing. Note `loom_optional_severity_is_the_defect`:
 
 ---
 
-## LIVE as first measured — six of these ten rows have since been settled
+## LIVE as first measured — SEVEN of these ten rows have since been settled
 
 The heading used to read **"LIVE — still stands as asked"**, which is the
 unswept mirror of the heading corrected one file over at
 `PRPs/active/drain-2026-08-31/DECISIONS.md` (grep: "The heading used to read").
 Both are fixed in the same commit this time; the sibling was fixed alone in the
-round before — another instance of this PR's own defect class, a resolution
+commit before — another instance of this PR's own defect class, a resolution
 reaching one site and not the matching one.
 
-Ten rows were measured LIVE. At head: **OP-15 is DISSOLVED**, **six carry an
-operator decision in whole or in part** (OP-3, OP-7, OP-8, OP-9 item 2, OP-14,
-OP-19(b)), and **four still carry something live** (OP-5, OP-9's items 1/3/5/7,
-OP-11, OP-13). OP-9 and OP-19 appear on both lists because each bundles
-sub-asks that were answered separately.
+**SEVEN, not six — the six-count omitted OP-15.** This heading said "six" for
+one round while the tally directly below it named a dissolution *plus* six
+decisions, and the marker arithmetic below that gave seven. Six is the count of
+**operator decisions**; seven is the count of **settled rows**, because OP-15
+dissolved without one. Two different questions that had been sharing a number.
 
-**Every settled row carries a supersede marker at its own row**, below. Rows are
-kept in this section rather than moved, because the question text is what this
-page is for and a reader looking for a row will look where it was filed — but
-the heading no longer claims something its own rows contradict. Five of those
-markers were added in this round; two rows (OP-14, OP-19) already had one from
-earlier rounds, which is precisely how the gap was found.
+Ten rows were measured LIVE. At head: **OP-15 is DISSOLVED** (no decision — its
+premise was false), **six carry an operator decision in whole or in part**
+(OP-3, OP-7, OP-8, OP-9 item 2, OP-14, OP-19(b)), and **four still carry
+something live** (OP-5, OP-9's items 1/3/5/7, OP-11, OP-13). OP-9 and OP-19
+appear on both lists because each bundles sub-asks answered separately.
+1 + 6 = **7 settled rows**, each carrying a marker; 4 + 7 = 11 > 10 because of
+those two double-counted rows.
+
+**Every settled row carries a supersede marker at its own row**, below —
+**seven markers, and the arithmetic closes**: five added by `743a5e2198a`
+(OP-3, OP-7, OP-8, OP-9, OP-15) and two by `b8aa6eb35dc` (OP-14, OP-19). Rows
+are kept in this section rather than moved, because the question text is what
+this page is for and a reader looking for a row will look where it was filed —
+but the heading no longer claims something its own rows contradict.
+
+**On the dates in those markers.** OP-3, OP-7, OP-8 and OP-9 item 2 are stamped
+**2026-09-17**: their answers were already committed in `832b46530f9`, author
+date `2026-09-17T21:36:08-04:00`. Only OP-14 and OP-19(b) are 2026-09-18
+decisions. An earlier revision of these four markers stamped them 2026-09-18,
+contradicting `DECISIONS.md` (grep: "The section heading is 2026-09-17"), which
+states in terms that the two days are different on purpose. The date is the only
+provenance a marker carries, so getting it wrong is not a typo — it is the
+fabrication shape, borrowing the credibility of a day on which something else
+was actually decided.
 
 ### OP-3 · task `D17` · clean-sub acceptance runs
 
@@ -335,7 +361,7 @@ other's. The R8 docs half of `D17` is **done**
 `failure-recovery.md`, `resource-groups.md`); this is the part that only an
 operator can unblock.
 
-> **DECIDED 2026-09-18 — land #4561 first, THEN take the attended window.** Do
+> **DECIDED 2026-09-17 — land #4561 first, THEN take the attended window.** Do
 > not dispatch into the red supply-chain gate: a greenfield run stops there and
 > cannot produce an R4 receipt. The question above is left as asked because the
 > decision is only legible beside it. See `DECISIONS.md` § *"OP-3 ·
@@ -362,7 +388,7 @@ mistaken for an answer: `lib/editors/report/map-visual.tsx:28` records a
 *separate* decision that ArcGIS/Esri stay out of the report map visual as
 third-party. That does not settle the GeoAnalytics license question.
 
-> **DECIDED 2026-09-18 — DECLINED. No first-party Esri license; GEO-2/3/4 stay
+> **DECIDED 2026-09-17 — DECLINED. No first-party Esri license; GEO-2/3/4 stay
 > bring-your-own-license.** See `DECISIONS.md` § *"OP-7 (and OP-9 item 6) · Esri
 > GeoAnalytics license"*. Nothing in the drain waits on this, and the archived
 > `geo-graph-ml` program already sequences GEO-2 last and assumes a
@@ -379,7 +405,7 @@ written half of `C6` is **done and re-measured** —
 already complete (142/142 item guides, 29/29 app tutorials). Visual captures are
 the outstanding piece and are operator-gated by design.
 
-> **DECIDED 2026-09-18 — agent-captured in a real browser, operator
+> **DECIDED 2026-09-17 — agent-captured in a real browser, operator
 > privacy-reviews before anything publishes.** See `DECISIONS.md` § *"OP-8 (and
 > OP-9 item 4) · help-program visual captures"*. Two constraints the decision
 > does not relax: nothing auto-publishes, and capture pairs with a deploy window
@@ -397,7 +423,7 @@ the outstanding piece and are operator-gated by design.
 Verbatim from the archived `loom-apex/PRP.md:180-186`:
 
 1. Entra CA exclusion for `svc-loom-synthetic@limitlessdata.ai` → V1 login probe online.
-2. I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05). **That window has passed.** It needs a fresh decision, not a silent roll-forward — and it is now six weeks staler than when that warning was written. **[DECIDED 2026-09-18 — see the marker below. The fresh decision this item asked for has been made: re-run the shadow window. The sentence is kept as asked, not as an open ask.]**
+2. I6/I7 enforce flip after I9 sign-off + clean-shadow window (~08-05). **That window has passed.** It needs a fresh decision, not a silent roll-forward — and it is now six weeks staler than when that warning was written. **[DECIDED 2026-09-17 — see the marker below. The fresh decision this item asked for has been made: re-run the shadow window. The sentence is kept as asked, not as an open ask.]**
 3. S2 FIC flip on the prod app reg.
 4. Visual-tutorial capture runs + privacy review — the same work as OP-8. Quantified then as 0/159 published (items 0/142, features 0/17).
 5. RisingWave image-tag confirm + Trino Helm install (opt-ins).
@@ -406,7 +432,7 @@ Verbatim from the archived `loom-apex/PRP.md:180-186`:
 
 Items 4 and 6 are duplicates of OP-8 and OP-7; answer them once.
 
-> **PARTLY DECIDED 2026-09-18 — item 2 is answered; items 1, 3, 5 and 7 are
+> **PARTLY DECIDED 2026-09-17 — item 2 is answered; items 1, 3, 5 and 7 are
 > not.** Item 2: **re-run the clean-shadow window** against today's estate, then
 > decide; do not roll forward on the 2026-08-05 sign-off, whose evidence has
 > expired. See `DECISIONS.md` § *"OP-9 item 2 · I6/I7 enforce flip"*. Items 4
@@ -471,9 +497,43 @@ Two parts, and they diverge.
 > operator has since decided it, and decided it the same way the fabrication
 > guessed — which changes nothing about the fabrication being a defect.
 >
-> It is also the row this PR's own resolution reached last: the commit that
-> added supersede markers to OP-13's and OP-19's rows skipped this one, while
-> updating three headline sites. Seventh instance of the same class.
+> **[RETRACTED 2026-09-18 — the sentence below is FALSE, and it was false when
+> the commit it accuses wrote it.]** It read: *"It is also the row this PR's own
+> resolution reached last: the commit that added supersede markers to OP-13's
+> and OP-19's rows skipped this one, while updating three headline sites."*
+>
+> **No commit has ever added a supersede marker to OP-13's row**, and the commit
+> that marked OP-19 is `b8aa6eb35dc` — which marked **OP-14 and OP-19 in the
+> same commit**, so it did not skip this row either. Measured across all ten
+> branch revisions of this file
+> (`temp/lane4565r10/marker_history.py`, and independently by
+> `git show <sha>:<path> | grep -n '^> \*\*DECIDED'`):
+>
+> | commit | supersede markers it added |
+> |---|---|
+> | `832b46530f9` … `397e953d699` (8 commits) | none |
+> | `b8aa6eb35dc` | **OP-14 and OP-19** |
+> | `743a5e2198a` | OP-3, OP-7, OP-8, OP-9, OP-15 |
+>
+> OP-13 carries **zero**. That zero is a measurement, not a regex miss: the same
+> probe fires on thirteen other rows, and a deliberately wider pattern finds no
+> marker-shaped prose in OP-13 either.
+>
+> **Ninth instance of this PR's defect class, and the first one I authored
+> myself.** The false sentence was written by `b8aa6eb35dc` *inside the marker
+> that commit added to this row* — an accusation against itself. `743a5e2198a`
+> then propagated it to two NEW surfaces (the PR body and its own commit
+> message) without measuring it, while writing an ACCURATE inventory of the same
+> facts 150 lines above (grep: "already had one from earlier rounds"). Two live
+> statements that disagree, in one commit, about the very history the PR offers
+> as evidence for how the gap was found.
+>
+> **`743a5e2198a`'s commit message is wrong and cannot be edited** — it is
+> pushed, and rewriting it would need a force-push. It says "Round 7 marked
+> OP-13 and OP-19 and skipped OP-14; round 8 marked OP-14". The table above
+> supersedes it. Round numbers are dropped here in favour of SHAs on purpose:
+> a round number is not measurable from the tree, and every version of this
+> claim that used one was wrong.
 
 ### OP-15 · task `D2` · Tag Contributor on the ACR
 

@@ -342,6 +342,31 @@ sourced FROM THE REPOSITORY. What settled it was asking. Recorded here with that
 provenance stated, so the next reader is not left re-deriving it — which is the
 entire point of this file.
 
+**NONE of the six decisions has an artifact anywhere, and only OP-19(b) has said
+so.** Measured 2026-09-18 via the GitHub API: `issues/4565/comments` holds 14
+comments — 3 `github-actions[bot]` and **11 authored `fgarofalo56`**, all of
+them agent-posted review verdicts; `issues/4495/comments` holds exactly **one**
+comment, also `fgarofalo56`, and it is an agent-written reconciliation. There is
+no comment, commit trailer, or file anywhere in this repository in which the
+operator states any of these six decisions.
+
+That is not an accusation that they were invented — the operator was asked, and
+five of the six were answered in a session whose transcript is not in the tree.
+It is a statement of what a future reader can and cannot verify, and it applies
+to **all six**, not just the one that happened to get caught:
+
+> **On this repository an operator statement and an agent statement are
+> indistinguishable by author.** Both post as `fgarofalo56`. Authorship proves
+> nothing here, so "the operator said so" cannot be checked by anyone later,
+> including by the next agent reading this file.
+
+That is exactly the condition that let the OP-14 fabrication stand for four
+rounds: a fabricated decision and a real one look identical in this tree. The
+remedy is not to trust the record harder — it is to say, at every decision, that
+the record is unverifiable. Done here once for all six rather than row by row,
+because six separate disclosures would be six places for the next correction to
+miss one.
+
 Kept rather than deleted, because the process finding outlives the answer: the
 retraction of the count reached the PR title, the PR body and
 `OPERATOR-QUESTIONS.md` and never came back to this file, the one the others
@@ -385,21 +410,36 @@ rows contradict.
 **SIX rows, SEVEN table lines — OP-19's two asks are listed separately for
 legibility and counted once.** The heading said "seven rows" for two rounds,
 which reached seven by counting OP-19(a) and OP-19(b) as two. That is the exact
-split retracted 24 lines above (grep: "counting OP-19's two asks as two rows")
-and forbidden in terms by `PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md`
+split retracted earlier in this section
+(grep: `first said "seven of the ten dissolved"` — one hit, and it is the
+target, not this line) and forbidden in terms by
+`PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md`
 (grep: "The counts are of"): *"The counts are of questions, not of sub-asks."*
+
 Counted by question the remainder is **six**: OP-5, OP-9, OP-11, OP-13, OP-14,
-OP-19. Ten LIVE minus OP-15, the one dissolved outright, leaves nine — of which
-OP-3, OP-7 and OP-8 have their own decision blocks below, leaving these six.
-The error was committed in the same section that retracts it — another instance
-of a correction reaching a sentence and not its sibling, which is now the
-dominant shape on this PR rather than an incident within it.
+OP-19. The derivation is **ten LIVE, minus OP-15 (dissolved), minus the three
+rows with NOTHING outstanding — OP-3, OP-7, OP-8.** An earlier revision of this
+sentence derived it as "minus the rows that have their own decision block
+below", which is a rule this document breaks twice: OP-9 item 2 and OP-14 both
+have decision blocks and both appear in the six, because both still carry
+something outstanding (OP-9's items 1/3/5/7; OP-14's owed gate-registry entry).
+A derivation that contradicts its own table is not a derivation.
+
+Two further corrections at this site, both introduced by the commit that wrote
+the paragraph above. It said the retraction was **"24 lines above"** — the
+target is at the `seven of the ten dissolved` line and the true distance is
+**36**; and its grep anchor, `"counting OP-19's two asks as two rows"`, has
+exactly **one** single-line hit: *this line itself*, because the real text wraps
+across two lines and no `grep` without `-z` will ever match it. A self-citing
+anchor over a wrong distance, in the file whose closing paragraph says
+precisely that (grep: "Line numbers into a document that is being edited").
+**Line distances are not stated here any more** — only anchors verified to
+return exactly one hit, at the target.
 
 That mismatch is the same defect this section pre-empted one table up, where the
 `> **Decision:**` block count is reconciled against the headline explicitly. The
 reconciliation was written for one count and not extended to the table beside
-it. Seventh instance of the class on this PR, and the first found in a HEADING
-rather than in a sentence.
+it — found in a HEADING rather than in a sentence.
 
 | row | status | what is actually outstanding |
 |---|---|---|
