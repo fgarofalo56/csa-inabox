@@ -1003,12 +1003,22 @@ def _without_title_line_breaks(err: str, *titles: str) -> str:
     # LONGEST FIRST, and de-duplicated. The two titles are the pre-close read
     # and the read-back. If one is a SUBSTRING of the other, replacing the
     # shorter first consumes the text the longer needed to match, and the longer
-    # title survives un-neutralised -- so a single title edit inside the close
-    # window forges the verdict with BOTH titles known and both passed. Argument
-    # order is the caller's accident; length is a property of the data.
-    # WHAT VALUE MAKES THIS FAIL: titles `("a\\nb", "a\\nb c")` against an `err`
-    # containing `"a\nb c"`. In argument order the first replace rewrites the
-    # prefix and the second never matches; longest-first neutralises both.
+    # title survives un-neutralised, leaving a break in the record.
+    #
+    # WHAT THAT COSTS, STATED ACCURATELY. An earlier revision of this comment
+    # said argument order "forges the verdict". That was an overclaim and no
+    # witness for it exists: a search over 35,000+ candidate straddles at two
+    # repo sizes, with one- and two-break titles, found ZERO forges under EITHER
+    # ordering. The measured effect of argument order is degradation to the
+    # honest `unknown` -- 4.5x/3.1x more spurious `unknown` than longest-first --
+    # which is a worse instrument, not a false verdict. Ordering by length is
+    # still right (argument order is the caller's accident; length is a property
+    # of the data), but it is a precision fix, not a soundness one, and saying
+    # otherwise is the R7 error this file exists to prevent.
+    #
+    # WHAT VALUE MAKES THE TEST FAIL: titles `("x\\ny", "x\\ny\\nz")` against an
+    # `err` containing `"x\ny\nz"`. In argument order the first replace rewrites
+    # the prefix, the second never matches, and the break before `z` survives.
     for title in sorted({_as_channel_would(t) for t in titles}, key=len, reverse=True):
         if _has_line_break(title):
             err = err.replace(title, " ".join(title.splitlines()))

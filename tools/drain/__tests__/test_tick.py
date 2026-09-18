@@ -2732,10 +2732,35 @@ def test_the_close_outcome_reads_lines_the_way_gh_wrote_them():
     CR to LF before any caller sees them, and no CR reaches `_producer_lines`
     through the real producer at all. These two arms are unit tests of the
     helper against a hypothetical caller, NOT evidence that the producer path
-    handles CRLF, and GH32 being "killed" by them says only that the helper
-    still behaves as written. The channel itself is pinned by
+    handles CRLF.
+
+    AND THE ARM THEY KILL IS **GH38**, NOT GH32. An earlier revision of this
+    disclosure named GH32, which is wrong and matters: GH32 is killed by four
+    entirely different tests, so filing the disclosure under it made the
+    equivalent-mutant admission invisible.
+
+    MEASURED, not transcribed (2026-09-18, sandbox copy, control green first):
+    apply GH38 and deselect BOTH constructed CRLF sites -- the two assertions
+    below, AND item 4 of
+    `test_the_close_outcome_is_read_at_a_fixed_offset_on_the_line_gh_names_us_in`
+    -- and GH38 **SURVIVES** (546 passed, 4 deselected, rc 0). A first attempt at
+    this probe deselected only ONE of the two sites and wrongly concluded GH38
+    had other kill power; naming the second site is the whole content of the
+    finding.
+
+    The third deselection is `test_mutate_gates.py::
+    test_every_arm_anchor_is_present_and_unique_in_the_current_source`. It fails
+    under EVERY arm simply because the anchor string changed, so counting it
+    makes KILLED a tautology
+    (`csa_loom_a_meta_test_inside_the_mutation_sandbox_makes_killed_a_tautology`).
+
+    So GH38 is scored KILLED over an input `tick.sh` cannot emit, and that is
+    disclosed here rather than counted (`.claude/rules/assertion-design.md`
+    "done" #5 and #6 -- a green arm must say which it is).
+
+    The channel itself is pinned by
     `test_gh_stderr_reaches_the_classifier_with_cr_already_translated_to_lf`,
-    which is the arm that takes `err` from a real capture.
+    which is the only arm in this file that takes `err` from a real capture.
     """
     # A non-LF separator is CONTENT, not structure: one line, not two.
     assert tick._producer_lines("a\u2028b\n") == ["a\u2028b", ""]
