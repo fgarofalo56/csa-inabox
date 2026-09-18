@@ -33,12 +33,13 @@ on:
       # `paths:`, so the PR path was never affected — this only closes the
       # push-to-main arm.
       #
-      # SIDE EFFECT, NAMED. validate.yml publishes 4 of the 15 required contexts
-      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene), and the drain
+      # SIDE EFFECT, NAMED. validate.yml publishes 5 of the 17 required contexts
+      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene, and — since
+      # 2026-09-18 — Bicep Params Compile; it was 4 of 15 before), and the drain
       # harness excuses exactly those on a merged sha BECAUSE this push trigger
       # was path-filtered (tools/drain/gates.py, policy.json `push_event_runs`).
       # Widening it means a merge touching any .bicep/.bicepparam now really
-      # runs those four instead of being excused. That is the good direction —
+      # runs those five instead of being excused. That is the good direction —
       # fewer excuses, more measurement — but it is a change to a receipt's
       # accounting and is recorded here rather than discovered later.
       - '**/*.bicep'
@@ -48,15 +49,21 @@ on:
     branches: [main]
   # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
   # GITHUB_TOKEN and GitHub suppresses the `pull_request` trigger on it, so the
-  # four required contexts published here (Secret Scan, PowerShell Lint, Python
-  # Lint, Repo Hygiene) never ran and were replaced by synthetic statuses.
+  # required contexts published here never ran and were replaced by synthetic
+  # statuses. That set was FOUR when #3393 was fixed (Secret Scan, PowerShell
+  # Lint, Python Lint, Repo Hygiene); it is FIVE since 2026-09-18, when Bicep
+  # Params Compile became required.
   # `workflow_dispatch` is the documented exception GITHUB_TOKEN *may* trigger,
   # so release-please.yml dispatches this workflow against the release branch.
-  # None of those four jobs read PR context, and none of them `needs:` the
-  # `changes` job, so they behave identically under a dispatch.
+  # None of those five jobs read PR context, and none of them `needs:` the
+  # `changes` job, so they behave identically under a dispatch. Re-measured
+  # 2026-09-18 for all five, not extended from the original four by assumption:
+  # zero references to `github.event.pull_request.*`, `github.event.number`,
+  # `github.head_ref` or `github.base_ref` in any of the five job bodies.
   workflow_dispatch:
-  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene are
-  # REQUIRED contexts, and a merge group is gated on the SAME required set as a
+  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene /
+  # Bicep Params Compile are REQUIRED contexts, and a merge group is gated on
+  # the SAME required set as a
   # PR. A required context that never reports in a merge group does not fail the
   # group — it leaves it pending until the queue times out and ejects the PR, so
   # a missing trigger here would stall every merge in the repo.
@@ -64,16 +71,19 @@ on:
   # DELIBERATELY BARE — no `branches:`, no `paths:`. The `paths:` list above
   # belongs to `push:` only; inheriting a path filter here would reintroduce the
   # same stall by another route (a merge group touching no matching path would
-  # never produce the context). All four jobs are event-agnostic: none has a
+  # never produce the context). All five jobs are event-agnostic: none has a
   # job-level `if:`, none reads `github.event.pull_request.*`, and none `needs:`
   # the path-filtered `changes` job. They behave identically here.
   merge_group:
 
 concurrency:
-  # #3426 — per-SHA on push/dispatch. This lane publishes FOUR required
-  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan), and with
+  # #3426 — per-SHA on push/dispatch. This lane publishes FIVE required
+  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan, and —
+  # since 2026-09-18 — Bicep Params Compile), and with
   # a ref-keyed group + cancel-in-progress:true every merge cancelled the
   # previous commit's run: 4 of the last 30 main runs cancelled (2026-08-14).
+  # That 4-of-30 is a DATED measurement of the incident, not the context count;
+  # do not "correct" it to five.
   # A cancelled required check is an ABSENCE, not a pass. See
   # scripts/ci/check-required-lane-concurrency.mjs, which now enforces this.
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
@@ -248,18 +258,40 @@ jobs:
   # asserted. What remains outside any guard's reach is a change to branch
   # protection or to the workflow's `on:` verbs themselves.
   #
-  # NOT A REQUIRED CONTEXT — STATED PLAINLY. `Bicep Params Compile` is NOT one
-  # of main's 15 required status checks (`gh api
-  # repos/fgarofalo56/csa-inabox/branches/main/protection --jq
-  # '.required_status_checks.contexts[]'` lists none), and ruleset 15128883
-  # carries no required_status_checks rule. So a RED compile here does not block
-  # a merge today: what blocks is `guardrails`, which checks this job's SHAPE,
-  # never the compile's RESULT. #4466's premise — "il5.bicepparam is parsed by
-  # no CI step" — is closed; the stronger claim "a broken il5.bicepparam can no
-  # longer reach main" is NOT, and will not be until an operator adds this
-  # context to branch protection. (`Bicep Lint` is non-required too, so this is
-  # pre-existing practice rather than a regression.) Changing branch protection
-  # is deliberately not done from here.
+  # REQUIRED AS OF 2026-09-18 — and this note said the opposite until then.
+  # `Bicep Params Compile` IS now one of main's required status checks (it was
+  # added to branch protection on 2026-09-18, taking the set from 15 to 17
+  # alongside the brain security-graph check). A RED compile here therefore
+  # BLOCKS a merge.
+  #
+  # The retracted text, kept rather than deleted so the change is legible: it
+  # read "NOT A REQUIRED CONTEXT — STATED PLAINLY … a RED compile here does not
+  # block a merge today: what blocks is `guardrails`, which checks this job's
+  # SHAPE, never the compile's RESULT." That was true when written and is not
+  # now.
+  #
+  # WHAT REQUIRED-NESS DOES *NOT* BUY, stated because the first draft of this
+  # correction overclaimed in the opposite direction. It said #4466's stronger
+  # claim — "a broken il5.bicepparam can no longer reach main" — was therefore
+  # closed. IT IS NOT. Measured 2026-09-18:
+  #
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.enforce_admins.enabled'      ->  false
+  #
+  # so an admin merge bypasses every required context, and `--admin` merging is
+  # this repo's standing practice rather than an exception. Required-ness stops
+  # an ORDINARY merge on a red compile. It does not make the path unreachable,
+  # and no branch-protection setting short of `enforce_admins: true` would.
+  # Retracting one overclaim by writing its mirror is the failure this note now
+  # records against itself.
+  #
+  # Verify rather than trust this comment; it is the kind that rots:
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.required_status_checks.contexts[]'
+  # The tracked snapshot is tools/drain/required_contexts.json, and the step
+  # names below are declared in tools/drain/policy.json
+  # (receipts.ci_green_rule.substantive_steps) so a green-over-skipped run
+  # cannot be read as a receipt. (`Bicep Lint` remains non-required.)
   #
   # POPULATION: every tracked `*.bicepparam`, repo-wide — 17 files, not just the
   # 7 under platform/fiab/bicep/params/. All 17 compile clean today (measured

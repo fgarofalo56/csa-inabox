@@ -1349,10 +1349,12 @@ const LEASE_SCRIPT = 'acr-firewall-lease.sh';
  * Strip whole-line comments so a MENTION of the lease is not read as a CALL.
  *
  * scripts/csa-loom/apply-acr-compliance-tags.sh names `acr-firewall-lease.sh`
- * twice, both times in a comment explaining why the template must not own the
- * ACR's tag dictionary. It takes no lease. A `grep -l` derivation would put it
- * in the census and the census would then be wrong in the harmless direction —
- * which is still wrong, because a census nobody trusts gets deleted.
+ * three times as of #4448 (it was twice; the #4448 note explaining that the
+ * estate image-write mutex has MOVED OFF that registry names it again), every
+ * one of them in a comment explaining why the template must not own the ACR's
+ * tag dictionary. It takes no lease. A `grep -l` derivation would put it in the
+ * census and the census would then be wrong in the harmless direction — which
+ * is still wrong, because a census nobody trusts gets deleted.
  *
  * @param {string} src
  * @returns {string}
