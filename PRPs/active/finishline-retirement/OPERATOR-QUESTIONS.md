@@ -10,19 +10,22 @@
 > the evidence trail behind each verdict.
 >
 > **A measure-first pass ran against all ten LIVE rows before any was put to the
-> operator.** Of the ten: **one dissolved outright** (OP-15), **four carry an
-> operator decision**, and **six still carry something live** — OP-5, OP-9's
-> unanswered items, OP-11, OP-13, OP-14 and OP-19. Those overlap because OP-9
-> both carries a decision and has four items nobody answered.
+> operator.** Of the ten: **one dissolved outright** (OP-15), **six carry an
+> operator decision**, and **four still carry something live** — OP-5, OP-9's
+> unanswered items, OP-11 and OP-13. Those overlap because OP-9 both carries a
+> decision and has four items nobody answered.
 >
-> **The "four" is DISPUTED and the caveat travels with it.** OP-19(b) is filed
-> approved with no recorded provenance, and PR #4564's body says
-> `operator-approved 2026-09-17` — the same day. Either the teardown was a fifth
-> decision by another route (four is short by one), or that line is unsourced
-> (OP-19(b) is not approved at all). See `DECISIONS.md` § OP-19(b). An earlier
-> revision wrote "resolve the provenance before anyone cites either count" in
-> one file and then cited the count flat in this one — the caveat has to
-> accompany the number, or it protects nothing.
+> **The count dispute is RESOLVED — the operator settled it directly on
+> 2026-09-18.** For three rounds this banner carried a caveat that the "four"
+> might be short by one, because OP-19(b) was filed approved with no provenance
+> anyone could source. Both open questions are now answered:
+> **OP-19(b) WAS approved** on 2026-09-17 (confirmed 2026-09-18), making it a
+> fifth decision; and **OP-14 is now decided too** — keep the 5000/day judge cap
+> — making six. See `DECISIONS.md` § OP-14 and § OP-19(b).
+>
+> The caveat was right to exist and is worth remembering rather than deleting:
+> the missing fact was never in the repository, so no amount of measuring could
+> have closed it. Six review rounds circled it. Asking closed it in one.
 >
 > Earlier revisions claimed **seven dissolved**, then **two**. Seven was reached
 > by counting OP-19's two asks and OP-9's items as separate rows, which the rule
@@ -37,13 +40,16 @@
 > | **OP-7** / OP-9 item 6 Esri license | **DECLINED** — GEO-2/3/4 stay bring-your-own-license |
 > | **OP-8** / OP-9 item 4 visual captures | agent-captured in a real browser, operator privacy-reviews before anything publishes |
 >
-> **OP-14 was NOT one of the four.** An earlier revision of DECISIONS.md filed
-> it as *"decided: keep the 5000/day ceiling — operator, this session"*, and an
-> earlier revision of THIS line said "No such decision was made". Neither is
-> supportable: what is checkable is that **no decision is RECORDED** for OP-14 —
-> DECISIONS.md carries exactly four `> **Decision:**` blocks and none is OP-14's.
-> Absence from a file is absence of a record, not proof about what was said. The
-> row stands as asked.
+> **OP-14 was not among those four, and is now decided separately.** An earlier
+> revision of DECISIONS.md FABRICATED a decision here — *"decided: keep the
+> 5000/day ceiling — operator, this session"* — before the question had been
+> asked, and an earlier revision of THIS line then over-retracted it with "No
+> such decision was made", which absence from a file cannot establish. Put to
+> the operator properly on 2026-09-18, the answer was **keep the 5000/day
+> ceiling**: the same outcome the fabrication guessed, which changes nothing
+> about the fabrication being a defect. It now carries a cost figure
+> (~20–25M gpt-4.1 tokens/day) and an owed gate-registry entry, neither of which
+> the invented version had.
 >
 > The most useful row is **OP-15**, which asked whether to grant Tag Contributor
 > so ACR firewall leases stop running unleased. Both halves of its premise were
@@ -84,24 +90,25 @@ Verdicts used below:
 
 Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
-After the 2026-09-17 measure-first pass, the ten LIVE rows resolved to
-**1 dissolved outright** (OP-15) · **3 decided by the operator** (OP-3,
-OP-7, OP-8) plus **OP-9 item 2** decided as its own sub-ask · and **6 still
-carrying something live** (OP-5, OP-9's four unanswered items, OP-11, OP-13,
-OP-14, OP-19). **The decided count is disputed — see the banner above and
-`DECISIONS.md` § OP-19(b).** Two earlier revisions got the dissolved count wrong
-in the same direction: "7 dissolved on measurement", by splitting sub-asks into
-rows against the rule stated two paragraphs below; then "2 dissolved", by
-counting OP-11, which is implemented in the bootstrap script but not in
-`entra-app-registration.bicep`.
+After the 2026-09-17 measure-first pass and the operator's 2026-09-18
+resolution, the ten LIVE rows stand at
+**1 dissolved outright** (OP-15) · **6 carrying an operator decision** — OP-3,
+OP-7, OP-8, OP-9 item 2, OP-19(b) (approved 2026-09-17, confirmed 2026-09-18)
+and OP-14 (decided 2026-09-18) · and **4 still carrying something live**
+(OP-5, OP-9's four unanswered items, OP-11, OP-13). Three earlier revisions got
+the counts wrong, all in the same direction — making the queue look emptier or
+more settled than it was: "7 dissolved on measurement", by splitting sub-asks
+into rows against the rule stated below; then "2 dissolved", by counting OP-11,
+which is implemented in the bootstrap script but not in
+`entra-app-registration.bicep`; then "four decided", which was short by one
+until the operator confirmed OP-19(b).
 
 The original counts are kept above rather than overwritten, because the drop from
-ten LIVE to roughly four decisions is still the finding — it is the measurement
-of how much of an operator queue goes stale in
-six weeks, and rewriting the number would erase it. ("Roughly" is load-bearing:
-the decided count is disputed, see the banner and `DECISIONS.md` § OP-19(b). The
-FINDING survives either value — ten to four and ten to five are the same
-observation — which is why it is stated here without waiting on the dispute.)
+ten LIVE to six decisions is still the finding — it is the measurement of how
+much of an operator queue goes stale in
+six weeks, and rewriting the number would erase it. The finding never depended on
+the exact value: ten-to-four and ten-to-six are the same observation, which is
+why it was stated while the count was still disputed.
 
 Two of the ten LIVE rows — **OP-13** and **OP-14** — carry a part that has since
 been discharged. They are filed under LIVE because a real decision survives in

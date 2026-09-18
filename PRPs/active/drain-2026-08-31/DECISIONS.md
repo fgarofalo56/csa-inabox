@@ -314,24 +314,39 @@ operator, on the principle that an operator's time is the scarcest input in this
 drain and a question whose premise is already false is worse than no question —
 it extracts a decision that changes nothing.
 
-**One of the ten dissolved outright. Four carry an operator decision. Six still
+**One of the ten dissolved outright. SIX carry an operator decision. Four still
 carry something live.** Those add to more than ten because OP-9 does both: one
 of its seven items was decided and four were never answered.
 
-**THE "FOUR" IS DISPUTED, AND THIS FILE IS THE AUTHORITATIVE COPY, SO THE
-CAVEAT BELONGS HERE FIRST.** OP-19(b) is filed approved with no recorded
-provenance, while PR #4564's body says `operator-approved 2026-09-17` — the same
-day these questions were put. Either the teardown was a FIFTH decision by
-another route, in which case four is short by one; or that line is unsourced, in
-which case OP-19(b) is not approved at all. See the OP-19(b) row below.
+**THE DISPUTE OVER THE COUNT IS RESOLVED — the operator settled it directly,
+2026-09-18.** Six rounds of review circled this and no measurement could close
+it, because the missing fact was not in the repository. Both open questions are
+now answered by the only authority that could answer them:
 
-That caveat was written at the OP-19(b) row as "resolve the provenance before
-anyone cites either count" and then **this headline cited the count flat**, far
-above its own instruction — while the caveat was propagated to the PR
-title, the PR body and `OPERATOR-QUESTIONS.md` and never back to the source. A
-reviewer found it in the file that issued the instruction. Fifth round, same
-class: the retraction reaches every surface except the one being read as
-authoritative.
+- **OP-19(b) WAS approved.** The operator confirms the Function App teardown
+  approval on 2026-09-17, so PR #4564's `operator-approved 2026-09-17` line is
+  sourced after all. That makes it a FIFTH decision, and the earlier count of
+  four was short by one — the direction the dispute flagged as possible.
+- **OP-14 is now decided too** (below), which makes six.
+
+**SIX decisions, FIVE `> **Decision:**` blocks — and that is not a discrepancy.**
+OP-19(b) was approved on 2026-09-17 outside this document's question set, so it
+has a row and a confirmation but no block. Said explicitly because the block
+count was, for two rounds, used as an anchor for a claim about OP-14, and a
+future reader comparing `grep -c '^> \*\*Decision:\*\*'` against the headline
+would otherwise find them disagreeing and have no way to know which was wrong.
+
+The provenance problem was real and the caveat was right to exist: an approval
+nobody could source should not have been counted, and this one could not be
+sourced FROM THE REPOSITORY. What settled it was asking. Recorded here with that
+provenance stated, so the next reader is not left re-deriving it — which is the
+entire point of this file.
+
+Kept rather than deleted, because the process finding outlives the answer: the
+retraction of the count reached the PR title, the PR body and
+`OPERATOR-QUESTIONS.md` and never came back to this file, the one the others
+call authoritative. A reviewer found it here, in the file that had issued the
+instruction "resolve the provenance before anyone cites either count".
 
 Two earlier revisions of this line were both wrong, in the same direction. The
 first said "seven of the ten dissolved" — reached by counting OP-19's two asks
@@ -366,9 +381,9 @@ dissolved — see below.
 | **OP-9** items 1, 3, 5, 7 | **no verdict** | item 2 was decided by the operator (below) and items 4 and 6 are duplicates of OP-8 and OP-7. The remaining four were neither measured nor asked |
 | **OP-11** audience registration | **stands as asked** | an earlier revision filed this as dissolved on the grounds that "option (a) is already implemented in code", citing `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058`. That is ONE of the two creators. Issue 2678's option (a) requires the identifier URI in **both** creators plus `az ad sp create` on the bicep path, and `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:138` still runs `az ad app create --display-name … --sign-in-audience AzureADMyOrg` with **zero** `--identifier-uris` and **zero** `az ad sp create` (measured 2026-09-18; the bootstrap script's single `identifierUris` is the positive control showing the probe is not blind). Issue 2678 is OPEN and its body prefers option (b). This PR's own row at `OPERATOR-QUESTIONS.md` (grep: "stands exactly as asked") says "stands exactly as asked" — the dissolution contradicted a line in the same PR |
 | **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about is much narrower than the row implies — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. "Cannot occur" was too strong: `deploy-fiab-commercial.yml:1265` is an `else` that WARNS and proceeds with a mint. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
-| **OP-14** `#3056` owner + judge cap | **no decision recorded** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **This document records no decision for it**, and that is exactly what the anchor supports and all it supports: the file carries exactly four `> **Decision:**` blocks — OP-3, OP-9 item 2, OP-7, OP-8 — and none for OP-14 (`grep -c '^> \*\*Decision:\*\*'` returns 4). **Narrowed on purpose.** Two earlier anchors for this retraction were unsourced, and a third overreached: a revision wrote "the operator did not decide it", which the anchor cannot establish — absence from this file is absence of a RECORD, not proof about what was said. The row immediately below applies the OPPOSITE inference to the same kind of evidence, filing OP-19(b) as "approved by a route this document does not record"; both cannot be right about what silence means, so this row now claims only the record. (`git log --all -S "operator-approved"` returns only this PR's own commit, and operator and agents share the `fgarofalo56` identity, so authorship settles nothing either way.) The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
+| **OP-14** `#3056` owner + judge cap | **DECIDED 2026-09-18 — keep the 5000/day ceiling** | see the decision block below. The history stays because it is the sharper record: an earlier revision **FABRICATED** this decision (*"decided: keep the 5000/day ceiling — operator, this session"*) before it had been asked; three successive anchors for the retraction were unsourced or overreached; the row was restored to LIVE. It was then put to the operator properly and answered **the same way the fabrication guessed** — which changes nothing about the fabrication being a defect. A decision that happens to be right is not a decision that was made, and the fabricated version carried no gate-registry entry, no cost figure and no way to check it |
 | **OP-19 (a)** duplicate timers | **mitigated out-of-band; fragile for the OPPOSITE reason first claimed** | measured on the live estate 2026-09-18: the timers ARE disabled — `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor` and `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` both report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`, as does a third, `copilotEvaluatorHttp`, which an earlier revision omitted. It is an app setting applied out of band, **not** the result of PR #4564, which is open and unmerged. An earlier revision then said "a bicep re-apply drops out-of-band state" — that mechanism CANNOT operate here: nothing in `platform/fiab/bicep` declares `func-secexp-*` or `func-cpeval-*` at all (their modules were deleted and replaced by Container App Jobs, e.g. `secret-expiry-monitor-job.bicep:24`), and nothing deploys in Complete mode, so an incremental apply cannot touch an undeclared resource. The real fragility is the mirror image: these hosts sit OUTSIDE IaC, so nothing re-asserts the disable either, and no gate would notice it being undone |
-| **OP-19 (b)** teardown | **approved — by a route this document does not record** | the row says "approved; PR carries the proof", and PR #4564's body line 3 reads `Refs #4495 · task C3 · operator-approved 2026-09-17` — the same day the four questions above were put. **This document does not establish where that approval came from**, and an approval with no recorded provenance is the OP-14 defect one row up. Two readings, and nothing written here separates them: either the teardown was a FIFTH operator decision taken by another route, in which case the headline "four" is short by one; or #4564's "operator-approved" is itself unsourced, in which case OP-19(b) is not approved and belongs with the unanswered rows. Either way it is NOT settled by this pass. Resolve the provenance before anyone cites either count |
+| **OP-19 (b)** teardown | **DECIDED — approval confirmed 2026-09-18 for 2026-09-17** | the operator confirms they approved the Function App teardown on 2026-09-17, so PR #4564's `Refs #4495 · task C3 · operator-approved 2026-09-17` is sourced after all. **This is the FIFTH decision and the earlier headline count of four was short by one** — the direction the dispute named as possible. The caveat that stood here for three rounds was right to exist: the approval could not be sourced FROM THE REPOSITORY, and an unsourceable approval should not authorise tearing down seven provisioned hosts. What settled it was asking, not measuring — the missing fact was never in the tree. `deploy-integrity.md` R2 still governs the work: approved is not deployed, and #4564 is open |
 
 **OP-15 is the one worth reading twice.** The question asked whether to grant
 Tag Contributor so that ACR firewall leases stop running unleased. Both halves of
@@ -455,6 +470,32 @@ ArcGIS/Esri stay out of the report map visual as a third-party dependency. That
 decision does not settle the GeoAnalytics license question and this one does not
 settle that. Two decisions, same vendor, different subjects.
 
+### OP-14 · `#3056` judge cap — **keep the 5000/day ceiling** (decided 2026-09-18)
+
+> **Decision:** the Copilot judge cap stays at **5000/day**. Asked with options
+> and a recommendation; the operator chose to keep it.
+
+At that ceiling the evaluator runs roughly **20–25M gpt-4.1 tokens/day**, which
+makes this a cost-material opt-in. Under `auto-bind-by-default.md` § Allowed,
+that is permitted *only with disclosure* — it "must be listed in the gate
+registry with that reason". **Obliges:** a gate-registry entry recording the cap,
+its cost, and that it is a deliberate ceiling rather than an unreviewed default.
+The entry does not exist today; that is owed work, not a settled state.
+
+**This row is the reason the rest of this section exists in the shape it does.**
+An earlier revision recorded a decision here *before it had been asked*, cited
+"operator, this session" as its evidence, and filed it in a table headed "The
+seven that needed no decision" — two lines below the sentence "Only four were
+asked". The retraction then took four attempts: two anchors that were as
+unsourced as the fabrication, and one that overreached by claiming the operator
+had not decided, which absence from a file cannot establish.
+
+The operator has now decided it, and **decided it the way the fabrication
+guessed**. That is worth stating plainly rather than quietly: a fabricated
+decision that turns out to match is still a fabricated decision. It carried no
+cost figure, no gate-registry obligation, and no way for a reader to check it —
+all three of which this block carries because the decision was actually made.
+
 ### OP-8 (and OP-9 item 4) · help-program visual captures — **agent-captured, operator-reviewed**
 
 > **Decision:** captures are produced by an agent driving a real browser against
@@ -521,10 +562,16 @@ forwarding the list as written.
 It read "The ratio held: **7 of 10 dissolved**" — the same claim retracted at the
 top of this section, surviving far below the retraction, in the very commit
 whose subject was about closing a finding at every site rather than at its label.
-Corrected count: **one row dissolved outright** (OP-15), four carry an operator
-decision — **that "four" is disputed; see the headline of this section and the
-OP-19(b) row** — and the rest still carry something live. OP-11 was briefly
-filed as a second dissolution and is not one — see its row.
+Corrected count: **one row dissolved outright** (OP-15), **six carry an operator
+decision** (OP-3, OP-7, OP-8, OP-9 item 2, OP-19(b), OP-14), and four still
+carry something live. OP-11 was briefly filed as a second dissolution and is not
+one — see its row.
+
+An earlier revision of THIS paragraph said "four … that four is disputed", and
+kept saying it after the operator resolved the dispute on 2026-09-18. That is
+the same class as the six escapes above, running the other way: the RESOLUTION
+failing to reach a site the retraction had reached. Found by the sweep rather
+than by a reviewer, which is the first time on this PR.
 
 The generalisable form, worth more than any individual row here: **before asking
 an operator to decide, verify the premise of the question at its site.** A
