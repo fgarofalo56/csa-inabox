@@ -96,15 +96,22 @@ node scripts/measure/mutate.mjs      # every arm must report CAUGHT
 node scripts/measure/__tests__/injection-arms.mjs   # every arm must match its documented verdict
 ```
 
-On Windows that is **156 tests, 0 skipped** — MEASURED, `rc=0`, with the exact command
-block above, at the commit that added this line. It was 94 before the `python-dash-repl`
+On Windows that is **162 tests, 0 skipped** — MEASURED, `rc=0`, with the exact command
+block above, at the commit that added this line: 96 `measurement-guard` + 32 `measure`
++ 25 `measure-injection` + 9 `cmd-quote`. It was 94 before the `python-dash-repl`
 rule landed.
 
-**Treat that number as a re-measurement instruction, not a fact.** It moved 94 → 152 → 156
-within a single pull request, and the 152 was stale before the commit that wrote it had
-finished. Run the block above rather than trusting the figure; if they disagree, the block
-is right. A stale count in a file whose subject is false measurement is the defect it
-documents.
+**Treat that number as a re-measurement instruction, not a fact.** It has moved
+94 → 152 → 156 → 160 → 162, and **twice it was stale before the commit that wrote it
+had finished** — the 152, and then the 156, which a reviewer re-derived as 160 with the
+drift introduced by a later commit **on this same branch**. Run the block above rather
+than trusting the figure; if they disagree, the block is right. A stale count in a file
+whose subject is false measurement is the defect it documents, and it has now been that
+defect three times.
+
+The per-suite breakdown is given above for the same reason the guards assert row sets
+rather than bare counts: a total that drifts tells you nothing about WHERE, and the four
+numbers fail separately.
 
 On a Linux CI runner it is four fewer, with the win32-only cmd.exe tests skipped — derived
 from the measured total and the measured skip set, not observed on a Linux host. Forcing
@@ -183,7 +190,6 @@ right one — belt and braces — but not for the reason claimed.
 
 ## The hook
 
-`.claude/hooks/measurement-guard.mjs` is a **PreToolUse** hook (wired in `.claude/settings.json`)
 `.claude/hooks/measurement-guard.mjs` is a **PreToolUse** hook (wired in `.claude/settings.json`)
 that **denies** Bash commands carrying four shapes — `$?` after a pipeline, a leading-slash ARM
 id passed to az/gh from Git Bash, a discarded stderr on a measurement, and `python -` at command

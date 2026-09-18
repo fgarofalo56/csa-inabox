@@ -428,9 +428,51 @@ test('the -c/-m EXCLUSION has a witness — a BARE trailing dash', () => {
   // the lookahead, `-c` is skipped as an ordinary option and the dash reads as
   // the interpreter's — it is not. `-c`'s argument here IS `-`, a one-character
   // program; stdin is never read.
-  // WHAT MAKES THIS FAIL: remove the `(?!-[cm](?:\s|$))` lookahead.
+  // WHAT MAKES THIS FAIL: remove the `(?!-[cm])` lookahead entirely.
   assert.equal(has(`python -c -`, 'python-dash-repl'), false);
   assert.equal(has(`python -m -`, 'python-dash-repl'), false);
+});
+
+test('the ATTACHED -cCODE / -mMOD spelling is excluded too — a live false DENIAL', () => {
+  // THIRD attempt, and the one the previous two could not have made. The
+  // lookahead was `(?!-[cm](?:\s|$))`, whose trailing `(?:\s|$)` confined it to
+  // the SPACE-SEPARATED spelling. CPython also accepts the attached form, so
+  // `-cprint(2)` fell through the option-skip loop and the following bare dash
+  // fired.
+  //
+  // MEASURED ON THE INTERPRETER, not reasoned about (python 3.13.15):
+  //     python "-cprint(2)" - < /dev/null   ->  prints 2, rc=0, NO REPL
+  // So the hook DENIED a command carrying zero hazard. In a PreToolUse hook a
+  // false denial stops work outright — it is the worse direction here, not the
+  // safer one.
+  //
+  // WHAT MAKES THIS FAIL: restoring `(?:\s|$)` after `-[cm]` in the lookahead.
+  // Review measured that mutation SURVIVING the full suite at 0/94 while
+  // differing from head on exactly these inputs — the fragment had no witness
+  // in EITHER direction, under a test named "the -c/-m EXCLUSION has a
+  // witness". This is that witness.
+  assert.equal(has(`python -cprint(2) -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -mjson.tool -`, 'python-dash-repl'), false);
+  // PAIRED POSITIVE: the exclusion must not have swallowed the real hazard.
+  // A bare dash with no -c/-m still fires, so "false" above is a decision and
+  // not a dead rule.
+  assert.equal(has(`python -`, 'python-dash-repl'), true);
+  assert.equal(has(`python -u -`, 'python-dash-repl'), true);
+});
+
+test('env MAY CARRY A PATH — /usr/bin/env python - was a fail-OPEN', () => {
+  // The `env` alternative required the bare word at that position while the
+  // path-prefix group sat AFTER it, so `/usr/bin/env python -` matched nothing
+  // and was ALLOWED. The adjacent comment claimed `/usr/bin/` was accepted —
+  // true of `/usr/bin/python`, not of `/usr/bin/env python`. A guard's comment
+  // naming a scope wider than the guard's is the recurring shape here.
+  //
+  // WHAT MAKES THIS FAIL: removing `(?:\S*[\/\\])?` from before `env`.
+  assert.equal(has(`/usr/bin/env python -`, 'python-dash-repl'), true);
+  assert.equal(has(`/usr/bin/env FOO=1 python -`, 'python-dash-repl'), true);
+  // Still works without a path, and still respects the -c exclusion through it.
+  assert.equal(has(`env python -`, 'python-dash-repl'), true);
+  assert.equal(has(`/usr/bin/env python -c -`, 'python-dash-repl'), false);
 });
 
 test('POSITIVE: --check-hash-based-pycs consumes a word and the dash still fires', () => {

@@ -467,18 +467,38 @@ const RULES = [
       // OPTIONS THAT CONSUME A SEPARATE WORD: `-W`, `-X`, and the long form
       // `--check-hash-based-pycs`. An earlier version said "ONLY -W and -X",
       // which was false and cost a FALSE NEGATIVE: measured on this box,
-      // `python --check-hash-based-pycs always -` accepts the word AND still
-      // reads the program from stdin, so it is the full hazard — and the
-      // previous head fired on it while the narrowed one allowed it.
+      // TWO FIXES FROM THE ROUND-1 REVIEW, both measured on the interpreter
+      // rather than reasoned about.
       //
-      // The narrowing itself was right: allowing an optional non-dash token
+      // 1. `-c`/`-m` EXCLUSION COVERS THE ATTACHED SPELLING. It was
+      //    `(?!-[cm](?:\s|$))`, and that trailing `(?:\s|$)` confined it to the
+      //    space-separated form. CPython also accepts `-cCODE` and `-mMOD`
+      //    attached, and those fell through the option-skip loop so the
+      //    following bare dash fired. Measured on 3.13.15:
+      //      python "-cprint(2)" - < /dev/null   ->  prints 2, rc=0, NO REPL
+      //    i.e. the hook denied a command carrying zero hazard. A false DENIAL
+      //    in a PreToolUse hook stops work outright, so it is worse here than
+      //    in a reporting guard. `--check-hash-based-pycs` is unaffected: its
+      //    second character is `-`, not `c` or `m`.
+      //
+      // 2. `env` MAY CARRY A PATH. `/usr/bin/env python -` was ALLOWED — a
+      //    fail-OPEN — because the `env` alternative required the bare word at
+      //    that position while the path-prefix group sat after it. The adjacent
+      //    comment claimed `/usr/bin/` was accepted, which was true only of
+      //    `/usr/bin/python`, not of `/usr/bin/env python`.
+      //
+      // `python --check-hash-based-pycs always -` accepts the word AND still
+      // reads the program from stdin, so it is the full hazard — and an earlier
+      // head fired on it while a narrowed one allowed it.
+      //
+      // That narrowing itself was right: allowing an optional non-dash token
       // after ANY option swallowed the SCRIPT PATH, newly denying
       // `python -u tools/fmt.py -`. The error was enumerating the
       // arg-consuming set from memory instead of from the interpreter.
       const CMD = new RegExp(
-        '^\\s*(?:\\w+=\\S*\\s+)*(?:env\\s+(?:\\w+=\\S*\\s+)*)?' +
+        '^\\s*(?:\\w+=\\S*\\s+)*(?:(?:\\S*[\\/\\\\])?env\\s+(?:\\w+=\\S*\\s+)*)?' +
         '(?:\\S*[\\/\\\\])?(?:py|python)(?:\\d+(?:\\.\\d+)?)?(?:\\.exe)?' +
-        '(?:\\s+(?!-[cm](?:\\s|$))' +
+        '(?:\\s+(?!-[cm])' +
         '(?:(?:-[WX]|--check-hash-based-pycs)\\s+[^-\\s]\\S*|-\\S+))*' +
         '\\s+-(?=\\s|$|[<>&|])',
       );
