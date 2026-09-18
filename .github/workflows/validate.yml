@@ -248,18 +248,26 @@ jobs:
   # asserted. What remains outside any guard's reach is a change to branch
   # protection or to the workflow's `on:` verbs themselves.
   #
-  # NOT A REQUIRED CONTEXT — STATED PLAINLY. `Bicep Params Compile` is NOT one
-  # of main's 15 required status checks (`gh api
-  # repos/fgarofalo56/csa-inabox/branches/main/protection --jq
-  # '.required_status_checks.contexts[]'` lists none), and ruleset 15128883
-  # carries no required_status_checks rule. So a RED compile here does not block
-  # a merge today: what blocks is `guardrails`, which checks this job's SHAPE,
-  # never the compile's RESULT. #4466's premise — "il5.bicepparam is parsed by
-  # no CI step" — is closed; the stronger claim "a broken il5.bicepparam can no
-  # longer reach main" is NOT, and will not be until an operator adds this
-  # context to branch protection. (`Bicep Lint` is non-required too, so this is
-  # pre-existing practice rather than a regression.) Changing branch protection
-  # is deliberately not done from here.
+  # REQUIRED AS OF 2026-09-18 — and this note said the opposite until then.
+  # `Bicep Params Compile` IS now one of main's required status checks (it was
+  # added to branch protection on 2026-09-18, taking the set from 15 to 17
+  # alongside the brain security-graph check). A RED compile here therefore
+  # BLOCKS a merge.
+  #
+  # The retracted text, kept rather than deleted so the change is legible: it
+  # read "NOT A REQUIRED CONTEXT — STATED PLAINLY … a RED compile here does not
+  # block a merge today: what blocks is `guardrails`, which checks this job's
+  # SHAPE, never the compile's RESULT." That was true when written and is not
+  # now. #4466's stronger claim — "a broken il5.bicepparam can no longer reach
+  # main" — is consequently CLOSED as well, which it was not before.
+  #
+  # Verify rather than trust this comment; it is the kind that rots:
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.required_status_checks.contexts[]'
+  # The tracked snapshot is tools/drain/required_contexts.json, and the step
+  # names below are declared in tools/drain/policy.json
+  # (receipts.ci_green_rule.substantive_steps) so a green-over-skipped run
+  # cannot be read as a receipt. (`Bicep Lint` remains non-required.)
   #
   # POPULATION: every tracked `*.bicepparam`, repo-wide — 17 files, not just the
   # 7 under platform/fiab/bicep/params/. All 17 compile clean today (measured
