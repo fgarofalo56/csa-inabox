@@ -69,27 +69,36 @@
  * file, so every version-update lane in the repo dies at once, including this
  * crate's. A guard that reports OK over such a file is reporting coverage that
  * does not exist. Two families are checked:
- *   - TAB characters used as STRUCTURAL whitespace — in the indent, after a `-`
- *     sequence marker, or between a key and its value. YAML forbids all three.
- *     A tab inside a quoted scalar or a comment is legal and is NOT flagged.
+ *   - TAB characters used as STRUCTURAL whitespace — anywhere outside a quoted
+ *     scalar or a comment. YAML forbids them in the indent, after a `-` marker,
+ *     and as a key/value separator. A tab inside quotes or a comment is legal
+ *     and is NOT flagged.
  *   - A top-level `version:` that is absent, not at column 0, missing the space
- *     after its colon, or not `2`. Dependabot honours only schema 2, a nested
- *     `version:` is a different key, and `version:2` is a plain scalar rather
- *     than a mapping — the document then fails with "mapping values are not
- *     allowed here".
+ *     after its colon, or not `2` — taking the LAST such key, since YAML
+ *     mappings are last-wins on duplicates. A leading UTF-8 BOM is stripped
+ *     first so it cannot masquerade as a missing key.
  *
  * DELIBERATELY NOT CHECKED:
  *   - The schedule, labels, limit or groups of the entry. Those are policy, and
  *     a weekly-vs-daily argument is not an outage.
  *   - Whether the pinned versions are current. That is dependabot's job; this
  *     guard only cares that dependabot is ASKED.
+ *   - Whether GitHub's own validator rejects a QUOTED `version: "2"`. PyYAML
+ *     yields the string "2" rather than the integer, but GitHub's behaviour was
+ *     not established, so nothing is asserted either way. Recorded as a known
+ *     unknown rather than guessed.
+ *   - Tabs inside a block scalar (`|` / `>`), where they would be content. This
+ *     scan would flag them, which is a real over-fire — but Dependabot's schema
+ *     has no block-scalar field a genuine dependabot.yml would carry, so it is
+ *     disclosed rather than engineered around.
  *   - Full YAML well-formedness. This is not a YAML parser and must not be
  *     mistaken for one: unclosed quotes, bad indentation levels and other parse
- *     errors pass straight through it. Duplicate keys are not flagged either,
- *     and correctly so — YAML accepts them. Hand-rolled rather than using a
- *     library because the `guardrails` job is `checkout` + `setup-node` then a
- *     bare `node scripts/ci/*.mjs`: neither `yaml` nor `js-yaml` resolves from
- *     the repo root, so a dependency here would not run at all.
+ *     errors pass straight through it. Duplicate keys are not flagged as such
+ *     either, and correctly so — YAML accepts them; only their RESOLVED value
+ *     is judged. Hand-rolled rather than using a library because the
+ *     `guardrails` job is `checkout` + `setup-node` then a bare
+ *     `node scripts/ci/*.mjs`: neither `yaml` nor `js-yaml` resolves from the
+ *     repo root, so a dependency here would not run at all.
  *
  * ESCAPE HATCH: none. A crate nobody wants update PRs for is a crate that
  * should not be in the tree.
@@ -203,26 +212,53 @@ const normaliseDir = (d) => String(d ?? '').replace(/^\/+/, '').replace(/\/+$/, 
  * @returns {string[]} one message per reason; empty means "none of the two
  *   modes checked here fired", NOT "this file is valid YAML".
  */
+/**
+ * The structural region of a line: everything that is not inside a quoted
+ * scalar and not inside a comment. A tab here is YAML-fatal; a tab in the other
+ * two places is legal content.
+ *
+ * Round-4: this walks the line tracking quote state rather than cutting at the
+ * FIRST quote. The cut-at-first-quote version hid every tab that came after a
+ * quoted scalar — a trailing tab (`- package-ecosystem: "cargo"\t`) and a tab
+ * separator after a quoted KEY (`- "package-ecosystem":\t"cargo"`) are both
+ * real parse errors that sat past the cut.
+ */
+function structuralRegion(line) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      // Only double-quoted YAML scalars honour backslash escapes; inside single
+      // quotes a backslash is a literal, and '' is the escape for a quote.
+      if (quote === '"' && ch === '\\') { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === '#') break; // comment: the rest of the line is content
+    out += ch;
+  }
+  return out;
+}
+
 export function configRejectionReasons(yamlText) {
   const reasons = [];
-  const lines = yamlText.split(/\r?\n/);
+  // A UTF-8 BOM is legal at the start of a YAML stream and several editors on
+  // this (Windows) repo emit one. Left in place it shifts `version:` off column
+  // 0 and the anchor below reports "no top-level `version:` key" about a key
+  // that is plainly there — a message asserting more than was established.
+  // Written as a \uFEFF escape, not the literal character: an invisible
+  // BOM in source is unreviewable and ungreppable.
+  const lines = yamlText.replace(/^\uFEFF/, '').split(/\r?\n/);
 
   // 1. Tabs used as STRUCTURAL whitespace. YAML forbids the tab character for
   //    indentation and as a key/value separator; such a file does not load at
   //    all. `\s` in a JS regex MATCHES a tab, so the line parser below happily
   //    reads a file GitHub would throw away -- the blind spot this catches.
-  //
-  //    Scanning only the LEADING indent run was too narrow (round-3): a tab
-  //    after the `-` sequence marker, or between a key and its value, is just
-  //    as fatal and lands wherever the cursor was. So the scan covers the whole
-  //    structural region of the line -- everything before the first quote or
-  //    `#`. Beyond that point a tab is legal content (inside a quoted scalar or
-  //    a comment) and flagging it would be an over-fire, which is why the cut
-  //    is made there rather than searching the raw line.
   const tabbed = [];
   lines.forEach((line, i) => {
-    const structural = line.split(/["'#]/)[0];
-    if (structural.includes('\t')) tabbed.push(i + 1);
+    if (structuralRegion(line).includes('\t')) tabbed.push(i + 1);
   });
   if (tabbed.length > 0) {
     reasons.push(
@@ -244,8 +280,14 @@ export function configRejectionReasons(yamlText) {
   //    not a mapping at all: YAML reads it as the plain scalar "version:2", and
   //    a document that then opens `updates:` fails with "mapping values are not
   //    allowed here". Accepting it would pass a file GitHub rejects.
+  //
+  //    findLast, NOT find (round-4). YAML mappings are LAST-WINS on a duplicate
+  //    key, so `version: 2` followed by `version: 1` resolves to 1 and the file
+  //    is rejected. A first-wins lookup reads the 2, reports nothing, and every
+  //    lane stops silently. Measured in BOTH directions: first-wins also FALSELY
+  //    rejected `version: 1` followed by `version: 2`, which is a valid config.
   const TOP_LEVEL_VERSION = /^version[ \t]*:/;
-  const versionLine = lines.find((l) => TOP_LEVEL_VERSION.test(l));
+  const versionLine = lines.findLast((l) => TOP_LEVEL_VERSION.test(l));
   if (!versionLine) {
     reasons.push(
       'no top-level `version:` key at column 0. Dependabot requires `version: 2`; without ' +

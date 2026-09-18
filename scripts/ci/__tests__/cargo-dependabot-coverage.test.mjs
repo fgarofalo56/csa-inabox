@@ -252,6 +252,64 @@ test('a well-formed config produces no rejection reasons', () => {
   assert.deepEqual(configRejectionReasons(YML_CARGO), []);
 });
 
+test('a DUPLICATE top-level version: is judged LAST-WINS, as YAML resolves it', () => {
+  // YAML mappings are last-wins on a duplicate key, so this document resolves
+  // to `version: 1` and Dependabot rejects it — every lane in the repo stops.
+  // A first-wins lookup reads the `2` and returns ZERO reasons.
+  // FAILS IF: `findLast` reverts to `find`.
+  const lastInvalid = 'version: 2\nversion: 1\n' + YML_CARGO.replace('version: 2\n', '');
+  assert.match(configRejectionReasons(lastInvalid)[0], /not `version: 2`/);
+  // The MIRROR, and it is load-bearing: first-wins is wrong in BOTH directions,
+  // so without this half a `find`-based implementation that merely reported
+  // something would look correct. Here the resolved value IS 2 and the file is
+  // valid — flagging it would red a working config.
+  const lastValid = 'version: 1\nversion: 2\n' + YML_CARGO.replace('version: 2\n', '');
+  assert.deepEqual(configRejectionReasons(lastValid), []);
+});
+
+test('a leading UTF-8 BOM does not masquerade as a missing version: key', () => {
+  // Valid YAML, and several editors on this Windows repo emit one. Left in
+  // place it shifts `version:` off column 0, and the anchor then reports "no
+  // top-level `version:` key" about a key that is plainly there — a message
+  // asserting more than the code established.
+  // FAILS IF: the BOM strip is removed.
+  assert.deepEqual(configRejectionReasons('﻿' + YML_CARGO), []);
+});
+
+test('tabs PAST a quoted scalar are still structural', () => {
+  // Both confirmed parse errors against PyYAML, and both sit beyond the point
+  // where a cut-at-the-first-quote scan stops looking.
+  // FAILS IF: structuralRegion() reverts to `line.split(/["'#]/)[0]`.
+  const trailing = 'version: 2\nupdates:\n  - package-ecosystem: "cargo"\t\n';
+  const afterQuotedKey = 'version: 2\nupdates:\n  - "package-ecosystem":\t"cargo"\n';
+  assert.match(configRejectionReasons(trailing)[0], /TAB character used as structural whitespace/);
+  assert.match(configRejectionReasons(afterQuotedKey)[0], /TAB character used as structural whitespace/);
+});
+
+test('every tracked YAML in this repo survives the tab scan [over-fire census]', () => {
+  // The widened scan is only safe if it stays silent on valid files. A bare
+  // "zero flagged" would be vacuous, so the WITNESS is asserted too: the tree
+  // must actually contain a tab somewhere for this to distinguish anything.
+  // (Measured 2026-09-18: 393 files, exactly one carries tabs —
+  // .github/workflows/loom-dataplane-roll.yml, real TSV separators inside
+  // quoted echo strings.)
+  // FAILS IF: the scan widens to the raw line — that file then flags.
+  const files = execFileSync('git', ['ls-files', '*.yml', '*.yaml'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  }).split('\n').filter(Boolean);
+  let withTab = 0;
+  const flagged = [];
+  for (const f of files) {
+    const text = readFileSync(join(REPO_ROOT, f), 'utf8');
+    if (text.includes('\t')) withTab++;
+    if (configRejectionReasons(text).some((r) => r.startsWith('TAB'))) flagged.push(f);
+  }
+  assert.ok(files.length > 100, `expected a real population, got ${files.length} files`);
+  assert.ok(withTab > 0, 'no tracked YAML contains a tab, so this census distinguishes nothing');
+  assert.deepEqual(flagged, [], 'the tab scan flagged valid repo YAML');
+});
+
 test('a missing or wrong version: key is reported as a rejected config', () => {
   const noVersion = YML_CARGO.split('\n').filter((l) => !l.startsWith('version:')).join('\n');
   // FAILS IF: the version check is removed. Dependabot honours only schema 2;

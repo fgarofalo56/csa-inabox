@@ -19981,7 +19981,7 @@
             "declaredSinkCount": 13,
             "sinks": [
               {
-                "id": "console:member:315",
+                "id": "console:member:357",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -19991,7 +19991,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:328",
+                "id": "console:member:370",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20001,7 +20001,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:332",
+                "id": "console:member:374",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20011,7 +20011,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:333",
+                "id": "console:member:375",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20021,57 +20021,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:350",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:358",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:368",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:378",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:386",
-                "surface": "console",
-                "accessPath": "member",
-                "wholeExpressionBounded": false,
-                "boundary": null,
-                "unredactedByDesign": false,
-                "carriesSensitive": false,
-                "childProvenRedacting": null
-              },
-              {
-                "id": "console:member:397",
+                "id": "console:member:392",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20091,7 +20041,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:401",
+                "id": "console:member:410",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -20101,7 +20051,57 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:416",
+                "id": "console:member:420",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:428",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:439",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:442",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:443",
+                "surface": "console",
+                "accessPath": "member",
+                "wholeExpressionBounded": false,
+                "boundary": null,
+                "unredactedByDesign": false,
+                "carriesSensitive": false,
+                "childProvenRedacting": null
+              },
+              {
+                "id": "console:member:458",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -50065,9 +50065,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-18T20:42:07.309Z",
-      "commit": "870909f0d1dd343baf8319ffffb704465e94ab25",
-      "inputsDigest": "657e88e0bdccbc29",
+      "generatedAt": "2026-09-18T21:43:57.004Z",
+      "commit": "ee473c9082b542ca6647e09e6c58b28f4fa95c67",
+      "inputsDigest": "e1bbd889bb770f06",
       "filesScanned": 2113,
       "scanScopes": [
         {
