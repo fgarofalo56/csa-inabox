@@ -68,10 +68,15 @@
  * that fails to parse does not degrade gracefully — GitHub rejects the WHOLE
  * file, so every version-update lane in the repo dies at once, including this
  * crate's. A guard that reports OK over such a file is reporting coverage that
- * does not exist. Two such cases are checked, both of which this guard was
- * blind to when first written:
- *   - TAB characters in indentation. YAML forbids them outright.
- *   - A missing or non-2 `version:`. Dependabot requires `version: 2`.
+ * does not exist. Two families are checked:
+ *   - TAB characters used as STRUCTURAL whitespace — in the indent, after a `-`
+ *     sequence marker, or between a key and its value. YAML forbids all three.
+ *     A tab inside a quoted scalar or a comment is legal and is NOT flagged.
+ *   - A top-level `version:` that is absent, not at column 0, missing the space
+ *     after its colon, or not `2`. Dependabot honours only schema 2, a nested
+ *     `version:` is a different key, and `version:2` is a plain scalar rather
+ *     than a mapping — the document then fails with "mapping values are not
+ *     allowed here".
  *
  * DELIBERATELY NOT CHECKED:
  *   - The schedule, labels, limit or groups of the entry. Those are policy, and
@@ -79,8 +84,12 @@
  *   - Whether the pinned versions are current. That is dependabot's job; this
  *     guard only cares that dependabot is ASKED.
  *   - Full YAML well-formedness. This is not a YAML parser and must not be
- *     mistaken for one; it catches the two rejection modes named above, and a
- *     file can still be invalid in ways it will not see.
+ *     mistaken for one: unclosed quotes, bad indentation levels and other parse
+ *     errors pass straight through it. Duplicate keys are not flagged either,
+ *     and correctly so — YAML accepts them. Hand-rolled rather than using a
+ *     library because the `guardrails` job is `checkout` + `setup-node` then a
+ *     bare `node scripts/ci/*.mjs`: neither `yaml` nor `js-yaml` resolves from
+ *     the repo root, so a dependency here would not run at all.
  *
  * ESCAPE HATCH: none. A crate nobody wants update PRs for is a crate that
  * should not be in the tree.
@@ -198,39 +207,67 @@ export function configRejectionReasons(yamlText) {
   const reasons = [];
   const lines = yamlText.split(/\r?\n/);
 
-  // 1. Tabs in indentation. YAML forbids the tab character for indentation
-  //    outright; a tab-indented file does not load at all. `\s` in a JS regex
-  //    MATCHES a tab, so the line-based parser below happily reads a file
-  //    GitHub would throw away -- the precise blind spot this catches.
+  // 1. Tabs used as STRUCTURAL whitespace. YAML forbids the tab character for
+  //    indentation and as a key/value separator; such a file does not load at
+  //    all. `\s` in a JS regex MATCHES a tab, so the line parser below happily
+  //    reads a file GitHub would throw away -- the blind spot this catches.
+  //
+  //    Scanning only the LEADING indent run was too narrow (round-3): a tab
+  //    after the `-` sequence marker, or between a key and its value, is just
+  //    as fatal and lands wherever the cursor was. So the scan covers the whole
+  //    structural region of the line -- everything before the first quote or
+  //    `#`. Beyond that point a tab is legal content (inside a quoted scalar or
+  //    a comment) and flagging it would be an over-fire, which is why the cut
+  //    is made there rather than searching the raw line.
   const tabbed = [];
   lines.forEach((line, i) => {
-    const indent = line.match(/^[ \t]*/)[0];
-    if (indent.includes('\t')) tabbed.push(i + 1);
+    const structural = line.split(/["'#]/)[0];
+    if (structural.includes('\t')) tabbed.push(i + 1);
   });
   if (tabbed.length > 0) {
     reasons.push(
-      `TAB character used for indentation on line(s) ${tabbed.slice(0, 5).join(', ')}` +
+      `TAB character used as structural whitespace on line(s) ${tabbed.slice(0, 5).join(', ')}` +
         `${tabbed.length > 5 ? ` (+${tabbed.length - 5} more)` : ''}. YAML forbids tabs for ` +
-        'indentation, so GitHub rejects the ENTIRE file and every version-update lane ' +
-        'in the repo — not just cargo — stops running.',
+        'indentation and as a key/value separator, so GitHub rejects the ENTIRE file and ' +
+        'every version-update lane in the repo — not just cargo — stops running.',
     );
   }
 
-  // 2. `version: 2` is mandatory. Dependabot v1 config is a different, retired
-  //    schema; without a recognised version the file is not honoured.
-  const versionLine = lines.find((l) => /^\s*version\s*:/.test(l));
+  // 2. `version: 2` is mandatory, and must be a TOP-LEVEL key.
+  //
+  //    Anchored to column 0 (round-3). The previous pattern allowed leading
+  //    whitespace, so a NESTED `version:` on an entry satisfied it while the
+  //    diagnostic went on claiming a "top-level" key had been found — a message
+  //    asserting a property the code had not established.
+  //
+  //    The colon must be followed by whitespace or end-of-line. `version:2` is
+  //    not a mapping at all: YAML reads it as the plain scalar "version:2", and
+  //    a document that then opens `updates:` fails with "mapping values are not
+  //    allowed here". Accepting it would pass a file GitHub rejects.
+  const TOP_LEVEL_VERSION = /^version[ \t]*:/;
+  const versionLine = lines.find((l) => TOP_LEVEL_VERSION.test(l));
   if (!versionLine) {
     reasons.push(
-      'no top-level `version:` key. Dependabot requires `version: 2`; without it the ' +
-        'file is not honoured and no version-update PR is ever opened.',
+      'no top-level `version:` key at column 0. Dependabot requires `version: 2`; without ' +
+        'it the file is not honoured and no version-update PR is ever opened. A `version:` ' +
+        'nested under an entry does not count — it is a different key.',
     );
   } else {
-    const value = versionLine.replace(/\s+#.*$/, '').split(':')[1]?.trim().replace(/["']/g, '');
-    if (value !== '2') {
+    const rest = versionLine.replace(TOP_LEVEL_VERSION, '');
+    if (rest !== '' && !/^[ \t]/.test(rest)) {
       reasons.push(
-        `\`version: ${value}\` is not \`version: 2\`. Only schema version 2 is honoured; ` +
-          'anything else means no version-update PR is ever opened.',
+        'the top-level `version:` has no space after the colon. YAML reads `version:2` as ' +
+          'the plain scalar "version:2" rather than a mapping, and the document then fails ' +
+          'to parse ("mapping values are not allowed here") — GitHub rejects the whole file.',
       );
+    } else {
+      const value = rest.replace(/\s+#.*$/, '').trim().replace(/["']/g, '');
+      if (value !== '2') {
+        reasons.push(
+          `\`version: ${value}\` is not \`version: 2\`. Only schema version 2 is honoured; ` +
+            'anything else means no version-update PR is ever opened.',
+        );
+      }
     }
   }
 
@@ -242,16 +279,31 @@ export function configRejectionReasons(yamlText) {
  *   `missing` = crates with no entry (#3982). `ghost` = entries whose directory
  *   holds no Cargo.toml (CSA-0048). Both directions, because each has already
  *   been a real defect in this file.
+ *
+ * GHOST IS ONE COMPARISON, AND THAT IS DELIBERATE (round-3 correction).
+ * `manifestDirs` is precisely the set of directories that CONTAIN a Cargo.toml,
+ * so `!known.has(dir)` IS rule 2 stated directly. An earlier revision wrote
+ * `!known.has(dir) && !dirExists(dir)`, which silently narrowed the rule to
+ * "the directory does not EXIST" — a different, weaker predicate. A directory
+ * that is present but holds no manifest (`directory: "/apps"`) then escaped
+ * entirely: the guard printed `1 crate(s), 2 cargo entr(ies)` and exited 0,
+ * publishing the discrepancy while passing over it.
+ *
+ * Both halves of that conjunction were un-killable, which is how it survived a
+ * green mutation matrix: `!known.has(...)` was dead (a known crate directory
+ * always exists, so the second clause already excluded it), and deleting
+ * `&& !dirExists(...)` was the FIX, so it read as an equivalent mutant. Neither
+ * mutation could go red, so the arm was counted as covering a rule it did not
+ * implement. Whether the directory exists is now used ONLY to choose the
+ * remediation wording in main() — it does not participate in the verdict.
  */
-export function evaluate(manifestDirs, updates, dirExists = () => true) {
+export function evaluate(manifestDirs, updates) {
   const cargoEntries = updates.filter((u) => u.ecosystem === 'cargo');
   const watched = new Set(cargoEntries.map((u) => normaliseDir(u.directory)));
   const known = new Set(manifestDirs.map(normaliseDir));
   const missing = manifestDirs.filter((d) => !watched.has(normaliseDir(d)));
   const covered = manifestDirs.filter((d) => watched.has(normaliseDir(d)));
-  const ghost = cargoEntries.filter(
-    (u) => !known.has(normaliseDir(u.directory)) && !dirExists(normaliseDir(u.directory)),
-  );
+  const ghost = cargoEntries.filter((u) => !known.has(normaliseDir(u.directory)));
   return { missing, covered, ghost, cargoEntries };
 }
 
@@ -288,9 +340,7 @@ function main(root) {
 
   const updates = parseUpdates(raw);
   const manifestDirs = findCargoManifestDirs(root);
-  const { missing, covered, ghost, cargoEntries } = evaluate(manifestDirs, updates, (d) =>
-    existsSync(join(root, d)),
-  );
+  const { missing, covered, ghost, cargoEntries } = evaluate(manifestDirs, updates);
 
   // Vacuity, checked BEFORE the verdict. The two clauses below are SEPARATE
   // findings with opposite remediations, so they get separate messages: one
@@ -319,7 +369,20 @@ function main(root) {
       `\n[cargo-dependabot-coverage] ${ghost.length} cargo entr(ies) point at a directory ` +
         'with no Cargo.toml:\n',
     );
-    for (const g of ghost) console.error(`  directory: "${g.directory}"  -> no Cargo.toml there`);
+    for (const g of ghost) {
+      // Whether the directory exists does NOT decide the verdict — it only
+      // chooses the remediation, and the two remediations differ: a vanished
+      // directory means delete the entry, a present one means the entry is
+      // aimed at the wrong level (`/apps` instead of `/apps/loom-directlake`).
+      const present = existsSync(join(root, normaliseDir(g.directory)));
+      console.error(
+        `  directory: "${g.directory}"  -> ${
+          present
+            ? 'directory EXISTS but contains no Cargo.toml — entry aimed at the wrong level?'
+            : 'directory DOES NOT EXIST — stale entry left behind?'
+        }`,
+      );
+    }
     console.error(
       '\n  dependabot.yml records this exact failure already (CSA-0048): when\n' +
         '  portal/static-webapp was archived its entry was left behind, pointing at\n' +

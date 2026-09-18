@@ -105,6 +105,12 @@ updates:
     # plus the release profile on every PR touching this crate. That lane is the
     # backstop; this group only ensures the four crates are judged together
     # instead of one at a time.
+    # DO NOT CLOSE the grouped arrow-stack PR. Closing a Dependabot PR without
+    # merging is a signal to Dependabot that the version is unwanted, and it
+    # will not raise that version again — so closing this one silently destroys
+    # the exact notification this entry exists to produce, and #3982 goes back
+    # to having no watcher at all. If the bump is not takeable yet (it will not
+    # be until delta-rs ships on arrow 59), LEAVE IT OPEN, or reopen it.
     groups:
       arrow-stack:
         patterns:

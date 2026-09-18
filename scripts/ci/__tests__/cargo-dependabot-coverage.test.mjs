@@ -129,19 +129,30 @@ test('a cargo entry for a DIFFERENT directory does not cover this crate', () => 
 
 // ── the inverse direction: an entry aimed at nothing (CSA-0048) ──────────────
 
-test('a cargo entry whose directory holds no Cargo.toml is reported as a ghost', () => {
+test('a cargo entry whose directory EXISTS but holds no Cargo.toml is a ghost', () => {
+  // THE DISCRIMINATING FIXTURE (round-3). The rule is "the directory contains
+  // no Cargo.toml"; an earlier revision implemented "the directory does not
+  // EXIST", and the old fixture passed `() => false` — absent, not empty — so
+  // the input that separates the two was never built. `/apps` is present here
+  // (it is the parent of the crate) and holds no manifest.
+  // FAILS IF: the predicate reverts to an existence test, since `/apps` exists.
+  const updates = parseUpdates(YML_CARGO.replace('/apps/loom-directlake', '/apps'));
+  const { ghost } = evaluate(['apps/loom-directlake'], updates);
+  assert.equal(ghost.length, 1);
+  assert.equal(ghost[0].directory, '/apps');
+});
+
+test('a cargo entry whose directory is absent entirely is also a ghost', () => {
   const updates = parseUpdates(YML_CARGO.replace('/apps/loom-directlake', '/portal/static-webapp'));
-  // dirExists returns false => the directory is genuinely gone, the CSA-0048 shape.
-  const { ghost } = evaluate(['apps/mine'], updates, () => false);
-  // FAILS IF: the guard only ever checks crate -> entry. dependabot.yml records
-  // this as a PAST defect in its own comments; an entry pointing at an archived
-  // directory produces no PRs while reading as coverage.
+  const { ghost } = evaluate(['apps/mine'], updates);
+  // The CSA-0048 shape recorded in dependabot.yml's own comments.
+  // FAILS IF: the ghost filter is dropped or inverted.
   assert.equal(ghost.length, 1);
   assert.equal(ghost[0].directory, '/portal/static-webapp');
 });
 
-test('a cargo entry whose directory DOES exist is not a ghost', () => {
-  const { ghost } = evaluate(['apps/loom-directlake'], parseUpdates(YML_CARGO), () => true);
+test('a cargo entry whose directory DOES hold a Cargo.toml is not a ghost', () => {
+  const { ghost } = evaluate(['apps/loom-directlake'], parseUpdates(YML_CARGO));
   // The paired positive: FAILS IF the ghost check fires on every entry, which
   // would make the real repo permanently red.
   assert.deepEqual(ghost, []);
@@ -249,6 +260,64 @@ test('a missing or wrong version: key is reported as a rejected config', () => {
   assert.match(configRejectionReasons(YML_CARGO.replace('version: 2', 'version: 1'))[0], /not `version: 2`/);
 });
 
+test('a NESTED version: does not satisfy the top-level requirement', () => {
+  // Round-3 fixture. The previous test built its input by filtering out the
+  // column-0 line, so it never SUPPLIED a nested `version:` — it read as
+  // pinning "top-level" while being unable to witness the difference. This
+  // file is valid YAML (PyYAML loads it); it is the Dependabot SCHEMA that it
+  // violates, and only the column-0 anchor catches that.
+  // FAILS IF: the `version:` lookup allows leading whitespace again, in which
+  // case the nested key satisfies it and the guard passes a config that opens
+  // no PRs — while its message still claims a top-level key was found.
+  const nested = [
+    'updates:',
+    '  - package-ecosystem: "cargo"',
+    '    directory: "/apps/loom-directlake"',
+    '    version: 2',
+    '',
+  ].join('\n');
+  const reasons = configRejectionReasons(nested);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /no top-level `version:` key at column 0/);
+});
+
+test('`version:2` with no space after the colon is a rejected config', () => {
+  // PyYAML agrees: "mapping values are not allowed here". YAML reads
+  // `version:2` as a plain scalar, not a mapping, so the document fails once
+  // `updates:` opens.
+  // FAILS IF: the separator check is dropped — the old `split(':')[1]` yielded
+  // "2" and the guard passed a file GitHub rejects outright.
+  const reasons = configRejectionReasons(YML_CARGO.replace('version: 2', 'version:2'));
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /no space after the colon/);
+});
+
+test('a tab after the `-` marker or between key and value is a rejected config', () => {
+  // Both are hard parse errors (confirmed against PyYAML), and both sit outside
+  // the LEADING indent run that the first implementation scanned.
+  // FAILS IF: the tab scan narrows back to `line.match(/^[ \t]*/)`.
+  const afterMarker = 'version: 2\nupdates:\n  -\tpackage-ecosystem: "cargo"\n';
+  const keyValue = 'version: 2\nupdates:\n  - package-ecosystem:\t"cargo"\n';
+  assert.match(configRejectionReasons(afterMarker)[0], /TAB character used as structural whitespace/);
+  assert.match(configRejectionReasons(keyValue)[0], /TAB character used as structural whitespace/);
+});
+
+test('a tab inside a quoted scalar or a comment BODY is NOT flagged', () => {
+  // The over-fire guard. PyYAML loads both of these, so flagging them would
+  // red a valid config — and a guard that is wrong in this direction gets
+  // switched off, which is worse than the gap it was meant to close.
+  // FAILS IF: the tab scan searches the raw line instead of the structural
+  // region before the first quote or `#`.
+  const inScalar =
+    'version: 2\nupdates:\n  - package-ecosystem: "cargo"\n' +
+    '    directory: "/apps/mine"\n    commit-message: "a\tb"\n';
+  const inComment =
+    'version: 2\nupdates:\n  # a\tcomment\n  - package-ecosystem: "cargo"\n' +
+    '    directory: "/apps/mine"\n';
+  assert.deepEqual(configRejectionReasons(inScalar), []);
+  assert.deepEqual(configRejectionReasons(inComment), []);
+});
+
 // ── the walker ───────────────────────────────────────────────────────────────
 
 test('a vendored Cargo.toml under target/ is not treated as a crate', () => {
@@ -332,21 +401,47 @@ test('a ghost entry exits 1 END-TO-END even when every crate is covered', () => 
     '  - package-ecosystem: "cargo"',
     '    directory: "/apps/mine"',
     '  - package-ecosystem: "cargo"',
+    '    directory: "/apps"', // EXISTS (parent of the crate), holds no Cargo.toml
+    '',
+  ].join('\n');
+  const root = scratch({ '.github/dependabot.yml': yml, 'apps/mine/Cargo.toml': CRATE });
+  try {
+    const r = runGuard(root);
+    // The realistic form of the defect, end to end. Before round 3 this exact
+    // tree printed "OK — 1 crate(s), 2 cargo entr(ies)" and exited 0: the guard
+    // published the discrepancy while passing over it.
+    // `missing` is empty here (apps/mine IS covered), so nothing else in the
+    // suite reddens on this fixture — only the ghost branch can.
+    // FAILS IF: the ghost branch is removed, or the predicate narrows back to
+    // an existence test (since `/apps` exists).
+    assert.equal(r.code, 1, `expected exit 1, got ${r.code}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /point at a directory/);
+    // Pins the remediation wording for the PRESENT case specifically.
+    assert.match(r.stderr, /EXISTS but contains no Cargo\.toml/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an ABSENT ghost directory gets the other remediation wording', () => {
+  const yml = [
+    'version: 2',
+    'updates:',
+    '  - package-ecosystem: "cargo"',
+    '    directory: "/apps/mine"',
+    '  - package-ecosystem: "cargo"',
     '    directory: "/apps/archived-crate"',
     '',
   ].join('\n');
   const root = scratch({ '.github/dependabot.yml': yml, 'apps/mine/Cargo.toml': CRATE });
   try {
     const r = runGuard(root);
-    // The unit-level ghost assertions call evaluate() directly, so they do NOT
-    // exercise the CLI branch — the mutation harness proved that by deleting
-    // `if (ghost.length > 0)` in main() and watching the suite stay green.
-    // This is the arm that kills it. `missing` is empty here (apps/mine IS
-    // covered), so nothing else in the suite reddens on this fixture.
-    // FAILS IF: the ghost branch in main() is removed or made unreachable.
+    // The two wordings point at different fixes — delete the entry vs. correct
+    // its level — so both are pinned rather than asserting a shared prefix.
+    // FAILS IF: the existsSync branch is collapsed to a single message.
     assert.equal(r.code, 1, `expected exit 1, got ${r.code}: ${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /point at a directory/);
-    assert.match(r.stderr, /archived-crate/);
+    assert.match(r.stderr, /DOES NOT EXIST/);
+    assert.doesNotMatch(r.stderr, /EXISTS but contains no Cargo\.toml/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
