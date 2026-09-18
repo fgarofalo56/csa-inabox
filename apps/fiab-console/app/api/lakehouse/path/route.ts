@@ -23,8 +23,8 @@
  *      exactly as `/api/lakehouse/paths` does for its item-bound listing. A
  *      read-only role is refused: both verbs mutate.
  *   2. That item's container + root come from `resolveLakehouseAbfss`, the ONE
- *      resolver `/api/lakehouse/{paths,tables}` already use. Nothing about the
- *      scope is caller-supplied.
+ *      resolver `/api/lakehouse/{paths,tables}` already use. The scope is
+ *      derived from the ITEM's recorded state, not from this request.
  *   3. The supplied container must BE the resolved one, and the supplied path
  *      must lie strictly BELOW the resolved root — compared segment by segment,
  *      never as a string prefix (`isValidRolePath` in onelake-security-rules.ts

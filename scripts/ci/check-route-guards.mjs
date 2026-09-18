@@ -1704,6 +1704,32 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
+  // ── /api/lakehouse/path — graduated out of the `app/api/lakehouse/` class ──
+  //
+  // The class reason in ALLOWLIST_PREFIXES reads "ADLS Gen2 lakehouse navigator
+  // over the deployment storage (container validated; single shared lake)".
+  // That described this route while the container check WAS its validation. It
+  // no longer does: both verbs now resolve the (container, path) pair against
+  // the route's own `lakehouseId` item — `resolveItemAccessByOid` (a
+  // STRONG_OWNERSHIP_SIGNALS token) and then `resolveLakehouseAbfss` — and
+  // refuse anything that is not strictly below that item's recorded root.
+  //
+  // Listing it here is what makes that enforceable. MEASURED three ways against
+  // the shipped file: in remit WITH the resolution → 0 violations; in remit
+  // WITHOUT it → 1, naming `[POST, DELETE]`; and, before this entry, NOT IN
+  // REMIT AT ALL without it → 0 — because the route carries `withSession`
+  // rather than a bare `getSession()` prologue, so the
+  // `!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)` remit test below skipped
+  // it entirely. A later edit could have deleted the whole resolution with this
+  // checker still reporting `violations: 0`. With the entry, dropping it
+  // RE-FLAGS rather than falling back to a class reason that stopped being true
+  // of this member — the same defect the `#3572` narrowing beside
+  // `storage/accounts/` records.
+  //
+  // The `app/api/lakehouse/` class entry is deliberately NOT deleted: it still
+  // describes the rest of the prefix (the listing, tables, download and upload
+  // routes), and NOW_GUARDED wins over the allowlist for this one path.
+  'apps/fiab-console/app/api/lakehouse/path/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
