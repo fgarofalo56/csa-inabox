@@ -92,7 +92,21 @@ function stripHeredocBodies(s) {
       continue;
     }
     // `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`. NOT `<<<` (herestring: no body).
-    const m = line.match(/<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
+    //
+    // THE LOOKBEHIND IS LOAD-BEARING. An earlier version wrote `<<(?!<)` and
+    // was blind: a negative LOOKAHEAD only guards the leftmost match attempt,
+    // so against `<<<x` the engine retries at offset 1, matches `<<` on
+    // characters 1-2, sees `x` at 3, and reads a heredoc whose delimiter is
+    // `x`. Everything after was then blanked as "body" and this rule stopped
+    // watching entirely — strictly worse than a false positive, because the
+    // guard stays installed while seeing nothing.
+    //
+    // Measured, and the measurement is the point: `<<<'print(1)'` did NOT
+    // reproduce it (the `(` breaks the `\2` backreference) while `<<<'x'` did.
+    // The shipped test used the former, so it passed for a reason it did not
+    // claim — the same defect the M9 arm exists to catch, recurring inside the
+    // fix for it.
+    const m = line.match(/(?<!<)<<(-?)\s*(?!<)(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
     if (m) { allowIndent = m[1] === '-'; delim = m[3]; }
     out.push(line);
   }
@@ -241,11 +255,16 @@ const RULES = [
         let prevSep = '';
         for (let p = 0; p < parts.length; p += 2) {
           const seg = parts[p];
-          // A HERESTRING supplies stdin and has no delimiter to mismatch, so it
-          // cannot degrade into a REPL the way a heredoc can. `python - <<<'x'`
-          // is safe and must stay usable.
-          const herestring = /<<</.test(seg);
-          if (prevSep !== '|' && !herestring && CMD.test(seg)) {
+          // STDIN SUPPLIED FROM SOMETHING THAT ENDS. Either form removes the
+          // hazard, because the REPL requires stdin to stay open on a terminal:
+          //   `<<<str`   herestring  -- no delimiter to mismatch
+          //   `< file`   redirect    -- reaches EOF
+          // A HEREDOC (`<<DELIM`) is deliberately NOT in this set: it is the
+          // one that degrades into a REPL when the delimiter does not land,
+          // which is the whole reason this rule exists.
+          // The lookarounds are what separate a lone `<` from `<<` and `<<<`.
+          const stdinSupplied = /<<</.test(seg) || /(?<!<)<(?!<)/.test(seg);
+          if (prevSep !== '|' && !stdinSupplied && CMD.test(seg)) {
             return rawLines[i].trim().slice(0, 90);
           }
           prevSep = parts[p + 1] || '';
@@ -276,6 +295,43 @@ const RULES = [
 ];
 
 import { readFileSync } from 'node:fs';
+
+/**
+ * Build the deny text for a set of findings.
+ *
+ * EXPORTED so it can be tested. It was inline in `main()`, which put it beyond
+ * `evaluate()`'s reach — a reviewer mutated the headline in both directions and
+ * both mutants survived 48/48, i.e. the R7 fix had no kill power and that was
+ * not disclosed. An untestable correctness fix is the shape this file polices.
+ */
+export function denyBody(findings) {
+  // RULE-AWARE. Asserting "a measurement you cannot trust" over a
+  // python-dash-repl finding is false — that rule is about resource
+  // exhaustion, not a wrong number — and recommending measure.mjs for it is
+  // advice that does not apply. Stating a cause the code did not establish is
+  // the R7 defect this file exists to police, so it must not appear in the
+  // file's own output.
+  //
+  // FAILS TOWARD THE MEASUREMENT TEXT for an unknown id, deliberately: a new
+  // measurement rule added without updating this set still gets the (correct)
+  // measurement framing, and only a new NON-measurement rule would be
+  // mislabelled. The test below pins that direction so the choice is visible.
+  const anyMeasurement = findings.some((f) => !NON_MEASUREMENT_RULES.has(f.id));
+  const headline = anyMeasurement
+    ? 'BLOCKED — this command would produce a measurement you cannot trust.'
+    : 'BLOCKED — this command carries a known hazard.';
+  const footer = anyMeasurement
+    ? `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
+      `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
+      `  refused unless a positive control proves the query path works.`
+    : '';
+  return `${headline}\n\n` +
+    findings.map((f, i) => `${i + 1}. [${f.id}] ${f.message}`).join('\n\n') +
+    footer;
+}
+
+/** Rules that are NOT about a false measurement. See denyBody(). */
+const NON_MEASUREMENT_RULES = new Set(['python-dash-repl']);
 
 /**
  * Read the hook payload from fd 0.
@@ -360,26 +416,7 @@ if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` || proc
   if (findings.length === 0) {
     process.exit(0); // allow
   }
-  // The headline and the footer are RULE-AWARE. Asserting "a measurement you
-  // cannot trust" over a python-dash-repl finding is false -- that rule is
-  // about resource exhaustion, not a wrong number -- and pointing at
-  // measure.mjs for it is advice that does not apply. Stating a cause the
-  // code did not establish is the R7 defect this file exists to police, so it
-  // must not appear in the file's own output.
-  const MEASUREMENT_RULES = new Set(['rc-after-pipe', 'msys-arm-id', 'discarded-stderr']);
-  const anyMeasurement = findings.some((f) => MEASUREMENT_RULES.has(f.id));
-  const headline = anyMeasurement
-    ? 'BLOCKED — this command would produce a measurement you cannot trust.'
-    : 'BLOCKED — this command carries a known hazard.';
-  const footer = anyMeasurement
-    ? `\n\nPrefer scripts/measure/measure.mjs, which makes these structurally impossible:\n` +
-      `  a failed command throws instead of yielding a value, and a ZERO result is\n` +
-      `  refused unless a positive control proves the query path works.`
-    : '';
-  const body =
-    `${headline}\n\n` +
-    findings.map((f, i) => `${i + 1}. [${f.id}] ${f.message}`).join('\n\n') +
-    footer;
+  const body = denyBody(findings);
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

@@ -19,7 +19,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate } from '../../.claude/hooks/measurement-guard.mjs';
+import { evaluate, denyBody } from '../../.claude/hooks/measurement-guard.mjs';
 
 const has = (cmd, id) => evaluate(cmd).some((f) => f.id === id);
 
@@ -248,6 +248,29 @@ test('NEGATIVE: a herestring supplies stdin and has no delimiter to mismatch', (
   assert.equal(has(`python - <<<'print(1)'`, 'python-dash-repl'), false);
 });
 
+test('BLINDING: a SHORT herestring must not silence the rule for the rest of the command', () => {
+  // The blocker from round 2's review, and the sharpest bug in this file's
+  // history. `stripHeredocBodies` used `<<(?!<)` to exclude herestrings. A
+  // negative LOOKAHEAD only guards the leftmost attempt, so against `<<<x` the
+  // engine retried at offset 1, matched `<<` on chars 1-2, and read a heredoc
+  // with delimiter `x`. Everything after was blanked as body and the guard
+  // stopped watching -- installed, but blind.
+  //
+  // WHAT MAKES THIS FAIL: revert the `(?<!<)` lookbehind. Then this goes RED
+  // while the `print(1)` case above stays GREEN, because `(` breaks the `\2`
+  // backreference and accidentally avoids the bug. That is exactly why the
+  // one-character delimiter is the arm that matters.
+  const cmd = `python - <<<'x'\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'a herestring must not blank the lines after it');
+});
+
+test('NEGATIVE: a FILE redirect supplies stdin too, and reaches EOF', () => {
+  // Same reasoning as the herestring: the hazard needs stdin open on a
+  // terminal. `<` is distinguished from `<<` and `<<<` by lookarounds.
+  assert.equal(has(`python - < script.py`, 'python-dash-repl'), false);
+});
+
 test('NEGATIVE: a `-` belonging to the SCRIPT, not to python, is allowed', () => {
   // `-` here means "read input from stdin" to fmt.py; python is not the reader.
   assert.equal(has(`python tools/fmt.py -`, 'python-dash-repl'), false);
@@ -281,6 +304,47 @@ test('POSITIVE: the no-space heredoc `python -<<EOF` fires (M7 witness)', () => 
   // This branch of the lookahead had NO test, so deleting `[<>&|]` from it
   // survived the whole suite. Named here as the arm that kills that mutant.
   assert.ok(has(`python -<<EOF\nEOF`, 'python-dash-repl'));
+});
+
+// ------------------------------------------------- the deny text is R7-bound
+// These exist because a reviewer mutated the headline in BOTH directions and
+// both mutants survived the whole suite: the rule-aware framing was a
+// correctness fix with no kill power, and that was not disclosed. An
+// untestable correctness fix is the shape this file polices.
+test('deny text: a python-dash-repl finding must NOT claim a bad measurement', () => {
+  // WHAT MAKES THIS FAIL: drop the rule-awareness and always emit the
+  // measurement headline. The rule is resource exhaustion, not a wrong number,
+  // and recommending measure.mjs for it is advice that does not apply (R7).
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF`));
+  assert.match(body, /carries a known hazard/);
+  assert.doesNotMatch(body, /measurement you cannot trust/);
+  assert.doesNotMatch(body, /measure\.mjs/);
+  // Paired positive: the finding itself must still be reported in full.
+  assert.match(body, /\[python-dash-repl\]/);
+});
+
+test('deny text: a measurement finding STILL gets the measurement framing', () => {
+  // The control for the test above. Without this, deleting the feature and
+  // always emitting "known hazard" would satisfy the absence assertions.
+  const body = denyBody(evaluate(`az account show 2>/dev/null`));
+  assert.match(body, /measurement you cannot trust/);
+  assert.match(body, /measure\.mjs/);
+});
+
+test('deny text: a MIXED finding set gets the measurement framing', () => {
+  // The classifier must not let one non-measurement finding suppress advice
+  // that is correct for the others.
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF\naz account show 2>/dev/null`));
+  assert.match(body, /measurement you cannot trust/);
+  assert.match(body, /\[python-dash-repl\]/);
+});
+
+test('deny text: an UNKNOWN rule id fails toward the measurement framing', () => {
+  // Pins the chosen failure direction so it is a decision, not an accident: a
+  // future measurement rule added without touching the set is still labelled
+  // correctly; only a new NON-measurement rule would be mislabelled.
+  const body = denyBody([{ id: 'some-future-rule', message: 'x' }]);
+  assert.match(body, /measurement you cannot trust/);
 });
 
 // ------------------------------------------------------- rule-level failure
