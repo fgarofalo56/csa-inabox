@@ -314,25 +314,33 @@ operator, on the principle that an operator's time is the scarcest input in this
 drain and a question whose premise is already false is worse than no question —
 it extracts a decision that changes nothing.
 
-**Two of the ten dissolved outright. Four carry an operator decision. Five still
+**One of the ten dissolved outright. Four carry an operator decision. Six still
 carry something live.** Those add to more than ten because OP-9 does both: one
 of its seven items was decided and four were never answered.
 
-An earlier revision of this section said "seven of the ten dissolved" and listed
-seven table rows. It reached seven by counting OP-19's two asks as two rows and
-OP-9's items as a third — which
+Two earlier revisions of this line were both wrong, in the same direction. The
+first said "seven of the ten dissolved" — reached by counting OP-19's two asks
+as two rows and OP-9's items as a third, which
 `PRPs/active/finishline-retirement/OPERATOR-QUESTIONS.md:61` forbids in terms:
 *"The counts are of questions, not of sub-asks; several rows bundle two or
-three."* Splitting the sub-asks is what made the queue look emptier than it is,
-so the count is now stated per row with a status, and the rows that are only
-PARTLY settled say so.
+three."* The second said two dissolved, counting OP-11, which turned out to be
+implemented in one of its two creators and not the other. Splitting sub-asks and
+accepting a half-implementation are the same error: they make the queue look
+emptier than it is. The count is now stated per row with a status, and rows that
+are only PARTLY settled say so.
+
+**Dates.** The section heading is 2026-09-17, the date the operator was asked.
+Evidence added afterwards is dated 2026-09-18 at each cell. Those are different
+days on purpose; neither is a typo.
 
 ### Dissolved outright — no decision needed, both halves measured
 
 | row | why it is no longer a question | evidence |
 |---|---|---|
-| **OP-11** audience registration | option (a) is already implemented **in code** | `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058` reads `identifierUris` and sets `api://${APP_ID}` when absent |
-| **OP-15** Tag Contributor on the ACR | premise false twice over | the deploy identity does not lack `tags/write`: `limitlessdata_deploy` (oid `b9c3cc65…`) holds **Owner** at `/providers/Microsoft.Management/managementGroups/d1fc0498…`, the tenant-root MG — measured 2026-09-18 via `az role assignment list --all --include-inherited`. And per issue 4563 the lease tags are erased by every apply regardless, so the grant would have been a no-op against the stated goal. An earlier revision asserted the first half with no measurement attached |
+| **OP-15** Tag Contributor on the ACR | premise false twice over | the deploy identity does not lack `tags/write`: `limitlessdata_deploy` (oid `b9c3cc65…`) holds **Owner** at `/providers/Microsoft.Management/managementGroups/d1fc0498…`, the tenant-root MG — measured 2026-09-18 via `az role assignment list --all --include-inherited`, and `az role definition list --name Owner` returns `actions: ["*"]`, `notActions: []`, so it does carry `Microsoft.Resources/tags/write`. And per issue 4563 the lease tags are erased by every apply regardless, so the grant would have been a no-op against the stated goal. An earlier revision asserted the first half with no measurement attached |
+
+**One row, not two.** An earlier revision listed OP-11 here as well. It is not
+dissolved — see below.
 
 ### Still live, in whole or in part — NOT settled by this pass
 
@@ -340,9 +348,10 @@ PARTLY settled say so.
 |---|---|---|
 | **OP-5** `task C12` | **untouched** | GOV-3 / model-strategy §7 / TPM raises. Not measured, not asked, not dissolved. An earlier revision of this section omitted it entirely while claiming all ten rows were accounted for — the omission is the reason the arithmetic appeared to close |
 | **OP-9** items 1, 3, 5, 7 | **no verdict** | item 2 was decided by the operator (below) and items 4 and 6 are duplicates of OP-8 and OP-7. The remaining four were neither measured nor asked |
-| **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about cannot occur — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
+| **OP-11** audience registration | **stands as asked** | an earlier revision filed this as dissolved on the grounds that "option (a) is already implemented in code", citing `scripts/csa-loom/bootstrap-msal-app-reg.sh:1052-1058`. That is ONE of the two creators. Issue 2678's option (a) requires the identifier URI in **both** creators plus `az ad sp create` on the bicep path, and `platform/fiab/bicep/modules/admin-plane/entra-app-registration.bicep:138` still runs `az ad app create --display-name … --sign-in-audience AzureADMyOrg` with **zero** `--identifier-uris` and **zero** `az ad sp create` (measured 2026-09-18; the bootstrap script's single `identifierUris` is the positive control showing the probe is not blind). Issue 2678 is OPEN and its body prefers option (b). This PR's own row at `OPERATOR-QUESTIONS.md:322` says "stands exactly as asked" — the dissolution contradicted a line in the same PR |
+| **OP-13** attended D4–D6 proving deploy | **partly discharged** | the `#3056` token hazard the watch-list warns about is much narrower than the row implies — `platform/fiab/bicep/main.bicep:568` and `modules/admin-plane/main.bicep:2372` state an adopt-never-mint contract, empty being the greenfield case only. "Cannot occur" was too strong: `deploy-fiab-commercial.yml:1267` is an `else` that WARNS and proceeds with a mint. That is the WATCH-LIST NOTE inside the row. The row's actual ask — an attended `deploy-fiab-commercial.yml` dispatch — is untouched |
 | **OP-14** `#3056` owner + judge cap | **never asked** | an earlier revision recorded this as *"decided: keep the 5000/day ceiling — operator, this session"*. **The operator did not decide it.** Four questions were put to the operator and this was not one of them. The row is restored to LIVE. It is also cost-material (~20–25M gpt-4.1 tokens/day at the cap), so under `auto-bind-by-default.md` § Allowed any decision to keep it opt-in needs a gate-registry entry, which it does not have |
-| **OP-19 (a)** duplicate timers | **mitigated out-of-band, and fragile** | measured on the live estate 2026-09-18: both timers ARE disabled — `func-secexp/secretExpiryMonitor` and `func-cpeval/copilotEvaluatorTimer` each report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`. But that is an **app setting applied out of band, not the result of PR #4564, which is open and unmerged**, and `main.bicep:8650` still carries the opposite measurement. A bicep re-apply drops out-of-band state, so this is mitigated, not closed |
+| **OP-19 (a)** duplicate timers | **mitigated out-of-band; fragile for the OPPOSITE reason first claimed** | measured on the live estate 2026-09-18: the timers ARE disabled — `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor` and `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` both report `isDisabled=true` with `AzureWebJobs.<fn>.Disabled=true`, as does a third, `copilotEvaluatorHttp`, which an earlier revision omitted. It is an app setting applied out of band, **not** the result of PR #4564, which is open and unmerged. An earlier revision then said "a bicep re-apply drops out-of-band state" — that mechanism CANNOT operate here: nothing in `platform/fiab/bicep` declares `func-secexp-*` or `func-cpeval-*` at all (their modules were deleted and replaced by Container App Jobs, e.g. `secret-expiry-monitor-job.bicep:24`), and nothing deploys in Complete mode, so an incremental apply cannot touch an undeclared resource. The real fragility is the mirror image: these hosts sit OUTSIDE IaC, so nothing re-asserts the disable either, and no gate would notice it being undone |
 | **OP-19 (b)** teardown | approved; PR carries the proof | in flight — `deploy-integrity.md` R2: in flight is not deployed |
 
 **OP-15 is the one worth reading twice.** The question asked whether to grant
@@ -457,12 +466,29 @@ Filed separately rather than fixed here.
 
 ### Method note
 
-Two of the fourteen original rows had already been measured as resolved earlier
-in the session (OP-15's grant, OP-19(a)'s timers) without spending operator time.
+Two of the fourteen original rows had already been measured earlier in the
+session without spending operator time — OP-15's grant (genuinely resolved) and
+OP-19(a)'s timers (disabled on the estate, but only by an out-of-band app
+setting, so mitigated rather than resolved; the row says so and this line must
+not say otherwise).
 That result is what motivated running the pass over all ten rather than
-forwarding the list as written. The ratio held: **7 of 10 dissolved.**
+forwarding the list as written.
+
+**The ratio did NOT hold, and an earlier revision of this line said it did.**
+It read "The ratio held: **7 of 10 dissolved**" — the same claim retracted at the
+top of this section, surviving 142 lines below the retraction, in the very commit
+whose subject was about closing a finding at every site rather than at its label.
+Corrected count: **one row dissolved outright** (OP-15), four carry an operator
+decision, and the rest still carry something live. OP-11 was briefly filed as a
+second dissolution and is not one — see its row.
 
 The generalisable form, worth more than any individual row here: **before asking
 an operator to decide, verify the premise of the question at its site.** A
 question is an instrument too, and a question whose premise is stale returns an
 answer that looks authoritative and changes nothing.
+
+The second generalisable form, learned the expensive way in this document:
+**retracting a claim at its headline does not retract it at its sites.** This
+section stated the corrected count at line 321 and the old one at line 463, in
+one commit, and a reviewer had to find the survivor. Grep for the retracted
+CLAIM, not for the place you remember writing it.

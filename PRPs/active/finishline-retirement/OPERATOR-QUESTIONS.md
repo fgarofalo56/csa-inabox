@@ -10,15 +10,16 @@
 > the evidence trail behind each verdict.
 >
 > **A measure-first pass ran against all ten LIVE rows before any was put to the
-> operator.** Of the ten: **two dissolved outright** (OP-11, OP-15), **four carry
-> an operator decision**, and **five still carry something live** — OP-5, OP-9's
-> unanswered items, OP-13, OP-14 and OP-19. Those overlap because OP-9 both
-> carries a decision and has four items nobody answered.
+> operator.** Of the ten: **one dissolved outright** (OP-15), **four carry an
+> operator decision**, and **six still carry something live** — OP-5, OP-9's
+> unanswered items, OP-11, OP-13, OP-14 and OP-19. Those overlap because OP-9
+> both carries a decision and has four items nobody answered.
 >
-> An earlier revision claimed **seven dissolved**. It reached seven by counting
-> OP-19's two asks and OP-9's items as separate rows, which line 61 of this very
-> file forbids: *"The counts are of questions, not of sub-asks."* The four asked
-> and answered:
+> Earlier revisions claimed **seven dissolved**, then **two**. Seven was reached
+> by counting OP-19's two asks and OP-9's items as separate rows, which line 61
+> of this very file forbids. Two counted OP-11, which is implemented in the
+> bootstrap script but NOT in `entra-app-registration.bicep` — one of the two
+> creators issue 2678 names. The four asked and answered:
 >
 > | row | decision |
 > |---|---|
@@ -65,11 +66,13 @@ Verdicts used below:
 Counts **as first measured**: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
 After the 2026-09-17 measure-first pass, the ten LIVE rows resolved to
-**2 dissolved outright** (OP-11, OP-15) · **3 decided by the operator** (OP-3,
-OP-7, OP-8) plus **OP-9 item 2** decided as its own sub-ask · and **5 still
-carrying something live** (OP-5, OP-9's four unanswered items, OP-13, OP-14,
-OP-19). An earlier revision recorded "7 dissolved on measurement" and reached it
-by splitting sub-asks into rows, against the rule stated two paragraphs below.
+**1 dissolved outright** (OP-15) · **3 decided by the operator** (OP-3,
+OP-7, OP-8) plus **OP-9 item 2** decided as its own sub-ask · and **6 still
+carrying something live** (OP-5, OP-9's four unanswered items, OP-11, OP-13,
+OP-14, OP-19). Two earlier revisions got this wrong in the same direction:
+"7 dissolved on measurement", by splitting sub-asks into rows against the rule
+stated two paragraphs below; then "2 dissolved", by counting OP-11, which is
+implemented in the bootstrap script but not in `entra-app-registration.bicep`.
 
 The original counts are kept above rather than overwritten, because the drop from
 ten LIVE to four decisions is still the finding — it is the measurement of how
