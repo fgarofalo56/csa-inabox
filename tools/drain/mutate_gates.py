@@ -1180,6 +1180,57 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if False:",
     ),
     (
+        ("A9b the SAME site NARROWED rather than disabled -- A9 turns it off entirely, "
+         "which any FAILURE-only test kills, so a narrowing that KEEPS FAILURE was "
+         "invisible to this registry. An independent reviewer showed "
+         "`(\"FAILURE\", \"ERROR\")` survived the whole suite at rc=0; the five other "
+         "members of RED_CONCLUSIONS silently fell through to ADV-WAIT and the gate "
+         "cleared its own block. A total-disable arm does not witness a partial one"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        '            if last_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A9c a run that MEASURED NOTHING again discharges an earlier red -- the THIRD "
+         "form of the self-clearing block. Once a re-run CONCLUDES SKIPPED it stops "
+         "being incomplete, so newest-wins drops it into `clean` and the red vanishes. "
+         "Reachable by `rerun-ci`, which is in `permitted_unattended`"),
+        "gates.py",
+        "        elif verdict in MEASURED_NOTHING:",
+        "        elif False:",
+    ),
+    (
+        ("A9d the ADV-RERUN branch counts a SKIPPED as an answer again -- the FOURTH "
+         "form, and round 4 CREATED it by fixing only the sibling branch. "
+         "`FAILURE, SKIPPED` blocks but `FAILURE, SKIPPED, IN_PROGRESS` clears, so "
+         "dispatching the gate's own remedy discharges the block the moment it STARTS. "
+         "The mutant is written INLINE rather than calling the old helper, because "
+         "round 6 deleted that helper -- a mutant naming a deleted function raises "
+         "NameError, which scores NOT-EVALUATED, not KILLED, and would have quietly "
+         "retired this arm"),
+        "gates.py",
+        "            last = _newest_informative_concluded(groups[name])",
+        ('            _concl = [r for r in groups[name] if not _is_incomplete(r)]\n'
+         '            last = _newest_from_groups({"": _concl})[""] if _concl else None'),
+    ),
+    (
+        ("A9e MEASURED_NOTHING narrowed to SKIPPED alone, so a NEUTRAL re-run "
+         "discharges a red. Survived the whole suite before a LITERAL tuple pinned "
+         "the set -- a loop derived from the frozenset cannot witness the frozenset"),
+        "gates.py",
+        'MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})',
+        'MEASURED_NOTHING = frozenset({"SKIPPED"})',
+    ),
+    (
+        ("A9f the supersession site's RED_CONCLUSIONS read narrowed to two members -- "
+         "the FOURTH read of that frozenset, and the third time this PR's own subject "
+         "recurred one line below its own fix. CANCELLED is the member that actually "
+         "fires here in production"),
+        "gates.py",
+        "            if prior_verdict in RED_CONCLUSIONS:",
+        '            if prior_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
         ("A10 the worst-wins fallback returns the FIRST run instead of the worst -- "
          "found by an independent reviewer, who showed it SURVIVED all 521 tests "
          "because both fixtures claiming to pin worst-wins put the red first"),
@@ -1188,21 +1239,30 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    return runs[0]\n    for run in runs[1:]:",
     ),
     (
-        ("A11 ADV-RERUN keys on ANY run of the name having concluded RED, so a check "
-         "that went red, WAS FIXED and is being re-run again holds the merge -- the "
-         "mirror image of the hole the bucket was added to close, and it SHIPPED in "
-         "the fix for that hole"),
+        ("A11 the informative filter keys on ANY run of the name having concluded RED, "
+         "so a check that went red, WAS FIXED and is being re-run again holds the "
+         "merge -- the mirror image of the hole the bucket was added to close, and it "
+         "SHIPPED in the fix for that hole. RE-ANCHORED in round 6: this arm used to "
+         "sit inside `_newest_concluded`, which round 5 orphaned when both callers "
+         "moved to `_newest_informative_concluded`. An arm over a function the gate "
+         "no longer calls prints KILLED against dead code -- a blind arm inside the "
+         "one instrument this package offers as evidence its suite is not blind. "
+         "Found by an independent reviewer who applied it and got byte-identical gate "
+         "output across 26 constructed rollup shapes"),
         "gates.py",
-        "    concluded = [run for run in runs if not _is_incomplete(run)]",
-        "    concluded = [run for run in runs if _outcome(run)[0] in RED_CONCLUSIONS]",
+        "        if not _is_incomplete(run)\n        and _outcome(run)[0] not in MEASURED_NOTHING",
+        "        if _outcome(run)[0] in RED_CONCLUSIONS",
     ),
     (
         ("A12 the rerun reason picks by LIST POSITION again, so the same three runs "
          "at one head name CANCELLED or FAILURE depending on the order the API "
-         "returned them - a gate claiming a conclusion it never read (R7)"),
+         "returned them - a gate claiming a conclusion it never read (R7). "
+         "RE-ANCHORED in round 6 onto `_newest_informative_concluded`'s return, for "
+         "the same reason as A11: this sat inside `_newest_concluded`, which round 5 "
+         "orphaned and round 6 deleted, so it would have scored against dead code"),
         "gates.py",
-        '    return _newest_from_groups({"": concluded})[""]',
-        "    return concluded[0]",
+        '    return _newest_from_groups({"": informative})[""]',
+        "    return informative[0]",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",

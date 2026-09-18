@@ -763,6 +763,20 @@ def _run(name, conclusion, status="COMPLETED"):
     return {"name": name, "conclusion": conclusion, "status": status}
 
 
+def _run_at(name, conclusion, started, status="COMPLETED"):
+    """A required-context run WITH a timestamp.
+
+    Exists because `_newest_from_groups` falls back to worst-wins the moment
+    ANY run in the list it is handed lacks `startedAt`. A fixture of unstamped
+    required runs therefore masks a population-widening mutation: the widened
+    list resolves to the worst conclusion anyway, so the mutant survives.
+    GitHub stamps every run it returns, so the unstamped fixture was the
+    artefact, not the realistic case.
+    """
+    return {"name": name, "conclusion": conclusion, "status": status,
+            "startedAt": started}
+
+
 def test_all_required_green_is_go():
     ok, reasons = gates.classify_checks(
         [_run(n, "SUCCESS") for n in REQUIRED] + [_run("Bicep Lint", "SKIPPED")], REQUIRED
@@ -910,7 +924,7 @@ def test_negative_control_an_advisory_red_blocks_while_every_required_is_green()
     assert "brain security graph" in why
 
 
-def test_every_red_conclusion_blocks_the_advisory_path_not_just_FAILURE():
+def test_every_red_conclusion_blocks_the_advisory_path_not_only_failure():
     """EACH member of `RED_CONCLUSIONS` pinned SEPARATELY, on the advisory path.
 
     ROUND 1'S BLOCKER, and the sharpest part of it is WHICH member was
@@ -935,9 +949,39 @@ def test_every_red_conclusion_blocks_the_advisory_path_not_just_FAILURE():
     than a pass; the advisory side has to agree, or the same run reads red on
     one path and clean on the other.
 
-    WHAT MAKES EACH ARM FAIL: removing that conclusion from `RED_CONCLUSIONS`,
-    or narrowing the branch to a literal subset. Each is checked on its own so a
-    single surviving member cannot hide behind the others.
+    WHAT MAKES THIS FAIL, stated exactly: **narrowing the branch** to a literal
+    subset. Each conclusion is checked on its own so a single surviving member
+    cannot hide behind the others.
+
+    WHAT THIS DOES **NOT** CATCH, and must not claim to: removing a conclusion
+    from `RED_CONCLUSIONS` itself. The loop derives its expectations from the
+    frozenset under test, so a removal takes the assertion with it — vacuous by
+    construction. An earlier revision of this docstring claimed both, which is
+    the "a test that asserts on a MESSAGE while the mutation changes a COUNT"
+    error in `assertion-design.md`, applied to its own scope.
+
+    THE CORRECTION TO THAT CLAIM WAS ALSO WRONG, and that is the finding worth
+    keeping. It said the removal case "IS covered" by
+    `test_negative_control_a_cancelled_run_is_red_not_absent` and that "the
+    composition holds". Measured by removing each member in turn and running the
+    full suite — independently, by two reviewers and by me, with the same table:
+
+        FAILURE          KILLED    15 failed
+        CANCELLED        KILLED     1 failed
+        ERROR            KILLED     2 failed
+        TIMED_OUT        SURVIVED  rc=0
+        ACTION_REQUIRED  SURVIVED  rc=0
+        STARTUP_FAILURE  SURVIVED  rc=0
+        STALE            SURVIVED  rc=0
+
+    **4 of 7 were unwitnessed.** The cited test pins CANCELLED only, and only on
+    `classify_checks`. So the retraction asserted its own mirror — the same
+    could-not-fail defect, inside the paragraph correcting it, for the third
+    time on this PR.
+
+    `test_every_member_of_red_conclusions_is_witnessed_by_a_literal` below is
+    the actual fix: it iterates a LITERAL list, so removing a member from the
+    frozenset can no longer remove the assertion that would have caught it.
     """
     for conclusion in sorted(gates.RED_CONCLUSIONS):
         checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
@@ -972,6 +1016,499 @@ def test_every_red_conclusion_blocks_the_advisory_path_not_just_FAILURE():
             f"routinely on path filters and a control that fires on everything "
             f"teaches its reader to skim it. why={why!r}"
         )
+
+
+# The seven members of RED_CONCLUSIONS, WRITTEN OUT rather than read from the
+# frozenset. The literal is the entire point: every other arm in this file
+# derives its expectations from `gates.RED_CONCLUSIONS`, so deleting a member
+# deletes the assertion that would have caught the deletion. Measured: 4 of the
+# 7 could be removed with the whole suite still at rc=0 before this existed.
+#
+# If you add a member to the frozenset, this list must be updated by hand and
+# that is deliberate — a new red conclusion should cost one conscious edit.
+RED_CONCLUSIONS_LITERAL = (
+    "FAILURE",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "STALE",
+    "ERROR",
+)
+
+
+def test_every_member_of_red_conclusions_is_witnessed_by_a_literal():
+    """The removal case, which every frozenset-derived arm is vacuous against.
+
+    WHAT MAKES THIS FAIL, three distinct mutations:
+
+    1. REMOVING any member from `gates.RED_CONCLUSIONS` — the set comparison
+       fails naming it, and the per-member loop below fails on both paths.
+       Before this arm, removing TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE or
+       STALE survived the entire suite at rc=0.
+    2. ADDING a member without updating this literal — also the set comparison.
+       That is intended, not friction: a new red conclusion is worth one edit.
+    3. NARROWING either of the TWO read sites this arm covers — the required
+       path and the advisory path — which are separate branches that have
+       drifted apart here before.
+
+    THERE ARE SIX READS OF `RED_CONCLUSIONS`, NOT TWO, and this arm covers two
+    of them. Saying "either read site" without that sentence reads as "all",
+    which is how four of the six stayed unwitnessed across four rounds. The
+    other four are covered by:
+      - `test_the_rerun_bucket_reads_every_red_conclusion_not_only_failure`
+        (the ADV-RERUN read)
+      - `test_a_run_that_measured_nothing_cannot_discharge_an_earlier_red`
+        (the supersession read)
+      - `test_every_member_of_red_conclusions_outranks_a_green_twin`
+        (`_check_rank`, which decides the REQUIRED gate)
+      - `test_every_red_conclusion_at_the_merged_sha_fails_the_receipt`
+        (`_one_context`, which decides whether an issue may CLOSE)
+    If a seventh read is added, it needs its own arm; none of these generalises.
+
+    The literal must NOT be derived from the frozenset, by any expression. That
+    is what made the arm it replaces unable to fail.
+    """
+    assert set(RED_CONCLUSIONS_LITERAL) == set(gates.RED_CONCLUSIONS), (
+        "RED_CONCLUSIONS changed without updating RED_CONCLUSIONS_LITERAL. "
+        f"only in the frozenset: {sorted(set(gates.RED_CONCLUSIONS) - set(RED_CONCLUSIONS_LITERAL))}; "
+        f"only in the literal: {sorted(set(RED_CONCLUSIONS_LITERAL) - set(gates.RED_CONCLUSIONS))}. "
+        "A member removed here stops being red for BOTH the required and the "
+        "advisory path, and every other arm in this file is blind to that."
+    )
+
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        # THE REQUIRED PATH. One required context carries the conclusion; the
+        # rest are green, so only this value can decide the verdict.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED[1:]] + [_run(REQUIRED[0], conclusion)]
+        ok, reasons = gates.classify_checks(checks, REQUIRED)
+        assert not ok, (
+            f"{conclusion} on the REQUIRED context {REQUIRED[0]!r} did not "
+            f"block. A required context in this state would merge. reasons={reasons!r}"
+        )
+
+        # THE ADVISORY PATH, a separate branch that has drifted from the above.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{conclusion.lower()}", conclusion),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion} did not block the ADVISORY path, though the required "
+            f"path treats it as red — the two read the same frozenset and must "
+            f"not disagree. why={why!r}"
+        )
+
+    # PAIRED POSITIVE: the three benign conclusions must still NOT block, or
+    # this arm is satisfied by a gate that refuses everything.
+    for benign in ("SUCCESS", "SKIPPED", "NEUTRAL"):
+        assert benign not in RED_CONCLUSIONS_LITERAL, (
+            f"{benign} must not be red: advisory checks skip routinely on path "
+            f"filters, and a gate that blocks on SKIPPED blocks every PR."
+        )
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{benign.lower()}", benign),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, f"{benign} must not block the advisory path. why={why!r}"
+
+
+MEASURED_NOTHING_LITERAL = ("SKIPPED", "NEUTRAL")
+
+
+def test_every_red_conclusion_at_the_merged_sha_fails_the_receipt():
+    """The SIXTH read of `RED_CONCLUSIONS`, at `_one_context`, on the RECEIPT
+    path — the one that decides whether an issue may be CLOSED.
+
+    Found by the same reviewer, in the same pass as the fifth. Narrowed, a
+    merged-sha check concluding CANCELLED / TIMED_OUT / STALE / STARTUP_FAILURE
+    / ACTION_REQUIRED falls past every branch below it and is scored a GREEN
+    receipt — so an issue closes on a red the receipt called clean. That is the
+    `deploy-integrity.md` R2 failure in its purest form: not "merged is done",
+    but "red is done".
+
+    WHAT MAKES THIS FAIL: narrowing `verdict in RED_CONCLUSIONS` at
+    `_one_context` to any literal subset, or removing a member from the
+    frozenset.
+
+    STARTUP_FAILURE is the member worth naming here: a workflow that fails to
+    start publishes ZERO jobs and reports the FILE PATH as its name, so it is
+    the conclusion most likely to be mistaken for an absence rather than a red.
+    """
+    # THE POLICY IS DECLARED FOR THE NEGATIVE ARMS TOO, and this is the whole
+    # arm. The first version passed `policy={}`, so every arm failed the
+    # receipt on "no substantive step is DECLARED" — fail-closed, correct, and
+    # NOTHING TO DO WITH THE RED. Measured: narrowing the read to
+    # ("FAILURE","ERROR") SURVIVED, because the assertions were satisfied by a
+    # receipt that could not pass for an unrelated reason. With the step
+    # declared and green, the ONLY thing left that can fail the receipt is the
+    # conclusion under test.
+    declared = {
+        "receipts": {
+            "ci_green_rule": {
+                "substantive_steps": {"Python Tests (3.10)": ["Run pytest"]},
+            }
+        }
+    }
+    green_job = {"name": "Python Tests (3.10)", "conclusion": "success",
+                 "steps": [{"name": "Run pytest", "conclusion": "success"}]}
+
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        evidence = [
+            gates.ContextEvidence(
+                name="Python Tests (3.10)",
+                merged_check={
+                    "name": "Python Tests (3.10)",
+                    "conclusion": conclusion,
+                    "status": "COMPLETED",
+                },
+                merged_job=green_job,
+            )
+        ]
+        receipt = gates.ci_green_receipt(
+            evidence,
+            merged_changed_files=("tools/drain/gates.py",),
+            merged_branch="main",
+            merged_sha="deadbeef",
+            trees_identical=True,
+            policy=declared,
+            merged_total_count=1,
+        )
+        assert not receipt.ok, (
+            f"{conclusion} at the MERGED sha was scored a green receipt. A "
+            f"receipt is what lets an issue be closed, so this closes an issue "
+            f"over a red. reasons={receipt.reasons!r}"
+        )
+        # NAME THE BRANCH, not merely the conclusion. The conclusion string
+        # appears in the GREEN-at-merged-sha message too, so asserting only
+        # that it is mentioned cannot tell a red detection from a pass.
+        assert any("RED at the merged sha" in r for r in receipt.reasons), (
+            f"{conclusion} failed the receipt, but NOT as a red — some other "
+            f"branch refused it, so this arm would pass with the red check "
+            f"removed entirely. reasons={receipt.reasons!r}"
+        )
+
+    # PAIRED POSITIVE: a genuinely green merged check still yields a receipt,
+    # or this arm is satisfied by a receipt that never passes.
+    #
+    # The policy is REAL, not `{}`. An empty policy makes the receipt fail
+    # closed on "no substantive step is DECLARED" — correct behaviour, and it
+    # would have made this positive control unable to pass for a reason that
+    # has nothing to do with the red conclusions above.
+    green_policy = {
+        "receipts": {
+            "ci_green_rule": {
+                "substantive_steps": {"Python Tests (3.10)": ["Run pytest"]},
+            }
+        }
+    }
+    evidence = [
+        gates.ContextEvidence(
+            name="Python Tests (3.10)",
+            merged_check={
+                "name": "Python Tests (3.10)",
+                "conclusion": "SUCCESS",
+                "status": "COMPLETED",
+            },
+            merged_job={"name": "Python Tests (3.10)", "conclusion": "success",
+                        "steps": [{"name": "Run pytest", "conclusion": "success"}]},
+        )
+    ]
+    receipt = gates.ci_green_receipt(
+        evidence,
+        merged_changed_files=("tools/drain/gates.py",),
+        merged_branch="main",
+        merged_sha="deadbeef",
+        trees_identical=True,
+        policy=green_policy,
+        merged_total_count=1,
+    )
+    assert receipt.ok, (
+        f"a SUCCESS at the merged sha with its substantive step declared and "
+        f"green must still produce a receipt, or the negative arms above are "
+        f"satisfied by a receipt that cannot pass. reasons={receipt.reasons!r}"
+    )
+
+
+def test_every_member_of_red_conclusions_outranks_a_green_twin():
+    """The FIFTH read of `RED_CONCLUSIONS`, at `_check_rank`, and the worst of
+    the six — because it decides the REQUIRED gate, not the advisory one.
+
+    Found by an independent reviewer on round 5, after they answered "is there
+    a fifth read?" with "yes, and a sixth".
+
+    `_check_rank` de-duplicates a context published more than once by RANK. If
+    the red test there is narrowed, a red twin ties with SUCCESS at rank 1 and
+    first-wins hides it. Measured on `classify_checks` with a duplicated
+    required context `[SUCCESS, X]`: ACTION_REQUIRED, CANCELLED, STALE,
+    STARTUP_FAILURE and TIMED_OUT ALL flip NO-GO -> GO. Only FAILURE and ERROR
+    survived the narrowing, which is exactly the shape that has now recurred at
+    five separate sites in this file.
+
+    THIS IS NOT HYPOTHETICAL. `_check_rank`'s own docstring records that **9 of
+    25 recent PRs publish a duplicated context name**, and that on the PR it
+    was written for the duplicate was a REQUIRED one.
+
+    WHAT MAKES THIS FAIL: narrowing `verdict in RED_CONCLUSIONS` at
+    `_check_rank` to any literal subset, or removing a member from the
+    frozenset (the literal is asserted equal to it above).
+
+    ORDER IS VARIED DELIBERATELY. A green twin FIRST is the ordering that hides
+    the red under first-wins; a red twin first passes even a broken rank. A
+    fixture with one ordering cannot witness this — that is the recorded
+    round-2 finding on `_newest_from_groups`, reproduced here on purpose.
+    """
+    other = [n for n in REQUIRED if n != REQUIRED[0]]
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        for order in ((("SUCCESS", conclusion)), ((conclusion, "SUCCESS"))):
+            checks = [_run(n, "SUCCESS") for n in other] + [
+                _run(REQUIRED[0], order[0]),
+                _run(REQUIRED[0], order[1]),
+            ]
+            ok, reasons = gates.classify_checks(checks, REQUIRED)
+            assert not ok, (
+                f"{conclusion} published as a TWIN of SUCCESS on required "
+                f"context {REQUIRED[0]!r} (order {order}) was scored GREEN. A "
+                f"green twin must never hide a run that failed — and a "
+                f"duplicated required context is the common case, not the odd "
+                f"one. reasons={reasons!r}"
+            )
+
+    # PAIRED POSITIVE: twin SUCCESS runs must still pass, or this arm is
+    # satisfied by a gate that refuses every duplicated context.
+    checks = [_run(n, "SUCCESS") for n in other] + [
+        _run(REQUIRED[0], "SUCCESS"),
+        _run(REQUIRED[0], "SUCCESS"),
+    ]
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert ok, f"two green twins must pass: {reasons!r}"
+
+
+def test_a_run_that_measured_nothing_cannot_discharge_an_earlier_red():
+    """The THIRD and FOURTH forms of the self-clearing block.
+
+    `rerun` closes the case where the re-run is still IN FLIGHT. But once that
+    re-run CONCLUDES `SKIPPED` or `NEUTRAL` it stops being incomplete, so
+    newest-wins dropped it into `clean` and the red disappeared:
+
+        FAILURE @10:00, SKIPPED @11:00  ->  (True, "no advisory context is red")
+
+    The FOURTH form was CREATED BY THE FIX FOR THE THIRD. The ADV-RERUN branch
+    still asked `_newest_concluded`, which counts a SKIPPED as an answer, so
+    adding an in-flight run re-opened the hole one line above where it closed:
+
+        FAILURE@10, SKIPPED@11                  -> NO-GO
+        FAILURE@10, SKIPPED@11, IN_PROGRESS@12  -> GO     (the regression)
+
+    Both branches now use `_newest_informative_concluded`.
+
+    Reachable by ordinary re-run semantics — an `if:` re-evaluating false, or a
+    `needs` upstream failing or being cancelled, both produce `skipped` — i.e.
+    by the gate's OWN remedy `rerun-ci`, which is in `permitted_unattended`.
+
+    THE PRIOR VERDICT IS PARAMETRISED OVER ALL SEVEN RED CONCLUSIONS, not just
+    FAILURE. The first version hard-coded FAILURE, which left the supersession
+    site as a FOURTH unwitnessed read of `RED_CONCLUSIONS` — narrowing it to
+    `("FAILURE","ERROR")` survived at rc=0. CANCELLED matters most in practice:
+    it is the red that actually fires here when a run is superseded.
+
+    WHAT MAKES THIS FAIL, each measured as a real mutant:
+      - narrowing `MEASURED_NOTHING` to `{"SKIPPED"}`, or EMPTYING it — caught
+        by the set equality below, which is why the literal exists;
+      - narrowing the supersession site's `in RED_CONCLUSIONS` to any subset;
+      - reverting either branch to a plain newest-CONCLUDED read (which counts a
+        skip as an answer) — that helper was deleted in round 6 once it was
+        orphaned, so arm A9d writes the reverting expression INLINE;
+      - dropping the `MEASURED_NOTHING` branch entirely.
+    """
+    assert set(MEASURED_NOTHING_LITERAL) == set(gates.MEASURED_NOTHING), (
+        "MEASURED_NOTHING changed without updating MEASURED_NOTHING_LITERAL. "
+        f"only in the frozenset: {sorted(set(gates.MEASURED_NOTHING) - set(MEASURED_NOTHING_LITERAL))}; "
+        f"only in the literal: {sorted(set(MEASURED_NOTHING_LITERAL) - set(gates.MEASURED_NOTHING))}. "
+        "Dropping a member — or emptying the set — lets a run of that conclusion "
+        "DISCHARGE an earlier red, which is the self-clearing block this closes."
+    )
+
+    for nothing in MEASURED_NOTHING_LITERAL:
+        for red in RED_CONCLUSIONS_LITERAL:
+            # TWO-RUN: the concluded supersession case.
+            checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+                _adv("advisory-superseded", red, started="2026-09-18T10:00:00Z"),
+                _adv("advisory-superseded", nothing, started="2026-09-18T11:00:00Z"),
+            ]
+            ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+            assert not ok, (
+                f"a {nothing} run superseding a {red} at the same head cleared "
+                f"the gate. {nothing} measured nothing, so it cannot answer a "
+                f"run that failed. why={why!r}"
+            )
+            assert "advisory-superseded" in why, (
+                f"{red}/{nothing} blocked without naming the check "
+                f"(deploy-integrity R6). why={why!r}"
+            )
+
+            # IN-FLIGHT over the skip: the FOURTH form. Adding a running re-run
+            # on top must not turn the block into an ADV-WAIT.
+            checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+                _adv("advisory-rerun-over-skip", red, started="2026-09-18T10:00:00Z"),
+                _adv("advisory-rerun-over-skip", nothing, started="2026-09-18T11:00:00Z"),
+                _adv("advisory-rerun-over-skip", None, status="IN_PROGRESS",
+                     started="2026-09-18T12:00:00Z"),
+            ]
+            ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+            assert not ok, (
+                f"{red} then {nothing} then a re-run IN FLIGHT cleared the gate. "
+                f"Dispatching `rerun-ci` must not discharge the block the moment "
+                f"it STARTS — that is the self-clearing block, re-opened. "
+                f"why={why!r}"
+            )
+
+        # THREE-RUN, TWO of them non-informative. A two-run fixture cannot
+        # witness this: with only one skip, excluding the newest leaves the red
+        # regardless of whether skips count as informative, so the
+        # `not in MEASURED_NOTHING` filter could be deleted and survive.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("advisory-twice-skipped", "FAILURE", started="2026-09-18T10:00:00Z"),
+            _adv("advisory-twice-skipped", nothing, started="2026-09-18T11:00:00Z"),
+            _adv("advisory-twice-skipped", nothing, started="2026-09-18T12:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"two consecutive {nothing} runs over a FAILURE cleared the gate — "
+            f"the filter that skips non-informative runs is not applied. why={why!r}"
+        )
+
+    # TWO ADVISORY NAMES, and this one is load-bearing for a reason a
+    # single-name fixture cannot express. Every other fixture here publishes
+    # exactly ONE advisory name, so `groups[name]` and `checks` are the SAME
+    # population and passing the whole `checks` list instead of the group
+    # SURVIVED the entire suite — an unrelated check's green discharging this
+    # check's red. Same shape as the module docstring's warning that a
+    # one-element fixture cannot witness a population-narrowing mutation, here
+    # in the other direction: a one-name fixture cannot witness a
+    # population-WIDENING one.
+    #
+    # EVERY RUN IS STAMPED, INCLUDING THE REQUIRED ONES, and that is the whole
+    # arm. `_newest_from_groups` falls back to worst-wins the moment ANY run in
+    # the list lacks `startedAt` — so with unstamped required runs the widened
+    # population still resolves to the FAILURE by worst-wins, and the mutation
+    # SURVIVED. Measured. GitHub stamps every run it returns; the unstamped
+    # fixture was the artefact, and it hid the defect.
+    stamped_required = [
+        _run_at(n, "SUCCESS", f"2026-09-18T09:{i:02d}:00Z")
+        for i, n in enumerate(REQUIRED)
+    ]
+    checks = [
+        *stamped_required,
+        _adv("adv-a", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("adv-a", "SKIPPED", started="2026-09-18T11:00:00Z"),
+        _adv("adv-b", "SUCCESS", started="2026-09-18T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, (
+        "a SUCCESS on a DIFFERENT advisory check discharged adv-a's red — the "
+        "supersession lookup is reading the whole published population instead "
+        f"of the runs of this name. why={why!r}"
+    )
+    assert "adv-a" in why, f"blocked without naming adv-a. why={why!r}"
+
+    # PAIRED POSITIVE 1: a skip with NO prior red is the ROUTINE case.
+    for nothing in MEASURED_NOTHING_LITERAL:
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("advisory-just-skipped", "SUCCESS", started="2026-09-18T10:00:00Z"),
+            _adv("advisory-just-skipped", nothing, started="2026-09-18T11:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, (
+            f"a {nothing} run over a previously GREEN check must NOT block — "
+            f"that is the path-filter case and it is the common one. why={why!r}"
+        )
+
+    # PAIRED POSITIVE 2: a SUCCESS re-run DOES discharge a red, even with a
+    # skip between them. Without this the fix is indistinguishable from "any
+    # red is permanent", which would strand every PR whose check was fixed.
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("advisory-fixed", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("advisory-fixed", "SKIPPED", started="2026-09-18T11:00:00Z"),
+        _adv("advisory-fixed", "SUCCESS", started="2026-09-18T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, (
+        f"a SUCCESS re-run measured something and passed, so it MUST discharge "
+        f"the earlier red even with a skip between them. why={why!r}"
+    )
+
+
+def test_the_rerun_bucket_reads_every_red_conclusion_not_only_failure():
+    """The SECOND read of `RED_CONCLUSIONS`, one line below the first.
+
+    `classify_advisory_checks` reads the frozenset TWICE: once for the newest
+    run's verdict, and once at `gates.py:1685` for `last_verdict` — the newest
+    CONCLUDED run, which decides ADV-RERUN. Round 2 pinned the first and left
+    the second unwitnessed. Narrowing `:1685` to `("FAILURE", "ERROR")` survived
+    the full drain suite at rc=0 — measured here as `580 passed, 1 deselected`
+    against round 2's test file, and rc=1 against this one.
+
+    THE FIGURE IS MINE, NOT INHERITED. An earlier revision of this docstring
+    cited "574 passed", which is not reproducible at any commit on this branch:
+    the collected counts along it are 524 / 531 / 532 / 580 / 581 / 582. It was
+    copied from the finding that prompted the round rather than re-measured —
+    quoting a number is an assertion, and `deploy-integrity.md` R7 does not
+    exempt one because someone else said it first.
+
+    THE SAME DEFECT AS ROUND 1's, ONE LINE BELOW ROUND 1's FIX — fixing the cell
+    rather than the class, in the commit that named closing findings at the SITE
+    as its own lesson.
+
+    NOT an equivalent mutant. On the #4492 shape — newest concluded run
+    CANCELLED, a re-run in flight — clean code answers ADV-RERUN / NO-GO and the
+    mutant answers GO. That reopens the SELF-CLEARING BLOCK this bucket exists to
+    close, and it reopens it for the ONLY conclusion that fires in production:
+    re-running `advisory_verdict` over the last 40 PR rollups gives one NO-GO,
+    #4492, whose reds are both CANCELLED. Both `rerun-ci` and `merge-on-gate-go`
+    are `permitted_unattended`, so this is a live path to an unattended merge
+    over a red.
+
+    WHAT MAKES THIS FAIL: narrowing the `last_verdict in RED_CONCLUSIONS` test at
+    the ADV-RERUN site to any literal subset that omits a member.
+
+    FIXTURE NOTE, because the first version of this arm did not reach the branch
+    at all. `_newest_from_groups` falls back to `_worst(runs)` when ANY run in a
+    group lacks `startedAt` — so two stampless entries resolve to the WORST
+    conclusion, not the newest, and the red one won. The arm failed loudly
+    rather than passing vacuously, which is the good direction, but it was
+    measuring ADV-RED while claiming to measure ADV-RERUN. Explicit stamps put
+    the in-flight re-run genuinely newest.
+    """
+    for conclusion in sorted(gates.RED_CONCLUSIONS):
+        name = f"advisory-rerun-{conclusion.lower()}"
+        # Newest run is IN PROGRESS (a re-run in flight); the newest CONCLUDED
+        # run of the same name was red. That is the ADV-RERUN shape, and the
+        # stamps are what make "newest" mean newest rather than worst.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(name, conclusion, started="2026-09-18T10:00:00Z"),
+            _adv(name, None, status="IN_PROGRESS", started="2026-09-18T11:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion}: a re-run in flight over a newest-CONCLUDED "
+            f"{conclusion} must hold, not clear. Dispatching the gate's own "
+            f"remedy would otherwise clear the gate's own block the moment the "
+            f"re-run STARTED. why={why!r}"
+        )
+        assert "ADV-RERUN" in why, (
+            f"{conclusion} blocked, but not as ADV-RERUN — the remedy differs "
+            f"from ADV-RED and R7 applies to a gate's own message. why={why!r}"
+        )
+
+    # PAIRED POSITIVE: a re-run over a newest-CONCLUDED *green* run must NOT
+    # hold, or this arm blocks every PR with CI still running.
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("advisory-was-green", "SUCCESS", started="2026-09-18T10:00:00Z"),
+        _adv("advisory-was-green", None, status="IN_PROGRESS",
+             started="2026-09-18T11:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, f"a re-run over a previously GREEN check must wait, not block: {why!r}"
 
 
 def test_negative_control_an_in_progress_advisory_check_is_not_red():
@@ -1116,7 +1653,7 @@ def test_negative_control_a_rerun_in_flight_does_not_clear_its_own_red():
         ok, why = gates.advisory_verdict(checks, REQUIRED, True)
         assert not ok, f"a re-run in flight over a completed RED must block: {why}"
         assert "ADV-RERUN 1" in why
-        assert "the NEWEST CONCLUDED run at this head was FAILURE" in why
+        assert "the newest run that MEASURED anything at this head was FAILURE" in why
         assert "ADV-WAIT" not in why, "it must not ALSO be reported as merely waiting"
 
 
@@ -1180,7 +1717,7 @@ def test_the_rerun_reason_names_the_newest_concluded_run_not_the_first_in_list()
         checks = [_run(n, "SUCCESS") for n in REQUIRED] + list(order)
         ok, why = gates.advisory_verdict(checks, REQUIRED, True)
         assert not ok, why
-        assert "the NEWEST CONCLUDED run at this head was FAILURE" in why
+        assert "the newest run that MEASURED anything at this head was FAILURE" in why
         assert "CANCELLED" not in why, (
             "naming the older CANCELLED run is the order-dependent claim this "
             f"test exists for: {why}"
@@ -1194,7 +1731,7 @@ def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_reru
     Any unreadable stamp sends the WHOLE group to worst-wins, so the red
     becomes the group's representative and lands in `red` directly. The
     in-flight run never wins "newest" WHEN A RED IS PRESENT, which is why
-    `_newest_concluded`'s undated fallback -- though it IS reached, and can
+    `_newest_informative_concluded`'s undated fallback -- though it IS reached, and can
     even choose between two undated concluded runs -- can never change the
     gate's answer. Stated precisely at that function; the direct unit test
     below is a real instrument, not an un-killable one.
@@ -1216,8 +1753,14 @@ def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_reru
         assert "ADV-RED 1: Repo Hygiene (FAILURE)" in why
 
 
-def test_newest_concluded_falls_back_to_worst_wins_on_an_unreadable_timestamp():
-    """`_newest_concluded` DIRECTLY, on a branch the gate genuinely takes.
+def test_newest_informative_concluded_falls_back_to_worst_wins_on_a_bad_timestamp():
+    """`_newest_informative_concluded` DIRECTLY, on a branch the gate takes.
+
+    RETARGETED in round 6. This tested `_newest_concluded`, which round 5
+    orphaned when both callers moved to the informative variant, and which
+    round 6 deleted. The properties still matter for the LIVE function, so the
+    coverage is retargeted rather than dropped — deleting a test because its
+    subject moved is how a witness disappears quietly.
 
     The function delegates its fallbacks to `_newest_from_groups`, and
     delegation is a claim until a fixture shows it. Tested at the function
@@ -1238,22 +1781,22 @@ def test_newest_concluded_falls_back_to_worst_wins_on_an_unreadable_timestamp():
             {"name": "H", "conclusion": order[1], "status": "COMPLETED"},
             {"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
         ]
-        chosen = gates._newest_concluded(runs)
+        chosen = gates._newest_informative_concluded(runs)
         assert chosen is not None
         assert chosen["conclusion"] == "FAILURE", f"order {order} picked {chosen}"
 
 
-def test_newest_concluded_is_none_when_nothing_has_concluded():
+def test_newest_informative_concluded_is_none_when_nothing_has_concluded():
     """The first-run-of-a-check case: every run is still in flight, so there is
     no previous answer to carry. It must be ADV-WAIT, never ADV-RERUN.
 
-    Breaks if: an in-flight run is counted as concluded -- `_newest_concluded`
+    Breaks if: an in-flight run is counted as concluded -- `_newest_informative_concluded`
     would return it, and `_outcome` of an IN_PROGRESS run is not in
     RED_CONCLUSIONS, so the bug would be silent here and show up as a wrong
     NAME somewhere else. The classifier assertion below is the one with teeth."""
     runs = [{"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
             {"name": "H", "conclusion": None, "status": "QUEUED"}]
-    assert gates._newest_concluded(runs) is None
+    assert gates._newest_informative_concluded(runs) is None
 
     checks = [_run(n, "SUCCESS") for n in REQUIRED] + runs
     ok, why = gates.advisory_verdict(checks, REQUIRED, True)
@@ -1550,17 +2093,45 @@ def test_the_advisory_split_counts_the_whole_published_population():
     0" -- see the empty-rollup control above.
 
     Breaks if: `total_checks` is derived from the advisory subset (it would
-    read 2, not 5) or `population` counts required contexts (it would read 5)."""
+    read 2, not 5) or `population` counts required contexts (it would read 5).
+
+    EVERY BUCKET IS NON-EMPTY HERE, ON PURPOSE. The previous fixture ended
+    `assert split.rerun == []`, which meant dropping `len(rerun)` from the
+    `population` sum at `gates.py` SURVIVED the whole suite at rc=0 — found by
+    an independent reviewer. A fixture that pins a term to zero cannot witness
+    that term's removal: zero is what the mutant computes too. The consequence
+    was confined to the gate's own printed counts, so a NO-GO naming an
+    ADV-RERUN would have reported `0 advisory of N published`, contradicting
+    `AdvisorySplit`'s contract — an R7 defect in a gate's own message.
+
+    So each of the four terms now contributes a DISTINCT non-zero count, and
+    `population` is asserted as their sum: dropping any one of the four changes
+    the total and fails here."""
     checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
         _adv("CodeQL", "SUCCESS"),
         _adv("Checkov", "FAILURE"),
+        # rerun: a red concluded run with a re-run still in flight
+        _adv("Trivy", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("Trivy", None, status="IN_PROGRESS", started="2026-09-18T11:00:00Z"),
+        # wait: running, with nothing red behind it
+        _adv("Bicep Lint", None, status="IN_PROGRESS"),
     ]
     split = gates.classify_advisory_checks(checks, REQUIRED)
-    assert split.total_checks == 5
-    assert split.population == 2
+    assert split.total_checks == 8
     assert split.red == ["Checkov (FAILURE)"]
     assert split.clean == ["CodeQL"]
-    assert split.rerun == []
+    assert len(split.rerun) == 1
+    assert "Trivy" in split.rerun[0]
+    assert split.wait == ["Bicep Lint"]
+    # The SUM, term by term — this is the assertion that dies when any one of
+    # the four is dropped from the expression.
+    assert split.population == 4, (
+        f"population must count all four buckets: red={split.red} "
+        f"rerun={split.rerun} wait={split.wait} clean={split.clean}"
+    )
+    assert split.population == (
+        len(split.red) + len(split.rerun) + len(split.wait) + len(split.clean)
+    )
 
 
 # ---------------------------------------------------------------------------

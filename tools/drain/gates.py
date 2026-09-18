@@ -1293,6 +1293,12 @@ RED_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
      "ERROR"}
 )
+# Concluded, not red, and carrying NO measurement. These are green ON THEIR OWN
+# -- an advisory check that skips on a path filter is the routine case and must
+# never block -- but they cannot DISCHARGE an earlier red run of the same name
+# at the same head, because nothing was measured to discharge it with. A
+# SUCCESS is deliberately absent: that is a re-run that ran and passed.
+MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})
 # Not finished. A required context that has not concluded is INCOMPLETE, never a
 # pass. `EXPECTED` is a StatusContext that has been announced and never
 # reported -- the check-run equivalent of never-created.
@@ -1550,7 +1556,7 @@ def _newest_from_groups(groups: dict[str, list[dict]]) -> dict[str, dict]:
 def _is_incomplete(check: dict) -> bool:
     """Has this run NOT said anything yet? One definition, two callers.
 
-    Written once because the advisory split and `_newest_concluded` must agree
+    Written once because the advisory split and `_newest_informative_concluded` must agree
     exactly: if they drift, a run counts as in-flight for one question and as
     concluded for the other, and the bucket boundary moves without anyone
     editing it.
@@ -1571,52 +1577,38 @@ def _is_incomplete(check: dict) -> bool:
     return not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES
 
 
-def _newest_concluded(runs: list[dict]) -> dict | None:
-    """The newest run of this name that actually CONCLUDED, or None.
+def _newest_informative_concluded(runs: list[dict]) -> dict | None:
+    """The newest CONCLUDED run that actually MEASURED something, or None.
 
-    THE ROUND-3 BLOCKER, recorded because it arrived IN the fix for the
-    round-2 one -- the previous-round's-fix pattern, and it was R7 inside the
-    branch whose own docstring cites R7. The first version asked "did ANY run
-    of this name conclude RED" and then reported the first such run as "the
-    last CONCLUDED run at this head". Measured by an independent reviewer:
+    A plain newest-concluded read answers "what did this check last say". This answers the
+    narrower question both callers need: "what did this check last say when it
+    actually RAN". A `SKIPPED` or `NEUTRAL` run said nothing, so it is not an
+    answer to a previous failure.
 
-        FAILURE 10:00, SUCCESS 11:00, IN_PROGRESS 12:00
-            -> BLOCKED, claiming the last concluded run was FAILURE.
-               It was SUCCESS, at 11:00.
-        CANCELLED 09:00, FAILURE 10:00, IN_PROGRESS   -> named CANCELLED
-        the same three runs, list order REVERSED      -> named FAILURE
+    WHAT MAKES THIS RETURN None: a group of nothing but skips and in-flight
+    runs. That routes the caller to `clean`/`wait`, which is correct — a check
+    that has never measured anything at this head has no red to carry forward.
 
-    Two defects in one. It OVER-BLOCKED -- a check that went red, was fixed,
-    and is being re-run again held the merge, which is the mirror image of the
-    hole `rerun` was added to close. And the reason it gave was FALSE and
-    ORDER-DEPENDENT: it named whichever red sat first in the list, a specific
-    run's conclusion it had never checked.
-
-    So the question is asked properly here, over the CONCLUDED subset, through
-    `_newest_from_groups` -- which already carries both fail-closed fallbacks
-    (an unreadable timestamp or a tie at the maximum falls back to worst-wins,
-    so an undated red is never discarded as superseded).
-
-    DISCLOSED, and stated exactly rather than conveniently. The undated
-    fallback inside this function IS REACHED -- `[SUCCESS undated,
-    IN_PROGRESS@12]` enters it -- and with two undated concluded runs it does
-    genuinely CHOOSE (`[SUCCESS undated, SKIPPED undated, IN_PROGRESS@12]`
-    returns the SKIPPED). What no input produces is a choice that CHANGES THE
-    GATE'S ANSWER: any RED among the concluded runs is picked by the
-    whole-group worst-wins one level up and routed to ADV-RED before this
-    branch is reached, so every case that gets here is non-red and lands in
-    `wait` whichever run is chosen. Measured, all three shapes.
-
-    An earlier draft of this comment said "UNREACHABLE", which was a hair
-    strong in the direction that flatters the disclosure -- the branch runs,
-    it just cannot decide anything the caller can observe. The direct unit test
-    below is correspondingly NOT un-killable: it is one of the tests that kills
-    arm A4's shape, on a branch the gate does take.
+    NO `exclude` PARAMETER, and the reason is worth recording. The first version
+    took the newest run and dropped it by IDENTITY, with a docstring claiming
+    that removing by VALUE would drop byte-equal twins and fail OPEN. Two
+    independent reviewers showed that claim was UNKILLABLE: `is not` → `!=` →
+    dropping the filter entirely all left the suite green, and one enumerated
+    all 898 reachable 2- and 3-run groups and found the verdict never differs.
+    It is dead by construction at both call sites — the supersession caller's
+    run is in `MEASURED_NOTHING` and the ADV-RERUN caller's is incomplete, so
+    each is already removed by a filter below. `assertion-design.md` says an
+    un-killable assertion is disclosed or dropped; this one is dropped, because
+    the honest version of it is "this parameter does nothing".
     """
-    concluded = [run for run in runs if not _is_incomplete(run)]
-    if not concluded:
+    informative = [
+        run for run in runs
+        if not _is_incomplete(run)
+        and _outcome(run)[0] not in MEASURED_NOTHING
+    ]
+    if not informative:
         return None
-    return _newest_from_groups({"": concluded})[""]
+    return _newest_from_groups({"": informative})[""]
 
 
 def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
@@ -1642,23 +1634,40 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
     lane states` were both SKIPPED on the fixture head, on a PR that touched
     neither. Counting those would make the arm red on essentially every PR.
 
-    ADV-RERUN: THE NEWEST CONCLUDED RUN OF THIS NAME WAS RED AND A RE-RUN HAS
-    NOT ANSWERED YET. This closes a SELF-CLEARING BLOCK, found by an
-    independent reviewer on the first version of this arm. `newest`-wins alone
-    answers ADV-WAIT there, which does not block -- so dispatching the gate's
-    OWN remedy (`rerun-ci`) cleared the gate's own block the moment the re-run
-    STARTED, before it answered anything. Both `rerun-ci` and
-    `merge-on-gate-go` are in `permitted_unattended`, so that was a live path
+    ADV-RERUN HOLDS TWO SHAPES, and the bucket's name is older than its
+    contents. Both mean "the last thing this check MEASURED was red, and
+    nothing has measured since":
+
+      1. a re-run is IN FLIGHT and has not answered yet; and
+      2. a re-run has CONCLUDED `SKIPPED` or `NEUTRAL` — it answered, but it
+         measured nothing, so it did not answer THIS.
+
+    Shape 1 closes a SELF-CLEARING BLOCK found by an independent reviewer on
+    the first version of this arm: `newest`-wins alone answered ADV-WAIT, which
+    does not block, so dispatching the gate's OWN remedy (`rerun-ci`) cleared
+    the gate's own block the moment the re-run STARTED. Shape 2 is the same
+    hole one step later, found on round 4 — and round 4's fix for it re-opened
+    shape 1 by changing only the sibling branch. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so this was a live path
     to merging over a red without a human in it.
 
-    NEWEST CONCLUDED, not "any run was red" -- see `_newest_concluded`, where
-    the second version of this bucket over-blocked a check that had already
-    been fixed and named a run whose conclusion it had never read.
+    NEWEST INFORMATIVE, not "any run was red" -- see
+    `_newest_informative_concluded`, where an earlier version of this bucket
+    over-blocked a check that had already been fixed and named a run whose
+    conclusion it had never read.
 
     It is a SEPARATE bucket from `red` on purpose, because the remedy differs
     and `deploy-integrity.md` R7 applies to a gate's own message: the check has
-    not failed again, the last thing it said was red and the new answer is not
-    in yet. "Wait for it" is true; "fix it" would not be.
+    not failed AGAIN, and the red has not been cleared.
+
+    "WAIT FOR IT" IS NOT SAID HERE, AND THE REASON IS THE ROUND-4 BLOCKER. It
+    was the runtime message and it is false for shape 2 — that re-run has
+    already concluded, so waiting can never resolve it. The message now says
+    the red has not been CLEARED and that a re-run must actually MEASURE to
+    clear it, which is true of both shapes. A docstring that still said "wait
+    for it is true" survived one round after the message it described was
+    corrected; closing a finding at the MESSAGE and not at the SPEC is the
+    label-not-site error `assertion-design.md` names.
 
     Live frequency of the shape: 0 across 52 PR heads (the reviewer's scan), so
     holding it costs nothing measurable today. It is blocked rather than
@@ -1680,15 +1689,61 @@ def classify_advisory_checks(checks: list[dict], required: list[str]) -> Advisor
         if verdict in RED_CONCLUSIONS:
             red.append(f"{name} ({verdict})")
         elif _is_incomplete(check):
-            last = _newest_concluded(groups[name])
+            # `_newest_informative_concluded`, NOT `_newest_concluded` -- the
+            # FOURTH form of the self-clearing block, and round 4 CREATED it by
+            # fixing only the sibling branch below. a plain newest-CONCLUDED read counts a
+            # SKIPPED run as an answer, so:
+            #
+            #     FAILURE@10, SKIPPED@11                  -> NO-GO  (round 4)
+            #     FAILURE@10, SKIPPED@11, IN_PROGRESS@12  -> GO     (this hole)
+            #
+            # i.e. round 4 made `FAILURE, SKIPPED` block, and then dispatching
+            # `rerun-ci` -- the gate's OWN `permitted_unattended` remedy --
+            # cleared it the instant the re-run STARTED. That is round 2's
+            # finding verbatim, re-opened one line above round 4's fix for it.
+            # The two branches ask the same question and must use the same
+            # helper.
+            last = _newest_informative_concluded(groups[name])
             last_verdict = _outcome(last)[0] if last is not None else ""
             if last_verdict in RED_CONCLUSIONS:
                 rerun.append(
-                    f"{name} (a re-run is in flight; the NEWEST CONCLUDED run at this "
-                    f"head was {last_verdict})"
+                    f"{name} (a re-run is in flight; the newest run that MEASURED "
+                    f"anything at this head was {last_verdict})"
                 )
             else:
                 wait.append(name)
+        elif verdict in MEASURED_NOTHING:
+            # A RUN THAT MEASURED NOTHING CANNOT DISCHARGE A RED ONE.
+            #
+            # The third form of the self-clearing block, found by an independent
+            # reviewer after the first two were closed. `rerun` above holds the
+            # case where the re-run is still IN FLIGHT -- but once that re-run
+            # CONCLUDES `SKIPPED` or `NEUTRAL` it stops being incomplete, so
+            # newest-wins dropped it straight into `clean` and the red vanished:
+            #
+            #     FAILURE @10:00, SKIPPED @11:00  ->  (True, "no advisory context is red")
+            #
+            # and the same for NEUTRAL. That is reachable by ordinary re-run
+            # semantics -- an `if:` re-evaluating false, or a `needs` upstream
+            # failing or being cancelled, both yield `skipped` -- i.e. by the
+            # gate's OWN remedy, `rerun-ci`, which is in `permitted_unattended`.
+            #
+            # SKIPPED still is not RED (see above: advisory checks skip
+            # routinely on path filters, and counting that would block every
+            # PR). The claim here is narrower and is about SUPERSESSION: a
+            # skip may mean "not applicable", which is fine on its own and is
+            # NOT fine as an answer to a run that already failed at this head.
+            # A SUCCESS deliberately DOES discharge it -- that is a re-run that
+            # measured something and passed.
+            prior = _newest_informative_concluded(groups[name])
+            prior_verdict = _outcome(prior)[0] if prior is not None else ""
+            if prior_verdict in RED_CONCLUSIONS:
+                rerun.append(
+                    f"{name} (superseded by a {verdict} run, which measured nothing; "
+                    f"the newest run that DID measure at this head was {prior_verdict})"
+                )
+            else:
+                clean.append(name)
         else:
             clean.append(name)
     return AdvisorySplit(
@@ -1793,8 +1848,10 @@ def advisory_verdict(
     if split.red or split.rerun:
         blocking = [
             (f"ADV-RED {len(split.red)}: {'; '.join(split.red)}." if split.red else ""),
-            (f"ADV-RERUN {len(split.rerun)}: {'; '.join(split.rerun)} - WAIT for the "
-             "re-run; do not read a re-run's mere existence as the red being cleared."
+            (f"ADV-RERUN {len(split.rerun)}: {'; '.join(split.rerun)} - the red has "
+             "NOT been cleared; a re-run must actually MEASURE to clear it. Do not "
+             "read a re-run's mere existence, or a re-run that skipped, as the red "
+             "being cleared."
              if split.rerun else ""),
         ]
         return False, (
