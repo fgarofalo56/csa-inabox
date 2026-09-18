@@ -837,7 +837,7 @@ def test_the_infra_ere_fixture_still_matches_the_deriver():
     try:
         out = subprocess.run(
             ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
-            capture_output=True, text=True, cwd=root, timeout=180,
+            capture_output=True, text=True, encoding="utf-8", cwd=root, timeout=180,
         )
     except (OSError, subprocess.SubprocessError):  # pragma: no cover
         pytest.skip("node is not available here")
@@ -1210,7 +1210,7 @@ def test_the_required_context_snapshot_is_current():
     try:
         out = subprocess.run(
             ["gh", "api", endpoint, "--jq", ".contexts"],
-            capture_output=True, text=True, timeout=45,
+            capture_output=True, text=True, encoding="utf-8", timeout=45,
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - offline
         pytest.skip(f"gh unavailable: {exc}")
