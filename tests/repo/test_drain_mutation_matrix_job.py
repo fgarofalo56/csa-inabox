@@ -51,6 +51,7 @@ import itertools
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -78,20 +79,21 @@ TRIGGERS = DOC[True]
 _MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
 
 
-def _matrix_job() -> dict:
+def _matrix_job() -> dict[str, Any]:
     """The matrix job, or a hard failure naming what is gone."""
     job = JOBS.get(MATRIX_JOB)
-    if job is None:
+    if not isinstance(job, dict):
         pytest.fail(
-            f"{WORKFLOW.name} has no job {MATRIX_JOB!r}. Every assertion in this "
-            "file is about that job; without it they would pass vacuously. If "
-            "the matrix moved again, repoint MATRIX_JOB -- do not delete this "
-            "file, which is the only thing asserting the matrix still runs."
+            f"{WORKFLOW.name} has no job {MATRIX_JOB!r} (got {type(job).__name__}). "
+            "Every assertion in this file is about that job; without it they "
+            "would pass vacuously. If the matrix moved again, repoint "
+            "MATRIX_JOB -- do not delete this file, which is the only thing "
+            "asserting the matrix still runs."
         )
     return job
 
 
-def _rendered_names(job: dict) -> set[str]:
+def _rendered_names(job: dict[str, Any]) -> set[str]:
     """Every status-check name a job publishes, matrix expanded.
 
     `Python Tests (3.10)` is not a literal anywhere in the workflow -- the job
@@ -118,10 +120,14 @@ def _rendered_names(job: dict) -> set[str]:
                 f"(got {values!r})."
             )
         value_lists.append([str(v) for v in values])
-    out = set()
+    out: set[str] = set()
     for combo in itertools.product(*value_lists):
         rendered = name
-        for key, value in zip(keys, combo):
+        # strict=True is not decoration: `keys` and `combo` are the same length
+        # by construction (the product is built FROM `keys`), so a mismatch
+        # means the construction changed and a rendered name would silently
+        # lose an axis -- which is how a rename would hide from this file.
+        for key, value in zip(keys, combo, strict=True):
             rendered = re.sub(
                 r"\$\{\{\s*matrix\." + re.escape(key) + r"\s*\}\}", value, rendered
             )
@@ -133,7 +139,7 @@ def _rendered_names(job: dict) -> set[str]:
 # 1-4: the matrix runs, unconditionally, over the whole suite
 # --------------------------------------------------------------------------- #
 
-def test_a_job_runs_the_mutation_matrix():
+def test_a_job_runs_the_mutation_matrix() -> None:
     """BREAKS ON: deleting or editing the `python tools/drain/mutate_gates.py`
     command. Searched across EVERY job, not just the expected one, so moving it
     elsewhere is reported as a move rather than as a deletion."""
@@ -155,7 +161,7 @@ def test_a_job_runs_the_mutation_matrix():
     )
 
 
-def test_the_matrix_job_is_unconditional():
+def test_the_matrix_job_is_unconditional() -> None:
     """BREAKS ON: any job-level `if:` on the matrix job.
 
     The pre-split step was gated `steps.relevant.outputs.run == 'true'`, which
@@ -172,7 +178,7 @@ def test_the_matrix_job_is_unconditional():
     )
 
 
-def test_no_step_in_the_matrix_job_is_conditional():
+def test_no_step_in_the_matrix_job_is_conditional() -> None:
     """BREAKS ON: `if:` on any step of the matrix job -- in particular the
     verbatim pre-split gate
     `steps.relevant.outputs.run == 'true' && matrix.python-version == '3.10'`.
@@ -196,7 +202,7 @@ def test_no_step_in_the_matrix_job_is_conditional():
     )
 
 
-def test_the_matrix_step_is_exactly_the_command():
+def test_the_matrix_step_is_exactly_the_command() -> None:
     """BREAKS ON: wrapping the command in shell control flow.
 
     A narrowing does not have to be spelled `if:`. `if ! git diff --quiet ...;
@@ -219,7 +225,7 @@ def test_the_matrix_step_is_exactly_the_command():
     )
 
 
-def test_the_pull_request_trigger_has_no_path_filter():
+def test_the_pull_request_trigger_has_no_path_filter() -> None:
     """BREAKS ON: adding `paths:` / `paths-ignore:` under `on.pull_request`.
 
     A path filter there suppresses the whole workflow run on a PR that touches
@@ -239,7 +245,7 @@ def test_the_pull_request_trigger_has_no_path_filter():
         )
 
 
-def test_the_parser_can_see_a_conditional_step():
+def test_the_parser_can_see_a_conditional_step() -> None:
     """POSITIVE CONTROL for the two absence-only assertions above.
 
     `test_the_matrix_job_is_unconditional` and
@@ -272,7 +278,7 @@ def test_the_parser_can_see_a_conditional_step():
     )
 
 
-def test_no_required_context_from_this_workflow_lost_its_producer():
+def test_no_required_context_from_this_workflow_lost_its_producer() -> None:
     """BREAKS ON: renaming `python-tests` or `dbt-compile`'s `name:`.
 
     This workflow publishes SEVEN of `main`'s required contexts. Splitting the
