@@ -1704,6 +1704,60 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
+  // ── /api/lakehouse/path — graduated out of the `app/api/lakehouse/` class ──
+  //
+  // The class reason in ALLOWLIST_PREFIXES reads "ADLS Gen2 lakehouse navigator
+  // over the deployment storage (container validated; single shared lake)".
+  // That described this route while the container check WAS its validation. It
+  // no longer does: both verbs now resolve the (container, path) pair against
+  // the route's own `lakehouseId` item — `resolveItemAccessByOid` (a
+  // STRONG_OWNERSHIP_SIGNALS token) and then `resolveLakehouseAbfss` — and
+  // refuse anything that is not strictly below that item's recorded root.
+  //
+  // Listing it here is what makes that enforceable. The excuse it USED to get
+  // was the `ALLOWLIST_PREFIXES` class entry, and that was established by
+  // varying ONE input per arm rather than by reading a regex — holding the
+  // other two fixed and reading three counters, because the verdict alone
+  // cannot tell "skipped" from "scanned and excused":
+  //
+  //   arm                                 violations  scanned  allowlistedHits
+  //   A  guard + entry + class prefix          0        1537        495
+  //   C  -guard -entry + class prefix          0        1537        496
+  //   Y  -guard -entry -class prefix          16        1537        480  <- names
+  //                                  `lakehouse/path [POST, DELETE]`
+  //   Z  +guard -entry -class prefix          15        1537        480  (absent)
+  //
+  // `scanned` is 1537 in EVERY arm, so the route was always IN REMIT, and
+  // `allowlistedHits` moves 495 -> 496 in C ALONE, which is the class entry
+  // doing the excusing. An earlier revision of this comment blamed the
+  // `!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)` remit test instead; that
+  // was WRONG — GETSESSION_RE (`:509`) lists `with(?:Session|…)\s*\(` as an
+  // explicit alternative, so it is TRUE for this route and for every other
+  // `withSession` route. The correction is recorded rather than quietly
+  // overwritten, because as written it would have told the next reader that
+  // several hundred `withSession` routes are outside this checker's remit.
+  //
+  // With the entry, dropping the resolution RE-FLAGS (arm B of the same probe:
+  // `violations: 1`, `[POST, DELETE]`) rather than falling back to a class
+  // reason that stopped being true of this member — the same defect the `#3572`
+  // narrowing beside `storage/accounts/` records.
+  //
+  // The `app/api/lakehouse/` class entry is deliberately NOT deleted: it still
+  // governs the rest of the prefix, and NOW_GUARDED wins over the allowlist for
+  // this one path. That is a statement about SCOPE, not an endorsement of the
+  // reason's accuracy for those members — and the reason ("… navigator …
+  // container validated; single shared lake") does not describe all of them:
+  // `upload` is a POST that writes. CHECK 3B, which exists to re-test class
+  // prefixes, structurally cannot see that: `READ_ONLY_CLAIM_RE` matches
+  // `read-only|scan|discovery` and this reason uses none of the three words, so
+  // the check is silent on this prefix rather than satisfied by it. Inserting
+  // `read-only` into the reason string and changing nothing else takes CHECK 3B
+  // from 0 to 10 (`history`, `load-to-table`, `permissions/rls-test`,
+  // `permissions`, `schemas`, `shortcuts/credentials`, `shortcuts`,
+  // `shortcuts/test`, `transform-preview`, `upload`). Re-wording the reason is
+  // OUT OF SCOPE here — it would put ten routes in remit in a change about one
+  // — and is tracked as the route-family rollup (#4619).
+  'apps/fiab-console/app/api/lakehouse/path/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
