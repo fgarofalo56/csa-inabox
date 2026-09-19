@@ -18,6 +18,9 @@ import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
+import {
+  assertNoServerDerivedScopeChange, ServerOwnedStateError,
+} from '@/app/api/items/_lib/item-crud';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,11 +60,24 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     if (!access) return err('Item not found', 404, 'not_found');
     if (!access.canWrite) return err('Read-only access', 403, 'forbidden');
     const item = access.item;
+    const nextState = 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state;
+    // #4619 — `state` is replaced WHOLESALE below with no schema validation, and
+    // this is the route `lib/api/workspaces.ts:272` (`updateItem`) puts every
+    // generic editor save through. A handful of its TOP-LEVEL keys are not user
+    // data: they record what the provisioning engine created for this item, and
+    // other code derives a security-relevant scope from them. Reject-on-change,
+    // so a body that round-trips them unchanged, or omits them, is unaffected.
+    try {
+      assertNoServerDerivedScopeChange(nextState, item.state);
+    } catch (e: any) {
+      if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
+      throw e;
+    }
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
       description: 'description' in body ? (body.description?.trim() || undefined) : item.description,
-      state: 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state,
+      state: nextState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();
