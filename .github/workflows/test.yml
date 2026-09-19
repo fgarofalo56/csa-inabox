@@ -143,10 +143,14 @@ jobs:
     # A required context that passes on a coin flip is the "green over nothing"
     # shape this repo refuses, so the budget is raised rather than retried.
     #
-    # Raised rather than SPLIT deliberately. Moving the matrix to its own job
-    # would take it OUT of the required set until branch protection is updated
-    # in the same change -- a guard that silently stops blocking, which is worse
-    # than a slow one.
+    # Raised rather than SPLIT deliberately -- AND THAT DECISION IS NOW
+    # REVERSED; see SPLIT, 2026-09-19 at the foot of this block. The argument
+    # was that moving the matrix to its own job would take it OUT of the
+    # required set until branch protection is updated in the same change -- a
+    # guard that silently stops blocking, which is worse than a slow one. That
+    # risk was real and is not waved away: what changed is that raising the
+    # ceiling did not work either (twice more, below), so the risk is now
+    # ANSWERED at the new job rather than avoided by not splitting.
     #
     # 30 WAS NOT ENOUGH EITHER, AND THE ARGUMENT ABOVE PREDICTED IT. Three more
     # cancellations, the last one fully instrumented -- job 104280343412, head
@@ -184,19 +188,40 @@ jobs:
     # and a job that exceeds `timeout-minutes` reports as `cancelled` rather
     # than `failure`, so it reads as a flake three times over.
     #
-    # 45 is chosen for HEADROOM, not for fit. The 31.8 min above is a FLOOR, not
-    # "today": it was measured at ff4562eca21, and round 15 then added 18 tests
-    # and zero arms (the sandbox control went 434 -> 452 collected). Every arm
-    # re-runs the whole suite, so per-arm cost moved while the arm count did
-    # not. PROJECTED, not measured -- scaling by two warm local runs on the same
-    # box (22.92s here / 21.53s there = 1.065): ~5.86 s/arm, 247 x 5.86 = ~24.1
-    # min matrix + 9.2 min setup = ~33.3 min against the 45 wall, i.e. ~35%
-    # headroom rather than the ~41% a reader would compute from the floor.
-    # Either figure clears; the point of naming both is that the smaller one is
-    # the honest one, and it went stale ONE COMMIT after it was written, inside
-    # this same PR. Do not treat 45 as a ceiling to grow into. The real fix is
-    # to stop paying a whole suite per arm -- most arms are killed by a handful
-    # of named assertions -- and that is tracked
+    # 45 WAS CHOSEN FOR HEADROOM, NOT FOR FIT -- AND IT DIED ANYWAY, TWO HEADS
+    # AFTER IT LANDED. The paragraph this replaces projected ~33.3 min against
+    # the 45 wall and called it "~35% headroom", while flagging that the floor
+    # it scaled from had gone stale one commit after being written. It went
+    # stale again, faster. Measured on the two most recent 3.10 legs:
+    #
+    #   2843bd3cc49 (#4555 final)  03:32:24 .. 04:17:24 = 45m00s  success, 0s
+    #   33856071b2c (#4591)        04:47:57 .. 05:33:15 = 45m18s  CANCELLED
+    #
+    # `len(ARMS)` reads 330 at 58e800233ac against the 247 that justified 45 --
+    # +34% with the wall unmoved -- and #4591, #4593, #4596, #4613 and #4625
+    # were all blocked behind a REQUIRED context that had run out of clock.
+    # Three ceilings (15, 30, 45) and four cancellations: the ceiling was never
+    # the variable.
+    #
+    # SPLIT, 2026-09-19 (#4555). The matrix moved to the `drain-mutation-matrix`
+    # job below, which is where the budget arithmetic now lives. The sibling
+    # legs -- these same steps minus that one -- measured 8m29s (3.11) and
+    # 13m04s (3.12) at 2843bd3cc49, so that is the scale this context returns to.
+    #
+    # 45 IS LEFT UNCHANGED HERE, DELIBERATELY, AS UNFITTED HEADROOM. It is now
+    # ~3.5x the largest sibling rather than a number derived from this job's
+    # cost, and it is NOT evidence about what this leg costs -- read the sibling
+    # durations for that. Tightening it is a separate change with its own
+    # measurement: the defect being fixed here is a REQUIRED context dying
+    # against a wall, and narrowing that wall in the same commit that removes
+    # the thing which hit it would risk re-creating the outage on a number that
+    # is still a projection.
+    #
+    # WHAT THE SPLIT DOES NOT FIX. Every arm still re-runs the WHOLE suite, so
+    # the matrix costs arms x suite and both multiplicands grow. The split buys
+    # this required lane its clock back; it does not make the matrix cheap, and
+    # the new job's own budget is therefore on the same treadmill. The real fix
+    # -- most arms are killed by a handful of named assertions -- is tracked
     # separately, because narrowing an arm's test selection is precisely how a
     # GREEN arm becomes ambiguous between "blind test" and "wrong subset".
     timeout-minutes: 45
@@ -484,39 +509,13 @@ jobs:
             --cov-report=html \
             --cov-fail-under=75
 
-      # THE MUTATION MATRIX, ON THE OLDEST SUPPORTED PYTHON.
-      #
-      # `tools/drain/mutate_gates.py` is what certifies that the drain's test
-      # suite is not BLIND: it reintroduces defects that actually happened and
-      # requires the suite to go red on every one. A green suite without it is
-      # ambiguous — it means either the tests discriminate or they do not.
-      # The arm count is deliberately NOT written here: it moves every round
-      # (155 -> 205 -> 209 -> 213 across #4487 alone), and a number in a comment
-      # that nothing checks is the stale-count defect this package keeps finding
-      # in its own files. `mutate_gates.py` prints and enforces its own total.
-      #
-      # Until now NOTHING RAN IT. `grep -rn mutate_gates .github/workflows/
-      # Makefile` returned nothing, so "every arm KILLED" was a claim producible
-      # only by hand, on whichever interpreter the author happened to have. That
-      # is how `Path.read_text(newline=...)` — a 3.13-only keyword — shipped in
-      # the runner's own normalisation loop: it ran green on three 3.13
-      # workstations (mine and both reviewers') and, on this matrix's Pythons,
-      # aborted before scoring a single arm. The control that certifies the gate
-      # was the one control in the package that nothing verified.
-      #
-      # Pinned to 3.10 — the FLOOR `pyproject.toml` declares — because that is
-      # the leg a version-gated API breaks on first. Running it on all three
-      # legs would triple the job's dominant cost: this step alone measured 396s
-      # of a 918s job on 2026-09-14, which is also why `timeout-minutes` above
-      # is 45. An earlier version of this comment called it "a ~90s job" and
-      # used that to argue the tripling was cheap — the estimate was an order of
-      # magnitude stale, in the file where the timeout lives. A later version
-      # then said the timeout was 30 after it had already been raised to 45,
-      # which is the same defect one round on: a comment describing a number
-      # that sits eight lines above it, and disagreeing with it.
-      - name: Drain mutation matrix (every arm must be KILLED)
-        if: steps.relevant.outputs.run == 'true' && matrix.python-version == '3.10'
-        run: python tools/drain/mutate_gates.py
+      # THE DRAIN MUTATION MATRIX USED TO BE A STEP HERE, gated
+      # `steps.relevant.outputs.run == 'true' && matrix.python-version ==
+      # '3.10'`. It moved to the `drain-mutation-matrix` job below on
+      # 2026-09-19 (#4555) -- see the timeout block at the top of this job for
+      # the measurement that forced it. Do NOT re-add it here: it was ~70% of
+      # this REQUIRED context's runtime and it is what killed three successive
+      # ceilings.
 
       - name: Upload coverage report (xml + html)
         if: always() && steps.relevant.outputs.run == 'true'
@@ -551,6 +550,138 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
+
+  # ------------------------------------------------------------------
+  # THE DRAIN MUTATION MATRIX, ON THE OLDEST SUPPORTED PYTHON.
+  #
+  # `tools/drain/mutate_gates.py` is what certifies that the drain's test suite
+  # is not BLIND: it reintroduces defects that actually happened and requires
+  # the suite to go red on every one. A green suite without it is ambiguous --
+  # it means either the tests discriminate or they do not. The arm count is
+  # deliberately NOT written into the step: it moves every round (155 -> 205 ->
+  # 209 -> 213 across #4487 alone, 247 -> 330 since), and a number in a comment
+  # that nothing checks is the stale-count defect this package keeps finding in
+  # its own files. `mutate_gates.py` prints and enforces its own total.
+  #
+  # Before #4487 NOTHING RAN IT. `grep -rn mutate_gates .github/workflows
+  # Makefile` returned nothing, so "every arm KILLED" was a claim producible
+  # only by hand, on whichever interpreter the author happened to have. That is
+  # how `Path.read_text(newline=...)` -- a 3.13-only keyword -- shipped in the
+  # runner's own normalisation loop: it ran green on three 3.13 workstations and
+  # aborted before scoring a single arm on the Pythons CI runs. The control that
+  # certifies the gate was the one control in the package that nothing verified.
+  # That history is why the paragraph below is written the way it is.
+  #
+  # ---- WHY THIS IS ITS OWN JOB (#4555, 2026-09-19) -------------------------
+  # It was a step in the 3.10 leg of `python-tests`, which publishes the
+  # REQUIRED context `Python Tests (3.10)`. At 396s of a 918s job it was
+  # already the dominant cost; at 330 arms it was ~70% of the leg, and the leg
+  # hit its wall on two consecutive heads (45m00s with zero margin, then 45m18s
+  # CANCELLED). A job that exceeds `timeout-minutes` reports as `cancelled`,
+  # which is RED to the merge gate, so five PRs were blocked by a required
+  # check that had simply run out of clock. Full measurement + the three dead
+  # ceilings: the `timeout-minutes` block on `python-tests` above.
+  #
+  # ---- THIS IS NOT A REQUIRED CONTEXT, AND THAT IS THE RISK --------------
+  # Branch protection is not a workflow file, so this split MOVES the matrix
+  # out of the blocking set: `Drain Mutation Matrix (3.10)` is absent from
+  # `main`'s required checks and from `tools/drain/required_contexts.json`, and
+  # a red here will NOT block a merge until branch protection is changed
+  # separately. No REQUIRED CONTEXT NAME MOVED -- `Python Tests (3.10)` keeps
+  # its name and its job key, and this job adds a name rather than renaming one
+  # -- but the SIGNAL moved from a blocking check to an advisory one, and that
+  # is the exact objection the pre-split comment raised against splitting.
+  #
+  # It is answered three ways, none of which is "we will remember":
+  #   1. The job is UNCONDITIONAL. No job-level `if:`, no change detector, no
+  #      `if:` on the matrix step -- so it runs on every PR, every push, every
+  #      merge group and every dispatch. It deliberately does NOT reuse
+  #      `python-tests`'s `Detect Python-relevant changes` gate: a second copy
+  #      of that delegation would be guarded by nothing (the tests that enforce
+  #      it are scoped to `jobs["python-tests"]`), and two lists that must agree
+  #      is defect #3862 verbatim. Running it on a docs-only PR costs minutes;
+  #      a silently-narrowed mutation matrix costs the guarantee.
+  #   2. `tests/repo/test_drain_mutation_matrix_job.py` ASSERTS all of that
+  #      against this file, so re-adding a gate is RED rather than quiet.
+  #   3. It is in `pr-summary`'s `needs` and its table, so its result is
+  #      visible on every PR instead of only to someone who opens the run.
+  #
+  # ---- THE BUDGET, AND HOW IT WAS DERIVED --------------------------------
+  # PER-ARM COST IS THE CONTROL SUITE'S RUNTIME. Not an approximation -- every
+  # arm re-runs the whole suite, and the instrumented run recorded the identity
+  # itself: "5.48 s/arm -- i.e. exactly the CONTROL suite runtime", against a
+  # control of "430 passed, 3 skipped, 1 deselected in 5.47s". So the matrix
+  # costs ARMS x SUITE and BOTH multiplicands have to be read at the head being
+  # budgeted for.
+  #
+  # Read at 793b2cd0955, both by measurement, neither by grep:
+  #   * `len(ARMS)` == 330  (247 at the head that justified the 45 this replaces)
+  #   * control suite: 581 passed, 4 skipped, 1 deselected, 586 collected
+  #     (430 passed at that same head -- the suite grew ~35% too)
+  #
+  # Runner per-arm therefore ~= 5.47s x 581/430 ~= 7.4s, and 330 x 7.4s ~= 41
+  # min of matrix.
+  #
+  # THE MODEL IS CHECKED AGAINST BOTH OBSERVED HEADS, because a projection that
+  # only fits the case it was fitted to is not evidence. Non-matrix work on the
+  # 3.10 leg is the 3.12 sibling's whole duration, 13m04s. 41 + 13 = ~54 min
+  # against a 45 wall -- which is why 33856071b2c was CANCELLED at 45m18s -- and
+  # the immediately preceding head, with fewer arms over a smaller suite,
+  # finished at 45m00s with zero margin. One model, both observations.
+  #
+  # AN EARLIER DRAFT OF THIS BLOCK BUDGETED 60 MINUTES OFF 5.61-5.8 s/arm, AND
+  # THAT WAS THE STALE-MULTIPLICAND ERROR AGAIN -- the figure was measured when
+  # the suite was ~430 tests and was applied to 330 arms of a 581-test suite,
+  # i.e. the exact mistake the `timeout-minutes` block on `python-tests`
+  # documents itself making twice. It is recorded here rather than quietly
+  # corrected, because the correction is the only reason this number is 90.
+  #
+  # This job's setup is NOT the 3.10 leg's ~9.2 min. That leg builds one
+  # environment out of ~22 independent pip resolutions for pytest/mypy/bandit
+  # and the whole Azure SDK surface; the matrix needs none of it. The drain
+  # package and its `__tests__` import exactly two third-party names, `pytest`
+  # and `yaml`, and `mutate_gates.py` runs its pytest subprocesses with
+  # `cwd=<sandbox outside the repo>`, so the root `pyproject.toml`'s `addopts`
+  # (and therefore pytest-cov) never apply. Two wheels, call it ~1-2 min.
+  #
+  # FLOOR ~= 43 min. Budget 90 = ~110% headroom, i.e. room to ~700 arms at
+  # today's per-arm cost, against +34% arm growth in the four days that killed
+  # the 45. Chosen deliberately wider than the fitted number because this lane
+  # is ADVISORY: an overrun here is a loud red advisory, not a merge freeze, so
+  # being generous costs runner minutes while being tight costs another round
+  # of this. It is still NOT a ceiling to grow into -- the same treadmill
+  # applies, and the next raise should be refused in favour of making an arm
+  # stop paying for a whole suite.
+  drain-mutation-matrix:
+    name: Drain Mutation Matrix (3.10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
+        with:
+          # 3.10 is the FLOOR `pyproject.toml` declares, and the leg a
+          # version-gated API breaks on first -- which is not hypothetical here
+          # (see the 3.13-only keyword above). Pinned to one version on purpose:
+          # every arm re-runs the whole suite, so a three-way matrix would
+          # triple the dominant cost of the thing that just outgrew its wall.
+          python-version: '3.10'
+
+      - name: Install the matrix's dependencies
+        # DELIBERATELY MINIMAL, and this is a claim with a value that breaks it:
+        # if the drain package or its `__tests__` ever import a third name, the
+        # sandbox control errors and `mutate_gates.py` returns non-zero BEFORE
+        # scoring an arm. It fails closed and loudly; it cannot report a green
+        # matrix over a missing dependency.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml
+
+      - name: Drain mutation matrix (every arm must be KILLED)
+        # NO `if:`. See the block above -- this is the whole point of the job.
+        run: python tools/drain/mutate_gates.py
 
   # ------------------------------------------------------------------
   # FRESH-RESOLVE LEG (story 3063)
@@ -734,7 +865,7 @@ jobs:
   pr-summary:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
-    needs: [python-tests, app-fresh-resolve, dbt-compile, dbt-integration]
+    needs: [python-tests, drain-mutation-matrix, app-fresh-resolve, dbt-compile, dbt-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -745,6 +876,10 @@ jobs:
           script: |
             const jobs = [
               { name: 'Python Tests', id: 'python-tests' },
+              // ADVISORY, not required — see the block above the job. It is
+              // listed here so a matrix that stops being green is visible on
+              // the PR rather than only to someone who opens the run.
+              { name: 'Drain Mutation Matrix', id: 'drain-mutation-matrix' },
               { name: 'App Fresh-Resolve', id: 'app-fresh-resolve' },
               { name: 'dbt Compile', id: 'dbt-compile' },
               { name: 'dbt Integration', id: 'dbt-integration' },
