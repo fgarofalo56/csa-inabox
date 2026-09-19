@@ -206,7 +206,11 @@ jobs:
     # SPLIT, 2026-09-19 (#4555). The matrix moved to the `drain-mutation-matrix`
     # job below, which is where the budget arithmetic now lives. The sibling
     # legs -- these same steps minus that one -- measured 8m29s (3.11) and
-    # 13m04s (3.12) at 2843bd3cc49, so that is the scale this context returns to.
+    # 13m04s (3.12) at 2843bd3cc49, so that is the scale this context returns
+    # to. MEASURED AFTER THE SPLIT, run 35469150763 at 7d1708db097, all three
+    # legs green in the same run: 3.10 = 9m29s, 3.11 = 8m29s, 3.12 = 11m10s.
+    # So 45m00s -> 9m29s, and this leg now sits MID-PACK among its siblings
+    # instead of at 3.4x the largest of them.
     #
     # 45 IS LEFT UNCHANGED HERE, DELIBERATELY, AS UNFITTED HEADROOM. It is now
     # ~3.5x the largest sibling rather than a number derived from this job's
@@ -606,56 +610,45 @@ jobs:
   #   3. It is in `pr-summary`'s `needs` and its table, so its result is
   #      visible on every PR instead of only to someone who opens the run.
   #
-  # ---- THE BUDGET, AND HOW IT WAS DERIVED --------------------------------
-  # PER-ARM COST IS THE CONTROL SUITE'S RUNTIME. Not an approximation -- every
-  # arm re-runs the whole suite, and the instrumented run recorded the identity
-  # itself: "5.48 s/arm -- i.e. exactly the CONTROL suite runtime", against a
-  # control of "430 passed, 3 skipped, 1 deselected in 5.47s". So the matrix
-  # costs ARMS x SUITE and BOTH multiplicands have to be read at the head being
-  # budgeted for.
+  # ---- THE BUDGET: MEASURED, NOT PROJECTED -------------------------------
+  # Measured at 7d1708db097, run 35469150763, on a GitHub Linux runner:
   #
-  # Read at 793b2cd0955, both by measurement, neither by grep:
-  #   * `len(ARMS)` == 330  (247 at the head that justified the 45 this replaces)
-  #   * control suite: 581 passed, 4 skipped, 1 deselected, 586 collected
-  #     (430 passed at that same head -- the suite grew ~35% too)
+  #   job                              21:01:52 .. 21:21:15  = 19m23s  SUCCESS
+  #   checkout + setup-python + wheels 21:01:53 .. 21:02:02  =     9s
+  #   matrix step                      21:02:02 .. 21:21:12  = 19m10s
   #
-  # Runner per-arm therefore ~= 5.47s x 581/430 ~= 7.4s, and 330 x 7.4s ~= 41
-  # min of matrix.
+  # 1150s over `len(ARMS)` == 330 = 3.48 s/arm, every arm KILLED.
   #
-  # THE MODEL IS CHECKED AGAINST BOTH OBSERVED HEADS, because a projection that
-  # only fits the case it was fitted to is not evidence. Non-matrix work on the
-  # 3.10 leg is the 3.12 sibling's whole duration, 13m04s. 41 + 13 = ~54 min
-  # against a 45 wall -- which is why 33856071b2c was CANCELLED at 45m18s -- and
-  # the immediately preceding head, with fewer arms over a smaller suite,
-  # finished at 45m00s with zero margin. One model, both observations.
+  # THE PROJECTION THAT PRECEDED THIS SAID ~41 MIN AND WAS WRONG BY 2.1x, and
+  # the reason is load-bearing rather than embarrassing. It scaled the 5.48
+  # s/arm recorded inside the OLD job by the suite's growth (430 -> 581 tests)
+  # and got 7.4 s/arm. The measured figure is 3.48 s/arm -- LOWER than the old
+  # one despite a 35% bigger suite -- because per-arm cost is dominated by
+  # interpreter and plugin startup, not by the tests, and the old number was
+  # measured inside the 3.10 leg's heavy environment: ~22 pip resolutions, the
+  # Azure SDK surface, pytest-cov/anyio/asyncio all loading on every one of 330
+  # pytest subprocesses. Stripping the environment to two wheels cut per-arm
+  # cost by ~36%. The split bought a second saving nobody planned for, and the
+  # model that missed it assumed arms x tests when the real term is
+  # arms x (startup + tests).
   #
-  # AN EARLIER DRAFT OF THIS BLOCK BUDGETED 60 MINUTES OFF 5.61-5.8 s/arm, AND
-  # THAT WAS THE STALE-MULTIPLICAND ERROR AGAIN -- the figure was measured when
-  # the suite was ~430 tests and was applied to 330 arms of a 581-test suite,
-  # i.e. the exact mistake the `timeout-minutes` block on `python-tests`
-  # documents itself making twice. It is recorded here rather than quietly
-  # corrected, because the correction is the only reason this number is 90.
+  # An earlier draft budgeted 90 off that 41-min projection. Left standing it
+  # would have been a comment asserting a floor 2.2x the job's real duration,
+  # in the file whose entire history is stale numbers -- so it is corrected
+  # here and the correction is kept, because the next person to raise this
+  # number should have to argue with the measurement rather than with a guess.
   #
-  # This job's setup is NOT the 3.10 leg's ~9.2 min. That leg builds one
-  # environment out of ~22 independent pip resolutions for pytest/mypy/bandit
-  # and the whole Azure SDK surface; the matrix needs none of it. The drain
-  # package and its `__tests__` import exactly two third-party names, `pytest`
-  # and `yaml`, and `mutate_gates.py` runs its pytest subprocesses with
-  # `cwd=<sandbox outside the repo>`, so the root `pyproject.toml`'s `addopts`
-  # (and therefore pytest-cov) never apply. Two wheels, call it ~1-2 min.
-  #
-  # FLOOR ~= 43 min. Budget 90 = ~110% headroom, i.e. room to ~700 arms at
-  # today's per-arm cost, against +34% arm growth in the four days that killed
-  # the 45. Chosen deliberately wider than the fitted number because this lane
-  # is ADVISORY: an overrun here is a loud red advisory, not a merge freeze, so
-  # being generous costs runner minutes while being tight costs another round
-  # of this. It is still NOT a ceiling to grow into -- the same treadmill
-  # applies, and the next raise should be refused in favour of making an arm
-  # stop paying for a whole suite.
+  # 45 = ~2.3x the measured 19m23s, i.e. room to ~740 arms at 3.48 s/arm,
+  # against the +34% arm growth that killed the old ceiling in four days.
+  # Deliberately wider than a fitted number because this lane is ADVISORY: an
+  # overrun is a loud red advisory, not a merge freeze, so generosity costs
+  # runner minutes while tightness costs another round of this. It is still NOT
+  # a ceiling to grow into -- every arm still re-runs the whole suite, so the
+  # next raise should be refused in favour of fixing that.
   drain-mutation-matrix:
     name: Drain Mutation Matrix (3.10)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
