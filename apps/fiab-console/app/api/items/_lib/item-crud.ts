@@ -181,12 +181,149 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
 }
 
 /**
+ * SERVER-DERIVED SCOPE — TOP-LEVEL item-state keys a REQUEST BODY may never
+ * introduce or change (#4619).
+ *
+ * WHAT THESE ARE. `state.provisioning` is the receipt the provisioning engine
+ * stamps AFTER it has created or attached an item's backing Azure object;
+ * `state.storageAccount` names the account a lakehouse is bound to when its lake
+ * lives outside the DLZ. Neither is user data. Both are records of work the
+ * SERVER did, and both are then read as a SCOPE — the bounds a later request's
+ * caller-supplied path, database, job or account is narrowed against. Measured
+ * readers on this tree:
+ *
+ *   state.provisioning.secondaryIds.{adlsRoot,container,rootPath}
+ *        → lib/azure/lakehouse-abfss.ts  resolveLakehouseAbfss()
+ *   state.provisioning.secondaryIds.database
+ *        → items/_lib/adx-item-scope.ts, items/_lib/synapse-item-scope.ts
+ *   state.provisioning.secondaryIds.jobId
+ *        → items/databricks-job/_lib/job-scope.ts
+ *   state.provisioning.secondaryIds.notebookPath
+ *        → items/databricks-notebook/_lib/notebook-path-scope.ts
+ *   state.storageAccount
+ *        → lib/azure/lakehouse-abfss.ts, api/lakehouse/references/**, and
+ *          api/storage/_lib/authorize.ts, where it IS the T3 grant coordinate.
+ *
+ * The generic item writers replace `state` WHOLESALE from the request body with
+ * no schema validation — `items/[type]/[id]` PATCH, `cosmos-items/[type]/[id]`
+ * PATCH, `cosmos-items/[type]` POST, and {@link updateOwnedItem}. A scope derived
+ * from these keys was therefore not independent of the caller it bounds, and a
+ * containment comparison against it was weaker than it reads.
+ *
+ * WHY A TOP-LEVEL KEY RULE AND NOT {@link SERVER_OWNED_STATE_KEYS}. That list is
+ * matched BY KEY NAME at ANY DEPTH, which is right for `secretRef` (a distinctive
+ * name that is never user data wherever it appears) and WRONG here. `container`
+ * and `storageAccount` are ordinary words other item types legitimately carry as
+ * user-AUTHORED config. Measured, not assumed:
+ * `lib/apps/content-bundles/app-direct-lake-replacement.ts:120-137` puts BOTH on
+ * an eventstream source's `config`, and `lib/editors/phase3/eventstream-editor.tsx:1634`
+ * / `lib/editors/stream-analytics-editor.tsx:667` are the inputs a user types
+ * them into. Adding those names to the depth-blind list would refuse a sink edit
+ * that has nothing to do with any scope above. The scopes are read at FIXED
+ * PATHS, so the rule is written at those paths.
+ *
+ * SEMANTICS, matching the block above: reject on INTRODUCE-or-CHANGE, never on
+ * presence. A body that round-trips the same value is unaffected, which is what
+ * keeps the near-universal `{ ...item.state, oneField: x }` save pattern working.
+ * OMISSION IS ALLOWED and is fail-safe in the NARROWING direction: dropping
+ * `state.storageAccount` falls back to the primary configured account
+ * (`api/lakehouse/references/paths/route.ts:71`) and withdraws the T3 grant;
+ * dropping `state.provisioning` drops `resolveLakehouseAbfss` to its
+ * deterministic branch 3 — a `lakehouses/<safeRelPath(displayName)>` root in a
+ * container that must pass `isKnownContainer` (`lakehouse-abfss.ts:140-149`).
+ *
+ * THIS IS DEFENCE IN DEPTH, NOT THE PRIMARY CONTROL — the same position the
+ * block above takes, for the same reason: the primary control belongs at the
+ * SINK, where it holds for every writer including the ones this helper
+ * deliberately does not cover. `api/storage/_lib/authorize.ts` and
+ * `items/_lib/databricks-resource-binding.ts` are the two sink-side precedents
+ * already on this tree, and the latter says in as many words that item state is
+ * a CLAIM, not an ATTESTATION. That stays true after this change.
+ *
+ * NOT COVERED, deliberately:
+ *   - {@link createOwnedItem} — unchanged. `deployment-pipelines/loom/_lib/promote.ts`
+ *     seeds a promotion target from the SOURCE item's whole state through it,
+ *     and that is the create half of a path that has to keep working.
+ *   - `state.ownedContainers`, which also steers branch 3's container choice. Its
+ *     range is already bounded to `KNOWN_CONTAINERS` by `isKnownContainer`
+ *     (`lakehouse-abfss.ts:58-72`), so it is a narrower question than this one
+ *     and is left to the sink rather than widened into here blindly.
+ */
+export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
+  'provisioning',
+  'storageAccount',
+];
+
+/** Own-property probe that refuses arrays and non-objects — never walks a proto chain. */
+function hasOwnStateKey(o: unknown, k: string): o is Record<string, unknown> {
+  return !!o && typeof o === 'object' && !Array.isArray(o)
+    && Object.prototype.hasOwnProperty.call(o, k);
+}
+
+/**
+ * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
+ * a TOP-LEVEL {@link SERVER_DERIVED_SCOPE_KEYS} value. Pass `undefined` as
+ * `currentState` on a CREATE, where there is no prior value and so any supplied
+ * one is an introduction.
+ */
+export function assertNoServerDerivedScopeChange(nextState: unknown, currentState: unknown): void {
+  if (!nextState || typeof nextState !== 'object' || Array.isArray(nextState)) return;
+  for (const key of SERVER_DERIVED_SCOPE_KEYS) {
+    if (!hasOwnStateKey(nextState, key)) continue; // omission — allowed, fail-safe
+    const incoming = stableStringify(nextState[key]);
+    if (hasOwnStateKey(currentState, key) && stableStringify(currentState[key]) === incoming) continue;
+    throw new ServerOwnedStateError(
+      key,
+      `"state.${key}" is recorded by Loom, not by the client: this request would change it. ` +
+        'It is the provisioning receipt for this item\'s backing Azure object, which later requests ' +
+        'narrow a caller-supplied path, database, job or account against, so it can only be ' +
+        'written by the provisioning path that produces it.',
+    );
+  }
+}
+
+/**
+ * Return `nextState` with every {@link SERVER_DERIVED_SCOPE_KEYS} key REBASED
+ * onto the value the TARGET item already carries (removed when it carries none),
+ * so a cross-item state copy satisfies {@link assertNoServerDerivedScopeChange}.
+ *
+ * Exists for exactly one caller: `deployment-pipelines/loom/_lib/promote.ts`
+ * builds its patch from the SOURCE item's state and applies it to a DIFFERENT,
+ * already-existing TARGET item. Without this the source's provisioning receipt
+ * would be written over the target's own — which is both the change this rule
+ * refuses AND wrong on the merits, since a receipt describes the resource the
+ * SOURCE is backed by. `lib/workspace/item-definition.ts:116` already drops
+ * `provisioning` when it exports a PORTABLE definition, for the same reason; a
+ * promotion is that export followed by an import.
+ *
+ * Deliberately NOT a bypass flag on {@link updateOwnedItem}: a flag would be
+ * reachable from every one of its 400+ call sites, whereas rebasing is safe
+ * wherever it is used because it can only ever produce the target's OWN value.
+ */
+export function carryServerDerivedScope<T extends Record<string, unknown>>(
+  nextState: T,
+  currentState: unknown,
+): T {
+  const out: Record<string, unknown> = { ...nextState };
+  for (const key of SERVER_DERIVED_SCOPE_KEYS) {
+    if (hasOwnStateKey(currentState, key)) out[key] = currentState[key];
+    else delete out[key];
+  }
+  return out as T;
+}
+
+/**
  * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
  * a {@link SERVER_OWNED_STATE_KEYS} value that `currentState` does not already
  * carry. Omission is permitted (and fail-safe). See the block comment above.
+ *
+ * Also runs {@link assertNoServerDerivedScopeChange} (#4619), so both generic
+ * enforcement points — the `items/[type]/[id]` PATCH and {@link updateOwnedItem}
+ * — pick up the path-scoped rule without a second call site of their own.
  */
 export function assertNoServerOwnedStateChange(nextState: unknown, currentState: unknown): void {
   if (!nextState || typeof nextState !== 'object') return;
+  assertNoServerDerivedScopeChange(nextState, currentState);
   const next = new Map<string, Set<string>>();
   collectServerOwned(nextState, next);
   if (next.size === 0) return;
