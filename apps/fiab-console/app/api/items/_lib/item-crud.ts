@@ -1008,11 +1008,25 @@ export async function deleteOwnedItem(
  *   restoreOwnedItem()  → un-deletes an item and re-indexes it
  *   purgeRecycledItem() → HARD-DELETES the Cosmos document, unrecoverably
  *
- * Widening this to workspace-write access would hand every shared-workspace
- * collaborator an irreversible purge over items they did not delete, and — via
- * restore — the ability to resurrect an item its owner deliberately removed.
- * Over-restrictive here is the SAFE direction: the failure mode is "an admin
- * must ask the owner to restore", not "a collaborator destroyed the only copy".
+ * Widening this to workspace-write access would hand every member the workspace
+ * was shared with AT WRITE SCOPE an irreversible purge over items they did not
+ * delete, and — via restore — the ability to resurrect an item its owner
+ * deliberately removed. Over-restrictive here is the SAFE direction: the failure
+ * mode is "an admin must ask the owner to restore", not "a collaborator
+ * destroyed the only copy".
+ *
+ * KNOWN ASYMMETRY, recorded rather than silently tolerated: the way INTO the bin
+ * is WIDER than the way out. `softDeleteOwnedItem` resolves through
+ * `loadOwnedItem` (:595) and therefore the canonical write-scoped ladder, so a
+ * write-role member CAN bin an item they did not create — but only the workspace
+ * creator can then list, restore or purge it. That is deliberate in the safe
+ * direction (nothing is destroyed by the narrow side) but it is NOT a decided
+ * end state; #3706 decided only that the fix is not "widen the way out".
+ *
+ * Note also what is NOT decided here: restore and purge are treated IDENTICALLY
+ * today because they share this helper. The paragraph below states the condition
+ * a FUTURE widening must meet (separate them); it does not argue that identical
+ * treatment is correct now. If that question is ever opened, open it explicitly.
  *
  * If restore/purge genuinely must reach beyond the creator, that is a DESIGN
  * change, not a guard relaxation: it needs an explicit recycle-bin permission

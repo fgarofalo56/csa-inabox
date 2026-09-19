@@ -186,7 +186,7 @@ const TOUCH_EXEMPT = new Map([
   // `loadRecycledItem`; #3753's hunks are the import line plus `resolveDomainName`
   // /`domainScopeFor`, and contain none of them.
   ['apps/fiab-console/app/api/items/_lib/item-crud.ts',
-   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and migrating loadRecycledItem would WIDEN recycle-bin restore/purge — separate PR"],
+   "#3697/#3698 + #3753: both diffs are confined to helpers that are NOT the four baselined sites (accessOptsFor + its call sites; resolveDomainName's tenant-settings domain-name lookup). mirrorGovernanceDoc is a name lookup, applyLabelInheritance fails closed, createOwnedItem already falls through to authorizeWorkspace, and loadRecycledItem stays owner-only BY DECISION (#3706) — enforced by recycle-bin-tenancy.test.ts, not by this guard"],
   // REMOVED 2026-09-07 (#3941): `items/[type]/[id]/access-mode/route.ts`. The
   // deferral this entry recorded — "migrating it would WIDEN who can change an
   // item's data-access mode — separate PR" — is DONE. That route's `loadItem`
