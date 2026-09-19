@@ -527,7 +527,8 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
     detection is ON by default (`diff.renames`), and a detected rename emits
     ONLY THE DESTINATION path. So a file moving OUT of a context's scope --
     `git mv tools/drain/helper.py docs/helper.txt` -- produced a delta of
-    `docs/helper.txt` alone, which no required context reads, and the gate
+    `docs/helper.txt` alone, which no required workflow's push filter admits,
+    and the gate
     answered INERT while the file that context depends on had left main.
     Reproduced end to end by a reviewer, with a plain delete as the control
     (which correctly refused), so the finding was a blind spot in the flag and
@@ -1201,7 +1202,14 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         )
         ok = inert
         why = f"{why} | delta {'INERT' if inert else 'NOT inert'}: {why_inert}"
-    record("1 base == origin/main (or a delta no required context reads)", ok, why)
+    # THE LABEL IS PRINTED ON EVERY STALE-BASE RUN, so it carries the same
+    # retraction the docstrings do. It said "or a delta no required context
+    # reads" for two rounds -- asserting exactly what `base_delta_is_inert`
+    # says this gate cannot establish, in the one string an operator actually
+    # sees. A retraction that lands in the prose and not in the program's own
+    # vocabulary has not landed.
+    record("1 base == origin/main (or a delta no required workflow's push "
+           "filter admits)", ok, why)
 
     # 2+3 -- verdicts, reduced by conjunction, pinned to the head they measured.
     live, near = gates.parse_verdicts(

@@ -3080,7 +3080,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "positive control exists for. Every refusal that depends on a file "
          "actually matching disappears, and the printed reason is identical"),
         "gates.py",
-        "            hits = [f for f in delta_files if scope_reads(scope, f)]",
+        "            hits = [f for f in delta_files if filter_admits(scope, f)]",
         "            hits = []",
     ),
     (
@@ -3184,8 +3184,38 @@ ARMS: list[tuple[str, str, str, str]] = [
          "the fourth ContextScope state, which sails past the no-filter branch "
          "because `paths is None` is False"),
         "gates.py",
-        "        if scope.paths == () or scope.paths_ignore == ():",
+        "        if scope.paths == ():",
         "        if False:",
+    ),
+    (
+        ("BD15B the OTHER empty spelling stops being refused. It is a separate "
+         "arm because round 2 shipped ONE branch for both and gave them one "
+         "(inverted) sentence; a reviewer's own arm narrowed the shared branch "
+         "to half and was killed, which is what this pins permanently"),
+        "gates.py",
+        "        if scope.paths_ignore == ():",
+        "        if False:",
+    ),
+    (
+        ("BD16 the GO-path message loses its own limit, so the string printed "
+         "BESIDE AN ALLOWED MERGE reads as a claim about what the required "
+         "contexts READ - the retracted claim re-entering the permanent record "
+         "through the squash, which is the one place it does real damage"),
+        "gates.py",
+        ('        + ". NOT a claim that no required context READS those files: the "\n'
+         '          "filters bound what the trunk RE-RUNS, and the superset precondition "\n'
+         '          "is unestablished - see gates.base_delta_is_inert."'),
+        "",
+    ),
+    (
+        ("BD17 the gate-1 LABEL goes back to asserting what the contexts READ. "
+         "It prints on every stale-base run and is the first thing an operator "
+         "sees, and no message-body assertion covers it"),
+        "merge_gate.py",
+        ('    record("1 base == origin/main (or a delta no required workflow\'s push "\n'
+         '           "filter admits)", ok, why)'),
+        ('    record("1 base == origin/main (or a delta no required context reads)",\n'
+         "           ok, why)"),
     ),
 ]
 

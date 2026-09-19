@@ -193,14 +193,24 @@ _INERT_SCOPES = [
 ]
 
 
-def test_a_stale_base_whose_delta_no_required_context_reads_is_go():
-    """THE POINT OF #4585. The base has moved (`c`*40 != `b`*40, so
-    `base_is_current` refuses), and the delta is one `docs/` file, which none of
-    the three scopes above reads. Gate 1 passes on the second arm.
+def test_a_stale_base_whose_delta_no_required_push_filter_admits_is_go():
+    """THE POINT OF #4585, and the ONE PATH THAT LETS A MERGE THROUGH.
+
+    The base has moved (`c`*40 != `b`*40, so `base_is_current` refuses), and
+    the delta is one `docs/` file, which none of the three push filters above
+    admits. Gate 1 passes on the second arm.
 
     Goes RED if the delta file is changed to `csa_platform/x.py`,
-    `apps/fiab-console/x.ts` or `scripts/ci/x.mjs` -- each of which is read by
-    exactly one of the three contexts, which is the test below.
+    `apps/fiab-console/x.ts` or `scripts/ci/x.mjs` -- each admitted by exactly
+    one of the three filters, which is the test below.
+
+    THE VOCABULARY OF THIS MESSAGE IS ASSERTED, not incidental. It is the
+    string printed BESIDE a merge being allowed, and for two rounds it said
+    "is read by any of the M required context(s)" -- asserting the very thing
+    `gates.base_delta_is_inert` states it cannot establish, in the one place
+    the claim would enter the permanent record. The absence check below is
+    paired with a positive one (the disclaimer must be PRESENT), so deleting
+    the sentence cannot satisfy it.
     """
     result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
                   context_scopes=_INERT_SCOPES)
@@ -212,6 +222,18 @@ def test_a_stale_base_whose_delta_no_required_context_reads_is_go():
     # is the exact thing a reviewer has to check to believe the pass.
     for name in REQUIRED:
         assert name in gate["detail"], (name, gate["detail"])
+    assert "is admitted by the `on.push` filter" in gate["detail"], gate["detail"]
+    assert "NOT a claim that no required context READS" in gate["detail"], (
+        "the GO message must carry its own limit; without it the string beside "
+        f"an allowed merge overstates what was measured: {gate['detail']}"
+    )
+    assert "is read by any of the" not in gate["detail"], (
+        "the retracted claim is back in the GO-path message: "
+        f"{gate['detail']}"
+    )
+    # ...and the LABEL, which is printed on every run of this gate.
+    assert "no required workflow's push filter admits" in gate["gate"], gate["gate"]
+    assert "no required context reads" not in gate["gate"], gate["gate"]
 
 
 @pytest.mark.parametrize(("hit_file", "context"), [
@@ -249,7 +271,7 @@ def test_negative_control_one_unfiltered_required_context_blocks_the_whole_arm()
     gate = _gate(result, "1 ")
     assert not gate["ok"]
     assert "guardrails" in gate["detail"], gate["detail"]
-    assert "reads EVERYTHING" in gate["detail"], gate["detail"]
+    assert "ADMITS EVERY PATH" in gate["detail"], gate["detail"]
 
 
 def test_negative_control_the_second_arm_never_rescues_a_non_main_base():
@@ -432,7 +454,7 @@ def test_a_derived_unfiltered_scope_is_paths_none_not_an_empty_tuple(monkeypatch
     assert scopes[0].paths is None, scopes[0].paths
     blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
     assert not blocked
-    assert "reads EVERYTHING" in why, why
+    assert "ADMITS EVERY PATH" in why, why
 
 
 def test_a_derived_empty_paths_list_is_a_tuple_that_the_gate_refuses(monkeypatch):
@@ -480,6 +502,23 @@ def _repo_with(tmp_path, first_path: str, then):
     """A two-commit repo: `first_path` is added, then `then(repo)` changes it.
 
     Returns `(repo, base_sha, head_sha)`.
+
+    `diff.renames = true` IS SET EXPLICITLY, and it is the difference between
+    this fixture witnessing the rename hazard and inheriting it. Both reviewers
+    measured the same thing independently: with `GIT_CONFIG_GLOBAL` pointing at
+    `[diff] renames = false`, arm BD14 SURVIVES -- every rename test stays
+    green with `--no-renames` deleted, because the ambient config has already
+    done what the flag does.
+
+        BD14, ambient git config          rc=1  2 failed   <- kills
+        BD14, global diff.renames=false   rc=0  2 passed   <- SURVIVES
+
+    A fixture that inherits the very setting it exists to witness reports green
+    over a removed flag. Production is unaffected (`--no-renames` overrides
+    config, and hosted runners do not set it), so this is entirely about the
+    local suite being able to fail. The counterfactual in
+    `test_negative_control_a_rename_out_of_scope_is_not_inert` then ESTABLISHES
+    that detection is live rather than assuming this line worked.
     """
     repo = tmp_path / "delta-repo"
     (repo / "tools" / "drain").mkdir(parents=True)
@@ -487,6 +526,7 @@ def _repo_with(tmp_path, first_path: str, then):
     _git(repo.parent, "init", "--quiet", repo.name)
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "diff.renames", "true")
     (repo / first_path).write_text("x = 1\n" * 40, encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "--quiet", "-m", "add")
@@ -496,6 +536,17 @@ def _repo_with(tmp_path, first_path: str, then):
     _git(repo, "commit", "--quiet", "-m", "change")
     head = _git(repo, "rev-parse", "HEAD").strip()
     return repo, base, head
+
+
+def _unflagged_delta(repo, base, head) -> list[str]:
+    """`git diff --name-only` WITHOUT `--no-renames`, over the same repo.
+
+    The counterfactual. Without it the rename tests assume rename detection is
+    live; with it they establish it, and a repo where detection is off turns
+    the assertion RED instead of quietly agreeing with the fix.
+    """
+    out = _git(repo, "diff", "--name-only", base, head)
+    return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 #: The scope the moved file starts inside. A rename OUT of it is the defect.
@@ -508,18 +559,32 @@ def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_pa
     default and emits ONLY THE DESTINATION path.
 
     `git mv tools/drain/helper.py docs/helper.txt` is a 100%-similar rename, so
-    without `--no-renames` the delta is `['docs/helper.txt']` alone -- which
-    `tools/**` does not read -- and the gate answers INERT while the file that
-    context depends on has LEFT main.
+    without `--no-renames` the delta is `['docs/helper.txt']` alone -- which no
+    required push filter admits -- and the gate answers INERT while the file
+    that context depends on has LEFT main.
 
-    This asserts BOTH halves, because either alone is satisfiable by the defect:
-    the source path is present in the delta, AND the composed answer refuses.
-    Drop `--no-renames` from `base_delta_files` and both go red.
+    THE COUNTERFACTUAL IS ASSERTED FIRST, and it is what makes the rest
+    evidence rather than assumption: the SAME two commits, diffed WITHOUT the
+    flag, must return exactly ONE path. If they return two, rename detection is
+    off in this environment, the flag is a no-op here, and every assertion
+    below would pass with `--no-renames` deleted -- which is exactly what both
+    reviewers measured under `GIT_CONFIG_GLOBAL` with `diff.renames = false`.
+
+    Then both halves of the fix, because either alone is satisfiable by the
+    defect: the source path is present in the delta, AND the composed answer
+    refuses naming it.
     """
     repo, base, head = _repo_with(
         tmp_path, "tools/drain/helper.py",
         lambda r: _git(r, "mv", "tools/drain/helper.py", "docs/helper.txt"))
     monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    assert unflagged == ["docs/helper.txt"], (
+        "rename detection is NOT live here, so `--no-renames` changes nothing "
+        "and every assertion below would pass with the flag removed. Check "
+        f"`diff.renames` / GIT_CONFIG_GLOBAL. Unflagged diff: {unflagged}"
+    )
 
     delta = merge_gate.base_delta_files(base, head)
     assert delta is not None
@@ -531,6 +596,54 @@ def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_pa
     inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
     assert not inert, why
     assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_into_scope_is_not_inert(monkeypatch, tmp_path):
+    """The MIRROR of the blocker, and it was untested.
+
+    `docs/helper.txt` -> `tools/drain/helper.py` moves a file INTO the filter's
+    scope. The unflagged diff collapses it to the destination, which happens to
+    be the in-scope path, so this one refuses either way -- it is here because
+    the pair "out of scope" / "into scope" is the boundary, and only one side
+    of it was covered. Named as an EQUIVALENT-MUTANT arm for BD14 rather than
+    counted as kill power for it (assertion-design.md "done" #5): removing
+    `--no-renames` does NOT turn this red.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "docs/helper.txt",
+        lambda r: _git(r, "mv", "docs/helper.txt", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/helper.txt", "tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_within_scope_is_not_inert(monkeypatch, tmp_path):
+    """A move from one in-scope path to another in-scope path.
+
+    Both endpoints are admitted by `tools/**`, so this refuses whatever the
+    rename setting does -- another declared equivalent mutant for BD14. It
+    completes the three-way partition the round-2 briefing asked for (out of
+    scope / into scope / within scope) and pins that a within-scope move is
+    NEVER inert, which is the answer a reader would otherwise have to derive.
+
+    The briefing described this case as "a move within a context's scope
+    staying INERT". That outcome is not reachable: a path inside the filter is
+    by definition admitted by it, so the correct answer is a refusal, and the
+    assertion states the reachable fact rather than the requested one.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/a.py",
+        lambda r: _git(r, "mv", "tools/drain/a.py", "tools/drain/b.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["tools/drain/a.py", "tools/drain/b.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
 
 
 def test_the_control_a_plain_delete_of_the_same_file_also_refuses(monkeypatch, tmp_path):
@@ -553,11 +666,18 @@ def test_the_control_a_plain_delete_of_the_same_file_also_refuses(monkeypatch, t
 
 def test_the_positive_control_a_move_that_stays_outside_every_scope_is_inert(
         monkeypatch, tmp_path):
-    """The other side, so the two arms above are not satisfied by a function
-    that refuses everything. A rename entirely within `docs/` touches nothing
-    `tools/**` reads, and `--no-renames` then lists TWO `docs/` paths -- still
-    inert. Goes red if `base_delta_files` ever started returning paths the
-    commits did not touch."""
+    """THE POSITIVE ARM, so the refusal tests above are not satisfied by a
+    function that refuses everything.
+
+    It is a `docs/` -> `docs/` move: BOTH endpoints outside every filter. It is
+    NOT the "in-scope to in-scope" case -- that one is
+    `test_negative_control_a_rename_within_scope_is_not_inert`, and it refuses;
+    the round-2 briefing described this test as that case, which it never was.
+    Both are now present and each says which it is.
+
+    `--no-renames` lists TWO `docs/` paths and the answer is still inert. Goes
+    red if `base_delta_files` ever started returning paths the commits did not
+    touch, or if the decision function started refusing unconditionally."""
     repo, base, head = _repo_with(
         tmp_path, "docs/a.md",
         lambda r: _git(r, "mv", "docs/a.md", "docs/b.md"))

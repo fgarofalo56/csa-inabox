@@ -2256,7 +2256,8 @@ def test_negative_control_a_delta_the_first_context_reads_still_blocks():
 def test_negative_control_a_context_with_no_path_filter_fails_closed():
     """The case that governs this repo TODAY: 5 of the 17 required contexts are
     produced by workflows whose `push:` carries no `paths:` at all. Such a
-    workflow reads EVERYTHING, so no delta is inert for it -- and the delta
+    workflow ADMITS EVERY PATH on push, so no delta is inert for it -- and the
+    delta
     here (`docs/x.md`) is one that every OTHER scope in this file excuses, so
     the refusal can only be coming from the missing filter."""
     unfiltered = gates.ContextScope("Gamma", ".github/workflows/gamma.yml")
@@ -2264,7 +2265,7 @@ def test_negative_control_a_context_with_no_path_filter_fails_closed():
         ["docs/x.md"], [_SCOPE_A, unfiltered], ["Alpha", "Gamma"])
     assert not ok
     assert "'Gamma'" in why, why
-    assert "reads EVERYTHING" in why, why
+    assert "ADMITS EVERY PATH" in why, why
 
 
 def test_negative_control_an_empty_paths_list_refuses_and_is_not_the_absent_one():
@@ -2272,31 +2273,43 @@ def test_negative_control_an_empty_paths_list_refuses_and_is_not_the_absent_one(
 
     `paths: []` in a workflow parses to `()`. `paths is None` is False, so it
     sails past the no-filter branch above; then `any([])` is False for every
-    file, so the context reads as touched by NOTHING and excuses the whole
-    delta -- "matches nothing is the answer that lets a merge through",
+    file, so every delta falls outside the filter and the context excuses the
+    whole thing -- "matches nothing is the answer that lets a merge through",
     arriving through the one branch that looked like it had handled it.
 
-    The delta here is `beta/y.txt`, which the OTHER scope in the fixture
-    (`_SCOPE_B`, `beta/**`) does read -- so this pins the empty-list refusal
-    specifically by naming `Iota` in the assertion rather than settling for
-    "something refused". Delete the `== ()` branch and it goes red.
+    THE TWO SPELLINGS ARE OPPOSITE FACTS AND THE MESSAGES MUST DIFFER.
+    `paths: []` admits NOTHING. `paths-ignore: []` ignores nothing and
+    therefore admits EVERYTHING. Round 2 gave both the "matches NOTHING"
+    sentence, which is inverted for the second -- and that half had already
+    been refused correctly (as a hit) before the branch existed, so a true
+    reason was replaced with a false one. The assertions below are what stops
+    that recurring: each pins the phrase that is true of ITS spelling, so
+    sharing one sentence again turns one of them red.
 
-    `paths_ignore=()` is the mirror and is asserted too: an empty ignore list
-    means nothing is ignored, i.e. it reads everything, and the same branch
-    must catch it rather than letting `not any([])` answer True for every file.
+    Delete the `paths == ()` branch and the first block goes red; delete the
+    `paths_ignore == ()` branch and the second does.
     """
     empty = gates.ContextScope("Iota", ".github/workflows/iota.yml", paths=())
     ok, why = gates.base_delta_is_inert(["docs/x.md"], [empty], ["Iota"])
     assert not ok, why
     assert "'Iota'" in why, why
-    assert "EMPTY" in why, why
+    assert "ADMITS NOTHING" in why, why
+    assert "ADMITS EVERY PATH" not in why, (
+        "`paths: []` admits nothing; saying it admits everything is the "
+        f"inversion this assertion exists for: {why}"
+    )
 
     empty_ignore = gates.ContextScope(
         "Kappa", ".github/workflows/kappa.yml", paths_ignore=())
     ok_ignore, why_ignore = gates.base_delta_is_inert(
         ["docs/x.md"], [empty_ignore], ["Kappa"])
     assert not ok_ignore, why_ignore
-    assert "EMPTY" in why_ignore, why_ignore
+    assert "'Kappa'" in why_ignore, why_ignore
+    assert "ADMITS EVERY PATH" in why_ignore, why_ignore
+    assert "ADMITS NOTHING" not in why_ignore, (
+        "`paths-ignore: []` ignores nothing, so it admits EVERY path - the "
+        f"round-2 inversion: {why_ignore}"
+    )
 
 
 def test_negative_control_an_unfiltered_context_refuses_even_an_empty_delta():
@@ -2484,11 +2497,11 @@ def test_positive_control_the_intersection_query_can_return_non_empty():
         "control cannot tell a sighted query from a blind one"
     )
     inside, outside = "tools/drain/gates.py", "README.md"
-    assert gates.scope_reads(scope, inside) is True, (
-        f"{inside!r} is inside test.yml's declared push scope - a False here is "
-        "the blind-query defect this control exists to catch"
+    assert gates.filter_admits(scope, inside) is True, (
+        f"{inside!r} is admitted by test.yml's declared push filter - a False "
+        "here is the blind-query defect this control exists to catch"
     )
-    assert gates.scope_reads(scope, outside) is False, (
+    assert gates.filter_admits(scope, outside) is False, (
         f"{outside!r} matches none of {list(scope.paths)} - a True here means "
         "the translator matches everything"
     )

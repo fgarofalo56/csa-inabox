@@ -4064,6 +4064,7 @@ class ContextScope:
     paths_ignore: tuple[str, ...] | None = None
     unreadable: str | None = None
 
+
 def _every_pattern_matched(patterns: tuple[str, ...], path: str) -> bool:
     """`any()` over a LIST, so every pattern is evaluated before an answer.
 
@@ -4079,8 +4080,14 @@ def _every_pattern_matched(patterns: tuple[str, ...], path: str) -> bool:
     return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419
 
 
-def scope_reads(scope: ContextScope, path: str) -> bool:
-    """Would a commit touching `path` have run this context's workflow?
+def filter_admits(scope: ContextScope, path: str) -> bool:
+    """Would a push touching `path` have been ADMITTED by this filter?
+
+    NAMED FOR WHAT IT MEASURES. It was `scope_reads` for two rounds, and the
+    name asserted the very thing `base_delta_is_inert`'s docstring says this
+    cannot establish -- that the filter bounds what the context READS. It
+    bounds what the TRUNK RE-RUNS FOR. A retraction that leaves the claim in an
+    identifier is the same defect as one that leaves it in a printed string.
 
     Raises `UnsupportedPatternError` (via `glob_matches`) rather than guessing,
     and raises `ValueError` on a scope that has no filter -- callers must have
@@ -4095,7 +4102,7 @@ def scope_reads(scope: ContextScope, path: str) -> bool:
         return _every_pattern_matched(scope.paths, path)
     if scope.paths_ignore is not None:
         return not _every_pattern_matched(scope.paths_ignore, path)
-    raise ValueError(f"{scope.name}: no path filter at all - it reads everything")
+    raise ValueError(f"{scope.name}: no path filter at all - it admits every path")
 
 
 #: How many hit files a refusal names before it truncates. The COUNT is always
@@ -4255,21 +4262,36 @@ def base_delta_is_inert(
         if scope.paths is None and scope.paths_ignore is None:
             return False, (
                 f"{name!r} is produced by {scope.workflow_path} which declares "
-                "NO `on.push` path filter, so it reads EVERYTHING and any base "
-                "delta can reach it"
+                "NO `on.push` path filter, so it ADMITS EVERY PATH and any "
+                "base delta can reach it"
             )
         # AN EMPTY LIST IS NOT THE SAME STATE AS AN ABSENT ONE, and it is the
         # dangerous one. `paths: []` parses to `()`, `any([])` is False, so
-        # EVERY delta reads as outside the scope and the context excuses
+        # every delta falls outside the filter and the context excuses
         # everything -- the "matches nothing is the answer that lets a merge
         # through" shape, arriving through the one branch above that looked
         # like it had already handled it. `ContextScope`'s own docstring names
         # three states; this is the fourth, and it was unwatched.
-        if scope.paths == () or scope.paths_ignore == ():
+        #
+        # THE TWO EMPTY SPELLINGS ARE OPPOSITE FACTS AND GET OPPOSITE REASONS.
+        # Round 2 shipped one message for both, saying "matches NOTHING" -- and
+        # for `paths-ignore: []` that is INVERTED: ignoring nothing means the
+        # workflow admits EVERYTHING. Worse, that half was already refused
+        # correctly before the branch existed (every file matched the hit arm),
+        # so a true reason was replaced with a false one. R7, introduced by the
+        # fix for something else, which is why they are split here rather than
+        # sharing a sentence.
+        if scope.paths == ():
             return False, (
                 f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
-                "path list, which matches NOTHING - that is not a scope, it is "
-                "a context that would excuse every delta"
+                "`paths` list, which ADMITS NOTHING - that is not a scope, it "
+                "is a context that would excuse every delta"
+            )
+        if scope.paths_ignore == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "`paths-ignore` list, which ignores nothing and therefore "
+                "ADMITS EVERY PATH - any base delta can reach it"
             )
         if scope.paths is not None and scope.paths_ignore is not None:
             return False, (
@@ -4278,7 +4300,7 @@ def base_delta_is_inert(
                 "wins"
             )
         try:
-            hits = [f for f in delta_files if scope_reads(scope, f)]
+            hits = [f for f in delta_files if filter_admits(scope, f)]
         except UnsupportedPatternError as exc:
             return False, (
                 f"{name!r}: {scope.workflow_path} uses filter pattern "
@@ -4290,22 +4312,33 @@ def base_delta_is_inert(
             return False, f"{name!r}: {exc}"
         if hits:
             return False, (
-                f"{len(hits)} file(s) in the base delta are read by {name!r} "
-                f"(via {scope.workflow_path}): {sorted(hits)[:_HITS_SHOWN]} - "
-                "take origin/main and re-run"
+                f"{len(hits)} file(s) in the base delta are ADMITTED BY the "
+                f"`on.push` filter of {name!r}'s producer "
+                f"({scope.workflow_path}): {sorted(hits)[:_HITS_SHOWN]} - the "
+                "trunk would have re-run it; take origin/main and re-run"
             )
+    # THE VOCABULARY ON BOTH PASSING BRANCHES IS THE RETRACTION'S, and round 2
+    # missed that. The prose was corrected to say this measures the trunk's
+    # push filters rather than what a context READS -- while the string printed
+    # BESIDE A MERGE BEING LET THROUGH still said "is read by". A retraction
+    # that leaves the claim in the program's own output puts the false sentence
+    # into the permanent record the moment the gate prints it.
     if not delta_files:
         return True, (
-            f"the base..origin/main delta lists NO files at all, so nothing in "
-            f"it can reach any of the {len(required)} required context(s): "
-            f"{sorted(required)}"
+            "the base..origin/main delta lists NO files at all, so no required "
+            f"context's `on.push` filter can admit anything from it - "
+            f"{len(required)} considered: {sorted(required)}"
         )
     return True, (
-        f"none of the {len(delta_files)} file(s) in the base..origin/main delta "
-        f"is read by any of the {len(required)} required context(s) "
-        f"{sorted(required)} - delta: {sorted(delta_files)[:_HITS_SHOWN]}"
+        f"no file in the base..origin/main delta ({len(delta_files)} file(s)) "
+        f"is admitted by the `on.push` filter of any of the {len(required)} "
+        f"required context(s) {sorted(required)} - delta: "
+        f"{sorted(delta_files)[:_HITS_SHOWN]}"
         + (f" (+{len(delta_files) - _HITS_SHOWN} more)"
            if len(delta_files) > _HITS_SHOWN else "")
+        + ". NOT a claim that no required context READS those files: the "
+          "filters bound what the trunk RE-RUNS, and the superset precondition "
+          "is unestablished - see gates.base_delta_is_inert."
     )
 
 
