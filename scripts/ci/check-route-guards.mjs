@@ -1714,21 +1714,49 @@ const NOW_GUARDED = new Set([
   // STRONG_OWNERSHIP_SIGNALS token) and then `resolveLakehouseAbfss` — and
   // refuse anything that is not strictly below that item's recorded root.
   //
-  // Listing it here is what makes that enforceable. MEASURED three ways against
-  // the shipped file: in remit WITH the resolution → 0 violations; in remit
-  // WITHOUT it → 1, naming `[POST, DELETE]`; and, before this entry, NOT IN
-  // REMIT AT ALL without it → 0 — because the route carries `withSession`
-  // rather than a bare `getSession()` prologue, so the
-  // `!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)` remit test below skipped
-  // it entirely. A later edit could have deleted the whole resolution with this
-  // checker still reporting `violations: 0`. With the entry, dropping it
-  // RE-FLAGS rather than falling back to a class reason that stopped being true
-  // of this member — the same defect the `#3572` narrowing beside
-  // `storage/accounts/` records.
+  // Listing it here is what makes that enforceable. The excuse it USED to get
+  // was the `ALLOWLIST_PREFIXES` class entry, and that was established by
+  // varying ONE input per arm rather than by reading a regex — holding the
+  // other two fixed and reading three counters, because the verdict alone
+  // cannot tell "skipped" from "scanned and excused":
+  //
+  //   arm                                 violations  scanned  allowlistedHits
+  //   A  guard + entry + class prefix          0        1537        495
+  //   C  -guard -entry + class prefix          0        1537        496
+  //   Y  -guard -entry -class prefix          16        1537        480  <- names
+  //                                  `lakehouse/path [POST, DELETE]`
+  //   Z  +guard -entry -class prefix          15        1537        480  (absent)
+  //
+  // `scanned` is 1537 in EVERY arm, so the route was always IN REMIT, and
+  // `allowlistedHits` moves 495 -> 496 in C ALONE, which is the class entry
+  // doing the excusing. An earlier revision of this comment blamed the
+  // `!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)` remit test instead; that
+  // was WRONG — GETSESSION_RE (`:509`) lists `with(?:Session|…)\s*\(` as an
+  // explicit alternative, so it is TRUE for this route and for every other
+  // `withSession` route. The correction is recorded rather than quietly
+  // overwritten, because as written it would have told the next reader that
+  // several hundred `withSession` routes are outside this checker's remit.
+  //
+  // With the entry, dropping the resolution RE-FLAGS (arm B of the same probe:
+  // `violations: 1`, `[POST, DELETE]`) rather than falling back to a class
+  // reason that stopped being true of this member — the same defect the `#3572`
+  // narrowing beside `storage/accounts/` records.
   //
   // The `app/api/lakehouse/` class entry is deliberately NOT deleted: it still
-  // describes the rest of the prefix (the listing, tables, download and upload
-  // routes), and NOW_GUARDED wins over the allowlist for this one path.
+  // governs the rest of the prefix, and NOW_GUARDED wins over the allowlist for
+  // this one path. That is a statement about SCOPE, not an endorsement of the
+  // reason's accuracy for those members — and the reason ("… navigator …
+  // container validated; single shared lake") does not describe all of them:
+  // `upload` is a POST that writes. CHECK 3B, which exists to re-test class
+  // prefixes, structurally cannot see that: `READ_ONLY_CLAIM_RE` matches
+  // `read-only|scan|discovery` and this reason uses none of the three words, so
+  // the check is silent on this prefix rather than satisfied by it. Inserting
+  // `read-only` into the reason string and changing nothing else takes CHECK 3B
+  // from 0 to 10 (`history`, `load-to-table`, `permissions/rls-test`,
+  // `permissions`, `schemas`, `shortcuts/credentials`, `shortcuts`,
+  // `shortcuts/test`, `transform-preview`, `upload`). Re-wording the reason is
+  // OUT OF SCOPE here — it would put ten routes in remit in a change about one
+  // — and is tracked as the route-family rollup (#4619).
   'apps/fiab-console/app/api/lakehouse/path/route.ts',
 ]);
 

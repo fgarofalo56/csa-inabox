@@ -32,8 +32,12 @@
  *      inside `lakehouses/Sales`). The root itself is not a target: removing an
  *      item's whole root belongs to deleting the item, not to its file browser.
  *   4. The path forwarded to ADLS is REBUILT from the resolved root segments
- *      plus the validated remainder, so a differently-spelled-but-equal input
- *      cannot change the string the storage call receives.
+ *      plus the validated remainder. This is NOT a second defence — it cannot
+ *      reject anything, and by construction it produces the same segments step
+ *      3 just compared. What it buys is that the string the storage call
+ *      receives is the one that was validated rather than the caller's bytes,
+ *      so a non-canonical spelling (`//`, a trailing separator) cannot reach
+ *      the SDK unexamined. The check is step 3; this is only what is forwarded.
  *
  * `pathSegments` refuses `.` and `..` outright rather than folding them away,
  * refuses an absolute form, and refuses an empty result, so no normalisation
@@ -61,10 +65,21 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const STORAGE_UNRESOLVED =
-  "Loom could not resolve this lakehouse's own storage root, so it did not create or delete anything. "
+const STORAGE_UNBOUND =
+  'Loom has no lakehouse storage binding for this item, so it did not create or delete anything. '
   + 'Either no lakehouse storage is configured for this deployment (set LOOM_{BRONZE,SILVER,GOLD,LANDING,CSV_IMPORTS}_URL, '
   + 'deployed by the DLZ Bicep) or the item has never been provisioned. Re-run the item provision and retry.';
+
+/**
+ * A DIFFERENT condition from `STORAGE_UNBOUND`, and said so: the binding exists
+ * and its root is not a usable container-relative path. Stating the first as
+ * the cause of the second is the R7 error `deploy-integrity.md` records.
+ */
+function rootUnusable(root: unknown): string {
+  return 'Loom found a storage binding for this lakehouse, but its recorded root '
+    + `(${JSON.stringify(String(root ?? ''))}) is not a usable path inside the container, so it did not `
+    + 'create or delete anything. Re-run the item provision to rewrite the binding.';
+}
 
 /**
  * Split a container-relative path into its segments, or null when the input is
@@ -149,8 +164,12 @@ async function resolveTarget(
   }
 
   const bound = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
-  const root = bound ? pathSegments(bound.root) : null;
-  if (!bound || !root) return apiConflict(STORAGE_UNRESOLVED);
+  if (!bound) return apiConflict(STORAGE_UNBOUND);
+  // NOT `?? []`: an empty root would make `segments.length <= root.length` a
+  // comparison against 0, i.e. the containment test always true. The two
+  // conditions are refused separately because they have different causes.
+  const root = pathSegments(bound.root);
+  if (!root) return apiConflict(rootUnusable(bound.root));
 
   const own = `${bound.container}/${root.join('/')}`;
   const asked = `${container}/${segments.join('/')}`;

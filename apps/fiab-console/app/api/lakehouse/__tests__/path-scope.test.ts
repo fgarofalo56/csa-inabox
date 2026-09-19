@@ -12,12 +12,13 @@
  * must sit strictly BELOW that root, compared SEGMENT BY SEGMENT.
  *
  * WHAT THE ASSERTIONS READ. The MECHANISM — the `deletePath` /
- * `createDirectory` call row set — not the route's JSON. A route that returned
- * 403 while still calling the ADLS client, or that returned the resolved pair in
- * its body while forwarding the caller's string, passes a response-only
- * assertion and fails these. Every arm names the value that makes it fail at its
- * site, and the refusals are paired with positives (arms 1 and 11): "nothing
- * reached ADLS" alone is satisfied by deleting the feature.
+ * `createDirectory` / `resolveItemAccessByOid` call row sets — not the route's
+ * JSON. A route that returned 403 while still calling the ADLS client, that
+ * returned the resolved pair in its body while forwarding the caller's string,
+ * or that authorized the wrong item type, passes a response-only assertion and
+ * fails these. Every arm names the value that makes it fail at its site, and the
+ * refusals are paired with positives (arms 1, 2, 15 and 15b): "nothing reached
+ * ADLS" alone is satisfied by deleting the feature.
  *
  * The containment rule is LIFTED from the route (`pathSegments`) rather than
  * transcribed, and the two trap fixtures have their shape asserted inline, so a
@@ -112,6 +113,10 @@ describe('DELETE /api/lakehouse/path — scope', () => {
   // reaches ADLS with the exact triple. FAILS IF the containment test rejects a
   // genuine member (e.g. `<=` widened to `<` on the wrong side, or the
   // comparison run against the wrong operand) — the row set becomes [].
+  // The THIRD row set pins which item the authorization was asked about: FAILS
+  // IF the route asks for a different item type (`'warehouse'`) or passes
+  // something other than the query-string id, both of which leave the other two
+  // assertions green.
   it('deletes a path inside the lakehouse own root', async () => {
     const res = await del(
       `lakehouseId=${LH}&container=${CONTAINER}&path=${INSIDE}&recursive=false`,
@@ -120,6 +125,7 @@ describe('DELETE /api/lakehouse/path — scope', () => {
     expect(res.status).toBe(200);
     expect(body).toEqual({ ok: true, container: CONTAINER, path: INSIDE });
     expect((deletePath as any).mock.calls).toEqual([[CONTAINER, INSIDE, false]]);
+    expect((resolveItemAccessByOid as any).mock.calls).toEqual([[session, LH, 'lakehouse']]);
   });
 
   // 2. POSITIVE — recursive is still the caller's option INSIDE the root, and
@@ -213,7 +219,40 @@ describe('DELETE /api/lakehouse/path — scope', () => {
     expect((deletePath as any).mock.calls).toEqual([]);
   });
 
-  // 8. NEGATIVE — the root itself, recursively. FAILS IF the containment test is
+  // 7b. NEGATIVE — a single-dot segment, the sibling of arm 5. FAILS IF `.` is
+  // silently dropped rather than refused (`if (part === '.') continue;`): the
+  // request is accepted and the row set becomes
+  // [['landing','lakehouses/Sales/Files/q1.csv',false]].
+  it('refuses a "." segment', async () => {
+    const res = await del(
+      `lakehouseId=${LH}&container=${CONTAINER}`
+      + `&path=${encodeURIComponent(`${ROOT}/Files/./q1.csv`)}&recursive=false`,
+    );
+    expect(res.status).toBe(400);
+    expect((deletePath as any).mock.calls).toEqual([]);
+  });
+
+  // 7c. NEGATIVE — an embedded NUL, sent percent-encoded (`%00`) and decoded
+  // by URLSearchParams before the route sees it. FAILS IF the `\0` guard is
+  // dropped: the request is accepted and the row set becomes
+  // [['landing','lakehouses/Sales/Files/q1.csv\u0000.txt',false]]. DISCLOSED per
+  // assertion-design #5: a surviving NUL would still have to clear the
+  // segment-wise containment test, so this arm pins the REFUSAL the header
+  // claims — it is not evidence about scope.
+  it('refuses a path containing a NUL', async () => {
+    const raw = `${INSIDE}\u0000.txt`;
+    // The fixture reaches the `\0` guard only if the decode really yields one.
+    // FAILS IF encodeURIComponent/URLSearchParams stop round-tripping it.
+    expect(new URLSearchParams(`path=${encodeURIComponent(raw)}`).get('path')).toBe(raw);
+    const res = await del(
+      `lakehouseId=${LH}&container=${CONTAINER}`
+      + `&path=${encodeURIComponent(raw)}&recursive=false`,
+    );
+    expect(res.status).toBe(400);
+    expect((deletePath as any).mock.calls).toEqual([]);
+  });
+
+
   // `segments.length < root.length` instead of `<=`: the row set becomes
   // [['landing','lakehouses/Sales',true]], i.e. the item's whole storage.
   it('refuses the root itself as a target', async () => {
@@ -267,14 +306,42 @@ describe('DELETE /api/lakehouse/path — scope', () => {
     expect((deletePath as any).mock.calls).toEqual([]);
   });
 
-  // 13. NEGATIVE — the lakehouse has no resolvable storage root. FAILS IF a null
+  // 13. NEGATIVE — no storage binding at all for this lakehouse. FAILS IF a null
   // binding degrades to "no scope" rather than a refusal: the row set becomes 1.
-  it('refuses when the lakehouse storage root cannot be resolved', async () => {
+  // The message assertion pins WHICH of the two 409 causes was reported: FAILS
+  // IF the two are merged back into one string (arm 13b then reads the same
+  // text for a different condition).
+  it('refuses when the lakehouse has no storage binding', async () => {
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await del(`lakehouseId=${LH}&container=${CONTAINER}&path=${INSIDE}`);
+    const body = await res.json();
     expect(res.status).toBe(409);
+    expect(body.error).toMatch(/no lakehouse storage binding/i);
     expect((deletePath as any).mock.calls).toEqual([]);
   });
+
+  // 13b. NEGATIVE — the binding EXISTS and its recorded root is not a usable
+  // container-relative path. This is the arm that refuses `?? []`: with an empty
+  // root, `segments.length <= root.length` compares against 0 and the
+  // containment test is true for every input, so the row set becomes
+  // [['landing','lakehouses/Sales/Files/q1.csv',false]] and the status 200.
+  // FAILS on that mutation, and on merging the two 409 causes (the message
+  // assertion). The parametrised roots are the spellings `pathSegments` refuses.
+  it.each(['', '/', '//', '.', '..', '/..'])(
+    'refuses a recorded root that is not a usable path (%j)',
+    async (root) => {
+      (resolveLakehouseAbfss as any).mockResolvedValue({
+        abfss: `abfss://${CONTAINER}@acct.dfs.core.windows.net/${root}`,
+        container: CONTAINER,
+        root,
+      });
+      const res = await del(`lakehouseId=${LH}&container=${CONTAINER}&path=${INSIDE}`);
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error).toMatch(/recorded root/i);
+      expect((deletePath as any).mock.calls).toEqual([]);
+    },
+  );
 
   // 14. NEGATIVE — an unknown container still 404s, as before. FAILS IF the
   // KNOWN_CONTAINERS check is dropped while the scope check is kept (the status
@@ -296,6 +363,22 @@ describe('POST /api/lakehouse/path — scope', () => {
     expect(res.status).toBe(201);
     expect(body).toEqual({ ok: true, container: CONTAINER, path: `${ROOT}/Files/new` });
     expect((createDirectory as any).mock.calls).toEqual([[CONTAINER, `${ROOT}/Files/new`]]);
+  });
+
+  // 15b. POSITIVE — the rebuilt spelling on the CREATE half, the twin of arm 2.
+  // Without it, "the path is rebuilt" is DELETE-only evidence presented as a
+  // route property. FAILS IF POST forwards `searchParams.get('path')` instead of
+  // the resolved target: the recorded argument becomes `lakehouses/Sales//Files/`
+  // rather than `lakehouses/Sales/Files`.
+  it('forwards the derived path spelling on create, not the caller string', async () => {
+    const res = await post(
+      `lakehouseId=${LH}&container=${CONTAINER}`
+      + `&path=${encodeURIComponent(`${ROOT}//Files/`)}`,
+    );
+    const body = await res.json();
+    expect(res.status).toBe(201);
+    expect(body).toEqual({ ok: true, container: CONTAINER, path: `${ROOT}/Files` });
+    expect((createDirectory as any).mock.calls).toEqual([[CONTAINER, `${ROOT}/Files`]]);
   });
 
   // 16. NEGATIVE — POST is scoped too, not just DELETE. FAILS IF only DELETE is
