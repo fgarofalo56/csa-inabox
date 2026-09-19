@@ -119,6 +119,11 @@ function resolveAdlsHints(
   const out: Array<{ container: string; path: string }> = [];
   const seen = new Set<string>();
   for (const raw of supplied as Array<{ container?: unknown; path?: unknown }>) {
+    // EQUIVALENT MUTANT, disclosed per assertion-design.md §5: rejecting a
+    // non-string here vs coercing it (`String(raw?.container ?? '')`) is not
+    // observable. A coerced `123` becomes '123', which is not a key of
+    // `allowed` — built only from derived pairs — so it is dropped one line
+    // later either way. No input distinguishes the two, and no test claims to.
     const container = typeof raw?.container === 'string' ? raw.container : '';
     const path = typeof raw?.path === 'string' ? raw.path : '';
     if (!container || !path) continue;

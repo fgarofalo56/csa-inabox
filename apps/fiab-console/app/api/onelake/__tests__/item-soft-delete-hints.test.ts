@@ -32,6 +32,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   itemsQuery: vi.fn(),
   itemReplace: vi.fn(),
+  wsPointRead: vi.fn(),
   listRoles: vi.fn(),
   softDeleteDirectory: vi.fn(),
   getSession: vi.fn(),
@@ -48,7 +49,15 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
       delete: vi.fn(),
     }),
   })),
-  workspacesContainer: vi.fn(async () => ({ item: () => ({ read: vi.fn() }) })),
+  // Modelled on the REAL container semantics, not on convenience: `workspaces`
+  // is partitioned on /tenantId and `Workspace.tenantId` holds the CREATOR's
+  // oid, so a point read keyed on any other principal's oid finds nothing. The
+  // route no longer performs such a read — this is here so a mutation that
+  // RE-ADDS one is distinguishable from the shipped code (see the ACL-admission
+  // arm), instead of failing for every caller alike and discriminating nothing.
+  workspacesContainer: vi.fn(async () => ({
+    item: (id: string, pk: string) => ({ read: () => h.wsPointRead(id, pk) }),
+  })),
   tenantSettingsContainer: vi.fn(async () => ({ item: () => ({ read: vi.fn() }) })),
   // item-crud emits an item.deleted lifecycle event; the fan-out reads this.
   webhookSubscriptionsContainer: vi.fn(async () => ({
@@ -98,6 +107,8 @@ import { DELETE } from '../[itemId]/route';
 import { isValidRolePath } from '@/lib/azure/onelake-security-rules';
 
 const TENANT = 'tenant-1';
+/** A signed-in caller who did NOT create the workspace — see the ACL arm. */
+const MEMBER_OID = 'member-2';
 const ITEM_ID = 'item-1';
 
 const activeItem = {
@@ -124,6 +135,10 @@ const DERIVED: Array<[string, string]> = [
 
 const ownerAccess = {
   workspace: { id: 'ws-1', tenantId: TENANT }, role: 'Owner', via: 'owner', canWrite: true,
+};
+/** A write-capable role held through a SHARE, not through creation (rel-T11). */
+const aclMemberAccess = {
+  workspace: { id: 'ws-1', tenantId: TENANT }, role: 'Member', via: 'acl', canWrite: true,
 };
 
 function delReq(body: unknown) {
@@ -172,6 +187,9 @@ beforeEach(() => {
   h.getSession.mockReturnValue({ claims: { oid: TENANT, tid: 'tid-1', upn: 'alice@contoso.com' } });
   h.itemsQuery.mockResolvedValue({ resources: [activeItem] });
   h.itemReplace.mockImplementation((_id: string, _pk: string, doc: any) => ({ resource: doc }));
+  // Owner-partition semantics: the doc exists ONLY in its creator's partition.
+  h.wsPointRead.mockImplementation(async (_id: string, pk: string) =>
+    (pk === TENANT ? { resource: { id: 'ws-1', tenantId: TENANT } } : { resource: undefined }));
   h.resolveWorkspaceAccessByOid.mockResolvedValue(ownerAccess);
   h.listRoles.mockResolvedValue(ownRoles);
   h.softDeleteDirectory.mockResolvedValue({ deletionId: 'del-1' });
@@ -338,6 +356,13 @@ describe('DELETE /api/onelake/[itemId] — itemType-inference branch', () => {
   // check is rigged to allow, so the gate is the only thing that can refuse.
   // FAILS IF the gate is given `allowReadRoles: true`, which admits Viewer and
   // lets execution through: shapes become [4, 3] and the call list DERIVED.
+  //
+  // SCOPE (assertion-design.md §5): this arm and the one above pin verdict
+  // CONSUMPTION and the fact that execution STOPS at the gate. They pin the
+  // STATUS, not the ENVELOPE — a hand-rolled `404 {ok:false,'item not found'}`
+  // substituted for `return denied` satisfies both. The envelope is pinned by
+  // the 409 arm below, and that arm is the one to keep green if these are ever
+  // reworked.
   it('refuses a read-only workspace role at the gate', async () => {
     resolverDenyingOnlyTheGate({
       workspace: { id: 'ws-1', tenantId: TENANT }, role: 'Viewer', via: 'acl', canWrite: false,
@@ -348,15 +373,81 @@ describe('DELETE /api/onelake/[itemId] — itemType-inference branch', () => {
     expect(resolverShapes()).toEqual([4]);
   });
 
-  // DISCLOSED, not counted as gate coverage (assertion-design.md §5): when BOTH
-  // layers answer from the same resolver — the live shape — removing the gate
-  // entirely is NOT observable at this route. `loadOwnedItem` is write-scoped
-  // and unconditional (item-crud.ts:597, `softDeleteOwnedItem` never passes
-  // `allowReadRoles`), so it refuses the same callers a beat later and the
-  // route still 404s. The gate is defence-in-depth over a check that already
-  // binds — which is precisely why migrating onto it admits nobody. This arm
-  // pins that shared-resolver behaviour so the claim is checkable, and it is
-  // the arms above, with their per-call-site answers, that carry the kill power.
+  // NEGATIVE, and the arm that pins the ENVELOPE rather than the status. When
+  // the resolver REFUSES a tenant-admin grant it would otherwise have made, it
+  // records that on the `diag` out-channel and `authorizeItemWorkspace` renders
+  // it as 409 `tenant_unconfirmed` — deliberately NOT the route's own 404,
+  // because the workspace WAS read and the admin rights ARE real, so a
+  // not-found would be a false statement (workspace-guard.ts:285-297,
+  // deploy-integrity R7). That honest 409 is the whole reason to route through
+  // the ladder rather than answer 404 locally.
+  //
+  // FAILS IF `return denied` is replaced by ANY hand-rolled 404 — status 404
+  // instead of 409, and no `code`. That substitution is invisible to the two
+  // status-only arms above; it is caught here.
+  it('surfaces a tenancy refusal as its own 409, not a flattened not-found', async () => {
+    h.resolveWorkspaceAccessByOid.mockImplementation(async (...args: any[]) => {
+      if (args.length < 4) return ownerAccess; // the item check would allow
+      args[3].denial = {
+        reason: 'workspace tenancy unconfirmed',
+        code: 'tenant_unconfirmed',
+        remediation: 'backfill the workspace tid',
+        workspaceId: 'ws-1',
+      };
+      return null;
+    });
+    const { res, json } = await callDelete({});
+    expect(res.status).toBe(409);
+    expect(json).toMatchObject({
+      ok: false,
+      error: 'workspace tenancy unconfirmed',
+      code: 'tenant_unconfirmed',
+      remediation: 'backfill the workspace tid',
+    });
+    expect(h.softDeleteDirectory.mock.calls).toEqual([]);
+  });
+
+  // POSITIVE — THE ROUND'S ACTUAL BEHAVIOURAL DELTA, and the only arm that
+  // exercises it. A caller who did not CREATE the workspace but holds a
+  // write-capable ACL role, omitting `itemType` so the inference branch runs,
+  // now completes the delete. Before the migration this branch answered 404 for
+  // exactly this caller: the owner-only partition point read looked in
+  // `member-2`'s partition, where the workspace doc does not exist.
+  //
+  // FAILS IF an owner-only point read is reinstated on this branch — the
+  // workspaces mock models the real partition semantics, so `ws.item('ws-1',
+  // 'member-2').read()` yields no resource and the route 404s with ok:false and
+  // an empty call list. It does NOT fail for the owner arms, which read their
+  // own partition and pass, so the discrimination is the admission itself.
+  it('admits a non-creator with a write-capable ACL role on the inference branch', async () => {
+    h.getSession.mockReturnValue({ claims: { oid: MEMBER_OID, tid: 'tid-1', upn: 'bob@contoso.com' } });
+    h.resolveWorkspaceAccessByOid.mockResolvedValue(aclMemberAccess);
+    const { res, json } = await callDelete({});
+    expect(res.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.item.id).toBe(ITEM_ID);
+    expect(h.softDeleteDirectory.mock.calls).toEqual(DERIVED);
+    // Paired with the positive above, not standing alone: the shipped route
+    // performs NO owner-partition read on this path. FAILS IF one is reinstated.
+    expect(h.wsPointRead).not.toHaveBeenCalled();
+    // Fixture control. FAILS IF MEMBER_OID is ever set equal to TENANT, which
+    // would quietly turn this arm back into a duplicate of the owner path and
+    // leave the admission delta unpinned again.
+    expect(MEMBER_OID).not.toBe(TENANT);
+  });
+
+  // DISCLOSED (assertion-design.md §5) — what the shared-resolver shape does and
+  // does not establish. When BOTH layers answer from one resolver, a caller the
+  // gate denies is denied again a beat later by `loadOwnedItem`, which is
+  // write-scoped and unconditional (item-crud.ts:597; `softDeleteOwnedItem`
+  // never passes `allowReadRoles`). That is the measurement B1 rests on: the
+  // gate admits nobody `loadOwnedItem` would not.
+  //
+  // It does NOT mean removing the gate is unobservable here — the arms above
+  // assert resolver call SHAPES, not just responses, so deleting the gate call
+  // drops the argc-4 entry and reds them. Nor does `check-route-guards.mjs`
+  // cover that case: it exits 1 on a DISCARDED verdict (`void denied;`) and 0
+  // on the gate's outright removal. Both halves are measured in the PR receipt.
   it('still refuses when BOTH layers deny — the shared-resolver shape', async () => {
     h.resolveWorkspaceAccessByOid.mockResolvedValue(null);
     const { res, json } = await callDelete({});
