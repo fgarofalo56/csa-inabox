@@ -252,7 +252,7 @@ describe('DELETE /api/lakehouse/path — scope', () => {
     expect((deletePath as any).mock.calls).toEqual([]);
   });
 
-
+  // 8. NEGATIVE — the root itself, recursively. FAILS IF the containment test is
   // `segments.length < root.length` instead of `<=`: the row set becomes
   // [['landing','lakehouses/Sales',true]], i.e. the item's whole storage.
   it('refuses the root itself as a target', async () => {
@@ -308,15 +308,19 @@ describe('DELETE /api/lakehouse/path — scope', () => {
 
   // 13. NEGATIVE — no storage binding at all for this lakehouse. FAILS IF a null
   // binding degrades to "no scope" rather than a refusal: the row set becomes 1.
-  // The message assertion pins WHICH of the two 409 causes was reported: FAILS
-  // IF the two are merged back into one string (arm 13b then reads the same
-  // text for a different condition).
+  // The message assertion pins WHICH of the two 409 causes was reported, and it
+  // has kill power in exactly ONE merge direction — the MIRROR one: FAILS IF
+  // this branch is rewritten to report the root-unusable text (M13). It does NOT
+  // fail when the OTHER branch is rewritten to report this text (M12) — M12 is
+  // caught by 13b, not here. Stated because "merged back into one string" is two
+  // different mutations and only one of them is this arm's.
   it('refuses when the lakehouse has no storage binding', async () => {
     (resolveLakehouseAbfss as any).mockResolvedValue(null);
     const res = await del(`lakehouseId=${LH}&container=${CONTAINER}&path=${INSIDE}`);
     const body = await res.json();
     expect(res.status).toBe(409);
     expect(body.error).toMatch(/no lakehouse storage binding/i);
+    expect(body.error).not.toMatch(/recorded root/i);
     expect((deletePath as any).mock.calls).toEqual([]);
   });
 
@@ -325,8 +329,15 @@ describe('DELETE /api/lakehouse/path — scope', () => {
   // root, `segments.length <= root.length` compares against 0 and the
   // containment test is true for every input, so the row set becomes
   // [['landing','lakehouses/Sales/Files/q1.csv',false]] and the status 200.
-  // FAILS on that mutation, and on merging the two 409 causes (the message
-  // assertion). The parametrised roots are the spellings `pathSegments` refuses.
+  //
+  // The message assertion quotes the ROOT THIS CASE SUPPLIED, which is what
+  // makes the six parametrisations distinct witnesses rather than six copies of
+  // one: `toMatch(/recorded root/i)` alone is satisfied by the STATIC wording of
+  // `rootUnusable` whatever value it is handed, so `rootUnusable(bound.abfss)`
+  // passes it (measured — that mutant survived the round-3 set). `toContain` the
+  // serialised root FAILS on that substitution for every case except the ones
+  // where the abfss and the root happen to share the text, and the `''` case
+  // fails it outright.
   it.each(['', '/', '//', '.', '..', '/..'])(
     'refuses a recorded root that is not a usable path (%j)',
     async (root) => {
@@ -339,6 +350,7 @@ describe('DELETE /api/lakehouse/path — scope', () => {
       const body = await res.json();
       expect(res.status).toBe(409);
       expect(body.error).toMatch(/recorded root/i);
+      expect(body.error).toContain(JSON.stringify(root));
       expect((deletePath as any).mock.calls).toEqual([]);
     },
   );
