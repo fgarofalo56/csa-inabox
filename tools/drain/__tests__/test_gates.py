@@ -2196,6 +2196,313 @@ def test_negative_control_an_unresolvable_sha_is_not_a_pass():
 
 
 # ---------------------------------------------------------------------------
+# Gate 1's second arm (#4585) -- a base delta no required context can read
+#
+# An EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so the dominant
+# risk here is a query that returns empty because it is BLIND rather than
+# because the delta is inert. Every refusal below names the value that produces
+# it, and the positive control at the end of the section proves the query can
+# return non-empty at all -- taken over patterns LIFTED OUT OF A REAL WORKFLOW
+# FILE at run time, never transcribed, so a typo here cannot make the probe
+# agree with itself.
+# ---------------------------------------------------------------------------
+
+#: Two contexts, not one. A predicate that stops at the first scope, or that
+#: `any()`s where it should `all()`, is invisible to a one-element fixture --
+#: the population-narrowing shape this file's own docstring records.
+_SCOPE_A = gates.ContextScope(
+    "Alpha", ".github/workflows/alpha.yml", paths=("alpha/**", "shared.txt"))
+_SCOPE_B = gates.ContextScope(
+    "Beta", ".github/workflows/beta.yml", paths=("beta/**",))
+_BOTH = ["Alpha", "Beta"]
+
+
+def test_a_delta_outside_every_required_scope_is_inert():
+    """PASSES because neither `docs/x.md` nor `README.md` matches `alpha/**`,
+    `shared.txt` or `beta/**`. Swap either for `beta/y.txt` and it goes red."""
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md", "README.md"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert ok, why
+    # The brief on this arm: an empty intersection is only evidence if the
+    # reader can see what it was taken over. Both names, not a count.
+    assert "Alpha" in why, why
+    assert "Beta" in why, why
+    assert "docs/x.md" in why, why
+
+
+def test_negative_control_a_delta_the_second_context_reads_still_blocks():
+    """`beta/y.txt` is outside Alpha's scope and inside Beta's. A loop that
+    returns on the first scope's clean result passes this; the correct one
+    refuses. Change the file to `docs/y.txt` and this test goes green-and-
+    wrong, which is why the file is named in the assertion."""
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md", "beta/y.txt"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "'Beta'" in why, why
+    assert "beta/y.txt" in why, why
+
+
+def test_negative_control_a_delta_the_first_context_reads_still_blocks():
+    """The mirror. `shared.txt` is a LITERAL pattern, so this also pins that a
+    non-wildcard entry in a `paths:` list is honoured -- a translator that only
+    handled `**` would read `shared.txt` as matching nothing and excuse it."""
+    ok, why = gates.base_delta_is_inert(
+        ["shared.txt"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "'Alpha'" in why, why
+    assert "shared.txt" in why, why
+
+
+def test_negative_control_a_context_with_no_path_filter_fails_closed():
+    """The case that governs this repo TODAY: 5 of the 17 required contexts are
+    produced by workflows whose `push:` carries no `paths:` at all. Such a
+    workflow reads EVERYTHING, so no delta is inert for it -- and the delta
+    here (`docs/x.md`) is one that every OTHER scope in this file excuses, so
+    the refusal can only be coming from the missing filter."""
+    unfiltered = gates.ContextScope("Gamma", ".github/workflows/gamma.yml")
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md"], [_SCOPE_A, unfiltered], ["Alpha", "Gamma"])
+    assert not ok
+    assert "'Gamma'" in why, why
+    assert "reads EVERYTHING" in why, why
+
+
+def test_negative_control_an_unfiltered_context_refuses_even_an_empty_delta():
+    """Named separately because the empty-delta branch is a SECOND exit from
+    this function and could be reached before the scope loop. If it were, an
+    unfiltered context would be excused by a delta of zero files -- and zero
+    files is what an unreadable `git diff` would look like to a caller that
+    mapped failure to `[]`."""
+    unfiltered = gates.ContextScope("Gamma", ".github/workflows/gamma.yml")
+    ok, why = gates.base_delta_is_inert([], [_SCOPE_A, unfiltered], ["Alpha", "Gamma"])
+    assert not ok
+    assert "'Gamma'" in why, why
+
+
+def test_negative_control_an_unresolved_scope_is_not_an_empty_intersection():
+    """`unreadable` must REFUSE, never read as "matches nothing". This is the
+    field that exists so a traced-producer failure cannot be mistaken for a
+    clean result -- delete it and `paths=None` collapses into the branch above,
+    which is the same refusal for the wrong reason."""
+    broken = gates.ContextScope(
+        "Delta", ".github/workflows/delta.yml",
+        unreadable="the check-suite that published it owns no workflow run")
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [_SCOPE_A, broken], ["Alpha", "Delta"])
+    assert not ok
+    assert "'Delta'" in why, why
+    assert "owns no workflow run" in why, why
+
+
+def test_negative_control_a_required_context_with_no_scope_row_blocks():
+    """The population check. `required` is passed separately precisely so a
+    caller that silently drops the one context it could not scope cannot buy a
+    clean intersection over the remainder -- here `Beta` has no scope object at
+    all and the delta (`docs/x.md`) is inert for the one that does."""
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [_SCOPE_A], _BOTH)
+    assert not ok
+    assert "Beta" in why, why
+    assert "no scope at all" in why, why
+
+
+def test_negative_control_an_unreadable_delta_is_not_a_pass():
+    """`None` is "I could not read it". The same fixture with `[]` is a
+    measured empty delta and passes -- the two must not collapse, which is
+    what the pair of assertions below pins."""
+    ok, why = gates.base_delta_is_inert(None, [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "could not be read" in why, why
+    ok_empty, _ = gates.base_delta_is_inert([], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert ok_empty
+
+
+def test_negative_control_an_empty_required_set_is_vacuous_not_inert():
+    """With no required contexts the intersection is empty by construction.
+    An empty required set is what a failed branch-protection read looks like."""
+    ok, why = gates.base_delta_is_inert(["beta/y.txt"], [_SCOPE_A, _SCOPE_B], [])
+    assert not ok
+    assert "EMPTY" in why, why
+
+
+def test_negative_control_an_unrepresentable_filter_pattern_refuses():
+    """`!` negates and `[...]` is a range; treating either as a literal
+    UNDER-matches, and under-matching is the excusing direction. `glob_matches`
+    already raises for these -- this pins that the raise becomes a REFUSAL here
+    rather than escaping as a traceback out of the program deciding merges."""
+    weird = gates.ContextScope("Eps", ".github/workflows/eps.yml", paths=("src/[0-9]*.py",))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [weird], ["Eps"])
+    assert not ok
+    assert "cannot represent" in why, why
+
+
+def test_negative_control_an_unrepresentable_pattern_after_a_match_still_refuses():
+    """Kills the SHORT-CIRCUIT, which only bites under `paths-ignore`.
+
+    `any()` over a generator stops at the first True. Under `paths-ignore` that
+    True means "this file is ignored", the function answers "not read", and the
+    unrepresentable pattern SITTING AFTER IT is never evaluated -- so a `!`
+    re-include (the one `_UNSUPPORTED_GLOB`'s own comment says "can excuse
+    outright") is skipped and the delta is called inert.
+
+    `docs/x.md` matches `docs/**`, which is pattern ONE. With a generator the
+    answer is INERT; with the list comprehension `src/[0-9]*.py` raises and the
+    answer is REFUSE. Nothing else in this file distinguishes the two, because
+    every other unsupported-pattern fixture has no matching pattern before it.
+    """
+    lurking = gates.ContextScope(
+        "Theta", ".github/workflows/theta.yml",
+        paths_ignore=("docs/**", "src/[0-9]*.py"))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [lurking], ["Theta"])
+    assert not ok, why
+    assert "cannot represent" in why, why
+
+
+def test_a_paths_ignore_filter_is_read_as_everything_except():
+    """`paths-ignore` inverts the test, and getting the polarity backwards is
+    the single most excusing error available: it would make the IGNORED paths
+    the only ones that block. Both directions are pinned on ONE scope."""
+    ignoring = gates.ContextScope(
+        "Zeta", ".github/workflows/zeta.yml", paths_ignore=("docs/**", "*.md"))
+    ok, why = gates.base_delta_is_inert(["docs/x.md", "README.md"], [ignoring], ["Zeta"])
+    assert ok, why
+    blocked, why_blocked = gates.base_delta_is_inert(
+        ["docs/x.md", "src/app.py"], [ignoring], ["Zeta"])
+    assert not blocked
+    assert "src/app.py" in why_blocked, why_blocked
+
+
+def test_negative_control_declaring_both_paths_and_paths_ignore_refuses():
+    """GitHub does not accept both on one event, so a workflow that appears to
+    carry both was misparsed. Guessing which wins is the unanswered question
+    this package refuses on principle."""
+    confused = gates.ContextScope(
+        "Eta", ".github/workflows/eta.yml", paths=("a/**",), paths_ignore=("b/**",))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [confused], ["Eta"])
+    assert not ok
+    assert "BOTH" in why, why
+
+
+def _real_push_scope(workflow_path: str, name: str) -> gates.ContextScope:
+    """A `ContextScope` built from a REAL workflow file in this checkout.
+
+    The patterns are LIFTED with the same parser production uses
+    (`gates.parse_push_trigger`), never transcribed -- assertion-design.md's
+    "lift the pattern out of the source at runtime rather than transcribing it,
+    so a typo cannot make the probe disagree with the implementation".
+
+    A MISSING WORKFLOW IS A FAILURE, NOT A SKIP, for the reason
+    `test_the_acr_lane_invariant_...` records at length: the skip belongs to
+    `_repo_root()` being None (genuinely out of tree), and a file that has been
+    renamed out from under a control must turn it RED, not quiet.
+    """
+    root = _repo_root()
+    assert root is not None, "callers must skip on _repo_root() is None first"
+    workflow = root / workflow_path
+    assert workflow.is_file(), (
+        f"{workflow_path} is not in this checkout - it was renamed or removed, "
+        "so the scope gate 1's second arm rests on CANNOT BE CHECKED. Re-point "
+        "this test and re-read the new file's triggers."
+    )
+    trigger = gates.parse_push_trigger(workflow.read_text(encoding="utf-8"))
+    assert trigger is not None, (
+        f"{workflow_path} could not be parsed at all, so nothing below "
+        "measures what it claims to"
+    )
+    assert trigger.present, (
+        f"{workflow_path} has no on.push trigger, so nothing below "
+        "measures what it claims to"
+    )
+    return gates.ContextScope(name, workflow_path,
+                              paths=trigger.paths, paths_ignore=trigger.paths_ignore)
+
+
+def test_positive_control_the_intersection_query_can_return_non_empty():
+    """THE CONTROL THE WHOLE ARM RESTS ON (#4585, assertion-design.md).
+
+    An empty intersection is the answer that lets a merge through. A query that
+    can only EVER return empty -- a `_glob_to_regex` that emits `^$`, a loop
+    over the wrong list, a scope whose patterns were dropped on the way in --
+    is therefore the worst defect available here, and it is indistinguishable
+    from the good case by inspection of its output.
+
+    So: real patterns, lifted out of `.github/workflows/test.yml` at run time,
+    and LITERAL probe paths. The probes are deliberately NOT derived from
+    `scope.paths` -- a probe built out of the patterns under test agrees with
+    them by construction and witnesses nothing.
+
+    What makes each assertion fail:
+      - `tools/drain/gates.py` reading False   -> the query is blind (`tools/**`
+        and `**.py` both cover it; two patterns must BOTH stop matching).
+      - `README.md` reading True               -> the query matches everything,
+        which would make the refusals above pass for the wrong reason.
+
+    SKIPS only out of tree (the mutation sandbox copies `tools/drain` alone),
+    declared in `mutate_gates.EXPECTED_SANDBOX_SKIPS`. It therefore kills no
+    arm, which is said out loud rather than implied: the arms are killed by the
+    synthetic-fixture tests above, and this control is about the query being
+    pointed at something real.
+    """
+    if _repo_root() is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file")
+    scope = _real_push_scope(".github/workflows/test.yml", "Python Tests (3.10)")
+    # A workflow that LOST its filter would leave `paths=None`, every probe
+    # would refuse for the no-filter reason, and this control would certify a
+    # blind query as sighted. That is the circularity it exists to break.
+    assert scope.paths, (
+        ".github/workflows/test.yml declares no on.push `paths:` list, so this "
+        "control cannot tell a sighted query from a blind one"
+    )
+    inside, outside = "tools/drain/gates.py", "README.md"
+    assert gates.scope_reads(scope, inside) is True, (
+        f"{inside!r} is inside test.yml's declared push scope - a False here is "
+        "the blind-query defect this control exists to catch"
+    )
+    assert gates.scope_reads(scope, outside) is False, (
+        f"{outside!r} matches none of {list(scope.paths)} - a True here means "
+        "the translator matches everything"
+    )
+    # ...and the same two THROUGH the decision function gate 1 actually calls,
+    # because a control that only exercises the helper leaves the caller unpinned.
+    blocked, why_blocked = gates.base_delta_is_inert([inside], [scope], [scope.name])
+    assert not blocked
+    assert inside in why_blocked, why_blocked
+    inert, why_inert = gates.base_delta_is_inert([outside], [scope], [scope.name])
+    assert inert, why_inert
+
+
+def test_positive_control_the_real_required_topology_is_measured_not_assumed():
+    """What the arm does on THIS repo today, asserted rather than claimed.
+
+    `policy.json` records that five required contexts are produced by workflows
+    with no `push: paths:` filter, so the arm refuses every stale base today.
+    That is a MEASUREMENT with a shelf life, and a note nobody checks is prose.
+
+    Goes RED in BOTH directions: if `validate.yml` or `test.yml` drops its
+    `paths:` list (the disclosure is then understated), or if one of the three
+    unfiltered workflows GAINS one (the disclosure is then overstated and the
+    arm has started firing). Either way the note must be re-measured before a
+    reader trusts it.
+
+    SKIPS only out of tree; see the control above.
+    """
+    if _repo_root() is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file")
+    for path in (".github/workflows/test.yml", ".github/workflows/validate.yml"):
+        scope = _real_push_scope(path, path)
+        assert scope.paths, f"{path} lost its on.push paths filter"
+    for path in (".github/workflows/fiab-console-ci.yml",
+                 ".github/workflows/loom-guardrails.yml",
+                 ".github/workflows/commit-message-parses.yml"):
+        scope = _real_push_scope(path, path)
+        drifted = (
+            f"{path} now declares a push path filter - policy.json's "
+            "`_stale_base_may_pass_on_an_inert_delta` says it does not, and "
+            "that note is what a reader trusts about how often this arm fires"
+        )
+        assert scope.paths is None, drifted
+        assert scope.paths_ignore is None, drifted
+
+
+# ---------------------------------------------------------------------------
 # Gate 7 -- the before/after open-issue audit
 # ---------------------------------------------------------------------------
 

@@ -3049,6 +3049,123 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        led.save(if_unchanged=not args.bootstrap)",
         "        led.save(if_unchanged=True)",
     ),
+    # -- #4585: gate 1's SECOND arm, the path-intersection relaxation ------
+    #
+    # AN EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so every
+    # arm here is aimed at making the query return empty for a reason that is
+    # not "the delta is inert". That is the shape the issue named as the trap
+    # and the one a green run cannot distinguish from a correct answer.
+    (
+        ("BD1 the population is re-derived FROM THE SCOPES, so a caller that "
+         "silently drops the one context it could not scope buys a clean "
+         "intersection over the remainder. `required` is a separate argument "
+         "precisely so the loop cannot be its own witness"),
+        "gates.py",
+        "    unscoped = sorted(set(required) - set(by_name))",
+        "    required = [s.name for s in scopes]\n    unscoped = []",
+    ),
+    (
+        ("BD2 a required context whose producing workflow declares NO push "
+         "path filter is SKIPPED instead of refusing - it reads the whole "
+         "tree, and skipping it is how five of this repo's seventeen required "
+         "contexts would stop being consulted at all"),
+        "gates.py",
+        "        if scope.paths is None and scope.paths_ignore is None:",
+        ("        if scope.paths is None and scope.paths_ignore is None:\n"
+         "            continue\n"
+         "        if False:"),
+    ),
+    (
+        ("BD3 the intersection is hard-wired EMPTY - the blind query the "
+         "positive control exists for. Every refusal that depends on a file "
+         "actually matching disappears, and the printed reason is identical"),
+        "gates.py",
+        "            hits = [f for f in delta_files if scope_reads(scope, f)]",
+        "            hits = []",
+    ),
+    (
+        ("BD4 `paths-ignore` loses its negation, so the ignored paths become "
+         "the ONLY ones that block - polarity inverted, which reads as a "
+         "working filter on any delta that happens to miss both sets"),
+        "gates.py",
+        "        return not _every_pattern_matched(scope.paths_ignore, path)",
+        "        return _every_pattern_matched(scope.paths_ignore, path)",
+    ),
+    (
+        ("BD5 an UNREADABLE delta collapses into a measured EMPTY one, so a "
+         "`git diff` that failed reads as 'nothing changed' - the "
+         "unanswered-question-as-a-pass shape this package names most often"),
+        "gates.py",
+        "    if delta_files is None:",
+        "    if not delta_files:",
+    ),
+    (
+        ("BD6 an unresolved scope borrows the no-filter sentence, so a producer "
+         "that could not be TRACED is reported as one that reads everything. "
+         "Same verdict, wrong evidence - and the two have opposite remedies"),
+        "gates.py",
+        "        if scope.unreadable:\n            return False, (",
+        "        if False:\n            return False, (",
+    ),
+    (
+        ("BD7 the composed caller records the second arm UNCONDITIONALLY, so "
+         "every stale base passes gate 1. The decision function is untouched "
+         "and every gates.py test still passes - the caller-side blind spot "
+         "this file was created for"),
+        "merge_gate.py",
+        "        ok = inert",
+        "        ok = True",
+    ),
+    (
+        ("BD8 the second arm is allowed to rescue a PR aimed at a branch that "
+         "is NOT main. An intersection over main's delta says nothing about "
+         "where that PR merges"),
+        "merge_gate.py",
+        '            and pr["baseRefName"] == "main"',
+        "            and True",
+    ),
+    (
+        ("BD9 the policy key is read with a `.get` default equal to the shipped "
+         "value, so DELETING it from the authority is unobservable - measured "
+         "twice already in this package"),
+        "merge_gate.py",
+        '            and policy["merge_gate"]["stale_base_may_pass_on_an_inert_delta"]',
+        ('            and policy["merge_gate"].get('
+         '"stale_base_may_pass_on_an_inert_delta", True)'),
+    ),
+    (
+        ("BD10 the scope is read at ONE sha, so a workflow whose own path "
+         "filter NARROWED inside the base delta is judged by the narrower one "
+         "- and a narrower filter excuses more. Two clocks, the shape "
+         "`_top_level_dirs_agree` exists for"),
+        "merge_gate.py",
+        "        if at_base != at_main:",
+        "        if False:",
+    ),
+    (
+        ("BD11 only the origin/main read is checked for failure, so a workflow "
+         "unreadable at the BASE sha silently resolves to main's filter"),
+        "merge_gate.py",
+        "        if at_base is None or at_main is None:",
+        "        if at_main is None:",
+    ),
+    (
+        ("BD12 an untraceable check-suite falls back to SOME workflow's filter "
+         "rather than refusing, so a context is scoped by a producer that is "
+         "not its own - a wrong filter reads as an empty intersection"),
+        "merge_gate.py",
+        "        path = path_by_suite.get(suite) if suite is not None else None",
+        ("        path = (path_by_suite.get(suite)\n"
+         "                or next(iter(path_by_suite.values()), None))"),
+    ),
+    (
+        ("BD13 the pattern loop SHORT-CIRCUITS again, so an unrepresentable "
+         "pattern sitting AFTER a matching one is never evaluated - under "
+         "`paths-ignore` that skips a `!` re-include and calls the delta inert"),
+        "gates.py",
+        "    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419",
+        "    return any(glob_matches(pattern, path) for pattern in patterns)",
+    ),
 ]
 
 
@@ -3184,6 +3301,15 @@ EXPECTED_SANDBOX_SKIPS = (
     # DECLARED here rather than left to make the skip audit fail, and it kills
     # no arm, which is exactly what this tuple exists to say out loud.
     "test_gates.py::test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds",
+    # #4585. Both read real workflow files to prove gate 1's path-intersection
+    # arm is pointed at something real (and that the five unfiltered required
+    # contexts policy.json discloses are still unfiltered). The sandbox copies
+    # only `tools/drain`, so `_repo_root()` is None and they skip. DECLARED,
+    # and said out loud: neither kills an arm. The arms for
+    # `base_delta_is_inert` are killed by the synthetic-fixture tests beside
+    # them, which need no checkout.
+    "test_gates.py::test_positive_control_the_intersection_query_can_return_non_empty",
+    "test_gates.py::test_positive_control_the_real_required_topology_is_measured_not_assumed",
 )
 
 

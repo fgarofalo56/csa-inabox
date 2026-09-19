@@ -172,6 +172,269 @@ def test_negative_control_a_stale_base_blocks():
     assert not _gate(result, "1 ")["ok"]
 
 
+# ---------------------------------------------------------------------------
+# Gate 1's second arm, COMPOSED (#4585)
+#
+# `test_gates.py` drives `base_delta_is_inert` directly. These drive it through
+# `run_gates`, which is where an argument can be live in `gates.py`, described
+# in a brief, and fed by nothing -- the defect this whole file exists to catch
+# ("two of the four triggers used to be INERT here").
+# ---------------------------------------------------------------------------
+
+#: A scope set covering exactly `_data()`'s `REQUIRED`, all three filtered to a
+#: directory the deltas below deliberately miss or hit.
+_INERT_SCOPES = [
+    gates.ContextScope("Python Lint", ".github/workflows/validate.yml",
+                       paths=("csa_platform/**",)),
+    gates.ContextScope("vitest (node 20)", ".github/workflows/fiab-console-ci.yml",
+                       paths=("apps/fiab-console/**",)),
+    gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml",
+                       paths=("scripts/ci/**",)),
+]
+
+
+def test_a_stale_base_whose_delta_no_required_context_reads_is_go():
+    """THE POINT OF #4585. The base has moved (`c`*40 != `b`*40, so
+    `base_is_current` refuses), and the delta is one `docs/` file, which none of
+    the three scopes above reads. Gate 1 passes on the second arm.
+
+    Goes RED if the delta file is changed to `csa_platform/x.py`,
+    `apps/fiab-console/x.ts` or `scripts/ci/x.mjs` -- each of which is read by
+    exactly one of the three contexts, which is the test below.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "GO", result["findings"]
+    gate = _gate(result, "1 ")
+    assert gate["ok"], gate["detail"]
+    # NAME WHICH CONTEXTS WERE CONSIDERED. An empty intersection with no
+    # population printed is a number with no denominator -- and the population
+    # is the exact thing a reviewer has to check to believe the pass.
+    for name in REQUIRED:
+        assert name in gate["detail"], (name, gate["detail"])
+
+
+@pytest.mark.parametrize(("hit_file", "context"), [
+    ("csa_platform/auth.py", "Python Lint"),
+    ("apps/fiab-console/app/page.tsx", "vitest (node 20)"),
+    ("scripts/ci/check-something.mjs", "guardrails"),
+])
+def test_negative_control_a_stale_base_whose_delta_is_read_still_blocks(hit_file, context):
+    """One arm per context, so a predicate that stops at the first scope cannot
+    pass: with only the `csa_platform` case, `return` after scope one survives.
+
+    Each `hit_file` is outside the OTHER two scopes, so the refusal can only be
+    coming from the context named in the assertion.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md", hit_file],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert hit_file in gate["detail"], gate["detail"]
+    assert context in gate["detail"], gate["detail"]
+
+
+def test_negative_control_one_unfiltered_required_context_blocks_the_whole_arm():
+    """The case that governs this repo TODAY. `guardrails` is produced by
+    `loom-guardrails.yml`, whose `push:` carries no `paths:` -- it reads the
+    whole checked-out tree. The delta is the same inert `docs/` file that
+    passes above, so the refusal comes from the missing filter and nothing else.
+    """
+    scopes = [*_INERT_SCOPES[:2],
+              gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml")]
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=scopes)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "guardrails" in gate["detail"], gate["detail"]
+    assert "reads EVERYTHING" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_the_second_arm_never_rescues_a_non_main_base():
+    """`base_is_current` refuses for two other reasons, and neither is a
+    question about a delta. A PR aimed at `release/0.106` merges into something
+    that is not the trunk; an intersection over main's delta says nothing about
+    that. With `baseRefName` back to `main` and everything else identical this
+    fixture is GO (the test above), so the branch name is doing the work.
+    """
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    data["pr"]["baseRefName"] = "release/0.106"
+    result = merge_gate.run_gates(data, POLICY, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "not 'main'" in gate["detail"]
+    # ...and the delta arm was never consulted, so its vocabulary is absent.
+    assert "INERT" not in gate["detail"], gate["detail"]
+
+
+def test_negative_control_a_collector_that_measured_no_delta_still_blocks():
+    """`collect()` only measures the delta when the base is actually stale, and
+    a `git diff` that fails leaves `base_delta=None`. Both must refuse. This is
+    the fixture the ORIGINAL stale-base test uses (it passes neither key), so
+    it also pins that the pre-#4585 fixtures still block for the right reason.
+    """
+    result = _run(base_sha="c" * 40)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "no scope at all" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_turning_the_policy_key_off_restores_the_strict_gate():
+    """`stale_base_may_pass_on_an_inert_delta: false` must make gate 1 refuse a
+    stale base again even on a provably inert delta -- the same fixture that is
+    GO above. A key read by nothing is prose; this is what makes it a control.
+    """
+    policy = {**POLICY, "merge_gate": {**POLICY["merge_gate"],
+                                       "stale_base_may_pass_on_an_inert_delta": False}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    result = merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "1 ")["ok"]
+
+
+def test_negative_control_deleting_the_policy_key_is_a_loud_keyerror():
+    """SUBSCRIPTED, not `.get`. A default equal to the shipped value makes
+    DELETING the key unobservable -- measured in this package twice, and the
+    reason `advisory_red_is_a_no_go` is subscripted too."""
+    policy = {**POLICY, "merge_gate": {
+        k: v for k, v in POLICY["merge_gate"].items()
+        if k != "stale_base_may_pass_on_an_inert_delta"}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    with pytest.raises(KeyError):
+        merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+
+
+# ---------------------------------------------------------------------------
+# `derive_context_scopes` -- the DERIVATION, which is where a blind scope comes
+# from. Every failure here must produce an `unreadable` scope, never a scope
+# with empty patterns: empty patterns match nothing, and matching nothing is
+# the answer that lets the merge through.
+# ---------------------------------------------------------------------------
+
+_WF = ".github/workflows/test.yml"
+#: A workflow with a real push path filter, written out rather than read from
+#: disk so the derivation test does not depend on the repo's own workflows.
+_WF_SRC = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'tools/**'\n"
+_WF_SRC_NARROWED = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'x/**'\n"
+_WF_SRC_NO_PUSH = "on:\n  pull_request:\n"
+
+
+def _wire_derivation(monkeypatch, *, suite=7, path=_WF, sources=None):
+    """Point `derive_context_scopes` at fixtures instead of the network/git."""
+    monkeypatch.setattr(
+        merge_gate, "_flat_check_runs",
+        lambda _repo, _sha: ([{"name": "Python Lint", "check_suite": {"id": suite}}], 1))
+    monkeypatch.setattr(
+        merge_gate, "_workflow_runs",
+        lambda _repo, _sha: [{"check_suite_id": suite, "path": path}])
+
+    def fake(args, **_kwargs):
+        if args[:2] == ["git", "show"]:
+            sha = args[2].split(":")[0]
+            text = (sources or {}).get(sha)
+            if text is None:
+                return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+            return SimpleNamespace(returncode=0, stdout=text, stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+
+
+def test_the_scope_is_derived_from_the_workflow_the_check_suite_names(monkeypatch):
+    """The POSITIVE arm of the derivation: a traced producer whose filter is
+    identical at both shas yields the real pattern list. Change `_WF_SRC`'s
+    `tools/**` to anything else and the assertion on the tuple goes red."""
+    _wire_derivation(monkeypatch, sources={"base": _WF_SRC, "main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert len(scopes) == 1
+    assert scopes[0].unreadable is None, scopes[0].unreadable
+    assert scopes[0].workflow_path == _WF
+    assert scopes[0].paths == ("tools/**",)
+
+
+def test_negative_control_an_untraceable_producer_is_unreadable_not_empty(monkeypatch):
+    """No workflow run owns the publishing check-suite. The scope MUST carry
+    `unreadable`; a `ContextScope(name)` with no reason would refuse for the
+    no-filter reason instead, which is the right verdict from the wrong
+    evidence -- and `paths=()` would refuse for nothing at all."""
+    _wire_derivation(monkeypatch, suite=7, sources={"base": _WF_SRC, "main": _WF_SRC})
+    monkeypatch.setattr(merge_gate, "_workflow_runs",
+                        lambda _repo, _sha: [{"check_suite_id": 999, "path": _WF}])
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "cannot be traced" in scopes[0].unreadable
+    assert scopes[0].paths is None
+    assert scopes[0].paths_ignore is None
+
+
+def test_negative_control_an_unreadable_workflow_file_is_unreadable(monkeypatch):
+    """`git show <sha>:<path>` failing is an unanswered question. Only the BASE
+    sha fails here, so a derivation that read one sha and skipped the other
+    would pass this and be wrong."""
+    _wire_derivation(monkeypatch, sources={"main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "could not be read or parsed" in scopes[0].unreadable
+
+
+def test_negative_control_a_filter_that_moved_inside_the_delta_is_unreadable(monkeypatch):
+    """The two-clock refusal. The workflow's own filter is one of the things
+    the base delta can change: reading only `origin/main` would judge the PR's
+    evidence against a filter that did not exist when it was produced. Here the
+    filter NARROWS from `tools/**` to `x/**`, and a narrower filter excuses
+    more -- so a one-sha reader would call a `tools/` delta inert."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC, "main": _WF_SRC_NARROWED})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "CHANGED inside the base delta" in scopes[0].unreadable
+    # ...and it really would have been excused: the narrowed filter alone says
+    # `tools/**` is outside scope. This is the counterfactual, not a restatement.
+    narrowed = gates.ContextScope("Python Lint", _WF, paths=("x/**",))
+    assert gates.base_delta_is_inert(
+        ["tools/drain/gates.py"], [narrowed], ["Python Lint"])[0] is True
+
+
+def test_negative_control_a_workflow_with_no_push_trigger_is_unreadable(monkeypatch):
+    """`present=False` explains an ABSENCE for the ci-green receipt; here it
+    means nothing declares which commits landing on main must re-run the
+    context, so there is no filter to intersect against."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC_NO_PUSH, "main": _WF_SRC_NO_PUSH})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "no `on.push` trigger" in scopes[0].unreadable
+
+
+def test_a_derived_unfiltered_scope_is_paths_none_not_an_empty_tuple(monkeypatch):
+    """`push:` with `branches:` but no `paths:` is the shape FIVE of this
+    repo's 17 required contexts have. It must arrive as `paths=None` -- the
+    "reads everything" state -- and NOT as `paths=()`, which matches nothing
+    and would excuse every delta."""
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n",
+        "main": "on:\n  push:\n    branches: [main]\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths is None, scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked
+    assert "reads EVERYTHING" in why, why
+
+
 # THE COMPOSED VERDICT IS NO LONGER A DISCRIMINATOR FOR GATE 2+3.
 #
 # Once a blocking verdict also RAISES the reviewer count, gate 3b blocks on the

@@ -514,6 +514,108 @@ def refresh_required_contexts(repo: str) -> int:
     return 0
 
 
+def derive_context_scopes(
+    repo: str, head: str, base_sha: str, origin_main_sha: str, required: list[str]
+) -> list[gates.ContextScope]:
+    """#4585. The path filter each REQUIRED context's producer declares, DERIVED.
+
+    NOTHING HERE MAPS A CONTEXT TO A PRODUCER BY SPELLING -- the same rule
+    `collect_ci_green_evidence` states and for the same reason. The producer is
+    traced at the PR HEAD through `check_suite_id`, which is 1:1 with an Actions
+    workflow run, and the run carries the workflow's `path`. A name table would
+    be one conditional `name:` expression away from being wrong, silently, and
+    an alias table that resolved a context to the WRONG workflow would hand
+    `base_delta_is_inert` a filter belonging to something else -- which reads as
+    an empty intersection, which lets a merge through.
+
+    THE FILTER IS READ AT BOTH SHAS AND A DISAGREEMENT REFUSES. The scope is
+    read out of the workflow file, and the workflow file is one of the things
+    the base delta can have changed. Reading it only at `origin_main_sha` would
+    evaluate the PR's evidence against a filter that did not exist when the
+    evidence was produced; reading it only at `base_sha` would ignore a filter
+    that has since NARROWED. Either way the narrower of the two excuses more, so
+    rather than picking one, a difference is an unanswered question. This is the
+    same shape as `_top_level_dirs_agree`, which exists because a deriver read
+    from one clock while the thing it corroborated came from another.
+
+    Every failure path produces a `ContextScope` carrying `unreadable`, never an
+    empty pattern tuple: an empty tuple matches nothing, and "matches nothing"
+    is the answer that lets the merge through.
+    """
+    head_checks, _total = _flat_check_runs(repo, head)
+    suite_of_check = {
+        (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
+    }
+    path_by_suite = {
+        r.get("check_suite_id"): r.get("path") for r in _workflow_runs(repo, head)
+    }
+
+    triggers: dict[tuple[str, str], gates.PushTrigger | None] = {}
+
+    def trigger_at(sha: str, path: str) -> gates.PushTrigger | None:
+        key = (sha, path)
+        if key not in triggers:
+            rc, out, err = sh(["git", "show", f"{sha}:{path}"])
+            if rc != 0:
+                print(f"WARNING: cannot read {path} at {sha[:12]} (rc={rc}): "
+                      f"{err[:200]}", file=sys.stderr)
+                triggers[key] = None
+            else:
+                triggers[key] = gates.parse_push_trigger(out)
+        return triggers[key]
+
+    scopes: list[gates.ContextScope] = []
+    for name in required:
+        suite = suite_of_check.get(name)
+        path = path_by_suite.get(suite) if suite is not None else None
+        if not path:
+            scopes.append(gates.ContextScope(
+                name=name,
+                unreadable=(
+                    "no workflow run at the PR head owns the check-suite that "
+                    f"published it (check_suite_id={suite!r}), so its producer "
+                    "cannot be traced and the paths it reads are unknown"
+                ),
+            ))
+            continue
+        at_base = trigger_at(base_sha, path)
+        at_main = trigger_at(origin_main_sha, path)
+        if at_base is None or at_main is None:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path} could not be read or parsed at "
+                    f"{base_sha[:12] if at_base is None else origin_main_sha[:12]}"
+                ),
+            ))
+            continue
+        if at_base != at_main:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path}'s own push trigger CHANGED inside the base delta "
+                    f"({at_base} at {base_sha[:12]} vs {at_main} at "
+                    f"{origin_main_sha[:12]}) - the scope moved under the "
+                    "evidence, so which filter governs is unanswered"
+                ),
+            ))
+            continue
+        if not at_main.present:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path} has no `on.push` trigger at all, so nothing "
+                    "declares which commits landing on main must re-run it"
+                ),
+            ))
+            continue
+        scopes.append(gates.ContextScope(
+            name=name, workflow_path=path,
+            paths=at_main.paths, paths_ignore=at_main.paths_ignore,
+        ))
+    return scopes
+
+
 def collect(repo: str, number: int) -> dict:
     """Everything the gates need, read once."""
     pr = gh_json(
@@ -585,6 +687,37 @@ def collect(repo: str, number: int) -> dict:
         f"check-runs on {head[:12]}",
     )
 
+    required = required_contexts(repo)
+
+    # #4585. Only measured when the base is actually stale -- when it is not,
+    # gate 1 passes on `base_is_current` and this costs two paginated API reads
+    # and 2N `git show`s for nothing. `base_delta` stays None (the unreadable
+    # answer) and `context_scopes` stays empty, and BOTH of those refuse in
+    # `gates.base_delta_is_inert`, so skipping the work can only ever make the
+    # gate stricter. That direction is deliberate: a collector that fails open
+    # when it declines to measure is the defect, not the optimisation.
+    base_delta: list[str] | None = None
+    context_scopes: list[gates.ContextScope] = []
+    if base_sha and origin_main_sha and base_sha != origin_main_sha:
+        rc, _, err = sh(["git", "fetch", "--quiet", "origin", origin_main_sha])
+        if rc != 0:
+            print(f"WARNING: git fetch {origin_main_sha[:12]} failed: {err[:200]}",
+                  file=sys.stderr)
+        # TWO-ARG `git diff`, i.e. the two-dot form: `base_sha` is already the
+        # MERGE-BASE of origin/main and the head, so this is exactly what main
+        # gained since the fork point. The three-dot form would be the same set
+        # here and silently different if `base_sha` ever stopped being a
+        # merge-base, so the explicit two-arg form says which one is meant.
+        rc, out, err = sh(["git", "diff", "--name-only", base_sha, origin_main_sha])
+        if rc != 0:
+            print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "
+                  f"{err[:200]} - gate 1 will refuse rather than assume", file=sys.stderr)
+        else:
+            base_delta = [line.strip() for line in out.splitlines() if line.strip()]
+            context_scopes = derive_context_scopes(
+                repo, head, base_sha, origin_main_sha, required
+            )
+
     return {
         "pr": pr,
         "head": head,
@@ -592,10 +725,12 @@ def collect(repo: str, number: int) -> dict:
         "comments": comments,
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
+        "base_delta": base_delta,
+        "context_scopes": context_scopes,
         "open_issues": open_issues,
         "head_runs": head_runs,
         "changed_files": changed_files,
-        "required": required_contexts(repo),
+        "required": required,
     }
 
 
@@ -1000,11 +1135,36 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
            if mergeable != "MERGEABLE" else ""),
     )
 
-    # 1 -- base == origin/main, exactly.
+    # 1 -- base == origin/main, exactly... OR the delta between them provably
+    # cannot reach any required context (#4585).
+    #
+    # The strict test runs FIRST and is unchanged. The second arm is only
+    # consulted when the strict one has already failed, and only when it failed
+    # for the STALENESS reason: `base_is_current` also refuses a PR aimed at
+    # another branch and a PR whose shas would not resolve, and neither of those
+    # is a question about a delta. Letting the delta arm answer them would rescue
+    # a PR targeting `release/x` on the strength of an intersection that says
+    # nothing about where it merges -- the one-side-of-a-boundary shape this
+    # package produces most often. Hence the explicit guards rather than a bare
+    # `if not ok`.
     ok, why = gates.base_is_current(
         pr["baseRefName"], data["base_sha"], data["origin_main_sha"]
     )
-    record("1 base == origin/main", ok, why)
+    # SUBSCRIPTED, never `.get`: deleting the key is a loud KeyError rather than
+    # a silent default, the shape `assert_policy_matches_code` was extended for.
+    # Setting it false restores the strict gate exactly.
+    if (not ok
+            and policy["merge_gate"]["stale_base_may_pass_on_an_inert_delta"]
+            and pr["baseRefName"] == "main"
+            and data["base_sha"] and data["origin_main_sha"]):
+        inert, why_inert = gates.base_delta_is_inert(
+            data.get("base_delta"),
+            data.get("context_scopes") or [],
+            data["required"],
+        )
+        ok = inert
+        why = f"{why} | delta {'INERT' if inert else 'NOT inert'}: {why_inert}"
+    record("1 base == origin/main (or a delta no required context reads)", ok, why)
 
     # 2+3 -- verdicts, reduced by conjunction, pinned to the head they measured.
     live, near = gates.parse_verdicts(
