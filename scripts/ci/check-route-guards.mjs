@@ -2044,23 +2044,45 @@ const ALLOWLIST_PREFIXES = [
   // the route's graph node goes `allowlisted` true -> false and the repo-wide
   // `allowlisted:true` count drops 24 -> 23, exactly this one.
   //
-  // It does NOT follow that THIS checker now watches the route, and the claim is
-  // not made. Measured 2026-09-18 in a sandbox: with the route's gate removed it
-  // exits 0; with the gate removed and the caller oid stripped from the
-  // `softDeleteOwnedItem` call it exits 0; with the ownership-shaped call name
-  // also gone it still exits 0. `GETSESSION_RE` does match the route (via
-  // `withSession(`), so this is not a remit miss — but what satisfies it
-  // downstream is none of those three, and was not identified. Its green over
-  // this path is not evidence; the route's own spec arms are.
+  // It does NOT follow that THIS checker stopped watching the route — and an
+  // earlier revision of this comment claimed exactly that, wrongly. Measured
+  // 2026-09-19, anchors == 1 at every step, on a sandbox worktree:
+  //
+  //   gate call + its import removed                        -> exit 0
+  //   + every `s.claims.*` reference removed                -> exit 0
+  //   + `softDeleteOwnedItem` renamed at the call site      -> exit 1,
+  //         naming this route and `[DELETE]`, `violations: 1`
+  //
+  // So the checker DOES watch it, via `softDeleteOwnedItem` — an explicit
+  // STRONG_OWNERSHIP_SIGNALS entry (:364) whose stated rationale is the same
+  // ladder this route's migration rests on (softDeleteOwnedItem ->
+  // loadOwnedItem -> resolveWorkspaceAccessByOid, write-scoped).
+  //
+  // WHY THE EARLIER CLAIM WAS WRONG, recorded because the shape is the reusable
+  // part: that run renamed the call while LEAVING
+  // `deletedBy = s.claims.upn || s.claims.email || s.claims.oid` in place, and
+  // a `claims.*` read is a WEAK identity signal the handler test accepts. The
+  // edit therefore never reached the rule it was aimed at. One-edit
+  // counterfactual, both states differing only in that line: with it, exit 0;
+  // without it, exit 1. A NOT-RUN was scored as a survivor, and the survivor
+  // was then written up as a conclusion about this control's efficacy INTO
+  // this control's own source. A mutation arm that does not move the verdict
+  // has to be shown to have reached the rule before it is read as evidence.
   //
   // The remaining members keep the exemption, each on the same stated reason as
   // before; enumerating them is what makes a future addition opt IN deliberately
   // rather than inherit an exemption it was never in.
+  //
+  // `onelake/recycle/` is deliberately NOT among them. It restores one item by
+  // `body.itemId` and purges one by `?itemId=`, so "navigator over the
+  // deployment storage" was never true of it either; the entry was also inert
+  // (removing it leaves `violations: 0`), and CHECK 3B premise-tests stated
+  // reasons, so a false one carried here is the defect this file exists to
+  // catch.
   ['apps/fiab-console/app/api/onelake/catalog/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/governance/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/lifecycle/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/paths/', 'A: OneLake/ADLS navigator over the deployment storage'],
-  ['apps/fiab-console/app/api/onelake/recycle/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/resolve/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/security/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/onelake/storage/', 'A: OneLake/ADLS navigator over the deployment storage'],
