@@ -514,6 +514,38 @@ def refresh_required_contexts(repo: str) -> int:
     return 0
 
 
+def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
+    """The files `origin/main` gained since the fork point. None = unreadable.
+
+    TWO-ARG `git diff`, i.e. the two-dot form: `base_sha` is already the
+    MERGE-BASE of origin/main and the head, so this is exactly what main gained
+    since the fork point. The three-dot form would be the same set here and
+    silently different if `base_sha` ever stopped being a merge-base, so the
+    explicit two-arg form says which one is meant.
+
+    `--no-renames` IS LOAD-BEARING AND WAS MISSING FOR A ROUND. Rename
+    detection is ON by default (`diff.renames`), and a detected rename emits
+    ONLY THE DESTINATION path. So a file moving OUT of a context's scope --
+    `git mv tools/drain/helper.py docs/helper.txt` -- produced a delta of
+    `docs/helper.txt` alone, which no required context reads, and the gate
+    answered INERT while the file that context depends on had left main.
+    Reproduced end to end by a reviewer, with a plain delete as the control
+    (which correctly refused), so the finding was a blind spot in the flag and
+    not in the query. With `--no-renames` the same commits emit BOTH paths and
+    the source path refuses.
+
+    NEVER discards stderr (R7): an unreadable diff returns None, which
+    `gates.base_delta_is_inert` refuses, and says why on stderr.
+    """
+    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",
+                       base_sha, origin_main_sha])
+    if rc != 0:
+        print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "
+              f"{err[:200]} - gate 1 will refuse rather than assume", file=sys.stderr)
+        return None
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def derive_context_scopes(
     repo: str, head: str, base_sha: str, origin_main_sha: str, required: list[str]
 ) -> list[gates.ContextScope]:
@@ -543,6 +575,17 @@ def derive_context_scopes(
     is the answer that lets the merge through.
     """
     head_checks, _total = _flat_check_runs(repo, head)
+    # LAST-WINS ON A DUPLICATE NAME, DISCLOSED RATHER THAN CLAIMED CLEAN.
+    # A check-run name is not unique by construction: a re-run, or two
+    # workflows publishing the same display name, would give one context two
+    # check-suites and this dict would silently keep whichever came last --
+    # binding the context to another workflow's filter, which reads as an
+    # empty intersection. Measured at the head this was written against: ZERO
+    # duplicate names. It is also the pre-existing shape used by
+    # `collect_ci_green_evidence` (`suite_of_head_check`), so it is inherited
+    # here rather than introduced, and fixing it belongs in both places at
+    # once. Named so a reader does not mistake "no duplicates today" for
+    # "cannot have duplicates".
     suite_of_check = {
         (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
     }
@@ -703,17 +746,11 @@ def collect(repo: str, number: int) -> dict:
         if rc != 0:
             print(f"WARNING: git fetch {origin_main_sha[:12]} failed: {err[:200]}",
                   file=sys.stderr)
-        # TWO-ARG `git diff`, i.e. the two-dot form: `base_sha` is already the
-        # MERGE-BASE of origin/main and the head, so this is exactly what main
-        # gained since the fork point. The three-dot form would be the same set
-        # here and silently different if `base_sha` ever stopped being a
-        # merge-base, so the explicit two-arg form says which one is meant.
-        rc, out, err = sh(["git", "diff", "--name-only", base_sha, origin_main_sha])
-        if rc != 0:
-            print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "
-                  f"{err[:200]} - gate 1 will refuse rather than assume", file=sys.stderr)
-        else:
-            base_delta = [line.strip() for line in out.splitlines() if line.strip()]
+        # TWO-ARG `git diff` and `--no-renames`; see `base_delta_files`, which
+        # is a separate function precisely so a real git repo can be built in a
+        # test and the rename case witnessed without the network.
+        base_delta = base_delta_files(base_sha, origin_main_sha)
+        if base_delta is not None:
             context_scopes = derive_context_scopes(
                 repo, head, base_sha, origin_main_sha, required
             )

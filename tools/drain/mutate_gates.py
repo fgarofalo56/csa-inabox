@@ -3166,6 +3166,27 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419",
         "    return any(glob_matches(pattern, path) for pattern in patterns)",
     ),
+    (
+        ("BD14 `--no-renames` comes off the delta query, so git's default "
+         "rename detection emits ONLY THE DESTINATION path - a file moved OUT "
+         "of a context's scope then reads as inert while the thing that "
+         "context depends on has left main. Round-1 blocker, reproduced "
+         "end-to-end with a plain delete as the control"),
+        "merge_gate.py",
+        ('    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",\n'
+         "                       base_sha, origin_main_sha])"),
+        ('    rc, out, err = sh(["git", "diff", "--name-only",\n'
+         "                       base_sha, origin_main_sha])"),
+    ),
+    (
+        ("BD15 an EMPTY `paths: []` stops being refused, so a workflow "
+         "declaring one matches NOTHING and its context excuses every delta - "
+         "the fourth ContextScope state, which sails past the no-filter branch "
+         "because `paths is None` is False"),
+        "gates.py",
+        "        if scope.paths == () or scope.paths_ignore == ():",
+        "        if False:",
+    ),
 ]
 
 

@@ -4045,12 +4045,17 @@ class ContextScope:
 
         paths=('a/**',)                  a filter: only `a/**` reaches it
         paths=None, paths_ignore=None    NO filter: it reads EVERYTHING
+        paths=()                         an EMPTY filter: it matches NOTHING
         unreadable='...'                 the question was not answered
 
-    Collapsing the last two into "matches nothing" is the whole defect this
-    guards against -- an empty intersection is the answer that lets a merge
-    through, so a scope that cannot match is indistinguishable from a scope
-    that was never resolved unless they are separate fields.
+    Collapsing any of the last three into "matches nothing" is the whole defect
+    this guards against -- an empty intersection is the answer that lets a
+    merge through, so a scope that cannot match is indistinguishable from a
+    scope that was never resolved unless they are separate fields. The
+    `paths=()` row is the one that was MISSED for a round: it is not the absent
+    state, it is a real `paths: []` in a workflow file, and because `any([])`
+    is False it excused every delta through the branch that looked like it had
+    already handled it. `base_delta_is_inert` refuses it explicitly.
     """
 
     name: str
@@ -4058,7 +4063,6 @@ class ContextScope:
     paths: tuple[str, ...] | None = None
     paths_ignore: tuple[str, ...] | None = None
     unreadable: str | None = None
-
 
 def _every_pattern_matched(patterns: tuple[str, ...], path: str) -> bool:
     """`any()` over a LIST, so every pattern is evaluated before an answer.
@@ -4115,29 +4119,69 @@ def base_delta_is_inert(
     re-run discarded a 42-minute mutation matrix over a base delta of three
     comment-only Dockerfiles.
 
-    THIS IS NOT A RELAXATION OF THE PROPERTY. It is the same property measured
-    directly. The question gate 1 asks by proxy -- "is the base current" -- is a
-    stand-in for "could the base delta have changed any required context's
-    result". When every file in the delta falls outside every required
-    context's declared read-scope, the answer is no, and the proxy is stricter
-    than the thing it stands for.
+    THIS IS A NARROWER PROPERTY THAN GATE 1'S, AND THE EARLIER TEXT HERE SAID
+    THE OPPOSITE. It said "this is not a relaxation of the property, it is the
+    same property measured directly". That was FALSE, both reviewers measured
+    it, and the sentence is recorded here rather than deleted because a
+    docstring asserting a soundness it does not have is the R7 error this
+    package exists to refuse -- and because the chain of reasoning it invites
+    is what the next person acts on.
 
-    WHY THE `on.push` FILTER IS THE RIGHT SCOPE, and it is not an analogy: the
-    commits in `base..origin/main` ALREADY LANDED ON MAIN, as pushes. GitHub
-    applied each workflow's `on.push` filter to them at that moment. A workflow
-    whose filter excluded them did not run, and main was taken as green anyway.
-    So the repo has already accepted, for the trunk itself, that those commits
-    need no run of that context. `policy.json`'s `ci_green_rule` rests on the
-    identical reading ("NEVER CREATED there because its own on.push trigger,
-    read AT that sha, could not have admitted the commit"). What remains is an
-    INTERACTION between the delta and the PR's own changes -- and an
-    interaction needs a shared file, which is what the intersection measures.
+    Gate 1's property is: THE CI GREEN BEING COUNTED WAS MEASURED AGAINST THE
+    BASE BEING MERGED. What this function measures is: THE TRUNK'S OWN `push`
+    FILTERS WOULD NOT HAVE RE-RUN THIS CONTEXT FOR THESE COMMITS. Those are
+    different questions. `on.push.paths` models WHAT THE TRUNK RE-RUNS FOR, not
+    WHAT A CONTEXT READS, and on this repo they already diverge:
+
+    - `validate.yml` publishes FIVE required contexts while declaring only
+      bicep paths plus `.github/workflows/**`.
+    - `PowerShell Lint` inside it runs
+      `Get-ChildItem -Path . -Filter "*.ps1" -Recurse`, and `Repo Hygiene` runs
+      `find . -type f`. Both read the whole tree.
+    - `Secret Scan` runs `gitleaks detect --config .gitleaks.toml`
+      (`validate.yml:599`), and `.gitleaks.toml` matches none of the filtered
+      contexts' patterns either.
+
+    Fed the real scopes of the 12 filtered contexts -- the counterfactual this
+    arm invites -- this function returns INERT for
+    `deploy/bicep/DLZ/powershellHelper.ps1` and for a 6 MB binary, which
+    `PowerShell Lint` and `Repo Hygiene` demonstrably read. It is harmless
+    TODAY only because the five unfiltered contexts refuse everything, which is
+    a property of the topology and not of this function.
+
+    SO THE `on.push` FILTER IS A PROXY, AND ITS PRECONDITION IS UNESTABLISHED.
+    Relying on it requires, PER CONTEXT, that the workflow's declared push
+    scope be a SUPERSET of what that context actually reads. That has not been
+    shown for any of the 12 filtered contexts; for three of them it is shown
+    FALSE above. Nobody may make this arm fire -- by giving one of the five
+    unfiltered workflows a `paths:` list, or any other route -- without
+    establishing that superset relation for the contexts it would unblock.
+
+    AND THE "MAIN WAS GREEN ANYWAY" ARGUMENT IS WEAKER THAN THIS GATE, which
+    is the other thing the earlier text got wrong. That the trunk accepted
+    these commits without re-running a context is a statement about TRUNK
+    HYGIENE. Gate 1 stands in for `strict=true` on branch protection, and
+    `strict` does not consult path filters AT ALL -- it requires the branch to
+    be up to date, full stop. So "the trunk would not have re-run it" is
+    strictly less than what gate 1 is substituting for, and it is offered here
+    as the reason the refusals are safe, never as a proof that the passes are.
+
+    WHAT MAKES THE ARM SAFE TO SHIP TODAY IS ITS FAIL-CLOSED BEHAVIOUR, not
+    the proxy: every input that is not a measured miss refuses, five of the 17
+    required contexts refuse unconditionally, and so no stale base reaches the
+    GO path at all. `policy.json`'s `ci_green_rule` reads the same filters, and
+    it is worth saying that it is not a precedent for this: it uses them to
+    explain why a context was NEVER CREATED at a sha, which is a fact about
+    GitHub's dispatcher, whereas this would use them to bound what a context
+    READS, which is a fact about the job.
 
     EVERYTHING THAT IS NOT A MEASURED MISS IS A REFUSAL:
 
     - a required context with no scope at all (its producer could not be traced)
     - a producing workflow that could not be read or parsed
     - a workflow with NO `on.push` path filter -- it reads EVERYTHING
+    - a workflow with an EMPTY one (`paths: []`) -- it matches NOTHING, which
+      would make every delta read inert
     - a filter pattern `glob_matches` will not represent (`!`, `[...]`, ...)
     - a delta that could not be read
     - an empty required set
@@ -4169,12 +4213,15 @@ def base_delta_is_inert(
       independent grounds.
 
     So this ships as the MECHANISM, correct and tested in both directions, and
-    it starts firing the moment a producing workflow declares what its `push`
-    reads. That is an available change -- `on.push.paths` is a different event
-    from `on.pull_request`, so a required check can keep reporting on every PR
-    while still declaring its push scope -- and it is deliberately NOT made
-    here: it changes what runs on main. Do not report this arm as having
-    reduced any cost until a real PR has passed on it.
+    it would start firing if a producing workflow declared a `push` path scope.
+    That is technically available -- `on.push.paths` is a different event from
+    `on.pull_request`, so a required check can keep reporting on every PR while
+    declaring its push scope -- and it is deliberately NOT done here, for two
+    reasons and not one: it changes what runs on main, AND the superset
+    precondition above is unestablished, so declaring a filter would make this
+    arm fire on a proxy that is known to be wrong for at least three contexts.
+    Establish the superset relation per context FIRST. Do not report this arm
+    as having reduced any cost until a real PR has passed on it.
 
     Returns `(inert, why)`. `why` NAMES the contexts considered on the passing
     arm -- an empty intersection is only evidence if you can see what it was
@@ -4210,6 +4257,19 @@ def base_delta_is_inert(
                 f"{name!r} is produced by {scope.workflow_path} which declares "
                 "NO `on.push` path filter, so it reads EVERYTHING and any base "
                 "delta can reach it"
+            )
+        # AN EMPTY LIST IS NOT THE SAME STATE AS AN ABSENT ONE, and it is the
+        # dangerous one. `paths: []` parses to `()`, `any([])` is False, so
+        # EVERY delta reads as outside the scope and the context excuses
+        # everything -- the "matches nothing is the answer that lets a merge
+        # through" shape, arriving through the one branch above that looked
+        # like it had already handled it. `ContextScope`'s own docstring names
+        # three states; this is the fourth, and it was unwatched.
+        if scope.paths == () or scope.paths_ignore == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "path list, which matches NOTHING - that is not a scope, it is "
+                "a context that would excuse every delta"
             )
         if scope.paths is not None and scope.paths_ignore is not None:
             return False, (

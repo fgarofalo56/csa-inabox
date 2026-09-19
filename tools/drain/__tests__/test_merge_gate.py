@@ -435,6 +435,150 @@ def test_a_derived_unfiltered_scope_is_paths_none_not_an_empty_tuple(monkeypatch
     assert "reads EVERYTHING" in why, why
 
 
+def test_a_derived_empty_paths_list_is_a_tuple_that_the_gate_refuses(monkeypatch):
+    """`paths: []` in a workflow parses to `()`, which is a FOURTH state.
+
+    It is not the absent state the test above pins, and it is the dangerous
+    one: `any([])` is False, so every delta reads as outside the scope and the
+    context excuses everything. Both halves are asserted -- that the derivation
+    hands back `()` rather than `None` (so the two states stay distinct), and
+    that `base_delta_is_inert` REFUSES it.
+
+    Goes red if the refusal branch is deleted: with it gone the same fixture
+    returns INERT over a `docs/x.md` delta.
+    """
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n    paths: []\n",
+        "main": "on:\n  push:\n    branches: [main]\n    paths: []\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths == (), scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked, why
+    assert "EMPTY" in why, why
+
+
+# ---------------------------------------------------------------------------
+# `base_delta_files` -- the DELTA, over a real git repo.
+#
+# The rename case cannot be witnessed by asserting on an argv list: the whole
+# finding is what git DOES with the flag, not that the flag is spelled. So
+# these build a throwaway repository, perform a real `git mv`, and read what
+# comes back.
+# ---------------------------------------------------------------------------
+
+def _git(repo, *args):
+    import subprocess
+
+    done = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+    assert done.returncode == 0, (args, done.stderr)
+    return done.stdout
+
+
+def _repo_with(tmp_path, first_path: str, then):
+    """A two-commit repo: `first_path` is added, then `then(repo)` changes it.
+
+    Returns `(repo, base_sha, head_sha)`.
+    """
+    repo = tmp_path / "delta-repo"
+    (repo / "tools" / "drain").mkdir(parents=True)
+    (repo / "docs").mkdir(parents=True)
+    _git(repo.parent, "init", "--quiet", repo.name)
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / first_path).write_text("x = 1\n" * 40, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "add")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    then(repo)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "change")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    return repo, base, head
+
+
+#: The scope the moved file starts inside. A rename OUT of it is the defect.
+_TOOLS_SCOPE = [gates.ContextScope(
+    "Python Lint", ".github/workflows/test.yml", paths=("tools/**",))]
+
+
+def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 1: `git diff --name-only` has rename detection ON by
+    default and emits ONLY THE DESTINATION path.
+
+    `git mv tools/drain/helper.py docs/helper.txt` is a 100%-similar rename, so
+    without `--no-renames` the delta is `['docs/helper.txt']` alone -- which
+    `tools/**` does not read -- and the gate answers INERT while the file that
+    context depends on has LEFT main.
+
+    This asserts BOTH halves, because either alone is satisfiable by the defect:
+    the source path is present in the delta, AND the composed answer refuses.
+    Drop `--no-renames` from `base_delta_files` and both go red.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "mv", "tools/drain/helper.py", "docs/helper.txt"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert "tools/drain/helper.py" in delta, (
+        "the SOURCE path is missing, so rename detection is still collapsing "
+        f"the pair to its destination: {delta}"
+    )
+    assert "docs/helper.txt" in delta, delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_the_control_a_plain_delete_of_the_same_file_also_refuses(monkeypatch, tmp_path):
+    """THE CONTROL that makes the test above a finding rather than a guess.
+
+    A delete has no destination to collapse into, so it refuses with or without
+    the flag. If this ever went red the query would be blind in general and the
+    rename arm would be measuring something else entirely.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "rm", "--quiet", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta == ["tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+
+
+def test_the_positive_control_a_move_that_stays_outside_every_scope_is_inert(
+        monkeypatch, tmp_path):
+    """The other side, so the two arms above are not satisfied by a function
+    that refuses everything. A rename entirely within `docs/` touches nothing
+    `tools/**` reads, and `--no-renames` then lists TWO `docs/` paths -- still
+    inert. Goes red if `base_delta_files` ever started returning paths the
+    commits did not touch."""
+    repo, base, head = _repo_with(
+        tmp_path, "docs/a.md",
+        lambda r: _git(r, "mv", "docs/a.md", "docs/b.md"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/a.md", "docs/b.md"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert inert, why
+
+
+def test_negative_control_an_unreadable_delta_returns_none_not_an_empty_list(
+        monkeypatch, tmp_path):
+    """A failing `git diff` must be the UNREADABLE answer. `[]` would be a
+    measured-empty delta, which is the one thing that passes."""
+    repo, base, _head = _repo_with(tmp_path, "docs/a.md",
+                                   lambda r: (r / "docs" / "a.md").write_text("y\n"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+    assert merge_gate.base_delta_files(base, "f" * 40) is None
+
+
 # THE COMPOSED VERDICT IS NO LONGER A DISCRIMINATOR FOR GATE 2+3.
 #
 # Once a blocking verdict also RAISES the reviewer count, gate 3b blocks on the

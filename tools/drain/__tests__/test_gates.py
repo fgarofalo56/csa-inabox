@@ -2267,6 +2267,38 @@ def test_negative_control_a_context_with_no_path_filter_fails_closed():
     assert "reads EVERYTHING" in why, why
 
 
+def test_negative_control_an_empty_paths_list_refuses_and_is_not_the_absent_one():
+    """The FOURTH state, and the one that was unwatched for a round.
+
+    `paths: []` in a workflow parses to `()`. `paths is None` is False, so it
+    sails past the no-filter branch above; then `any([])` is False for every
+    file, so the context reads as touched by NOTHING and excuses the whole
+    delta -- "matches nothing is the answer that lets a merge through",
+    arriving through the one branch that looked like it had handled it.
+
+    The delta here is `beta/y.txt`, which the OTHER scope in the fixture
+    (`_SCOPE_B`, `beta/**`) does read -- so this pins the empty-list refusal
+    specifically by naming `Iota` in the assertion rather than settling for
+    "something refused". Delete the `== ()` branch and it goes red.
+
+    `paths_ignore=()` is the mirror and is asserted too: an empty ignore list
+    means nothing is ignored, i.e. it reads everything, and the same branch
+    must catch it rather than letting `not any([])` answer True for every file.
+    """
+    empty = gates.ContextScope("Iota", ".github/workflows/iota.yml", paths=())
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [empty], ["Iota"])
+    assert not ok, why
+    assert "'Iota'" in why, why
+    assert "EMPTY" in why, why
+
+    empty_ignore = gates.ContextScope(
+        "Kappa", ".github/workflows/kappa.yml", paths_ignore=())
+    ok_ignore, why_ignore = gates.base_delta_is_inert(
+        ["docs/x.md"], [empty_ignore], ["Kappa"])
+    assert not ok_ignore, why_ignore
+    assert "EMPTY" in why_ignore, why_ignore
+
+
 def test_negative_control_an_unfiltered_context_refuses_even_an_empty_delta():
     """Named separately because the empty-delta branch is a SECOND exit from
     this function and could be reached before the scope loop. If it were, an
@@ -2470,17 +2502,28 @@ def test_positive_control_the_intersection_query_can_return_non_empty():
 
 
 def test_positive_control_the_real_required_topology_is_measured_not_assumed():
-    """What the arm does on THIS repo today, asserted rather than claimed.
+    """THE SAFETY INTERLOCK, not a frequency note -- the earlier wording here
+    framed this as "how often the arm fires", which points the remedy at the
+    wrong thing at exactly the moment it matters.
 
-    `policy.json` records that five required contexts are produced by workflows
-    with no `push: paths:` filter, so the arm refuses every stale base today.
-    That is a MEASUREMENT with a shelf life, and a note nobody checks is prose.
+    `gates.base_delta_is_inert` uses `on.push.paths` as a PROXY for what a
+    context reads, and that proxy's precondition -- the declared push scope is
+    a SUPERSET of what the context actually reads -- is unestablished, and is
+    known FALSE for at least three contexts (`PowerShell Lint` recurses the
+    whole tree, `Repo Hygiene` runs `find . -type f`, `Secret Scan` runs
+    gitleaks over the repo). The only reason that is harmless today is that
+    five of the 17 required contexts have NO push filter and therefore refuse
+    unconditionally, so no stale base reaches the GO path at all.
 
-    Goes RED in BOTH directions: if `validate.yml` or `test.yml` drops its
-    `paths:` list (the disclosure is then understated), or if one of the three
-    unfiltered workflows GAINS one (the disclosure is then overstated and the
-    arm has started firing). Either way the note must be re-measured before a
-    reader trusts it.
+    THIS TEST IS THE THING THAT NOTICES WHEN THAT STOPS BEING TRUE. If one of
+    the three unfiltered workflows gains a `paths:` list, the interlock is
+    gone, the arm begins deciding merges on a proxy that is wrong for at least
+    three contexts, and the correct response is NOT to update a note -- it is
+    to establish the superset relation per context, or to stop using the proxy.
+
+    Goes RED in BOTH directions: `validate.yml` or `test.yml` losing its
+    `paths:` list (then even the filtered side is unmeasurable), or any of the
+    three unfiltered workflows gaining one (then the interlock has opened).
 
     SKIPS only out of tree; see the control above.
     """
@@ -2494,9 +2537,14 @@ def test_positive_control_the_real_required_topology_is_measured_not_assumed():
                  ".github/workflows/commit-message-parses.yml"):
         scope = _real_push_scope(path, path)
         drifted = (
-            f"{path} now declares a push path filter - policy.json's "
-            "`_stale_base_may_pass_on_an_inert_delta` says it does not, and "
-            "that note is what a reader trusts about how often this arm fires"
+            f"{path} now declares a push path filter. THE INTERLOCK HAS OPENED: "
+            "gate 1's second arm can now reach its GO path, on a proxy "
+            "(`on.push.paths` as a stand-in for what a context READS) whose "
+            "superset precondition is unestablished and is known false for "
+            "PowerShell Lint, Repo Hygiene and Secret Scan. Do NOT update the "
+            "note in policy.json and move on -- establish the superset "
+            "relation for every context this unblocks, or take the arm out of "
+            "service. See gates.base_delta_is_inert."
         )
         assert scope.paths is None, drifted
         assert scope.paths_ignore is None, drifted
