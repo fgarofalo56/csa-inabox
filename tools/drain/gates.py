@@ -2124,6 +2124,19 @@ class UnsupportedPatternError(ValueError):
     """A filter pattern this translator cannot represent faithfully."""
 
 
+def git_argv(args: list[str]) -> list[str]:
+    """Return `args` with `-c core.quotePath=false` inserted after `git`.
+
+    Non-git argv is returned unchanged. Callers must ALSO decode as utf-8;
+    the flag alone is not sufficient.
+
+    Enforced by `test_every_git_invocation_routes_through_the_quoting_injection`.
+    """
+    if args and args[0] == "git":
+        return [args[0], "-c", "core.quotePath=false", *args[1:]]
+    return args
+
+
 def glob_matches(pattern: str, path: str) -> bool:
     """Does one GitHub filter pattern match one path?
 
@@ -4251,13 +4264,8 @@ def base_delta_is_inert(
       "That intersection is empty" was a hypothesis; it is false on two
       independent grounds.
 
-    So this ships as the MECHANISM, tested in both directions ON THE ARM'S OWN
-    LOGIC, and it would start firing if a producing workflow declared a
-    `push` path scope. Read that scope narrowly: round 4 shipped the same
-    phrase unqualified while `core.quotePath` was still unset on a sibling
-    path-reading call, which EXCUSED rather than refused. Both directions
-    describes the arm's decision logic, not a guarantee that every query
-    feeding it reads paths faithfully - that is now held by `sh()`.
+    So this ships as the MECHANISM, and it would start firing if a producing
+    workflow declared a `push` path scope.
     That is technically available -- `on.push.paths` is a different event from
     `on.pull_request`, so a required check can keep reporting on every PR while
     declaring its push scope -- and it is deliberately NOT done here, for two

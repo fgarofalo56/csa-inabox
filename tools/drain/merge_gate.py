@@ -40,47 +40,19 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 POLICY_PATH = os.path.join(HERE, "policy.json")
 
 
-def git_argv(args: list[str]) -> list[str]:
-    """`args` with git's global quoting option injected. THE ONLY INJECTION POINT.
+#: Re-exported so call sites and the AST guard resolve it by bare name.
+#: Defined in `gates` because `tick` shares it.
+git_argv = gates.git_argv
 
-    `core.quotePath` defaults to TRUE, under which any git command that emits
-    a path returns a non-ASCII one C-quoted and octal-escaped
-    (`"tools/prob\\303\\251.py"`), which no literal comparison recognises. A
-    delta then looks empty and an absence gets EXCUSED.
-
-    This exists as a separate function, rather than living inside `sh()`,
-    because two call sites cannot use `sh()` at all -- they need `timeout=`,
-    which `sh()` does not take -- and both read paths:
-    `git rev-parse --git-common-dir` and `git ls-tree -d --name-only`.
-    Measured in a throwaway repo, `ls-tree` returns `"prob\\303\\251_dir"`
-    under the default and the real name with the flag, with an ASCII sibling
-    present in both.
-
-    THIS CLAIM HAS BEEN WRONG TWICE, both times in the same shape: round 4
-    fixed one call site and said the class was closed; round 5 moved it into
-    `sh()` and said EVERY git invocation was covered, while these two were
-    not. It is not prose any more --
-    `test_every_git_invocation_routes_through_the_quoting_injection` reads
-    this module's AST and fails on any `["git", ...]` literal that reaches
-    `subprocess.run` without passing through here or through `sh()`.
-
-    The other half is the codec, which `sh()` pins with `encoding="utf-8"`;
-    the flag alone still fails under a locale decode.
-    """
-    if args and args[0] == "git":
-        return [args[0], "-c", "core.quotePath=false", *args[1:]]
-    return args
+#: Decoding kwargs for every subprocess this module runs. A locale decode
+#: turns raw UTF-8 output into mojibake that matches nothing.
+TEXT_UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 
 def sh(args: list[str]) -> tuple[int, str, str]:
-    """Run in the repo root, never discarding stderr (deploy-integrity R7).
-
-    Git invocations are routed through `git_argv`, which is where the quoting
-    story is told in full.
-    """
+    """Run in the repo root, never discarding stderr (deploy-integrity R7)."""
     run = subprocess.run(
-        git_argv(args), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", cwd=REPO_ROOT,
+        git_argv(args), capture_output=True, cwd=REPO_ROOT, **TEXT_UTF8,
     )
     return run.returncode, run.stdout, run.stderr
 
@@ -177,7 +149,7 @@ def ledger_candidates(state_path: str | None = None,
     try:
         common = subprocess.run(
             git_argv(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]),
-            capture_output=True, text=True, cwd=REPO_ROOT, timeout=20, check=False,
+            capture_output=True, cwd=REPO_ROOT, timeout=20, check=False, **TEXT_UTF8,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"WARNING: cannot ask git for the primary checkout ({exc}) - "
@@ -578,12 +550,6 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
 
     NEVER discards stderr (R7): an unreadable diff returns None, which
     `gates.base_delta_is_inert` refuses, and says why on stderr.
-
-    Non-ASCII paths are handled in `sh()`, which injects
-    `core.quotePath=false` into every git invocation. It is deliberately NOT
-    set here: round 4 set it at this one call site, claimed the class was
-    closed, and left the sibling at `git show --name-only` -- which excuses
-    rather than refuses -- still blind.
     """
     rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",
                        base_sha, origin_main_sha])
@@ -1056,7 +1022,7 @@ def resolve_infra_ere(merged_sha: str | None = None) -> str | None:
     try:
         out = subprocess.run(
             ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
-            capture_output=True, text=True, cwd=REPO_ROOT, timeout=120,
+            capture_output=True, cwd=REPO_ROOT, timeout=120, **TEXT_UTF8,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1113,7 +1079,7 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
         try:
             out = subprocess.run(
                 git_argv(["git", "ls-tree", "-d", "--name-only", ref]),
-                capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
+                capture_output=True, cwd=REPO_ROOT, timeout=60, **TEXT_UTF8,
             )
         except (OSError, subprocess.SubprocessError):
             return None

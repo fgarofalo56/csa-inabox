@@ -34,96 +34,168 @@ import merge_gate
 
 import gates
 
+#: git global options that consume a following value, and the flag-only ones.
+_GIT_VALUE_OPTS = ("-c", "-C", "--git-dir", "--work-tree", "--namespace",
+                   "--exec-path", "--config-env")
+_GIT_FLAG_OPTS = ("--no-pager", "--bare", "--literal-pathspecs",
+                  "--no-replace-objects", "--paginate", "--no-optional-locks",
+                  "--icase-pathspecs")
+
 
 def _git_argv(args: list[str]) -> list[str]:
-    """`args` with git's leading global `-c key=value` options removed.
+    """`args` with git's leading global options removed, subcommand first.
 
-    `merge_gate.git_argv()` injects `-c core.quotePath=false` into every git
-    invocation -- via `sh()` for most, and directly at the two call sites that
-    need `timeout=` -- exactly where real git accepts global options: before
-    the subcommand. A stub that pinned `args[:2] == ["git", "show"]` silently
-    stopped matching the moment that injection landed, fell through to its
-    default success-with-empty-stdout, and the derivation then reported the
-    workflow "could not be read or parsed" -- a green stub producing a red
-    that had nothing to do with the code under test.
+    Stubs must not match git argv by POSITION: a global option shifts the
+    subcommand and the stub silently stops matching, falling through to a
+    default success that reads downstream as a parse failure.
 
-    So parse argv the way git does rather than pinning a position. Returns
-    `["show", ...]` for both `git show ...` and `git -c k=v show ...`, and
-    tolerates the other global options that take a value (`-C`, `--git-dir`,
-    `--work-tree`) and the flag-only ones (`--no-pager`, `--bare`,
-    `--literal-pathspecs`) -- review found the first version broke on all of
-    them, which would make a stub silently blind again.
+    Handles the value-taking options in both spellings (`-c k=v`, `--git-dir p`,
+    `--git-dir=p`) and the flag-only ones, in any order.
     """
     i = 1
-    while i + 1 < len(args) and args[i] in ("-c", "-C", "--git-dir", "--work-tree"):
-        i += 2
-    while i < len(args) and args[i] in ("--no-pager", "--bare", "--literal-pathspecs"):
-        i += 1
+    while i < len(args):
+        token = args[i]
+        if token in _GIT_VALUE_OPTS:
+            i += 2
+        elif token in _GIT_FLAG_OPTS or any(
+                token.startswith(f"{opt}=") for opt in _GIT_VALUE_OPTS):
+            i += 1
+        else:
+            break
     return args[i:]
 
 
+def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
+    """`_git_argv` is what keeps the stubs sighted, so a wrong one yields
+    FALSE GREENS rather than failures.
+
+    WHAT WOULD MAKE THIS FAIL: dropping a form from either option table, or
+    making the scan order-sensitive between value-taking and flag-only
+    options.
+    """
+    assert _git_argv(["git", "show", "HEAD:f"]) == ["show", "HEAD:f"]
+    assert _git_argv(["git", "-c", "core.quotePath=false", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "-C", "/repo", "ls-tree", "-d"]) == ["ls-tree", "-d"]
+    assert _git_argv(["git", "--git-dir", "/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--git-dir=/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--no-pager", "log"]) == ["log"]
+    # Interleaved, and in the order that broke the first version: a flag-only
+    # option BEFORE a value-taking one.
+    assert _git_argv(
+        ["git", "--no-pager", "-c", "a=b", "--bare", "-C", "/r", "show", "y"]
+    ) == ["show", "y"]
+    # A subcommand that merely looks like an option must NOT be consumed.
+    assert _git_argv(["git", "status"]) == ["status"]
+    # Degenerate input must not raise or loop.
+    assert _git_argv(["git"]) == []
+    assert _git_argv(["git", "-c"]) == []
+
+
+#: Exact number of `["git", ...]` argv literals across the modules below.
+#: PINNED, not a floor: a floor with slack lets someone hide literals and
+#: sneak an unrouted call through green, which is measured behaviour.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 11, "tick.py": 0, "gates.py": 0}
+
+
+def _git_call_census(module_path):
+    """(list literals, routed ids, `git` name-bindings, `git` tuples) for one module."""
+    tree = ast.parse(pathlib.Path(module_path).read_text(encoding="utf-8"))
+
+    def _starts_with_git(node):
+        return (node.elts and isinstance(node.elts[0], ast.Constant)
+                and node.elts[0].value == "git")
+
+    lists = [n for n in ast.walk(tree) if isinstance(n, ast.List) and _starts_with_git(n)]
+    tuples = [n for n in ast.walk(tree) if isinstance(n, ast.Tuple) and _starts_with_git(n)]
+    binds = [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Assign)
+             and isinstance(n.value, ast.Constant) and n.value.value == "git"]
+
+    routed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (
+            fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name in ("sh", "git_argv"):
+            # Walk the whole argument subtree, so `sh([...] + extra)` counts
+            # the inner list as routed rather than stray.
+            for arg in node.args:
+                for sub in ast.walk(arg):
+                    routed.add(id(sub))
+    return lists, routed, binds, tuples
+
+
 def test_every_git_invocation_routes_through_the_quoting_injection():
-    """THE GUARD THAT WAS MISSING FOR THREE ROUNDS.
+    """No `["git", ...]` literal reaches a runner without `sh()`/`git_argv()`.
 
-    `core.quotePath` defaults to true, so any git command emitting a PATH
-    returns a non-ASCII one C-quoted and octal-escaped, which no literal
-    comparison recognises -- and an unrecognised path makes a delta look
-    EMPTY, which excuses an absence. The fix has been claimed three times and
-    was wrong twice, in the same shape each time:
+    Also fails on the two ways the literal walk can be blinded: binding
+    `"git"` to a name, and using a tuple instead of a list. Counts are PINNED
+    per module, so hiding a literal is itself the failure.
 
-      round 4  set the flag at ONE call site and said the class was closed.
-               The sibling `git show --name-only` -- which EXCUSES rather
-               than refuses -- was still blind.
-      round 5  moved it into `sh()` and said "EVERY git invocation gets it
-               injected HERE". Two did not: `git rev-parse --git-common-dir`
-               and `git ls-tree -d --name-only`, both raw `subprocess.run`
-               because they need `timeout=`, which `sh()` does not take.
-               `ls-tree` is quote-sensitive -- measured in a throwaway repo,
-               `"prob\\303\\251_dir"` under the default versus the real name
-               with the flag, ASCII sibling present in both.
+    WHAT WOULD MAKE THIS FAIL: a raw `subprocess.run(["git", ...])`; a
+    `_GIT = "git"` binding; a `("git", ...)` tuple; or any change to the
+    number of git argv literals in these modules.
+    """
+    here = pathlib.Path(merge_gate.__file__).parent
+    for filename, expected in _GIT_ARGV_LITERALS.items():
+        lists, routed, binds, tuples = _git_call_census(here / filename)
 
-    Prose could not hold this. Both times the claim was universal and the
-    check was "the author looked". So read the module's OWN AST and assert
-    the property structurally.
+        assert len(lists) == expected, (
+            f"{filename}: {len(lists)} git argv literal(s), pinned at {expected}. "
+            "FEWER means either a call was removed or the literal was hidden "
+            "behind a name/concatenation, which blinds this walk; MORE means a "
+            "new git call to account for. Re-measure, do not edit the number "
+            "to match."
+        )
+        assert not binds, (
+            f"{filename}: `\"git\"` is bound to a name at line(s) {binds}. That "
+            "defeats the literal walk below, so an unrouted call could pass. "
+            "Inline the literal."
+        )
+        assert not tuples, (
+            f"{filename}: git argv given as a TUPLE at line(s) "
+            f"{[n.lineno for n in tuples]}. This walk only inspects lists; use "
+            "a list so the check can see it."
+        )
 
-    WHAT WOULD MAKE THIS FAIL: adding `subprocess.run(["git", ...])` to
-    `merge_gate.py` without routing it through `sh()` or `git_argv()` --
-    exactly what rounds 4 and 5 each shipped.
+        stray = sorted(n.lineno for n in lists if id(n) not in routed)
+        assert not stray, (
+            f"{filename}: git invocation(s) bypassing the quoting injection at "
+            f"line(s) {stray}. Pass the list to `sh(...)` or wrap it in "
+            "`git_argv(...)`. A raw `subprocess.run(['git', ...])` reads a "
+            "non-ASCII path in its ESCAPED spelling, which matches nothing and "
+            "EXCUSES an absence. With `timeout=`, use "
+            "`subprocess.run(git_argv([...]), **TEXT_UTF8, timeout=...)`."
+        )
 
-    The floor is load-bearing, not decoration: a walk that suddenly sees
-    fewer git literals than the module has is blind, and a clean result from
-    a blind walk is worth nothing.
+
+def test_every_git_runner_decodes_as_utf8():
+    """The flag is half the fix; a locale decode re-breaks it.
+
+    Every `subprocess.run` in `merge_gate.py` must pass `encoding=` or the
+    `TEXT_UTF8` mapping. Measured: with only `text=True`, `git ls-tree` returns
+    `probÃ©_dir` on a cp1252 box where the real name is `probé_dir`.
+
+    WHAT WOULD MAKE THIS FAIL: a `subprocess.run(..., text=True)` with no
+    codec, which is exactly what two call sites shipped with for a round.
     """
     tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
-
-    git_lists = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.List)
-        and node.elts
-        and isinstance(node.elts[0], ast.Constant)
-        and node.elts[0].value == "git"
-    ]
-    assert len(git_lists) >= 8, (
-        f"only {len(git_lists)} git argv literal(s) found in merge_gate.py - "
-        "the AST walk is not seeing the module, so a clean result below would "
-        "be a blind scan rather than a property"
-    )
-
-    routed: set[int] = set()
+    bare = []
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id in ("sh", "git_argv")):
-            for arg in node.args:
-                routed.add(id(arg))
-
-    stray = sorted(n.lineno for n in git_lists if id(n) not in routed)
-    assert not stray, (
-        f"git invocation(s) bypassing the quoting injection at line(s) {stray}. "
-        "Every `['git', ...]` must be passed to `sh(...)` or wrapped in "
-        "`git_argv(...)`; a raw `subprocess.run(['git', ...])` reads a "
-        "non-ASCII path in its ESCAPED spelling, which matches nothing and "
-        "EXCUSES an absence. If the call needs `timeout=`, wrap the list: "
-        "`subprocess.run(git_argv(['git', ...]), timeout=...)`."
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "run"):
+            continue
+        kwargs = {k.arg for k in node.keywords if k.arg}
+        starred = any(k.arg is None for k in node.keywords)  # **TEXT_UTF8
+        if "encoding" not in kwargs and not starred:
+            bare.append(node.lineno)
+    assert not bare, (
+        f"subprocess.run without an explicit codec at line(s) {bare}. Pass "
+        "`**TEXT_UTF8` (or `encoding=\"utf-8\"`): git emits raw UTF-8 bytes and "
+        "a locale decode turns a non-ASCII path into mojibake, which matches "
+        "nothing and excuses an absence."
     )
 
 POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
@@ -667,9 +739,6 @@ def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tm
     inside `tools/**`, which four required contexts are produced from.
 
     Round 4 set the flag at ONE call site and claimed the class was closed.
-    It is injected in `sh()` now, and this is the fixture that makes arm BD18
-    a witness rather than a claim: before this test existed, BD18 SURVIVED the
-    whole suite because every path in every fixture was ASCII.
 
     THE COUNTERFACTUAL IS ASSERTED FIRST, for the same reason the rename test
     asserts its own: the SAME two commits, diffed WITHOUT the injection, must
@@ -677,8 +746,8 @@ def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tm
     environment, the flag is a no-op here, and everything below would pass
     with it removed.
 
-    WHAT WOULD MAKE THIS FAIL: `sh()` no longer injecting
-    `core.quotePath=false` (BD18), which returns the escaped spelling and
+    WHAT WOULD MAKE THIS FAIL: `git_argv` no longer injecting
+    `core.quotePath=false` (arm BD18), which returns the escaped spelling and
     turns the refusal below into INERT.
     """
     name = "tools/drain/probé.py"

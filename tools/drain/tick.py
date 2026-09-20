@@ -64,9 +64,13 @@ def sh(args: list[str]) -> tuple[int, str, str]:
     Never discards stderr. A discarded stderr once turned "I could not reach the
     registry" into "the tag does not exist" and sent two investigations down the
     wrong path (deploy-integrity R7).
+
+    Git argv is routed through `gates.git_argv`. No git call exists here today;
+    the routing is so that adding one does not reintroduce the quoting defect.
     """
     run = subprocess.run(
-        args, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=REPO_ROOT
+        gates.git_argv(args), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", cwd=REPO_ROOT,
     )
     return run.returncode, run.stdout, run.stderr
 

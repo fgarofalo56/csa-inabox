@@ -3186,7 +3186,7 @@ ARMS: list[tuple[str, str, str, str]] = [
          "EXCUSES. Round-5 blocker - round 4 fixed one call site and left the "
          "excusing sibling blind; round 6 moved this into `git_argv` so the "
          "two `timeout=` callers are covered too"),
-        "merge_gate.py",
+        "gates.py",
         ('    if args and args[0] == "git":\n'
          '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
          "    return args"),
