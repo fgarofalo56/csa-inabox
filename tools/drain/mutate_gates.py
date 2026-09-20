@@ -1040,8 +1040,17 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G1 the StatusContext vocabulary is dropped from the INCOMPLETE test",
         "gates.py",
-        "        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:",
-        "        elif not verdict or status in INCOMPLETE_STATUSES:",
+        # ANCHORED TO THE REQUIRED PATH. `classify_advisory_checks` (#4543)
+        # reuses the same three-way split, so this line now appears TWICE in
+        # `gates.py` -- and `replace(old, new, 1)` takes the first, which would
+        # have silently pointed a required-path arm at the advisory one. The
+        # preceding RED branch is what distinguishes them; A5 is the advisory
+        # twin of this arm.
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:"),
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or status in INCOMPLETE_STATUSES:"),
     ),
     (
         "G2 a blocking near-miss stops being pinned to head (stale text blocks forever)",
@@ -1090,6 +1099,170 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "            elif mentions_token:",
         "            elif False:",
+    ),
+    # -- #4543: the ADVISORY population. Every arm here NARROWS the population
+    # back to something smaller than "every check the rollup published", which
+    # is the defect being fixed rather than an invented one: gates 4/4b/5 pass
+    # `required` and ~25 contexts per PR were invisible to the merge decision.
+    # A1 is the exact original; the rest are the neighbouring ways to get the
+    # same blindness, plus the two fail-open edges.
+    (
+        "A1 the advisory arm filters back DOWN to the required contexts (#4543 verbatim)",
+        "gates.py",
+        "        if name in required_names:\n            continue",
+        "        if name not in required_names:\n            continue",
+    ),
+    (
+        "A2 only the first check-run is scanned (the first-N narrowing)",
+        "gates.py",
+        # Anchored at the GROUPING, which is the single point the whole
+        # population passes through -- both "which run is newest" and "was an
+        # older run of this name red" read it, so narrowing here narrows both.
+        "    groups = _group_by_name(checks)",
+        "    groups = _group_by_name(checks[:1])",
+    ),
+    (
+        "A3 a duplicated context is keyed LAST-IN-LIST instead of by max start time",
+        "gates.py",
+        ("        newest = max(stamps)\n"
+         "        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) "
+         "if s == newest])"),
+        "        out[name] = runs[-1]",
+    ),
+    (
+        ("A4 an unreadable start time stops falling back to worst-wins, so an "
+         "undated red is discarded as superseded"),
+        "gates.py",
+        # BEHAVIOURAL, not a crash. Deleting the fallback outright would make
+        # `max(stamps)` compare None to None and die with a TypeError -- and a
+        # mutant killed by a TypeError proves only that the tests run Python
+        # (the note on G4 is about the same trap). This substitutes the OTHER
+        # plausible rule instead, so the arm is a wrong ANSWER rather than an
+        # exception.
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = _worst(runs)",
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = runs[-1]",
+    ),
+    (
+        "A5 an IN-PROGRESS advisory check reads as RED again (the cry-wolf defect)",
+        "gates.py",
+        # Disambiguated by the line BELOW it: `classify_checks` opens with the
+        # same `if verdict in RED_CONCLUSIONS:` test, and `replace(.., 1)`
+        # takes the first -- the G1 collision one function over.
+        ("        if verdict in RED_CONCLUSIONS:\n"
+         '            red.append(f"{name} ({verdict})")'),
+        ("        if verdict in RED_CONCLUSIONS or _is_incomplete(check):\n"
+         '            red.append(f"{name} ({verdict})")'),
+    ),
+    (
+        "A6 the empty-rollup guard falls OPEN, so a clean answer over zero checks is a pass",
+        "gates.py",
+        "    if not checks:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        "A7 the advisory arm stops blocking in the composed caller (report-only)",
+        "merge_gate.py",
+        "    ok, why = gates.advisory_verdict(",
+        "    ok = True\n    _, why = gates.advisory_verdict(",
+    ),
+    (
+        ("A8 the policy flag is read with a permissive default, so deleting the "
+         "authority's key leaves the gate silently on"),
+        "merge_gate.py",
+        'policy["merge_gate"]["advisory_red_is_a_no_go"]',
+        'policy["merge_gate"].get("advisory_red_is_a_no_go", True)',
+    ),
+    (
+        ("A9 a re-run in flight over a completed RED collapses back to ADV-WAIT, so "
+         "the gate's OWN remedy clears the gate's own block before the re-run answers"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        "            if False:",
+    ),
+    (
+        ("A9b the SAME site NARROWED rather than disabled -- A9 turns it off entirely, "
+         "which any FAILURE-only test kills, so a narrowing that KEEPS FAILURE was "
+         "invisible to this registry. An independent reviewer showed "
+         "`(\"FAILURE\", \"ERROR\")` survived the whole suite at rc=0; the five other "
+         "members of RED_CONCLUSIONS silently fell through to ADV-WAIT and the gate "
+         "cleared its own block. A total-disable arm does not witness a partial one"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        '            if last_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A9c a run that MEASURED NOTHING again discharges an earlier red -- the THIRD "
+         "form of the self-clearing block. Once a re-run CONCLUDES SKIPPED it stops "
+         "being incomplete, so newest-wins drops it into `clean` and the red vanishes. "
+         "Reachable by `rerun-ci`, which is in `permitted_unattended`"),
+        "gates.py",
+        "        elif verdict in MEASURED_NOTHING:",
+        "        elif False:",
+    ),
+    (
+        ("A9d the ADV-RERUN branch counts a SKIPPED as an answer again -- the FOURTH "
+         "form, and round 4 CREATED it by fixing only the sibling branch. "
+         "`FAILURE, SKIPPED` blocks but `FAILURE, SKIPPED, IN_PROGRESS` clears, so "
+         "dispatching the gate's own remedy discharges the block the moment it STARTS. "
+         "The mutant is written INLINE rather than calling the old helper, because "
+         "round 6 deleted that helper -- a mutant naming a deleted function raises "
+         "NameError, which scores NOT-EVALUATED, not KILLED, and would have quietly "
+         "retired this arm"),
+        "gates.py",
+        "            last = _newest_informative_concluded(groups[name])",
+        ('            _concl = [r for r in groups[name] if not _is_incomplete(r)]\n'
+         '            last = _newest_from_groups({"": _concl})[""] if _concl else None'),
+    ),
+    (
+        ("A9e MEASURED_NOTHING narrowed to SKIPPED alone, so a NEUTRAL re-run "
+         "discharges a red. Survived the whole suite before a LITERAL tuple pinned "
+         "the set -- a loop derived from the frozenset cannot witness the frozenset"),
+        "gates.py",
+        'MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})',
+        'MEASURED_NOTHING = frozenset({"SKIPPED"})',
+    ),
+    (
+        ("A9f the supersession site's RED_CONCLUSIONS read narrowed to two members -- "
+         "the FOURTH read of that frozenset, and the third time this PR's own subject "
+         "recurred one line below its own fix. CANCELLED is the member that actually "
+         "fires here in production"),
+        "gates.py",
+        "            if prior_verdict in RED_CONCLUSIONS:",
+        '            if prior_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A10 the worst-wins fallback returns the FIRST run instead of the worst -- "
+         "found by an independent reviewer, who showed it SURVIVED all 521 tests "
+         "because both fixtures claiming to pin worst-wins put the red first"),
+        "gates.py",
+        "    chosen = runs[0]\n    for run in runs[1:]:",
+        "    return runs[0]\n    for run in runs[1:]:",
+    ),
+    (
+        ("A11 the informative filter keys on ANY run of the name having concluded RED, "
+         "so a check that went red, WAS FIXED and is being re-run again holds the "
+         "merge -- the mirror image of the hole the bucket was added to close, and it "
+         "SHIPPED in the fix for that hole. RE-ANCHORED in round 6: this arm used to "
+         "sit inside `_newest_concluded`, which round 5 orphaned when both callers "
+         "moved to `_newest_informative_concluded`. An arm over a function the gate "
+         "no longer calls prints KILLED against dead code -- a blind arm inside the "
+         "one instrument this package offers as evidence its suite is not blind. "
+         "Found by an independent reviewer who applied it and got byte-identical gate "
+         "output across 26 constructed rollup shapes"),
+        "gates.py",
+        "        if not _is_incomplete(run)\n        and _outcome(run)[0] not in MEASURED_NOTHING",
+        "        if _outcome(run)[0] in RED_CONCLUSIONS",
+    ),
+    (
+        ("A12 the rerun reason picks by LIST POSITION again, so the same three runs "
+         "at one head name CANCELLED or FAILURE depending on the order the API "
+         "returned them - a gate claiming a conclusion it never read (R7). "
+         "RE-ANCHORED in round 6 onto `_newest_informative_concluded`'s return, for "
+         "the same reason as A11: this sat inside `_newest_concluded`, which round 5 "
+         "orphaned and round 6 deleted, so it would have scored against dead code"),
+        "gates.py",
+        '    return _newest_from_groups({"": informative})[""]',
+        "    return informative[0]",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",
@@ -3004,6 +3177,13 @@ EXPECTED_SANDBOX_SKIPS = (
     "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
     "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
     "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
+    # #4543. Reads `.github/workflows/build-fiab-images-acr-tasks.yml` to pin
+    # the invariant gate 4c's scope sentence rests on (`push:` restricted to
+    # `branches: [main]`, so the lane never attaches to a PR head). The sandbox
+    # copies only `tools/drain`, so that file is absent and the test skips --
+    # DECLARED here rather than left to make the skip audit fail, and it kills
+    # no arm, which is exactly what this tuple exists to say out loud.
+    "test_gates.py::test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds",
 )
 
 
