@@ -916,6 +916,16 @@ jobs:
       - name: 'codeql-action-pins (init/autobuild/analyze must run one release)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-codeql-action-pins.mjs
+      # Dependabot has two independent mechanisms and they are easy to conflate:
+      # security ALERTS come from the dependency graph and fire with no
+      # dependabot.yml entry at all, while version-update PRs fire ONLY for a
+      # listed ecosystem/directory. apps/loom-directlake had the first and not
+      # the second, so its open thrift advisory (#3982, alert #94) could be
+      # reported but never remedied — and the remedy is an upstream delta-rs
+      # release, which is exactly what an update lane exists to notice.
+      - name: 'cargo-dependabot-coverage (every Rust crate has a version-update lane)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-cargo-dependabot-coverage.mjs
       # A module that reaches INTO the lake account (role assignment, or an
       # `existing` reference inside loomDlzRg) must gate on loomStorageGrantable,
       # not on !empty(loomStorageAccount). #3196 split binding from granting but
