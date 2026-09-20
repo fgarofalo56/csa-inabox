@@ -163,6 +163,34 @@ describe('POST — the async contract', () => {
     expect(getReindexJobStatus().state).toBe('succeeded');
   });
 
+  it('hands the job id it just minted DOWN into the rebuild (#4498)', async () => {
+    /**
+     * The linchpin of #4497, and it was unmeasured. Reverting `route.ts` to
+     * `startReindexJob(() => reindex())` left all 53 tests GREEN: the 202 still
+     * carries a jobId, the durable record is still written — carrying
+     * `jobId: null`. `reindex-loom-docs.sh` then never correlates the record
+     * with the run it just started, the `rebuild_failed` fast path is inert, and
+     * the roll is back to the silent 900s timeout this PR exists to remove.
+     *
+     * The two tests that LOOK like they cover it do not:
+     *   - `loom-docs-lastrun.test.ts` builds the closure itself, proving the
+     *     closure works — never that the ROUTE passes one.
+     *   - the rest of this file mocks `reindex` wholesale and never inspects
+     *     its arguments.
+     *
+     * So assert the argument, at both ends: the id must be the one the caller
+     * was handed, and a retry must carry the NEW id, not a captured stale one.
+     */
+    const first = await (await POST(req())).json();
+    await __awaitReindexJob();
+    expect(reindex).toHaveBeenCalledWith({ jobId: first.jobId });
+
+    const second = await (await POST(req())).json();
+    await __awaitReindexJob();
+    expect(second.jobId).not.toBe(first.jobId);
+    expect(reindex).toHaveBeenLastCalledWith({ jobId: second.jobId });
+  });
+
   it('is idempotent while a run is in flight — no duplicate concurrent rebuild', async () => {
     let release: (v: typeof OK_RESULT) => void = () => {};
     (reindex as any).mockReturnValue(new Promise((r) => { release = r; }));

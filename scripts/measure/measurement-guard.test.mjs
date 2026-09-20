@@ -19,7 +19,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate } from '../../.claude/hooks/measurement-guard.mjs';
+import { evaluate, denyBody } from '../../.claude/hooks/measurement-guard.mjs';
 
 const has = (cmd, id) => evaluate(cmd).some((f) => f.id === id);
 
@@ -149,6 +149,694 @@ test('NEGATIVE: discarding only STDOUT is allowed — stderr still readable', ()
 
 test('NEGATIVE: a non-measurement discarding stderr is still allowed', () => {
   assert.equal(has(`ps -ef 2>/dev/null | grep node`, 'discarded-stderr'), false);
+});
+
+// ------------------------------------------------ `python -` interactive REPL
+// `python - <<'EOF'` that misses stdin becomes an interactive REPL and loops on
+// a traceback forever. It has recurred repeatedly in one session, including by
+// agents quoting the prohibition at the time — which is why this is a hook and
+// not a note. No count is asserted here: the hook header explains why, and the
+// itemised record is the project memory for this hazard.
+// The POSITIVE cases below are the literal shapes that were run.
+test('POSITIVE: the canonical heredoc is blocked', () => {
+  assert.ok(has(`python - <<'EOF'\nprint(1)\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: an EMPTY body is blocked — "harmless" is not a defence', () => {
+  // Several occurrences were deliberate no-ops. They still hung for the full 120s
+  // and still left a REPL to be killed. The construct is the hazard, not what
+  // it would have run.
+  assert.ok(has(`python - <<'NEVER'\nNEVER`, 'python-dash-repl'));
+});
+
+test('POSITIVE: redirecting STDOUT does not make it safe — the loop is on stderr', () => {
+  assert.ok(has(`python - > /dev/null 2>&1 <<'X'\nX`, 'python-dash-repl'));
+});
+
+test('POSITIVE: the QUIET shape (2>/dev/null) is blocked — no file ever grows', () => {
+  // Measured: 8.3 GB of write IO and ~1h CPU with zero file-size movement. This
+  // variant is invisible to every size check, so it survives longest.
+  assert.ok(has(`python - 2>/dev/null <<'X'\nX`, 'python-dash-repl'));
+});
+
+test('POSITIVE: args before the heredoc are blocked', () => {
+  assert.ok(has(`python - "$@" <<'PYEOF'\nPYEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: python3 and a bare trailing dash are blocked', () => {
+  assert.ok(has(`python3 - <<EOF\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -`, 'python-dash-repl'), 'end-of-string must match too');
+});
+
+test('POSITIVE: buried on a later line of a multi-line script', () => {
+  assert.ok(has(`set -e\ncd /tmp\npython - <<'Z'\nZ`, 'python-dash-repl'));
+});
+
+test('NEGATIVE: `python -c` is the sanctioned escape and must not be blocked', () => {
+  // If this rule denied -c it would be routed around within a day, and a guard
+  // people delete protects nothing.
+  assert.equal(has(`python -c "import sys; print(sys.version)"`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: -m, -u, --version and a plain script path are allowed', () => {
+  assert.equal(has(`python -m pytest tests/ -q`, 'python-dash-repl'), false);
+  assert.equal(has(`python -u temp/s.py`, 'python-dash-repl'), false);
+  assert.equal(has(`python --version`, 'python-dash-repl'), false);
+  assert.equal(has(`python temp/script.py`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: the trap INSIDE quotes is not a command (quote-masking)', () => {
+  // Talking about the pattern must stay possible — in a -c program, in an echo,
+  // and in a comment. A guard that cannot be discussed cannot be documented.
+  assert.equal(has(`python -c "print('python - <<EOF')"`, 'python-dash-repl'), false);
+  assert.equal(has(`echo "never run python - <<EOF"`, 'python-dash-repl'), false);
+  assert.equal(has(`# python - <<'EOF' is forbidden`, 'python-dash-repl'), false);
+});
+
+// ---- false positives found by review; each one denied REAL work ------------
+// The first version matched a bare `-` anywhere on the line. These six are the
+// shapes that cost, and the first is the one that matters most: a heredoc is
+// the only way an agent with no Write tool creates a file, and the rule's own
+// FIX text pointed at that tool. A guard that blocks its own documented
+// workaround gets deleted, and then it protects nothing.
+test('NEGATIVE: writing a FILE whose body mentions the pattern is allowed', () => {
+  // Measured: a reviewer was denied twice writing their own verdict file.
+  const cmd = `cat > temp/notes.md <<'MD'\nNever run python - <<'EOF'\nit becomes a REPL\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false, 'heredoc BODIES must be exempt');
+});
+
+test('NEGATIVE: a heredoc body line starting AT COLUMN 1 is still exempt', () => {
+  // THIS is the arm that pins stripHeredocBodies, and the one above is not.
+  // Caught by mutation M9: deleting the heredoc strip failed NOTHING, because
+  // the body line there reads "Never run python - ..." and command-position
+  // anchoring already rejects it. The test passed for a reason it did not
+  // claim — the defect this repo keeps paying for.
+  //
+  // Here the body line IS `python - <<'EOF'` at column 1, which anchoring
+  // alone cannot distinguish from a real command. Remove stripHeredocBodies
+  // and this goes RED; that is the value that makes it fail.
+  const cmd = `cat > temp/doc.md <<'MD'\npython - <<'EOF'\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a documented sample at column 1 inside a heredoc must not be read as a command');
+});
+
+test('NEGATIVE: a pipe-fed `python -` cannot become a REPL', () => {
+  // stdin is a pipe; it reaches EOF. The hazard requires stdin on a terminal.
+  assert.equal(has(`cat s.py | python -`, 'python-dash-repl'), false);
+  assert.equal(has(`gh api x --jq '.a' | python -`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: a herestring supplies stdin and has no delimiter to mismatch', () => {
+  assert.equal(has(`python - <<<'print(1)'`, 'python-dash-repl'), false);
+});
+
+test('BLINDING: a SHORT herestring must not silence the rule for the rest of the command', () => {
+  // The blocker from round 2's review, and the sharpest bug in this file's
+  // history. `stripHeredocBodies` used `<<(?!<)` to exclude herestrings. A
+  // negative LOOKAHEAD only guards the leftmost attempt, so against `<<<x` the
+  // engine retried at offset 1, matched `<<` on chars 1-2, and read a heredoc
+  // with delimiter `x`. Everything after was blanked as body and the guard
+  // stopped watching -- installed, but blind.
+  //
+  // WHAT MAKES THIS FAIL: revert the `(?<!<)` lookbehind. Then this goes RED
+  // while the `print(1)` case above stays GREEN, because `(` breaks the `\2`
+  // backreference and accidentally avoids the bug. That is exactly why the
+  // one-character delimiter is the arm that matters.
+  const cmd = `python - <<<'x'\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'a herestring must not blank the lines after it');
+});
+
+test('BLINDING: a herestring whose delimiter REAPPEARS later still must not blind', () => {
+  // The terminator requirement added later subsumes the simple case above, so
+  // that arm alone stopped killing the lookbehind mutant — a surviving arm
+  // meaning the TEST SET is short, not that the code is right.
+  //
+  // Here `x` genuinely reappears at the end. Without the `(?<!<)` lookbehind
+  // the herestring is read as an opener with delimiter `x`, the terminator
+  // check is SATISFIED, and every line between is blanked — hiding the hazard
+  // on line 2. WHAT MAKES THIS FAIL: revert the lookbehind.
+  const cmd = `python - <<<'x'\npython - <<'EOF'\nEOF\nx`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'lookbehind and terminator check are both load-bearing, for different inputs');
+});
+
+test('NEGATIVE: a FILE redirect supplies stdin too, and reaches EOF', () => {
+  // Same reasoning as the herestring: the hazard needs stdin open on a
+  // terminal. `<` is distinguished from `<<` and `<<<` by lookarounds.
+  assert.equal(has(`python - < script.py`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: a redirect on a NON-stdin fd does not exempt a real heredoc', () => {
+  // The lone-`<` exemption was too wide: `2<err.txt` redirects fd 2 and leaves
+  // fd 0 on the terminal, so the heredoc hazard is fully present.
+  assert.ok(has(`python - 2<err.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python - 3<in.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: a NON-stdin fd redirect with NO heredoc is still a hazard', () => {
+  // THIS is what pins the `[0-9]` in the `(?<![0-9<])` lookbehind, and the two
+  // assertions above no longer do. Once heredoc-precedence landed, those were
+  // caught by `hasHeredoc` whatever the fd logic did — mutation M12 survived,
+  // which is how the lost witness surfaced. Third time in this file that a
+  // broader check silently retired an older arm's kill power.
+  //
+  // Here there is no heredoc at all: fd 2 is redirected, fd 0 is still the
+  // terminal, and `python -` becomes a REPL.
+  // WHAT MAKES THIS FAIL: drop the `[0-9]` from that lookbehind.
+  assert.ok(has(`python - 2>err.txt 2<in.txt`, 'python-dash-repl'));
+  assert.ok(has(`python - 3<in.txt`, 'python-dash-repl'));
+});
+
+// ---- BLINDING, second class: an opener that is not a redirect --------------
+// stripHeredocBodies scans the RAW line, before quote masking and with no
+// comment handling, so any `<<IDENT` set delim and blanked the rest of the
+// command. Requiring the delimiter to REAPPEAR downstream fixes it, and turns
+// every future opener miss into a false positive rather than a silence.
+//
+// These four are not hypothetical: two of them are verbatim shapes from this
+// very test file, and the population this rule serves is "agents quoting the
+// prohibition" — exactly the traffic that writes such a line.
+//
+// EVERY ONE USES `EOF` AS THE HAZARD DELIMITER, DELIBERATELY. An earlier
+// version used `Z` and all four passed for that reason alone: the terminator
+// check asked whether the phantom delimiter reappears ANYWHERE downstream, not
+// BEFORE the hazard, so a rare delimiter avoided the collision. Measured —
+// switching the hazard to `EOF` flipped three of the four to ALLOWED. `EOF` is
+// 91 of 171 heredoc-opener tokens in this repo (53%, five times the next), so
+// the rare choice was the unrealistic one.
+test('BLINDING: a `<<IDENT` in a COMMENT must not silence the rest', () => {
+  const cmd = `# see the <<EOF trap\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'), 'a comment must not blank the command');
+});
+
+test('BLINDING: a `<<IDENT` inside a QUOTED STRING must not silence the rest', () => {
+  const cmd = `echo "never write <<EOF here"\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: a `<<IDENT` in a grep PATTERN must not silence the rest', () => {
+  const cmd = `grep -n '<<EOF' notes.md\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: an UNTERMINATED opener must not swallow the command', () => {
+  // The general form: no matching terminator downstream means it was never a
+  // heredoc. Failing this way makes a miss LOUD instead of silent. This one
+  // held even under the `Z` delimiter, because `NOPE` genuinely never recurs.
+  const cmd = `echo start <<NOPE\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('POSITIVE: a heredoc wins fd 0 even when a `< file` precedes it', () => {
+  // The lone-`<` exemption ignored redirect ORDER. bash gives fd 0 to the LAST
+  // redirect, and the heredoc is the hazard. Same defect M12 addressed for the
+  // fd digit, reached through ordering instead.
+  // WHAT MAKES THIS FAIL: drop the `hasHeredoc` precedence check.
+  assert.ok(has(`python - < in.txt <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: a REAL terminated heredoc still exempts its body', () => {
+  // Pairs with the four above — without this, requiring a terminator could be
+  // satisfied by disabling the exemption entirely.
+  const cmd = `cat > temp/doc.md <<'MD'\npython - <<'EOF'\nMD\necho done`;
+  assert.equal(has(cmd, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: a `-` belonging to the SCRIPT, not to python, is allowed', () => {
+  // `-` here means "read input from stdin" to fmt.py; python is not the reader.
+  assert.equal(has(`python tools/fmt.py -`, 'python-dash-repl'), false);
+});
+
+test('NEGATIVE: the pattern after a trailing `#` comment is allowed', () => {
+  assert.equal(has(`ls temp/ # python - <<EOF is the trap`, 'python-dash-repl'), false);
+});
+
+// ---- false NEGATIVES closed by anchoring at command position ---------------
+test('POSITIVE: versioned and .exe interpreters no longer slip through', () => {
+  // Substring matching missed both. Position matching catches them for free.
+  assert.ok(has(`python3.11 - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python.exe - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: env assignments and a path prefix do not hide it', () => {
+  assert.ok(has(`PYTHONPATH=lib python - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`/usr/bin/python - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`env python - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: `||`, `&&`, `;` and `&` do NOT supply stdin, so they still fire', () => {
+  // Only a BARE `|` is exculpatory. An earlier draft excluded all of these.
+  assert.ok(has(`test -f x || python - <<'E'\nE`, 'python-dash-repl'));
+  assert.ok(has(`cd /tmp && python - <<'E'\nE`, 'python-dash-repl'));
+  assert.ok(has(`echo hi ; python - <<'E'\nE`, 'python-dash-repl'));
+});
+
+test('POSITIVE: the no-space heredoc `python -<<EOF` fires (M7 witness)', () => {
+  // This branch of the lookahead had NO test, so deleting `[<>&|]` from it
+  // survived the whole suite. Named here as the arm that kills that mutant.
+  assert.ok(has(`python -<<EOF\nEOF`, 'python-dash-repl'));
+});
+
+test('POSITIVE: an OPTION RUN in front of the dash does not hide it', () => {
+  // The dash need not be the first argument. All of these were ALLOWED while
+  // carrying the identical hazard — the options in front concealed it.
+  // WHAT MAKES THIS FAIL: require the `-` to follow the interpreter directly.
+  assert.ok(has(`python -u - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -B - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -X dev - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`py -3 - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: -c and -m still do NOT fire, even with options in front', () => {
+  // The option run must not swallow `-c`/`-m`: those read from their argument,
+  // never from stdin, so they cannot become a REPL. Without this control the
+  // widening above would deny the sanctioned escape route.
+  assert.equal(has(`python -u -c "print(1)"`, 'python-dash-repl'), false);
+  assert.equal(has(`python -B -m pytest -q`, 'python-dash-repl'), false);
+  assert.equal(has(`python -u script.py`, 'python-dash-repl'), false);
+});
+
+test('the -c/-m EXCLUSION has a witness — a BARE trailing dash', () => {
+  // SECOND attempt at this witness. The first used `python -c "print(1)" -`,
+  // which stopped discriminating the moment the arg-consuming set was narrowed:
+  // `"print(1)"` is no longer consumed, so the option run ends before the dash
+  // and neither version matches. A test can lose its witness to a change in a
+  // DIFFERENT part of the same regex.
+  //
+  // The discriminating shape is a BARE dash directly after `-c`/`-m`. Without
+  // the lookahead, `-c` is skipped as an ordinary option and the dash reads as
+  // the interpreter's — it is not. `-c`'s argument here IS `-`, a one-character
+  // program; stdin is never read.
+  // WHAT MAKES THIS FAIL: remove the `(?!-[cm])` lookahead entirely.
+  assert.equal(has(`python -c -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -m -`, 'python-dash-repl'), false);
+});
+
+test('the ATTACHED -cCODE / -mMOD spelling is excluded too — a live false DENIAL', () => {
+  // THIRD attempt, and the one the previous two could not have made. The
+  // lookahead was `(?!-[cm](?:\s|$))`, whose trailing `(?:\s|$)` confined it to
+  // the SPACE-SEPARATED spelling. CPython also accepts the attached form, so
+  // `-cprint(2)` fell through the option-skip loop and the following bare dash
+  // fired.
+  //
+  // MEASURED ON THE INTERPRETER, not reasoned about (python 3.13.15):
+  //     python "-cprint(2)" - < /dev/null   ->  prints 2, rc=0, NO REPL
+  // So the hook DENIED a command carrying zero hazard. In a PreToolUse hook a
+  // false denial stops work outright — it is the worse direction here, not the
+  // safer one.
+  //
+  // WHAT MAKES THIS FAIL: restoring `(?:\s|$)` after `-[cm]` in the lookahead.
+  // Review measured that mutation SURVIVING the full suite at 0/94 while
+  // differing from head on exactly these inputs — the fragment had no witness
+  // in EITHER direction, under a test named "the -c/-m EXCLUSION has a
+  // witness". This is that witness.
+  assert.equal(has(`python -cprint(2) -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -mjson.tool -`, 'python-dash-repl'), false);
+  // PAIRED POSITIVE: the exclusion must not have swallowed the real hazard.
+  // A bare dash with no -c/-m still fires, so "false" above is a decision and
+  // not a dead rule.
+  assert.equal(has(`python -`, 'python-dash-repl'), true);
+  assert.equal(has(`python -u -`, 'python-dash-repl'), true);
+});
+
+test('env MAY CARRY A PATH — /usr/bin/env python - was a fail-OPEN', () => {
+  // The `env` alternative required the bare word at that position while the
+  // path-prefix group sat AFTER it, so `/usr/bin/env python -` matched nothing
+  // and was ALLOWED. The adjacent comment claimed `/usr/bin/` was accepted —
+  // true of `/usr/bin/python`, not of `/usr/bin/env python`. A guard's comment
+  // naming a scope wider than the guard's is the recurring shape here.
+  //
+  // WHAT MAKES THIS FAIL: removing `(?:\S*[\/\\])?` from before `env`.
+  assert.equal(has(`/usr/bin/env python -`, 'python-dash-repl'), true);
+  assert.equal(has(`/usr/bin/env FOO=1 python -`, 'python-dash-repl'), true);
+  // Still works without a path, and still respects the -c exclusion through it.
+  assert.equal(has(`env python -`, 'python-dash-repl'), true);
+  assert.equal(has(`/usr/bin/env python -c -`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: --check-hash-based-pycs consumes a word and the dash still fires', () => {
+  // The arg-consuming set was enumerated from memory as "-W and -X only",
+  // which lost a real detection: this option takes a separate word AND the
+  // following dash still makes python read its program from stdin.
+  // WHAT MAKES THIS FAIL: drop `--check-hash-based-pycs` from that set.
+  assert.ok(has(`python --check-hash-based-pycs always - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('the `<<-` TERMINATOR-LOOKAHEAD tab-strip has its own witness', () => {
+  // There are TWO tab-strip sites — the body scan and the terminator lookahead
+  // that decides whether an opener is honoured at all. Round 10's test pinned
+  // only the body one; dropping the lookahead strip survived 84/0.
+  //
+  // Here the ONLY terminator is tab-indented under `<<-`. Without the strip in
+  // the lookahead the opener is judged unterminated, so it is not honoured, the
+  // body is never blanked, and the `python -` inside it is read as a command —
+  // a FALSE POSITIVE on a pure file write.
+  // WHAT MAKES THIS FAIL: delete the `replace(/^\t+/, '')` in the terminator scan.
+  const cmd = `cat > temp/d.md <<-'MD'\npython - <<'EOF'\n\tMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a tab-indented dash-form terminator must be recognised when honouring the opener');
+});
+
+test('NEGATIVE: an option run must not swallow the SCRIPT PATH', () => {
+  // A regression introduced by the option-run widening: the optional non-dash
+  // token was allowed after ANY option, so the script path was eaten and the
+  // trailing `-` (which belongs to the SCRIPT) read as the interpreter's.
+  // `python tools/fmt.py -` was already covered; the sibling WITH an option in
+  // front was not, so the break was silent.
+  // WHAT MAKES THIS FAIL: allow the non-dash token after any option.
+  assert.equal(has(`python -u tools/fmt.py -`, 'python-dash-repl'), false);
+  assert.equal(has(`python -B setup.py -`, 'python-dash-repl'), false);
+});
+
+test('POSITIVE: -W and -X DO consume a word, and the dash after still fires', () => {
+  // The paired positive for the narrowing above — without it, restricting the
+  // arg-consuming set could be satisfied by removing the branch entirely.
+  assert.ok(has(`python -X dev - <<'EOF'\nEOF`, 'python-dash-repl'));
+  assert.ok(has(`python -W ignore - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('the `<<-` TAB-STRIP has a witness — bash really runs the hazard', () => {
+  // `allowIndent` and both tab-strips were dead code under `.trim()` and were
+  // revived in round 9. Review found the revival had ZERO witness: two mutants
+  // survived 79/0 and BOTH install a SILENCE rather than a false positive —
+  // measured against real bash, the hazard EXECUTES after a tab-indented
+  // dash-form terminator. The suite contained no dash-form heredocs at all.
+  //
+  // Here the body's terminator is tab-indented under `<<-`, which bash accepts,
+  // so the heredoc really ends there and the `python -` on the next line is a
+  // real command.
+  // WHAT MAKES THIS FAIL: delete the `replace(/^\t+/, '')` in the body scan.
+  const cmd = `cat > temp/d.md <<-'MD'\nbody\n\tMD\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'a tab-indented dash-form terminator ends the heredoc, exposing the hazard');
+});
+
+test('CONTROL: a tab-indented terminator under PLAIN `<<` does NOT end it', () => {
+  // Pairs with the above: bash strips tabs only for the `<<-` form. Without
+  // this control the tab-strip could be applied unconditionally and still pass.
+  const cmd = `cat > temp/d.md <<'MD'\nbody\n\tMD\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'under plain `<<` a tab-indented lookalike is body, not the terminator');
+});
+
+test('NEGATIVE: an INDENTED delimiter lookalike must not end the heredoc', () => {
+  // bash requires the terminator at COLUMN 0 (tabs-only for `<<-`). Comparing
+  // with `.trim()` accepted it at any indentation, so an indented lookalike in
+  // the BODY ended the heredoc early, un-blanked the rest, and DENIED a pure
+  // file write — verified against a real bash run at exit 0.
+  // WHAT MAKES THIS FAIL: compare with `.trim()` instead of `===`.
+  const cmd = `cat > temp/doc.md <<'MD'\nexample:\n    MD\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'an indented `MD` inside the body is not the terminator');
+});
+
+// ------------------------------------------------- the deny text is R7-bound
+// These exist because a reviewer mutated the headline in BOTH directions and
+// both mutants survived the whole suite: the rule-aware framing was a
+// correctness fix with no kill power, and that was not disclosed. An
+// untestable correctness fix is the shape this file polices.
+test('deny text: a python-dash-repl finding must NOT claim a bad measurement', () => {
+  // WHAT MAKES THIS FAIL: drop the rule-awareness and always emit the
+  // measurement headline. The rule is resource exhaustion, not a wrong number,
+  // and recommending measure.mjs for it is advice that does not apply (R7).
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF`));
+  assert.match(body, /carries a known hazard/);
+  assert.doesNotMatch(body, /measurement you cannot trust/);
+  assert.doesNotMatch(body, /measure\.mjs/);
+  // Paired positive: the finding itself must still be reported in full.
+  assert.match(body, /\[python-dash-repl\]/);
+});
+
+test('deny text: a measurement finding STILL gets the measurement framing', () => {
+  // The control for the test above. Without this, deleting the feature and
+  // always emitting "known hazard" would satisfy the absence assertions.
+  const body = denyBody(evaluate(`az account show 2>/dev/null`));
+  assert.match(body, /measurement you cannot trust/);
+  assert.match(body, /measure\.mjs/);
+});
+
+test('deny text: a MIXED finding set gets the measurement framing', () => {
+  // The classifier must not let one non-measurement finding suppress advice
+  // that is correct for the others.
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF\naz account show 2>/dev/null`));
+  assert.match(body, /measurement you cannot trust/);
+  assert.match(body, /\[python-dash-repl\]/);
+});
+
+test('deny text: an UNKNOWN rule id fails toward the measurement framing', () => {
+  // Pins the chosen failure direction so it is a decision, not an accident: a
+  // future measurement rule added without touching the set is still labelled
+  // correctly; only a new NON-measurement rule would be mislabelled.
+  const body = denyBody([{ id: 'some-future-rule', message: 'x' }]);
+  assert.match(body, /measurement you cannot trust/);
+});
+
+// ---- BLINDING, fourth class: an apostrophe inside a `#` comment -----------
+// `maskQuoted` had no comment awareness, so an apostrophe in a comment opened a
+// phantom single-quote that masked everything to the next apostrophe or to end
+// of input. Confirmed against a real `bash` run: bash executes precisely the
+// line the guard blanked.
+//
+// This one blinded EVERY rule in the file, not just the newest — including
+// `rc-after-pipe`, the rule the file was originally built for. Measured
+// reachability: 708 comment lines with an odd apostrophe count across 840
+// tracked shell/workflow/scripts files. The repo's dominant comment style.
+//
+// WHAT MAKES THESE FAIL: remove the `#` word-boundary branch from maskQuoted.
+test('BLINDING: an apostrophe in a comment must not blank the next line', () => {
+  assert.ok(has(`# don't do it\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('BLINDING: an apostrophe in a comment must not blank a LATER line', () => {
+  const cmd = `# agent's note\necho one\necho two\necho three\npython -`;
+  assert.ok(has(cmd, 'python-dash-repl'));
+});
+
+test('BLINDING: the same defect silenced rc-after-pipe, the original rule', () => {
+  // The other maskQuoted consumer. It had no witness for this at all.
+  const cmd = `# it's fine\nR=$(az monitor metrics list --resource "$ID" -o tsv | tr -d '\\r')\nRC=$?`;
+  assert.ok(has(cmd, 'rc-after-pipe'), 'a comment apostrophe must not blind the pipeline rule');
+});
+
+test('CONTROL: a `#` that does NOT begin a word is not a comment', () => {
+  // bash starts a comment only at a word boundary. Without this control the fix
+  // could widen into "any # blanks the rest", which would mask real arguments.
+  assert.ok(has(`python - file#1 <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: a QUOTED apostrophe still masks normally', () => {
+  // Pairs with the four above — the comment branch must not disturb ordinary
+  // quote handling, which is what keeps the jq false positive fixed.
+  const cmd = `gh api "repos/o/r/x" --jq '.a[] | .b' > out.json 2>err.txt\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false, 'a jq pipe must still not read as a shell pipe');
+});
+
+// ---- the witness M15 never had -------------------------------------------
+// The explicit comment check in stripHeredocBodies was deleted once because
+// mutation M15 survived at 68/0, read as "equivalent mutant". It was not: the
+// SUITE HAD NO WITNESS. bash starts a comment after `)` and `}` closing a
+// control structure, and maskQuoted's word-boundary class omits both.
+//
+// WHAT MAKES THESE FAIL: delete the `masked.indexOf('#')` check again.
+//
+// The obvious alternative — widening maskQuoted's class to include `)` — is
+// WRONG and must not be adopted: `)` is context-dependent, and the control at
+// the bottom of this block is what pins that.
+test('BLINDING: a comment after `)` closing a control structure', () => {
+  assert.ok(has(`(true)#<<EOF\npython - <<'EOF'\nEOF`, 'python-dash-repl'));
+});
+
+test('CONTROL: `}` does NOT start a comment — `{ true; }#x` is a syntax error', () => {
+  // An earlier version had a BLINDING arm for `}` and put `}` in the hash
+  // class. Measured with `bash -n` on Git Bash 5.3.15: `{ true; }#BOOM` is a
+  // SYNTAX ERROR, because `}` is a reserved word only as a standalone word.
+  // Defending a shape bash cannot parse bought a real false positive.
+  // WHAT MAKES THIS FAIL: put `}` back in the hash class.
+  const cmd = `cat > temp/v2}#final.md <<'MD'\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false,
+    'a `}` in a filename must not be read as a comment boundary');
+});
+
+test('the `)` disagreement is witnessed in BOTH directions', () => {
+  // The code asserts the two comment classes must disagree about `)`. M19 pins
+  // one direction (dropping `)` from the HASH class). The other — ADDING `)` to
+  // maskQuoted's class — passed 75/75, so the assertion was half unwitnessed:
+  // a blind test, not an equivalent mutant, which is the exact category the
+  // previous round fixed, recurring inside the commit that fixed it.
+  //
+  // Measured premise: `echo $(echo a)#note with a | tr a-z A-Z` prints
+  // `A#NOTE WITH A`, so that `|` is a REAL pipe. If maskQuoted treated `)` as a
+  // comment boundary it would mask the pipe and `rc-after-pipe` would go BLIND
+  // on correct-to-flag code.
+  // WHAT MAKES THIS FAIL: add `)` to maskQuoted's boundary class.
+  const cmd = `echo $(echo a)#x | tr a-z A-Z\nRC=$?`;
+  assert.ok(has(cmd, 'rc-after-pipe'),
+    'a pipe after a substitution-closing `)` must stay visible');
+});
+
+test('CONTROL: `)` closing a SUBSTITUTION does not start a comment', () => {
+  // `echo $(echo a)#BOOM` prints `a#BOOM` — bash does not treat that `#` as a
+  // comment. This is why the fix is a second narrow check rather than widening
+  // maskQuoted's word-boundary class: widening would silence the guard here.
+  const cmd = `echo $(echo a)#BOOM\npython - <<'EOF'\nEOF`;
+  assert.ok(has(cmd, 'python-dash-repl'), 'a substitution `)` must not blank the command');
+});
+
+test('the `(` in the word-boundary class has a witness', () => {
+  // Found by review to have NONE — dropping `(` survived the whole suite, and
+  // 122 distinguishing inputs existed, so it was a BLIND TEST, not an
+  // equivalent mutant. That distinction has already been got wrong once in
+  // this file and is not being got wrong twice.
+  //
+  // My first attempt at this witness ALSO failed to discriminate: it used a
+  // heredoc opener, which stripHeredocBodies' own hash scan already rejects
+  // because THAT class includes `(`. The distinguishing inputs are in the other
+  // rules, which consume maskQuoted directly and have no second check.
+  //
+  // Here a comment opened right after `(` contains a `|`. Without `(` in the
+  // class the comment is not masked, the `|` reads as a real pipeline, and
+  // `rc-after-pipe` fires on correct code — a false positive. The `RC=$?` must
+  // be on the IMMEDIATELY following line; a second attempt at this witness put
+  // another command in between and the adjacent-line check never engaged, so it
+  // survived too.
+  // WHAT MAKES THIS FAIL: remove `(` from maskQuoted's boundary class.
+  const cmd = `(#note about a | pipe\nRC=$?`;
+  assert.equal(has(cmd, 'rc-after-pipe'), false,
+    'a comment opened right after `(` must be masked for every rule');
+});
+
+test('NEGATIVE: a `#` in a FILENAME is not a comment', () => {
+  // Real false positive found by review: `masked.indexOf('#')` matched the `#`
+  // in a filename, so writing a file with `#` in its name while the body quoted
+  // the pattern was DENIED. A guard that blocks real work gets deleted.
+  // WHAT MAKES THIS FAIL: revert the word-boundary scan to indexOf('#').
+  const cmd = `cat > temp/v2#final.md <<'MD'\npython - <<'EOF'\nMD\necho ok`;
+  assert.equal(has(cmd, 'python-dash-repl'), false, 'a `#` in a filename is not a comment');
+});
+
+test('a CRASHED non-measurement rule is not relabelled as a bad measurement', () => {
+  // `${rule.id}-ERRORED` is not in NON_MEASUREMENT_RULES, so the decorated id
+  // fell through to the measurement framing — R7 on the error path, which is
+  // the path nobody reads until it fires.
+  // WHAT MAKES THIS FAIL: classify on `f.id` instead of the base id.
+  const body = denyBody([{ id: 'python-dash-repl-ERRORED', message: 'x' }]);
+  assert.match(body, /carries a known hazard/);
+  assert.doesNotMatch(body, /measurement you cannot trust/);
+});
+
+// ---- the deny message must name the RIGHT line ----------------------------
+test('R7: a lost newline must not make the message accuse an innocent line', () => {
+  // maskQuoted's double-quote escape branch emitted `__` for backslash+anything,
+  // preserving LENGTH but destroying a LINE when the escape was a newline. The
+  // raw-line index then desynced and the deny text named the wrong command.
+  // WHAT MAKES THIS FAIL: restore `out += '__'` in that branch.
+  const cmd = `echo "a\\\nb"\necho INNOCENT_BYSTANDER\npython - <<'EOF'\nEOF`;
+  const hit = evaluate(cmd).find((f) => f.id === 'python-dash-repl');
+  assert.ok(hit, 'the hazard must still be detected');
+  assert.match(hit.message, /python -/, 'the offending line must be the hazard');
+  assert.doesNotMatch(hit.message, /INNOCENT_BYSTANDER/, 'it must not accuse another line');
+});
+
+// ------------------------------------------------- every MESSAGE is R7-bound
+// `denyBody` was exported in round 9 precisely so message text could be pinned,
+// after the rule-aware headline was found to have zero kill power. Two later
+// rounds then fixed message text WITHOUT witnesses, and four message mutations
+// survived the whole suite. These arms close that door for all four rules.
+test('message R7: rule 1 does not assert the capture is READ or the pipeline measured', () => {
+  // WHAT MAKES THIS FAIL: restore "reports the LAST element's status, not the
+  // command you care about" as an unqualified claim.
+  const body = denyBody(evaluate(`a | b\nRC=$?`));
+  assert.match(body, /STATED CAREFULLY/);
+  assert.match(body, /does NOT establish/);
+  assert.match(body, /pipefail/, 'the pipefail caveat must survive (issue 4581)');
+  assert.doesNotMatch(body, /not the command you care about/);
+});
+
+test('message R7: rule 2 asserts CO-OCCURRENCE, not that the id reaches az', () => {
+  // The defect that fired against a reviewer: the message said "so this
+  // resource id never arrives" while nothing was passed to az at all.
+  //
+  // The absence check is scoped to the HEADLINE — the first line, where the
+  // claim lived. A blunt `doesNotMatch(/never arrives/)` over the whole body
+  // fails against the fix itself, because the correction QUOTES the retracted
+  // sentence in order to retract it. Keying an assertion to a spelling that the
+  // remedy legitimately contains is the same label-vs-site error this file
+  // keeps finding, pointed inward.
+  // WHAT MAKES THIS FAIL: restore "so this resource id never arrives" as the
+  // opening claim.
+  const body = denyBody(evaluate(`az x --resource /subscriptions/a/rg`));
+  const headline = body.split('\n').find((l) => l.includes('[msys-arm-id]')) ?? '';
+  assert.match(headline, /co-occurs/i, 'the opening claim must be co-occurrence');
+  assert.doesNotMatch(headline, /never arrives/, 'and must not assert the cause');
+  assert.match(body, /does NOT establish/);
+  assert.match(body, /An earlier version asserted/,
+    'the retraction is kept as a record, not deleted');
+});
+
+test('message R7: rule 3 discloses that it has NO known exit', () => {
+  // Measured: for a heredoc body carrying `az ... 2>/dev/null`, both the
+  // heredoc write AND `python -c` are denied. Telling a caller to use
+  // `python -c` there would loop it.
+  // WHAT MAKES THIS FAIL: delete the no-known-exit sentence.
+  const body = denyBody(evaluate(`az account show 2>/dev/null`));
+  assert.match(body, /no exit from\s+this rule is known|No exit is known/i);
+  assert.match(body, /does NOT establish/);
+});
+
+test('message R7: rule 4 names the PER-RULE exits, measured not reasoned', () => {
+  // Three earlier versions of this caveat were each wrong. The exits differ by
+  // rule: python -c works for rule 1, MSYS_NO_PATHCONV=1 for rule 2, and
+  // nothing is known for rule 3.
+  // WHAT MAKES THIS FAIL: collapse it back to "the remaining escape is python -c".
+  const body = denyBody(evaluate(`python - <<'EOF'\nEOF`));
+  assert.match(body, /MSYS_NO_PATHCONV=1/);
+  assert.match(body, /No exit is known/);
+  assert.match(body, /MEASURED this time/);
+});
+
+// ---- the DISCLOSED boundary, pinned so the disclosure cannot rot -----------
+// Rule 4's command position is narrower than bash's. Sixteen shapes carry the
+// full hazard and are ALLOWED, and the file now names them. These arms pin that
+// the disclosure stays TRUE in both directions: if a future change starts
+// catching one of these, the disclosure is stale and must be narrowed; if one
+// of the caught cases stops firing, that is a regression.
+test('DISCLOSED: same-line compound openers are NOT caught', () => {
+  // Measured, not assumed — and disclosed in the rule comment. Changing any of
+  // these to FIRES means the comment overstates the blind spot.
+  assert.equal(has(`{ python - <<'EOF'\nEOF\n}`, 'python-dash-repl'), false);
+  assert.equal(has(`if true; then python - <<'EOF'\nEOF\nfi`, 'python-dash-repl'), false);
+});
+
+test('DISCLOSED: wrapper programs and nested shells are NOT caught', () => {
+  assert.equal(has(`timeout 60 python - <<'EOF'\nEOF`, 'python-dash-repl'), false);
+  assert.equal(has(`bash -c "python - <<'EOF'"`, 'python-dash-repl'), false);
+});
+
+test('CONTROL: the hazard on its OWN line inside a compound IS caught', () => {
+  // The reassuring half, and the reason the boundary is same-line composition
+  // rather than compounds as such. Without this pair the two tests above could
+  // be satisfied by the rule catching nothing at all.
+  assert.ok(has(`{\npython - <<'EOF'\nEOF\n}`, 'python-dash-repl'));
+  assert.ok(has(`if true; then\npython - <<'EOF'\nEOF\nfi`, 'python-dash-repl'));
+});
+
+test('the TERMINATOR-lookahead column-0 rule has its own witness', () => {
+  // There are TWO column-0 comparisons — the body scan (`:171`) and the
+  // terminator lookahead (`:276`) that decides whether an opener is honoured at
+  // all. Round 12 witnessed only the body one; mutating the lookahead to
+  // `.trim()` survived the whole suite, and its direction is SILENCING.
+  //
+  // Here the only `MD`-looking line inside the body is INDENTED, so under
+  // bash's column-0 rule the heredoc is never terminated — the opener is not
+  // honoured, the body is not blanked, and the `python -` in it is a real
+  // command. Under `.trim()` the lookahead accepts the indented lookalike,
+  // honours the opener, blanks the body, and the hazard disappears.
+  // WHAT MAKES THIS FAIL: change `p === d` to `p.trim() === d` at the
+  // terminator lookahead.
+  const cmd = `cat > temp/d.md <<'MD'\npython - <<'EOF'\n  MD\necho ok`;
+  assert.ok(has(cmd, 'python-dash-repl'),
+    'an indented lookalike must not terminate the heredoc in the lookahead either');
 });
 
 // ------------------------------------------------------- rule-level failure

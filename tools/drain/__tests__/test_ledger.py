@@ -1,0 +1,1127 @@
+"""Unit tests for the ledger, each with a NEGATIVE CONTROL.
+
+The README calls `ledger.transition()` the enforcement point for
+`deploy-integrity.md` R2 -- merged is never done -- and for the rule that a park
+without an owner is indistinguishable from forgetting. Until this file existed
+that module had ZERO tests, so both "load-bearing refusals" were claims about
+untested code, and the one that mattered was wrong: `transition()` checked that a
+receipt was PRESENT, never that it was the KIND the item's class requires, so the
+literal string "merged" closed a console surface.
+
+Run:  python -m pytest tools/drain/__tests__/ -q
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import ledger as led_mod
+from ledger import CLOSED, DECLINED, NEEDS_AUDIT, PARKED, READY, Ledger
+
+import gates
+
+POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
+RECEIPTS = POLICY["receipts"]
+
+
+def _led(tmp_path, receipts=RECEIPTS) -> Ledger:
+    return Ledger(str(tmp_path / "state.json"), receipts=receipts)
+
+
+# ---------------------------------------------------------------------------
+# R2 in code: closed requires a receipt OF THE RIGHT KIND
+# ---------------------------------------------------------------------------
+
+
+def test_a_matching_receipt_closes(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "a console surface", "W5-console", lane="lane:console", size=3)
+    led.record_receipt(1, "g1-browser", "playwright run 123, agent badge asserted")
+    item = led.transition(1, CLOSED, "verified live")
+    assert item.state == CLOSED
+
+
+def test_negative_control_no_receipt_refuses(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "a guard", "W6-ci", lane="lane:ci", size=2)
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_an_empty_receipt_refuses(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "a guard", "W6-ci", lane="lane:ci", size=2)
+    led.record_receipt(1, "", "")
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_the_string_merged_does_not_close_anything(tmp_path):
+    """THE defect this suite exists for. A truthiness check on the receipt let
+    any non-empty string close any item, including the one word R2 says is never
+    a receipt."""
+    led = _led(tmp_path)
+    led.upsert(1, "a console surface", "W5-console", lane="lane:console", size=3)
+    led.record_receipt(1, "merged", "PR #4483 landed")
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_ci_green_does_not_close_a_ui_surface(tmp_path):
+    """ux-baseline G1: tsc + vitest are not completion evidence."""
+    led = _led(tmp_path)
+    led.upsert(1, "an editor", "W5-console", lane="lane:console", size=5)
+    led.record_receipt(1, "ci-green", "all required contexts green")
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_ci_green_does_not_close_a_deploy_path_item(tmp_path):
+    """W1 is the stream R1 says preempts everything. Closing it on CI green is
+    reporting a merge as a fix."""
+    led = _led(tmp_path)
+    led.upsert(1, "a deploy lane", "W1-deploy", lane="lane:ci", size=5)
+    led.record_receipt(1, "ci-green", "green at the merged sha")
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+    led.record_receipt(1, "deploy-run", "run 987654321, deploy job executed 33 steps")
+    assert led.transition(1, CLOSED).state == CLOSED
+
+
+def test_negative_control_the_receipt_refusal_applies_to_every_stream(tmp_path):
+    """THE narrow bypass: `if state == CLOSED and item.stream != "W9-rest":`
+    exempts 90 of 297 issues from R2 and survives any fixture built from one
+    stream. A filter placed INSIDE the predicate beats a contract written about
+    the predicate, so the contract has to be written over the POPULATION."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="without a receipt"):
+            led.transition(i, CLOSED)
+        led.record_receipt(i, "merged", "the PR landed")
+        with pytest.raises(ValueError, match="does not close"):
+            led.transition(i, CLOSED)
+
+
+def test_negative_control_the_decline_refusal_applies_to_every_stream(tmp_path):
+    """Same shape, same door. Both refusals that define a terminal state must be
+    contracted over every stream, not over the one the fixture happened to use."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="recorded decision"):
+            led.transition(i, DECLINED)
+
+
+def test_negative_control_the_park_refusal_applies_to_every_stream(tmp_path):
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        led = _led(tmp_path)
+        led.upsert(i, "x", stream, lane="lane:ci", size=1)
+        with pytest.raises(ValueError, match="blocker AND owner"):
+            led.transition(i, PARKED)
+
+
+def test_negative_control_without_the_policy_map_nothing_closes(tmp_path):
+    """A ledger that cannot validate the KIND must refuse, not fall back to a
+    presence check -- falling back is exactly the defect, re-entered by a
+    different door."""
+    led = _led(tmp_path, receipts=None)
+    led.upsert(1, "a guard", "W6-ci", lane="lane:ci", size=2)
+    led.record_receipt(1, "ci-green", "green")
+    with pytest.raises(ValueError, match="no policy receipts map"):
+        led.transition(1, CLOSED)
+
+
+# ---------------------------------------------------------------------------
+# A park without an owner is indistinguishable from forgetting
+# ---------------------------------------------------------------------------
+
+
+def test_a_named_blocker_and_owner_parks(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(1, "gov lane", "W3-gov", lane="lane:bicep", size=3)
+    item.blocker = "no GCC tenant exists to authenticate against"
+    item.owner = "operator"
+    item.review_by = "2026-11-11"
+    assert led.transition(1, PARKED).state == PARKED
+
+
+def test_negative_control_a_park_with_no_owner_refuses(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(1, "gov lane", "W3-gov", lane="lane:bicep", size=3)
+    item.blocker = "no GCC tenant"
+    with pytest.raises(ValueError, match="blocker AND owner"):
+        led.transition(1, PARKED)
+
+
+def test_negative_control_a_park_with_no_blocker_refuses(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(1, "gov lane", "W3-gov", lane="lane:bicep", size=3)
+    item.owner = "operator"
+    with pytest.raises(ValueError, match="blocker AND owner"):
+        led.transition(1, PARKED)
+
+
+def test_a_recorded_decision_declines(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    assert led.transition(
+        1, DECLINED, "operator 2026-09-11: superseded by the Iceberg path"
+    ).state == DECLINED
+
+
+def test_negative_control_a_decline_with_no_recorded_decision_refuses(tmp_path):
+    """`declined` is the THIRD terminal state and had NO refusal: an empty `why`
+    recorded the transition and nothing else, so a whole backlog could reach
+    `drained(): True` -- this program's exit condition -- with zero evidence.
+    Two of the three refusals were in code; this one was only in prose."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    with pytest.raises(ValueError, match="without a recorded decision"):
+        led.transition(1, DECLINED)
+    with pytest.raises(ValueError, match="without a recorded decision"):
+        led.transition(1, DECLINED, "   ")
+
+
+def test_negative_control_a_backlog_cannot_be_declined_into_drained(tmp_path):
+    led = _led(tmp_path)
+    for n in range(10):
+        led.upsert(n, "x", "W9-rest", lane="lane:ci", size=1)
+    for n in range(10):
+        with pytest.raises(ValueError, match="recorded decision"):
+            led.transition(n, DECLINED)
+    assert not led.drained()
+
+
+def test_an_unknown_state_is_refused(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    with pytest.raises(ValueError, match="unknown state"):
+        led.transition(1, "done-ish")
+
+
+# ---------------------------------------------------------------------------
+# drained() -- the run's exit test
+# ---------------------------------------------------------------------------
+
+
+def test_negative_control_an_empty_ledger_is_not_drained(tmp_path):
+    """`all([])` is True. Without the emptiness clause a wiped scratch file
+    reports a 297-issue backlog DRAINED, and `drained: true` is the documented
+    exit condition of the whole program -- so the run ends having done nothing.
+    An empty ledger is the absence of a measurement, not a result."""
+    assert not _led(tmp_path).drained()
+
+
+def test_all_terminal_is_drained(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "a", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(2, "b", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "green at sha")
+    led.transition(1, CLOSED)
+    item = led.items[2]
+    item.blocker, item.owner = "upstream", "operator"
+    led.transition(2, PARKED)
+    assert led.drained()
+
+
+def test_negative_control_one_open_item_is_not_drained(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "a", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "green")
+    led.transition(1, CLOSED)
+    led.upsert(2, "b", "W6-ci", lane="lane:ci", size=1)
+    assert not led.drained()
+
+
+def test_a_missing_file_is_distinguishable_from_an_empty_one(tmp_path):
+    """`--status` must be able to tell "no queue" from "an empty queue"."""
+    led = _led(tmp_path)
+    assert not led.load().loaded_from_disk
+    led.upsert(1, "a", "W6-ci", lane="lane:ci", size=1)
+    led.save()
+    assert _led(tmp_path).load().loaded_from_disk
+
+
+# ---------------------------------------------------------------------------
+# Receipt class derivation -- what the brief tells an agent
+# ---------------------------------------------------------------------------
+
+
+def test_receipt_class_follows_the_stream(tmp_path):
+    led = _led(tmp_path)
+    assert led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=3
+                      ).effective_receipt_class == "deploy-path"
+    assert led.upsert(2, "x", "W6-ci", lane="lane:ci", size=3
+                      ).effective_receipt_class == "guard-or-test-only"
+    assert led.upsert(3, "x", "W8-dataplane", lane="lane:dataplane", size=3
+                      ).effective_receipt_class == "estate-behaviour"
+
+
+def test_the_console_lane_is_a_ui_surface_whatever_stream_it_sits_in(tmp_path):
+    led = _led(tmp_path)
+    item = led.upsert(1, "x", "W9-rest", lane="lane:console", size=3)
+    assert item.effective_receipt_class == "ui-surface"
+
+
+def test_an_explicit_class_reaches_human_only(tmp_path):
+    """`operator` is otherwise unreachable, and it is the receipt for anything
+    only a person can verify."""
+    led = _led(tmp_path)
+    item = led.upsert(1, "tenant admin consent", "W2-security", lane="lane:ci", size=2)
+    item.receipt_class = "human-only"
+    assert item.effective_receipt_class == "human-only"
+    led.record_receipt(1, "operator", "click-script in the issue")
+    assert led.transition(1, CLOSED).state == CLOSED
+
+
+# ---------------------------------------------------------------------------
+# upsert -- refresh must not lose progress, and must not preserve stale labels
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_preserves_progress(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "old title", "W6-ci", lane="lane:ci", size=2)
+    led.record_receipt(1, "ci-green", "green at sha")
+    led.upsert(1, "new title", "W6-ci", lane="lane:ci", size=2)
+    assert led.items[1].receipt_kind == "ci-green"
+    assert led.items[1].title == "new title"
+
+
+def test_negative_control_a_repinned_stream_reaches_an_item_already_in_the_ledger(tmp_path):
+    """`upsert` wrote title, lane and size and silently DROPPED stream -- so a
+    correction to `build_inventory`'s pinned sets, which is how a
+    misclassification gets fixed, never reached an item already in the ledger.
+    The stream decides the receipt CLASS: #4485 was pinned to W0-harness and
+    stayed W6-ci. A fix that lands one layer above where the value is stored is
+    not a fix."""
+    led = _led(tmp_path)
+    led.upsert(4485, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W6-ci"
+    led.upsert(4485, "x", "W0-harness", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W0-harness"
+
+
+def test_negative_control_a_stream_downgrade_cannot_make_a_held_receipt_sufficient(tmp_path):
+    """THE regression the stream write-through introduced, found independently
+    by both reviewers. `effective_receipt_class` is evaluated lazily at close
+    time, so once `stream` became mutable the REQUIRED RECEIPT became mutable
+    with it -- and `stream` comes from live GitHub labels every tick.
+
+    Sequence: record `ci-green` on a `ui-surface` item (refused, correctly),
+    remove `lane:console` for an unrelated reason, and the SAME receipt closes
+    it. The item never left `in-flight`. R2 defeated by a label edit.
+
+    The first fix did NOT catch this: guarding "the receipt is no longer valid
+    for the new class" never fires on a downgrade, because a downgrade is
+    exactly where the old receipt BECOMES valid."""
+    led = _led(tmp_path)
+    led.upsert(1, "an editor", "W5-console", lane="lane:console", size=3)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "ci-green", "green at sha")
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    led.upsert(1, "an editor", "W9-rest", lane=None, size=3)   # label removed
+    assert led.items[1].receipt_kind is None, "the receipt must be VOID, not carried over"
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    assert any("VOID" in h for h in led.items[1].history), "and it must be RECORDED"
+
+
+def test_negative_control_a_lane_removal_alone_cannot_make_a_receipt_sufficient(
+    tmp_path,
+):
+    """The door the previous fix left open, and the one its own comment had
+    named as the attack. `effective_receipt_class` reads THREE inputs --
+    `receipt_class`, then `lane`, then `stream` -- and `lane` OUTRANKS `stream`.
+    Keying the guard on `stream` therefore defended the route the reviewers
+    demonstrated and left the stronger one untouched.
+
+    Here the stream is PINNED at W2-security throughout: nothing about it moves.
+    Only `lane:console` is removed, which is an ordinary relabel, and the class
+    falls `ui-surface` -> `guard-or-test-only`. Eleven live items sat on a
+    lane-derived class when this was measured, 8 of them W2-security whose
+    required receipt would have dropped from a live browser walk to CI green.
+
+    Kills L15."""
+    led = _led(tmp_path)
+    led.upsert(1, "a security surface", "W2-security", lane="lane:console", size=3)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "ci-green", "run/123")
+    assert led.items[1].effective_receipt_class == "ui-surface"
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    led.upsert(1, "a security surface", "W2-security", lane=None, size=3)
+    assert led.items[1].stream == "W2-security", "the stream must NOT have moved"
+    assert led.items[1].effective_receipt_class == "guard-or-test-only"
+    assert led.items[1].receipt_kind is None, "the receipt must be VOID"
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    # The lane move is recorded in its own right (kills L17), and the VOID line
+    # names the REF -- a receipt destroyed without saying which one it was
+    # leaves nothing to re-take or to dispute.
+    assert any("lane lane:console -> None" in h for h in led.items[1].history)
+    assert any("VOID" in h and "run/123" in h for h in led.items[1].history)
+
+
+def test_negative_control_an_explicit_receipt_class_escapes_a_label_keyed_guard(
+    tmp_path,
+):
+    """The third input, and the one that outranks both labels. A guard re-gated
+    on "did a LABEL move?" reads clean here: neither `lane` nor `stream`
+    changes, and the class still drops because `receipt_class` was written
+    through the kwargs loop.
+
+    This is why the comparison is taken over the CLASS -- the OUTCOME -- rather
+    than over any list of its causes. The two previous versions of this guard
+    were each a narrower enumeration of causes, and each was breached by the
+    input it did not enumerate. Kills L18."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1)
+    led.record_receipt(1, "ci-green", "r/1")
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1,
+               receipt_class="guard-or-test-only")
+    assert led.items[1].lane == "lane:bicep"
+    assert led.items[1].stream == "W1-deploy"
+    assert led.items[1].receipt_kind is None
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_negative_control_kwargs_cannot_restore_a_receipt_the_same_call_voided(
+    tmp_path,
+):
+    """Order matters. The kwargs loop writes arbitrary fields, `receipt_kind`
+    among them, so a refresh that reclassifies AND supplies a receipt in one
+    call must not have the write land after the void. Kills L16 -- if
+    `now_class` is read before the writes it can never differ and every route
+    here is open at once."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/1")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1,
+               receipt_kind="ci-green", receipt_ref="r/2")
+    assert led.items[1].receipt_kind is None
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+
+
+def test_a_mid_work_reclassification_is_flagged_even_with_no_receipt_yet(tmp_path):
+    """A lane holding this item is building toward a target that just moved --
+    a `g1-browser` walk it no longer needs, or a `ci-green` that is no longer
+    enough. It is told whether or not a receipt happened to have been taken
+    first. My own probe caught this one: the earlier shape only routed to
+    `needs-audit` inside the void branch, so an item reclassified BEFORE its
+    receipt existed kept working to the old spec in silence. Kills L19."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.transition(1, "in-flight", "selected")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    assert any("receipt class ui-surface -> guard-or-test-only" in h
+               for h in led.items[1].history)
+
+
+def test_a_ready_item_is_not_routed_to_needs_audit_by_a_reclassification(tmp_path):
+    """The control for the one above. A `ready` item has nothing to audit; its
+    receipt is void, that is recorded, and what it needs is re-work, which is
+    what `ready` means.
+
+    THIS TEST WAS PREVIOUSLY A FRAUD, caught by a reviewer: it entered from
+    `needs-audit`, so the carve-out's tuple was never consulted and the `ready`
+    it asserted came from the departure rescue below. Widening the tuple to
+    include `READY` -- which IS the round-3 behaviour that stranded items --
+    passed 262/262 over a green 117-arm matrix. A test named for a fix that
+    does not exercise it is worse than no test: it reads as coverage.
+
+    Entered from a genuinely READY item, and it asserts the receipt half of its
+    own docstring too (the second reviewer's finding 2). Kills L20."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/5")
+    assert led.items[1].state == READY, "the premise: it must START ready"
+
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    assert led.items[1].state == READY, "a ready item has nothing to audit"
+    assert led.items[1].audit_reason is None
+    assert led.items[1].receipt_kind is None, "the receipt is still VOID"
+    assert any("VOID" in h and "trace/5" in h for h in led.items[1].history)
+
+
+def test_negative_control_the_departure_rescue_survives_a_reclassification(tmp_path):
+    """The stranding this carve-out repaired, which is a DIFFERENT case from the
+    one above and used to share its test. `audit_reason` is a SCALAR: routing
+    every reclassification to `needs-audit` overwrote a `departed` reason, which
+    made the rescue's `elif` unmatchable and left the item unable to return to
+    the queue ever -- the one-way `needs-audit` the rescue exists to prevent."""
+    led = _led(tmp_path)
+    it = led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    it.audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(1, NEEDS_AUDIT, "gone from GitHub")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)   # returns AND reclassifies
+    assert led.items[1].state == READY
+    assert led.items[1].audit_reason is None
+
+
+def test_negative_control_a_state_kwarg_cannot_suppress_the_mid_work_routing(tmp_path):
+    """`was_state`, not `existing.state`. The kwargs loop writes arbitrary
+    fields, `state` among them, so reading the POST-write state let one call
+    both reclassify an in-flight item and land it in `ready`, skipping the
+    checkpoint. Not reachable from either production caller today -- neither
+    passes `state=` -- but the class comparison two lines up was hardened
+    against exactly this shape and its sibling was not. Kills L21."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.transition(1, "in-flight", "selected")
+    led.record_receipt(1, "g1-browser", "trace/6")
+    led.upsert(1, "x", "W9-rest", lane=None, size=1, state=READY)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_RECLASSIFIED
+    assert led.items[1].receipt_kind is None
+
+
+def test_negative_control_a_reopen_voids_the_receipt_that_closed_it(tmp_path):
+    """The SIBLING of the class-change void, and it was missed for two rounds.
+
+    A reopen DISPUTES the receipt that closed the item, and the class has not
+    moved, so the reclassification route never touches it. Measured by a
+    reviewer: close on `ci-green`, reopen, and `receipt_ok()` -- which
+    `merge_gate.ledger_receipt_ready` calls in production -- still returned
+    True, so `--allow-close` re-closed on the very evidence in dispute with no
+    new work done. The kind check is satisfied trivially there; there is nothing
+    left to re-take. Kills L22."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)   # seen OPEN on GitHub
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+    assert led.items[1].receipt_kind is None
+    ok, why = led.receipt_ok(led.items[1])
+    assert not ok, f"the production reader must refuse too: {why}"
+    with pytest.raises(ValueError, match="without a receipt"):
+        led.transition(1, CLOSED)
+    assert any("VOID" in h and "run/1" in h for h in led.items[1].history)
+
+    # ...and the audit is dischargeable without a human, per the module comment:
+    # re-take the receipt and close. The control is the KIND check, not a person.
+    led.record_receipt(1, "ci-green", "run/NEW")
+    assert led.transition(1, CLOSED).state == CLOSED
+
+
+# ---------------------------------------------------------------------------
+# #4535 -- a PARK is supposed to stay open on GitHub, so being open disputes
+# nothing. These four tests are the other side of the reopen boundary above:
+# the fix must not be bought by weakening the `closed` case, so every one of
+# them asserts both halves.
+# ---------------------------------------------------------------------------
+
+
+def _parked(led, number=2874, stream="W1-deploy"):
+    """A legal park: the refusal needs a named blocker AND owner."""
+    item = led.upsert(number, "bicep drift, GCC-High", stream, lane="lane:bicep", size=3)
+    item.blocker = "no GCC tenant to authenticate against"
+    item.owner = "operator"
+    led.transition(number, PARKED, "re-measured at head: run 35171642605")
+    return item
+
+
+def test_a_park_survives_the_refresh_that_sees_its_issue_still_open(tmp_path):
+    """#2874 was parked and demoted to `needs-audit` THIRTEEN SECONDS later, by
+    the next refresh, because the reopen branch keyed on TERMINAL wholesale.
+
+    WHAT MAKES THIS FAIL: put `PARKED` back into `REOPEN_DISPUTES` (i.e. revert
+    it to `TERMINAL`) and the second `upsert` -- which is exactly what a refresh
+    does for an issue that is open on GitHub -- moves the item to `needs-audit`
+    with `audit_reason == 'reopened'`. Kills L26.
+
+    The `closed` half is asserted in the SAME test so the park cannot be rescued
+    by simply deleting the branch: an arm that does that has to survive both."""
+    led = _led(tmp_path)
+    _parked(led)
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+
+    assert led.items[2874].state == PARKED, (
+        "a parked item is BLOCKED, not done - its GitHub issue is supposed to be "
+        "open, so being open is not evidence of anything"
+    )
+    assert led.items[2874].audit_reason is None
+    # Paired positive: the branch still fires for the state it was written for.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+
+
+def test_drained_is_true_over_a_park_whose_issue_is_still_open(tmp_path):
+    """THE EXIT CONDITION, which had no test -- which is why this shipped.
+
+    PRP S1 and policy.json both define done as "every issue closed | parked |
+    declined". With the demotion in place `parked` was not a state the ledger
+    could HOLD across a refresh, so `drained()` -- `tick.py`'s documented stop
+    signal -- was unreachable for any item that must be parked.
+
+    WHAT MAKES THIS FAIL: the same `REOPEN_DISPUTES = TERMINAL` revert. The item
+    lands in `needs-audit`, which is non-terminal by design, and `drained()`
+    returns False. It also fails if `drained()` is widened to count
+    `needs-audit`, which is the wrong fix in the other direction -- so the
+    second half pins that a genuine audit still blocks the exit."""
+    led = _led(tmp_path)
+    _parked(led)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.drained() is True
+    assert led.items[2874] not in led.remaining()
+
+    # ...and a real `needs-audit` still blocks it. Without this the first
+    # assertion is satisfied by a `drained()` that counts everything.
+    led.upsert(4491, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(4491, NEEDS_AUDIT, "departed")
+    assert led.drained() is False
+
+
+def test_negative_control_a_park_never_reaches_the_receipt_void(tmp_path):
+    """A park holds no receipt-in-dispute, and the void must not fire for it.
+
+    `record_receipt` refuses a terminal item, so the only way a parked item
+    holds one is to have taken it BEFORE the park -- which is the realistic
+    shape: a lane takes a `deploy-path` receipt, the deploy is then blocked, and
+    the item parks holding it.
+
+    WHAT MAKES THIS FAIL: reverting `REOPEN_DISPUTES` to `TERMINAL` runs the
+    void over the park and clears `receipt_kind`, so the first assertion goes
+    red. The second and third pair it with a positive: the void still fires on
+    the `closed` route, and its history line names the state the item actually
+    reached rather than claiming it was closed (R7)."""
+    led = _led(tmp_path)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    led.record_receipt(2874, "deploy-run", "run/35171642605")
+    led.items[2874].blocker = "no GCC tenant"
+    led.items[2874].owner = "operator"
+    led.transition(2874, PARKED, "blocked on a tenant that does not exist")
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.items[2874].receipt_kind == "deploy-run"
+    assert not any("VOID" in h for h in led.items[2874].history)
+
+    # Paired positive, on the route the void is FOR.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached closed" in h for h in led.items[1].history)
+
+
+def test_a_declined_item_seen_open_is_still_disputed(tmp_path):
+    """THE DECISION, pinned rather than inherited. `declined` stays in the
+    dispute set: "will not do" leaves nothing to track, so the disposal is
+    closing the issue as not-planned, and one still open after a decline means
+    the decline never reached GitHub or someone is disputing it.
+
+    WHAT MAKES THIS FAIL: narrowing `REOPEN_DISPUTES` to `(CLOSED,)` leaves the
+    declined item `declined` and `audit_reason` None. Kills L27.
+
+    The second item carries NO receipt, which is the ORDINARY shape of a decline
+    -- `transition(DECLINED)` requires none. It is here because a filter placed
+    inside the predicate (`... and existing.receipt_kind`) would pass every
+    other reopen test in this file, all of which happen to record one: that arm
+    is L29, and this fixture is what kills it.
+
+    The last assertion is the R7 half: a declined item that held a receipt gets
+    a history line naming `declined`, not one asserting it "was closed on it" --
+    a claim the code cannot establish for this route. Kills L28."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, DECLINED, "operator 2026-09-17: superseded")
+
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(2, DECLINED, "operator 2026-09-17: superseded, no receipt taken")
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached declined" in h for h in led.items[1].history)
+    assert led.items[2].state == NEEDS_AUDIT, (
+        "a decline holds no receipt, so a dispute route gated on holding one "
+        "would never fire for the state it was written for"
+    )
+    assert led.items[2].audit_reason == led_mod.AUDIT_REOPENED
+
+
+def test_a_terminal_transition_clears_a_stale_audit_reason(tmp_path):
+    """A CLOSED ITEM IS NOT ALSO A DEPARTED ONE (round 9 nit, pre-existing).
+
+    `audit_reason` is a SCALAR set on the way IN to `needs-audit`, and the only
+    thing that cleared it was `upsert`'s departure rescue -- the path where the
+    item turns up open on GitHub again. Recovering the OTHER way, which is what
+    the drain now does routinely (re-take the receipt on an audited item and
+    close it), left the item reading `state=closed reason='departed'`. A cold
+    reader of the ledger sees a closed item still labelled as having vanished,
+    and there is no way to tell that label apart from a live one.
+
+    Both audit reasons are exercised, because the reopen route and the
+    departure route write the field at different sites and a fix at one of them
+    is the one-sided shape this package keeps producing.
+
+    WHAT MAKES THIS FAIL: deleting the `if state in TERMINAL:` clear in
+    `transition`, which is arm L30 -- the item reaches `closed` with
+    `audit_reason` still set. The POSITIVE PAIR is the third block: a
+    NON-terminal transition must NOT clear the field, or "clear it always" would
+    satisfy the two negatives while destroying the departure rescue's own
+    premise (`was_state == NEEDS_AUDIT and audit_reason == AUDIT_DEPARTED`).
+    """
+    led = _led(tmp_path)
+
+    # departed -> re-receipted -> closed
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.items[1].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(1, NEEDS_AUDIT, "vanished from the live set")
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED, "re-taken after the audit")
+    assert led.items[1].state == CLOSED
+    assert led.items[1].audit_reason is None, (
+        "a closed item still reads as departed - the value that breaks this is "
+        "the terminal clear removed from `transition`"
+    )
+
+    # reopened -> declined
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.items[2].audit_reason = led_mod.AUDIT_REOPENED
+    led.transition(2, NEEDS_AUDIT, "open on GitHub again")
+    led.transition(2, DECLINED, "operator 2026-09-18: superseded")
+    assert led.items[2].state == DECLINED
+    assert led.items[2].audit_reason is None, (
+        "a declined item still reads as reopened"
+    )
+
+    # THE POSITIVE PAIR. A non-terminal transition leaves the reason alone; the
+    # departure rescue in `upsert` reads it AFTER exactly such a move.
+    led.upsert(3, "z", "W6-ci", lane="lane:ci", size=1)
+    led.items[3].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(3, NEEDS_AUDIT, "vanished from the live set")
+    assert led.items[3].audit_reason == led_mod.AUDIT_DEPARTED, (
+        "clearing on EVERY transition would break the departure rescue, whose "
+        "whole premise is reading this field on a `needs-audit` item"
+    )
+
+
+def test_negative_control_a_receipt_is_stamped_with_the_class_it_was_taken_under(
+    tmp_path,
+):
+    """THE INVARIANT, as opposed to the event observer.
+
+    `upsert`'s comparison can only witness a class that moves across a call it
+    makes. Two of `effective_receipt_class`'s inputs are not fields at all --
+    `RECEIPT_CLASS_BY_STREAM` and `LANE_RECEIPT_CLASS` are module constants --
+    so a one-line edit to either moved every held receipt's class with NOTHING
+    in `history`, the identical symptom to the round-3 defect, through an input
+    no `upsert` guard can see. A reviewer closed a `ui-surface` item on the
+    `ci-green` that had been refused a moment earlier.
+
+    Stamping at capture and comparing at the decision does not care HOW the
+    class moved, or whether anything observed it move. Kills L23, L24."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane=None, size=1)
+    led.record_receipt(1, "ci-green", "run/2")
+    assert led.items[1].receipt_taken_under == "ui-surface"
+    with pytest.raises(ValueError, match="does not close"):
+        led.transition(1, CLOSED)
+
+    saved = led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"]
+    led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"] = "guard-or-test-only"
+    try:
+        # The kind check now passes trivially -- this is the downgrade, and the
+        # downgrade is exactly where the old receipt BECOMES valid.
+        assert led.items[1].effective_receipt_class == "guard-or-test-only"
+        with pytest.raises(ValueError, match="was taken under"):
+            led.transition(1, CLOSED)
+    finally:
+        led_mod.RECEIPT_CLASS_BY_STREAM["W5-console"] = saved
+
+
+def test_negative_control_a_stale_ledger_cannot_close_against_the_weaker_class(
+    tmp_path,
+):
+    """The milder form of the same hole, and it needs no source edit at all.
+    `merge_gate` LOADS `state.json` and never upserts, so adding `lane:console`
+    to an issue and running `--allow-close` before the next tick evaluated the
+    receipt against the stale, weaker class. `receipt_ok` is the production
+    reader, so it is what the assertion is taken against."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane=None, size=1)
+    led.record_receipt(1, "ci-green", "run/3")
+    ok, _ = led.receipt_ok(led.items[1])
+    assert ok
+
+    led.items[1].lane = "lane:console"     # labelled on GitHub; no tick yet
+    ok, why = led.receipt_ok(led.items[1])
+    assert not ok, why
+
+
+def test_negative_control_an_old_ledger_with_an_unstamped_receipt_cannot_close(
+    tmp_path,
+):
+    """THE SERIALIZATION BOUNDARY. `receipt_taken_under` is new on a dataclass
+    that round-trips through JSON, so a ledger written before it existed -- or
+    a hand edit that sets `receipt_kind` and `receipt_ref` and stops, which is
+    the ONLY way a receipt gets recorded today, since `record_receipt` has no
+    production caller -- loads with the stamp absent.
+
+    It refuses, and that is deliberate. It is NOT backfilled on load: inferring
+    the stamp from the item's CURRENT class would manufacture exactly the
+    evidence the check exists to demand, which is "invent a receipt to get past
+    the receipt gate" wearing a migration's clothes.
+
+    The message is its own, because an absent stamp and a stale stamp have
+    different causes and different remedies -- and reporting the absent case as
+    "taken under None" asserted a class named None that never existed (R7)."""
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({
+        "schema": led_mod.SCHEMA,
+        "items": [{
+            "number": 4400, "title": "a console surface", "stream": "W5-console",
+            "state": "awaiting-receipt", "lane": "lane:console", "size": 3,
+            "receipt_kind": "g1-browser", "receipt_ref": "playwright trace 77",
+            "history": [],
+        }],
+    }), encoding="utf-8")
+    led = Ledger(str(path), receipts=RECEIPTS).load()
+    item = led.items[4400]
+    assert item.receipt_taken_under is None
+
+    ok, why = led.receipt_ok(item)
+    assert not ok
+    assert "carries no `receipt_taken_under`" in why
+    assert "ui-surface" in why, "the message must name what to set it TO"
+    assert "None" not in why.split("carries no")[1][:80], \
+        "an absent stamp must not be reported as a class named None"
+
+    # An ordinary refresh does NOT repair it -- nothing about the class moved,
+    # so there is nothing for `upsert` to observe. Only re-taking the receipt
+    # does, which is the point.
+    led.upsert(4400, "a console surface", "W5-console", lane="lane:console", size=3)
+    assert not led.receipt_ok(led.items[4400])[0]
+    led.record_receipt(4400, "g1-browser", "playwright trace 78")
+    assert led.receipt_ok(led.items[4400])[0]
+
+
+def test_a_receipt_re_taken_under_the_current_class_closes(tmp_path):
+    """The control. The invariant must not make a reclassified item permanently
+    unclosable -- re-taking the receipt under the new class is the whole
+    remedy, and if that did not work the guard would be a brick."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W5-console", lane="lane:console", size=1)
+    led.record_receipt(1, "g1-browser", "trace/1")
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    led.record_receipt(1, "ci-green", "run/9")
+    assert led.items[1].receipt_taken_under == "guard-or-test-only"
+    assert led.transition(1, CLOSED).state == CLOSED
+
+
+def test_negative_control_the_upgrade_direction_voids_the_receipt_too(tmp_path):
+    """Either direction. A receipt is evidence about a QUESTION -- change the
+    class and it is evidence about a different one, so `ci-green` taken while an
+    item looked like a guard proves nothing once it is a deploy path."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W9-rest", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "green")
+    led.upsert(1, "x", "W1-deploy", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+
+def test_a_re_pin_within_one_class_keeps_its_receipt(tmp_path):
+    """The control. W6-ci and W0-harness are both `guard-or-test-only`, so a
+    re-pin between them changes the stream and asks no new question -- voiding
+    the receipt there would make every pin correction cost a re-verification."""
+    led = _led(tmp_path)
+    led.upsert(4485, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(4485, "ci-green", "green at sha")
+    led.upsert(4485, "x", "W0-harness", lane="lane:ci", size=1)
+    assert led.items[4485].stream == "W0-harness"
+    assert led.items[4485].receipt_kind == "ci-green"
+    assert led.transition(4485, CLOSED).state == CLOSED
+    # ...and the move is RECORDED even when it costs the receipt nothing. The
+    # stream decides selection order and the receipt class; a silent change to
+    # it is the thing that made the downgrade invisible in the first place.
+    assert any("stream W6-ci -> W0-harness" in h for h in led.items[4485].history)
+
+
+def test_negative_control_a_falsy_stream_does_not_wipe_the_class(tmp_path):
+    """`lane` and `size` are written unconditionally with a stated reason -- a
+    label removed on GitHub must clear the ledger's copy. `stream` inherited the
+    unconditional write without the reason, and an empty stream degrades to the
+    WEAKEST class rather than refusing."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W1-deploy", lane="lane:bicep", size=1)
+    led.upsert(1, "x", "", lane="lane:bicep", size=1)
+    assert led.items[1].stream == "W1-deploy"
+    assert led.items[1].effective_receipt_class == "deploy-path"
+
+
+def test_an_unchanged_stream_does_not_churn_the_history(tmp_path):
+    """A refresh runs every tick. A history line per tick would bury the entries
+    that matter under the ones that do not."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    for _ in range(4):
+        led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert len(led.items[1].history) == 1
+
+
+def test_negative_control_a_removed_lane_label_clears_the_lane(tmp_path):
+    """A label removed on GitHub must clear the ledger's copy, or the item stays
+    schedulable on a lane it no longer claims -- and lanes partition by FILE, so
+    that is how two lanes end up editing one file."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=2)
+    assert led.items[1].schedulable
+    led.upsert(1, "x", "W6-ci", lane=None, size=None)
+    assert led.items[1].lane is None
+    assert not led.items[1].schedulable
+
+
+def test_negative_control_a_reopened_item_re_enters_the_queue(tmp_path):
+    """Reopening is how a false close gets disputed. A terminal item seen OPEN
+    on GitHub must not stay terminal -- and must not go straight back to `ready`
+    either, because whatever closed it may still be true."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=2)
+    led.record_receipt(1, "ci-green", "green")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=2)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1] in led.remaining()
+
+
+def test_needs_audit_is_not_terminal(tmp_path):
+    """An item whose disappearance nobody has explained is still in the queue.
+    If it were terminal the drain would report itself finished over a pile of
+    unexplained closes."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=2)
+    led.transition(1, NEEDS_AUDIT, "gone from GitHub")
+    assert not led.drained()
+    assert led.counts()["needs-audit"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+
+def test_save_load_roundtrip(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(7, "a title", "W1-deploy", lane="lane:bicep", size=8)
+    led.record_receipt(7, "deploy-run", "run 1, 33 steps")
+    led.cycle = 4
+    led.save()
+
+    again = _led(tmp_path).load()
+    assert again.cycle == 4
+    assert again.items[7].receipt_kind == "deploy-run"
+    assert again.items[7].size == 8
+
+
+def test_a_foreign_schema_refuses_rather_than_guessing(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"schema": 99, "items": []}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="migrate deliberately"):
+        _led(tmp_path).load()
+
+
+def test_counts_cover_every_state(tmp_path):
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    counts = led.counts()
+    for state in led_mod.ALL_STATES:
+        assert state in counts
+    assert counts["total"] == 1
+    assert counts[READY] == 1
+    assert counts[DECLINED] == 0
+
+
+# -- LOST UPDATES ------------------------------------------------------------
+#
+# `save()` is atomic at the FILE level and was never atomic at the DOCUMENT
+# level. It serialises the whole ledger from memory, so two transactions that
+# overlap do not conflict -- the second writes a document that never contained
+# the first one's change. Reproduced by an independent reviewer against the new
+# receipt write path, and reproduced again here before the guard was written.
+
+
+def _seed_two(tmp_path):
+    led = Ledger(str(tmp_path / "state.json"), receipts=RECEIPTS)
+    led.upsert(990001, "item A", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(990002, "item B", "W6-ci", lane="lane:ci", size=1)
+    led.save()
+    return str(tmp_path / "state.json")
+
+
+def test_positive_control_an_uncontended_guarded_save_still_works(tmp_path):
+    """THE CONTROL. Every test below asserts a refusal, and a guard that refused
+    unconditionally would satisfy all of them while making the ledger
+    unwritable. This pins that the ordinary path is unaffected."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.record_receipt(990001, "ci-green", "green at sha")
+    led.transition(990001, CLOSED, "closed")
+    led.save(if_unchanged=True)
+    assert Ledger(path, receipts=RECEIPTS).load().items[990001].state == CLOSED
+
+
+def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
+    """THE LOST UPDATE, measured before the guard existed: B closed #990002 and
+    saved; A, holding a document loaded before that, saved its own unrelated
+    change; #990002 came back `ready` with its receipt and history line GONE.
+
+    Silent, and it un-closes a RECEIPTED item -- so the next tick re-selects
+    work that was already finished and verified.
+
+    Would pass (no exception) if the digest comparison were removed; that is
+    arm RW10.
+    """
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+
+    b.record_receipt(990002, "ci-green", "green at sha B")
+    b.transition(990002, CLOSED, "B closed it")
+    b.save(if_unchanged=True)
+
+    a.notes.append("A's unrelated edit")
+    with pytest.raises(led_mod.LedgerChangedError, match="changed since this transaction"):
+        a.save(if_unchanged=True)
+
+    final = Ledger(path, receipts=RECEIPTS).load()
+    assert final.items[990002].state == CLOSED, "B's verified close was discarded"
+    assert final.items[990002].receipt_kind == "ci-green"
+
+
+def test_a_refused_save_writes_nothing_at_all(tmp_path):
+    """A refusal must not leave a partial document. Compared by DIGEST rather
+    than by re-reading fields, so a change anywhere in the file is caught."""
+    import hashlib
+
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+    b.notes.append("b was here")
+    b.save(if_unchanged=True)
+
+    with open(path, "rb") as handle:
+        before = hashlib.sha256(handle.read()).hexdigest()
+    a.notes.append("stale")
+    with pytest.raises(led_mod.LedgerChangedError):
+        a.save(if_unchanged=True)
+    with open(path, "rb") as handle:
+        assert hashlib.sha256(handle.read()).hexdigest() == before
+
+
+def test_the_same_transaction_can_save_twice(tmp_path):
+    """The digest is refreshed after a successful write, or a caller that saves
+    twice would refuse itself on its OWN previous save -- which would make the
+    guard unusable for any multi-step operation."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.notes.append("first")
+    led.save(if_unchanged=True)
+    led.notes.append("second")
+    led.save(if_unchanged=True)
+    assert "second" in Ledger(path, receipts=RECEIPTS).load().notes
+
+
+def test_a_guarded_save_does_not_read_the_file_back_after_writing(monkeypatch, tmp_path):
+    """THE POST-WRITE WINDOW, armed by COUNTING rather than by racing.
+
+    `save()` used to refresh its digest by RE-READING the file after
+    `os.replace`. A writer landing in that gap leaves this ledger holding
+    someone else's digest, and the next guarded save then sails through the
+    comparison it was supposed to fail. Fixed by hashing the payload that was
+    written.
+
+    NO SEQUENTIAL TEST CAN KILL THAT MUTATION. The two implementations differ
+    only inside a microseconds-wide gap between `os.replace` and the re-read, so
+    any test that drives them in order sees identical results -- a reviewer
+    spent a round establishing exactly that, and corrected themselves twice
+    doing it.
+
+    What IS deterministic is the OBSERVABLE the fix changes: a guarded save
+    reads the file once, for the comparison, and never again. Under the mutation
+    it reads twice. Counting the reads pins the property without needing to win
+    a race.
+
+    This asserts on a call count, which is closer to the implementation than
+    most tests here. That is deliberate and disclosed: the alternative is
+    leaving a correct fix silently green, so that a future editor restoring the
+    re-read gets no signal at all.
+    """
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+
+    reads = []
+    real = Ledger._on_disk_digest
+
+    def counting(self):
+        reads.append(1)
+        return real(self)
+
+    monkeypatch.setattr(Ledger, "_on_disk_digest", counting)
+    led.notes.append("one guarded save")
+    led.save(if_unchanged=True)
+
+    assert len(reads) == 1, (
+        f"a guarded save read the ledger back {len(reads)} times; the second read "
+        "is the post-write refresh, and a writer in that gap leaves this "
+        "transaction holding someone else's digest"
+    )
+
+
+def test_an_unguarded_save_replaces_whatever_is_there(tmp_path):
+    """`if_unchanged=False` is the unguarded write `--bootstrap` needs: it
+    replaces the document outright rather than reconciling with it.
+
+    IT NO LONGER CLAIMS TO MIRROR `main()`. The previous version transcribed
+    `fresh.save(if_unchanged=fresh.loaded_from_disk)` with the comment "exactly
+    what tick.main() does" -- and that stopped being true the moment `main()`
+    switched to `not args.bootstrap`, so the test went on agreeing with a copy
+    of an expression that no longer existed. A reviewer found it at its second
+    site after the same defect produced the round-4 blocker at its first.
+
+    Whether `main()` passes the right flag is `main()`'s test to make, and it is
+    made by driving `main()` -- see `test_bootstrap_still_reseeds_over_an_
+    existing_ledger` in test_tick.py.
+    """
+    path = _seed_two(tmp_path)
+    fresh = Ledger(path, receipts=RECEIPTS)  # no .load()
+    fresh.upsert(3001, "seeded", "W6-ci", lane="lane:ci", size=1)
+    fresh.save(if_unchanged=False)
+    assert 3001 in Ledger(path, receipts=RECEIPTS).load().items

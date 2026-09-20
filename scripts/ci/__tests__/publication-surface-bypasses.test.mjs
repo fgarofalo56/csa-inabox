@@ -40,6 +40,8 @@ import path from 'node:path';
 
 import {
   closingParen,
+  forbiddenPublishers,
+  inheritedStreamSpawns,
   streamBindings,
   streamWrites,
   stripComments,
@@ -192,19 +194,45 @@ test('#3876 — the shared control carries all four bypasses and its counts are 
   );
 });
 
-test('#3876 — the four real publication scripts are clean under the WIDENED enumerator', () => {
+test('#3876 — the six real publication scripts are clean under the WIDENED enumerator', () => {
   // The point of widening a guard is the estate it now covers. Asserting the
   // control alone would prove the matcher works and say nothing about whether
   // the files it guards pass it.
+  //
+  // #4498 round 6 added the last two rows, and the classifier could not simply
+  // be listed: run over it beforehand this loop reported `unboundedWrites: 0`
+  // AND `streamWrites: 0`. The zero was a POPULATION, not a verdict — both of
+  // its publications were `console.log`, which no `process.stdout.write`
+  // matcher can see. Enrolling it took converting those two calls into one
+  // bounded `process.stdout.write(formatAnnotation(...))`. That is why the
+  // `>= 1` and the forbidden-publisher assertions below are both here: either
+  // one alone lets a file join this list while publishing invisibly.
   const root = path.resolve(import.meta.dirname, '..', '..', '..');
+  //
+  // The third column is the DECLARED set of inherited-stream spawns — see the
+  // assertion at the bottom of the loop for why it is a declared set and not a
+  // demand for zero.
   const subjects = [
-    ['scripts/ci/deploy-arm-errors.mjs', ['formatStdout', 'formatStderr', 'unredactedByDesign']],
-    ['scripts/ci/deploy-retry.mjs', ['formatAnnotation', 'formatStderr', 'unredactedByDesign']],
-    ['.github/scripts/deploy-notify-failure.mjs', ['formatStdout', 'formatStderr']],
-    ['scripts/csa-loom/converge-role-assignment.mjs', ['formatStdout']],
+    ['scripts/ci/deploy-arm-errors.mjs', ['formatStdout', 'formatStderr', 'unredactedByDesign'], []],
+    [
+      'scripts/ci/deploy-retry.mjs',
+      ['formatAnnotation', 'formatStderr', 'unredactedByDesign'],
+      ["stdio: ['inherit', 'inherit', 'pipe'] -> stdout"],
+    ],
+    ['.github/scripts/deploy-notify-failure.mjs', ['formatStdout', 'formatStderr'], []],
+    ['scripts/csa-loom/converge-role-assignment.mjs', ['formatStdout'], []],
+    ['scripts/ci/classify-reindex-result.mjs', ['formatAnnotation'], []],
+    // Round 9 gave this module two more CLI modes, each with its own stdout
+    // write, and round 10 caught that this column was not updated with them —
+    // so the guard THIS PR built went red on a file THIS PR owns, in the one
+    // suite that exists to notice a new unbounded publication surface. Both new
+    // names are genuine redacting boundaries (`postJobId` and `redactBodyFile`
+    // each route through `redact-secrets.mjs`), so enrolling them records a
+    // fact rather than silencing a complaint.
+    ['scripts/ci/parse-reindex-poll.mjs', ['parsePollFile', 'postJobId', 'redactBodyFile'], []],
   ];
   let total = 0;
-  for (const [rel, boundaries] of subjects) {
+  for (const [rel, boundaries, declaredInherited] of subjects) {
     const file = path.resolve(root, rel);
     assert.ok(fs.existsSync(file), `${rel} is missing — the sum below would be a silent zero`);
     const src = fs.readFileSync(file, 'utf8');
@@ -212,10 +240,51 @@ test('#3876 — the four real publication scripts are clean under the WIDENED en
     total += writes.length;
     assert.ok(writes.length >= 1, `${rel} enumerated ZERO writes — the matcher drifted, it did not stop publishing`);
     assert.deepEqual(
+      forbiddenPublishers(src).map((f) => `${f.line}: ${f.hit} (${f.why})`),
+      [],
+      `${rel} publishes through a shape this lane's structural assertions cannot see`,
+    );
+    assert.deepEqual(
       unboundedWrites(src, boundaries).map((w) => `${w.line}: ${w.accessPath}: ${w.arg.split('\n')[0]}`),
       [],
       `${rel} publishes to a stream without the whole expression crossing a boundary (#3876)`,
     );
+    // #4498 round 7 (review finding). The three assertions above are all
+    // WRITE-based, and `_publication-surfaces.mjs:401` documents the spawn that
+    // hands a child this process's stdout as "THE SURFACE NO WRITE-BASED
+    // ENUMERATOR CAN SEE". Three other suites in this lane assert it per-script;
+    // this loop did not, so a file could join the list, inherit its log to a
+    // child, and read clean on every check here.
+    //
+    // CORRECTED BEFORE IT MERGED. This assertion was first written as a demand
+    // for ZERO, justified in prose as "zero for all six today". That was
+    // ASSERTED, NOT MEASURED, and it was false: `deploy-retry.mjs:826` spawns
+    // its remediation child with `['inherit','inherit','pipe']`, deliberately
+    // and with ~30 lines of disclosure at `:800-824`. The boundary for those
+    // bytes belongs to the CHILD (`converge-role-assignment.mjs`, whose own
+    // `formatStdout()` is pinned by its own suite), and `az provider register`
+    // is a Microsoft tool printing its own output. A demand for zero would have
+    // forced deleting a correct, documented design -- or deleting this check.
+    //
+    // So the expectation is DECLARED PER SUBJECT, the same shape as the
+    // `boundaries` column: five declare none, one declares the surface it owns.
+    // A NEW inherited spawn on any of the six still fails here. The line number
+    // is deliberately NOT pinned -- `deploy-retry.mjs` is not in this PR's
+    // declared files, and #4504 records line-based ids drifting under unrelated
+    // edits; the SHAPE and the inherited slots are what carry the meaning.
+    assert.deepEqual(
+      inheritedStreamSpawns(src).map((s) => `${s.stdio} -> ${s.inherits.join(',')}`),
+      declaredInherited,
+      `${rel}: the set of spawns handing a child this process's public log CHANGED. ` +
+        'Adding one is a decision, not a detail — declare it above with its disclosure, or remove it',
+    );
   }
-  assert.ok(total >= 10, `expected >=10 real stream writes across the four scripts, found ${total}`);
+  // A coarse backstop against a matcher that stops counting across the board;
+  // the per-file `>= 1` above is the sharp instrument. Round 7 tightened this
+  // from 12: measured 17 at `e4cbca4970a` (6/6/2/1/1/1 per file), and since the
+  // per-file floor already guarantees 6, a floor of 12 only had power over the
+  // band [6,11] -- close to decorative, which is how a guard stops being obeyed.
+  // 15 keeps the deliberate slack a pinned count would lose (a count is only a
+  // fact with the commit it was taken at attached) without being free.
+  assert.ok(total >= 15, `expected >=15 real stream writes across the six scripts, found ${total}`);
 });

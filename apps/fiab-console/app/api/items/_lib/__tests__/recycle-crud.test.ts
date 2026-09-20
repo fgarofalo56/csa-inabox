@@ -154,6 +154,30 @@ describe('restoreOwnedItem', () => {
     expect(out).toBeNull();
     expect(h.itemReplace).not.toHaveBeenCalled();
   });
+
+  /**
+   * #3706 — RESTORE must reach its tenancy decision THROUGH `loadRecycledItem`.
+   *
+   * The item itself is a perfectly good recycled row here; the ONLY thing that
+   * refuses it is the parent workspace belonging to someone else. FAILS IF
+   * `restoreOwnedItem` is changed to resolve the item directly (an
+   * `items.item(id, pk).read()`, or a query without the workspace check) rather
+   * than delegating — the replace then fires against another tenant's item.
+   *
+   * The absence assertions below are paired with the POSITIVE case above
+   * ("clears _recycled, un-deletes ADLS folders, and re-indexes"), which uses
+   * this same fixture with a matching tenant and DOES replace + un-delete — so
+   * deleting the feature cannot satisfy them.
+   */
+  it('refuses to restore when the parent workspace belongs to another tenant', async () => {
+    h.itemsQuery.mockResolvedValue({ resources: [recycledItem] });
+    h.wsRead.mockResolvedValue({ resource: { tenantId: 'other' } });
+    const out = await restoreOwnedItem('item-1', TENANT);
+    expect(out).toBeNull();
+    expect(h.itemReplace).not.toHaveBeenCalled();
+    expect(h.unDeleteDirectory).not.toHaveBeenCalled();
+    expect(h.restoreThreadEdgesForItem).not.toHaveBeenCalled();
+  });
 });
 
 describe('purgeRecycledItem', () => {
@@ -178,5 +202,30 @@ describe('purgeRecycledItem', () => {
     const ok = await purgeRecycledItem('item-1', TENANT);
     expect(ok).toBe(false);
     expect(h.itemDelete).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #3706 — PURGE must reach its tenancy decision THROUGH `loadRecycledItem`.
+   *
+   * This is the arm that matters most, because purge is the IRREVERSIBLE verb:
+   * a miss here is an unrecoverable hard-delete of another tenant's item, not a
+   * 404. The row IS a recycled item; the only refusal is the parent workspace's
+   * owner. FAILS IF `purgeRecycledItem` resolves the item itself instead of
+   * delegating — `itemDelete` then fires. That exact mutation passed this file
+   * before this test existed, which is why it is here.
+   *
+   * Paired with the POSITIVE case above ("hard-deletes a recycled item the
+   * tenant owns"), which uses the same fixture with a matching tenant and DOES
+   * call `itemDelete`.
+   */
+  it('refuses to purge when the parent workspace belongs to another tenant', async () => {
+    h.itemsQuery.mockResolvedValue({ resources: [{ ...activeItem, state: { _recycled: { deletedAt: 'x', deletedBy: 'a', purgeAfter: 'y' } } }] });
+    h.wsRead.mockResolvedValue({ resource: { tenantId: 'other' } });
+    const ok = await purgeRecycledItem('item-1', TENANT);
+    expect(ok).toBe(false);
+    expect(h.itemDelete).not.toHaveBeenCalled();
+    expect(h.deleteLoomDoc).not.toHaveBeenCalled();
+    expect(h.reconcileThreadEdgesOnDelete).not.toHaveBeenCalled();
+    expect(h.offboardFromPurview).not.toHaveBeenCalled();
   });
 });

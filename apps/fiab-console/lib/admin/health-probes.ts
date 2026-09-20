@@ -999,6 +999,31 @@ async function probeCopilotCorpus(h: ProbeHelpers): Promise<CheckResult> {
         redeploy: false,
       };
     }
+    if (f.state === 'unknown') {
+      // THE READ FAILED. Not "the corpus is fine" -- this probe cannot say
+      // anything about the corpus, and saying `pass` would be the R7 defect
+      // relocated from a CI log onto the operator's readiness page, which is
+      // strictly worse: before `unknown` existed an unreadable manifest came
+      // back as `never-indexed` and at least warned.
+      return {
+        ...base, status: 'warn',
+        detail: `Help Copilot corpus freshness is UNKNOWN — the corpus manifest could not be read from backend ${f.backend}. ${f.reason} This says nothing about whether the corpus is indexed; it says the check could not run.`,
+        remediation: 'Check reachability and permissions for the backing store (AI Search index `loom-docs`, or the Cosmos help-copilot-corpus container) from the console identity. Re-run this probe before deciding to reindex — a failed read is not evidence of a stale corpus.',
+        redeploy: false,
+      };
+    }
+    if (f.state !== 'fresh') {
+      // EXHAUSTIVE BY CONSTRUCTION. This used to be a bare fall-through to
+      // `pass`, so `unknown` -- a state added in a different file -- silently
+      // became a green tick. A new member of `CorpusFreshnessState` must never
+      // again be able to report the corpus healthy just by not being handled.
+      return {
+        ...base, status: 'warn',
+        detail: `Help Copilot corpus is in an unrecognised state '${f.state}' (backend ${f.backend}). ${f.reason}`,
+        remediation: 'This probe does not know how to interpret that state. Treat the corpus as unverified and check `CorpusFreshnessState` in lib/azure/loom-docs-index.ts against this probe.',
+        redeploy: false,
+      };
+    }
     return { ...base, status: 'pass', detail: `Help Copilot corpus fresh (backend ${f.backend}, ${f.indexedChunkCount ?? 0} chunks, indexed ${f.indexedAt || 'n/a'}).` };
   } catch (e: any) {
     return {

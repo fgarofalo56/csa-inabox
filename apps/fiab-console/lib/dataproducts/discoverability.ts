@@ -30,12 +30,59 @@
  *      0  access-requests · analytics · certification · policies · sla-check ·
  *         subscribers
  *
- * So the six zero-hit routes run the same unscoped query with no
- * workspace/ownership token whatsoever and are NOT audited by this change.
- * Three of them (analytics, sla-check, certification) return derived values
- * rather than the raw item, which lowers the disclosure severity but does not
- * remove it. That is a disclosed gap and a follow-up, NOT a claim that the class
- * is closed: "the decision moves here, once" is 1-of-9, not 1-of-2.
+ * ── THE ZERO-HIT COUNT WAS A SYMBOL SEARCH, AND FOUR OF THE SIX WERE GATED ──
+ *
+ * The sentence that stood here said "the six zero-hit routes run the same
+ * unscoped query with NO WORKSPACE/OWNERSHIP TOKEN WHATSOEVER". That was a
+ * measurement reported as a property, and it is false for four of them. The grep
+ * above matches a FIXED LIST OF SYMBOL NAMES; a route that performs the same
+ * comparison INLINE scores 0 while being gated. Read at #3580's second pass:
+ *
+ *     analytics/route.ts:42     `if (wsRes[0]?.tenantId !== oid) return null` -> 404
+ *     sla-check/route.ts:49     `if (wsRes[0]?.tenantId !== s.claims.oid)`    -> 403
+ *     subscribers/route.ts:57   PK-scoped `ws.item(workspaceId, tenantId).read()`
+ *                               plus `resource.tenantId !== tenantId`         -> 404
+ *     access-requests/route.ts:163,280
+ *                               `owner.ownerTenantId !== s.claims.oid` on PATCH
+ *                               and on the list-all branch of GET             -> 403
+ *
+ * (`Workspace.tenantId` stores the CREATOR's Entra oid — see the `workspaceTid`
+ * note below — so these are OWNER checks, narrower than this module's membership
+ * test, not absent ones. `access-requests` POST is deliberately open: it IS the
+ * cross-tenant request-access flow, and it discloses nothing back.)
+ *
+ * TWO of the six were genuinely ungated, and #3580's second pass fixes BOTH by
+ * routing them through `resolveDiscoveryAccess`:
+ *
+ *   - `certification/route.ts` — `withSession` and nothing else. Its docblock
+ *     said "not ownership-gated (the trust signal is discoverable)", the same
+ *     unimplemented-posture sentence this whole advisory is about, and its
+ *     payload was wider than "a trust signal": `dq.breakdown` is
+ *     `DqRuleResult[]`, whose `scope` is `table:<name>` / `column:<table>.<col>`
+ *     (`lib/azure/data-quality-client.ts:53,75`) and whose `detail` interpolates
+ *     the rule's `pattern`/`min`/`max`. Another tenant's table and column names.
+ *   - `policies/route.ts` — no gate at all; returned the owner's `Access` policy
+ *     `name` + `rule` for any product id in any tenant.
+ *
+ * So the honest scope line is: ALL NINE now carry some decision — this module on
+ * `[id]`, `certification` and `policies` (3); `ports`'s byte-identical private
+ * copy (1); the four inline owner checks above (4); and `preview`'s different
+ * one, `resolveDataProductDataAccess` (1). 3+1+4+1 = 9. The residual is not
+ * "six unaudited routes" but the NARROWER, still-real facts that the four inline
+ * checks are OWNER-only rather than membership-aware (a shared-ACL collaborator
+ * is refused where this module would admit them), and that `preview` and
+ * `sla-check` answer 403-not-404 and so remain status-code oracles over the same
+ * id space.
+ *
+ * COUNT THE ENUMERATION, NOT THE ADJECTIVE. An earlier draft of this very
+ * paragraph said "SEVEN now carry a decision" and then listed eight. The list is
+ * the measurement; the number in front of it is a summary, and it was wrong on
+ * the first pass of the paragraph written to correct a wrong number.
+ *
+ * KEEP THE GREP, DISTRUST ITS ZEROES. A zero from a symbol-name search is
+ * "no symbol from my list", never "no guard". That conflation is the same
+ * presence-vs-enforcement weakness `check-route-guards.mjs` documents about
+ * itself, committed here in the comment warning about it.
  *
  * That is the shape this repo keeps re-finding: a fix keyed to a LAYER (one
  * route file) rather than to the DECISION, so the next caller of the same
