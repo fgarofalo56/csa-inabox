@@ -32,8 +32,39 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Columnar engine. arrow 53 / datafusion 43 are the versions deltalake 0.24
-# re-uses, so the whole graph resolves to ONE arrow + ONE datafusion (no split).
+# Columnar engine. These three move as ONE unit — deltalake 0.24 re-uses this
+# arrow and this datafusion, so the whole graph resolves to ONE arrow + ONE
+# datafusion (no split). .github/dependabot.yml groups arrow*/parquet*/
+# datafusion*/deltalake* for the same reason.
+#
+# WHY THEY ARE STUCK HERE (#3982, measured with cargo 1.98.0 on 2026-09-18).
+# `thrift 0.17.0` enters this graph through `parquet` and carries an open
+# advisory (GHSA-2f9f-gq7v-9h6m, < 0.23.0). It cannot be removed from here:
+#   * arrow-rs dropped the thrift crate at parquet 59.0.0 — 53/57/58 all still
+#     depend on `thrift ^0.17`, 59.0.0 and 59.3.0 have no thrift at all.
+#   * but delta-rs has NOT followed. deltalake-core 0.32.4, the newest
+#     published, still pins `arrow ^58` / `parquet ^58` / `datafusion ^53.1.0`.
+#   * so with the `azure` feature on (the DEFAULT, and what the image ships)
+#     there is no published combination today whose graph is thrift-free.
+#     Resolving parquet 59 + datafusion 55 + deltalake 0.32 together does not
+#     error — it links arrow 58 AND 59, datafusion 53.1 AND 55.1, parquet 58
+#     AND 59, keeps thrift 0.17 via parquet 58, and breaks src/scan.rs because
+#     two datafusion majors mean two distinct `TableProvider` traits.
+#
+# A PATCHED thrift is not a way out either, and it is worth writing down because
+# "just pin the fixed version" is the obvious first idea. thrift 0.23.0 and
+# 0.24.0 ARE published (2026-06-08 and 2026-07-11; 0.17.0 dates from 2022, so
+# the gap is four years). They are unreachable from here on semver: `parquet`
+# declares `thrift ^0.17`, which for a 0.x crate means `>=0.17.0, <0.18.0`, and
+# a `[patch.crates-io]` replacement must still SATISFY the original requirement
+# — cargo rejects a patch that does not. Using the fixed code would therefore
+# require a maintained 0.17.x fork with the advisory patch backported, published
+# or vendored, and carried until delta-rs moves. That is disproportionate to a
+# medium-severity advisory in a transitive decoder, so it is recorded as
+# considered-and-rejected rather than left to be rediscovered.
+#
+# The unblocking event is a delta-rs release on arrow 59. Do not hand-edit the
+# lock to chase it; wait for the grouped dependabot PR and let CI compile it.
 arrow = "53"
 parquet = "53"
 datafusion = "44"
