@@ -228,6 +228,7 @@ MARKERS = ("Independent review", "Independent re-review")
 MERGE_GATE_IMPLEMENTED_BY = {
     "mergeable_must_be_known": "merge_gate.run_gates gate 0",
     "base_must_equal_origin_main": "gates.base_is_current",
+    "stale_base_may_pass_on_an_inert_delta": "gates.base_delta_is_inert",
     "reduce_verdicts_by": "gates.reduce_verdicts",
     "verdict_pinned_to_head": "gates.parse_verdicts (postdates)",
     "require_no_red": "gates.classify_checks (RED_CONCLUSIONS)",
@@ -2104,14 +2105,36 @@ def _glob_to_regex(pattern: str) -> str:
 #: absence gets excused. `!` under `paths-ignore:` is worse still: it re-includes
 #: a path, so ignoring it can excuse outright.
 #:
+#: `?` is here for a DIFFERENT reason than the others, and the difference is
+#: the point: it was not unimplemented, it was implemented WRONG. This
+#: translator emitted `[^/]` for it -- one arbitrary character, the fnmatch
+#: reading -- while GitHub documents `?` as "zero or one of the PRECEDING
+#: character". Those disagree on real inputs, and the disagreement excuses in
+#: both of the cases where GitHub admits. Measured on this checkout: 127
+#: workflow files, 40 with an `on.push` trigger, and ZERO push filters contain
+#: `?`, so refusing costs nothing and guessing costs correctness.
+#:
 #: Zero workflows in this repo use any of them today (measured), which is
 #: exactly why refusing is free. A pattern this cannot represent is an
 #: unanswered question, and unanswered questions fail closed here.
-_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|]")
+_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|?]")
 
 
 class UnsupportedPatternError(ValueError):
     """A filter pattern this translator cannot represent faithfully."""
+
+
+def git_argv(args: list[str]) -> list[str]:
+    """Return `args` with `-c core.quotePath=false` inserted after `git`.
+
+    Non-git argv is returned unchanged. Callers must ALSO decode as utf-8;
+    the flag alone is not sufficient.
+
+    Enforced by `test_every_git_invocation_routes_through_the_quoting_injection`.
+    """
+    if args and args[0] == "git":
+        return [args[0], "-c", "core.quotePath=false", *args[1:]]
+    return args
 
 
 def glob_matches(pattern: str, path: str) -> bool:
@@ -4027,6 +4050,341 @@ def base_is_current(
     if base_sha != origin_main_sha:
         return False, f"base {base_sha[:12]} != origin/{expected_base} {origin_main_sha[:12]}"
     return True, f"base == origin/{expected_base} @ {base_sha[:12]}"
+
+
+@dataclass(frozen=True)
+class ContextScope:
+    """Which paths ONE required context's producing workflow declares it reads.
+
+    `paths` / `paths_ignore` are that workflow's own `on.push` filter, DERIVED
+    from the workflow file by `merge_gate.derive_context_scopes` -- never
+    transcribed into this package. `unreadable` carries the reason the scope
+    could not be established at all, and a scope that carries one can only
+    refuse.
+
+    THE THREE STATES ARE DIFFERENT ANSWERS AND ARE KEPT APART, for the same
+    reason `parse_push_trigger` keeps `None` apart from `present=False`:
+
+        paths=('a/**',)                  a filter: only `a/**` reaches it
+        paths=None, paths_ignore=None    NO filter: it reads EVERYTHING
+        paths=()                         an EMPTY filter: it matches NOTHING
+        unreadable='...'                 the question was not answered
+
+    Collapsing any of the last three into "matches nothing" is the whole defect
+    this guards against -- an empty intersection is the answer that lets a
+    merge through, so a scope that cannot match is indistinguishable from a
+    scope that was never resolved unless they are separate fields. The
+    `paths=()` row is the one that was MISSED for a round: it is not the absent
+    state, it is a real `paths: []` in a workflow file, and because `any([])`
+    is False it excused every delta through the branch that looked like it had
+    already handled it. `base_delta_is_inert` refuses it explicitly.
+    """
+
+    name: str
+    workflow_path: str | None = None
+    paths: tuple[str, ...] | None = None
+    paths_ignore: tuple[str, ...] | None = None
+    unreadable: str | None = None
+
+
+def _every_pattern_matched(patterns: tuple[str, ...], path: str) -> bool:
+    """`any()` over a LIST, so every pattern is evaluated before an answer.
+
+    `_any_match` uses a generator and short-circuits. That is harmless under a
+    positive `paths:` list -- an early match means a HIT, which refuses either
+    way -- and it is the EXCUSING direction under `paths-ignore`: a match on
+    pattern one returns before pattern two is looked at, so an unrepresentable
+    pattern later in the list never raises, and a `!` re-include (which
+    `_UNSUPPORTED_GLOB` exists to refuse, precisely because ignoring it can
+    excuse outright) is silently skipped. The list comprehension forces every
+    `glob_matches` call, so an unsupported pattern ANYWHERE in the list raises.
+    """
+    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419
+
+
+def filter_admits(scope: ContextScope, path: str) -> bool:
+    """Would a push touching `path` have been ADMITTED by this filter?
+
+    NAMED FOR WHAT IT MEASURES. It was `scope_reads` for two rounds, and the
+    name asserted the very thing `base_delta_is_inert`'s docstring says this
+    cannot establish -- that the filter bounds what the context READS. It
+    bounds what the TRUNK RE-RUNS FOR. A retraction that leaves the claim in an
+    identifier is the same defect as one that leaves it in a printed string.
+
+    Raises `UnsupportedPatternError` (via `glob_matches`) rather than guessing,
+    and raises `ValueError` on a scope that has no filter -- callers must have
+    refused before they get here. Both are the fail-closed direction: this
+    function NEVER answers "no" for a reason other than the patterns.
+    """
+    if scope.unreadable:
+        raise ValueError(f"{scope.name}: scope unresolved ({scope.unreadable})")
+    if scope.paths is not None and scope.paths_ignore is not None:
+        raise ValueError(f"{scope.name}: both paths and paths-ignore declared")
+    if scope.paths is not None:
+        return _every_pattern_matched(scope.paths, path)
+    if scope.paths_ignore is not None:
+        # `**` is REFUSED here though it is fine under `paths:`, and the
+        # asymmetry is the whole point. `_glob_to_regex` lets `**/` consume
+        # ZERO segments, so it matches MORE paths than a strict reading. Under
+        # `paths:` matching more ADMITS more, which makes a delta look live --
+        # the refusing direction, and safe. Under `paths-ignore:` the same
+        # permissiveness IGNORES more, which makes the delta look INERT: the
+        # excusing direction, on the arm that decides merges.
+        #
+        # Measured on this checkout: 127 workflow files, 40 with an `on.push`
+        # trigger, and ZERO of them declare `paths-ignore` at all -- so this
+        # refuses nothing that exists today, and costs nothing to keep closed.
+        # NARROW ON PURPOSE: `**/` only, not a bare trailing `**`. The
+        # permissiveness lives in the `**/` production, which may consume ZERO
+        # segments together with its slash; `docs/**` has no such branch and
+        # is read exactly as "everything under docs/", which is why the
+        # everything-except test still passes.
+        for pattern in scope.paths_ignore:
+            if "**/" in pattern:
+                raise UnsupportedPatternError(
+                    f"{pattern} (`**/` under paths-ignore - it may consume "
+                    "zero segments, which is permissive, and permissive under "
+                    "negation excuses an absence rather than refusing it)"
+                )
+        return not _every_pattern_matched(scope.paths_ignore, path)
+    raise ValueError(f"{scope.name}: no path filter at all - it admits every path")
+
+
+#: How many hit files a refusal names before it truncates. The COUNT is always
+#: printed, so truncation cannot make a large intersection look small.
+_HITS_SHOWN = 3
+
+
+def base_delta_is_inert(
+    delta_files: list[str] | None,
+    scopes: list[ContextScope],
+    required: list[str],
+) -> tuple[bool, str]:
+    """#4585. Can the commits in `base..origin/main` affect THIS PR's evidence?
+
+    Gate 1 requires `base == origin/main` because branch protection here is
+    `strict=false`: without it, "all required contexts green" could be a
+    statement about a base that no longer exists. That is correct, and it makes
+    every merge staleness-block every other open PR -- clearing which is a push,
+    which re-pins every live verdict as `predates-head`. Measured 2026-09-18:
+    four rounds of verdicts burned on pushes where no content changed, and one
+    re-run discarded a 42-minute mutation matrix over a base delta of three
+    comment-only Dockerfiles.
+
+    THIS IS A NARROWER PROPERTY THAN GATE 1'S, AND THE EARLIER TEXT HERE SAID
+    THE OPPOSITE. It said "this is not a relaxation of the property, it is the
+    same property measured directly". That was FALSE, both reviewers measured
+    it, and the sentence is recorded here rather than deleted because a
+    docstring asserting a soundness it does not have is the R7 error this
+    package exists to refuse -- and because the chain of reasoning it invites
+    is what the next person acts on.
+
+    Gate 1's property is: THE CI GREEN BEING COUNTED WAS MEASURED AGAINST THE
+    BASE BEING MERGED. What this function measures is: THE TRUNK'S OWN `push`
+    FILTERS WOULD NOT HAVE RE-RUN THIS CONTEXT FOR THESE COMMITS. Those are
+    different questions. `on.push.paths` models WHAT THE TRUNK RE-RUNS FOR, not
+    WHAT A CONTEXT READS, and on this repo they already diverge:
+
+    - `validate.yml` publishes FIVE required contexts while declaring only
+      bicep paths plus `.github/workflows/**`.
+    - `PowerShell Lint` inside it runs
+      `Get-ChildItem -Path . -Filter "*.ps1" -Recurse`, and `Repo Hygiene` runs
+      `find . -type f`. Both read the whole tree.
+    - `Secret Scan` runs `gitleaks detect --config .gitleaks.toml`
+      (`validate.yml:599`), and `.gitleaks.toml` matches none of the filtered
+      contexts' patterns either.
+
+    Fed the real scopes of the 12 filtered contexts -- the counterfactual this
+    arm invites -- this function returns INERT for
+    `deploy/bicep/DLZ/powershellHelper.ps1` and for a 6 MB binary, which
+    `PowerShell Lint` and `Repo Hygiene` demonstrably read. It is harmless
+    TODAY only because the five unfiltered contexts refuse everything, which is
+    a property of the topology and not of this function.
+
+    SO THE `on.push` FILTER IS A PROXY, AND ITS PRECONDITION IS UNESTABLISHED.
+    Relying on it requires, PER CONTEXT, that the workflow's declared push
+    scope be a SUPERSET of what that context actually reads. That has not been
+    shown for any of the 12 filtered contexts; for three of them it is shown
+    FALSE above. Nobody may make this arm fire -- by giving one of the five
+    unfiltered workflows a `paths:` list, or any other route -- without
+    establishing that superset relation for the contexts it would unblock.
+
+    AND THE "MAIN WAS GREEN ANYWAY" ARGUMENT IS WEAKER THAN THIS GATE, which
+    is the other thing the earlier text got wrong. That the trunk accepted
+    these commits without re-running a context is a statement about TRUNK
+    HYGIENE. Gate 1 stands in for `strict=true` on branch protection, and
+    `strict` does not consult path filters AT ALL -- it requires the branch to
+    be up to date, full stop. So "the trunk would not have re-run it" is
+    strictly less than what gate 1 is substituting for, and it is offered here
+    as the reason the refusals are safe, never as a proof that the passes are.
+
+    WHAT MAKES THE ARM SAFE TO SHIP TODAY IS ITS FAIL-CLOSED BEHAVIOUR, not
+    the proxy: every input that is not a measured miss refuses, five of the 17
+    required contexts refuse unconditionally, and so no stale base reaches the
+    GO path at all. `policy.json`'s `ci_green_rule` reads the same filters, and
+    it is worth saying that it is not a precedent for this: it uses them to
+    explain why a context was NEVER CREATED at a sha, which is a fact about
+    GitHub's dispatcher, whereas this would use them to bound what a context
+    READS, which is a fact about the job.
+
+    EVERYTHING THAT IS NOT A MEASURED MISS IS A REFUSAL:
+
+    - a required context with no scope at all (its producer could not be traced)
+    - a producing workflow that could not be read or parsed
+    - a workflow with NO `on.push` path filter -- it reads EVERYTHING
+    - a workflow with an EMPTY one (`paths: []`) -- it matches NOTHING, which
+      would make every delta read inert
+    - a filter pattern `glob_matches` will not represent (`!`, `[...]`, ...)
+    - a delta that could not be read
+    - an empty required set
+
+    `required` is passed SEPARATELY and set-equality is asserted against the
+    scopes. Deriving the population from `scopes` itself would make the loop
+    unable to witness a dropped context: a caller that silently omits the one
+    context whose scope is unresolvable would produce a clean intersection over
+    the remainder, which is the "a loop derived from the thing under test
+    cannot witness it" shape.
+
+    WHAT THIS ARM DOES ON THIS REPO TODAY, measured 2026-09-19 rather than
+    projected, because an arm that cannot fire is the defect this package
+    exists to find:
+
+    - FIVE of the 17 required contexts are produced by workflows whose `push:`
+      carries no `paths:` at all -- `fiab-console-ci.yml` (`next build
+      (node 20)`, `vitest (node 20)`, `brain security graph`),
+      `loom-guardrails.yml` (`guardrails`) and `commit-message-parses.yml`
+      (`changelog parser can read every commit message`). Each reads
+      EVERYTHING, so each refuses, so this arm refuses EVERY stale base today
+      and gate 1 behaves exactly as it did before.
+    - The issue's own worked example does not survive re-measurement either.
+      #4574 -> #4552's delta is three Dockerfiles
+      (`git diff --name-only 0c2c4c97434 e6d28c0892f`), and
+      `apps/fiab-setup-orchestrator/Dockerfile` IS inside `test.yml`'s push
+      paths -- so seven required contexts hit it on the filtered side as well.
+      "That intersection is empty" was a hypothesis; it is false on two
+      independent grounds.
+
+    So this ships as the MECHANISM, and it would start firing if a producing
+    workflow declared a `push` path scope.
+    That is technically available -- `on.push.paths` is a different event from
+    `on.pull_request`, so a required check can keep reporting on every PR while
+    declaring its push scope -- and it is deliberately NOT done here, for two
+    reasons and not one: it changes what runs on main, AND the superset
+    precondition above is unestablished, so declaring a filter would make this
+    arm fire on a proxy that is known to be wrong for at least three contexts.
+    Establish the superset relation per context FIRST. Do not report this arm
+    as having reduced any cost until a real PR has passed on it.
+
+    Returns `(inert, why)`. `why` NAMES the contexts considered on the passing
+    arm -- an empty intersection is only evidence if you can see what it was
+    taken over.
+    """
+    if not required:
+        return False, (
+            "the required-context set is EMPTY, so an empty intersection is "
+            "vacuous - unmeasurable is not a pass"
+        )
+    by_name = {s.name: s for s in scopes}
+    unscoped = sorted(set(required) - set(by_name))
+    if unscoped:
+        return False, (
+            f"{len(unscoped)} required context(s) have no scope at all: "
+            f"{unscoped} - an intersection taken over a subset of the required "
+            "set cannot say anything about the rest"
+        )
+    if delta_files is None:
+        return False, (
+            "the base..origin/main delta could not be read, so nothing was "
+            "intersected - unmeasurable is not a pass"
+        )
+    for name in required:
+        scope = by_name[name]
+        if scope.unreadable:
+            return False, (
+                f"{name!r}: {scope.unreadable} - a scope that could not be "
+                "resolved refuses; it never reads as 'matches nothing'"
+            )
+        if scope.paths is None and scope.paths_ignore is None:
+            return False, (
+                f"{name!r} is produced by {scope.workflow_path} which declares "
+                "NO `on.push` path filter, so it ADMITS EVERY PATH and any "
+                "base delta can reach it"
+            )
+        # AN EMPTY LIST IS NOT THE SAME STATE AS AN ABSENT ONE, and it is the
+        # dangerous one. `paths: []` parses to `()`, `any([])` is False, so
+        # every delta falls outside the filter and the context excuses
+        # everything -- the "matches nothing is the answer that lets a merge
+        # through" shape, arriving through the one branch above that looked
+        # like it had already handled it. `ContextScope`'s own docstring names
+        # three states; this is the fourth, and it was unwatched.
+        #
+        # THE TWO EMPTY SPELLINGS ARE OPPOSITE FACTS AND GET OPPOSITE REASONS.
+        # Round 2 shipped one message for both, saying "matches NOTHING" -- and
+        # for `paths-ignore: []` that is INVERTED: ignoring nothing means the
+        # workflow admits EVERYTHING. Worse, that half was already refused
+        # correctly before the branch existed (every file matched the hit arm),
+        # so a true reason was replaced with a false one. R7, introduced by the
+        # fix for something else, which is why they are split here rather than
+        # sharing a sentence.
+        if scope.paths == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "`paths` list, which ADMITS NOTHING - that is not a scope, it "
+                "is a context that would excuse every delta"
+            )
+        if scope.paths_ignore == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "`paths-ignore` list, which ignores nothing and therefore "
+                "ADMITS EVERY PATH - any base delta can reach it"
+            )
+        if scope.paths is not None and scope.paths_ignore is not None:
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares BOTH `paths` and "
+                "`paths-ignore` on push - this translator will not guess which "
+                "wins"
+            )
+        try:
+            hits = [f for f in delta_files if filter_admits(scope, f)]
+        except UnsupportedPatternError as exc:
+            return False, (
+                f"{name!r}: {scope.workflow_path} uses filter pattern "
+                f"{str(exc)!r}, which this translator cannot represent "
+                "faithfully - an unanswerable question is not an empty "
+                "intersection"
+            )
+        except ValueError as exc:  # pragma: no cover - the branches above cover it
+            return False, f"{name!r}: {exc}"
+        if hits:
+            return False, (
+                f"{len(hits)} file(s) in the base delta are ADMITTED BY the "
+                f"`on.push` filter of {name!r}'s producer "
+                f"({scope.workflow_path}): {sorted(hits)[:_HITS_SHOWN]} - the "
+                "trunk would have re-run it; take origin/main and re-run"
+            )
+    # THE VOCABULARY ON BOTH PASSING BRANCHES IS THE RETRACTION'S, and round 2
+    # missed that. The prose was corrected to say this measures the trunk's
+    # push filters rather than what a context READS -- while the string printed
+    # BESIDE A MERGE BEING LET THROUGH still said "is read by". A retraction
+    # that leaves the claim in the program's own output puts the false sentence
+    # into the permanent record the moment the gate prints it.
+    if not delta_files:
+        return True, (
+            "the base..origin/main delta lists NO files at all, so no required "
+            f"context's `on.push` filter can admit anything from it - "
+            f"{len(required)} considered: {sorted(required)}"
+        )
+    return True, (
+        f"no file in the base..origin/main delta ({len(delta_files)} file(s)) "
+        f"is admitted by the `on.push` filter of any of the {len(required)} "
+        f"required context(s) {sorted(required)} - delta: "
+        f"{sorted(delta_files)[:_HITS_SHOWN]}"
+        + (f" (+{len(delta_files) - _HITS_SHOWN} more)"
+           if len(delta_files) > _HITS_SHOWN else "")
+        + ". NOT a claim that no required context READS those files: the "
+          "filters bound what the trunk RE-RUNS, and the superset precondition "
+          "is unestablished - see gates.base_delta_is_inert."
+    )
 
 
 def issue_set_audit(
