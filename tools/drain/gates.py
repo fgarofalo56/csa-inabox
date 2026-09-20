@@ -19,6 +19,7 @@ spec and implemented nowhere, and five `policy.json` keys were read by nothing.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass, field
@@ -232,6 +233,7 @@ MERGE_GATE_IMPLEMENTED_BY = {
     "require_no_red": "gates.classify_checks (RED_CONCLUSIONS)",
     "require_no_incomplete": "gates.classify_checks (INCOMPLETE_STATUSES)",
     "require_no_skipped_required_context": "gates.required_measured_nothing",
+    "advisory_red_is_a_no_go": "gates.advisory_verdict",
     "scan_closing_keywords_in": "gates.merge_is_close_safe",
     "closing_keyword_scan_blocks_an_undeclared_close": "merge_gate.run_gates gate 6",
     "audit_issue_numbers_around_every_merge": "gates.issue_set_audit",
@@ -1291,6 +1293,12 @@ RED_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
      "ERROR"}
 )
+# Concluded, not red, and carrying NO measurement. These are green ON THEIR OWN
+# -- an advisory check that skips on a path filter is the routine case and must
+# never block -- but they cannot DISCHARGE an earlier red run of the same name
+# at the same head, because nothing was measured to discharge it with. A
+# SUCCESS is deliberately absent: that is a re-run that ran and passed.
+MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})
 # Not finished. A required context that has not concluded is INCOMPLETE, never a
 # pass. `EXPECTED` is a StatusContext that has been announced and never
 # reported -- the check-run equivalent of never-created.
@@ -1398,6 +1406,472 @@ def _check_rank(check: dict) -> int:
     if verdict == "SKIPPED":
         return 2
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Gate 4c -- the ADVISORY population (#4543)
+# ---------------------------------------------------------------------------
+#
+# Gates 4, 4b and 5 all take `required` and FILTER THE POPULATION BEFORE ANY
+# PREDICATE RUNS. Only 15 of the ~35-40 contexts this repo publishes are
+# required, so ~25 checks per PR were invisible to the program that decides
+# every merge -- and an advisory RED and `VERDICT: GO` were perfectly
+# compatible. Measured on PR #4540, head `7dd2fa3e279`: forty check-runs,
+# exactly ONE red (`brain security graph -- committed artifact matches the
+# tree`, advisory), and the gate printed GO. The merge landed and `main` was
+# red afterwards.
+#
+# This capability EXISTED and was lost. `temp/merge-eligible.py` -- the tool
+# `merge_gate.py` replaced -- had the same blind spot, it was found (#4035) and
+# it was fixed there with exactly this three-way split. The promotion out of
+# `temp/` did not carry it. A gate checking a gate, inheriting its blindness.
+#
+# The population here is `statusCheckRollup`, which already carries every check
+# and needs no second API call. That matters for fail-closed behaviour: if the
+# rollup cannot be read, `collect` raises and nothing is scored -- a site that
+# is never evaluated, not a site that evaluates to GO.
+
+
+@dataclass(frozen=True)
+class AdvisorySplit:
+    """The split, as names -- so a caller can PRINT which is which.
+
+    `red` carries `"name (CONCLUSION)"`; `rerun` carries a sentence; `wait` and
+    `clean` carry bare names. `population` counts the distinct advisory
+    contexts considered and `total_checks` every entry the rollup published,
+    required included. Both counts are reported rather than derived by the
+    caller, because a clean answer over an EMPTY population is the
+    green-over-zero-items shape (#4451) and the reader has to be able to tell
+    the two apart.
+
+    FOUR buckets, not three. `rerun` is the one the predecessor did not have:
+    a name whose NEWEST run has not concluded while an OLDER run at the same
+    head concluded RED. See `classify_advisory_checks` for why it is separate
+    from both `red` and `wait`.
+    """
+
+    red: list[str]
+    rerun: list[str]
+    wait: list[str]
+    clean: list[str]
+    population: int
+    total_checks: int
+
+
+def _started_utc(check: dict) -> _dt.datetime | None:
+    """When this run STARTED, in UTC, or None when that cannot be established.
+
+    FOUR spellings, because the same fact arrives under different names:
+    GraphQL `statusCheckRollup` publishes `startedAt`, the REST check-runs API
+    publishes `started_at`, and a StatusContext has neither -- it carries
+    `createdAt` / `created_at`. A reader that knows one spelling silently
+    treats every other shape as timestamp-less.
+
+    Returns None, deliberately, for anything it cannot parse or that carries no
+    timezone. `newest_by_name` reads None as "fall back to worst-wins for this
+    whole name", which is the conservative branch: an unreadable timestamp must
+    never let a red run be discarded as superseded.
+    """
+    for key in ("startedAt", "started_at", "createdAt", "created_at"):
+        raw = check.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip()
+        # `fromisoformat` did not accept a trailing `Z` until 3.11, and this
+        # package declares >=3.10. Every GitHub timestamp ends in one.
+        if text[-1] in ("Z", "z"):
+            text = text[:-1] + "+00:00"
+        try:
+            when = _dt.datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if when.tzinfo is None:
+            return None
+        return when.astimezone(_dt.timezone.utc)
+    return None
+
+
+def _worst(runs: list[dict]) -> dict:
+    """The worst run in a group, first-wins on a tie (as `worst_by_name` is)."""
+    chosen = runs[0]
+    for run in runs[1:]:
+        if _check_rank(run) > _check_rank(chosen):
+            chosen = run
+    return chosen
+
+
+def _group_by_name(checks) -> dict[str, list[dict]]:
+    """Context name -> every run that published it at this head.
+
+    Split out because TWO questions need the whole group, not just its winner:
+    which run is newest, and whether any OTHER run of that name concluded RED
+    (`classify_advisory_checks`'s `rerun` bucket). Narrowing the population is
+    therefore a single edit here, which is what arm A2 mutates.
+    """
+    groups: dict[str, list[dict]] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        groups.setdefault(name, []).append(check)
+    return groups
+
+
+def newest_by_name(checks) -> dict[str, dict]:
+    """Context name -> its NEWEST run, by max start time. Not last-in-list.
+
+    A re-run publishes a SECOND check-run under the same name, and list order
+    is the API's, not time's. Taking the last entry is wrong in both
+    directions: a stale red can outrank the green re-run that fixed it, and a
+    stale green can bury a red one. Neither error is visible from the answer.
+
+    Deliberately DIFFERENT from `worst_by_name`, which the required path uses.
+    There, worst-wins is right: a required context that concluded SKIPPED must
+    not hide behind a green twin, and a required gate is allowed to be
+    pessimistic. Here the question is "what does this advisory check say NOW",
+    and a fixed check that still blocks is a gate that strands the drain.
+
+    Two ways this falls back to worst-wins, both fail-closed:
+      * any run in the group has no readable start time -- then the group's
+        order is unknown and the pessimistic answer is the only honest one;
+      * two or more runs TIE at the maximum start time (matrix legs fire
+        together) -- then "newest" does not pick one and the worst of the tied
+        set is taken.
+    """
+    return _newest_from_groups(_group_by_name(checks))
+
+
+def _newest_from_groups(groups: dict[str, list[dict]]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for name, runs in groups.items():
+        stamps = [_started_utc(run) for run in runs]
+        if any(stamp is None for stamp in stamps):
+            out[name] = _worst(runs)
+            continue
+        newest = max(stamps)
+        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) if s == newest])
+    return out
+
+
+def _is_incomplete(check: dict) -> bool:
+    """Has this run NOT said anything yet? One definition, two callers.
+
+    Written once because the advisory split and `_newest_informative_concluded` must agree
+    exactly: if they drift, a run counts as in-flight for one question and as
+    concluded for the other, and the bucket boundary moves without anyone
+    editing it.
+
+    DISCLOSED GAP, pre-existing and deliberately not papered over: the
+    `status in INCOMPLETE_STATUSES` clause has NO fixture that distinguishes it
+    on this path. Every advisory in-flight fixture also has a falsy `verdict`,
+    so the first clause answers first and deleting the third is invisible to
+    the suite. It is kept because `_outcome`'s docstring records why -- a
+    CheckRun can publish `status: IN_PROGRESS` alongside a stale `conclusion`,
+    and a reader testing only one of the pair scored a PENDING StatusContext
+    green. The same clause exists unfixtured at two OLDER sites
+    (`classify_checks`, `_check_rank`); an independent reviewer measured that
+    and asked for this line rather than a fabricated fixture, and those two
+    sites are deliberately NOT touched here.
+    """
+    verdict, status = _outcome(check)
+    return not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES
+
+
+def _newest_informative_concluded(runs: list[dict]) -> dict | None:
+    """The newest CONCLUDED run that actually MEASURED something, or None.
+
+    A plain newest-concluded read answers "what did this check last say". This answers the
+    narrower question both callers need: "what did this check last say when it
+    actually RAN". A `SKIPPED` or `NEUTRAL` run said nothing, so it is not an
+    answer to a previous failure.
+
+    WHAT MAKES THIS RETURN None: a group of nothing but skips and in-flight
+    runs. That routes the caller to `clean`/`wait`, which is correct — a check
+    that has never measured anything at this head has no red to carry forward.
+
+    NO `exclude` PARAMETER, and the reason is worth recording. The first version
+    took the newest run and dropped it by IDENTITY, with a docstring claiming
+    that removing by VALUE would drop byte-equal twins and fail OPEN. Two
+    independent reviewers showed that claim was UNKILLABLE: `is not` → `!=` →
+    dropping the filter entirely all left the suite green, and one enumerated
+    all 898 reachable 2- and 3-run groups and found the verdict never differs.
+    It is dead by construction at both call sites — the supersession caller's
+    run is in `MEASURED_NOTHING` and the ADV-RERUN caller's is incomplete, so
+    each is already removed by a filter below. `assertion-design.md` says an
+    un-killable assertion is disclosed or dropped; this one is dropped, because
+    the honest version of it is "this parameter does nothing".
+    """
+    informative = [
+        run for run in runs
+        if not _is_incomplete(run)
+        and _outcome(run)[0] not in MEASURED_NOTHING
+    ]
+    if not informative:
+        return None
+    return _newest_from_groups({"": informative})[""]
+
+
+def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
+    """Split every NON-required context: ADV-RED / ADV-RERUN / ADV-WAIT / clean.
+
+    The same split the required path uses, over the population the required
+    path throws away, plus one bucket the predecessor did not have. Both rollup
+    shapes are read via `_outcome`: a StatusContext says ERROR/PENDING where a
+    CheckRun says FAILURE/IN_PROGRESS and has no `status` key at all, so a
+    conclusion-only reader is blind to every context published by the other
+    shape.
+
+    IN-PROGRESS IS NOT RED. That is the recorded mistake from the first time
+    this was built, for `merge-eligible.py`: classifying `in_progress` as red
+    cries wolf on every PR with CI still running, and a control that fires on
+    everything teaches its reader to skim it. The same goes for `queued` and
+    for a StatusContext's `PENDING` -- `INCOMPLETE_STATUSES` is the whole
+    vocabulary of "has not said anything yet", and all of it routes to `wait`.
+
+    SKIPPED IS NOT RED EITHER, on this side. For a REQUIRED context a SKIPPED
+    run is a gate that measured nothing (gate 5), but advisory checks skip
+    routinely and legitimately on path filters -- `Bicep Lint` and `Workflow
+    lane states` were both SKIPPED on the fixture head, on a PR that touched
+    neither. Counting those would make the arm red on essentially every PR.
+
+    ADV-RERUN HOLDS TWO SHAPES, and the bucket's name is older than its
+    contents. Both mean "the last thing this check MEASURED was red, and
+    nothing has measured since":
+
+      1. a re-run is IN FLIGHT and has not answered yet; and
+      2. a re-run has CONCLUDED `SKIPPED` or `NEUTRAL` — it answered, but it
+         measured nothing, so it did not answer THIS.
+
+    Shape 1 closes a SELF-CLEARING BLOCK found by an independent reviewer on
+    the first version of this arm: `newest`-wins alone answered ADV-WAIT, which
+    does not block, so dispatching the gate's OWN remedy (`rerun-ci`) cleared
+    the gate's own block the moment the re-run STARTED. Shape 2 is the same
+    hole one step later, found on round 4 — and round 4's fix for it re-opened
+    shape 1 by changing only the sibling branch. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so this was a live path
+    to merging over a red without a human in it.
+
+    NEWEST INFORMATIVE, not "any run was red" -- see
+    `_newest_informative_concluded`, where an earlier version of this bucket
+    over-blocked a check that had already been fixed and named a run whose
+    conclusion it had never read.
+
+    It is a SEPARATE bucket from `red` on purpose, because the remedy differs
+    and `deploy-integrity.md` R7 applies to a gate's own message: the check has
+    not failed AGAIN, and the red has not been cleared.
+
+    "WAIT FOR IT" IS NOT SAID HERE, AND THE REASON IS THE ROUND-4 BLOCKER. It
+    was the runtime message and it is false for shape 2 — that re-run has
+    already concluded, so waiting can never resolve it. The message now says
+    the red has not been CLEARED and that a re-run must actually MEASURE to
+    clear it, which is true of both shapes. A docstring that still said "wait
+    for it is true" survived one round after the message it described was
+    corrected; closing a finding at the MESSAGE and not at the SPEC is the
+    label-not-site error `assertion-design.md` names.
+
+    Live frequency of the shape: 0 across 52 PR heads (the reviewer's scan), so
+    holding it costs nothing measurable today. It is blocked rather than
+    disclosed because the cost of holding is a few minutes and the cost of the
+    hole is an unattended merge over a red -- and because the drain's own
+    remedy is what creates the shape, which makes it reachable by design rather
+    than by chance.
+    """
+    required_names = set(required)
+    red: list[str] = []
+    rerun: list[str] = []
+    wait: list[str] = []
+    clean: list[str] = []
+    groups = _group_by_name(checks)
+    for name, check in sorted(_newest_from_groups(groups).items()):
+        if name in required_names:
+            continue
+        verdict = _outcome(check)[0]
+        if verdict in RED_CONCLUSIONS:
+            red.append(f"{name} ({verdict})")
+        elif _is_incomplete(check):
+            # `_newest_informative_concluded`, NOT `_newest_concluded` -- the
+            # FOURTH form of the self-clearing block, and round 4 CREATED it by
+            # fixing only the sibling branch below. a plain newest-CONCLUDED read counts a
+            # SKIPPED run as an answer, so:
+            #
+            #     FAILURE@10, SKIPPED@11                  -> NO-GO  (round 4)
+            #     FAILURE@10, SKIPPED@11, IN_PROGRESS@12  -> GO     (this hole)
+            #
+            # i.e. round 4 made `FAILURE, SKIPPED` block, and then dispatching
+            # `rerun-ci` -- the gate's OWN `permitted_unattended` remedy --
+            # cleared it the instant the re-run STARTED. That is round 2's
+            # finding verbatim, re-opened one line above round 4's fix for it.
+            # The two branches ask the same question and must use the same
+            # helper.
+            last = _newest_informative_concluded(groups[name])
+            last_verdict = _outcome(last)[0] if last is not None else ""
+            if last_verdict in RED_CONCLUSIONS:
+                rerun.append(
+                    f"{name} (a re-run is in flight; the newest run that MEASURED "
+                    f"anything at this head was {last_verdict})"
+                )
+            else:
+                wait.append(name)
+        elif verdict in MEASURED_NOTHING:
+            # A RUN THAT MEASURED NOTHING CANNOT DISCHARGE A RED ONE.
+            #
+            # The third form of the self-clearing block, found by an independent
+            # reviewer after the first two were closed. `rerun` above holds the
+            # case where the re-run is still IN FLIGHT -- but once that re-run
+            # CONCLUDES `SKIPPED` or `NEUTRAL` it stops being incomplete, so
+            # newest-wins dropped it straight into `clean` and the red vanished:
+            #
+            #     FAILURE @10:00, SKIPPED @11:00  ->  (True, "no advisory context is red")
+            #
+            # and the same for NEUTRAL. That is reachable by ordinary re-run
+            # semantics -- an `if:` re-evaluating false, or a `needs` upstream
+            # failing or being cancelled, both yield `skipped` -- i.e. by the
+            # gate's OWN remedy, `rerun-ci`, which is in `permitted_unattended`.
+            #
+            # SKIPPED still is not RED (see above: advisory checks skip
+            # routinely on path filters, and counting that would block every
+            # PR). The claim here is narrower and is about SUPERSESSION: a
+            # skip may mean "not applicable", which is fine on its own and is
+            # NOT fine as an answer to a run that already failed at this head.
+            # A SUCCESS deliberately DOES discharge it -- that is a re-run that
+            # measured something and passed.
+            prior = _newest_informative_concluded(groups[name])
+            prior_verdict = _outcome(prior)[0] if prior is not None else ""
+            if prior_verdict in RED_CONCLUSIONS:
+                rerun.append(
+                    f"{name} (superseded by a {verdict} run, which measured nothing; "
+                    f"the newest run that DID measure at this head was {prior_verdict})"
+                )
+            else:
+                clean.append(name)
+        else:
+            clean.append(name)
+    return AdvisorySplit(
+        red=red,
+        rerun=rerun,
+        wait=wait,
+        clean=clean,
+        population=len(red) + len(rerun) + len(wait) + len(clean),
+        total_checks=len(checks),
+    )
+
+
+def advisory_verdict(
+    checks: list[dict], required: list[str], policy_says_no_go: bool
+) -> tuple[bool, str]:
+    """Gate 4c: an advisory RED is a NO-GO. Returns (ok, one legible line).
+
+    BLOCK, not report -- decided on a measurement rather than on taste, and the
+    measurement was taken WITH THIS FUNCTION rather than with a restatement of
+    it. Across 22 PR heads on 2026-09-17 (the 10 then-open PRs plus the 12 most
+    recently merged), TWO would go NO-GO here:
+
+        #4540  brain security graph -- committed artifact matches the tree
+               (FAILURE)  <- the fixture; this is the head that shipped a red
+               main under a VERDICT: GO
+        #4492  in-VNet runner capability probe (CANCELLED)
+               the runner PAT is not reachable from job code (CANCELLED)
+
+    So 2 of 22, ~9%: not "every PR", and blocking does not strand the drain.
+    An earlier draft of this docstring said ONE of 22 -- that number came from
+    remembering the merged half of the population and not re-reading the open
+    half, which is the partial-read-then-confident-claim shape this repo keeps
+    recording. It is corrected here rather than quietly dropped, because the
+    block-vs-report decision rests on it.
+
+    #4492's pair is not a false positive to be carved out: a CANCELLED run
+    measured nothing, neither was re-run, and that PR genuinely should not
+    merge until they are. The remedy is a re-run, which is already in
+    `permitted_unattended`.
+
+    WHAT THIS GATE CANNOT SEE, stated here rather than left to be discovered.
+    The population is the checks attached to the HEAD BEING MEASURED. A lane
+    with no `pull_request` trigger publishes no check-run at a PR head and is
+    therefore invisible to this arm -- by construction, not by omission.
+
+    The named instance is #4547, and the CONDITION MATTERS more than the
+    conclusion: `build-fiab-images-acr-tasks.yml` triggers on
+    `workflow_dispatch`, `workflow_call` AND `push` -- but that push is
+    `branches: [main]` (`:80-82`), and a PR head is never on `main`. THE
+    INVARIANT IS `branches: [main]`, not "there is no push trigger". An earlier
+    version of this comment said the latter, which was false at the time it was
+    written: the reader who checks it finds a `push:` block, concludes the
+    disclosure is stale, and learns nothing about the real condition. A
+    tripwire that names the wrong condition cannot fire -- the thing it told
+    you to watch for has already happened.
+
+    So what would make these reds start blocking here is a `pull_request`
+    trigger being added, or `branches:` being widened past `main`. Corroborated
+    empirically, twice and independently: 0 ACR-lane checks across 22 PR heads
+    (this lane) and across 40 merged heads (the reviewer's scan, whose only
+    Trivy hits were `trivy.yml`'s, on 2 heads, both SUCCESS).
+
+    Two consequences, both deliberate: the known-flaky objection to blocking
+    does not apply, and NO allowlist, exemption or carve-out is built for it --
+    a guard-weakening mechanism is a defect in its own right here; and this
+    gate must not be read as saying anything about main-only or scheduled
+    lanes. A red there is a P0 under `deploy-integrity.md` R1 and needs a
+    different instrument.
+
+    ADV-WAIT does NOT block, and is named in the GO line rather than left as a
+    footnote. Blocking on it would mean waiting for every advisory check on
+    every PR, including the 30-minute ones, and an in-progress or queued check
+    has not said anything yet. The residual risk is stated in the line itself:
+    a check still running can still turn red after this answer.
+
+    `policy_says_no_go` is `policy.json`'s `merge_gate.advisory_red_is_a_no_go`,
+    read by the caller and passed here. It is NOT a switch: setting it false
+    does not relax the arm, it makes the arm refuse to answer, because this
+    gate implements no permissive mode. A key that could turn a control off
+    would be a skip valve; a key that can only take the control out of service
+    is the authority being consulted.
+    """
+    if not policy_says_no_go:
+        return False, (
+            "policy.json declares merge_gate.advisory_red_is_a_no_go=false and this "
+            "gate implements no such mode - it cannot answer, which is NO-GO, not a "
+            "pass. Restore the key to true."
+        )
+    if not checks:
+        return False, (
+            "the rollup published NO checks at all, so this arm measured NOTHING - "
+            "a clean advisory answer over an empty population is the "
+            "green-over-zero-items shape (#4451), not a pass. See gate 4b for which "
+            "of never-created / parked this is."
+        )
+    split = classify_advisory_checks(checks, required)
+    waiting = (
+        f" ADV-WAIT {len(split.wait)} still running ({', '.join(split.wait)}) - NOT "
+        "counted as red, and a check still running can still turn red after this line."
+        if split.wait else ""
+    )
+    if split.red or split.rerun:
+        blocking = [
+            (f"ADV-RED {len(split.red)}: {'; '.join(split.red)}." if split.red else ""),
+            (f"ADV-RERUN {len(split.rerun)}: {'; '.join(split.rerun)} - the red has "
+             "NOT been cleared; a re-run must actually MEASURE to clear it. Do not "
+             "read a re-run's mere existence, or a re-run that skipped, as the red "
+             "being cleared."
+             if split.rerun else ""),
+        ]
+        return False, (
+            " ".join(part for part in blocking if part)
+            + " These are NOT required contexts, so branch protection will merge "
+            "straight over them - which is exactly how #4540 shipped a red main. "
+            "REMEDY: fix the check, or re-run it with `gh run rerun --failed` (both "
+            "`rerun-ci` and `approve-parked-ci-run` are permitted unattended) and "
+            "wait for the new answer. Do NOT merge past it. "
+            f"[{split.population} advisory of {split.total_checks} published; "
+            f"{len(split.clean)} clean]" + waiting
+        )
+    return True, (
+        f"no advisory context is red: {len(split.clean)} clean of {split.population} "
+        f"advisory ({split.total_checks} checks published in total). SCOPE: checks "
+        "ATTACHED TO THIS HEAD only - a lane with no `pull_request` trigger publishes "
+        "nothing here. The ACR image builds (#4547) DO have a push trigger, but it is "
+        "`branches: [main]`, and a PR head is never on main - that branch filter is the "
+        "invariant, not an absent trigger." + waiting
+    )
 
 
 def required_measured_nothing(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
