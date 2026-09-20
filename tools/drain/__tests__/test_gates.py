@@ -2231,7 +2231,7 @@ def test_a_delta_outside_every_required_scope_is_inert():
     assert "docs/x.md" in why, why
 
 
-def test_negative_control_a_delta_the_second_context_reads_still_blocks():
+def test_negative_control_a_delta_the_second_contexts_filter_admits_still_blocks():
     """`beta/y.txt` is outside Alpha's scope and inside Beta's. A loop that
     returns on the first scope's clean result passes this; the correct one
     refuses. Change the file to `docs/y.txt` and this test goes green-and-
@@ -2243,7 +2243,7 @@ def test_negative_control_a_delta_the_second_context_reads_still_blocks():
     assert "beta/y.txt" in why, why
 
 
-def test_negative_control_a_delta_the_first_context_reads_still_blocks():
+def test_negative_control_a_delta_the_first_contexts_filter_admits_still_blocks():
     """The mirror. `shared.txt` is a LITERAL pattern, so this also pins that a
     non-wildcard entry in a `paths:` list is honoured -- a translator that only
     handled `**` would read `shared.txt` as matching nothing and excuse it."""
@@ -2599,6 +2599,15 @@ def test_positive_control_the_intersection_query_can_return_non_empty():
     assert inert, why_inert
 
 
+#: How many of the 17 required contexts are published by the three workflows
+#: that declare NO `on.push` path filter. Those contexts refuse gate 1's
+#: second arm unconditionally, which is the only reason the `on.push`-as-proxy
+#: weakness is harmless today. MODULE level because ruff's N806 forbids an
+#: uppercase name inside a function, and lowercasing it would read as an
+#: incidental local rather than the pinned expectation it is.
+_UNFILTERED_REQUIRED = 5
+
+
 def test_positive_control_the_real_required_topology_is_measured_not_assumed():
     """THE SAFETY INTERLOCK, not a frequency note -- the earlier wording here
     framed this as "how often the arm fires", which points the remedy at the
@@ -2683,18 +2692,20 @@ def test_positive_control_the_real_required_topology_is_measured_not_assumed():
         ctx for ctx in required
         if any(ctx in body for body in texts.values())
     )
-    UNFILTERED_REQUIRED = 5
-    assert len(published) == UNFILTERED_REQUIRED, (
+    assert len(published) == _UNFILTERED_REQUIRED, (
         f"{len(published)} required context(s) are published by the three "
-        f"unfiltered workflows, expected {UNFILTERED_REQUIRED}: {published}. "
+        f"unfiltered workflows, expected {_UNFILTERED_REQUIRED}: {published}. "
         "FEWER means branch protection dropped one (or a workflow was "
         "renamed), so that context no longer forces gate 1's second arm to "
-        "refuse -- THE INTERLOCK HAS OPENED ON THE AXIS THE LOOP ABOVE DOES "
-        "NOT WATCH, and the remedy is the same: establish the superset "
-        "relation per context, or take the arm out of service. MORE means a "
-        "new unfiltered required context appeared and this floor needs "
-        "re-measuring, not raising on sight. Note the snapshot read here can "
-        "lag live protection (#4629); this is the offline half of the check."
+        "refuse -- THE INTERLOCK IS WEAKENED ON THE AXIS THE LOOP ABOVE DOES "
+        "NOT WATCH. It is not necessarily GONE: the remaining unfiltered "
+        "contexts still refuse unconditionally, and the interlock only opens "
+        "when the count reaches zero. The remedy is the same either way -- "
+        "establish the superset relation per context, or take the arm out of "
+        "service. MORE means a new unfiltered required context appeared and "
+        "this floor needs re-measuring, not raising on sight. Note the "
+        "snapshot read here can lag live protection (#4629); this is the "
+        "offline half of the check, and it agreed with live when measured."
     )
 
 

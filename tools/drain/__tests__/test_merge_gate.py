@@ -32,6 +32,26 @@ import merge_gate
 
 import gates
 
+
+def _git_argv(args: list[str]) -> list[str]:
+    """`args` with git's leading global `-c key=value` options removed.
+
+    `merge_gate.sh()` injects `-c core.quotePath=false` into EVERY git
+    invocation, exactly where real git accepts global options: before the
+    subcommand. A stub that pinned `args[:2] == ["git", "show"]` silently
+    stopped matching the moment that injection landed, fell through to its
+    default success-with-empty-stdout, and the derivation then reported the
+    workflow "could not be read or parsed" -- a green stub producing a red
+    that had nothing to do with the code under test.
+
+    So parse argv the way git does rather than pinning a position. Returns
+    `["show", ...]` for both `git show ...` and `git -c k=v show ...`.
+    """
+    i = 1
+    while i + 1 < len(args) and args[i] == "-c":
+        i += 2
+    return args[i:]
+
 POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
 HEAD = "a" * 40
 HEAD_DATE = "2026-09-11T10:00:00Z"
@@ -358,8 +378,9 @@ def _wire_derivation(monkeypatch, *, suite=7, path=_WF, sources=None):
         lambda _repo, _sha: [{"check_suite_id": suite, "path": path}])
 
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "show"]:
-            sha = args[2].split(":")[0]
+        _argv = _git_argv(args)
+        if args[0] == "git" and _argv[:1] == ["show"]:
+            sha = _argv[1].split(":")[0]
             text = (sources or {}).get(sha)
             if text is None:
                 return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
@@ -552,6 +573,63 @@ def _unflagged_delta(repo, base, head) -> list[str]:
 #: The scope the moved file starts inside. A rename OUT of it is the defect.
 _TOOLS_SCOPE = [gates.ContextScope(
     "Python Lint", ".github/workflows/test.yml", paths=("tools/**",))]
+
+
+def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 5: `core.quotePath` defaults to TRUE, so a non-ASCII
+    path comes back C-quoted and octal-escaped -- `"tools/drain/prob\\303\\251.py"`
+    -- and no literal path comparison recognises it. The delta then contains
+    no path any filter admits, and the gate answers INERT for a file sitting
+    inside `tools/**`, which four required contexts are produced from.
+
+    Round 4 set the flag at ONE call site and claimed the class was closed.
+    It is injected in `sh()` now, and this is the fixture that makes arm BD18
+    a witness rather than a claim: before this test existed, BD18 SURVIVED the
+    whole suite because every path in every fixture was ASCII.
+
+    THE COUNTERFACTUAL IS ASSERTED FIRST, for the same reason the rename test
+    asserts its own: the SAME two commits, diffed WITHOUT the injection, must
+    come back QUOTED. If they come back plain, quoting is off in this
+    environment, the flag is a no-op here, and everything below would pass
+    with it removed.
+
+    WHAT WOULD MAKE THIS FAIL: `sh()` no longer injecting
+    `core.quotePath=false` (BD18), which returns the escaped spelling and
+    turns the refusal below into INERT.
+    """
+    name = "tools/drain/probé.py"
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/plain.py",
+        lambda r: (r / name).write_text("y = 2\n", encoding="utf-8"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    assert name not in unflagged, (
+        "git is NOT quoting non-ASCII paths in this environment, so "
+        "`core.quotePath=false` changes nothing here and every assertion "
+        f"below would pass without it. Unflagged diff: {unflagged}"
+    )
+    assert any("\\303" in p or "\\" in p for p in unflagged), (
+        f"expected an escaped spelling in the unflagged diff, got {unflagged}"
+    )
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert name in delta, (
+        "the real path is missing from the delta, so the injection in `sh()` "
+        f"is not reaching this query: {delta}"
+    )
+
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert name in why, why
+
+    # ASCII CONTROL: the sibling added in the same repo must behave identically
+    # either way, so a refusal above cannot be "it refuses everything".
+    assert "tools/drain/plain.py" not in delta, (
+        "the control file was added in the BASE commit and must not appear in "
+        f"the delta: {delta}"
+    )
 
 
 def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_path):
@@ -1645,7 +1723,7 @@ def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
     }
 
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=0, stdout=trees[args[-1]], stderr="")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 
@@ -1666,7 +1744,7 @@ def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
 def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch):
     """"Cannot be shown to agree" is not "agree"."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 
@@ -1696,7 +1774,7 @@ def test_a_failed_ls_tree_with_output_does_not_read_as_an_empty_tree(monkeypatch
     so a failed listing treated as an empty one silently permits the narrowing
     this guard exists to refuse."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(
                 returncode=128, stdout="tools\nscripts\n", stderr="bad object")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
@@ -1711,7 +1789,7 @@ def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch)
     rather than an answer; returning the bare set lets the caller's `is None`
     check pass and then compare against nothing."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 

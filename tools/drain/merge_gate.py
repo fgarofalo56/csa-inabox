@@ -41,7 +41,27 @@ POLICY_PATH = os.path.join(HERE, "policy.json")
 
 
 def sh(args: list[str]) -> tuple[int, str, str]:
-    """Run in the repo root, never discarding stderr (deploy-integrity R7)."""
+    """Run in the repo root, never discarding stderr (deploy-integrity R7).
+
+    EVERY `git` invocation gets `-c core.quotePath=false` injected HERE rather
+    than at its call site, and the difference is not style. `core.quotePath`
+    defaults to true, under which a non-ASCII path comes back C-quoted and
+    octal-escaped (`"tools/prob\\303\\251.py"`), which no literal path
+    comparison recognises. Round 4 fixed exactly one call site and shipped a
+    claim that the class was closed; review then found the SIBLING at
+    `git show --name-only`, which feeds `push_event_runs` and
+    `scope_untouched_at_merge` -- and those EXCUSE an absence, so that one was
+    live rather than latent. Measured through the real code on a single
+    non-ASCII path: unflagged gave "no push event" (absence excused), flagged
+    gave the opposite.
+
+    Injecting once here is what makes the NEXT path-reading git call safe
+    without anyone remembering. It is a no-op for git calls that emit no
+    paths, and `gh` and everything else is untouched. The other half is the
+    codec, which this function already pins: `encoding="utf-8"`.
+    """
+    if args and args[0] == "git":
+        args = [args[0], "-c", "core.quotePath=false", *args[1:]]
     run = subprocess.run(
         args, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=REPO_ROOT
     )
@@ -451,9 +471,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
 def required_contexts(repo: str) -> list[str]:
     """The contexts branch protection will actually BLOCK on.
 
-    Measured: only 15 of ~35 published contexts are required. Treating all of
+    Measured 2026-09-20: 17 of ~38 published contexts are required. Both
+    numbers DRIFT -- the required set is whatever branch protection says at
+    read time (it was 15 when this docstring was written), and the published
+    total varies per PR with which advisory lanes trigger. Treating all of
     them as blocking stalls on checks that cannot block; treating none as
-    blocking merges over a red required one.
+    blocking merges over a red required one. Read the live set rather than
+    this sentence, which is context for the design, not a constant.
     """
     rc, out, err = sh(
         ["gh", "api", f"repos/{repo}/branches/main/protection",
@@ -538,17 +562,13 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
     NEVER discards stderr (R7): an unreadable diff returns None, which
     `gates.base_delta_is_inert` refuses, and says why on stderr.
 
-    `core.quotePath=false` is LOAD-BEARING, not tidiness. It defaults to true,
-    and under it a non-ASCII path comes back C-quoted and octal-escaped -
-    `"tools/prob\\303\\251.py"` - which no literal filter match recognises, so a
-    delta touching a scoped file reads as INERT and gate 1 passes on a base
-    that a required context does read. Measured in a throwaway repo against
-    this box's config, with an ASCII sibling as the control matching in both
-    directions. `sh()` already decodes utf-8 explicitly, which is the other
-    half: the flag alone still fails under a locale decode.
+    Non-ASCII paths are handled in `sh()`, which injects
+    `core.quotePath=false` into every git invocation. It is deliberately NOT
+    set here: round 4 set it at this one call site, claimed the class was
+    closed, and left the sibling at `git show --name-only` -- which excuses
+    rather than refuses -- still blind.
     """
-    rc, out, err = sh(["git", "-c", "core.quotePath=false",
-                       "diff", "--name-only", "--no-renames",
+    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",
                        base_sha, origin_main_sha])
     if rc != 0:
         print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "
@@ -1183,8 +1203,15 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
            if mergeable != "MERGEABLE" else ""),
     )
 
-    # 1 -- base == origin/main, exactly... OR the delta between them provably
-    # cannot reach any required context (#4585).
+    # 1 -- base == origin/main, exactly... OR no required context's producing
+    # workflow declares an on.push path filter that ADMITS the delta between
+    # them (#4585). That is a PROXY for unreachability, not a proof of it:
+    # the filters bound what the trunk RE-RUNS, not what a context READS, and
+    # the superset precondition is unestablished. The earlier wording here
+    # said "provably cannot reach any required context", which is the claim
+    # `gates.base_delta_is_inert` states it cannot establish -- and it
+    # survived two sweeps by being WRAPPED across this comment break, where
+    # no line-anchored grep could see it.
     #
     # The strict test runs FIRST and is unchanged. The second arm is only
     # consulted when the strict one has already failed, and only when it failed

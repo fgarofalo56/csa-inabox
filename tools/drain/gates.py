@@ -4251,8 +4251,13 @@ def base_delta_is_inert(
       "That intersection is empty" was a hypothesis; it is false on two
       independent grounds.
 
-    So this ships as the MECHANISM, correct and tested in both directions, and
-    it would start firing if a producing workflow declared a `push` path scope.
+    So this ships as the MECHANISM, tested in both directions ON THE ARM'S OWN
+    LOGIC, and it would start firing if a producing workflow declared a
+    `push` path scope. Read that scope narrowly: round 4 shipped the same
+    phrase unqualified while `core.quotePath` was still unset on a sibling
+    path-reading call, which EXCUSED rather than refused. Both directions
+    describes the arm's decision logic, not a guarantee that every query
+    feeding it reads paths faithfully - that is now held by `sh()`.
     That is technically available -- `on.push.paths` is a different event from
     `on.pull_request`, so a required check can keep reporting on every PR while
     declaring its push scope -- and it is deliberately NOT done here, for two

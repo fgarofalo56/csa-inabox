@@ -3173,26 +3173,23 @@ ARMS: list[tuple[str, str, str, str]] = [
          "context depends on has left main. Round-1 blocker, reproduced "
          "end-to-end with a plain delete as the control"),
         "merge_gate.py",
-        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
-         '                       "diff", "--name-only", "--no-renames",\n'
+        ('    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",\n'
          "                       base_sha, origin_main_sha])"),
-        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
-         '                       "diff", "--name-only",\n'
+        ('    rc, out, err = sh(["git", "diff", "--name-only",\n'
          "                       base_sha, origin_main_sha])"),
     ),
     (
-        ("BD18 `core.quotePath=false` comes off the delta query, so git's "
-         "DEFAULT quoting returns a non-ASCII path C-quoted and octal-escaped "
-         "- no literal filter match recognises it, the delta reads as inert, "
-         "and gate 1 passes on a base a required context does read. Round-4 "
-         "blocker; the ASCII sibling is the control that stays matched"),
+        ("BD18 `core.quotePath=false` stops being injected into every git "
+         "call, so git's DEFAULT quoting returns a non-ASCII path C-quoted "
+         "and octal-escaped. No literal path comparison recognises it: the "
+         "base delta reads as inert, and `push_event_runs` reads as 'no push "
+         "event', which EXCUSES. Round-5 blocker - round 4 fixed one call "
+         "site and left the excusing sibling blind"),
         "merge_gate.py",
-        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
-         '                       "diff", "--name-only", "--no-renames",\n'
-         "                       base_sha, origin_main_sha])"),
-        ('    rc, out, err = sh(["git",\n'
-         '                       "diff", "--name-only", "--no-renames",\n'
-         "                       base_sha, origin_main_sha])"),
+        ('    if args and args[0] == "git":\n'
+         '        args = [args[0], "-c", "core.quotePath=false", *args[1:]]'),
+        ('    if False:\n'
+         '        args = [args[0], "-c", "core.quotePath=false", *args[1:]]'),
     ),
     (
         ("BD15 an EMPTY `paths: []` stops being refused, so a workflow "
