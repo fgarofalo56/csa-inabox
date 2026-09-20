@@ -225,12 +225,28 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * SEMANTICS, matching the block above: reject on INTRODUCE-or-CHANGE, never on
  * presence. A body that round-trips the same value is unaffected, which is what
  * keeps the near-universal `{ ...item.state, oneField: x }` save pattern working.
- * OMISSION IS ALLOWED and is fail-safe in the NARROWING direction: dropping
- * `state.storageAccount` falls back to the primary configured account
- * (`api/lakehouse/references/paths/route.ts:71`) and withdraws the T3 grant;
- * dropping `state.provisioning` drops `resolveLakehouseAbfss` to its
- * deterministic branch 3 — a `lakehouses/<safeRelPath(displayName)>` root in a
- * container that must pass `isKnownContainer` (`lakehouse-abfss.ts:140-149`).
+ * OMISSION IS ALLOWED, and it is fail-safe at ONE of the four readers, NOT at
+ * all of them. Where it is safe: dropping `state.storageAccount` falls back to
+ * the primary configured account and withdraws the T3 grant; dropping
+ * `state.provisioning` drops `resolveLakehouseAbfss` to its deterministic
+ * branch 3 — a `lakehouses/<safeRelPath(displayName)>` root in a container
+ * that must pass `isKnownContainer` (`lakehouse-abfss.ts:140-149`).
+ *
+ * WHERE OMISSION WIDENS INSTEAD, measured, and NOT closed by this rule:
+ * `synapse-item-scope.ts:223-227` and `adx-item-scope.ts` fall through from the
+ * provisioning receipt to TOP-LEVEL `state.database` / `state.databaseName`,
+ * and `notebook-path-scope.ts:121-124` falls through to TOP-LEVEL
+ * `state.notebookPath`. Those keys are client-writable and are NOT in
+ * {@link SERVER_DERIVED_SCOPE_KEYS}, so omitting the receipt moves the scope
+ * to a coordinate the caller supplied. An earlier version of this note claimed
+ * omission was narrowing at every reader; that was false, and the gap is
+ * tracked rather than papered over.
+ *
+ * Guarding those names is NOT a matter of adding them to the list — it needs
+ * the same per-item-type analysis done above for `container` and
+ * `storageAccount`, since `database` is ordinary user-authored config on other
+ * item types and a depth-blind or blanket top-level rule would refuse
+ * legitimate edits.
  *
  * THIS IS DEFENCE IN DEPTH, NOT THE PRIMARY CONTROL — the same position the
  * block above takes, for the same reason: the primary control belongs at the
@@ -240,14 +256,27 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * already on this tree, and the latter says in as many words that item state is
  * a CLAIM, not an ATTESTATION. That stays true after this change.
  *
- * NOT COVERED, deliberately:
- *   - {@link createOwnedItem} — unchanged. `deployment-pipelines/loom/_lib/promote.ts`
- *     seeds a promotion target from the SOURCE item's whole state through it,
- *     and that is the create half of a path that has to keep working.
- *   - `state.ownedContainers`, which also steers branch 3's container choice. Its
- *     range is already bounded to `KNOWN_CONTAINERS` by `isKnownContainer`
- *     (`lakehouse-abfss.ts:58-72`), so it is a narrower question than this one
- *     and is left to the sink rather than widened into here blindly.
+ * NOT COVERED, and the first two are gaps rather than choices:
+ *   - {@link createOwnedItem} — unchanged, and ~20 collection routes pass a raw
+ *     request body straight into it (`items/graph-model/route.ts:41`,
+ *     `items/_lib/palantir-crud.ts:158` for the whole Palantir family,
+ *     `items/branch-out/route.ts:195`). `promote.ts` seeds a promotion target
+ *     from the SOURCE item's whole state through it, and that is the create half
+ *     of a path that has to keep working — but a rule binding only the UPDATE
+ *     routes is satisfiable by creating a fresh item instead. OPEN.
+ *   - The TOP-LEVEL scope coordinates `state.database`, `state.databaseName`,
+ *     `state.databases[]` and `state.notebookPath`, which three of the four
+ *     readers above PREFER over the provisioning receipt when the receipt is
+ *     absent. See the omission note above. OPEN.
+ *   - `state.ownedContainers`, which also steers branch 3's container choice.
+ *     An earlier version of this note said its range is already bounded to
+ *     `KNOWN_CONTAINERS` by `isKnownContainer`. That is FALSE at
+ *     `api/lakehouse/references/paths/route.ts:72-76`, where a non-empty
+ *     `state.ownedContainers` REPLACES `KNOWN_CONTAINERS` as the allowlist
+ *     rather than being checked against it. OPEN.
+ *
+ * All three are tracked; none is closed by this rule, and this comment is the
+ * place that says so rather than implying coverage by omission.
  */
 export const SERVER_DERIVED_SCOPE_KEYS: readonly string[] = [
   'provisioning',

@@ -19,7 +19,7 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import {
-  assertNoServerDerivedScopeChange, ServerOwnedStateError,
+  assertNoServerOwnedStateChange, ServerOwnedStateError,
 } from '@/app/api/items/_lib/item-crud';
 
 export const runtime = 'nodejs';
@@ -67,8 +67,16 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     // data: they record what the provisioning engine created for this item, and
     // other code derives a security-relevant scope from them. Reject-on-change,
     // so a body that round-trips them unchanged, or omits them, is unaffected.
+    //
+    // `assertNoServerOwnedStateChange`, NOT the narrower scope assert. It calls
+    // the scope assert and then adds the depth-blind server-owned key check
+    // (#3611: `secretRef` names a Key Vault secret a later delete acts on,
+    // `engineObject` names a query-engine object a later query acts on) plus the
+    // `__proto__` refusal. This route's sibling at `items/[type]/[id]` has
+    // always called the fuller one; calling only the scope assert here left that
+    // class open on a PATCH route, which review measured.
     try {
-      assertNoServerDerivedScopeChange(nextState, item.state);
+      assertNoServerOwnedStateChange(nextState, item.state);
     } catch (e: any) {
       if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
       throw e;

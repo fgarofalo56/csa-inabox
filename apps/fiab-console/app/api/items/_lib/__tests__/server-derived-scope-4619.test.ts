@@ -193,9 +193,17 @@ beforeEach(() => {
 // ───────────────────────────────────────────────────────────────────────────
 describe('#4619 — the resolver is not blind, and the provisioner path still persists', () => {
   it('REPORTS a rewritten root when one is written the way the provisioner writes it', async () => {
-    // FAILS IF: resolveLakehouseAbfss ignores state.provisioning.secondaryIds
-    // .adlsRoot, or the direct replace() path has been guarded too (which would
-    // break `app/api/apps/[id]/install/route.ts:404` and `persistAutoBindPatch`).
+    // FAILS IF: the resolver reports the OLD root after the provisioner's direct
+    // replace() lands — i.e. it is blind to a written scope, or the direct path
+    // has been guarded too (which would break
+    // `app/api/apps/[id]/install/route.ts:404` and `persistAutoBindPatch`).
+    //
+    // DOES NOT PIN A BRANCH, disclosed rather than counted: this fixture's
+    // `adlsRoot` is reconstructible character-for-character by branch 2b from
+    // `storageAccount` + `container` + `rootPath`, so disabling branch 1 alone
+    // survives, and so does disabling 2b alone. It pins that SOME branch
+    // observes the write, which is what the "cannot see the field" worry above
+    // needs; it does not pin which.
     const { itemsContainer } = await import('@/lib/azure/cosmos-client');
     const items = await itemsContainer();
     const cur = DOCS.get(dkey(LH_ID, WS));
@@ -372,15 +380,20 @@ describe('#4619 — ordinary item-state updates still succeed', () => {
     expect(replaced).toHaveLength(1);
   });
 
-  it('ALLOWS omitting the scope entirely (fail-safe: narrows, never widens)', async () => {
+  it('ALLOWS omitting the scope entirely', async () => {
     // Omission is permitted by design. FAILS IF omission is made an error — that
     // would break every caller that builds a fresh state object.
     const res = await updateOwnedItem(LH_ID, 'lakehouse', TENANT, { state: { notes: 'fresh' } });
     expect(res).not.toBeNull();
     expect(replaced).toHaveLength(1);
     expect(replaced[0].state.provisioning).toBeUndefined();
-    // And the resolver degrades to its deterministic branch, never to the
-    // omitted-but-remembered value.
+    // NOT A NARROWING ASSERTION, and an earlier version of this spec was titled
+    // as if it were. `toBeNull()` here is produced by the absent `LOOM_*_URL` in
+    // this environment, so NO value of the omitted state distinguishes narrow
+    // from wide and this line pins nothing about direction. Omission is in fact
+    // narrowing only at `resolveLakehouseAbfss`; at `synapse-item-scope` and
+    // `notebook-path-scope` it WIDENS to a client-writable top-level key. See
+    // the omission note in `item-crud.ts`.
     expect(await resolveLakehouseAbfss(LH_ID, WS)).toBeNull(); // no LOOM_*_URL in this env
   });
 
@@ -410,9 +423,33 @@ describe('#4619 — ordinary item-state updates still succeed', () => {
 // PROMOTION — the path that WOULD have broken. `promote.ts` builds its patch
 // from the SOURCE item and applies it to a DIFFERENT target.
 // ───────────────────────────────────────────────────────────────────────────
-describe('#4619 — carryServerDerivedScope keeps deployment-pipeline promotion working', () => {
+describe('#4619 — carryServerDerivedScope rebases a cross-item copy, and promote.ts wires it in', () => {
   const sourceState = { notes: 'promoted definition', provisioning: structuredClone(SERVER_SCOPE), storageAccount: 'dlzacct' };
   const targetState = { notes: 'old', provisioning: structuredClone(REWRITTEN_SCOPE), storageAccount: 'targetacct' };
+
+  it('promote.ts passes the REBASED state to updateOwnedItem, not the raw source state', async () => {
+    // THE CALL SITE, pinned STRUCTURALLY because no behavioural spec reaches it:
+    // all three promote suites stub `carryServerDerivedScope` to identity AND
+    // stub `updateOwnedItem`, so reverting `promote.ts` to the pre-fix
+    // `state: promotedState` survives every one of them. Review measured that
+    // and it is why this spec exists — the describe above tests the FUNCTION,
+    // which says nothing about whether the promotion path calls it.
+    //
+    // FAILS IF: promote.ts's updateOwnedItem call stops routing `state` through
+    // carryServerDerivedScope — which is exactly the surviving mutant.
+    const { readFileSync } = await import('node:fs');
+    const path = new URL(
+      '../../../deployment-pipelines/loom/_lib/promote.ts', import.meta.url);
+    const src = readFileSync(path, 'utf8');
+
+    // Floor first: a read that returned nothing would make the match below
+    // vacuous, so prove the file was actually opened.
+    expect(src.length).toBeGreaterThan(2000);
+    expect(src).toContain('updateOwnedItem(');
+
+    expect(src).toMatch(/state:\s*carryServerDerivedScope\(/);
+    expect(src).not.toMatch(/state:\s*promotedState\b/);
+  });
 
   it('the RAW source state would be refused against the target (the regression)', () => {
     // The arm that proves the exemption is needed rather than decorative. FAILS
