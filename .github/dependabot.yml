@@ -1,3 +1,27 @@
+# EVERY ENTRY BELOW ENDS IN A CATCH-ALL GROUP, and the reason is review cost,
+# not tidiness. This repo's merge gate sets the reviewer requirement by PATH,
+# not by authorship or diff kind: `merge_gate.py` asked for 2 independent
+# APPROVEs on #4477 — an eslint 10.9.1 -> 10.10.0 devDependency bump — because
+# "the diff touches portal/ - a guard, deploy or console surface". It cannot
+# tell a lockfile version bump from a hand-written change to console auth, and
+# it should not be taught to: loosening the bar per-author is how a malicious
+# bump walks in. So the bar stays, and the number of OBJECTS carrying it drops.
+#
+# Measured 2026-09-20: 22 of 26 open PRs were Dependabot, each needing 2
+# reviews = 44 review runs, against ~5 runs once grouped. The backlog was not
+# CI-blocked — #4477 carried 38 check-runs, all COMPLETED — it was blocked on
+# review capacity that nobody was ever going to spend one bump at a time.
+#
+# TWO catch-alls per entry, not one. A group defaults to
+# `applies-to: version-updates`, so a security-updates group is NOT redundant —
+# without it the security lane keeps opening one PR per advisory and the whole
+# point is lost. Do not "simplify" these into a single group.
+#
+# ORDER IS LOAD-BEARING. Per the Dependabot options reference: "If a dependency
+# matches more than one rule, it's included in the first group that it matches."
+# The named groups above each catch-all exist for correctness reasons stated at
+# their sites; a catch-all placed BEFORE one silently swallows it and destroys
+# that reason. Keep every catch-all last in its entry.
 version: 2
 updates:
   - package-ecosystem: "pip"
@@ -10,6 +34,12 @@ updates:
       azure-sdk:
         patterns:
           - "azure-*"
+      pip-root-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      pip-root-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   # apps/loom-duckdb/requirements.txt is the repo's ONLY direct pin of duckdb
   # and pyarrow, and the `/` entry above does not monitor it. Without this
@@ -22,6 +52,13 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
+    groups:
+      duckdb-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      duckdb-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -43,6 +80,12 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+      actions-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
@@ -50,6 +93,15 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
+    # The largest single cluster in the 2026-09-20 backlog: 10 of the 22 open
+    # Dependabot PRs were this one directory (#4477, #4598-#4606, #4636).
+    groups:
+      portal-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      portal-security:
+        applies-to: security-updates
+        patterns: ["*"]
   # CSA-0048: portal/static-webapp was archived on 2026-04-15; its
   # dependabot entry was removed here so PRs aren't opened against a
   # non-existent directory.
@@ -118,3 +170,18 @@ updates:
           - "parquet*"
           - "datafusion*"
           - "deltalake*"
+      # The catch-alls sit AFTER arrow-stack so the four crates above still
+      # arrive as their own PR on the version lane. On the SECURITY lane they
+      # do not: `applies-to` is matched per lane, so a security catch-all
+      # collects arrow crates too. That is acceptable only because thrift —
+      # the sole open cargo alert (GHSA-2f9f-gq7v-9h6m, medium) — cannot leave
+      # this graph until delta-rs ships on arrow 59, as measured above. If a
+      # takeable cargo advisory ever lands while the arrow bump is still
+      # un-takeable, split it back out rather than closing the combined PR:
+      # the DO-NOT-CLOSE rule above applies to every Dependabot PR here.
+      cargo-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
