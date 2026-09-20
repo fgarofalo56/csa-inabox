@@ -24,6 +24,8 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import merge_gate
@@ -286,6 +288,60 @@ def test_negative_control_a_missing_context_names_the_right_remedy():
     assert "never-created" in _gate(never, "4b")["detail"]
     parked = _run(statusCheckRollup=rollup, head_runs={"n": 9, "waiting": 2})
     assert "parked" in _gate(parked, "4b")["detail"]
+
+
+def test_negative_control_an_advisory_red_blocks_the_composed_verdict():
+    """#4543, AT THE CALLER -- which is where the defect lived. `gates.py` is
+    not what decides a merge; this function is, and every check arm above it
+    passes `data["required"]`, so the population was narrowed before any
+    predicate ran. Measured on PR #4540 head `7dd2fa3e279`: forty check-runs,
+    exactly one red, not required, and this program printed `VERDICT: GO`. The
+    merge landed and `main` was red after it.
+
+    Breaks if: gate 4c is dropped from the composition, stops blocking, or
+    filters to the required contexts again -- and note the required half is
+    asserted GREEN first, so this cannot pass for gate 4's reason.
+    """
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "brain security graph — committed artifact matches the tree",
+                   "status": "COMPLETED", "conclusion": "FAILURE"})
+    result = _run(statusCheckRollup=rollup)
+    assert _gate(result, "4 ")["ok"], "the REQUIRED half must be green, or this is gate 4"
+    assert not _gate(result, "4c")["ok"]
+    assert "ADV-RED 1" in _gate(result, "4c")["detail"]
+    assert result["verdict"] == "NO-GO"
+
+
+def test_an_advisory_check_still_running_is_named_in_the_go_line_itself():
+    """ADV-WAIT does not block -- an in-progress check has said nothing yet,
+    and blocking on it would wait out every advisory check on every PR. So the
+    report has to be impossible to miss where the reader already is: in the
+    gate's own line, not a footnote under a `VERDICT: GO`.
+
+    Breaks if: the waiting names are dropped from the GO branch of the message
+    (the `ok` half alone would still pass), or if IN_PROGRESS starts counting
+    as red -- the verdict assertion catches that one."""
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "Checkov", "status": "IN_PROGRESS", "conclusion": None})
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "GO", result["findings"]
+    assert "ADV-WAIT 1" in _gate(result, "4c")["detail"]
+    assert "Checkov" in _gate(result, "4c")["detail"]
+
+
+def test_negative_control_the_advisory_flag_is_subscripted_not_defaulted():
+    """The authority is READ, and read LOUDLY. Every key in this policy section
+    has been read by nothing at least once in this package's history -- and the
+    version of that defect which survives a both-ways key check is a `.get(k,
+    <the shipped value>)`, where DELETING the key from `policy.json` is
+    unobservable. `assert_policy_matches_code` was extended for exactly that.
+
+    Breaks if: the caller reads the flag with a default -- then a policy with
+    the key removed answers GO instead of raising."""
+    trimmed = {**POLICY, "merge_gate": {k: v for k, v in POLICY["merge_gate"].items()
+                                        if k != "advisory_red_is_a_no_go"}}
+    with pytest.raises(KeyError, match="advisory_red_is_a_no_go"):
+        merge_gate.run_gates(_data(), trimmed, [4468], state_path=_ledger_path())
 
 
 def test_negative_control_a_skipped_required_context_blocks():
@@ -733,7 +789,7 @@ def test_every_gate_of_the_spec_is_present():
     """A gate silently dropped from the composition is a gate that stopped
     watching -- and the finding list is the only place that would show it."""
     gate_names = [f["gate"] for f in _run()["findings"]]
-    for prefix in ("0 ", "1 ", "2+3", "4 ", "5 ", "6 "):
+    for prefix in ("0 ", "1 ", "2+3", "4 ", "4c", "5 ", "6 "):
         assert any(g.startswith(prefix) for g in gate_names), f"gate {prefix} missing"
 
 
