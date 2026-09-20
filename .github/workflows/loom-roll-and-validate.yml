@@ -2187,6 +2187,111 @@ jobs:
               });
             }
 
+      - name: Retire superseded revisions (this roll's own accumulation)
+        if: success()
+        env:
+          KEEP_NEWEST: '3'
+        run: |
+          set -euo pipefail
+
+          # WHY THIS STEP EXISTS, measured 2026-09-20.
+          #
+          # `az containerapp update --image` against an app whose
+          # activeRevisionsMode is Multiple CREATES a revision and DEACTIVATES
+          # NOTHING. "Rollback on validation failure" below does the same thing
+          # with the previous image rather than reactivating the old revision,
+          # so a FAILED roll adds two. There was no counterpart anywhere on the
+          # success path, so every revision this workflow has ever produced
+          # stayed active and kept holding replicas.
+          #
+          # The end state that produced this step: 251 active revisions holding
+          # 484 replicas (minReplicas=2 apiece), ALL reporting Unhealthy. New
+          # revisions provisioned cleanly — provisioningState=Provisioned,
+          # provisioningError=null — and then received ZERO replicas against a
+          # floor of 2. PLACEMENT was failing, not provisioning, and Azure
+          # reports no error for that. So "Wait for revision health" timed out
+          # at ~300s, auto-rollback targeted a revision that was equally
+          # starved, and the estate sat 11 commits behind for two days while
+          # every roll attempt added two more revisions to the pile.
+          #
+          # The causal link was confirmed by intervention, not inferred: eight
+          # revisions sitting at 0 replicas took 2 apiece as soon as older ones
+          # were deactivated and capacity freed.
+          #
+          # ONLY ON SUCCESS (`if: success()`). A failed roll MUST keep its
+          # predecessors — the rollback path needs somewhere to go.
+          #
+          # NOT SWITCHED TO Single MODE, deliberately. This app is Multiple on
+          # purpose: `deploy-fiab-commercial.yml:2872` and
+          # `console-bluegreen-roll.yml` both depend on traffic-splitting across
+          # revisions. Single would remove the leak and the blue/green
+          # capability together. Retiring superseded revisions keeps both.
+
+          APP="${{ env.APP_NAME }}"
+          RG="${{ env.RG_NAME }}"
+          ERRF="$(mktemp)"
+          REVS="$(mktemp)"
+
+          # A LIST THAT FAILS MUST NOT READ AS "nothing to do". Without this
+          # branch a permissions error or a transient would produce an empty
+          # set and this step would report success having retired nothing —
+          # the exact silent-accumulation shape it exists to stop (R7: an error
+          # must not state something it did not establish).
+          if ! az containerapp revision list -n "$APP" -g "$RG" \
+                 --query "[?properties.active].{name:name,created:properties.createdTime,traffic:properties.trafficWeight,replicas:properties.replicas}" \
+                 -o json > "$REVS" 2>"$ERRF"; then
+            echo "::error::Could not LIST revisions for $APP in $RG, so this step will not claim anything about them. Superseded revisions may still be accumulating. Detail: $(head -c 400 "$ERRF")"
+            exit 1
+          fi
+
+          TOTAL="$(jq 'length' "$REVS")"
+          if [ "$TOTAL" -le "$KEEP_NEWEST" ]; then
+            echo "::notice::$TOTAL active revision(s), keep floor is $KEEP_NEWEST — nothing to retire."
+            exit 0
+          fi
+
+          # Keep, in addition to the newest $KEEP_NEWEST:
+          #   * anything carrying traffic — never cut the revision serving users
+          #   * anything whose suffix is NOT numeric. A named revision
+          #     (`loom-console--adlssink`) is a deliberate label, and labels are
+          #     how Multiple-mode routes direct traffic. A first pass at this
+          #     cleanup crashed on exactly that name rather than mis-sorting it,
+          #     which is why the filter is explicit instead of assumed.
+          jq -r --argjson keep "$KEEP_NEWEST" '
+            (sort_by(.created) | reverse) as $desc
+            | ($desc[:$keep] | map(.name)) as $newest
+            | $desc
+            | map(select(
+                ((.name as $n | $newest | index($n)) | not)
+                and ((.traffic // 0) == 0)
+                and (.name | split("--")[1] | test("^[0-9]+$"))
+              ))
+            | .[].name
+          ' "$REVS" > /tmp/retire.txt
+
+          KEPT="$(jq -r --argjson keep "$KEEP_NEWEST" '(sort_by(.created)|reverse)[:$keep]|map(.name)|join(", ")' "$REVS")"
+          COUNT="$(wc -l < /tmp/retire.txt | tr -d ' ')"
+          echo "::notice::$TOTAL active; keeping newest $KEEP_NEWEST ($KEPT) plus any with traffic or a named suffix; retiring $COUNT."
+
+          FAILED=0
+          while read -r REV; do
+            [ -n "$REV" ] || continue
+            if az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$REV" -o none 2>"$ERRF"; then
+              echo "  retired $REV"
+            else
+              # Reported, never swallowed. A `|| true` here is how 251 of these
+              # accumulated unnoticed in the first place.
+              echo "::error::Could NOT deactivate $REV — it stays ACTIVE and keeps holding replicas against this app's capacity. By hand: az containerapp revision deactivate -n $APP -g $RG --revision $REV . Detail: $(head -c 300 "$ERRF")"
+              FAILED=$((FAILED + 1))
+            fi
+          done < /tmp/retire.txt
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED of $COUNT revisions could not be retired. The roll itself SUCCEEDED and traffic is already shifted — this step failing means cleanup is owed, not that the deploy is bad."
+            exit 1
+          fi
+          echo "retired $COUNT superseded revision(s); $KEEP_NEWEST kept for rollback."
+
       - name: Auto-close stale deploy-validation issues on success
         if: success()
         uses: actions/github-script@v9
