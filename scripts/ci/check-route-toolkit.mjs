@@ -39,6 +39,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runRatchet, gitTouchedFiles } from './_ratchet-count.mjs';
+import { codeOnly } from './_code-only.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -46,10 +47,13 @@ const APP_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 const BASELINE_FILE = path.join(__dirname, 'route-toolkit-baseline.json');
 
 // Same data-surface regexes as check-route-guards.mjs.
-const MUTATING_EXPORT_RE = /export\s+(?:async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|const\s+(?:POST|PUT|PATCH|DELETE)\s*=)/;
-const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
+// EXPORTED so the test suite imports the live objects. A test that transcribes
+// a pattern can disagree with the implementation via a typo and still pass —
+// assertion-design.md "done" #3.
+export const MUTATING_EXPORT_RE = /export\s+(?:async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|const\s+(?:POST|PUT|PATCH|DELETE)\s*=)/;
+export const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // The hand-rolled marker: an auth-session getSession import (alias-aware).
-const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\}\s*from\s*['"]@\/lib\/auth\/session['"]/;
+export const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\}\s*from\s*['"]@\/lib\/auth\/session['"]/;
 // Any toolkit wrapper reference = migrated (or composing) — out of the ratchet.
 // C22 (#3088) adds `withCapability` (the non-discardable enforceCapability
 // form) and `(?:<[^()]*>)?` so an explicit type argument — `withSession<{ id:
@@ -57,46 +61,25 @@ const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\
 // Without the type-arg branch those routes matched only via their header
 // COMMENTS ("Route-toolkit: withSession (R1/R3)"), which is #2977's mechanism
 // exactly: a control passing on prose rather than code.
-const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
+export const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
 
 /**
- * Drop comment lines, so PROSE cannot decide membership in this population.
+ * COMMENTS NEVER DECIDE MEMBERSHIP IN THIS POPULATION — see ./_code-only.mjs.
  *
- * The comment at :53-59 already records one version of this bug — a route that
- * matched only via its header comment — and the fix taken then was to widen the
- * regex so the real CALL matched. That left the other half untouched: the regex
- * was still applied to RAW SOURCE, so a comment could still satisfy it, and the
- * exclusion arm is where that is dangerous. `TOOLKIT_RE` is an EXCLUDE: a hit
- * removes the file from the ratchet entirely.
+ * The comment at :53-59 records one version of this bug (a route matching only
+ * via its header comment); the fix then was to widen the regex so the real CALL
+ * matched, which left the regex still applied to RAW SOURCE. #4467 recorded the
+ * live consequence: `app/api/copilot/orchestrate/route.ts` was excluded from the
+ * ratchet by one sentence of prose, and rewording that sentence moved the
+ * population by one (1010 -> 1011 keys) with zero executable change.
  *
- * Measured before the fix, at da91bd5, across all 1692 route files: exactly ONE
- * file was cloaked — `app/api/copilot/orchestrate/route.ts`, which imports
- * `getSession` from '@/lib/auth/session', calls it, and hand-rolls its own 401,
- * and whose ONLY toolkit-wrapper occurrence is the sentence "Unlike almost every
- * sibling route this one is a bare handler, not `withSession(...)`". The
- * counterfactual, run against the real guard and restored byte-identically:
- *
- *   AS-IS            : 1010 keys, orchestrate present = false
- *   COMMENT REWORDED : 1011 keys, orchestrate present = true  (prose only)
- *
- * So a purely editorial change moved the population. That is the same defect
- * class as the one this PR fixes in the UAT classifier: a rule keyed on a string
- * that the thing under test does not actually have to MEAN.
- *
- * Same shape and same reason as the `isComment` filter in the sibling guard
- * `check-owner-only-workspace-guard.mjs`. `\r?\n` is load-bearing: the working
- * tree is CRLF, and a line filter split on `\n` alone leaves a trailing `\r` on
- * every line, which silently defeats `trim()`-free matching elsewhere.
+ * #4467's own fix was a LINE-PREFIX filter, which closes only the line-leading
+ * shape — a TRAILING comment, a block-comment body line with no leading
+ * asterisk, and a block comment opened mid-line all still cloaked. Measured, 3
+ * of those 4 shapes survived. `codeOnly` is now a real scanner shared with
+ * check-owner-only-workspace-guard.mjs, so the same defect cannot be fixed on
+ * one guard and left on its sibling.
  */
-const isCommentLine = (l) => {
-  const t = l.trim();
-  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
-};
-
-/** The file with comment LINES removed — what every regex above is applied to. */
-function codeOnly(src) {
-  return src.split(/\r?\n/).filter((l) => !isCommentLine(l)).join('\n');
-}
 
 // ── Touched-file escape hatch ───────────────────────────────────────────────
 // Paths (repo-relative) a PR may modify WITHOUT migrating, each with a one-line

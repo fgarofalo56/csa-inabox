@@ -1,0 +1,1985 @@
+"""Unit tests for the COMPOSED merge gate, each with a NEGATIVE CONTROL.
+
+`gates.py` holds the decisions; `merge_gate.run_gates()` is what actually
+decides a merge. Until this file existed only the first of those was tested --
+so the fix for "the gates have no production caller" recreated the same defect
+one level up. Three arms an independent reviewer wrote against the caller
+survived the entire 106-test suite and a 26-arm mutation matrix:
+
+    SURVIVED  gate 4 always records GO
+    SURVIVED  the verdicts gate always records GO
+    SURVIVED  NO-GO is computed over an empty finding set
+
+The third is a one-token edit (`blocking = []`) that turns the program deciding
+every merge into a rubber stamp. `run_gates()` is pure over a `data` dict, so
+none of this needs the network; the reduction now lives inside it, where these
+fixtures can reach it.
+
+Run:  python -m pytest tools/drain/__tests__/ -q
+"""
+from __future__ import annotations
+
+import ast
+import json
+import os
+import pathlib
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import merge_gate
+
+import gates
+
+#: git global options that consume a following value, and the flag-only ones.
+_GIT_VALUE_OPTS = ("-c", "-C", "--git-dir", "--work-tree", "--namespace",
+                   "--exec-path", "--config-env", "--attr-source")
+_GIT_FLAG_OPTS = ("--no-pager", "-P", "--bare", "--literal-pathspecs",
+                  "--no-replace-objects", "--paginate", "--no-optional-locks",
+                  "--icase-pathspecs", "--no-advice", "--no-lazy-fetch")
+
+
+def _git_argv(args: list[str]) -> list[str]:
+    """`args` with git's leading global options removed, subcommand first.
+
+    Stubs must not match git argv by POSITION: a global option shifts the
+    subcommand and the stub silently stops matching, falling through to a
+    default success that reads downstream as a parse failure.
+
+    Handles the value-taking options in both spellings (`-c k=v`, `--git-dir p`,
+    `--git-dir=p`) and the flag-only ones, in any order.
+    """
+    i = 1
+    while i < len(args):
+        token = args[i]
+        if token in _GIT_VALUE_OPTS:
+            i += 2
+        elif token in _GIT_FLAG_OPTS or any(
+                token.startswith(f"{opt}=") for opt in _GIT_VALUE_OPTS):
+            i += 1
+        else:
+            break
+    return args[i:]
+
+
+def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
+    """`_git_argv` is what keeps the stubs sighted, so a wrong one yields
+    FALSE GREENS rather than failures.
+
+    WHAT WOULD MAKE THIS FAIL: dropping a form from either option table, or
+    making the scan order-sensitive between value-taking and flag-only
+    options.
+    """
+    assert _git_argv(["git", "show", "HEAD:f"]) == ["show", "HEAD:f"]
+    assert _git_argv(["git", "-c", "core.quotePath=false", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "-C", "/repo", "ls-tree", "-d"]) == ["ls-tree", "-d"]
+    assert _git_argv(["git", "--git-dir", "/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--git-dir=/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--no-pager", "log"]) == ["log"]
+    # Interleaved, and in the order that broke the first version: a flag-only
+    # option BEFORE a value-taking one.
+    assert _git_argv(
+        ["git", "--no-pager", "-c", "a=b", "--bare", "-C", "/r", "show", "y"]
+    ) == ["show", "y"]
+    # A subcommand that merely looks like an option must NOT be consumed.
+    assert _git_argv(["git", "status"]) == ["status"]
+    # Degenerate input must not raise or loop.
+    assert _git_argv(["git"]) == []
+    assert _git_argv(["git", "-c"]) == []
+    # Forms review measured as mis-parsed by the first table.
+    assert _git_argv(["git", "-P", "log"]) == ["log"]
+    assert _git_argv(["git", "--no-advice", "status"]) == ["status"]
+    assert _git_argv(["git", "--no-lazy-fetch", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "--attr-source=HEAD", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--attr-source", "HEAD", "diff"]) == ["diff"]
+
+
+#: Exact number of `["git", ...]` argv literals across the modules below.
+#: PINNED, not a floor: a floor with slack lets someone hide literals and
+#: sneak an unrouted call through green, which is measured behaviour.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 11, "tick.py": 0, "gates.py": 0}
+
+
+def _git_call_census(module_path):
+    """(list literals, routed ids, `git` name-bindings, `git` tuples) for one module."""
+    tree = ast.parse(pathlib.Path(module_path).read_text(encoding="utf-8"))
+
+    def _starts_with_git(node):
+        return (node.elts and isinstance(node.elts[0], ast.Constant)
+                and node.elts[0].value == "git")
+
+    lists = [n for n in ast.walk(tree) if isinstance(n, ast.List) and _starts_with_git(n)]
+    tuples = [n for n in ast.walk(tree) if isinstance(n, ast.Tuple) and _starts_with_git(n)]
+    binds = [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Assign)
+             and isinstance(n.value, ast.Constant) and n.value.value == "git"]
+
+    routed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (
+            fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name in ("sh", "git_argv"):
+            # Walk the whole argument subtree, so `sh([...] + extra)` counts
+            # the inner list as routed rather than stray.
+            for arg in node.args:
+                for sub in ast.walk(arg):
+                    routed.add(id(sub))
+    return lists, routed, binds, tuples
+
+
+def test_every_git_invocation_routes_through_the_quoting_injection():
+    """No `["git", ...]` literal reaches a runner without `sh()`/`git_argv()`.
+
+    Blinding the walk is itself caught three ways: counts are PINNED per
+    module so hiding a literal fails; binding `"git"` to a name fails; a
+    tuple instead of a list fails.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5):
+    argv assembled at runtime -- `.append`, a name bound elsewhere, a value
+    returned by a helper. Review measured an `.append`-built unrouted call
+    surviving. The pinned counts blunt it (removing a literal to build one
+    dynamically fails the count) but do not close it.
+
+    WHAT WOULD MAKE THIS FAIL: a raw `subprocess.run(["git", ...])`; a
+    `_GIT = "git"` binding; a `("git", ...)` tuple; or any change to the
+    number of git argv literals in these modules.
+    """
+    here = pathlib.Path(merge_gate.__file__).parent
+    for filename, expected in _GIT_ARGV_LITERALS.items():
+        lists, routed, binds, tuples = _git_call_census(here / filename)
+
+        assert len(lists) == expected, (
+            f"{filename}: {len(lists)} git argv literal(s), pinned at {expected}. "
+            "FEWER means either a call was removed or the literal was hidden "
+            "behind a name/concatenation, which blinds this walk; MORE means a "
+            "new git call to account for. Re-measure, do not edit the number "
+            "to match."
+        )
+        assert not binds, (
+            f"{filename}: `\"git\"` is bound to a name at line(s) {binds}. That "
+            "defeats the literal walk below, so an unrouted call could pass. "
+            "Inline the literal."
+        )
+        assert not tuples, (
+            f"{filename}: git argv given as a TUPLE at line(s) "
+            f"{[n.lineno for n in tuples]}. This walk only inspects lists; use "
+            "a list so the check can see it."
+        )
+
+        stray = sorted(n.lineno for n in lists if id(n) not in routed)
+        assert not stray, (
+            f"{filename}: git invocation(s) bypassing the quoting injection at "
+            f"line(s) {stray}. Pass the list to `sh(...)` or wrap it in "
+            "`git_argv(...)`. A raw `subprocess.run(['git', ...])` reads a "
+            "non-ASCII path in its ESCAPED spelling, which matches nothing and "
+            "EXCUSES an absence. With `timeout=`, use "
+            "`subprocess.run(git_argv([...]), **TEXT_UTF8, timeout=...)`."
+        )
+
+
+def test_every_git_runner_decodes_as_utf8():
+    """The flag is half the fix; a locale decode re-breaks it.
+
+    Every subprocess launcher in `merge_gate.py` must pass `encoding=` or
+    splat `TEXT_UTF8` BY NAME. Measured: with only `text=True`, `git ls-tree`
+    returns `probÃ©_dir` on a cp1252 box where the real name is `probé_dir`.
+
+    Covers `run`, `Popen`, `check_output`, `call` and `check_call`: review
+    measured an undecoded `check_output` and `Popen` surviving a `run`-only
+    check, and `**{"text": True}` surviving an any-splat check.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5): a
+    launcher whose kwargs are assembled elsewhere and splatted from a
+    variable this walk cannot resolve. `TEXT_UTF8` is the only splat accepted,
+    so that shape fails CLOSED here.
+
+    WHAT WOULD MAKE THIS FAIL: any of those launchers with `text=True` and no
+    codec, which is exactly what two call sites shipped with for a round.
+    """
+    tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
+    launchers = {"run", "Popen", "check_output", "call", "check_call"}
+    bare = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in launchers):
+            continue
+        kwargs = {k.arg for k in node.keywords if k.arg}
+        # Only a TEXT_UTF8 splat counts. Any-splat let `**{"text": True}` pass.
+        splats_text_utf8 = any(
+            k.arg is None and isinstance(k.value, ast.Name) and k.value.id == "TEXT_UTF8"
+            for k in node.keywords
+        )
+        if "encoding" not in kwargs and not splats_text_utf8:
+            bare.append(node.lineno)
+    assert not bare, (
+        f"subprocess launcher without an explicit codec at line(s) {bare}. Pass "
+        "`**TEXT_UTF8` (or `encoding=\"utf-8\"`): git emits raw UTF-8 bytes and "
+        "a locale decode turns a non-ASCII path into mojibake, which matches "
+        "nothing and excuses an absence."
+    )
+
+
+POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
+HEAD = "a" * 40
+HEAD_DATE = "2026-09-11T10:00:00Z"
+REQUIRED = ["Python Lint", "vitest (node 20)", "guardrails"]
+APPROVAL = {
+    "id": 1,
+    "body": "## Independent review - APPROVE\n\nlooks right.",
+    "created_at": "2026-09-11T11:00:00Z",
+}
+
+
+def _data(**over) -> dict:
+    """A PR that passes every gate. Each test breaks exactly one thing."""
+    data = {
+        "pr": {
+            "number": 1,
+            "title": "a change",
+            "baseRefName": "main",
+            "headRefOid": HEAD,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "BLOCKED",
+            # A DECLARED close, because that is the canonical drain PR: it
+            # closes the issue it was scheduled for and says so. It also has to
+            # be, for gate 3b -- a bare `Refs #N` is an ASIDE and no longer
+            # resolves the stream, so a mention-only fixture is a
+            # stream-unknown PR and escalates. The clean-PR control has to be a
+            # PR that is genuinely clean.
+            "body": "Closes #4468",
+            "commits": [{"messageHeadline": "feat: a change",
+                         "messageBody": "Closes #4468"}],
+            "statusCheckRollup": [
+                {"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED
+            ],
+            "closingIssuesReferences": [],
+        },
+        "head": HEAD,
+        "head_date": HEAD_DATE,
+        "comments": [APPROVAL],
+        "base_sha": "b" * 40,
+        "origin_main_sha": "b" * 40,
+        "open_issues": [1, 2, 3],
+        "head_runs": {"n": 12, "waiting": 0},
+        "changed_files": ["domains/sales/models/x.sql"],
+        "required": list(REQUIRED),
+    }
+    for key, value in over.items():
+        if key in ("body", "commits", "statusCheckRollup", "mergeable", "mergeStateStatus",
+                   "closingIssuesReferences"):
+            data["pr"][key] = value
+        else:
+            data[key] = value
+    return data
+
+
+#: A ledger for gate 3b's STREAM lookup, written once per session.
+#:
+#: It MUST be injected. Without `state_path` these tests read the developer's
+#: real `tools/drain/state.json` -- which is gitignored, so its contents differ
+#: per machine and per hour, and the fixture body "Closes #4468" resolved to a
+#: live W6-ci item and escalated. A hermetic test that silently consults live
+#: state is the same defect class as a gate that reads a stale ledger.
+_LEDGER: dict[str, str] = {}
+
+
+def _ledger_path() -> str:
+    if "path" not in _LEDGER:
+        import tempfile
+
+        from ledger import Ledger
+
+        path = os.path.join(tempfile.mkdtemp(), "state.json")
+        led = Ledger(path, receipts=POLICY["receipts"])
+        # #4468 is the number every closing-scan fixture uses. W9-rest does NOT
+        # escalate by stream, so the control PRs stay one-reviewer and the
+        # escalation tests below have to name their own stream.
+        #
+        # IN-FLIGHT, not `ready`: a declared close only corroborates the stream
+        # when the HARNESS put the item in a lane. A `ready` item was never
+        # scheduled and a terminal one is finished, so neither is evidence that
+        # a PR opened now is work on it -- which is the exploit a reviewer used.
+        # The canonical drain PR is one a lane is holding, so the fixture is one.
+        led.upsert(4468, "a fixture item", "W9-rest", lane="lane:docs", size=1)
+        led.transition(4468, "in-flight", "selected by a lane")
+        led.save()
+        _LEDGER["path"] = path
+    return _LEDGER["path"]
+
+
+def _run(**over):
+    state_path = over.pop("state_path", None) or _ledger_path()
+    # The default fixture DECLARES its close, so the default `allow_close`
+    # declares it too -- otherwise every test would be measuring gate 6's
+    # undeclared-close refusal instead of the thing it names.
+    allow_close = over.pop("allow_close", None)
+    if allow_close is None:
+        allow_close = [4468]
+    return merge_gate.run_gates(
+        _data(**over), POLICY, allow_close, state_path=state_path
+    )
+
+
+def _gate(result, prefix):
+    return next(f for f in result["findings"] if f["gate"].startswith(prefix))
+
+
+# ---------------------------------------------------------------------------
+# The control: a clean PR is GO. Without it every NO-GO below is vacuous.
+# ---------------------------------------------------------------------------
+
+
+def test_a_clean_pr_is_go():
+    result = _run()
+    assert result["verdict"] == "GO", result["findings"]
+    assert result["blocking"] == []
+
+
+# ---------------------------------------------------------------------------
+# Each gate, observed FAILING
+# ---------------------------------------------------------------------------
+
+
+def test_negative_control_a_conflicting_pr_blocks():
+    """A commit pushed while the PR reads CONFLICTING gets zero check-runs,
+    permanently -- and clearing the conflict afterwards does not create them."""
+    result = _run(mergeable="CONFLICTING")
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "0 ")["ok"]
+
+
+def test_negative_control_a_stale_base_blocks():
+    # `state_path` is NOT optional here. This was the one `run_gates` call in
+    # the file that skipped it, so a tracked test's outcome depended on the
+    # developer's untracked `state.json` -- pointed at a truncated one, it died
+    # with `JSONDecodeError` instead of asserting anything about a stale base.
+    result = merge_gate.run_gates(_data(base_sha="c" * 40), POLICY,
+                                  state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "1 ")["ok"]
+
+
+# ---------------------------------------------------------------------------
+# Gate 1's second arm, COMPOSED (#4585)
+#
+# `test_gates.py` drives `base_delta_is_inert` directly. These drive it through
+# `run_gates`, which is where an argument can be live in `gates.py`, described
+# in a brief, and fed by nothing -- the defect this whole file exists to catch
+# ("two of the four triggers used to be INERT here").
+# ---------------------------------------------------------------------------
+
+#: A scope set covering exactly `_data()`'s `REQUIRED`, all three filtered to a
+#: directory the deltas below deliberately miss or hit.
+_INERT_SCOPES = [
+    gates.ContextScope("Python Lint", ".github/workflows/validate.yml",
+                       paths=("csa_platform/**",)),
+    gates.ContextScope("vitest (node 20)", ".github/workflows/fiab-console-ci.yml",
+                       paths=("apps/fiab-console/**",)),
+    gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml",
+                       paths=("scripts/ci/**",)),
+]
+
+
+def test_a_stale_base_whose_delta_no_required_push_filter_admits_is_go():
+    """THE POINT OF #4585, and the ONE PATH THAT LETS A MERGE THROUGH.
+
+    The base has moved (`c`*40 != `b`*40, so `base_is_current` refuses), and
+    the delta is one `docs/` file, which none of the three push filters above
+    admits. Gate 1 passes on the second arm.
+
+    Goes RED if the delta file is changed to `csa_platform/x.py`,
+    `apps/fiab-console/x.ts` or `scripts/ci/x.mjs` -- each admitted by exactly
+    one of the three filters, which is the test below.
+
+    THE VOCABULARY OF THIS MESSAGE IS ASSERTED, not incidental. It is the
+    string printed BESIDE a merge being allowed, and for two rounds it said
+    "is read by any of the M required context(s)" -- asserting the very thing
+    `gates.base_delta_is_inert` states it cannot establish, in the one place
+    the claim would enter the permanent record. The absence check below is
+    paired with a positive one (the disclaimer must be PRESENT), so deleting
+    the sentence cannot satisfy it.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "GO", result["findings"]
+    gate = _gate(result, "1 ")
+    assert gate["ok"], gate["detail"]
+    # NAME WHICH CONTEXTS WERE CONSIDERED. An empty intersection with no
+    # population printed is a number with no denominator -- and the population
+    # is the exact thing a reviewer has to check to believe the pass.
+    for name in REQUIRED:
+        assert name in gate["detail"], (name, gate["detail"])
+    assert "is admitted by the `on.push` filter" in gate["detail"], gate["detail"]
+    assert "NOT a claim that no required context READS" in gate["detail"], (
+        "the GO message must carry its own limit; without it the string beside "
+        f"an allowed merge overstates what was measured: {gate['detail']}"
+    )
+    assert "is read by any of the" not in gate["detail"], (
+        "the retracted claim is back in the GO-path message: "
+        f"{gate['detail']}"
+    )
+    # ...and the LABEL, which is printed on every run of this gate.
+    assert "no required workflow's push filter admits" in gate["gate"], gate["gate"]
+    assert "no required context reads" not in gate["gate"], gate["gate"]
+
+
+@pytest.mark.parametrize(("hit_file", "context"), [
+    ("csa_platform/auth.py", "Python Lint"),
+    ("apps/fiab-console/app/page.tsx", "vitest (node 20)"),
+    ("scripts/ci/check-something.mjs", "guardrails"),
+])
+def test_negative_control_a_stale_base_whose_delta_is_admitted_still_blocks(hit_file, context):
+    """One arm per context, so a predicate that stops at the first scope cannot
+    pass: with only the `csa_platform` case, `return` after scope one survives.
+
+    Each `hit_file` is outside the OTHER two scopes, so the refusal can only be
+    coming from the context named in the assertion.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md", hit_file],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert hit_file in gate["detail"], gate["detail"]
+    assert context in gate["detail"], gate["detail"]
+
+
+def test_negative_control_one_unfiltered_required_context_blocks_the_whole_arm():
+    """The case that governs this repo TODAY. `guardrails` is produced by
+    `loom-guardrails.yml`, whose `push:` carries no `paths:` -- it reads the
+    whole checked-out tree. The delta is the same inert `docs/` file that
+    passes above, so the refusal comes from the missing filter and nothing else.
+    """
+    scopes = [*_INERT_SCOPES[:2],
+              gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml")]
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=scopes)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "guardrails" in gate["detail"], gate["detail"]
+    assert "ADMITS EVERY PATH" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_the_second_arm_never_rescues_a_non_main_base():
+    """`base_is_current` refuses for two other reasons, and neither is a
+    question about a delta. A PR aimed at `release/0.106` merges into something
+    that is not the trunk; an intersection over main's delta says nothing about
+    that. With `baseRefName` back to `main` and everything else identical this
+    fixture is GO (the test above), so the branch name is doing the work.
+    """
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    data["pr"]["baseRefName"] = "release/0.106"
+    result = merge_gate.run_gates(data, POLICY, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "not 'main'" in gate["detail"]
+    # ...and the delta arm was never consulted, so its vocabulary is absent.
+    assert "INERT" not in gate["detail"], gate["detail"]
+
+
+def test_negative_control_a_collector_that_measured_no_delta_still_blocks():
+    """`collect()` only measures the delta when the base is actually stale, and
+    a `git diff` that fails leaves `base_delta=None`. Both must refuse. This is
+    the fixture the ORIGINAL stale-base test uses (it passes neither key), so
+    it also pins that the pre-#4585 fixtures still block for the right reason.
+    """
+    result = _run(base_sha="c" * 40)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "no scope at all" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_turning_the_policy_key_off_restores_the_strict_gate():
+    """`stale_base_may_pass_on_an_inert_delta: false` must make gate 1 refuse a
+    stale base again even on a provably inert delta -- the same fixture that is
+    GO above. A key read by nothing is prose; this is what makes it a control.
+    """
+    policy = {**POLICY, "merge_gate": {**POLICY["merge_gate"],
+                                       "stale_base_may_pass_on_an_inert_delta": False}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    result = merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "1 ")["ok"]
+
+
+def test_negative_control_deleting_the_policy_key_is_a_loud_keyerror():
+    """SUBSCRIPTED, not `.get`. A default equal to the shipped value makes
+    DELETING the key unobservable -- measured in this package twice, and the
+    reason `advisory_red_is_a_no_go` is subscripted too."""
+    policy = {**POLICY, "merge_gate": {
+        k: v for k, v in POLICY["merge_gate"].items()
+        if k != "stale_base_may_pass_on_an_inert_delta"}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    with pytest.raises(KeyError):
+        merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+
+
+# ---------------------------------------------------------------------------
+# `derive_context_scopes` -- the DERIVATION, which is where a blind scope comes
+# from. Every failure here must produce an `unreadable` scope, never a scope
+# with empty patterns: empty patterns match nothing, and matching nothing is
+# the answer that lets the merge through.
+# ---------------------------------------------------------------------------
+
+_WF = ".github/workflows/test.yml"
+#: A workflow with a real push path filter, written out rather than read from
+#: disk so the derivation test does not depend on the repo's own workflows.
+_WF_SRC = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'tools/**'\n"
+_WF_SRC_NARROWED = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'x/**'\n"
+_WF_SRC_NO_PUSH = "on:\n  pull_request:\n"
+
+
+def _wire_derivation(monkeypatch, *, suite=7, path=_WF, sources=None):
+    """Point `derive_context_scopes` at fixtures instead of the network/git."""
+    monkeypatch.setattr(
+        merge_gate, "_flat_check_runs",
+        lambda _repo, _sha: ([{"name": "Python Lint", "check_suite": {"id": suite}}], 1))
+    monkeypatch.setattr(
+        merge_gate, "_workflow_runs",
+        lambda _repo, _sha: [{"check_suite_id": suite, "path": path}])
+
+    def fake(args, **_kwargs):
+        _argv = _git_argv(args)
+        if args[0] == "git" and _argv[:1] == ["show"]:
+            sha = _argv[1].split(":")[0]
+            text = (sources or {}).get(sha)
+            if text is None:
+                return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+            return SimpleNamespace(returncode=0, stdout=text, stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+
+
+def test_the_scope_is_derived_from_the_workflow_the_check_suite_names(monkeypatch):
+    """The POSITIVE arm of the derivation: a traced producer whose filter is
+    identical at both shas yields the real pattern list. Change `_WF_SRC`'s
+    `tools/**` to anything else and the assertion on the tuple goes red."""
+    _wire_derivation(monkeypatch, sources={"base": _WF_SRC, "main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert len(scopes) == 1
+    assert scopes[0].unreadable is None, scopes[0].unreadable
+    assert scopes[0].workflow_path == _WF
+    assert scopes[0].paths == ("tools/**",)
+
+
+def test_negative_control_an_untraceable_producer_is_unreadable_not_empty(monkeypatch):
+    """No workflow run owns the publishing check-suite. The scope MUST carry
+    `unreadable`; a `ContextScope(name)` with no reason would refuse for the
+    no-filter reason instead, which is the right verdict from the wrong
+    evidence -- and `paths=()` would refuse for nothing at all."""
+    _wire_derivation(monkeypatch, suite=7, sources={"base": _WF_SRC, "main": _WF_SRC})
+    monkeypatch.setattr(merge_gate, "_workflow_runs",
+                        lambda _repo, _sha: [{"check_suite_id": 999, "path": _WF}])
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "cannot be traced" in scopes[0].unreadable
+    assert scopes[0].paths is None
+    assert scopes[0].paths_ignore is None
+
+
+def test_negative_control_an_unreadable_workflow_file_is_unreadable(monkeypatch):
+    """`git show <sha>:<path>` failing is an unanswered question. Only the BASE
+    sha fails here, so a derivation that read one sha and skipped the other
+    would pass this and be wrong."""
+    _wire_derivation(monkeypatch, sources={"main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "could not be read or parsed" in scopes[0].unreadable
+
+
+def test_negative_control_a_filter_that_moved_inside_the_delta_is_unreadable(monkeypatch):
+    """The two-clock refusal. The workflow's own filter is one of the things
+    the base delta can change: reading only `origin/main` would judge the PR's
+    evidence against a filter that did not exist when it was produced. Here the
+    filter NARROWS from `tools/**` to `x/**`, and a narrower filter excuses
+    more -- so a one-sha reader would call a `tools/` delta inert."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC, "main": _WF_SRC_NARROWED})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "CHANGED inside the base delta" in scopes[0].unreadable
+    # ...and it really would have been excused: the narrowed filter alone says
+    # `tools/**` is outside scope. This is the counterfactual, not a restatement.
+    narrowed = gates.ContextScope("Python Lint", _WF, paths=("x/**",))
+    assert gates.base_delta_is_inert(
+        ["tools/drain/gates.py"], [narrowed], ["Python Lint"])[0] is True
+
+
+def test_negative_control_a_workflow_with_no_push_trigger_is_unreadable(monkeypatch):
+    """`present=False` explains an ABSENCE for the ci-green receipt; here it
+    means nothing declares which commits landing on main must re-run the
+    context, so there is no filter to intersect against."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC_NO_PUSH, "main": _WF_SRC_NO_PUSH})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "no `on.push` trigger" in scopes[0].unreadable
+
+
+def test_a_derived_unfiltered_scope_is_paths_none_not_an_empty_tuple(monkeypatch):
+    """`push:` with `branches:` but no `paths:` is the shape FIVE of this
+    repo's 17 required contexts have. It must arrive as `paths=None` -- the
+    "reads everything" state -- and NOT as `paths=()`, which matches nothing
+    and would excuse every delta."""
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n",
+        "main": "on:\n  push:\n    branches: [main]\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths is None, scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked
+    assert "ADMITS EVERY PATH" in why, why
+
+
+def test_a_derived_empty_paths_list_is_a_tuple_that_the_gate_refuses(monkeypatch):
+    """`paths: []` in a workflow parses to `()`, which is a FOURTH state.
+
+    It is not the absent state the test above pins, and it is the dangerous
+    one: `any([])` is False, so every delta reads as outside the scope and the
+    context excuses everything. Both halves are asserted -- that the derivation
+    hands back `()` rather than `None` (so the two states stay distinct), and
+    that `base_delta_is_inert` REFUSES it.
+
+    Goes red if the refusal branch is deleted: with it gone the same fixture
+    returns INERT over a `docs/x.md` delta.
+    """
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n    paths: []\n",
+        "main": "on:\n  push:\n    branches: [main]\n    paths: []\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths == (), scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked, why
+    assert "EMPTY" in why, why
+
+
+# ---------------------------------------------------------------------------
+# `base_delta_files` -- the DELTA, over a real git repo.
+#
+# The rename case cannot be witnessed by asserting on an argv list: the whole
+# finding is what git DOES with the flag, not that the flag is spelled. So
+# these build a throwaway repository, perform a real `git mv`, and read what
+# comes back.
+# ---------------------------------------------------------------------------
+
+def _git(repo, *args):
+    import subprocess
+
+    # `encoding="utf-8"` is LOAD-BEARING in the non-ASCII test, not tidiness.
+    # Without it Python decodes git's raw bytes with the locale codec -- cp1252
+    # on this box -- and a real UTF-8 path comes back as mojibake
+    # (`tools/drain/probÃ©.py`). The counterfactual there asserts the real name
+    # is ABSENT from the unflagged read, and mojibake satisfies that for the
+    # wrong reason: the arm would pass with the quoting fix removed, which is
+    # the "could not fail" shape `assertion-design.md` exists to prevent.
+    # Pinning the codec here leaves QUOTING as the only thing that assertion
+    # can be measuring.
+    done = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    assert done.returncode == 0, (args, done.stderr)
+    return done.stdout
+
+
+def _repo_with(tmp_path, first_path: str, then):
+    """A two-commit repo: `first_path` is added, then `then(repo)` changes it.
+
+    Returns `(repo, base_sha, head_sha)`.
+
+    `diff.renames = true` IS SET EXPLICITLY, and it is the difference between
+    this fixture witnessing the rename hazard and inheriting it. Both reviewers
+    measured the same thing independently: with `GIT_CONFIG_GLOBAL` pointing at
+    `[diff] renames = false`, arm BD14 SURVIVES -- every rename test stays
+    green with `--no-renames` deleted, because the ambient config has already
+    done what the flag does.
+
+        BD14, ambient git config          rc=1  2 failed   <- kills
+        BD14, global diff.renames=false   rc=0  2 passed   <- SURVIVES
+
+    A fixture that inherits the very setting it exists to witness reports green
+    over a removed flag. Production is unaffected (`--no-renames` overrides
+    config, and hosted runners do not set it), so this is entirely about the
+    local suite being able to fail. The counterfactual in
+    `test_negative_control_a_rename_out_of_scope_is_not_inert` then ESTABLISHES
+    that detection is live rather than assuming this line worked.
+    """
+    repo = tmp_path / "delta-repo"
+    (repo / "tools" / "drain").mkdir(parents=True)
+    (repo / "docs").mkdir(parents=True)
+    _git(repo.parent, "init", "--quiet", repo.name)
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "diff.renames", "true")
+    (repo / first_path).write_text("x = 1\n" * 40, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "add")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    then(repo)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "change")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    return repo, base, head
+
+
+def _unflagged_delta(repo, base, head) -> list[str]:
+    """`git diff --name-only` WITHOUT `--no-renames`, over the same repo.
+
+    The counterfactual. Without it the rename tests assume rename detection is
+    live; with it they establish it, and a repo where detection is off turns
+    the assertion RED instead of quietly agreeing with the fix.
+    """
+    out = _git(repo, "diff", "--name-only", base, head)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+#: The scope the moved file starts inside. A rename OUT of it is the defect.
+_TOOLS_SCOPE = [gates.ContextScope(
+    "Python Lint", ".github/workflows/test.yml", paths=("tools/**",))]
+
+
+def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 5: `core.quotePath` defaults to TRUE, so a non-ASCII
+    path comes back C-quoted and octal-escaped -- `"tools/drain/prob\\303\\251.py"`
+    -- and no literal path comparison recognises it. The delta then contains
+    no path any filter admits, and the gate answers INERT for a file sitting
+    inside `tools/**`, which four required contexts are produced from.
+
+    Round 4 set the flag at ONE call site and claimed the class was closed.
+
+    THE COUNTERFACTUAL IS ASSERTED FIRST, for the same reason the rename test
+    asserts its own: the SAME two commits, diffed WITHOUT the injection, must
+    come back QUOTED. If they come back plain, quoting is off in this
+    environment, the flag is a no-op here, and everything below would pass
+    with it removed.
+
+    WHAT WOULD MAKE THIS FAIL: `git_argv` no longer injecting
+    `core.quotePath=false` (arm BD18), which returns the escaped spelling and
+    turns the refusal below into INERT.
+    """
+    name = "tools/drain/probé.py"
+    ascii_sibling = "tools/drain/sibling.py"
+    def _add_both(r):
+        (r / name).write_text("y = 2\n", encoding="utf-8")
+        (r / ascii_sibling).write_text("z = 3\n", encoding="utf-8")
+
+    repo, base, head = _repo_with(tmp_path, "tools/drain/plain.py", _add_both)
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    # THE PAIRED COUNTERFACTUAL. Both files were added by the SAME commit, so
+    # the unflagged read must show the ASCII one and hide the non-ASCII one.
+    # Asserting only the absence is satisfiable by a read that returned
+    # nothing at all; asserting only the presence says nothing about quoting.
+    assert ascii_sibling in unflagged, (
+        "the unflagged read did not return the ASCII sibling either, so it "
+        f"measured nothing rather than measuring quoting: {unflagged}"
+    )
+    assert name not in unflagged, (
+        "git is NOT quoting non-ASCII paths in this environment, so "
+        "`core.quotePath=false` changes nothing here and every assertion "
+        f"below would pass without it. Unflagged diff: {unflagged}"
+    )
+    assert any("\\303" in p for p in unflagged), (
+        f"expected the octal-escaped spelling in the unflagged diff, got {unflagged}"
+    )
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert name in delta, (
+        "the real path is missing from the delta, so the injection is not "
+        f"reaching this query: {delta}"
+    )
+    # ...and the ASCII sibling is STILL there, which is what makes the line
+    # above a statement about quoting rather than about the reader working.
+    assert ascii_sibling in delta, delta
+
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert name in why, why
+
+
+def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 1: `git diff --name-only` has rename detection ON by
+    default and emits ONLY THE DESTINATION path.
+
+    `git mv tools/drain/helper.py docs/helper.txt` is a 100%-similar rename, so
+    without `--no-renames` the delta is `['docs/helper.txt']` alone -- which no
+    required push filter admits -- and the gate answers INERT while the file
+    that context depends on has LEFT main.
+
+    THE COUNTERFACTUAL IS ASSERTED FIRST, and it is what makes the rest
+    evidence rather than assumption: the SAME two commits, diffed WITHOUT the
+    flag, must return exactly ONE path. If they return two, rename detection is
+    off in this environment, the flag is a no-op here, and every assertion
+    below would pass with `--no-renames` deleted -- which is exactly what both
+    reviewers measured under `GIT_CONFIG_GLOBAL` with `diff.renames = false`.
+
+    Then both halves of the fix, because either alone is satisfiable by the
+    defect: the source path is present in the delta, AND the composed answer
+    refuses naming it.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "mv", "tools/drain/helper.py", "docs/helper.txt"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    assert unflagged == ["docs/helper.txt"], (
+        "rename detection is NOT live here, so `--no-renames` changes nothing "
+        "and every assertion below would pass with the flag removed. Check "
+        f"`diff.renames` / GIT_CONFIG_GLOBAL. Unflagged diff: {unflagged}"
+    )
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert "tools/drain/helper.py" in delta, (
+        "the SOURCE path is missing, so rename detection is still collapsing "
+        f"the pair to its destination: {delta}"
+    )
+    assert "docs/helper.txt" in delta, delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_into_scope_is_not_inert(monkeypatch, tmp_path):
+    """The MIRROR of the blocker, and it was untested.
+
+    `docs/helper.txt` -> `tools/drain/helper.py` moves a file INTO the filter's
+    scope. The unflagged diff collapses it to the destination, which happens to
+    be the in-scope path, so this one refuses either way -- it is here because
+    the pair "out of scope" / "into scope" is the boundary, and only one side
+    of it was covered. Named as an EQUIVALENT-MUTANT arm for BD14 rather than
+    counted as kill power for it (assertion-design.md "done" #5): removing
+    `--no-renames` does NOT turn this red.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "docs/helper.txt",
+        lambda r: _git(r, "mv", "docs/helper.txt", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/helper.txt", "tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_within_scope_is_not_inert(monkeypatch, tmp_path):
+    """A move from one in-scope path to another in-scope path.
+
+    Both endpoints are admitted by `tools/**`, so this refuses whatever the
+    rename setting does -- another declared equivalent mutant for BD14. It
+    completes the three-way partition the round-2 briefing asked for (out of
+    scope / into scope / within scope) and pins that a within-scope move is
+    NEVER inert, which is the answer a reader would otherwise have to derive.
+
+    The briefing described this case as "a move within a context's scope
+    staying INERT". That outcome is not reachable: a path inside the filter is
+    by definition admitted by it, so the correct answer is a refusal, and the
+    assertion states the reachable fact rather than the requested one.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/a.py",
+        lambda r: _git(r, "mv", "tools/drain/a.py", "tools/drain/b.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["tools/drain/a.py", "tools/drain/b.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+
+
+def test_the_control_a_plain_delete_of_the_same_file_also_refuses(monkeypatch, tmp_path):
+    """THE CONTROL that makes the test above a finding rather than a guess.
+
+    A delete has no destination to collapse into, so it refuses with or without
+    the flag. If this ever went red the query would be blind in general and the
+    rename arm would be measuring something else entirely.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "rm", "--quiet", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta == ["tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+
+
+def test_the_positive_control_a_move_that_stays_outside_every_scope_is_inert(
+        monkeypatch, tmp_path):
+    """THE POSITIVE ARM, so the refusal tests above are not satisfied by a
+    function that refuses everything.
+
+    It is a `docs/` -> `docs/` move: BOTH endpoints outside every filter. It is
+    NOT the "in-scope to in-scope" case -- that one is
+    `test_negative_control_a_rename_within_scope_is_not_inert`, and it refuses;
+    the round-2 briefing described this test as that case, which it never was.
+    Both are now present and each says which it is.
+
+    `--no-renames` lists TWO `docs/` paths and the answer is still inert. Goes
+    red if `base_delta_files` ever started returning paths the commits did not
+    touch, or if the decision function started refusing unconditionally."""
+    repo, base, head = _repo_with(
+        tmp_path, "docs/a.md",
+        lambda r: _git(r, "mv", "docs/a.md", "docs/b.md"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/a.md", "docs/b.md"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert inert, why
+
+
+def test_negative_control_an_unreadable_delta_returns_none_not_an_empty_list(
+        monkeypatch, tmp_path):
+    """A failing `git diff` must be the UNREADABLE answer. `[]` would be a
+    measured-empty delta, which is the one thing that passes."""
+    repo, base, _head = _repo_with(tmp_path, "docs/a.md",
+                                   lambda r: (r / "docs" / "a.md").write_text("y\n"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+    assert merge_gate.base_delta_files(base, "f" * 40) is None
+
+
+# THE COMPOSED VERDICT IS NO LONGER A DISCRIMINATOR FOR GATE 2+3.
+#
+# Once a blocking verdict also RAISES the reviewer count, gate 3b blocks on the
+# same fixtures gate 2+3 does -- so `verdict == "NO-GO"` stays true even with
+# 2+3 forced to GO, and arm MG3 ("the verdict gate always records GO") went from
+# KILLED to SURVIVED on a suite that had not changed. A coupling between two
+# controls makes each one's test pass for the other's reason. The assertions
+# below are on the GATE's own `ok`, which is what MG3 actually mutates.
+def test_negative_control_no_review_blocks():
+    result = _run(comments=[])
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "2+3")["ok"]
+    assert "no live APPROVE" in _gate(result, "2+3")["detail"]
+
+
+def test_negative_control_a_live_block_is_not_discharged_by_a_later_approve():
+    result = _run(comments=[
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nno.",
+         "created_at": "2026-09-11T11:00:00Z"},
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nfixed.",
+         "created_at": "2026-09-11T12:00:00Z"},
+    ])
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "2+3")["ok"]
+    assert "REQUEST-CHANGES" in _gate(result, "2+3")["detail"]
+
+
+def test_negative_control_a_guard_diff_needs_two_approvals():
+    """The reviewer count ENFORCED, not described. Stated in a brief and
+    enforced nowhere, it was the shape this module exists to end: a `tools/drain`
+    PR that `review_requirement` says needs two reviewers merged GO on one
+    APPROVE. And here the diff EXISTS, so the decision is made on the real
+    changed files rather than on a lane-to-path guess."""
+    one = _run(changed_files=["tools/drain/gates.py"])
+    assert one["verdict"] == "NO-GO"
+    assert not _gate(one, "3b")["ok"]
+    assert "1 live APPROVE of 2 required" in _gate(one, "3b")["detail"]
+
+    two = _run(changed_files=["tools/drain/gates.py"], comments=[
+        APPROVAL,
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nsecond pair of eyes.",
+         "created_at": "2026-09-11T12:00:00Z"},
+    ])
+    assert two["verdict"] == "GO", two["blocking"]
+
+
+def test_negative_control_an_empty_changed_file_list_fails_closed():
+    """A failing `gh pr diff` raises in `collect`, but an EMPTY list would
+    otherwise be indistinguishable from "an ordinary diff touching nothing that
+    escalates" -- same boundary, other side."""
+    result = _run(changed_files=[])
+    assert result["verdict"] == "NO-GO"
+    assert "not known" in _gate(result, "3b")["detail"]
+
+
+def test_the_approval_gate_does_not_claim_to_measure_independence():
+    """It counts APPROVE comments and cannot tell two reviewers from one
+    reviewer posting twice: `collect` drops `user.login` before the parser sees
+    it, and on this repo every agent verdict posts under one login anyway. A
+    gate NAMED for a property it does not establish is an R7 error in its own
+    label -- so it is named for what it measures, and says so."""
+    result = _run()
+    gate = _gate(result, "3b")
+    assert gate["gate"] == "3b approval count"
+    assert "independence is enforced by tool access, not measured here" in gate["detail"]
+
+
+def test_an_ordinary_diff_merges_on_one_approval():
+    """The control. Without it the rule above could simply be "always two", and
+    at ~296 issues that dominates the run."""
+    result = _run(changed_files=["domains/sales/models/x.sql"])
+    assert result["verdict"] == "GO", result["blocking"]
+    assert _gate(result, "3b")["ok"]
+
+
+def test_negative_control_the_count_is_taken_from_the_real_changed_files():
+    """Not from a lane guess. A console diff filed under any lane still needs
+    two, because here `gh pr diff --name-only` has already answered the question
+    the brief could only guess at."""
+    for path in ("apps/fiab-console/app/page.tsx", "platform/fiab/bicep/main.bicep",
+                 ".github/workflows/deploy-fiab-commercial.yml", "scripts/ci/check-x.mjs",
+                 "dev-loop/gates/validate-all.ps1", "deploy/main.bicep"):
+        result = _run(changed_files=[path])
+        assert result["verdict"] == "NO-GO", f"{path} merged on one approval"
+        # ...on 3b's own `ok`, not on the composed verdict. It discriminates
+        # today -- 3b is the only failing gate on these fixtures -- but the
+        # composed verdict is the form that let MG3 go from KILLED to SURVIVED
+        # once two gates started blocking on the same input.
+        assert not _gate(result, "3b")["ok"], path
+
+
+def test_negative_control_a_red_required_context_blocks():
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup[1]["conclusion"] = "FAILURE"
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "4 ")["ok"]
+
+
+def test_negative_control_an_incomplete_required_context_blocks():
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup[0] = {"name": "Python Lint", "status": "IN_PROGRESS", "conclusion": None}
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "NO-GO"
+    assert "INCOMPLETE" in _gate(result, "4 ")["detail"]
+
+
+def test_negative_control_a_missing_context_names_the_right_remedy():
+    """never-created and parked look identical and have OPPOSITE remedies. The
+    discriminator is check-runs ON THE COMMIT, not the rollup length and not
+    `mergeStateStatus == BLOCKED`, which is true for nearly every blocked PR."""
+    rollup = [{"name": "Python Lint", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    never = _run(statusCheckRollup=rollup, head_runs={"n": 0, "waiting": 0})
+    assert "never-created" in _gate(never, "4b")["detail"]
+    parked = _run(statusCheckRollup=rollup, head_runs={"n": 9, "waiting": 2})
+    assert "parked" in _gate(parked, "4b")["detail"]
+
+
+def test_negative_control_an_advisory_red_blocks_the_composed_verdict():
+    """#4543, AT THE CALLER -- which is where the defect lived. `gates.py` is
+    not what decides a merge; this function is, and every check arm above it
+    passes `data["required"]`, so the population was narrowed before any
+    predicate ran. Measured on PR #4540 head `7dd2fa3e279`: forty check-runs,
+    exactly one red, not required, and this program printed `VERDICT: GO`. The
+    merge landed and `main` was red after it.
+
+    Breaks if: gate 4c is dropped from the composition, stops blocking, or
+    filters to the required contexts again -- and note the required half is
+    asserted GREEN first, so this cannot pass for gate 4's reason.
+    """
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "brain security graph — committed artifact matches the tree",
+                   "status": "COMPLETED", "conclusion": "FAILURE"})
+    result = _run(statusCheckRollup=rollup)
+    assert _gate(result, "4 ")["ok"], "the REQUIRED half must be green, or this is gate 4"
+    assert not _gate(result, "4c")["ok"]
+    assert "ADV-RED 1" in _gate(result, "4c")["detail"]
+    assert result["verdict"] == "NO-GO"
+
+
+def test_an_advisory_check_still_running_is_named_in_the_go_line_itself():
+    """ADV-WAIT does not block -- an in-progress check has said nothing yet,
+    and blocking on it would wait out every advisory check on every PR. So the
+    report has to be impossible to miss where the reader already is: in the
+    gate's own line, not a footnote under a `VERDICT: GO`.
+
+    Breaks if: the waiting names are dropped from the GO branch of the message
+    (the `ok` half alone would still pass), or if IN_PROGRESS starts counting
+    as red -- the verdict assertion catches that one."""
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "Checkov", "status": "IN_PROGRESS", "conclusion": None})
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "GO", result["findings"]
+    assert "ADV-WAIT 1" in _gate(result, "4c")["detail"]
+    assert "Checkov" in _gate(result, "4c")["detail"]
+
+
+def test_negative_control_the_advisory_flag_is_subscripted_not_defaulted():
+    """The authority is READ, and read LOUDLY. Every key in this policy section
+    has been read by nothing at least once in this package's history -- and the
+    version of that defect which survives a both-ways key check is a `.get(k,
+    <the shipped value>)`, where DELETING the key from `policy.json` is
+    unobservable. `assert_policy_matches_code` was extended for exactly that.
+
+    Breaks if: the caller reads the flag with a default -- then a policy with
+    the key removed answers GO instead of raising."""
+    trimmed = {**POLICY, "merge_gate": {k: v for k, v in POLICY["merge_gate"].items()
+                                        if k != "advisory_red_is_a_no_go"}}
+    with pytest.raises(KeyError, match="advisory_red_is_a_no_go"):
+        merge_gate.run_gates(_data(), trimmed, [4468], state_path=_ledger_path())
+
+
+def test_negative_control_a_skipped_required_context_blocks():
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup[2]["conclusion"] = "SKIPPED"
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "5 ")["ok"]
+
+
+def test_the_hollow_gate_states_what_it_cannot_see():
+    """statusCheckRollup publishes no per-check population, so a green-over-zero
+    check is invisible here. Saying so is the R7-honest answer; claiming the
+    measurement would be the defect this gate was written to end."""
+    detail = _gate(_run(), "5 ")["detail"]
+    assert "no per-check population" in detail
+
+
+def test_negative_control_an_undeclared_auto_close_blocks():
+    """An auto-close bypasses the ledger: the item never gets the receipt its
+    class requires. This gate recorded `True` unconditionally -- a gate that
+    could not fail, inside the composed caller."""
+    result = _run(body="Closes #4468", allow_close=[])
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "6 ")["ok"]
+    assert result["will_close"] == [4468]
+
+
+def test_negative_control_the_api_field_never_narrows_the_scan():
+    """`closingIssuesReferences` is reported beside the scan, never subtracted
+    from it. Using the API field to filter the population re-introduces the
+    exact silent close this gate exists for: it read EMPTY while a squash commit
+    closed an issue. The UNION is the answer, never the intersection."""
+    result = _run(body="Closes #4468", closingIssuesReferences=[], allow_close=[])
+    assert result["verdict"] == "NO-GO"
+    assert result["will_close"] == [4468]
+
+
+def test_the_api_field_adds_to_the_scan_when_the_text_is_clean():
+    """And the other direction: a linked issue with no keyword in the text still
+    counts. Neither oracle is complete, so both are consulted."""
+    result = _run(body="no keywords here", commits=[], allow_close=[],
+                  closingIssuesReferences=[{"number": 4469}])
+    assert result["verdict"] == "NO-GO"
+    assert result["will_close"] == [4469]
+
+
+def test_negative_control_an_unknown_mergeability_is_not_a_pass():
+    """A deny-list on CONFLICTING passes GitHub's async UNKNOWN -- the state
+    every PR sits in for a few seconds after a push, and precisely what precedes
+    the hazard this gate names. "I do not know yet" is not a pass."""
+    for value in ("UNKNOWN", "", None):
+        result = _run(mergeable=value)
+        assert result["verdict"] == "NO-GO", value
+        assert not _gate(result, "0 ")["ok"]
+
+
+def test_negative_control_the_commit_trail_blocks_too():
+    """A squash publishes the whole trail, and `closingIssuesReferences` read
+    EMPTY while a squash commit closed an issue."""
+    result = _run(body="a change", allow_close=[], commits=[
+        {"messageHeadline": "feat: a change", "messageBody": "fixed: #4361"},
+        {"messageHeadline": "test: cover it", "messageBody": ""},
+    ])
+    assert result["verdict"] == "NO-GO"
+    assert result["will_close"] == [4361]
+
+
+def test_a_declared_auto_close_is_allowed():
+    result = _run(body="Closes #4468", allow_close=[4468])
+    assert result["verdict"] == "GO", result["blocking"]
+
+
+def test_negative_control_3b_escalates_on_a_blocking_first_verdict():
+    """The block-push-reapprove rhythm, which is the ordinary shape of a review
+    round here -- this PR went through it five times.
+
+    A reviewer blocks; the author pushes; the block is correctly no longer LIVE,
+    because a verdict is pinned to the head it measured. Nothing then raised the
+    count, so one approval merged what a reviewer had just rejected. The
+    HISTORY question and the CURRENT-STATE question are different questions,
+    and `first_verdict_token` deliberately does not pin.
+
+    Kills MG14 and MG12. (Not MG8, as an earlier draft claimed: under MG8 this
+    fixture has api_says=[] and scan.hard=[], so will_close is [] either way and
+    gate 6 stays green -- the test would have passed on 3b alone.)"""
+    blocked_then_approved = [
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nthe guard is open.",
+         "created_at": "2026-09-11T09:00:00Z"},           # before the push
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nfixed.",
+         "created_at": "2026-09-11T11:00:00Z"},           # after it
+    ]
+    result = _run(comments=blocked_then_approved)
+    gate = _gate(result, "3b")
+    assert not gate["ok"], gate["detail"]
+    assert "REQUEST-CHANGES" in gate["detail"]
+    # ...and the 2+3 gate still reads the block as NOT live, which is correct
+    # and is exactly why 3b has to ask the other question.
+    assert _gate(result, "2+3")["ok"]
+
+
+def test_negative_control_3b_fails_closed_when_the_stream_cannot_be_resolved(tmp_path):
+    """Three ways it fails, one meaning: the harness cannot place the work.
+
+    Every sibling control in this package fails closed. This one is the merge
+    gate's half of `escalate_when_footprint_unknown` -- at brief time the stream
+    is the fact and the paths are the guess; here it is the other way round.
+
+    Kills MGE and MG10. (Not MG9, as an earlier draft claimed: this fixture
+    leaves mergeable=MERGEABLE, so gate 0 passes under MG9 too.)"""
+    empty = str(tmp_path / "nothing.json")
+    no_ref = _run(body="a change with no issue reference", commits=[])
+    assert not _gate(no_ref, "3b")["ok"]
+    assert "no issue" in _gate(no_ref, "3b")["detail"]
+
+    no_ledger = _run(state_path=empty)
+    assert not _gate(no_ledger, "3b")["ok"]
+    assert "no ledger" in _gate(no_ledger, "3b")["detail"]
+
+    unknown = _ledger_with(tmp_path, 999, stream="W9-rest", lane="lane:docs")
+    assert not _gate(_run(state_path=unknown), "3b")["ok"]
+
+
+def test_negative_control_a_bare_refs_resolves_the_stream(tmp_path):
+    """`Refs #N` carries no closing verb, so the closing scan sees it in
+    NEITHER `hard` nor `near` -- and `Refs #N` is how nearly every PR in this
+    repo names the item it is work on, this one included. Reusing the closing
+    scan for the stream lookup would have read "references no issue" on most
+    PRs and escalated all of them for the wrong reason. A control that fires on
+    everything teaches the reader to skim it."""
+    w1 = _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs")
+    result = _run(body="Refs #4468 - stays open pending its receipt.",
+                  commits=[], allow_close=[], state_path=w1)
+    gate = _gate(result, "3b")
+    assert not gate["ok"]
+    assert "W1-deploy" in gate["detail"]
+    assert result["will_close"] == [], "a bare Refs must NOT read as a close"
+
+
+def test_negative_control_a_corrupt_ledger_fails_closed_instead_of_raising(tmp_path):
+    """Gate 3b put new filesystem I/O on the merge path, over an UNTRACKED,
+    per-machine scratch file. A reviewer measured both ways it ended the
+    program: a corrupt `state.json` raised `JSONDecodeError` and a schema
+    mismatch raised `SystemExit`, neither caught. deploy-integrity R6 -- "a
+    failure whose only output is a stack trace" -- in the program that decides
+    every merge. Kills MG20."""
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not json", encoding="utf-8")
+    result = _run(state_path=str(corrupt))
+    assert result["verdict"] == "NO-GO"
+    detail = _gate(result, "3b")["detail"]
+    assert "unreadable" in detail
+    assert "JSONDecodeError" in detail
+
+    wrong_schema = tmp_path / "schema.json"
+    wrong_schema.write_text(json.dumps({"schema": 99, "items": {}}), encoding="utf-8")
+    result = _run(state_path=str(wrong_schema))
+    assert result["verdict"] == "NO-GO"
+    assert "refused to load" in _gate(result, "3b")["detail"]
+
+
+def test_negative_control_every_malformed_ledger_shape_fails_closed(tmp_path):
+    """`except (OSError, ValueError)` was the NARROWER-ENUMERATION shape again.
+    It covered `JSONDecodeError` and missed four ordinary hand-edit shapes a
+    reviewer measured -- and `state.json` is hand-edited today, which the README
+    says out loud in this same round, so a dropped key is the ordinary case.
+
+    A function whose contract is "NEVER raises" cannot have an exception
+    allow-list. Kills MG20."""
+    shapes = {
+        "top-level array": "[]",
+        "top-level string": '"nope"',
+        "item missing `number`": json.dumps(
+            {"schema": 2, "items": [{"title": "x", "stream": "W9-rest"}]}
+        ),
+        "items is a dict": json.dumps({"schema": 2, "items": {"1": "x"}}),
+        "truncated": "{not json",
+    }
+    for label, text in shapes.items():
+        path = tmp_path / f"{abs(hash(label))}.json"
+        path.write_text(text, encoding="utf-8")
+        led, why = merge_gate.load_ledger(POLICY, str(path))   # must not RAISE
+        assert led is None, label
+        assert "unreadable" in why or "refused to load" in why, f"{label}: {why}"
+        result = _run(state_path=str(path))
+        assert result["verdict"] == "NO-GO", label
+
+
+def test_a_worktree_falls_back_to_the_primary_checkouts_ledger(monkeypatch, tmp_path):
+    """`state.json` is gitignored, so it exists in the primary checkout and in
+    NO worktree -- measured 371 worktrees on this machine, 1 with a ledger. A
+    lane runs the gate from its own worktree, which is what the brief instructs
+    and what file-partitioned parallelism requires. Resolving only against
+    `HERE` meant the stream never resolved, and since that fails closed, EVERY
+    PR asked for two reviewers -- reinstating wholesale the "a control that
+    fires on everything teaches the reader to skim it" defect that
+    `referenced_issues` exists to avoid. Kills MG21."""
+    primary = tmp_path / "primary"
+    (primary / "tools" / "drain").mkdir(parents=True)
+    # The candidate's `policy.json` must name the SAME REPO. Requiring only that
+    # the file EXIST did not discriminate the case its own comment named -- a
+    # vendored copy carries one by definition -- and a reviewer pointed
+    # `GIT_COMMON_DIR` at a foreign repo and resolved this repo's #1483 out of
+    # its ledger. `"{}"` was the tell: the guard was satisfied by a token.
+    # Kills MG29.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": POLICY["repo"]}), encoding="utf-8"
+    )
+    (primary / ".git").mkdir()
+    worktree_drain = tmp_path / "wt" / "tools" / "drain"
+    worktree_drain.mkdir(parents=True)
+
+    monkeypatch.setattr(merge_gate, "HERE", str(worktree_drain))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(tmp_path / "wt"))
+    def fake_git(*_a, **_k):
+        return SimpleNamespace(returncode=0, stdout=str(primary / ".git") + "\n",
+                               stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake_git)
+    found = merge_gate.ledger_candidates(policy_repo=POLICY["repo"])
+    assert len(found) == 2, found
+    assert os.path.abspath(found[1]) == os.path.abspath(
+        str(primary / "tools" / "drain" / "state.json")
+    )
+    # An explicit path short-circuits it -- otherwise every test would depend on
+    # whatever git says about the machine it runs on.
+    assert merge_gate.ledger_candidates("/x/state.json") == ["/x/state.json"]
+
+    # A checkout of a DIFFERENT repo is refused, even though it carries every
+    # file this package has. Presence was not identity.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": "someone-else/other-repo"}), encoding="utf-8"
+    )
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
+    # ...and so is one with no policy at all, or an unreadable one.
+    (primary / "tools" / "drain" / "policy.json").write_text("{not json",
+                                                             encoding="utf-8")
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
+    (primary / "tools" / "drain" / "policy.json").unlink()
+    assert len(merge_gate.ledger_candidates(policy_repo=POLICY["repo"])) == 1
+    # A caller that cannot say which repo it is gets no fallback: fail closed.
+    (primary / "tools" / "drain" / "policy.json").write_text(
+        json.dumps({"repo": POLICY["repo"]}), encoding="utf-8"
+    )
+    assert len(merge_gate.ledger_candidates(policy_repo=None)) == 1
+
+
+def test_the_strongest_stream_wins_when_a_pr_references_several(tmp_path):
+    """Conjunction, the same reduction `reduce_verdicts` uses. A PR touching a
+    W9-rest item and a W1-deploy item is a W1-deploy change; taking the first
+    one found would make the answer depend on issue-number order."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(4468, "x", "W9-rest", lane="lane:docs", size=1)
+    led.upsert(4487, "x", "W1-deploy", lane="lane:docs", size=1)
+    led.save()
+    stream, why = merge_gate.ledger_stream([], [4468, 4487], POLICY, path)
+    assert stream == "W1-deploy", why
+
+
+def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
+    """THE INVERSION, found independently by both reviewers, in the feature the
+    same round had just added. Measured at ba62873:
+
+        body "Related to #10 in passing."  (#10 is W9-rest)  -> 1 reviewer
+        the SAME diff with NO reference at all               -> 2 reviewers
+
+    Referencing an issue bought a WEAKER gate than referencing nothing, which
+    inverts the fail-closed design. Not a malice case: an agent-written PR body
+    copy-pasting a stale number is ordinary, and `KICKOFF.md` reuses `#4468` as
+    an example number throughout its own text.
+
+    `Closes #N` is an ASSERTION about what this PR is -- and gate 6 refuses it
+    unless it is also declared with `--allow-close`, so it is corroborated.
+    `Refs #N` is an ASIDE: good enough to raise the requirement, not good enough
+    to lower it. Kills MG22, MG23."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "an unrelated triage item", "W9-rest", lane="lane:docs", size=1)
+    led.save()
+
+    mention_only = _run(body="Related to #10 in passing.", commits=[],
+                        state_path=path)
+    gate = _gate(mention_only, "3b")
+    assert not gate["ok"], gate["detail"]
+    assert "only MENTIONED" in gate["detail"]
+
+    # The floor: no reference at all is ALSO unknown. The two must not disagree,
+    # because the whole defect was that one was weaker than the other.
+    no_ref = _run(body="a change with no issue reference", commits=[],
+                  state_path=path)
+    assert not _gate(no_ref, "3b")["ok"]
+
+    # A DECLARED close of an item the harness NEVER SCHEDULED does not resolve
+    # it either -- reviewer B walked straight through round 6's fix with exactly
+    # this, using an unrelated item that already held a valid receipt. Round 6
+    # called `--allow-close` corroboration; it is an author DECLARATION, and
+    # saying otherwise was an R7 error in a round whose subject was an R7 error.
+    still_unknown = _run(body="Closes #10", commits=[], allow_close=[10],
+                         state_path=path)
+    assert not _gate(still_unknown, "3b")["ok"]
+    assert "the author's word alone" in _gate(still_unknown, "3b")["detail"]
+    # ...and it does NOT claim a binding that does not exist. `Item.pr` has no
+    # writer, so "bound to PR None" was what this said about all 299 items: a
+    # fact asserted about a system with no bindings, the same shape as the
+    # "was taken under None" message repaired in `ledger.py`. Kills MG34.
+    assert "bound to PR" not in _gate(still_unknown, "3b")["detail"]
+
+    # NOW put it in flight. Everything below turns on that, because the
+    # corroboration test is `state in SCHEDULED_STATES`.
+    led.transition(10, "in-flight", "selected by a lane")
+    led.save()
+
+    # THE DISCRIMINATING CASE for the mention/close split, and the one the first
+    # version of this test was missing. A MENTION of a MID-FLIGHT item must
+    # still not resolve the stream -- with #10 in `ready` above, `closing` and
+    # `every` give the same answer, so MG22 SURVIVED a matrix that had just been
+    # repaired enough to report it. A negative control has to differ under the
+    # mutation it is named for.
+    still_a_mention = _run(body="Related to #10 in passing.", commits=[],
+                           state_path=path)
+    assert not _gate(still_a_mention, "3b")["ok"]
+    assert "only MENTIONED" in _gate(still_a_mention, "3b")["detail"]
+
+    # It resolves ONLY when the item is both DECLARED closed and in flight. That
+    # is evidence the harness produced, not evidence the author typed -- the
+    # only kind a merge gate can trust. Otherwise every PR escalates and the
+    # control fires on everything, which is the other reviewer's objection.
+    declared = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert _gate(declared, "3b")["ok"], _gate(declared, "3b")["detail"]
+    assert "in flight" in _gate(declared, "3b")["detail"]
+
+    # ...and when the corroboration comes from the BINDING instead, the reason
+    # says so. The binding arm bypasses the state test, so a TERMINAL item bound
+    # to this PR corroborates -- defensible, since a harness-written binding
+    # outranks a state, but "is work the harness has in flight" is then false.
+    # Unreachable until #4489 lands a writer; wording it now means the sentence
+    # does not become wrong on the day it arms. Kills MG35.
+    led.items[10].pr = 1          # the fixture PR; set by hand, nothing writes it
+    led.save()
+    bound = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    detail = _gate(bound, "3b")["detail"]
+    assert "binds [10] to this PR" in detail, detail
+    assert "in flight" not in detail, detail
+
+    # MG34's TRUE arm. The stale branch's binding clause was asserted only by
+    # ABSENCE, so dropping it whenever a binding DOES exist left the suite
+    # green -- one-sided, which is the shape this package names most often.
+    # Bind #10 to a DIFFERENT PR and it becomes stale-and-bound at once.
+    led.items[10].pr = 99
+    led.transition(10, "ready", "handed back")
+    led.save()
+    stale = merge_gate.ledger_stream([10], [], POLICY, path, pr=1)[1]
+    assert "bound to PR 99" in stale, stale
+    assert "'ready'" in stale, stale
+
+
+def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_path):
+    """The copy-paste-across-invocations case, made loud. `Item.pr` had existed
+    since the ledger was written and had NO writer, so the correlation a
+    reviewer asked for could not be checked at all. `main()` binds it when it
+    honours `--allow-close`, first writer wins, and the second PR to claim the
+    same number is refused rather than silently believed.
+
+    It does not prove the FIRST claim was right -- nothing available to a merge
+    gate can -- but the repeat is the failure mode that was actually named: the
+    drain runs this command hundreds of times across one backlog.
+
+    Kills MG25, MG26."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "x", "W9-rest", lane="lane:docs", size=1)
+    led.transition(10, "in-flight", "selected")
+    led.save()
+
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    # The binding is set DIRECTLY here, because nothing writes it in production
+    # and this module no longer tries to. `bind_pr` used to, from `main()` --
+    # and both reviewers reproduced a lost update: an unlocked read-modify-write
+    # on the drain's only durable record, reaching (via the worktree fallback) a
+    # checkout this process does not own. `Ledger.save()` serialises the whole
+    # document from memory, so the loser's cycle, state transitions and history
+    # do not merge, they vanish. A merge gate does not write the thing it
+    # measures; `tick.py` owns the ledger. The writer is tracked in #4489, and
+    # until it exists this control is DECLARED INERT rather than claimed.
+    led.items[10].pr = 99
+    led.save()
+    # The SAME PR may re-run the gate as often as it likes.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    # A DIFFERENT PR may not claim it. The fixture PR is #1.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=1) == ["#10 is bound to PR 99"]
+    result = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert not _gate(result, "6 ")["ok"]
+    assert "POACHED" in _gate(result, "6 ")["detail"]
+    # ...and it no longer resolves the stream either: the ledger says that item
+    # is another PR's work, so this PR is again unplaceable.
+    assert not _gate(result, "3b")["ok"]
+    # Silent when it cannot tell: no ledger, or no binding, is not a conflict.
+    assert merge_gate.poached_closes([10], POLICY, str(tmp_path / "none.json"), pr=2) == []
+    assert merge_gate.poached_closes([], POLICY, path, pr=2) == []
+
+
+def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
+    """The half that must NOT be lost to the fix above. A mention may only
+    raise the requirement -- but it must still raise it, or `Refs #N` on a
+    W1-deploy item goes back to one reviewer, which is the hole the whole
+    trigger was added to close."""
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(4487, "a deploy fix", "W1-deploy", lane="lane:docs", size=1)
+    led.save()
+    result = _run(body="Refs #4487 - the deploy path.", commits=[], state_path=path)
+    gate = _gate(result, "3b")
+    assert not gate["ok"]
+    assert "W1-deploy" in gate["detail"]
+    assert result["will_close"] == [], "a bare Refs must not read as a close"
+
+
+def test_negative_control_declaring_one_does_not_allow_another():
+    result = merge_gate.run_gates(
+        _data(body="Closes #4468 and closes #4469"), POLICY, allow_close=[4468],
+        state_path=_ledger_path(),
+    )
+    assert result["verdict"] == "NO-GO"
+    assert "4469" in _gate(result, "6 ")["detail"]
+
+
+def test_the_verdict_is_the_conjunction_of_every_gate():
+    """Not of the last one, and not of a hand-picked subset."""
+    result = _run(mergeable="CONFLICTING", comments=[])
+    assert result["verdict"] == "NO-GO"
+    assert len(result["blocking"]) >= 2
+    assert all(f in result["findings"] for f in result["blocking"])
+
+
+def test_every_gate_of_the_spec_is_present():
+    """A gate silently dropped from the composition is a gate that stopped
+    watching -- and the finding list is the only place that would show it."""
+    gate_names = [f["gate"] for f in _run()["findings"]]
+    for prefix in ("0 ", "1 ", "2+3", "4 ", "4c", "5 ", "6 "):
+        assert any(g.startswith(prefix) for g in gate_names), f"gate {prefix} missing"
+
+
+# ---------------------------------------------------------------------------
+# `--allow-close` is checked against the LEDGER, not taken on a lane's word
+# ---------------------------------------------------------------------------
+
+
+def _ledger_with(tmp_path, number, stream="W6-ci", lane="lane:ci", receipt=None,
+                 state="in-flight"):
+    """A ledger holding one item, IN FLIGHT by default.
+
+    In flight because that is the only state a declared close corroborates: a
+    `ready` item was never scheduled and a terminal one is finished, so neither
+    is evidence that a PR opened now is work on it. The canonical PR these
+    fixtures stand for is one a lane is holding.
+    """
+    from ledger import Ledger
+
+    led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
+    led.upsert(number, "x", stream, lane=lane, size=1)
+    if state:
+        led.transition(number, state, "selected by a lane")
+    if receipt:
+        led.record_receipt(number, receipt, "evidence")
+    led.save()
+    return str(tmp_path / "state.json")
+
+
+def test_a_declared_close_is_allowed_when_the_ledger_holds_the_receipt(tmp_path):
+    path = _ledger_with(tmp_path, 4468, receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert ok, why
+
+
+def test_negative_control_a_declared_close_with_no_ledger_fails_closed(tmp_path):
+    """Declaring an auto-close does not GIVE the item a receipt. If you cannot
+    show the receipt, you cannot declare the close -- otherwise the flag is just
+    a way to switch gate 6 off. All three branches of this function shipped
+    uncovered and three reviewer mutations survived the whole suite."""
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, str(tmp_path / "nope.json"))
+    assert not ok
+    assert "no ledger" in why
+
+
+def test_negative_control_a_declared_close_for_an_unknown_issue_is_refused(tmp_path):
+    path = _ledger_with(tmp_path, 4468, receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(9999, POLICY, path)
+    assert not ok
+    assert "not in the ledger" in why
+
+
+def test_negative_control_a_declared_close_with_no_receipt_is_refused(tmp_path):
+    path = _ledger_with(tmp_path, 4468)
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert not ok
+    assert "without a receipt" in why
+
+
+def test_negative_control_a_declared_close_with_the_wrong_receipt_kind_is_refused(tmp_path):
+    """The KIND, not the presence -- the same rule the ledger enforces, reached
+    through the same code path rather than re-implemented beside it."""
+    path = _ledger_with(tmp_path, 4468, stream="W5-console", lane="lane:console",
+                        receipt="ci-green")
+    ok, why = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+    assert not ok
+    assert "g1-browser" in why
+
+
+def test_the_ledger_check_applies_to_every_stream(tmp_path):
+    """Population contract, because a stream exemption is the narrow bypass that
+    survived two rounds on the ledger's own refusal."""
+    import build_inventory
+
+    for i, stream in enumerate(build_inventory.ORDER):
+        path = _ledger_with(tmp_path / f"s{i}", 4468, stream=stream)
+        ok, _ = merge_gate.ledger_receipt_ready(4468, POLICY, path)
+        assert not ok, f"{stream} must not be exempt"
+
+
+# ---------------------------------------------------------------------------
+# WIRING -- main(). A check main() does not call is a check that does not run.
+# ---------------------------------------------------------------------------
+
+
+def _main_over(monkeypatch, tmp_path, argv, data=None, after=None):
+    """Drive `merge_gate.main()` with every network read stubbed."""
+    monkeypatch.setattr(merge_gate, "HERE", str(tmp_path))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(merge_gate, "collect", lambda _repo, _n: data or _data())
+    monkeypatch.setattr(merge_gate, "gh_json", lambda _args, _what: after or [1, 2])
+    monkeypatch.setattr(sys, "argv", ["merge_gate.py", *argv])
+    return merge_gate.main()
+
+
+def test_negative_control_main_cross_checks_allow_close_against_the_ledger(
+    monkeypatch, tmp_path
+):
+    """Unit-testing `ledger_receipt_ready` says nothing about whether anything
+    CALLS it. That gap is the exact shape of the defect this whole harness
+    exists to end, and it has now produced a regression in three consecutive
+    rounds."""
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"]) == 2
+
+
+def test_main_accepts_a_declared_close_the_ledger_backs(monkeypatch, tmp_path):
+    """The control. Without it the refusal above could come from anywhere.
+
+    W9-rest, not the helper's W6-ci default: `main()` now resolves the STREAM
+    from that same ledger for gate 3b, and W6-ci escalates to two reviewers, so
+    the old fixture made this control fail for a reason that had nothing to do
+    with what it tests. Named here because it is evidence the wiring is real --
+    a stream nobody read could not have changed this test's outcome."""
+    _ledger_with(tmp_path, 4468, stream="W9-rest", lane="lane:docs", receipt="ci-green")
+    data = _data(body="Closes #4468")
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 0
+
+
+def test_negative_control_main_escalates_on_the_stream_of_the_issue_it_closes(
+    monkeypatch, tmp_path
+):
+    """The trigger that was inert at the enforcement point for three rounds.
+
+    Same PR, same one approval, same diff -- `domains/sales/models/x.sql`, which
+    touches no escalating path. The ONLY difference from the control above is
+    the stream the ledger has this issue in. Measured before the fix: GO.
+
+    W1-deploy is the case that matters: R1 makes a broken deploy path preempt
+    all feature work, and its fixes routinely land in `azure-functions/`,
+    `apps/fiab-*` and `csa_platform/` -- none of which is in the twelve
+    fragments, so the path trigger never fired for them either."""
+    _ledger_with(tmp_path, 4468, stream="W1-deploy", lane="lane:docs",
+                 receipt="deploy-run")
+    data = _data(body="Closes #4468")
+    assert _main_over(monkeypatch, tmp_path, ["1", "--allow-close", "4468"], data) == 1
+
+
+def test_negative_control_main_refuses_a_before_file_from_another_pr(monkeypatch, tmp_path):
+    """Auditing #4483 against #4400's baseline prints AUDIT OK or AUDIT FAILED
+    with equal confidence, and neither answer is about anything."""
+    before = tmp_path / "before-4400.json"
+    before.write_text(json.dumps({"pr": 4400, "open_issues": [1, 2, 3]}), encoding="utf-8")
+    rc = _main_over(
+        monkeypatch, tmp_path,
+        ["--audit-close", "4483", "--before-file", str(before), "--intended", "3"],
+    )
+    assert rc == 2
+
+
+def test_main_audits_against_its_own_before_file(monkeypatch, tmp_path):
+    before = tmp_path / "before-4483.json"
+    before.write_text(json.dumps({"pr": 4483, "open_issues": [1, 2, 3]}), encoding="utf-8")
+    rc = _main_over(
+        monkeypatch, tmp_path,
+        ["--audit-close", "4483", "--before-file", str(before), "--intended", "3"],
+        after=[1, 2],
+    )
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Gate 7 -- the post-merge audit, on SETS
+# ---------------------------------------------------------------------------
+
+
+def test_the_audit_passes_on_exactly_the_intended_set():
+    ok, why = gates.issue_set_audit([1, 2, 3], [1, 2], [3])
+    assert ok, why
+
+
+def test_negative_control_a_set_swap_is_caught():
+    """THE reason the count version is not enough: the intended issue closed,
+    another closed silently, and a third opened concurrently. The delta is 1,
+    the intended count is 1, and the count audit reports OK over a silent
+    close. On this repo concurrent movement is the normal case."""
+    ok_count, _ = gates.issue_count_audit(3, 2, [3])
+    assert ok_count, "the count version passes the swap - that is the premise"
+    ok, why = gates.issue_set_audit([1, 2, 3], [1, 4], [3])
+    assert not ok
+    assert "nobody chose" in why
+    assert "2" in why
+
+
+def test_negative_control_an_issue_that_did_not_close_is_a_finding():
+    ok, why = gates.issue_set_audit([1, 2, 3], [1, 2, 3], [3])
+    assert not ok
+    assert "did not" in why
+
+
+def test_a_concurrent_open_alone_is_not_a_finding():
+    """release-please opens issues while a merge lands. That is not a false
+    close, and a gate that cries about it gets ignored."""
+    ok, why = gates.issue_set_audit([1, 2, 3], [1, 2, 9], [3])
+    assert ok, why
+    assert "concurrently" in why
+
+
+# ---------------------------------------------------------------------------
+# The job join -- `merge_gate.py` is in SOURCES but no arm pointed at this
+# ---------------------------------------------------------------------------
+
+
+def test_the_job_join_reads_every_workflow_run_of_the_sha(monkeypatch):
+    """Arm CB14: `run_ids[:1]`.
+
+    An independent reviewer wrote this arm and it SURVIVED, because every test
+    of the receipt hands `gates` a job dict directly and nothing exercised the
+    PRODUCER that builds the name -> job map. One sha carries many workflow runs
+    -- this repo publishes its 15 required contexts from five workflows -- so
+    reading only the first run leaves most contexts with no job record at all,
+    and "no job record was read for it" is indistinguishable from a genuine
+    absence.
+
+    That is the same class of defect the CB* arms exist for: the pure function
+    was mutated to death while the program deciding its inputs was not.
+    """
+    runs = {
+        11: ({"name": "Python Lint", "conclusion": "success", "steps": []},),
+        22: ({"name": "next build (node 20)", "conclusion": "success", "steps": []},),
+        33: ({"name": "guardrails", "conclusion": "success", "steps": []},),
+    }
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    joined = merge_gate._jobs_by_name("owner/repo", [11, 22, 33])
+    assert set(joined) == {"Python Lint", "next build (node 20)", "guardrails"}
+
+
+def test_the_job_join_keeps_the_job_that_ran_less_on_a_duplicate(monkeypatch):
+    """The other half of the same function: a green re-run must not hide a
+    sibling that ran nothing. Without this, the arm above could be killed by
+    making the join take the LAST run instead of every run."""
+    hollow = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "skipped"}],
+    }
+    real = {
+        "name": "vitest (node 20)", "conclusion": "success",
+        "steps": [{"name": "Run vitest (with istanbul coverage floor)",
+                   "conclusion": "success"}],
+    }
+    runs = {1: (real,), 2: (hollow,)}
+    monkeypatch.setattr(merge_gate, "_jobs_of_run", lambda _repo, run_id: runs[run_id])
+    assert merge_gate._jobs_by_name("owner/repo", [1, 2])["vitest (node 20)"] is hollow
+    assert merge_gate._jobs_by_name("owner/repo", [2, 1])["vitest (node 20)"] is hollow
+
+
+# --------------------------------------------------------------------------
+# The DELEGATED infra scope. Round 8, both findings in the EXCUSING direction.
+# --------------------------------------------------------------------------
+
+def _fake_run(stdout: str, rc: int = 0):
+    def run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
+    return run
+
+
+REAL_ERE = r"^(\.claude|\.github|PRPs|scripts|tools)/"
+
+
+def test_a_contaminated_but_compilable_ere_is_refused_not_accepted(monkeypatch):
+    """ROUND 8. `stdout.strip() or None` accepted anything non-empty.
+
+    Empty stdout refuses and an UNCOMPILABLE pattern refuses. The one shape that
+    is neither -- a warning line, a newline, then the real ERE -- is a VALID
+    regex: it compiles, raises nothing, matches no path, and the excuse route
+    then returns ok=True. The only stdout shape with no guard was the one that
+    silently excused.
+
+    Not reachable through today's deriver (every diagnostic goes to stderr and
+    stdout is one line), which is why an independent reviewer filed it as
+    should-fix rather than a blocker. It was one `console.log` away, in a file
+    nothing under `tools/drain/` owns.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run",
+                        _fake_run(f"warning: could not stat foo\n{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+    # NEGATIVE CONTROL: the clean shape still resolves, or this test would pass
+    # under a mutant that simply returns None always.
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n"))
+    assert merge_gate.resolve_infra_ere() == REAL_ERE
+
+
+def test_a_diagnostic_after_the_ere_is_refused_by_the_newline_check(monkeypatch):
+    """ROUND 9. The fixture above puts the diagnostic BEFORE the ERE, where the
+    `^(` anchor check alone already refuses it -- so the "contains a newline"
+    half of the shape check was a SURVIVING MUTANT: an independent reviewer
+    dropped only that clause and the whole suite stayed green.
+
+    Put the diagnostic AFTER instead (the deriver prints the ERE, then
+    `warning: 3 suites could not be parsed`) and the anchor check passes while
+    the value is still contaminated. It compiles, matches no path, and the
+    excuse route returns ok=True. Each half of that `or` needs its own fixture
+    or the matrix cannot tell the halves apart.
+    """
+    monkeypatch.setattr(
+        merge_gate.subprocess, "run",
+        _fake_run(f"{REAL_ERE}\nwarning: 3 suites could not be parsed\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_an_unanchored_ere_is_refused(monkeypatch):
+    """A single line that is not the deriver's declared shape is still not it.
+
+    A delegated scope arriving in an unexpected shape must be None, never a
+    regex that happens to compile and match nothing.
+    """
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run("no suites found\n"))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
+        monkeypatch):
+    """ROUND 8, the TWO CLOCKS: the deriver walks the working tree's HEAD while
+    `push_trigger` is pinned to the merged sha.
+
+    If today's tree is NARROWER, a file that was in the infra scope at merge
+    falls outside it now, `hits` comes back empty, and a merge that DID have
+    infra work is excused. Present-day narrowing is the excusing direction, so
+    it refuses; today's tree having MORE directories only widens the scope, and
+    a wider scope can refuse but never excuse.
+    """
+    trees = {
+        "MERGED": "tools\nscripts\nretired-dir\n",
+        "HEAD": "tools\nscripts\n",
+    }
+
+    def fake(args, **_kwargs):
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout=trees[args[-1]], stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+    # WIDER today is fine -- and this is the control that stops the fix above
+    # from simply refusing everything. My first draft compared the merged sha's
+    # directories against the ERE's own ALTERNATIVES, which are a different set
+    # by design (18 of 29 at the time of writing), so it returned None on every
+    # receipt and would have refused `vitest (node 20)` on every merge.
+    trees["HEAD"] = "tools\nscripts\nretired-dir\nbrand-new\n"
+    assert merge_gate._top_level_dirs_agree("MERGED") is True
+    assert merge_gate.resolve_infra_ere("MERGED") == REAL_ERE
+
+
+def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch):
+    """"Cannot be shown to agree" is not "agree"."""
+    def fake(args, **_kwargs):
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
+            return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate.resolve_infra_ere("deadbeef") is None
+
+
+# --------------------------------------------------------------------------
+# ROUND 10: three mutations of these two guards SURVIVED the E1-E6 arms, found
+# by an independent reviewer. All three are an EXIT CODE stopping being read --
+# a subprocess that FAILED treated as one that ANSWERED -- and each needs a
+# fixture where the failing call still produces OUTPUT, which the round-9
+# fixtures did not have. One fixture satisfying both halves of a check is the
+# same conflation round 9 fixed one function further up.
+# --------------------------------------------------------------------------
+
+def test_a_crashed_deriver_with_partial_output_is_not_the_delegated_scope(monkeypatch):
+    """Kills E7. The rc check and the shape check were both satisfied by the
+    same fixture (rc=0 AND clean stdout), so dropping the rc check changed
+    nothing observable. A deriver that crashed halfway still has stdout."""
+    monkeypatch.setattr(merge_gate.subprocess, "run", _fake_run(f"{REAL_ERE}\n", rc=1))
+    assert merge_gate.resolve_infra_ere() is None
+
+
+def test_a_failed_ls_tree_with_output_does_not_read_as_an_empty_tree(monkeypatch):
+    """Kills E8. An empty `at_merge` subtracts to nothing, and nothing AGREES --
+    so a failed listing treated as an empty one silently permits the narrowing
+    this guard exists to refuse."""
+    def fake(args, **_kwargs):
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
+            return SimpleNamespace(
+                returncode=128, stdout="tools\nscripts\n", stderr="bad object")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None
+
+
+def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch):
+    """Kills E9. `found or None` is what makes an empty listing UNREADABLE
+    rather than an answer; returning the bare set lets the caller's `is None`
+    check pass and then compare against nothing."""
+    def fake(args, **_kwargs):
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+    assert merge_gate._top_level_dirs_agree("MERGED") is False
+    assert merge_gate.resolve_infra_ere("MERGED") is None

@@ -12,20 +12,58 @@ on:
       - 'deploy/**/*.bicep'
       - 'deploy/**/*.json'
       - '*.bicep'
+      # #4466. The three entries above reach 'deploy/**' and the repo ROOT only.
+      # MEASURED THREE WAYS at 0348d3715e6 — and CORRECTED in review: an earlier
+      # revision of this comment said "198 .bicep files under
+      # platform/fiab/bicep/", which is the count of ALL TRACKED FILES in that
+      # directory, not of .bicep files. Quoting a number under the wrong scope
+      # line is the exact error assertion-design.md memorialises, so here is the
+      # full set, each with the query that produces it:
+      #   357  git ls-files -- '*.bicep'                                (repo-wide)
+      #   185  git ls-files -- 'platform/fiab/bicep/**/*.bicep' + the dir's own
+      #   198  git ls-files -- 'platform/fiab/bicep/'                   (ALL files)
+      #   223  .bicep matching NONE of the three globs above  <- the real gap
+      #    17  git ls-files -- '*.bicepparam', of which 17 also matched none
+      # So a push to main touching only those paths never started this workflow
+      # at all, and the .bicep arm was short by 223, not by 198 — the original
+      # argument was understated, not overstated. Both globs are widened
+      # together deliberately: adding the .bicepparam arm alone would have left
+      # the .bicep arm short by all 223, which is the one-side-of-a-symmetry
+      # shape this repo keeps shipping. `pull_request:` below carries no
+      # `paths:`, so the PR path was never affected — this only closes the
+      # push-to-main arm.
+      #
+      # SIDE EFFECT, NAMED. validate.yml publishes 5 of the 17 required contexts
+      # (Secret Scan, PowerShell Lint, Python Lint, Repo Hygiene, and — since
+      # 2026-09-18 — Bicep Params Compile; it was 4 of 15 before), and the drain
+      # harness excuses exactly those on a merged sha BECAUSE this push trigger
+      # was path-filtered (tools/drain/gates.py, policy.json `push_event_runs`).
+      # Widening it means a merge touching any .bicep/.bicepparam now really
+      # runs those five instead of being excused. That is the good direction —
+      # fewer excuses, more measurement — but it is a change to a receipt's
+      # accounting and is recorded here rather than discovered later.
+      - '**/*.bicep'
+      - '**/*.bicepparam'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
   # REQUIRED-CHECK DISPATCH (#3393). release-please's PR is authored by
   # GITHUB_TOKEN and GitHub suppresses the `pull_request` trigger on it, so the
-  # four required contexts published here (Secret Scan, PowerShell Lint, Python
-  # Lint, Repo Hygiene) never ran and were replaced by synthetic statuses.
+  # required contexts published here never ran and were replaced by synthetic
+  # statuses. That set was FOUR when #3393 was fixed (Secret Scan, PowerShell
+  # Lint, Python Lint, Repo Hygiene); it is FIVE since 2026-09-18, when Bicep
+  # Params Compile became required.
   # `workflow_dispatch` is the documented exception GITHUB_TOKEN *may* trigger,
   # so release-please.yml dispatches this workflow against the release branch.
-  # None of those four jobs read PR context, and none of them `needs:` the
-  # `changes` job, so they behave identically under a dispatch.
+  # None of those five jobs read PR context, and none of them `needs:` the
+  # `changes` job, so they behave identically under a dispatch. Re-measured
+  # 2026-09-18 for all five, not extended from the original four by assumption:
+  # zero references to `github.event.pull_request.*`, `github.event.number`,
+  # `github.head_ref` or `github.base_ref` in any of the five job bodies.
   workflow_dispatch:
-  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene are
-  # REQUIRED contexts, and a merge group is gated on the SAME required set as a
+  # MERGE QUEUE. Secret Scan / PowerShell Lint / Python Lint / Repo Hygiene /
+  # Bicep Params Compile are REQUIRED contexts, and a merge group is gated on
+  # the SAME required set as a
   # PR. A required context that never reports in a merge group does not fail the
   # group — it leaves it pending until the queue times out and ejects the PR, so
   # a missing trigger here would stall every merge in the repo.
@@ -33,16 +71,19 @@ on:
   # DELIBERATELY BARE — no `branches:`, no `paths:`. The `paths:` list above
   # belongs to `push:` only; inheriting a path filter here would reintroduce the
   # same stall by another route (a merge group touching no matching path would
-  # never produce the context). All four jobs are event-agnostic: none has a
+  # never produce the context). All five jobs are event-agnostic: none has a
   # job-level `if:`, none reads `github.event.pull_request.*`, and none `needs:`
   # the path-filtered `changes` job. They behave identically here.
   merge_group:
 
 concurrency:
-  # #3426 — per-SHA on push/dispatch. This lane publishes FOUR required
-  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan), and with
+  # #3426 — per-SHA on push/dispatch. This lane publishes FIVE required
+  # contexts (PowerShell Lint, Python Lint, Repo Hygiene, Secret Scan, and —
+  # since 2026-09-18 — Bicep Params Compile), and with
   # a ref-keyed group + cancel-in-progress:true every merge cancelled the
   # previous commit's run: 4 of the last 30 main runs cancelled (2026-08-14).
+  # That 4-of-30 is a DATED measurement of the incident, not the context count;
+  # do not "correct" it to five.
   # A cancelled required check is an ABSENCE, not a pass. See
   # scripts/ci/check-required-lane-concurrency.mjs, which now enforces this.
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
@@ -133,6 +174,14 @@ jobs:
           #   gov/main.bicep       policy defs using dynamic expressions
           #   alerts/              threshold expressions -> false positives
           #   example-vertical/    cookiecutter {{ }} Jinja, not valid until rendered
+          #
+          # SCOPE, MEASURED (#4466): this pathspec matches 357 files and ZERO
+          # `.bicepparam` — `git ls-files '*.bicep' | grep -c bicepparam` -> 0.
+          # Param files are NOT in this population and are not meant to be; they
+          # need `bicep build-params`, not `bicep build`. The `bicep-params` job
+          # below is the guard that covers them, and
+          # scripts/ci/check-bicepparam-compiled.mjs enforces that it keeps
+          # doing so.
           git ls-files '*.bicep' \
             | grep -vE '^codeqlDB/|/node_modules/|landing-zone-alz/|gov/main\.bicep$|/alerts/|templates/example-vertical/' \
             > /tmp/bicep-files.txt
@@ -168,6 +217,365 @@ jobs:
             exit 1
           fi
           echo "All $COUNT Bicep files compiled clean."
+
+  # -------------------------------------------------------------------------
+  # Bicep PARAM files (#4466)
+  #
+  # The job above compiles `*.bicep`. It does NOT compile `*.bicepparam`, and
+  # neither did anything else: measured on 0348d3715e6, `az bicep build-params`
+  # appeared in `.github/workflows/` at exactly three sites, ALL of them
+  # comments (deploy-fiab-commercial.yml:1114,1172; loom-guardrails.yml:581) and
+  # zero of them executable steps. The enumeration above is
+  # `git ls-files '*.bicep'`, whose pathspec matches 357 files and ZERO
+  # `.bicepparam` (verified: `git ls-files '*.bicep' | grep -c bicepparam` -> 0),
+  # so the param files were outside the population that guard walks rather than
+  # merely skipped by it. The only other build of a param file is
+  # `bicep-whatif.yml:403`, which passes `commercial-full.bicepparam` to
+  # `az deployment sub what-if` — one file out of seventeen, behind an Azure
+  # login, on a lane that no-ops when credentials are absent.
+  #
+  # Net effect: a syntax error, a BCP259 undeclared assignment, a type mismatch
+  # or a dangling `using` in gcc.bicepparam / gcc-high.bicepparam /
+  # il5.bicepparam / dlz-attach.bicepparam / tenant-dmlz.bicepparam reached main
+  # with nothing in CI having parsed it. il5.bicepparam is the worst case: it is
+  # compiled by no gate AND executed by no deploy (deploy-fiab-il5.yml is
+  # `active` with zero recorded runs), so an IL5 first-ever deploy would have
+  # been the first time anything parsed it — against deploy-integrity.md R4.
+  #
+  # NO PATHS FILTER, DELIBERATELY. #4466 asks for a filter that includes
+  # '**/*.bicepparam' so a param-only PR cannot skip the step. This job goes
+  # further: it carries no `needs:` and no `if:` at job OR step level, so no
+  # PR-triggered run of this workflow can skip it.
+  #
+  # THAT IS NOT THE SAME AS "NO PR CAN SKIP IT", and an earlier revision of this
+  # comment claimed exactly that. Two measured escapes were demonstrated in
+  # review against the previous revision — an `if:` on a STEP (eight-space
+  # indent, which the guard's job-level probe never saw) and a `paths:` filter
+  # added under `pull_request:` (which stops the whole workflow, this job
+  # included). Both are now rules in check-bicepparam-compiled.mjs (R3 rejects
+  # any `if:`/`needs:` anywhere in this job; R6 glob-tests `pull_request:`'s
+  # `paths:` as well as `push:`'s), so the claim above is enforced rather than
+  # asserted. What remains outside any guard's reach is a change to branch
+  # protection or to the workflow's `on:` verbs themselves.
+  #
+  # REQUIRED AS OF 2026-09-18 — and this note said the opposite until then.
+  # `Bicep Params Compile` IS now one of main's required status checks (it was
+  # added to branch protection on 2026-09-18, taking the set from 15 to 17
+  # alongside the brain security-graph check). A RED compile here therefore
+  # BLOCKS a merge.
+  #
+  # The retracted text, kept rather than deleted so the change is legible: it
+  # read "NOT A REQUIRED CONTEXT — STATED PLAINLY … a RED compile here does not
+  # block a merge today: what blocks is `guardrails`, which checks this job's
+  # SHAPE, never the compile's RESULT." That was true when written and is not
+  # now.
+  #
+  # WHAT REQUIRED-NESS DOES *NOT* BUY, stated because the first draft of this
+  # correction overclaimed in the opposite direction. It said #4466's stronger
+  # claim — "a broken il5.bicepparam can no longer reach main" — was therefore
+  # closed. IT IS NOT. Measured 2026-09-18:
+  #
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.enforce_admins.enabled'      ->  false
+  #
+  # so an admin merge bypasses every required context, and `--admin` merging is
+  # this repo's standing practice rather than an exception. Required-ness stops
+  # an ORDINARY merge on a red compile. It does not make the path unreachable,
+  # and no branch-protection setting short of `enforce_admins: true` would.
+  # Retracting one overclaim by writing its mirror is the failure this note now
+  # records against itself.
+  #
+  # Verify rather than trust this comment; it is the kind that rots:
+  #   gh api repos/fgarofalo56/csa-inabox/branches/main/protection \
+  #     --jq '.required_status_checks.contexts[]'
+  # The tracked snapshot is tools/drain/required_contexts.json, and the step
+  # names below are declared in tools/drain/policy.json
+  # (receipts.ci_green_rule.substantive_steps) so a green-over-skipped run
+  # cannot be read as a receipt. (`Bicep Lint` remains non-required.)
+  #
+  # POPULATION: every tracked `*.bicepparam`, repo-wide — 17 files, not just the
+  # 7 under platform/fiab/bicep/params/. All 17 compile clean today (measured
+  # with `az bicep build-params` CLI 0.45.15 before this job was written, and
+  # again on the runner with 0.47.16), so there is no exclusion list and none is
+  # needed. The reconciliation at the end of the compile step is what makes that
+  # a measured claim rather than a stated one.
+  # -------------------------------------------------------------------------
+  bicep-params:
+    name: Bicep Params Compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Install Bicep CLI
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x bicep
+          sudo mv bicep /usr/local/bin/
+          bicep --version
+
+      # NEGATIVE CONTROL, RUN FIRST (#4466 "done" #4; assertion-design.md §2).
+      # A gate nobody has seen fail is not known to watch anything, so this
+      # proves the kill power of the compile below IN THE ENVIRONMENT WHERE IT
+      # RUNS — this CLI build, this runner — before any verdict is reported
+      # about the repo.
+      #
+      # It works on a SANDBOX COPY under $RUNNER_TEMP. The tracked tree is never
+      # written to, and the final arm PROVES that (before/after `git status`)
+      # rather than asserting it.
+      #
+      # POSITIVE ARM (assertion-design.md §4): the unmutated copy must compile
+      # clean. Without it a RED from the mutated arm could equally mean "the
+      # copy is broken" — e.g. a `cp` that lost ../main.bicep, which is exactly
+      # what happens if you copy the params directory alone.
+      #   -> goes red if `cp -r platform/fiab/bicep` stops producing a
+      #      self-contained tree, or if il5.bicepparam itself stops compiling.
+      #
+      # NEGATIVE ARM: the SAME copy, plus one line assigning a parameter that
+      # main.bicep does not declare, must exit NON-ZERO.
+      #   -> goes red (i.e. this step fails) if `bicep build-params` exits 0 for
+      #      a params file containing
+      #      `param zzzGateNegativeControlUndeclaredParam = true`.
+      #      Measured locally with az bicep 0.45.15: rc=1 (BCP259 class). Also
+      #      measured rc=1 for a syntax error, a type mismatch and a dangling
+      #      `using`; rc=0 for the pristine file DESPITE ~40 linter warnings, so
+      #      this gate fires on errors only and warnings cannot red main.
+      #
+      # An undeclared-parameter assignment is chosen over a syntax error on
+      # purpose: a syntax error would only prove the parser ran, while BCP259
+      # can only be reached by TYPE-CHECKING the params file against the target
+      # template — which is the property #4466 says nothing had ever
+      # established.
+      - name: Negative control — prove this gate can fail
+        run: |
+          set -uo pipefail
+          SBX="$RUNNER_TEMP/bicepparam-negative-control"
+          rm -rf "$SBX"
+          mkdir -p "$SBX"
+          # BEFORE state, so a tree that was already dirty for some unrelated
+          # reason is not mis-attributed to this control (deploy-integrity.md R7
+          # — do not assert a cause you have not established).
+          BEFORE=$(git status --porcelain -- platform/fiab/bicep)
+          cp -r platform/fiab/bicep "$SBX/bicep"
+          TARGET="$SBX/bicep/params/il5.bicepparam"
+          if [ ! -f "$TARGET" ]; then
+            echo "::error::Negative-control sandbox has no params/il5.bicepparam — the copy did not produce the expected tree, so nothing below would be attributable. Check that platform/fiab/bicep/params/il5.bicepparam still exists."
+            exit 1
+          fi
+
+          echo "--- positive arm: the unmutated sandbox copy must compile clean ---"
+          if ! bicep build-params "$TARGET" --outfile "$SBX/pristine.json"; then
+            echo "::error::Negative-control SANDBOX is broken: the UNMUTATED copy of il5.bicepparam failed to compile. A red from the mutated arm below would not be attributable to the mutation, so no verdict is reported."
+            exit 1
+          fi
+          echo "pristine copy compiled clean (rc=0)."
+
+          echo "--- negative arm: the same copy + one undeclared assignment must FAIL ---"
+          printf '\nparam zzzGateNegativeControlUndeclaredParam = true\n' >> "$TARGET"
+          # CAPTURE THE RC THROUGH AN `if`, NOT THROUGH `$?`.
+          #
+          # GitHub's default shell for a `run:` block is
+          # `bash --noprofile --norc -e -o pipefail {0}` — errexit is ON before
+          # this script's own `set -uo pipefail` ever runs, and `set -uo` does
+          # not clear it. A bare `bicep build-params …` followed by `MUT_RC=$?`
+          # therefore KILLED THE STEP the instant the mutation worked: the
+          # control could only pass by failing to fail. Measured on run
+          # 35173056079 — BCP259 fired exactly as designed and the job still
+          # went red at that line. A command in an `if` condition is exempt from
+          # errexit, so this shape is correct under `-e` and without it.
+          if bicep build-params "$TARGET" --outfile "$SBX/mutated.json"; then
+            MUT_RC=0
+          else
+            MUT_RC=$?
+          fi
+          echo "mutated copy exit code: $MUT_RC"
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::NEGATIVE CONTROL FAILED — bicep build-params returned 0 for a params file assigning 'zzzGateNegativeControlUndeclaredParam', which platform/fiab/bicep/main.bicep does not declare. This gate cannot distinguish a broken param file from a good one, so its pass below would mean nothing. Do NOT weaken or delete this control to get green: fix the compile invocation (or pin a CLI version that type-checks params files)."
+            exit 1
+          fi
+
+          echo "--- proving the tracked tree was never written to ---"
+          AFTER=$(git status --porcelain -- platform/fiab/bicep)
+          if [ "$AFTER" != "$BEFORE" ]; then
+            echo "::error::The negative control modified the TRACKED tree, which it must never do (assertion-design.md: mutate a sandbox copy, never the tracked tree). git status under platform/fiab/bicep changed during this step. Before:"
+            printf '%s\n' "$BEFORE"
+            echo "After:"
+            printf '%s\n' "$AFTER"
+            exit 1
+          fi
+          rm -rf "$SBX"
+          echo "Negative control OK: clean copy rc=0, mutated copy rc=$MUT_RC, tracked tree unchanged by this step."
+
+      - name: Compile every tracked .bicepparam
+        run: |
+          set -uo pipefail
+          # `git ls-files` for the same reasons the .bicep job gives: tracked
+          # files only, deterministic, cannot wander into node_modules. NO
+          # exclusion filter — every tracked param file compiles clean today.
+          #
+          # `:(icase)` pathspec magic, not a bare `*.bicepparam`: a file
+          # committed as `x.BICEPPARAM` is invisible to the case-sensitive
+          # pathspec on a Linux runner, and would be compiled by nothing while
+          # every count in this step still read clean. Measured: `git ls-files
+          # -- ':(icase)*.BICEPPARAM'` returns the same 17 lowercase files, so
+          # the magic is honoured here and the widening is real. The guard's
+          # own population oracle uses the SAME pathspec, deliberately — see the
+          # disclosure in check-bicepparam-compiled.mjs about a corpus neither
+          # lens can see (a `.bicep-param` spelling, say) being invisible to
+          # both by construction.
+          git ls-files -- ':(icase)*.bicepparam' > "$RUNNER_TEMP/bicepparam-files.txt"
+          COUNT=$(wc -l < "$RUNNER_TEMP/bicepparam-files.txt")
+          # FAIL CLOSED on an empty population. A renamed directory or a changed
+          # extension would otherwise make this step exit 0 having compiled
+          # nothing, which is the exact defect #4466 is about wearing a green
+          # tick. Same fail-closed shape as check-postgres-quota-gate.mjs's
+          # zero-corpus check. (This arm is now belt-and-braces: the
+          # reconciliation at the end of the step also reds an empty run,
+          # because 0 produced never equals a non-zero tracked count. It stays
+          # because it fails EARLY, with the specific reason.)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::git ls-files matched ZERO .bicepparam files — the corpus drifted. Nothing was compiled, so no verdict is reported."
+            exit 1
+          fi
+          echo "=== Compiling $COUNT Bicep param files across $(nproc) workers ==="
+          cat "$RUNNER_TEMP/bicepparam-files.txt"
+
+          # Exported for the same reason the .bicep job exports it: the `sh -c`
+          # workers are separate processes and inherit only the environment.
+          export FAIL_DIR OUT_DIR ATTEMPT_DIR
+          FAIL_DIR=$(mktemp -d)
+          # --outfile, never --stdout: --stdout crashes on the Unicode these
+          # param files carry. Output goes OUTSIDE the checkout so the run
+          # cannot litter the tree with sibling .json artifacts.
+          OUT_DIR=$(mktemp -d)
+          # One marker per file the compiler was actually INVOKED on. This is
+          # what the reconciliation below counts, and it is deliberately not
+          # derived from that list file.
+          ATTEMPT_DIR=$(mktemp -d)
+
+          # The `sh -c '…'` body is single-quoted ON PURPOSE: it must be
+          # expanded by the WORKER, not by this shell, so that `$1` is the
+          # filename xargs passes and `$OUT_DIR`/`$FAIL_DIR` are read from the
+          # exported environment. SC2016 is exactly the observation "these do
+          # not expand here", which is the intent — suppressed rather than
+          # baselined, so `validate.yml` stays at its recorded 1 finding
+          # (scripts/ci/workflow-actionlint-baseline.json) and the
+          # workflow-actionlint ratchet keeps its teeth.
+          # shellcheck disable=SC2016
+          xargs -r -d '\n' -P "$(nproc)" -n1 sh -c '
+            f="$1"
+            flat=$(printf "%s" "$f" | tr "/" "_")
+            if ! out=$(bicep build-params "$f" --outfile "$OUT_DIR/$flat.json" 2>&1); then
+              printf "%s\n" "$out"
+              printf "::error file=%s::bicep build-params failed\n" "$f"
+              touch "$FAIL_DIR/$flat"
+            elif [ ! -s "$OUT_DIR/$flat.json" ]; then
+              printf "::error file=%s::bicep build-params exited 0 but wrote no ARM JSON - nothing was actually compiled for this file\n" "$f"
+              touch "$FAIL_DIR/$flat"
+            fi
+            touch "$ATTEMPT_DIR/$flat"
+          ' _ < "$RUNNER_TEMP/bicepparam-files.txt"
+
+          FAILED=$(find "$FAIL_DIR" -type f | wc -l)
+
+          # ── POPULATION RECONCILIATION (#4466, review rounds 2 and 3) ───────
+          #
+          # WHAT THIS IS FOR. Everything above this line judges the RESULT of
+          # whatever list reached xargs. Nothing judged the LIST. Ten one-line
+          # narrowings were demonstrated against the pre-reconciliation
+          # revision — `head -n 1`, a positive `grep -E` keeping only the 7 fiab
+          # params, a SECOND `grep -v` after a harmless first, `grep -vF`,
+          # `sed -i`, a truncated list with COUNT forced, a pipe into xargs, and
+          # replacing the invocation with an `echo` — and every one left this
+          # step GREEN while printing a count it had never established
+          # (deploy-integrity.md R7). That is the very shape #4466 is about: the
+          # ISSUE was a POPULATION defect, not a check defect, and the first cut
+          # of this gate reproduced it.
+          #
+          # AND THEN THE FIX HAD THE SAME DEFECT ONE LEVEL DOWN. Round 2 computed
+          # four numbers and compared ONE pair, so two more narrowings walked
+          # through the reconciliation itself:
+          #   - marking the attempt BEFORE the work (`touch` then `exit 0`)
+          #     kept ATTEMPTED at 17 while 7 compiled — measured rc=0, with the
+          #     success line printing its own disproof: "reconciled 17 ...; 7 ARM
+          #     JSON output(s) written". PRODUCED was computed and compared
+          #     against nothing.
+          #   - narrowing ATTEMPTED and EXPECTED in lockstep printed
+          #     "reconciled 7 ... against 7" at rc=0. COUNT was likewise computed
+          #     and compared against nothing.
+          # EVERY NUMBER THIS STEP COMPUTES IS NOW COMPARED. If you add another,
+          # compare it or do not compute it.
+          #
+          # The four arms report SEPARATELY and in this order, because they mean
+          # different things and an error must not claim what it did not
+          # establish. The order is chosen so each defect meets the arm that
+          # describes it: a narrowed enumeration reaches (1), two lenses narrowed
+          # together reach (2), a genuinely broken file reaches (3), and work
+          # that was marked but not done reaches (4).
+          #
+          # SCOPE OF THE WORKER'S `-s` ARM, stated because it is exactly the gap
+          # (4) exists to close: `-s` only judges a worker that REACHED the
+          # compiler. A worker that returns before calling it produces no `-s`
+          # verdict at all, and is caught by (4) instead.
+          #
+          # The attempt marker is written AFTER the compile for the same reason:
+          # marking is not doing, and a marker written first counts a worker that
+          # did nothing. It is still written on the failure path, so a file that
+          # genuinely fails to compile is reported by (3) and not miscounted as a
+          # narrowing by (1).
+          ATTEMPTED=$(find "$ATTEMPT_DIR" -type f | wc -l)
+          EXPECTED=$(git ls-files -- ':(icase)*.bicepparam' | wc -l)
+          PRODUCED=$(find "$OUT_DIR" -type f -name '*.json' | wc -l)
+          rm -rf "$FAIL_DIR" "$OUT_DIR" "$ATTEMPT_DIR"
+
+          # (1) Do the two INDEPENDENT enumerations agree with each other? This
+          # runs FIRST because it names the ROOT cause when a pathspec is wrong:
+          # if the oracle itself was narrowed, arm (3) would report "invoked on
+          # 17 but 3 tracked", which reads backwards. It is also the cross-check
+          # that stops the reconciliation being narrowed on both sides at once —
+          # ATTEMPTED and EXPECTED can be made to agree at 7 while the
+          # enumeration really produced 17. And it must precede (2), because a
+          # forged or truncated COUNT would otherwise surface there as a
+          # "collision", which is true arithmetic but the wrong diagnosis.
+          if [ "$COUNT" -ne "$EXPECTED" ]; then
+            echo "::error::THE TWO ENUMERATIONS DISAGREE — the list enumerated $COUNT file(s) while an independent re-derivation counts $EXPECTED tracked .bicepparam file(s). One of the two pathspecs has been narrowed. Fix the pathspec; do NOT make the two agree by narrowing the other one."
+            exit 1
+          fi
+
+          # (2) Marker names must be unique, or the counts below undercount and
+          # arm (3) would report a narrowing that did not happen. `tr / _` maps
+          # `a/b` and `a_b` to the same name. Measured on this tree: 17 paths ->
+          # 17 distinct names, so this is a REGRESSION GUARD at zero, not a
+          # finder — but it is compared, not merely printed.
+          FLATNAMES=$(tr '/' '_' < "$RUNNER_TEMP/bicepparam-files.txt" | sort -u | wc -l)
+          if [ "$FLATNAMES" -ne "$COUNT" ]; then
+            echo "::error::$COUNT param path(s) collapse to only $FLATNAMES distinct marker name(s) — two paths differ only where one has '/' and the other '_'. The counts below would undercount and blame the enumeration. Give the markers a collision-free name."
+            exit 1
+          fi
+
+          # (3) Did every tracked file reach the compiler? Distinct from (1):
+          # the two enumerations can agree while the LIST is rewritten between
+          # the count and the compile.
+          if [ "$ATTEMPTED" -ne "$EXPECTED" ]; then
+            echo "::error::POPULATION NARROWED — bicep build-params was invoked on $ATTEMPTED file(s) but $EXPECTED .bicepparam file(s) are tracked. Every tracked param file must reach the compiler. Look at the enumeration above for a filter, a truncation, or a pathspec that no longer matches; do NOT adjust this comparison to agree with the smaller number."
+            exit 1
+          fi
+
+          # (4) Did anything fail to compile?
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED Bicep param file(s) failed to compile"
+            exit 1
+          fi
+
+          # (5) Nothing failed and everything was attempted — so every tracked
+          # file must have produced ARM JSON. A shortfall here means a worker was
+          # counted without doing the work.
+          if [ "$PRODUCED" -ne "$EXPECTED" ]; then
+            echo "::error::MARKED BUT NOT COMPILED — $ATTEMPTED invocation(s) recorded and 0 failures, yet only $PRODUCED ARM JSON output(s) exist for $EXPECTED tracked file(s). The compiler was counted for work it did not do."
+            exit 1
+          fi
+
+          echo "All $COUNT Bicep param files compiled clean — $COUNT enumerated, $ATTEMPTED invoked, $PRODUCED ARM JSON written, all reconciled against $EXPECTED independently-derived tracked file(s)."
 
   # -------------------------------------------------------------------------
   # Secret Scanning

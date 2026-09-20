@@ -1,7 +1,7 @@
 /**
  * BFF contract tests for the F15 data-product consumer + access-request routes:
  *   - GET  /api/data-products/[id]                  (consumer read, DISCOVERY gated)
- *   - GET  /api/data-products/[id]/policies         (cross-tenant permitted purposes)
+ *   - GET  /api/data-products/[id]/policies         (permitted purposes, DISCOVERY gated)
  *   - POST /api/data-products/[id]/access-requests  (create purpose-bound request)
  *   - GET  /api/data-products/[id]/access-requests  (T12 mine / T14 approver)
  *
@@ -166,10 +166,26 @@ describe('GET /api/data-products/[id]', () => {
 });
 
 describe('GET /api/data-products/[id]/policies', () => {
+  /* #3580 (second pass) — THESE TWO FIXTURES MOVED FOR THE SAME REASON THE
+   * FIRST DESCRIBE'S DID. `[id]/policies` was the last data-product route still
+   * answering on the bare `SELECT ... WHERE c.id = @id` with no workspace, tid
+   * or lifecycle predicate, so it handed the owner's `Access` policy `name` AND
+   * `rule` — the owner's own governance expression — to any signed-in caller for
+   * a DRAFT product in any tenant. It now runs `resolveDiscoveryAccess`.
+   *
+   * So the caller has to be in a population that may see the product. These
+   * tests are about the PURPOSE FILTER (Access-kind + matching scope + enabled),
+   * not about discovery, and the consumer they model is exactly the one the
+   * discovery rule admits: same Entra tenant, published product. Discovery
+   * itself is pinned in `../[id]/policies/__tests__/route.test.ts`, not here. */
+  const DISCOVERABLE_PRODUCT = [{
+    id: PRODUCT_ID, workspaceId: WS_ID, state: { lifecycleState: 'published' },
+  }];
+
   it('returns only Access-kind policies scoped to this product and enabled', async () => {
-    (getSession as any).mockReturnValue({ claims: { oid: CONSUMER_OID } });
-    (itemsContainer as any).mockResolvedValue(queryContainer([{ workspaceId: WS_ID }]));
-    (workspacesContainer as any).mockResolvedValue(queryContainer([{ tenantId: OWNER_OID }]));
+    (getSession as any).mockReturnValue({ claims: { oid: CONSUMER_OID, tid: TENANT_TID } });
+    (itemsContainer as any).mockResolvedValue(queryContainer(DISCOVERABLE_PRODUCT));
+    (workspacesContainer as any).mockResolvedValue(queryContainer([WS_DOC]));
     (tenantSettingsContainer as any).mockResolvedValue({
       item: () => ({
         read: async () => ({
@@ -192,9 +208,9 @@ describe('GET /api/data-products/[id]/policies', () => {
   });
 
   it('returns empty list when the owner has no policies doc (404)', async () => {
-    (getSession as any).mockReturnValue({ claims: { oid: CONSUMER_OID } });
-    (itemsContainer as any).mockResolvedValue(queryContainer([{ workspaceId: WS_ID }]));
-    (workspacesContainer as any).mockResolvedValue(queryContainer([{ tenantId: OWNER_OID }]));
+    (getSession as any).mockReturnValue({ claims: { oid: CONSUMER_OID, tid: TENANT_TID } });
+    (itemsContainer as any).mockResolvedValue(queryContainer(DISCOVERABLE_PRODUCT));
+    (workspacesContainer as any).mockResolvedValue(queryContainer([WS_DOC]));
     (tenantSettingsContainer as any).mockResolvedValue({
       item: () => ({ read: async () => { const e: any = new Error('not found'); e.code = 404; throw e; } }),
     });

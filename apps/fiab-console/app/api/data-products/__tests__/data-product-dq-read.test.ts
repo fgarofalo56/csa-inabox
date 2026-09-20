@@ -40,6 +40,22 @@ const OWNER_TID = 'tid-owner-entra';
  *  Empty unless a test says the caller is a member. */
 let wsRoles: any[] = [];
 
+/** A workspace-role row: what makes the collaborator an ACL MEMBER.
+ *
+ *  HOISTED to module scope by #3580's second pass. It used to live inside the
+ *  `GET /[id]` describe, because that was the only discovery-gated route in this
+ *  file. `GET /[id]/certification` is now gated by the SAME
+ *  `resolveDiscoveryAccess`, so its block needs the row too — the fixture product
+ *  carries no `lifecycleState` (i.e. Draft) and an empty `wsRoles` makes the
+ *  caller a non-member, which the gate correctly answers 404. These tests are
+ *  about the ADX QUERY COUNT, not about discovery, so the right repair is to give
+ *  the collaborator the membership the file's own beforeEach comment says they
+ *  have — NOT to relax the gate. */
+const VIEWER_ROW = {
+  id: 'r-collab', workspaceId: 'ws-1', principalId: 'collaborator-oid',
+  principalType: 'User', role: 'Viewer', addedAt: '2026-01-01T00:00:00.000Z',
+};
+
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/kusto-client', () => ({
   executeQuery: (...a: any[]) => executeQuery(...a),
@@ -186,6 +202,12 @@ beforeEach(() => {
 });
 
 describe('GET /api/data-products/[id]/certification issues no per-rule ADX query', () => {
+  // #3580 — this route is discovery-gated now, and the ADX-count claim these
+  // tests make is about an ADMITTED caller. Without this the gate 404s first and
+  // the count is trivially 0, which would leave every assertion below green over
+  // a route that never ran.
+  beforeEach(() => { wsRoles = [VIEWER_ROW]; });
+
   it('answers from the persisted measurement — 0 ADX queries, 0 rule-store reads', async () => {
     wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT }));
 
@@ -276,12 +298,6 @@ describe('GET /api/data-products/[id]/certification issues no per-rule ADX query
  * this file was written for, and only the count can tell the difference.
  */
 describe('GET /api/data-products/[id] issues no per-rule ADX query', () => {
-  /** A workspace-role row: what makes the collaborator an ACL MEMBER. */
-  const VIEWER_ROW = {
-    id: 'r-collab', workspaceId: 'ws-1', principalId: 'collaborator-oid',
-    principalType: 'User', role: 'Viewer', addedAt: '2026-01-01T00:00:00.000Z',
-  };
-
   it('a workspace MEMBER projects the persisted measurement — 0 ADX queries, 0 rule-store reads', async () => {
     wsRoles = [VIEWER_ROW];
     wireCosmos(product({ [DQ_MEASUREMENT_KEY]: MEASUREMENT }));

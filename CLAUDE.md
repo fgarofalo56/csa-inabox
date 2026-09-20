@@ -14,10 +14,19 @@ live in `.claude/rules/` and load automatically — they are not restated here.
 
 ## The die-hard rules
 
-`.claude/rules/*.md` auto-load. Nine of them are marked **die-hard**: they sit
-above convenience and above "it works", and they define what *done* means. Read
-the rule itself before arguing with it — each one states its scope and effective
-date.
+`.claude/rules/*.md` auto-load — eleven globally, plus the path-scoped
+`tool-specifications.md` (twelve files in the directory). **Eight carry a
+`die-hard` marker in the file itself** (`no-vaporware`, `no-fabric-dependency`,
+`cloud-parity`, `auto-bind-by-default`, `deploy-integrity`, `ux-baseline`,
+`web3-ui`, `assertion-design`); the table below lists those eight plus
+`ui-parity`, `session-end` and `task-tracking`, which define what *done* means
+without carrying the marker. All of them sit above convenience and above "it
+works". Read the rule itself before arguing with it — each one states its scope
+and effective date.
+
+Count them with `grep -ril 'die-hard' .claude/rules/*.md | wc -l` rather than
+trusting this sentence; the number was wrong here for two rules' worth of edits
+before anyone measured it.
 
 | Rule | In one line |
 |---|---|
@@ -29,6 +38,7 @@ date.
 | `ui-parity.md` | Surfaces match Azure & Fabric one-for-one. |
 | `ux-baseline.md` | Fabric-grade floor on every front-end surface. |
 | `web3-ui.md` | Modern, consistent, picture-perfect UI. |
+| `assertion-design.md` | Every assertion names the value that would break it. |
 | `session-end.md` · `task-tracking.md` | Native task list in-session, GitHub Issues across sessions. |
 
 `tool-specifications.md` is path-scoped — it applies under `skills/`,

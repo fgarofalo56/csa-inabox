@@ -1704,6 +1704,60 @@ const NOW_GUARDED = new Set([
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/schema/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/script-out/route.ts',
   'apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/warehouses/route.ts',
+  // ── /api/lakehouse/path — graduated out of the `app/api/lakehouse/` class ──
+  //
+  // The class reason in ALLOWLIST_PREFIXES reads "ADLS Gen2 lakehouse navigator
+  // over the deployment storage (container validated; single shared lake)".
+  // That described this route while the container check WAS its validation. It
+  // no longer does: both verbs now resolve the (container, path) pair against
+  // the route's own `lakehouseId` item — `resolveItemAccessByOid` (a
+  // STRONG_OWNERSHIP_SIGNALS token) and then `resolveLakehouseAbfss` — and
+  // refuse anything that is not strictly below that item's recorded root.
+  //
+  // Listing it here is what makes that enforceable. The excuse it USED to get
+  // was the `ALLOWLIST_PREFIXES` class entry, and that was established by
+  // varying ONE input per arm rather than by reading a regex — holding the
+  // other two fixed and reading three counters, because the verdict alone
+  // cannot tell "skipped" from "scanned and excused":
+  //
+  //   arm                                 violations  scanned  allowlistedHits
+  //   A  guard + entry + class prefix          0        1537        495
+  //   C  -guard -entry + class prefix          0        1537        496
+  //   Y  -guard -entry -class prefix          16        1537        480  <- names
+  //                                  `lakehouse/path [POST, DELETE]`
+  //   Z  +guard -entry -class prefix          15        1537        480  (absent)
+  //
+  // `scanned` is 1537 in EVERY arm, so the route was always IN REMIT, and
+  // `allowlistedHits` moves 495 -> 496 in C ALONE, which is the class entry
+  // doing the excusing. An earlier revision of this comment blamed the
+  // `!GETSESSION_RE.test(src) && !NOW_GUARDED.has(r)` remit test instead; that
+  // was WRONG — GETSESSION_RE (`:509`) lists `with(?:Session|…)\s*\(` as an
+  // explicit alternative, so it is TRUE for this route and for every other
+  // `withSession` route. The correction is recorded rather than quietly
+  // overwritten, because as written it would have told the next reader that
+  // several hundred `withSession` routes are outside this checker's remit.
+  //
+  // With the entry, dropping the resolution RE-FLAGS (arm B of the same probe:
+  // `violations: 1`, `[POST, DELETE]`) rather than falling back to a class
+  // reason that stopped being true of this member — the same defect the `#3572`
+  // narrowing beside `storage/accounts/` records.
+  //
+  // The `app/api/lakehouse/` class entry is deliberately NOT deleted: it still
+  // governs the rest of the prefix, and NOW_GUARDED wins over the allowlist for
+  // this one path. That is a statement about SCOPE, not an endorsement of the
+  // reason's accuracy for those members — and the reason ("… navigator …
+  // container validated; single shared lake") does not describe all of them:
+  // `upload` is a POST that writes. CHECK 3B, which exists to re-test class
+  // prefixes, structurally cannot see that: `READ_ONLY_CLAIM_RE` matches
+  // `read-only|scan|discovery` and this reason uses none of the three words, so
+  // the check is silent on this prefix rather than satisfied by it. Inserting
+  // `read-only` into the reason string and changing nothing else takes CHECK 3B
+  // from 0 to 10 (`history`, `load-to-table`, `permissions/rls-test`,
+  // `permissions`, `schemas`, `shortcuts/credentials`, `shortcuts`,
+  // `shortcuts/test`, `transform-preview`, `upload`). Re-wording the reason is
+  // OUT OF SCOPE here — it would put ten routes in remit in a change about one
+  // — and is tracked as the route-family rollup (#4619).
+  'apps/fiab-console/app/api/lakehouse/path/route.ts',
 ]);
 
 // Paths that get their excuse from the CLASS reason below rather than from a
@@ -1844,7 +1898,61 @@ for (const p of SHARED_BACKEND_TYPE_ROUTES) {
 // scan (per-route so each carries its own honest reason).
 for (const [p, reason] of [
   ['apps/fiab-console/app/api/data-products/import/template/route.ts', 'imports a data product from a shared template definition; no per-tenant Cosmos read'],
-  ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: returns the owner\'s Access-policy purposes for the Request-access dialog (documented cross-tenant read, read-only, non-sensitive)'],
+  // #3580 (second pass) — THIS ENTRY NO LONGER EXCUSES AN UNGUARDED ROUTE, AND
+  // ITS REASON SAYS SO. It used to read "consumer-discovery: returns the owner's
+  // Access-policy purposes for the Request-access dialog (documented cross-tenant
+  // read, read-only, NON-SENSITIVE)". Two of those clauses were false of the code:
+  //
+  //   - "documented cross-tenant read" — the route established NOTHING about
+  //     which product the caller could see. Step 1 was the unscoped
+  //     `SELECT c.workspaceId FROM c WHERE c.id = @id AND c.itemType = @t`, no
+  //     workspace / tid / lifecycle predicate, so it answered for a DRAFT product
+  //     in ANY tenant rather than for a discoverable one.
+  //   - "non-sensitive" — the response carries `PermittedPurpose.rule`, the
+  //     OWNER's own governance expression stating the conditions under which
+  //     their data may be used. That is policy text, not a label.
+  //
+  // The route now runs `resolveDiscoveryAccess` (lib/dataproducts/
+  // discoverability.ts) — the same decision `GET /api/data-products/[id]` makes —
+  // and returns the not-found body to everyone it refuses.
+  //
+  // WHY THE ENTRY IS KEPT RATHER THAN DELETED, MEASURED NOT ASSUMED. Deleting it
+  // was tried first, and the run went RED naming this exact route:
+  //
+  //     [route-guards] FAIL — these routes are gated only by getSession() with no
+  //     owner/tenant/admin authorization (potential cross-tenant access):
+  //       - apps/fiab-console/app/api/data-products/[id]/policies/route.ts  [GET]
+  //     violations: 1
+  //
+  // The route did not become less authorized by having the entry removed. CHECK 2
+  // is a NAME SEARCH over the route's own source, `resolveDiscoveryAccess` is not
+  // in GUARD_SIGNAL_RE, and this handler destructures `{ session: s, params }`
+  // from `withSession` and passes `s` straight down rather than spelling
+  // `session.claims.*` itself — so it matches no OWNERSHIP token. (`withSession`
+  // establishes a SESSION, which is the thing CHECK 2 treats as insufficient on
+  // its own; that is why migrating this route to the route-toolkit, which the
+  // boy-scout ratchet in check-route-toolkit.mjs required, did not change the
+  // verdict — RE-MEASURED after that migration, still `violations: 1`.) That is
+  // the SAME measurement `[id]/ports` recorded when it tried to delegate.
+  //
+  // The two ways past it, and why only one is taken here:
+  //   - Register `resolveDiscoveryAccess` in GUARD_SIGNAL_RE and in
+  //     GUARD_WRAPPERS with `mustCall` pinned to EXPRESSIONS (`authorizeWorkspace(
+  //     session, item.workspaceId,`; `DISCOVERABLE.has(resolveLifecycleState(`;
+  //     `sameTenantConfirmed(session.claims.tid, ownerTid)`). That is the correct
+  //     fix, it would also let `[id]/ports` finally drop its byte-identical
+  //     private copy — and per the `withOwnedSqlItem` note above it must be done
+  //     IN LOCKSTEP with generate-route-inventory's OWNER_RE, which this change
+  //     does not own. Left as the named next step, same as the ports docblock.
+  //   - Name something in the route so a token reappears in its text. That is
+  //     writing a token to satisfy a scanner — the presence-vs-enforcement lie
+  //     this checker documents about itself. Refused, as it was on ports.
+  //
+  // SO THE ENTRY IS NOT LOAD-BEARING FOR SECURITY, ONLY FOR THE CHECKER'S
+  // VOCABULARY, and the enforcement is pinned where a regression can actually be
+  // caught: `app/api/data-products/[id]/policies/__tests__/route.test.ts` runs
+  // the real `resolveDiscoveryAccess` and goes red if the call is removed.
+  ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: the Request-access dialog\'s permitted purposes, gated by resolveDiscoveryAccess (member, or published/deprecated in the caller\'s own tenant) — allowlisted because CHECK 2 cannot see that symbol, NOT because the route is unguarded; enforcement pinned by policies/__tests__/route.test.ts'],
   ['apps/fiab-console/app/api/data-products/[id]/preview/route.ts', 'consumer-discovery: read-only 25-row preview of a discoverable data product (documented, mirrors GET /api/data-products/[id])'],
   // #3580 — THE `data-products/[id]/ports` ENTRY IS DELETED, NOT REWORDED.
   //
@@ -1977,7 +2085,62 @@ const ALLOWLIST_PREFIXES = [
   ['apps/fiab-console/app/api/messaging/', 'A: Service Bus/messaging metrics over the deployment namespace'],
   ['apps/fiab-console/app/api/monitor/', 'A: Azure Monitor navigator over the deployment (Log Analytics/metrics/alerts by resource)'],
   ['apps/fiab-console/app/api/network/', 'A: networking navigator over the deployment (PE/VNet/VPN by resource)'],
-  ['apps/fiab-console/app/api/onelake/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  // NARROWED from `app/api/onelake/` (2026-09-18), on the #3572 precedent below.
+  // The class reason — "OneLake/ADLS navigator over the deployment storage" —
+  // describes the container/path/catalog surfaces and stopped being true of
+  // `onelake/[itemId]/route.ts`, which is not a navigator at all: its DELETE
+  // soft-deletes ONE catalog item named by the URL and now runs a real
+  // per-resource decision (`authorizeItemWorkspace`, write-scoped). Left under
+  // the class prefix it was recorded `allowlisted: true` /
+  // `allowlistPremiseTested: false` in the security graph — the
+  // C3-discarded-verdict allowlist-premise shape (#3607), i.e. a verdict that
+  // does not change when the code does. Narrowing flips that flag: measured,
+  // the route's graph node goes `allowlisted` true -> false and the repo-wide
+  // `allowlisted:true` count drops 24 -> 23, exactly this one.
+  //
+  // It does NOT follow that THIS checker stopped watching the route — and an
+  // earlier revision of this comment claimed exactly that, wrongly. Measured
+  // 2026-09-19, anchors == 1 at every step, on a sandbox worktree:
+  //
+  //   gate call + its import removed                        -> exit 0
+  //   + every `s.claims.*` reference removed                -> exit 0
+  //   + `softDeleteOwnedItem` renamed at the call site      -> exit 1,
+  //         naming this route and `[DELETE]`, `violations: 1`
+  //
+  // So the checker DOES watch it, via `softDeleteOwnedItem` — an explicit
+  // STRONG_OWNERSHIP_SIGNALS entry (:364) whose stated rationale is the same
+  // ladder this route's migration rests on (softDeleteOwnedItem ->
+  // loadOwnedItem -> resolveWorkspaceAccessByOid, write-scoped).
+  //
+  // WHY THE EARLIER CLAIM WAS WRONG, recorded because the shape is the reusable
+  // part: that run renamed the call while LEAVING
+  // `deletedBy = s.claims.upn || s.claims.email || s.claims.oid` in place, and
+  // a `claims.*` read is a WEAK identity signal the handler test accepts. The
+  // edit therefore never reached the rule it was aimed at. One-edit
+  // counterfactual, both states differing only in that line: with it, exit 0;
+  // without it, exit 1. A NOT-RUN was scored as a survivor, and the survivor
+  // was then written up as a conclusion about this control's efficacy INTO
+  // this control's own source. A mutation arm that does not move the verdict
+  // has to be shown to have reached the rule before it is read as evidence.
+  //
+  // The remaining members keep the exemption, each on the same stated reason as
+  // before; enumerating them is what makes a future addition opt IN deliberately
+  // rather than inherit an exemption it was never in.
+  //
+  // `onelake/recycle/` is deliberately NOT among them. It restores one item by
+  // `body.itemId` and purges one by `?itemId=`, so "navigator over the
+  // deployment storage" was never true of it either; the entry was also inert
+  // (removing it leaves `violations: 0`), and CHECK 3B premise-tests stated
+  // reasons, so a false one carried here is the defect this file exists to
+  // catch.
+  ['apps/fiab-console/app/api/onelake/catalog/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/governance/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/lifecycle/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/paths/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/resolve/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/security/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/storage/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/onelake/tier/', 'A: OneLake/ADLS navigator over the deployment storage'],
   ['apps/fiab-console/app/api/powerbi/', 'A: Power BI REST navigator (opt-in) via the Console service principal'],
   ['apps/fiab-console/app/api/powerplatform/', 'A: Power Platform navigator over the deployment environments via the PP management app'],
   ['apps/fiab-console/app/api/realtime-hub/', 'A: Real-Time hub navigator over the deployment Event Hubs/ADX'],
