@@ -537,8 +537,18 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
 
     NEVER discards stderr (R7): an unreadable diff returns None, which
     `gates.base_delta_is_inert` refuses, and says why on stderr.
+
+    `core.quotePath=false` is LOAD-BEARING, not tidiness. It defaults to true,
+    and under it a non-ASCII path comes back C-quoted and octal-escaped -
+    `"tools/prob\\303\\251.py"` - which no literal filter match recognises, so a
+    delta touching a scoped file reads as INERT and gate 1 passes on a base
+    that a required context does read. Measured in a throwaway repo against
+    this box's config, with an ASCII sibling as the control matching in both
+    directions. `sh()` already decodes utf-8 explicitly, which is the other
+    half: the flag alone still fails under a locale decode.
     """
-    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",
+    rc, out, err = sh(["git", "-c", "core.quotePath=false",
+                       "diff", "--name-only", "--no-renames",
                        base_sha, origin_main_sha])
     if rc != 0:
         print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "

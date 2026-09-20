@@ -3173,9 +3173,25 @@ ARMS: list[tuple[str, str, str, str]] = [
          "context depends on has left main. Round-1 blocker, reproduced "
          "end-to-end with a plain delete as the control"),
         "merge_gate.py",
-        ('    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",\n'
+        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
+         '                       "diff", "--name-only", "--no-renames",\n'
          "                       base_sha, origin_main_sha])"),
-        ('    rc, out, err = sh(["git", "diff", "--name-only",\n'
+        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
+         '                       "diff", "--name-only",\n'
+         "                       base_sha, origin_main_sha])"),
+    ),
+    (
+        ("BD18 `core.quotePath=false` comes off the delta query, so git's "
+         "DEFAULT quoting returns a non-ASCII path C-quoted and octal-escaped "
+         "- no literal filter match recognises it, the delta reads as inert, "
+         "and gate 1 passes on a base a required context does read. Round-4 "
+         "blocker; the ASCII sibling is the control that stays matched"),
+        "merge_gate.py",
+        ('    rc, out, err = sh(["git", "-c", "core.quotePath=false",\n'
+         '                       "diff", "--name-only", "--no-renames",\n'
+         "                       base_sha, origin_main_sha])"),
+        ('    rc, out, err = sh(["git",\n'
+         '                       "diff", "--name-only", "--no-renames",\n'
          "                       base_sha, origin_main_sha])"),
     ),
     (

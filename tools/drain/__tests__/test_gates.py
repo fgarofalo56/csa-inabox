@@ -21,6 +21,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -2426,6 +2427,90 @@ def test_negative_control_declaring_both_paths_and_paths_ignore_refuses():
     assert "BOTH" in why, why
 
 
+def test_doublestar_slash_under_paths_ignore_is_refused_not_translated():
+    """`**/` is safe under `paths:` and EXCUSING under `paths-ignore:`.
+
+    `_glob_to_regex` lets `**/` consume zero segments together with its slash,
+    so it matches MORE paths than a strict reading. Under `paths:` that admits
+    more, which makes a delta look live -- harmless. Under `paths-ignore:` it
+    ignores more, which makes the delta look INERT, and that is the direction
+    that decides a merge.
+
+    NARROW BY DESIGN: a bare trailing `**` has no zero-segment branch and is
+    still read as "everything under this prefix" -- see
+    `test_a_paths_ignore_filter_is_read_as_everything_except`, which keeps
+    passing and is the control for this test not being over-broad.
+
+    WHAT WOULD MAKE THIS FAIL: `filter_admits` translating `**/` under
+    `paths-ignore` again instead of raising, turning the first case back into
+    a silent `ok=True`.
+    """
+    permissive = gates.ContextScope(
+        "Theta", ".github/workflows/theta.yml", paths_ignore=("docs/**/*.md",))
+    ok, why = gates.base_delta_is_inert(["docs/a/b.md"], [permissive], ["Theta"])
+    assert not ok, why
+    assert "paths-ignore" in why, why
+
+    # POSITIVE PAIR -- without it, "refuse everything" would satisfy the above.
+    # A paths-ignore with no `**/` must still decide, and decide BOTH ways.
+    strict = gates.ContextScope(
+        "Iota", ".github/workflows/iota.yml", paths_ignore=("docs/x.md",))
+    ok_ignored, _ = gates.base_delta_is_inert(["docs/x.md"], [strict], ["Iota"])
+    assert ok_ignored, "a fully-ignored delta must still read as inert"
+    ok_live, why_live = gates.base_delta_is_inert(["src/app.py"], [strict], ["Iota"])
+    assert not ok_live, why_live
+
+
+def test_the_printed_counts_are_the_real_counts_not_the_truncated_ones():
+    """`_HITS_SHOWN`'s own comment asserts "The COUNT is always printed, so
+    truncation cannot make a large intersection look small". That is a stated
+    SAFETY PROPERTY, and until this test it had zero kill power -- falsifying
+    any of the three counts survived the whole suite.
+
+    All three are pinned here against a population deliberately larger than
+    `_HITS_SHOWN`, so truncation is actually exercised:
+
+      1. the refusal's `N file(s) are ADMITTED BY` count,
+      2. the GO path's `(N file(s))` delta count,
+      3. the GO path's `(+N more)` truncation suffix.
+
+    WHAT WOULD MAKE THIS FAIL: replacing any of those with a constant, with
+    `len(...[:_HITS_SHOWN])`, or dropping the suffix -- each makes a large
+    intersection or a large delta read as small next to a merge being let
+    through.
+
+    `_HITS_SHOWN` is LIFTED from the module, not transcribed, so a change to
+    it cannot make this probe disagree with the implementation.
+    """
+    shown = gates._HITS_SHOWN
+    n = shown + 4  # strictly larger, so the suffix must appear
+
+    # --- refusal branch: every file admitted -------------------------------
+    admitted = [f"src/f{i}.py" for i in range(n)]
+    reads_src = gates.ContextScope(
+        "Kappa", ".github/workflows/kappa.yml", paths=("src/**",))
+    ok, why = gates.base_delta_is_inert(admitted, [reads_src], ["Kappa"])
+    assert not ok, why
+    assert f"{n} file(s) in the base delta are ADMITTED BY" in why, why
+    # ...and it names only `shown` of them, which is what makes the count
+    # load-bearing rather than decorative.
+    assert why.count("src/f") == shown, why
+
+    # --- GO branch: nothing admitted, but the delta is still large ---------
+    unadmitted = [f"docs/d{i}.md" for i in range(n)]
+    ok, why = gates.base_delta_is_inert(unadmitted, [reads_src], ["Kappa"])
+    assert ok, why
+    assert f"({n} file(s))" in why, why
+    assert f"(+{n - shown} more)" in why, why
+    assert why.count("docs/d") == shown, why
+
+    # --- control: at or below the threshold there is NO suffix -------------
+    small = [f"docs/d{i}.md" for i in range(shown)]
+    ok, why = gates.base_delta_is_inert(small, [reads_src], ["Kappa"])
+    assert ok, why
+    assert "more)" not in why, f"suffix appeared for a delta of exactly {shown}: {why}"
+
+
 def _real_push_scope(workflow_path: str, name: str) -> gates.ContextScope:
     """A `ContextScope` built from a REAL workflow file in this checkout.
 
@@ -2561,6 +2646,56 @@ def test_positive_control_the_real_required_topology_is_measured_not_assumed():
         )
         assert scope.paths is None, drifted
         assert scope.paths_ignore is None, drifted
+
+    # ---- SECOND AXIS -------------------------------------------------------
+    # The loop above watches the workflow FILES. That is only half the
+    # interlock. The unconditional refusal exists because those workflows
+    # publish REQUIRED contexts; `merge_gate.required_contexts` reads branch
+    # protection LIVE (merge_gate.py:451-468), so a context LEAVING the
+    # required set removes exactly the same refusal without any workflow
+    # changing at all -- and nothing noticed until two independent reviews
+    # converged on it.
+    #
+    # NOT circular: the five names are derived from the workflow files, and
+    # the COUNT is the independent expectation. Intersecting and then
+    # asserting membership would be a tautology -- the count is what moves.
+    root = _repo_root()
+    unfiltered = (".github/workflows/fiab-console-ci.yml",
+                  ".github/workflows/loom-guardrails.yml",
+                  ".github/workflows/commit-message-parses.yml")
+    texts = {}
+    for path in unfiltered:
+        wf = root / path
+        assert wf.is_file(), f"{path} is not in this checkout"
+        body = wf.read_text(encoding="utf-8")
+        assert body.strip(), f"{path} read as empty - this probe went blind"
+        texts[path] = body
+
+    required = json.loads(
+        (root / "tools" / "drain" / "required_contexts.json").read_text(encoding="utf-8")
+    )["contexts"]
+    assert len(required) >= 10, (
+        f"only {len(required)} required contexts read - the snapshot was "
+        "truncated, so the count below means nothing"
+    )
+
+    published = sorted(
+        ctx for ctx in required
+        if any(ctx in body for body in texts.values())
+    )
+    UNFILTERED_REQUIRED = 5
+    assert len(published) == UNFILTERED_REQUIRED, (
+        f"{len(published)} required context(s) are published by the three "
+        f"unfiltered workflows, expected {UNFILTERED_REQUIRED}: {published}. "
+        "FEWER means branch protection dropped one (or a workflow was "
+        "renamed), so that context no longer forces gate 1's second arm to "
+        "refuse -- THE INTERLOCK HAS OPENED ON THE AXIS THE LOOP ABOVE DOES "
+        "NOT WATCH, and the remedy is the same: establish the superset "
+        "relation per context, or take the arm out of service. MORE means a "
+        "new unfiltered required context appeared and this floor needs "
+        "re-measuring, not raising on sight. Note the snapshot read here can "
+        "lag live protection (#4629); this is the offline half of the check."
+    )
 
 
 # ---------------------------------------------------------------------------

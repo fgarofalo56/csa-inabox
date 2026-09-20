@@ -2105,10 +2105,19 @@ def _glob_to_regex(pattern: str) -> str:
 #: absence gets excused. `!` under `paths-ignore:` is worse still: it re-includes
 #: a path, so ignoring it can excuse outright.
 #:
+#: `?` is here for a DIFFERENT reason than the others, and the difference is
+#: the point: it was not unimplemented, it was implemented WRONG. This
+#: translator emitted `[^/]` for it -- one arbitrary character, the fnmatch
+#: reading -- while GitHub documents `?` as "zero or one of the PRECEDING
+#: character". Those disagree on real inputs, and the disagreement excuses in
+#: both of the cases where GitHub admits. Measured on this checkout: 127
+#: workflow files, 40 with an `on.push` trigger, and ZERO push filters contain
+#: `?`, so refusing costs nothing and guessing costs correctness.
+#:
 #: Zero workflows in this repo use any of them today (measured), which is
 #: exactly why refusing is free. A pattern this cannot represent is an
 #: unanswered question, and unanswered questions fail closed here.
-_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|]")
+_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|?]")
 
 
 class UnsupportedPatternError(ValueError):
@@ -4101,6 +4110,29 @@ def filter_admits(scope: ContextScope, path: str) -> bool:
     if scope.paths is not None:
         return _every_pattern_matched(scope.paths, path)
     if scope.paths_ignore is not None:
+        # `**` is REFUSED here though it is fine under `paths:`, and the
+        # asymmetry is the whole point. `_glob_to_regex` lets `**/` consume
+        # ZERO segments, so it matches MORE paths than a strict reading. Under
+        # `paths:` matching more ADMITS more, which makes a delta look live --
+        # the refusing direction, and safe. Under `paths-ignore:` the same
+        # permissiveness IGNORES more, which makes the delta look INERT: the
+        # excusing direction, on the arm that decides merges.
+        #
+        # Measured on this checkout: 127 workflow files, 40 with an `on.push`
+        # trigger, and ZERO of them declare `paths-ignore` at all -- so this
+        # refuses nothing that exists today, and costs nothing to keep closed.
+        # NARROW ON PURPOSE: `**/` only, not a bare trailing `**`. The
+        # permissiveness lives in the `**/` production, which may consume ZERO
+        # segments together with its slash; `docs/**` has no such branch and
+        # is read exactly as "everything under docs/", which is why the
+        # everything-except test still passes.
+        for pattern in scope.paths_ignore:
+            if "**/" in pattern:
+                raise UnsupportedPatternError(
+                    f"{pattern} (`**/` under paths-ignore - it may consume "
+                    "zero segments, which is permissive, and permissive under "
+                    "negation excuses an absence rather than refusing it)"
+                )
         return not _every_pattern_matched(scope.paths_ignore, path)
     raise ValueError(f"{scope.name}: no path filter at all - it admits every path")
 
