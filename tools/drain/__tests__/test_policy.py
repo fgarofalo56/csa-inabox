@@ -72,11 +72,15 @@ def test_the_gate_set_is_exactly_what_the_spec_names():
     assert set(gates.MERGE_GATE_IMPLEMENTED_BY) == {
         "mergeable_must_be_known",
         "base_must_equal_origin_main",
+        # #4585. Gate 1's SECOND arm. It does not replace the key above -- both
+        # are listed because both are live, and the strict one still runs first.
+        "stale_base_may_pass_on_an_inert_delta",
         "reduce_verdicts_by",
         "verdict_pinned_to_head",
         "require_no_red",
         "require_no_incomplete",
         "require_no_skipped_required_context",
+        "advisory_red_is_a_no_go",
         "scan_closing_keywords_in",
         "closing_keyword_scan_blocks_an_undeclared_close",
         "audit_issue_numbers_around_every_merge",

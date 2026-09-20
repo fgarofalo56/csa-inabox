@@ -1040,8 +1040,17 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G1 the StatusContext vocabulary is dropped from the INCOMPLETE test",
         "gates.py",
-        "        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:",
-        "        elif not verdict or status in INCOMPLETE_STATUSES:",
+        # ANCHORED TO THE REQUIRED PATH. `classify_advisory_checks` (#4543)
+        # reuses the same three-way split, so this line now appears TWICE in
+        # `gates.py` -- and `replace(old, new, 1)` takes the first, which would
+        # have silently pointed a required-path arm at the advisory one. The
+        # preceding RED branch is what distinguishes them; A5 is the advisory
+        # twin of this arm.
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:"),
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or status in INCOMPLETE_STATUSES:"),
     ),
     (
         "G2 a blocking near-miss stops being pinned to head (stale text blocks forever)",
@@ -1090,6 +1099,170 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "            elif mentions_token:",
         "            elif False:",
+    ),
+    # -- #4543: the ADVISORY population. Every arm here NARROWS the population
+    # back to something smaller than "every check the rollup published", which
+    # is the defect being fixed rather than an invented one: gates 4/4b/5 pass
+    # `required` and ~25 contexts per PR were invisible to the merge decision.
+    # A1 is the exact original; the rest are the neighbouring ways to get the
+    # same blindness, plus the two fail-open edges.
+    (
+        "A1 the advisory arm filters back DOWN to the required contexts (#4543 verbatim)",
+        "gates.py",
+        "        if name in required_names:\n            continue",
+        "        if name not in required_names:\n            continue",
+    ),
+    (
+        "A2 only the first check-run is scanned (the first-N narrowing)",
+        "gates.py",
+        # Anchored at the GROUPING, which is the single point the whole
+        # population passes through -- both "which run is newest" and "was an
+        # older run of this name red" read it, so narrowing here narrows both.
+        "    groups = _group_by_name(checks)",
+        "    groups = _group_by_name(checks[:1])",
+    ),
+    (
+        "A3 a duplicated context is keyed LAST-IN-LIST instead of by max start time",
+        "gates.py",
+        ("        newest = max(stamps)\n"
+         "        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) "
+         "if s == newest])"),
+        "        out[name] = runs[-1]",
+    ),
+    (
+        ("A4 an unreadable start time stops falling back to worst-wins, so an "
+         "undated red is discarded as superseded"),
+        "gates.py",
+        # BEHAVIOURAL, not a crash. Deleting the fallback outright would make
+        # `max(stamps)` compare None to None and die with a TypeError -- and a
+        # mutant killed by a TypeError proves only that the tests run Python
+        # (the note on G4 is about the same trap). This substitutes the OTHER
+        # plausible rule instead, so the arm is a wrong ANSWER rather than an
+        # exception.
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = _worst(runs)",
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = runs[-1]",
+    ),
+    (
+        "A5 an IN-PROGRESS advisory check reads as RED again (the cry-wolf defect)",
+        "gates.py",
+        # Disambiguated by the line BELOW it: `classify_checks` opens with the
+        # same `if verdict in RED_CONCLUSIONS:` test, and `replace(.., 1)`
+        # takes the first -- the G1 collision one function over.
+        ("        if verdict in RED_CONCLUSIONS:\n"
+         '            red.append(f"{name} ({verdict})")'),
+        ("        if verdict in RED_CONCLUSIONS or _is_incomplete(check):\n"
+         '            red.append(f"{name} ({verdict})")'),
+    ),
+    (
+        "A6 the empty-rollup guard falls OPEN, so a clean answer over zero checks is a pass",
+        "gates.py",
+        "    if not checks:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        "A7 the advisory arm stops blocking in the composed caller (report-only)",
+        "merge_gate.py",
+        "    ok, why = gates.advisory_verdict(",
+        "    ok = True\n    _, why = gates.advisory_verdict(",
+    ),
+    (
+        ("A8 the policy flag is read with a permissive default, so deleting the "
+         "authority's key leaves the gate silently on"),
+        "merge_gate.py",
+        'policy["merge_gate"]["advisory_red_is_a_no_go"]',
+        'policy["merge_gate"].get("advisory_red_is_a_no_go", True)',
+    ),
+    (
+        ("A9 a re-run in flight over a completed RED collapses back to ADV-WAIT, so "
+         "the gate's OWN remedy clears the gate's own block before the re-run answers"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        "            if False:",
+    ),
+    (
+        ("A9b the SAME site NARROWED rather than disabled -- A9 turns it off entirely, "
+         "which any FAILURE-only test kills, so a narrowing that KEEPS FAILURE was "
+         "invisible to this registry. An independent reviewer showed "
+         "`(\"FAILURE\", \"ERROR\")` survived the whole suite at rc=0; the five other "
+         "members of RED_CONCLUSIONS silently fell through to ADV-WAIT and the gate "
+         "cleared its own block. A total-disable arm does not witness a partial one"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        '            if last_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A9c a run that MEASURED NOTHING again discharges an earlier red -- the THIRD "
+         "form of the self-clearing block. Once a re-run CONCLUDES SKIPPED it stops "
+         "being incomplete, so newest-wins drops it into `clean` and the red vanishes. "
+         "Reachable by `rerun-ci`, which is in `permitted_unattended`"),
+        "gates.py",
+        "        elif verdict in MEASURED_NOTHING:",
+        "        elif False:",
+    ),
+    (
+        ("A9d the ADV-RERUN branch counts a SKIPPED as an answer again -- the FOURTH "
+         "form, and round 4 CREATED it by fixing only the sibling branch. "
+         "`FAILURE, SKIPPED` blocks but `FAILURE, SKIPPED, IN_PROGRESS` clears, so "
+         "dispatching the gate's own remedy discharges the block the moment it STARTS. "
+         "The mutant is written INLINE rather than calling the old helper, because "
+         "round 6 deleted that helper -- a mutant naming a deleted function raises "
+         "NameError, which scores NOT-EVALUATED, not KILLED, and would have quietly "
+         "retired this arm"),
+        "gates.py",
+        "            last = _newest_informative_concluded(groups[name])",
+        ('            _concl = [r for r in groups[name] if not _is_incomplete(r)]\n'
+         '            last = _newest_from_groups({"": _concl})[""] if _concl else None'),
+    ),
+    (
+        ("A9e MEASURED_NOTHING narrowed to SKIPPED alone, so a NEUTRAL re-run "
+         "discharges a red. Survived the whole suite before a LITERAL tuple pinned "
+         "the set -- a loop derived from the frozenset cannot witness the frozenset"),
+        "gates.py",
+        'MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})',
+        'MEASURED_NOTHING = frozenset({"SKIPPED"})',
+    ),
+    (
+        ("A9f the supersession site's RED_CONCLUSIONS read narrowed to two members -- "
+         "the FOURTH read of that frozenset, and the third time this PR's own subject "
+         "recurred one line below its own fix. CANCELLED is the member that actually "
+         "fires here in production"),
+        "gates.py",
+        "            if prior_verdict in RED_CONCLUSIONS:",
+        '            if prior_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A10 the worst-wins fallback returns the FIRST run instead of the worst -- "
+         "found by an independent reviewer, who showed it SURVIVED all 521 tests "
+         "because both fixtures claiming to pin worst-wins put the red first"),
+        "gates.py",
+        "    chosen = runs[0]\n    for run in runs[1:]:",
+        "    return runs[0]\n    for run in runs[1:]:",
+    ),
+    (
+        ("A11 the informative filter keys on ANY run of the name having concluded RED, "
+         "so a check that went red, WAS FIXED and is being re-run again holds the "
+         "merge -- the mirror image of the hole the bucket was added to close, and it "
+         "SHIPPED in the fix for that hole. RE-ANCHORED in round 6: this arm used to "
+         "sit inside `_newest_concluded`, which round 5 orphaned when both callers "
+         "moved to `_newest_informative_concluded`. An arm over a function the gate "
+         "no longer calls prints KILLED against dead code -- a blind arm inside the "
+         "one instrument this package offers as evidence its suite is not blind. "
+         "Found by an independent reviewer who applied it and got byte-identical gate "
+         "output across 26 constructed rollup shapes"),
+        "gates.py",
+        "        if not _is_incomplete(run)\n        and _outcome(run)[0] not in MEASURED_NOTHING",
+        "        if _outcome(run)[0] in RED_CONCLUSIONS",
+    ),
+    (
+        ("A12 the rerun reason picks by LIST POSITION again, so the same three runs "
+         "at one head name CANCELLED or FAILURE depending on the order the API "
+         "returned them - a gate claiming a conclusion it never read (R7). "
+         "RE-ANCHORED in round 6 onto `_newest_informative_concluded`'s return, for "
+         "the same reason as A11: this sat inside `_newest_concluded`, which round 5 "
+         "orphaned and round 6 deleted, so it would have scored against dead code"),
+        "gates.py",
+        '    return _newest_from_groups({"": informative})[""]',
+        "    return informative[0]",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",
@@ -2876,6 +3049,190 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        led.save(if_unchanged=not args.bootstrap)",
         "        led.save(if_unchanged=True)",
     ),
+    # -- #4585: gate 1's SECOND arm, the path-intersection relaxation ------
+    #
+    # AN EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so every
+    # arm here is aimed at making the query return empty for a reason that is
+    # not "the delta is inert". That is the shape the issue named as the trap
+    # and the one a green run cannot distinguish from a correct answer.
+    (
+        ("BD1 the population is re-derived FROM THE SCOPES, so a caller that "
+         "silently drops the one context it could not scope buys a clean "
+         "intersection over the remainder. `required` is a separate argument "
+         "precisely so the loop cannot be its own witness"),
+        "gates.py",
+        "    unscoped = sorted(set(required) - set(by_name))",
+        "    required = [s.name for s in scopes]\n    unscoped = []",
+    ),
+    (
+        ("BD2 a required context whose producing workflow declares NO push "
+         "path filter is SKIPPED instead of refusing - it reads the whole "
+         "tree, and skipping it is how five of this repo's seventeen required "
+         "contexts would stop being consulted at all"),
+        "gates.py",
+        "        if scope.paths is None and scope.paths_ignore is None:",
+        ("        if scope.paths is None and scope.paths_ignore is None:\n"
+         "            continue\n"
+         "        if False:"),
+    ),
+    (
+        ("BD3 the intersection is hard-wired EMPTY - the blind query the "
+         "positive control exists for. Every refusal that depends on a file "
+         "actually matching disappears, and the printed reason is identical"),
+        "gates.py",
+        "            hits = [f for f in delta_files if filter_admits(scope, f)]",
+        "            hits = []",
+    ),
+    (
+        ("BD4 `paths-ignore` loses its negation, so the ignored paths become "
+         "the ONLY ones that block - polarity inverted, which reads as a "
+         "working filter on any delta that happens to miss both sets"),
+        "gates.py",
+        "        return not _every_pattern_matched(scope.paths_ignore, path)",
+        "        return _every_pattern_matched(scope.paths_ignore, path)",
+    ),
+    (
+        ("BD5 an UNREADABLE delta collapses into a measured EMPTY one, so a "
+         "`git diff` that failed reads as 'nothing changed' - the "
+         "unanswered-question-as-a-pass shape this package names most often"),
+        "gates.py",
+        "    if delta_files is None:",
+        "    if not delta_files:",
+    ),
+    (
+        ("BD6 an unresolved scope borrows the no-filter sentence, so a producer "
+         "that could not be TRACED is reported as one that reads everything. "
+         "Same verdict, wrong evidence - and the two have opposite remedies"),
+        "gates.py",
+        "        if scope.unreadable:\n            return False, (",
+        "        if False:\n            return False, (",
+    ),
+    (
+        ("BD7 the composed caller records the second arm UNCONDITIONALLY, so "
+         "every stale base passes gate 1. The decision function is untouched "
+         "and every gates.py test still passes - the caller-side blind spot "
+         "this file was created for"),
+        "merge_gate.py",
+        "        ok = inert",
+        "        ok = True",
+    ),
+    (
+        ("BD8 the second arm is allowed to rescue a PR aimed at a branch that "
+         "is NOT main. An intersection over main's delta says nothing about "
+         "where that PR merges"),
+        "merge_gate.py",
+        '            and pr["baseRefName"] == "main"',
+        "            and True",
+    ),
+    (
+        ("BD9 the policy key is read with a `.get` default equal to the shipped "
+         "value, so DELETING it from the authority is unobservable - measured "
+         "twice already in this package"),
+        "merge_gate.py",
+        '            and policy["merge_gate"]["stale_base_may_pass_on_an_inert_delta"]',
+        ('            and policy["merge_gate"].get('
+         '"stale_base_may_pass_on_an_inert_delta", True)'),
+    ),
+    (
+        ("BD10 the scope is read at ONE sha, so a workflow whose own path "
+         "filter NARROWED inside the base delta is judged by the narrower one "
+         "- and a narrower filter excuses more. Two clocks, the shape "
+         "`_top_level_dirs_agree` exists for"),
+        "merge_gate.py",
+        "        if at_base != at_main:",
+        "        if False:",
+    ),
+    (
+        ("BD11 only the origin/main read is checked for failure, so a workflow "
+         "unreadable at the BASE sha silently resolves to main's filter"),
+        "merge_gate.py",
+        "        if at_base is None or at_main is None:",
+        "        if at_main is None:",
+    ),
+    (
+        ("BD12 an untraceable check-suite falls back to SOME workflow's filter "
+         "rather than refusing, so a context is scoped by a producer that is "
+         "not its own - a wrong filter reads as an empty intersection"),
+        "merge_gate.py",
+        "        path = path_by_suite.get(suite) if suite is not None else None",
+        ("        path = (path_by_suite.get(suite)\n"
+         "                or next(iter(path_by_suite.values()), None))"),
+    ),
+    (
+        ("BD13 the pattern loop SHORT-CIRCUITS again, so an unrepresentable "
+         "pattern sitting AFTER a matching one is never evaluated - under "
+         "`paths-ignore` that skips a `!` re-include and calls the delta inert"),
+        "gates.py",
+        "    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419",
+        "    return any(glob_matches(pattern, path) for pattern in patterns)",
+    ),
+    (
+        ("BD14 `--no-renames` comes off the delta query, so git's default "
+         "rename detection emits ONLY THE DESTINATION path - a file moved OUT "
+         "of a context's scope then reads as inert while the thing that "
+         "context depends on has left main. Round-1 blocker, reproduced "
+         "end-to-end with a plain delete as the control"),
+        "merge_gate.py",
+        ('    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",\n'
+         "                       base_sha, origin_main_sha])"),
+        ('    rc, out, err = sh(["git", "diff", "--name-only",\n'
+         "                       base_sha, origin_main_sha])"),
+    ),
+    (
+        ("BD18 `core.quotePath=false` stops being injected, so git's DEFAULT "
+         "quoting returns a non-ASCII path C-quoted and octal-escaped. No "
+         "literal path comparison recognises it: the base delta reads as "
+         "inert, and `push_event_runs` reads as 'no push event', which "
+         "EXCUSES. Round-5 blocker - round 4 fixed one call site and left the "
+         "excusing sibling blind; round 6 moved this into `git_argv` so the "
+         "two `timeout=` callers are covered too"),
+        "gates.py",
+        ('    if args and args[0] == "git":\n'
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
+        ('    if False:\n'
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
+    ),
+    (
+        ("BD15 an EMPTY `paths: []` stops being refused, so a workflow "
+         "declaring one matches NOTHING and its context excuses every delta - "
+         "the fourth ContextScope state, which sails past the no-filter branch "
+         "because `paths is None` is False"),
+        "gates.py",
+        "        if scope.paths == ():",
+        "        if False:",
+    ),
+    (
+        ("BD15B the OTHER empty spelling stops being refused. It is a separate "
+         "arm because round 2 shipped ONE branch for both and gave them one "
+         "(inverted) sentence; a reviewer's own arm narrowed the shared branch "
+         "to half and was killed, which is what this pins permanently"),
+        "gates.py",
+        "        if scope.paths_ignore == ():",
+        "        if False:",
+    ),
+    (
+        ("BD16 the GO-path message loses its own limit, so the string printed "
+         "BESIDE AN ALLOWED MERGE reads as a claim about what the required "
+         "contexts READ - the retracted claim re-entering the permanent record "
+         "through the squash, which is the one place it does real damage"),
+        "gates.py",
+        ('        + ". NOT a claim that no required context READS those files: the "\n'
+         '          "filters bound what the trunk RE-RUNS, and the superset precondition "\n'
+         '          "is unestablished - see gates.base_delta_is_inert."'),
+        "",
+    ),
+    (
+        ("BD17 the gate-1 LABEL goes back to asserting what the contexts READ. "
+         "It prints on every stale-base run and is the first thing an operator "
+         "sees, and no message-body assertion covers it"),
+        "merge_gate.py",
+        ('    record("1 base == origin/main (or a delta no required workflow\'s push "\n'
+         '           "filter admits)", ok, why)'),
+        ('    record("1 base == origin/main (or a delta no required context reads)",\n'
+         "           ok, why)"),
+    ),
 ]
 
 
@@ -3004,6 +3361,22 @@ EXPECTED_SANDBOX_SKIPS = (
     "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
     "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
     "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
+    # #4543. Reads `.github/workflows/build-fiab-images-acr-tasks.yml` to pin
+    # the invariant gate 4c's scope sentence rests on (`push:` restricted to
+    # `branches: [main]`, so the lane never attaches to a PR head). The sandbox
+    # copies only `tools/drain`, so that file is absent and the test skips --
+    # DECLARED here rather than left to make the skip audit fail, and it kills
+    # no arm, which is exactly what this tuple exists to say out loud.
+    "test_gates.py::test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds",
+    # #4585. Both read real workflow files to prove gate 1's path-intersection
+    # arm is pointed at something real (and that the five unfiltered required
+    # contexts policy.json discloses are still unfiltered). The sandbox copies
+    # only `tools/drain`, so `_repo_root()` is None and they skip. DECLARED,
+    # and said out loud: neither kills an arm. The arms for
+    # `base_delta_is_inert` are killed by the synthetic-fixture tests beside
+    # them, which need no checkout.
+    "test_gates.py::test_positive_control_the_intersection_query_can_return_non_empty",
+    "test_gates.py::test_positive_control_the_real_required_topology_is_measured_not_assumed",
 )
 
 

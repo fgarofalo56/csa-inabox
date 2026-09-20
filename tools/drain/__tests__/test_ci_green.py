@@ -23,6 +23,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import gates
@@ -223,8 +225,19 @@ def test_glob_star_does_not_cross_a_slash_but_doublestar_does():
     assert gates.glob_matches("deploy/**/*.bicep", "deploy/main.bicep")
     assert gates.glob_matches(".github/workflows/**", ".github/workflows/validate.yml")
     assert gates.glob_matches(".github/workflows/**", ".github/workflows/a/b.yml")
-    assert gates.glob_matches("docs/?.md", "docs/a.md")
-    assert not gates.glob_matches("docs/?.md", "docs/ab.md")
+    # `?` is REFUSED, not translated. These two assertions previously pinned
+    # `?` as a single arbitrary character (the fnmatch reading); GitHub
+    # documents it as "zero or one of the PRECEDING character", so the old
+    # behaviour was wrong on real inputs and wrong in the excusing direction.
+    # What would break this: `?` being translated again instead of refused.
+    with pytest.raises(gates.UnsupportedPatternError):
+        gates.glob_matches("docs/?.md", "docs/a.md")
+    with pytest.raises(gates.UnsupportedPatternError):
+        gates.glob_matches("docs/?.md", "docs/ab.md")
+    # Positive pair, so the refusal above cannot be satisfied by refusing
+    # EVERYTHING: a pattern with no `?` still decides both ways.
+    assert gates.glob_matches("docs/a.md", "docs/a.md")
+    assert not gates.glob_matches("docs/a.md", "docs/ab.md")
 
 
 def test_negative_control_the_real_filter_admits_none_of_the_real_merge():

@@ -19,16 +19,211 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import pathlib
 import sys
 from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import merge_gate
 
 import gates
+
+#: git global options that consume a following value, and the flag-only ones.
+_GIT_VALUE_OPTS = ("-c", "-C", "--git-dir", "--work-tree", "--namespace",
+                   "--exec-path", "--config-env", "--attr-source")
+_GIT_FLAG_OPTS = ("--no-pager", "-P", "--bare", "--literal-pathspecs",
+                  "--no-replace-objects", "--paginate", "--no-optional-locks",
+                  "--icase-pathspecs", "--no-advice", "--no-lazy-fetch")
+
+
+def _git_argv(args: list[str]) -> list[str]:
+    """`args` with git's leading global options removed, subcommand first.
+
+    Stubs must not match git argv by POSITION: a global option shifts the
+    subcommand and the stub silently stops matching, falling through to a
+    default success that reads downstream as a parse failure.
+
+    Handles the value-taking options in both spellings (`-c k=v`, `--git-dir p`,
+    `--git-dir=p`) and the flag-only ones, in any order.
+    """
+    i = 1
+    while i < len(args):
+        token = args[i]
+        if token in _GIT_VALUE_OPTS:
+            i += 2
+        elif token in _GIT_FLAG_OPTS or any(
+                token.startswith(f"{opt}=") for opt in _GIT_VALUE_OPTS):
+            i += 1
+        else:
+            break
+    return args[i:]
+
+
+def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
+    """`_git_argv` is what keeps the stubs sighted, so a wrong one yields
+    FALSE GREENS rather than failures.
+
+    WHAT WOULD MAKE THIS FAIL: dropping a form from either option table, or
+    making the scan order-sensitive between value-taking and flag-only
+    options.
+    """
+    assert _git_argv(["git", "show", "HEAD:f"]) == ["show", "HEAD:f"]
+    assert _git_argv(["git", "-c", "core.quotePath=false", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "-C", "/repo", "ls-tree", "-d"]) == ["ls-tree", "-d"]
+    assert _git_argv(["git", "--git-dir", "/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--git-dir=/g", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--no-pager", "log"]) == ["log"]
+    # Interleaved, and in the order that broke the first version: a flag-only
+    # option BEFORE a value-taking one.
+    assert _git_argv(
+        ["git", "--no-pager", "-c", "a=b", "--bare", "-C", "/r", "show", "y"]
+    ) == ["show", "y"]
+    # A subcommand that merely looks like an option must NOT be consumed.
+    assert _git_argv(["git", "status"]) == ["status"]
+    # Degenerate input must not raise or loop.
+    assert _git_argv(["git"]) == []
+    assert _git_argv(["git", "-c"]) == []
+    # Forms review measured as mis-parsed by the first table.
+    assert _git_argv(["git", "-P", "log"]) == ["log"]
+    assert _git_argv(["git", "--no-advice", "status"]) == ["status"]
+    assert _git_argv(["git", "--no-lazy-fetch", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "--attr-source=HEAD", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--attr-source", "HEAD", "diff"]) == ["diff"]
+
+
+#: Exact number of `["git", ...]` argv literals across the modules below.
+#: PINNED, not a floor: a floor with slack lets someone hide literals and
+#: sneak an unrouted call through green, which is measured behaviour.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 11, "tick.py": 0, "gates.py": 0}
+
+
+def _git_call_census(module_path):
+    """(list literals, routed ids, `git` name-bindings, `git` tuples) for one module."""
+    tree = ast.parse(pathlib.Path(module_path).read_text(encoding="utf-8"))
+
+    def _starts_with_git(node):
+        return (node.elts and isinstance(node.elts[0], ast.Constant)
+                and node.elts[0].value == "git")
+
+    lists = [n for n in ast.walk(tree) if isinstance(n, ast.List) and _starts_with_git(n)]
+    tuples = [n for n in ast.walk(tree) if isinstance(n, ast.Tuple) and _starts_with_git(n)]
+    binds = [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Assign)
+             and isinstance(n.value, ast.Constant) and n.value.value == "git"]
+
+    routed = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (
+            fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name in ("sh", "git_argv"):
+            # Walk the whole argument subtree, so `sh([...] + extra)` counts
+            # the inner list as routed rather than stray.
+            for arg in node.args:
+                for sub in ast.walk(arg):
+                    routed.add(id(sub))
+    return lists, routed, binds, tuples
+
+
+def test_every_git_invocation_routes_through_the_quoting_injection():
+    """No `["git", ...]` literal reaches a runner without `sh()`/`git_argv()`.
+
+    Blinding the walk is itself caught three ways: counts are PINNED per
+    module so hiding a literal fails; binding `"git"` to a name fails; a
+    tuple instead of a list fails.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5):
+    argv assembled at runtime -- `.append`, a name bound elsewhere, a value
+    returned by a helper. Review measured an `.append`-built unrouted call
+    surviving. The pinned counts blunt it (removing a literal to build one
+    dynamically fails the count) but do not close it.
+
+    WHAT WOULD MAKE THIS FAIL: a raw `subprocess.run(["git", ...])`; a
+    `_GIT = "git"` binding; a `("git", ...)` tuple; or any change to the
+    number of git argv literals in these modules.
+    """
+    here = pathlib.Path(merge_gate.__file__).parent
+    for filename, expected in _GIT_ARGV_LITERALS.items():
+        lists, routed, binds, tuples = _git_call_census(here / filename)
+
+        assert len(lists) == expected, (
+            f"{filename}: {len(lists)} git argv literal(s), pinned at {expected}. "
+            "FEWER means either a call was removed or the literal was hidden "
+            "behind a name/concatenation, which blinds this walk; MORE means a "
+            "new git call to account for. Re-measure, do not edit the number "
+            "to match."
+        )
+        assert not binds, (
+            f"{filename}: `\"git\"` is bound to a name at line(s) {binds}. That "
+            "defeats the literal walk below, so an unrouted call could pass. "
+            "Inline the literal."
+        )
+        assert not tuples, (
+            f"{filename}: git argv given as a TUPLE at line(s) "
+            f"{[n.lineno for n in tuples]}. This walk only inspects lists; use "
+            "a list so the check can see it."
+        )
+
+        stray = sorted(n.lineno for n in lists if id(n) not in routed)
+        assert not stray, (
+            f"{filename}: git invocation(s) bypassing the quoting injection at "
+            f"line(s) {stray}. Pass the list to `sh(...)` or wrap it in "
+            "`git_argv(...)`. A raw `subprocess.run(['git', ...])` reads a "
+            "non-ASCII path in its ESCAPED spelling, which matches nothing and "
+            "EXCUSES an absence. With `timeout=`, use "
+            "`subprocess.run(git_argv([...]), **TEXT_UTF8, timeout=...)`."
+        )
+
+
+def test_every_git_runner_decodes_as_utf8():
+    """The flag is half the fix; a locale decode re-breaks it.
+
+    Every subprocess launcher in `merge_gate.py` must pass `encoding=` or
+    splat `TEXT_UTF8` BY NAME. Measured: with only `text=True`, `git ls-tree`
+    returns `probÃ©_dir` on a cp1252 box where the real name is `probé_dir`.
+
+    Covers `run`, `Popen`, `check_output`, `call` and `check_call`: review
+    measured an undecoded `check_output` and `Popen` surviving a `run`-only
+    check, and `**{"text": True}` surviving an any-splat check.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5): a
+    launcher whose kwargs are assembled elsewhere and splatted from a
+    variable this walk cannot resolve. `TEXT_UTF8` is the only splat accepted,
+    so that shape fails CLOSED here.
+
+    WHAT WOULD MAKE THIS FAIL: any of those launchers with `text=True` and no
+    codec, which is exactly what two call sites shipped with for a round.
+    """
+    tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
+    launchers = {"run", "Popen", "check_output", "call", "check_call"}
+    bare = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in launchers):
+            continue
+        kwargs = {k.arg for k in node.keywords if k.arg}
+        # Only a TEXT_UTF8 splat counts. Any-splat let `**{"text": True}` pass.
+        splats_text_utf8 = any(
+            k.arg is None and isinstance(k.value, ast.Name) and k.value.id == "TEXT_UTF8"
+            for k in node.keywords
+        )
+        if "encoding" not in kwargs and not splats_text_utf8:
+            bare.append(node.lineno)
+    assert not bare, (
+        f"subprocess launcher without an explicit codec at line(s) {bare}. Pass "
+        "`**TEXT_UTF8` (or `encoding=\"utf-8\"`): git emits raw UTF-8 bytes and "
+        "a locale decode turns a non-ASCII path into mojibake, which matches "
+        "nothing and excuses an absence."
+    )
+
 
 POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
 HEAD = "a" * 40
@@ -170,6 +365,605 @@ def test_negative_control_a_stale_base_blocks():
     assert not _gate(result, "1 ")["ok"]
 
 
+# ---------------------------------------------------------------------------
+# Gate 1's second arm, COMPOSED (#4585)
+#
+# `test_gates.py` drives `base_delta_is_inert` directly. These drive it through
+# `run_gates`, which is where an argument can be live in `gates.py`, described
+# in a brief, and fed by nothing -- the defect this whole file exists to catch
+# ("two of the four triggers used to be INERT here").
+# ---------------------------------------------------------------------------
+
+#: A scope set covering exactly `_data()`'s `REQUIRED`, all three filtered to a
+#: directory the deltas below deliberately miss or hit.
+_INERT_SCOPES = [
+    gates.ContextScope("Python Lint", ".github/workflows/validate.yml",
+                       paths=("csa_platform/**",)),
+    gates.ContextScope("vitest (node 20)", ".github/workflows/fiab-console-ci.yml",
+                       paths=("apps/fiab-console/**",)),
+    gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml",
+                       paths=("scripts/ci/**",)),
+]
+
+
+def test_a_stale_base_whose_delta_no_required_push_filter_admits_is_go():
+    """THE POINT OF #4585, and the ONE PATH THAT LETS A MERGE THROUGH.
+
+    The base has moved (`c`*40 != `b`*40, so `base_is_current` refuses), and
+    the delta is one `docs/` file, which none of the three push filters above
+    admits. Gate 1 passes on the second arm.
+
+    Goes RED if the delta file is changed to `csa_platform/x.py`,
+    `apps/fiab-console/x.ts` or `scripts/ci/x.mjs` -- each admitted by exactly
+    one of the three filters, which is the test below.
+
+    THE VOCABULARY OF THIS MESSAGE IS ASSERTED, not incidental. It is the
+    string printed BESIDE a merge being allowed, and for two rounds it said
+    "is read by any of the M required context(s)" -- asserting the very thing
+    `gates.base_delta_is_inert` states it cannot establish, in the one place
+    the claim would enter the permanent record. The absence check below is
+    paired with a positive one (the disclaimer must be PRESENT), so deleting
+    the sentence cannot satisfy it.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "GO", result["findings"]
+    gate = _gate(result, "1 ")
+    assert gate["ok"], gate["detail"]
+    # NAME WHICH CONTEXTS WERE CONSIDERED. An empty intersection with no
+    # population printed is a number with no denominator -- and the population
+    # is the exact thing a reviewer has to check to believe the pass.
+    for name in REQUIRED:
+        assert name in gate["detail"], (name, gate["detail"])
+    assert "is admitted by the `on.push` filter" in gate["detail"], gate["detail"]
+    assert "NOT a claim that no required context READS" in gate["detail"], (
+        "the GO message must carry its own limit; without it the string beside "
+        f"an allowed merge overstates what was measured: {gate['detail']}"
+    )
+    assert "is read by any of the" not in gate["detail"], (
+        "the retracted claim is back in the GO-path message: "
+        f"{gate['detail']}"
+    )
+    # ...and the LABEL, which is printed on every run of this gate.
+    assert "no required workflow's push filter admits" in gate["gate"], gate["gate"]
+    assert "no required context reads" not in gate["gate"], gate["gate"]
+
+
+@pytest.mark.parametrize(("hit_file", "context"), [
+    ("csa_platform/auth.py", "Python Lint"),
+    ("apps/fiab-console/app/page.tsx", "vitest (node 20)"),
+    ("scripts/ci/check-something.mjs", "guardrails"),
+])
+def test_negative_control_a_stale_base_whose_delta_is_admitted_still_blocks(hit_file, context):
+    """One arm per context, so a predicate that stops at the first scope cannot
+    pass: with only the `csa_platform` case, `return` after scope one survives.
+
+    Each `hit_file` is outside the OTHER two scopes, so the refusal can only be
+    coming from the context named in the assertion.
+    """
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md", hit_file],
+                  context_scopes=_INERT_SCOPES)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert hit_file in gate["detail"], gate["detail"]
+    assert context in gate["detail"], gate["detail"]
+
+
+def test_negative_control_one_unfiltered_required_context_blocks_the_whole_arm():
+    """The case that governs this repo TODAY. `guardrails` is produced by
+    `loom-guardrails.yml`, whose `push:` carries no `paths:` -- it reads the
+    whole checked-out tree. The delta is the same inert `docs/` file that
+    passes above, so the refusal comes from the missing filter and nothing else.
+    """
+    scopes = [*_INERT_SCOPES[:2],
+              gates.ContextScope("guardrails", ".github/workflows/loom-guardrails.yml")]
+    result = _run(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                  context_scopes=scopes)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "guardrails" in gate["detail"], gate["detail"]
+    assert "ADMITS EVERY PATH" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_the_second_arm_never_rescues_a_non_main_base():
+    """`base_is_current` refuses for two other reasons, and neither is a
+    question about a delta. A PR aimed at `release/0.106` merges into something
+    that is not the trunk; an intersection over main's delta says nothing about
+    that. With `baseRefName` back to `main` and everything else identical this
+    fixture is GO (the test above), so the branch name is doing the work.
+    """
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    data["pr"]["baseRefName"] = "release/0.106"
+    result = merge_gate.run_gates(data, POLICY, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "not 'main'" in gate["detail"]
+    # ...and the delta arm was never consulted, so its vocabulary is absent.
+    assert "INERT" not in gate["detail"], gate["detail"]
+
+
+def test_negative_control_a_collector_that_measured_no_delta_still_blocks():
+    """`collect()` only measures the delta when the base is actually stale, and
+    a `git diff` that fails leaves `base_delta=None`. Both must refuse. This is
+    the fixture the ORIGINAL stale-base test uses (it passes neither key), so
+    it also pins that the pre-#4585 fixtures still block for the right reason.
+    """
+    result = _run(base_sha="c" * 40)
+    assert result["verdict"] == "NO-GO"
+    gate = _gate(result, "1 ")
+    assert not gate["ok"]
+    assert "no scope at all" in gate["detail"], gate["detail"]
+
+
+def test_negative_control_turning_the_policy_key_off_restores_the_strict_gate():
+    """`stale_base_may_pass_on_an_inert_delta: false` must make gate 1 refuse a
+    stale base again even on a provably inert delta -- the same fixture that is
+    GO above. A key read by nothing is prose; this is what makes it a control.
+    """
+    policy = {**POLICY, "merge_gate": {**POLICY["merge_gate"],
+                                       "stale_base_may_pass_on_an_inert_delta": False}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    result = merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+    assert result["verdict"] == "NO-GO"
+    assert not _gate(result, "1 ")["ok"]
+
+
+def test_negative_control_deleting_the_policy_key_is_a_loud_keyerror():
+    """SUBSCRIPTED, not `.get`. A default equal to the shipped value makes
+    DELETING the key unobservable -- measured in this package twice, and the
+    reason `advisory_red_is_a_no_go` is subscripted too."""
+    policy = {**POLICY, "merge_gate": {
+        k: v for k, v in POLICY["merge_gate"].items()
+        if k != "stale_base_may_pass_on_an_inert_delta"}}
+    data = _data(base_sha="c" * 40, base_delta=["docs/fiab/readme.md"],
+                 context_scopes=_INERT_SCOPES)
+    with pytest.raises(KeyError):
+        merge_gate.run_gates(data, policy, [4468], state_path=_ledger_path())
+
+
+# ---------------------------------------------------------------------------
+# `derive_context_scopes` -- the DERIVATION, which is where a blind scope comes
+# from. Every failure here must produce an `unreadable` scope, never a scope
+# with empty patterns: empty patterns match nothing, and matching nothing is
+# the answer that lets the merge through.
+# ---------------------------------------------------------------------------
+
+_WF = ".github/workflows/test.yml"
+#: A workflow with a real push path filter, written out rather than read from
+#: disk so the derivation test does not depend on the repo's own workflows.
+_WF_SRC = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'tools/**'\n"
+_WF_SRC_NARROWED = "on:\n  push:\n    branches: [main]\n    paths:\n      - 'x/**'\n"
+_WF_SRC_NO_PUSH = "on:\n  pull_request:\n"
+
+
+def _wire_derivation(monkeypatch, *, suite=7, path=_WF, sources=None):
+    """Point `derive_context_scopes` at fixtures instead of the network/git."""
+    monkeypatch.setattr(
+        merge_gate, "_flat_check_runs",
+        lambda _repo, _sha: ([{"name": "Python Lint", "check_suite": {"id": suite}}], 1))
+    monkeypatch.setattr(
+        merge_gate, "_workflow_runs",
+        lambda _repo, _sha: [{"check_suite_id": suite, "path": path}])
+
+    def fake(args, **_kwargs):
+        _argv = _git_argv(args)
+        if args[0] == "git" and _argv[:1] == ["show"]:
+            sha = _argv[1].split(":")[0]
+            text = (sources or {}).get(sha)
+            if text is None:
+                return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
+            return SimpleNamespace(returncode=0, stdout=text, stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(merge_gate.subprocess, "run", fake)
+
+
+def test_the_scope_is_derived_from_the_workflow_the_check_suite_names(monkeypatch):
+    """The POSITIVE arm of the derivation: a traced producer whose filter is
+    identical at both shas yields the real pattern list. Change `_WF_SRC`'s
+    `tools/**` to anything else and the assertion on the tuple goes red."""
+    _wire_derivation(monkeypatch, sources={"base": _WF_SRC, "main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert len(scopes) == 1
+    assert scopes[0].unreadable is None, scopes[0].unreadable
+    assert scopes[0].workflow_path == _WF
+    assert scopes[0].paths == ("tools/**",)
+
+
+def test_negative_control_an_untraceable_producer_is_unreadable_not_empty(monkeypatch):
+    """No workflow run owns the publishing check-suite. The scope MUST carry
+    `unreadable`; a `ContextScope(name)` with no reason would refuse for the
+    no-filter reason instead, which is the right verdict from the wrong
+    evidence -- and `paths=()` would refuse for nothing at all."""
+    _wire_derivation(monkeypatch, suite=7, sources={"base": _WF_SRC, "main": _WF_SRC})
+    monkeypatch.setattr(merge_gate, "_workflow_runs",
+                        lambda _repo, _sha: [{"check_suite_id": 999, "path": _WF}])
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "cannot be traced" in scopes[0].unreadable
+    assert scopes[0].paths is None
+    assert scopes[0].paths_ignore is None
+
+
+def test_negative_control_an_unreadable_workflow_file_is_unreadable(monkeypatch):
+    """`git show <sha>:<path>` failing is an unanswered question. Only the BASE
+    sha fails here, so a derivation that read one sha and skipped the other
+    would pass this and be wrong."""
+    _wire_derivation(monkeypatch, sources={"main": _WF_SRC})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "could not be read or parsed" in scopes[0].unreadable
+
+
+def test_negative_control_a_filter_that_moved_inside_the_delta_is_unreadable(monkeypatch):
+    """The two-clock refusal. The workflow's own filter is one of the things
+    the base delta can change: reading only `origin/main` would judge the PR's
+    evidence against a filter that did not exist when it was produced. Here the
+    filter NARROWS from `tools/**` to `x/**`, and a narrower filter excuses
+    more -- so a one-sha reader would call a `tools/` delta inert."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC, "main": _WF_SRC_NARROWED})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "CHANGED inside the base delta" in scopes[0].unreadable
+    # ...and it really would have been excused: the narrowed filter alone says
+    # `tools/**` is outside scope. This is the counterfactual, not a restatement.
+    narrowed = gates.ContextScope("Python Lint", _WF, paths=("x/**",))
+    assert gates.base_delta_is_inert(
+        ["tools/drain/gates.py"], [narrowed], ["Python Lint"])[0] is True
+
+
+def test_negative_control_a_workflow_with_no_push_trigger_is_unreadable(monkeypatch):
+    """`present=False` explains an ABSENCE for the ci-green receipt; here it
+    means nothing declares which commits landing on main must re-run the
+    context, so there is no filter to intersect against."""
+    _wire_derivation(monkeypatch,
+                     sources={"base": _WF_SRC_NO_PUSH, "main": _WF_SRC_NO_PUSH})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is not None
+    assert "no `on.push` trigger" in scopes[0].unreadable
+
+
+def test_a_derived_unfiltered_scope_is_paths_none_not_an_empty_tuple(monkeypatch):
+    """`push:` with `branches:` but no `paths:` is the shape FIVE of this
+    repo's 17 required contexts have. It must arrive as `paths=None` -- the
+    "reads everything" state -- and NOT as `paths=()`, which matches nothing
+    and would excuse every delta."""
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n",
+        "main": "on:\n  push:\n    branches: [main]\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths is None, scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked
+    assert "ADMITS EVERY PATH" in why, why
+
+
+def test_a_derived_empty_paths_list_is_a_tuple_that_the_gate_refuses(monkeypatch):
+    """`paths: []` in a workflow parses to `()`, which is a FOURTH state.
+
+    It is not the absent state the test above pins, and it is the dangerous
+    one: `any([])` is False, so every delta reads as outside the scope and the
+    context excuses everything. Both halves are asserted -- that the derivation
+    hands back `()` rather than `None` (so the two states stay distinct), and
+    that `base_delta_is_inert` REFUSES it.
+
+    Goes red if the refusal branch is deleted: with it gone the same fixture
+    returns INERT over a `docs/x.md` delta.
+    """
+    _wire_derivation(monkeypatch, sources={
+        "base": "on:\n  push:\n    branches: [main]\n    paths: []\n",
+        "main": "on:\n  push:\n    branches: [main]\n    paths: []\n"})
+    scopes = merge_gate.derive_context_scopes(
+        "r/r", "head", "base", "main", ["Python Lint"])
+    assert scopes[0].unreadable is None
+    assert scopes[0].paths == (), scopes[0].paths
+    blocked, why = gates.base_delta_is_inert(["docs/x.md"], scopes, ["Python Lint"])
+    assert not blocked, why
+    assert "EMPTY" in why, why
+
+
+# ---------------------------------------------------------------------------
+# `base_delta_files` -- the DELTA, over a real git repo.
+#
+# The rename case cannot be witnessed by asserting on an argv list: the whole
+# finding is what git DOES with the flag, not that the flag is spelled. So
+# these build a throwaway repository, perform a real `git mv`, and read what
+# comes back.
+# ---------------------------------------------------------------------------
+
+def _git(repo, *args):
+    import subprocess
+
+    # `encoding="utf-8"` is LOAD-BEARING in the non-ASCII test, not tidiness.
+    # Without it Python decodes git's raw bytes with the locale codec -- cp1252
+    # on this box -- and a real UTF-8 path comes back as mojibake
+    # (`tools/drain/probÃ©.py`). The counterfactual there asserts the real name
+    # is ABSENT from the unflagged read, and mojibake satisfies that for the
+    # wrong reason: the arm would pass with the quoting fix removed, which is
+    # the "could not fail" shape `assertion-design.md` exists to prevent.
+    # Pinning the codec here leaves QUOTING as the only thing that assertion
+    # can be measuring.
+    done = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    assert done.returncode == 0, (args, done.stderr)
+    return done.stdout
+
+
+def _repo_with(tmp_path, first_path: str, then):
+    """A two-commit repo: `first_path` is added, then `then(repo)` changes it.
+
+    Returns `(repo, base_sha, head_sha)`.
+
+    `diff.renames = true` IS SET EXPLICITLY, and it is the difference between
+    this fixture witnessing the rename hazard and inheriting it. Both reviewers
+    measured the same thing independently: with `GIT_CONFIG_GLOBAL` pointing at
+    `[diff] renames = false`, arm BD14 SURVIVES -- every rename test stays
+    green with `--no-renames` deleted, because the ambient config has already
+    done what the flag does.
+
+        BD14, ambient git config          rc=1  2 failed   <- kills
+        BD14, global diff.renames=false   rc=0  2 passed   <- SURVIVES
+
+    A fixture that inherits the very setting it exists to witness reports green
+    over a removed flag. Production is unaffected (`--no-renames` overrides
+    config, and hosted runners do not set it), so this is entirely about the
+    local suite being able to fail. The counterfactual in
+    `test_negative_control_a_rename_out_of_scope_is_not_inert` then ESTABLISHES
+    that detection is live rather than assuming this line worked.
+    """
+    repo = tmp_path / "delta-repo"
+    (repo / "tools" / "drain").mkdir(parents=True)
+    (repo / "docs").mkdir(parents=True)
+    _git(repo.parent, "init", "--quiet", repo.name)
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "diff.renames", "true")
+    (repo / first_path).write_text("x = 1\n" * 40, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "add")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    then(repo)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "--quiet", "-m", "change")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    return repo, base, head
+
+
+def _unflagged_delta(repo, base, head) -> list[str]:
+    """`git diff --name-only` WITHOUT `--no-renames`, over the same repo.
+
+    The counterfactual. Without it the rename tests assume rename detection is
+    live; with it they establish it, and a repo where detection is off turns
+    the assertion RED instead of quietly agreeing with the fix.
+    """
+    out = _git(repo, "diff", "--name-only", base, head)
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+#: The scope the moved file starts inside. A rename OUT of it is the defect.
+_TOOLS_SCOPE = [gates.ContextScope(
+    "Python Lint", ".github/workflows/test.yml", paths=("tools/**",))]
+
+
+def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 5: `core.quotePath` defaults to TRUE, so a non-ASCII
+    path comes back C-quoted and octal-escaped -- `"tools/drain/prob\\303\\251.py"`
+    -- and no literal path comparison recognises it. The delta then contains
+    no path any filter admits, and the gate answers INERT for a file sitting
+    inside `tools/**`, which four required contexts are produced from.
+
+    Round 4 set the flag at ONE call site and claimed the class was closed.
+
+    THE COUNTERFACTUAL IS ASSERTED FIRST, for the same reason the rename test
+    asserts its own: the SAME two commits, diffed WITHOUT the injection, must
+    come back QUOTED. If they come back plain, quoting is off in this
+    environment, the flag is a no-op here, and everything below would pass
+    with it removed.
+
+    WHAT WOULD MAKE THIS FAIL: `git_argv` no longer injecting
+    `core.quotePath=false` (arm BD18), which returns the escaped spelling and
+    turns the refusal below into INERT.
+    """
+    name = "tools/drain/probé.py"
+    ascii_sibling = "tools/drain/sibling.py"
+    def _add_both(r):
+        (r / name).write_text("y = 2\n", encoding="utf-8")
+        (r / ascii_sibling).write_text("z = 3\n", encoding="utf-8")
+
+    repo, base, head = _repo_with(tmp_path, "tools/drain/plain.py", _add_both)
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    # THE PAIRED COUNTERFACTUAL. Both files were added by the SAME commit, so
+    # the unflagged read must show the ASCII one and hide the non-ASCII one.
+    # Asserting only the absence is satisfiable by a read that returned
+    # nothing at all; asserting only the presence says nothing about quoting.
+    assert ascii_sibling in unflagged, (
+        "the unflagged read did not return the ASCII sibling either, so it "
+        f"measured nothing rather than measuring quoting: {unflagged}"
+    )
+    assert name not in unflagged, (
+        "git is NOT quoting non-ASCII paths in this environment, so "
+        "`core.quotePath=false` changes nothing here and every assertion "
+        f"below would pass without it. Unflagged diff: {unflagged}"
+    )
+    assert any("\\303" in p for p in unflagged), (
+        f"expected the octal-escaped spelling in the unflagged diff, got {unflagged}"
+    )
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert name in delta, (
+        "the real path is missing from the delta, so the injection is not "
+        f"reaching this query: {delta}"
+    )
+    # ...and the ASCII sibling is STILL there, which is what makes the line
+    # above a statement about quoting rather than about the reader working.
+    assert ascii_sibling in delta, delta
+
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert name in why, why
+
+
+def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_path):
+    """BLOCKER, round 1: `git diff --name-only` has rename detection ON by
+    default and emits ONLY THE DESTINATION path.
+
+    `git mv tools/drain/helper.py docs/helper.txt` is a 100%-similar rename, so
+    without `--no-renames` the delta is `['docs/helper.txt']` alone -- which no
+    required push filter admits -- and the gate answers INERT while the file
+    that context depends on has LEFT main.
+
+    THE COUNTERFACTUAL IS ASSERTED FIRST, and it is what makes the rest
+    evidence rather than assumption: the SAME two commits, diffed WITHOUT the
+    flag, must return exactly ONE path. If they return two, rename detection is
+    off in this environment, the flag is a no-op here, and every assertion
+    below would pass with `--no-renames` deleted -- which is exactly what both
+    reviewers measured under `GIT_CONFIG_GLOBAL` with `diff.renames = false`.
+
+    Then both halves of the fix, because either alone is satisfiable by the
+    defect: the source path is present in the delta, AND the composed answer
+    refuses naming it.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "mv", "tools/drain/helper.py", "docs/helper.txt"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    unflagged = _unflagged_delta(repo, base, head)
+    assert unflagged == ["docs/helper.txt"], (
+        "rename detection is NOT live here, so `--no-renames` changes nothing "
+        "and every assertion below would pass with the flag removed. Check "
+        f"`diff.renames` / GIT_CONFIG_GLOBAL. Unflagged diff: {unflagged}"
+    )
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta is not None
+    assert "tools/drain/helper.py" in delta, (
+        "the SOURCE path is missing, so rename detection is still collapsing "
+        f"the pair to its destination: {delta}"
+    )
+    assert "docs/helper.txt" in delta, delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_into_scope_is_not_inert(monkeypatch, tmp_path):
+    """The MIRROR of the blocker, and it was untested.
+
+    `docs/helper.txt` -> `tools/drain/helper.py` moves a file INTO the filter's
+    scope. The unflagged diff collapses it to the destination, which happens to
+    be the in-scope path, so this one refuses either way -- it is here because
+    the pair "out of scope" / "into scope" is the boundary, and only one side
+    of it was covered. Named as an EQUIVALENT-MUTANT arm for BD14 rather than
+    counted as kill power for it (assertion-design.md "done" #5): removing
+    `--no-renames` does NOT turn this red.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "docs/helper.txt",
+        lambda r: _git(r, "mv", "docs/helper.txt", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/helper.txt", "tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+    assert "tools/drain/helper.py" in why, why
+
+
+def test_negative_control_a_rename_within_scope_is_not_inert(monkeypatch, tmp_path):
+    """A move from one in-scope path to another in-scope path.
+
+    Both endpoints are admitted by `tools/**`, so this refuses whatever the
+    rename setting does -- another declared equivalent mutant for BD14. It
+    completes the three-way partition the round-2 briefing asked for (out of
+    scope / into scope / within scope) and pins that a within-scope move is
+    NEVER inert, which is the answer a reader would otherwise have to derive.
+
+    The briefing described this case as "a move within a context's scope
+    staying INERT". That outcome is not reachable: a path inside the filter is
+    by definition admitted by it, so the correct answer is a refusal, and the
+    assertion states the reachable fact rather than the requested one.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/a.py",
+        lambda r: _git(r, "mv", "tools/drain/a.py", "tools/drain/b.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["tools/drain/a.py", "tools/drain/b.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+
+
+def test_the_control_a_plain_delete_of_the_same_file_also_refuses(monkeypatch, tmp_path):
+    """THE CONTROL that makes the test above a finding rather than a guess.
+
+    A delete has no destination to collapse into, so it refuses with or without
+    the flag. If this ever went red the query would be blind in general and the
+    rename arm would be measuring something else entirely.
+    """
+    repo, base, head = _repo_with(
+        tmp_path, "tools/drain/helper.py",
+        lambda r: _git(r, "rm", "--quiet", "tools/drain/helper.py"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert delta == ["tools/drain/helper.py"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert not inert, why
+
+
+def test_the_positive_control_a_move_that_stays_outside_every_scope_is_inert(
+        monkeypatch, tmp_path):
+    """THE POSITIVE ARM, so the refusal tests above are not satisfied by a
+    function that refuses everything.
+
+    It is a `docs/` -> `docs/` move: BOTH endpoints outside every filter. It is
+    NOT the "in-scope to in-scope" case -- that one is
+    `test_negative_control_a_rename_within_scope_is_not_inert`, and it refuses;
+    the round-2 briefing described this test as that case, which it never was.
+    Both are now present and each says which it is.
+
+    `--no-renames` lists TWO `docs/` paths and the answer is still inert. Goes
+    red if `base_delta_files` ever started returning paths the commits did not
+    touch, or if the decision function started refusing unconditionally."""
+    repo, base, head = _repo_with(
+        tmp_path, "docs/a.md",
+        lambda r: _git(r, "mv", "docs/a.md", "docs/b.md"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+
+    delta = merge_gate.base_delta_files(base, head)
+    assert sorted(delta) == ["docs/a.md", "docs/b.md"], delta
+    inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
+    assert inert, why
+
+
+def test_negative_control_an_unreadable_delta_returns_none_not_an_empty_list(
+        monkeypatch, tmp_path):
+    """A failing `git diff` must be the UNREADABLE answer. `[]` would be a
+    measured-empty delta, which is the one thing that passes."""
+    repo, base, _head = _repo_with(tmp_path, "docs/a.md",
+                                   lambda r: (r / "docs" / "a.md").write_text("y\n"))
+    monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
+    assert merge_gate.base_delta_files(base, "f" * 40) is None
+
+
 # THE COMPOSED VERDICT IS NO LONGER A DISCRIMINATOR FOR GATE 2+3.
 #
 # Once a blocking verdict also RAISES the reviewer count, gate 3b blocks on the
@@ -286,6 +1080,60 @@ def test_negative_control_a_missing_context_names_the_right_remedy():
     assert "never-created" in _gate(never, "4b")["detail"]
     parked = _run(statusCheckRollup=rollup, head_runs={"n": 9, "waiting": 2})
     assert "parked" in _gate(parked, "4b")["detail"]
+
+
+def test_negative_control_an_advisory_red_blocks_the_composed_verdict():
+    """#4543, AT THE CALLER -- which is where the defect lived. `gates.py` is
+    not what decides a merge; this function is, and every check arm above it
+    passes `data["required"]`, so the population was narrowed before any
+    predicate ran. Measured on PR #4540 head `7dd2fa3e279`: forty check-runs,
+    exactly one red, not required, and this program printed `VERDICT: GO`. The
+    merge landed and `main` was red after it.
+
+    Breaks if: gate 4c is dropped from the composition, stops blocking, or
+    filters to the required contexts again -- and note the required half is
+    asserted GREEN first, so this cannot pass for gate 4's reason.
+    """
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "brain security graph — committed artifact matches the tree",
+                   "status": "COMPLETED", "conclusion": "FAILURE"})
+    result = _run(statusCheckRollup=rollup)
+    assert _gate(result, "4 ")["ok"], "the REQUIRED half must be green, or this is gate 4"
+    assert not _gate(result, "4c")["ok"]
+    assert "ADV-RED 1" in _gate(result, "4c")["detail"]
+    assert result["verdict"] == "NO-GO"
+
+
+def test_an_advisory_check_still_running_is_named_in_the_go_line_itself():
+    """ADV-WAIT does not block -- an in-progress check has said nothing yet,
+    and blocking on it would wait out every advisory check on every PR. So the
+    report has to be impossible to miss where the reader already is: in the
+    gate's own line, not a footnote under a `VERDICT: GO`.
+
+    Breaks if: the waiting names are dropped from the GO branch of the message
+    (the `ok` half alone would still pass), or if IN_PROGRESS starts counting
+    as red -- the verdict assertion catches that one."""
+    rollup = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED]
+    rollup.append({"name": "Checkov", "status": "IN_PROGRESS", "conclusion": None})
+    result = _run(statusCheckRollup=rollup)
+    assert result["verdict"] == "GO", result["findings"]
+    assert "ADV-WAIT 1" in _gate(result, "4c")["detail"]
+    assert "Checkov" in _gate(result, "4c")["detail"]
+
+
+def test_negative_control_the_advisory_flag_is_subscripted_not_defaulted():
+    """The authority is READ, and read LOUDLY. Every key in this policy section
+    has been read by nothing at least once in this package's history -- and the
+    version of that defect which survives a both-ways key check is a `.get(k,
+    <the shipped value>)`, where DELETING the key from `policy.json` is
+    unobservable. `assert_policy_matches_code` was extended for exactly that.
+
+    Breaks if: the caller reads the flag with a default -- then a policy with
+    the key removed answers GO instead of raising."""
+    trimmed = {**POLICY, "merge_gate": {k: v for k, v in POLICY["merge_gate"].items()
+                                        if k != "advisory_red_is_a_no_go"}}
+    with pytest.raises(KeyError, match="advisory_red_is_a_no_go"):
+        merge_gate.run_gates(_data(), trimmed, [4468], state_path=_ledger_path())
 
 
 def test_negative_control_a_skipped_required_context_blocks():
@@ -733,7 +1581,7 @@ def test_every_gate_of_the_spec_is_present():
     """A gate silently dropped from the composition is a gate that stopped
     watching -- and the finding list is the only place that would show it."""
     gate_names = [f["gate"] for f in _run()["findings"]]
-    for prefix in ("0 ", "1 ", "2+3", "4 ", "5 ", "6 "):
+    for prefix in ("0 ", "1 ", "2+3", "4 ", "4c", "5 ", "6 "):
         assert any(g.startswith(prefix) for g in gate_names), f"gate {prefix} missing"
 
 
@@ -1062,7 +1910,7 @@ def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
     }
 
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=0, stdout=trees[args[-1]], stderr="")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 
@@ -1083,7 +1931,7 @@ def test_the_ere_refuses_when_the_merged_tree_had_a_directory_we_no_longer_have(
 def test_the_ere_fails_closed_when_the_merged_tree_cannot_be_listed(monkeypatch):
     """"Cannot be shown to agree" is not "agree"."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=128, stdout="", stderr="bad object")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 
@@ -1113,7 +1961,7 @@ def test_a_failed_ls_tree_with_output_does_not_read_as_an_empty_tree(monkeypatch
     so a failed listing treated as an empty one silently permits the narrowing
     this guard exists to refuse."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(
                 returncode=128, stdout="tools\nscripts\n", stderr="bad object")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
@@ -1128,7 +1976,7 @@ def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch)
     rather than an answer; returning the bare set lets the caller's `is None`
     check pass and then compare against nothing."""
     def fake(args, **_kwargs):
-        if args[:2] == ["git", "ls-tree"]:
+        if args[0] == "git" and _git_argv(args)[:1] == ["ls-tree"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=0, stdout=f"{REAL_ERE}\n", stderr="")
 
