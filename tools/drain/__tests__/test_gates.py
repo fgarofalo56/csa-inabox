@@ -2197,7 +2197,8 @@ def test_negative_control_an_unresolvable_sha_is_not_a_pass():
 
 
 # ---------------------------------------------------------------------------
-# Gate 1's second arm (#4585) -- a base delta no required context can read
+# Gate 1's second arm (#4585) -- a base delta that no required context's
+# producing workflow declares an on.push filter ADMITTING
 #
 # An EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so the dominant
 # risk here is a query that returns empty because it is BLIND rather than
@@ -2487,9 +2488,9 @@ def test_the_printed_counts_are_the_real_counts_not_the_truncated_ones():
 
     # --- refusal branch: every file admitted -------------------------------
     admitted = [f"src/f{i}.py" for i in range(n)]
-    reads_src = gates.ContextScope(
+    admits_src = gates.ContextScope(
         "Kappa", ".github/workflows/kappa.yml", paths=("src/**",))
-    ok, why = gates.base_delta_is_inert(admitted, [reads_src], ["Kappa"])
+    ok, why = gates.base_delta_is_inert(admitted, [admits_src], ["Kappa"])
     assert not ok, why
     assert f"{n} file(s) in the base delta are ADMITTED BY" in why, why
     # ...and it names only `shown` of them, which is what makes the count
@@ -2498,7 +2499,7 @@ def test_the_printed_counts_are_the_real_counts_not_the_truncated_ones():
 
     # --- GO branch: nothing admitted, but the delta is still large ---------
     unadmitted = [f"docs/d{i}.md" for i in range(n)]
-    ok, why = gates.base_delta_is_inert(unadmitted, [reads_src], ["Kappa"])
+    ok, why = gates.base_delta_is_inert(unadmitted, [admits_src], ["Kappa"])
     assert ok, why
     assert f"({n} file(s))" in why, why
     assert f"(+{n - shown} more)" in why, why
@@ -2506,7 +2507,7 @@ def test_the_printed_counts_are_the_real_counts_not_the_truncated_ones():
 
     # --- control: at or below the threshold there is NO suffix -------------
     small = [f"docs/d{i}.md" for i in range(shown)]
-    ok, why = gates.base_delta_is_inert(small, [reads_src], ["Kappa"])
+    ok, why = gates.base_delta_is_inert(small, [admits_src], ["Kappa"])
     assert ok, why
     assert "more)" not in why, f"suffix appeared for a delta of exactly {shown}: {why}"
 

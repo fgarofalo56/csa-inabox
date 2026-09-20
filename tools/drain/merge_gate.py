@@ -40,30 +40,47 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 POLICY_PATH = os.path.join(HERE, "policy.json")
 
 
+def git_argv(args: list[str]) -> list[str]:
+    """`args` with git's global quoting option injected. THE ONLY INJECTION POINT.
+
+    `core.quotePath` defaults to TRUE, under which any git command that emits
+    a path returns a non-ASCII one C-quoted and octal-escaped
+    (`"tools/prob\\303\\251.py"`), which no literal comparison recognises. A
+    delta then looks empty and an absence gets EXCUSED.
+
+    This exists as a separate function, rather than living inside `sh()`,
+    because two call sites cannot use `sh()` at all -- they need `timeout=`,
+    which `sh()` does not take -- and both read paths:
+    `git rev-parse --git-common-dir` and `git ls-tree -d --name-only`.
+    Measured in a throwaway repo, `ls-tree` returns `"prob\\303\\251_dir"`
+    under the default and the real name with the flag, with an ASCII sibling
+    present in both.
+
+    THIS CLAIM HAS BEEN WRONG TWICE, both times in the same shape: round 4
+    fixed one call site and said the class was closed; round 5 moved it into
+    `sh()` and said EVERY git invocation was covered, while these two were
+    not. It is not prose any more --
+    `test_every_git_invocation_routes_through_the_quoting_injection` reads
+    this module's AST and fails on any `["git", ...]` literal that reaches
+    `subprocess.run` without passing through here or through `sh()`.
+
+    The other half is the codec, which `sh()` pins with `encoding="utf-8"`;
+    the flag alone still fails under a locale decode.
+    """
+    if args and args[0] == "git":
+        return [args[0], "-c", "core.quotePath=false", *args[1:]]
+    return args
+
+
 def sh(args: list[str]) -> tuple[int, str, str]:
     """Run in the repo root, never discarding stderr (deploy-integrity R7).
 
-    EVERY `git` invocation gets `-c core.quotePath=false` injected HERE rather
-    than at its call site, and the difference is not style. `core.quotePath`
-    defaults to true, under which a non-ASCII path comes back C-quoted and
-    octal-escaped (`"tools/prob\\303\\251.py"`), which no literal path
-    comparison recognises. Round 4 fixed exactly one call site and shipped a
-    claim that the class was closed; review then found the SIBLING at
-    `git show --name-only`, which feeds `push_event_runs` and
-    `scope_untouched_at_merge` -- and those EXCUSE an absence, so that one was
-    live rather than latent. Measured through the real code on a single
-    non-ASCII path: unflagged gave "no push event" (absence excused), flagged
-    gave the opposite.
-
-    Injecting once here is what makes the NEXT path-reading git call safe
-    without anyone remembering. It is a no-op for git calls that emit no
-    paths, and `gh` and everything else is untouched. The other half is the
-    codec, which this function already pins: `encoding="utf-8"`.
+    Git invocations are routed through `git_argv`, which is where the quoting
+    story is told in full.
     """
-    if args and args[0] == "git":
-        args = [args[0], "-c", "core.quotePath=false", *args[1:]]
     run = subprocess.run(
-        args, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=REPO_ROOT
+        git_argv(args), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", cwd=REPO_ROOT,
     )
     return run.returncode, run.stdout, run.stderr
 
@@ -159,7 +176,7 @@ def ledger_candidates(state_path: str | None = None,
     found = [os.path.join(HERE, "state.json")]
     try:
         common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            git_argv(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]),
             capture_output=True, text=True, cwd=REPO_ROOT, timeout=20, check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1095,7 +1112,7 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     def dirs(ref: str) -> set[str] | None:
         try:
             out = subprocess.run(
-                ["git", "ls-tree", "-d", "--name-only", ref],
+                git_argv(["git", "ls-tree", "-d", "--name-only", ref]),
                 capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
             )
         except (OSError, subprocess.SubprocessError):

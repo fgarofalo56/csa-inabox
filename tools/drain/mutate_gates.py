@@ -3179,17 +3179,20 @@ ARMS: list[tuple[str, str, str, str]] = [
          "                       base_sha, origin_main_sha])"),
     ),
     (
-        ("BD18 `core.quotePath=false` stops being injected into every git "
-         "call, so git's DEFAULT quoting returns a non-ASCII path C-quoted "
-         "and octal-escaped. No literal path comparison recognises it: the "
-         "base delta reads as inert, and `push_event_runs` reads as 'no push "
-         "event', which EXCUSES. Round-5 blocker - round 4 fixed one call "
-         "site and left the excusing sibling blind"),
+        ("BD18 `core.quotePath=false` stops being injected, so git's DEFAULT "
+         "quoting returns a non-ASCII path C-quoted and octal-escaped. No "
+         "literal path comparison recognises it: the base delta reads as "
+         "inert, and `push_event_runs` reads as 'no push event', which "
+         "EXCUSES. Round-5 blocker - round 4 fixed one call site and left the "
+         "excusing sibling blind; round 6 moved this into `git_argv` so the "
+         "two `timeout=` callers are covered too"),
         "merge_gate.py",
         ('    if args and args[0] == "git":\n'
-         '        args = [args[0], "-c", "core.quotePath=false", *args[1:]]'),
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
         ('    if False:\n'
-         '        args = [args[0], "-c", "core.quotePath=false", *args[1:]]'),
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
     ),
     (
         ("BD15 an EMPTY `paths: []` stops being refused, so a workflow "

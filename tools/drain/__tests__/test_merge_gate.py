@@ -19,8 +19,10 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import pathlib
 import sys
 from types import SimpleNamespace
 
@@ -36,21 +38,93 @@ import gates
 def _git_argv(args: list[str]) -> list[str]:
     """`args` with git's leading global `-c key=value` options removed.
 
-    `merge_gate.sh()` injects `-c core.quotePath=false` into EVERY git
-    invocation, exactly where real git accepts global options: before the
-    subcommand. A stub that pinned `args[:2] == ["git", "show"]` silently
+    `merge_gate.git_argv()` injects `-c core.quotePath=false` into every git
+    invocation -- via `sh()` for most, and directly at the two call sites that
+    need `timeout=` -- exactly where real git accepts global options: before
+    the subcommand. A stub that pinned `args[:2] == ["git", "show"]` silently
     stopped matching the moment that injection landed, fell through to its
     default success-with-empty-stdout, and the derivation then reported the
     workflow "could not be read or parsed" -- a green stub producing a red
     that had nothing to do with the code under test.
 
     So parse argv the way git does rather than pinning a position. Returns
-    `["show", ...]` for both `git show ...` and `git -c k=v show ...`.
+    `["show", ...]` for both `git show ...` and `git -c k=v show ...`, and
+    tolerates the other global options that take a value (`-C`, `--git-dir`,
+    `--work-tree`) and the flag-only ones (`--no-pager`, `--bare`,
+    `--literal-pathspecs`) -- review found the first version broke on all of
+    them, which would make a stub silently blind again.
     """
     i = 1
-    while i + 1 < len(args) and args[i] == "-c":
+    while i + 1 < len(args) and args[i] in ("-c", "-C", "--git-dir", "--work-tree"):
         i += 2
+    while i < len(args) and args[i] in ("--no-pager", "--bare", "--literal-pathspecs"):
+        i += 1
     return args[i:]
+
+
+def test_every_git_invocation_routes_through_the_quoting_injection():
+    """THE GUARD THAT WAS MISSING FOR THREE ROUNDS.
+
+    `core.quotePath` defaults to true, so any git command emitting a PATH
+    returns a non-ASCII one C-quoted and octal-escaped, which no literal
+    comparison recognises -- and an unrecognised path makes a delta look
+    EMPTY, which excuses an absence. The fix has been claimed three times and
+    was wrong twice, in the same shape each time:
+
+      round 4  set the flag at ONE call site and said the class was closed.
+               The sibling `git show --name-only` -- which EXCUSES rather
+               than refuses -- was still blind.
+      round 5  moved it into `sh()` and said "EVERY git invocation gets it
+               injected HERE". Two did not: `git rev-parse --git-common-dir`
+               and `git ls-tree -d --name-only`, both raw `subprocess.run`
+               because they need `timeout=`, which `sh()` does not take.
+               `ls-tree` is quote-sensitive -- measured in a throwaway repo,
+               `"prob\\303\\251_dir"` under the default versus the real name
+               with the flag, ASCII sibling present in both.
+
+    Prose could not hold this. Both times the claim was universal and the
+    check was "the author looked". So read the module's OWN AST and assert
+    the property structurally.
+
+    WHAT WOULD MAKE THIS FAIL: adding `subprocess.run(["git", ...])` to
+    `merge_gate.py` without routing it through `sh()` or `git_argv()` --
+    exactly what rounds 4 and 5 each shipped.
+
+    The floor is load-bearing, not decoration: a walk that suddenly sees
+    fewer git literals than the module has is blind, and a clean result from
+    a blind walk is worth nothing.
+    """
+    tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
+
+    git_lists = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.List)
+        and node.elts
+        and isinstance(node.elts[0], ast.Constant)
+        and node.elts[0].value == "git"
+    ]
+    assert len(git_lists) >= 8, (
+        f"only {len(git_lists)} git argv literal(s) found in merge_gate.py - "
+        "the AST walk is not seeing the module, so a clean result below would "
+        "be a blind scan rather than a property"
+    )
+
+    routed: set[int] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("sh", "git_argv")):
+            for arg in node.args:
+                routed.add(id(arg))
+
+    stray = sorted(n.lineno for n in git_lists if id(n) not in routed)
+    assert not stray, (
+        f"git invocation(s) bypassing the quoting injection at line(s) {stray}. "
+        "Every `['git', ...]` must be passed to `sh(...)` or wrapped in "
+        "`git_argv(...)`; a raw `subprocess.run(['git', ...])` reads a "
+        "non-ASCII path in its ESCAPED spelling, which matches nothing and "
+        "EXCUSES an absence. If the call needs `timeout=`, wrap the list: "
+        "`subprocess.run(git_argv(['git', ...]), timeout=...)`."
+    )
 
 POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
 HEAD = "a" * 40
@@ -261,7 +335,7 @@ def test_a_stale_base_whose_delta_no_required_push_filter_admits_is_go():
     ("apps/fiab-console/app/page.tsx", "vitest (node 20)"),
     ("scripts/ci/check-something.mjs", "guardrails"),
 ])
-def test_negative_control_a_stale_base_whose_delta_is_read_still_blocks(hit_file, context):
+def test_negative_control_a_stale_base_whose_delta_is_admitted_still_blocks(hit_file, context):
     """One arm per context, so a predicate that stops at the first scope cannot
     pass: with only the `csa_platform` case, `return` after scope one survives.
 
@@ -514,7 +588,17 @@ def test_a_derived_empty_paths_list_is_a_tuple_that_the_gate_refuses(monkeypatch
 def _git(repo, *args):
     import subprocess
 
-    done = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+    # `encoding="utf-8"` is LOAD-BEARING in the non-ASCII test, not tidiness.
+    # Without it Python decodes git's raw bytes with the locale codec -- cp1252
+    # on this box -- and a real UTF-8 path comes back as mojibake
+    # (`tools/drain/probÃ©.py`). The counterfactual there asserts the real name
+    # is ABSENT from the unflagged read, and mojibake satisfies that for the
+    # wrong reason: the arm would pass with the quoting fix removed, which is
+    # the "could not fail" shape `assertion-design.md` exists to prevent.
+    # Pinning the codec here leaves QUOTING as the only thing that assertion
+    # can be measuring.
+    done = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
     assert done.returncode == 0, (args, done.stderr)
     return done.stdout
 
@@ -598,38 +682,45 @@ def test_negative_control_a_non_ascii_path_in_scope_is_not_inert(monkeypatch, tm
     turns the refusal below into INERT.
     """
     name = "tools/drain/probé.py"
-    repo, base, head = _repo_with(
-        tmp_path, "tools/drain/plain.py",
-        lambda r: (r / name).write_text("y = 2\n", encoding="utf-8"))
+    ascii_sibling = "tools/drain/sibling.py"
+    def _add_both(r):
+        (r / name).write_text("y = 2\n", encoding="utf-8")
+        (r / ascii_sibling).write_text("z = 3\n", encoding="utf-8")
+
+    repo, base, head = _repo_with(tmp_path, "tools/drain/plain.py", _add_both)
     monkeypatch.setattr(merge_gate, "REPO_ROOT", str(repo))
 
     unflagged = _unflagged_delta(repo, base, head)
+    # THE PAIRED COUNTERFACTUAL. Both files were added by the SAME commit, so
+    # the unflagged read must show the ASCII one and hide the non-ASCII one.
+    # Asserting only the absence is satisfiable by a read that returned
+    # nothing at all; asserting only the presence says nothing about quoting.
+    assert ascii_sibling in unflagged, (
+        "the unflagged read did not return the ASCII sibling either, so it "
+        f"measured nothing rather than measuring quoting: {unflagged}"
+    )
     assert name not in unflagged, (
         "git is NOT quoting non-ASCII paths in this environment, so "
         "`core.quotePath=false` changes nothing here and every assertion "
         f"below would pass without it. Unflagged diff: {unflagged}"
     )
-    assert any("\\303" in p or "\\" in p for p in unflagged), (
-        f"expected an escaped spelling in the unflagged diff, got {unflagged}"
+    assert any("\\303" in p for p in unflagged), (
+        f"expected the octal-escaped spelling in the unflagged diff, got {unflagged}"
     )
 
     delta = merge_gate.base_delta_files(base, head)
     assert delta is not None
     assert name in delta, (
-        "the real path is missing from the delta, so the injection in `sh()` "
-        f"is not reaching this query: {delta}"
+        "the real path is missing from the delta, so the injection is not "
+        f"reaching this query: {delta}"
     )
+    # ...and the ASCII sibling is STILL there, which is what makes the line
+    # above a statement about quoting rather than about the reader working.
+    assert ascii_sibling in delta, delta
 
     inert, why = gates.base_delta_is_inert(delta, _TOOLS_SCOPE, ["Python Lint"])
     assert not inert, why
     assert name in why, why
-
-    # ASCII CONTROL: the sibling added in the same repo must behave identically
-    # either way, so a refusal above cannot be "it refuses everything".
-    assert "tools/drain/plain.py" not in delta, (
-        "the control file was added in the BASE commit and must not appear in "
-        f"the delta: {delta}"
-    )
 
 
 def test_negative_control_a_rename_out_of_scope_is_not_inert(monkeypatch, tmp_path):
