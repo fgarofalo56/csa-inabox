@@ -225,27 +225,26 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * SEMANTICS, matching the block above: reject on INTRODUCE-or-CHANGE, never on
  * presence. A body that round-trips the same value is unaffected, which is what
  * keeps the near-universal `{ ...item.state, oneField: x }` save pattern working.
- * OMISSION IS ALLOWED, and it is fail-safe at ONE of the four readers, NOT at
- * all of them. Where it is safe: dropping `state.storageAccount` falls back to
- * the primary configured account and withdraws the T3 grant; dropping
- * `state.provisioning` drops `resolveLakehouseAbfss` to its deterministic
- * branch 3 — a `lakehouses/<safeRelPath(displayName)>` root in a container
- * that must pass `isKnownContainer` (`lakehouse-abfss.ts:140-149`).
+ * OMISSION IS ALLOWED AND NO LONGER DELETES. The assert below permits a body
+ * that leaves a guarded key out — making omission an error would break every
+ * caller that builds a fresh state object — but `state` is replaced WHOLESALE,
+ * so an omitted key used to be DROPPED. That was the bypass, and it defeated
+ * the resolver-side precedence fix outright: ONE request could edit
+ * `state.database` and drop `state.provisioning`, leaving no receipt to
+ * prefer. {@link carryServerDerivedScope} now rebases those keys onto whatever
+ * the item already carries, at both writers. Assert first, carry second: an
+ * attempted CHANGE stays a 400 rather than becoming a silent substitution,
+ * which `adx-item-scope.ts` forbids in as many words.
  *
- * WHERE OMISSION WIDENS INSTEAD, measured, and NOT closed by this rule:
- * `synapse-item-scope.ts:223-227` and `adx-item-scope.ts` fall through from the
- * provisioning receipt to TOP-LEVEL `state.database` / `state.databaseName`,
- * and `notebook-path-scope.ts:121-124` falls through to TOP-LEVEL
- * `state.notebookPath`. Those keys are client-writable and are NOT in
- * {@link SERVER_DERIVED_SCOPE_KEYS}, so omitting the receipt moves the scope
- * to a coordinate the caller supplied. An earlier version of this note claimed
- * omission was narrowing at every reader; that was false, and the gap is
- * tracked rather than papered over.
- *
- * Guarding those names is NOT a matter of adding them to the list — it needs
- * the same per-item-type analysis done above for `container` and
- * `storageAccount`, since `database` is ordinary user-authored config on other
- * item types and a depth-blind or blanket top-level rule would refuse
+ * WHAT THAT DOES NOT CLOSE, measured and open: an item with NO successful
+ * receipt resolves to whatever it declares, at every reader, because there is
+ * no server record to carry forward. `synapse-item-scope.ts` and
+ * `notebook-path-scope.ts` then read TOP-LEVEL `state.database` /
+ * `state.databaseName` / `state.notebookPath`, which are client-writable and
+ * are NOT in {@link SERVER_DERIVED_SCOPE_KEYS}. Guarding those names is not a
+ * list entry — it needs the same per-item-type analysis done above for
+ * `container` and `storageAccount`, since `database` is ordinary user-authored
+ * config on other item types and a blanket top-level rule would refuse
  * legitimate edits.
  *
  * THIS IS DEFENCE IN DEPTH, NOT THE PRIMARY CONTROL — the same position the
@@ -258,9 +257,9 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  *
  * NOT COVERED, and the first two are gaps rather than choices:
  *   - {@link createOwnedItem} — unchanged, and ~20 collection routes pass a raw
- *     request body straight into it (`items/graph-model/route.ts:41`,
- *     `items/_lib/palantir-crud.ts:158` for the whole Palantir family,
- *     `items/branch-out/route.ts:195`). `promote.ts` seeds a promotion target
+ *     request body straight into it (`items/graph-model/route.ts:45`,
+ *     `items/_lib/palantir-crud.ts:162` for the whole Palantir family,
+ *     `admin/workspaces/[id]/git/branch-out/route.ts:195`). `promote.ts` seeds a promotion target
  *     from the SOURCE item's whole state through it, and that is the create half
  *     of a path that has to keep working — but a rule binding only the UPDATE
  *     routes is satisfiable by creating a fresh item instead. OPEN.
@@ -1092,11 +1091,25 @@ export async function updateOwnedItem(
   // that do not catch it surface it as a 500, which is still a refusal — the
   // write does not happen either way.
   assertNoServerOwnedStateChange(patch.state, current.state);
+  // #4619 — the assert above permits OMISSION, and `state` is replaced
+  // wholesale below, so a body that simply LEAVES OUT a server-derived key
+  // DELETES it. That is the whole bypass: the same request that edits
+  // `state.database` also drops `state.provisioning`, and a resolver that
+  // prefers the receipt then has no receipt left to prefer. Rebase the
+  // server-derived keys back onto whatever this item already carries.
+  //
+  // ORDER IS LOAD-BEARING. Asserting FIRST keeps an attempted CHANGE a 400
+  // rather than a silent substitution, which `adx-item-scope.ts` forbids in as
+  // many words; carrying SECOND makes an OMISSION preserve instead of delete.
+  // Rebasing alone would turn every refused change into a quiet 200.
+  const patchedState = patch.state && typeof patch.state === 'object'
+    ? carryServerDerivedScope(patch.state as Record<string, unknown>, current.state)
+    : patch.state;
   const next: WorkspaceItem = {
     ...current,
     displayName: patch.displayName?.trim() || current.displayName,
     description: 'description' in patch ? (patch.description?.trim() || undefined) : current.description,
-    state: patch.state && typeof patch.state === 'object' ? patch.state : current.state,
+    state: patchedState && typeof patchedState === 'object' ? patchedState : current.state,
     updatedAt: new Date().toISOString(),
   };
   const items = await itemsContainer();

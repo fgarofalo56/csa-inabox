@@ -307,6 +307,54 @@ describe('#4619 — PATCH /api/cosmos-items/[type]/[id] refuses it too', () => {
     expect(DOCS.get(dkey(LH_ID, WS)).state.provisioning).toEqual(SERVER_SCOPE);
     expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
   });
+
+  it('CARRIES the receipt forward when the body omits it, on THIS route', async () => {
+    // The route builds and writes its own `next`, so it does NOT go through
+    // `updateOwnedItem` — the carry has to be wired here too. Measured: with
+    // only the `updateOwnedItem` site carrying, removing this one SURVIVED the
+    // whole suite, which is why this arm exists rather than relying on the
+    // helper-level spec.
+    //
+    // FAILS IF `carryServerDerivedScope` comes off this route: the omitted
+    // receipt is then deleted by the wholesale replace, and the declared field
+    // becomes the scope.
+    const res = await COSMOS_ITEM_PATCH(
+      patchReq({ state: { notes: 'edited', database: 'VICTIM_DB' } }),
+      patchCtx,
+    );
+    expect(res.status).toBe(200);
+    expect(replaced).toHaveLength(1);
+    // The edit LANDED ...
+    expect(replaced[0].state.notes).toBe('edited');
+    expect(replaced[0].state.database).toBe('VICTIM_DB');
+    // ... and the omitted receipt survived the wholesale replace.
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
+    // The stored document agrees, and the reader still derives from the receipt.
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
+  });
+
+  it('REFUSES a server-OWNED key too, not only a server-derived one (#3611)', async () => {
+    // WITNESSES THE ASSERT SWAP. This route called only the narrower scope
+    // assert; its sibling at `items/[type]/[id]` has always called
+    // `assertNoServerOwnedStateChange`, which calls the scope assert AND adds
+    // the depth-blind server-owned key check. Measured by review: reverting
+    // this route to the narrow assert left 285 tests green across 21 suites,
+    // so nothing distinguished the two. `secretRef` does — it names a Key
+    // Vault secret a later DELETE acts on, and it is in
+    // SERVER_OWNED_STATE_KEYS but NOT in SERVER_DERIVED_SCOPE_KEYS.
+    //
+    // FAILS IF the route goes back to `assertNoServerDerivedScopeChange`: the
+    // narrow assert does not look at `secretRef`, so this write would land.
+    const res = await COSMOS_ITEM_PATCH(
+      patchReq({ state: { ...lakehouseDoc().state, secretRef: 'loom-msal-client-secret' } }),
+      patchCtx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('server_owned_state');
+    expect(replaced).toHaveLength(0);
+    // The stored document is untouched.
+    expect(DOCS.get(dkey(LH_ID, WS)).state.secretRef).toBeUndefined();
+  });
 });
 
 describe('#4619 — POST /api/cosmos-items/[type] refuses it at CREATE', () => {
@@ -380,21 +428,31 @@ describe('#4619 — ordinary item-state updates still succeed', () => {
     expect(replaced).toHaveLength(1);
   });
 
-  it('ALLOWS omitting the scope entirely', async () => {
-    // Omission is permitted by design. FAILS IF omission is made an error — that
-    // would break every caller that builds a fresh state object.
-    const res = await updateOwnedItem(LH_ID, 'lakehouse', TENANT, { state: { notes: 'fresh' } });
+  it('ALLOWS omitting the scope, and CARRIES IT FORWARD rather than deleting it', async () => {
+    // THE BYPASS THIS CLOSES. Omission is permitted — making it an error would
+    // break every caller that builds a fresh state object — but `state` is
+    // replaced WHOLESALE, so before this an omitted key was DELETED. That is
+    // what defeated the precedence fix: one request could edit the declared
+    // field AND drop the receipt, leaving the resolver no receipt to prefer.
+    //
+    // FAILS IF `carryServerDerivedScope` comes off the update path: the receipt
+    // then reads `undefined` below, and the declared field wins by default.
+    const res = await updateOwnedItem(LH_ID, 'lakehouse', TENANT, {
+      state: { notes: 'fresh', database: 'VICTIM_DB' },
+    });
     expect(res).not.toBeNull();
     expect(replaced).toHaveLength(1);
-    expect(replaced[0].state.provisioning).toBeUndefined();
-    // NOT A NARROWING ASSERTION, and an earlier version of this spec was titled
-    // as if it were. `toBeNull()` here is produced by the absent `LOOM_*_URL` in
-    // this environment, so NO value of the omitted state distinguishes narrow
-    // from wide and this line pins nothing about direction. Omission is in fact
-    // narrowing only at `resolveLakehouseAbfss`; at `synapse-item-scope` and
-    // `notebook-path-scope` it WIDENS to a client-writable top-level key. See
-    // the omission note in `item-crud.ts`.
-    expect(await resolveLakehouseAbfss(LH_ID, WS)).toBeNull(); // no LOOM_*_URL in this env
+    // The write LANDED (not a 400) ...
+    expect(replaced[0].state.notes).toBe('fresh');
+    // ... and the omitted receipt survived it.
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
+    // PAIRED NEGATIVE, so the above cannot be satisfied by refusing the write:
+    // the caller's own non-scope field is still what they sent.
+    expect(replaced[0].state.database).toBe('VICTIM_DB');
+    // The resolver half of this property — that the surviving receipt OUTRANKS
+    // the declared field — is witnessed in `adx-item-scope.test.ts`, which owns
+    // that precedence. Asserting it here would import an ADX module and its env
+    // for no extra kill power.
   });
 
   it('ALLOWS a NESTED storageAccount / container — the eventstream sink shape', async () => {

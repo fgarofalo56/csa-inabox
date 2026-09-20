@@ -12,15 +12,15 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import {
-  assertNoServerOwnedStateChange, ServerOwnedStateError,
+  assertNoServerOwnedStateChange, carryServerDerivedScope, ServerOwnedStateError,
 } from '@/app/api/items/_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,13 +29,7 @@ function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
 }
 
-export async function GET(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     // READ resolves via owner → workspace ACL → item-level grant (rel-T87), so
     // a user the item was shared with can open it (any role admits read).
@@ -45,12 +39,9 @@ export async function GET(
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const PATCH = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
@@ -81,11 +72,21 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
       if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
       throw e;
     }
+    // #4619 — the assert permits OMISSION, and `state` is replaced WHOLESALE
+    // below, so a body that merely LEAVES OUT a server-derived key DELETES it.
+    // That is the bypass: one request edits `state.database` AND drops
+    // `state.provisioning`, so a resolver that prefers the receipt has no
+    // receipt left to prefer. Rebase those keys onto what this item carries.
+    // Assert FIRST (an attempted change stays a 400, never a silent
+    // substitution), carry SECOND (an omission preserves instead of deleting).
+    const carriedState = nextState && typeof nextState === 'object'
+      ? carryServerDerivedScope(nextState as Record<string, unknown>, item.state)
+      : nextState;
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
       description: 'description' in body ? (body.description?.trim() || undefined) : item.description,
-      state: nextState,
+      state: carriedState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();
@@ -101,15 +102,9 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   } catch (e: any) {
     return err(e?.message || 'Failed to update item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function DELETE(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const DELETE = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     // DELETE is destructive: require WORKSPACE-level write (owner or a
     // workspace Admin/Member). An item-level `Edit` grant confers edit, not
@@ -146,4 +141,4 @@ export async function DELETE(
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');
   }
-}
+});

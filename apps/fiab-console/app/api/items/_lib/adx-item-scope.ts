@@ -163,11 +163,20 @@ const ADX_BACKED_ITEM_TYPES = [
  * it. `synapse-item-scope.ts` already resolved in this order; the two
  * disagreed, and this one was the permissive side.
  *
- * NOT A COMPLETE BOUND, stated rather than implied: an item with NO successful
- * receipt still resolves to whatever it declares, because there is no server
- * record to prefer. Bounding that case needs a sink-side check that a declared
- * name is one the workspace is actually entitled to — see the note on
- * {@link workspaceAdxScope}.
+ * NOT A COMPLETE BOUND, stated rather than implied. Precedence only decides
+ * between values that are BOTH present, so on its own it was defeatable: the
+ * generic writers replace `state` wholesale and the guard permits omission, so
+ * one request could edit the declared field AND drop the receipt, leaving
+ * nothing to prefer. That half is closed at the writers, which now carry the
+ * server-derived keys forward instead of deleting them
+ * (`item-crud.ts` / `cosmos-items/[type]/[id]`).
+ *
+ * What remains OPEN, measured: an item with NO successful receipt resolves to
+ * whatever it declares, because there is no server record to prefer; and a
+ * provisioned item whose receipt carries no `database` and no `resourceId`
+ * falls through to the declared field by the same route. Both need a sink-side
+ * check that a declared name is one the workspace is entitled to — see the note
+ * on {@link workspaceAdxScope}. Neither is closed here.
  *
  * The key differs per family because the editors persist it differently:
  *   `state.database`      — graph-model (the "Target ADX database" field)
