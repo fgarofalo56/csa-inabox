@@ -122,6 +122,199 @@ describe('evaluateFreshness (G2)', () => {
   it('reports stale when fingerprints differ', () => {
     expect(evaluateFreshness('fp-new', { statFingerprint: 'fp-old' }).state).toBe('stale');
   });
+
+  // --- the roll that this fixes (run 34648534467, 2026-09-11) ---------------
+
+  it('reports UNKNOWN, not never-indexed, when the manifest could not be READ', () => {
+    // `loadManifestHead` catches every exception and returns null, so an AI
+    // Search blip arrived here indistinguishable from a corpus that was never
+    // built -- and this function asserted the latter. That is a claim it had
+    // not established (deploy-integrity R7), and it is why the roll's poll log
+    // alternated `never-indexed` / `stale` while nothing about the corpus
+    // changed: reads were intermittently failing and each failure printed as a
+    // different fact.
+    const out = evaluateFreshness('fp', null, { manifestError: 'AI Search 503' });
+    expect(out.state).toBe('unknown');
+    expect(out.reason).toContain('could not be READ');
+    expect(out.reason).toContain('AI Search 503');
+    expect(out.reason).not.toContain('never been indexed');
+  });
+
+  it('an unreadable manifest outranks every other signal', () => {
+    // Even with a manifest object and matching fingerprints in hand, a read
+    // error means the answer is not known. Reporting `fresh` here would be a
+    // gate passing on data it could not confirm.
+    const out = evaluateFreshness('fp', { statFingerprint: 'fp' }, { manifestError: 'token expired' });
+    expect(out.state).toBe('unknown');
+  });
+
+  it('two replicas of the SAME revision agree, even though their mtimes do not', () => {
+    // THE DEFECT THAT BROKE THE ROLL. `statFingerprint` hashes
+    // `path:size:mtime` from the ANSWERING replica's local filesystem, while
+    // the manifest is shared -- so the comparison was replica-local against
+    // durable. `reindex-loom-docs.sh` polls `freshness.state` believing it is
+    // "the DURABLE, cross-replica signal", and it was not one.
+    //
+    // Same build SHA => same revision => same corpus, whatever the mtimes say.
+    const manifest = { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' };
+    const replicaB = evaluateFreshness('replica-B-different-mtimes', manifest, {
+      currentCommit: 'dcabe1dd02af',
+    });
+    expect(replicaB.state).toBe('fresh');
+  });
+
+  it('a DIFFERENT revision is stale even when the stat fingerprint happens to match', () => {
+    const out = evaluateFreshness('same-fp', { statFingerprint: 'same-fp', sourceCommit: 'aaaaaaaaaaaa' }, {
+      currentCommit: 'bbbbbbbbbbbb',
+    });
+    expect(out.state).toBe('stale');
+    expect(out.reason).toContain('aaaaaaaaaaaa');
+    expect(out.reason).toContain('bbbbbbbbbbbb');
+  });
+
+  it('falls back to the stat comparison when either commit is missing', () => {
+    // Dev, and manifests written before commits were recorded. The fallback is
+    // what keeps this change from stranding an existing deployment.
+    expect(evaluateFreshness('fp', { statFingerprint: 'fp', sourceCommit: null }, {
+      currentCommit: 'dcabe1dd02af',
+    }).state).toBe('fresh');
+    expect(evaluateFreshness('fp-new', { statFingerprint: 'fp-old', sourceCommit: 'dcabe1dd02af' }, {
+      currentCommit: null,
+    }).state).toBe('stale');
+    // An EMPTY string is missing, not a commit that differs from everything.
+    expect(evaluateFreshness('fp', { statFingerprint: 'fp', sourceCommit: '' }, {
+      currentCommit: '  ',
+    }).state).toBe('fresh');
+  });
+
+  it('the literal build stamp "unknown" is NOT a commit, on either side', () => {
+    // `Dockerfile:41` and `:96` both declare `ARG LOOM_BUILD_SHA=unknown`, so an
+    // image built without `--build-arg` ships that literal. Two such replicas
+    // "agree", the commit path engages, and freshness reports FRESH over docs
+    // that have changed — a false green on the one gate that catches a stale
+    // index. Measured by a reviewer against the previous revision of this code.
+    //
+    // Both sides are checked, because `manifest.sourceCommit` is PERSISTED: a
+    // manifest written by such an image carries `unknown` long after the image
+    // is gone.
+    const staleByStat = { statFingerprint: 'built-then', sourceCommit: 'unknown' };
+    expect(evaluateFreshness('changed-now', staleByStat, { currentCommit: 'unknown' }).state)
+      .toBe('stale');
+    expect(evaluateFreshness('changed-now', staleByStat, { currentCommit: 'dcabe1dd02af' }).state)
+      .toBe('stale');
+    expect(evaluateFreshness(
+      'changed-now',
+      { statFingerprint: 'built-then', sourceCommit: 'dcabe1dd02af' },
+      { currentCommit: 'unknown' },
+    ).state).toBe('stale');
+    // Case-insensitively, and for placeholders no spelling list enumerated.
+    // The guard keys on the SHAPE of a git object id, so `n/a`, `dirty`,
+    // `<none>`, a branch name and a too-short hex string are all rejected
+    // without anyone having had to think of them first.
+    for (const placeholder of [
+      'UNKNOWN', 'none', 'null', 'undefined', 'dev', 'local', 'HEAD',
+      'n/a', 'dirty', '<none>', 'main', 'refs/heads/main', 'latest', 'abcdef',
+    ]) {
+      expect(evaluateFreshness(
+        'changed-now',
+        { statFingerprint: 'built-then', sourceCommit: placeholder },
+        { currentCommit: placeholder },
+      ).state).toBe('stale');
+    }
+    // ...and a real pair still takes the commit path.
+    expect(evaluateFreshness(
+      'mtimes-differ-across-replicas',
+      { statFingerprint: 'built-on-replica-A', sourceCommit: 'dcabe1dd02af' },
+      { currentCommit: 'dcabe1dd02af' },
+    ).state).toBe('fresh');
+    // Both stamped widths the repo actually produces are commits. Round 4: this
+    // comment used to say "Commercial stamps 40 hex, Gov stamps --short=8",
+    // which names the wrong axis. The split is by PRODUCER, not by cloud —
+    // `console-bluegreen-roll.yml:15` serves "Commercial + Gov" off a `cloud:`
+    // input and stamps 8 hex for both, so Commercial serves either width.
+    expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'a'.repeat(40) }, {
+      currentCommit: 'b'.repeat(40),
+    }).reason).toContain('aaaaaaaaaaaa');
+    expect(evaluateFreshness('any', { statFingerprint: 'other', sourceCommit: 'deadbeef' }, {
+      currentCommit: 'cafed00d',
+    }).reason).toContain('deadbeef');
+  });
+
+  it('an ABBREVIATED stamp of the same commit is not a revision gap (8-hex vs 40-hex)', () => {
+    // Round 4, reviewer 2 NIT 8 + my own SHOULD-FIX 4, which converged on one
+    // defect. `currentCommit !== indexedCommit` is only correct if every
+    // producer stamps the same width, and three stamp 40 hex while three stamp
+    // `--short=8`. Crucially the split is NOT by cloud: the blue/green roll
+    // serves Commercial AND Gov off one `cloud:` input and stamps 8 hex for
+    // both, while the Commercial image build stamps 40 hex. A blue/green roll
+    // therefore puts mixed-width replicas side by side BY CONSTRUCTION.
+    //
+    // MUTATION-PROOF: the stat fingerprints are made to DIFFER on purpose. If
+    // they matched, the stat path would return `fresh` on its own and this test
+    // would pass with the commit comparison still broken — the exact blindness
+    // reviewer 2 caught in the test above. Reaching `fresh` here is only
+    // possible through the commit path, so reverting `sameCommit` to `!==`
+    // turns this red.
+    const long = 'deadbeef' + 'c'.repeat(32);
+    const abbreviated = evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'deadbeef',
+    }, { currentCommit: long });
+    expect(abbreviated.state).toBe('fresh');
+    // ...and symmetrically, whichever side happens to be the short one.
+    expect(evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: long,
+    }, { currentCommit: 'deadbeef' }).state).toBe('fresh');
+    // `GIT_OBJECT_ID` carries the `i` flag, so a stamp is accepted in either
+    // case and the two producers need not agree on it.
+    expect(evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'DEADBEEF',
+    }, { currentCommit: long }).state).toBe('fresh');
+    // A genuinely different revision is STILL stale — the prefix rule must not
+    // have bought its tolerance by going blind. `deadbeef` vs `deadbee0`
+    // differ in the last nibble of the shortest form, the tightest miss the
+    // 7-hex floor admits.
+    const different = evaluateFreshness('live-stat', {
+      statFingerprint: 'manifest-stat-DIFFERS', sourceCommit: 'deadbee0' + 'c'.repeat(32),
+    }, { currentCommit: long });
+    expect(different.state).toBe('stale');
+    expect(different.reason).toContain('deadbee0');
+  });
+
+  it('the MIXED case — a real sha live, a placeholder in the manifest — falls to stat, and that is a WEAKENING', () => {
+    // Reviewer 2's FINDING 4. Every case in the test above has a DIFFERING stat
+    // fingerprint, so all of them reach `stale` down the stat path whether or
+    // not the indexed side is filtered — the assertions could not tell the two
+    // behaviours apart, and the code comment justifying the indexed-side filter
+    // claimed a protection it does not provide.
+    //
+    // This is the case that discriminates: stat MATCHES, so the stat path says
+    // `fresh`, and only the commit path could say otherwise.
+    const statMatches = { statFingerprint: 'same-stat', sourceCommit: 'unknown' };
+    const mixed = evaluateFreshness('same-stat', statMatches, { currentCommit: 'abc12345' });
+    expect(mixed.state).toBe('fresh');
+    expect(mixed.reason).toBe('The indexed corpus matches the staged docs.');
+    // Measured, so the direction is on record: WITHOUT the indexed-side filter
+    // this same input compares `unknown` against `abc12345`, reports `stale`,
+    // and names `unknown` as a revision it is not. Filtering moves the verdict
+    // toward `fresh`. That is the trade this code takes deliberately — a
+    // non-commit is not comparable to a commit, and the stat fingerprint is the
+    // designed fallback — but it is a weakening, not the false-green protection
+    // the old comment claimed.
+    //
+    // The safe direction is preserved where it matters: change the docs and the
+    // stat no longer matches, so the same mixed pair reds.
+    expect(evaluateFreshness('docs-changed', statMatches, { currentCommit: 'abc12345' }).state)
+      .toBe('stale');
+    // And the live-side filter alone still stops the original false green:
+    // `unknown` on BOTH sides never engages the commit comparison.
+    const bothPlaceholder = evaluateFreshness(
+      'docs-changed',
+      { statFingerprint: 'built-then', sourceCommit: 'unknown' },
+      { currentCommit: 'unknown' },
+    );
+    expect(bothPlaceholder.state).toBe('stale');
+    expect(bothPlaceholder.reason).not.toContain('unknown');
+  });
 });
 
 describe('reindex incremental round-trip (G1 + G2)', () => {

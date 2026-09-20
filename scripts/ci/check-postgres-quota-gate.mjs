@@ -860,6 +860,13 @@ export const CONTROL_STATS = { ran: 0 };
 // ─────────────────────────────────────────────────────────────────────────────
 
 function trackedBicep() {
+  // SCOPE (#4466): `'*.bicep'` matches ZERO `.bicepparam` files, and that is
+  // deliberate here — this scan walks `module` / `param` DECLARATIONS to prove
+  // the quota gate is threaded through the template graph, and a param file
+  // declares nothing, it assigns. The two param files this rule cares about are
+  // read by name (see the header, and the remediation below). Compilation of
+  // every tracked `.bicepparam` is covered by validate.yml's `bicep-params`
+  // job, guarded by scripts/ci/check-bicepparam-compiled.mjs.
   const out = execFileSync('git', ['ls-files', '--', '*.bicep'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',

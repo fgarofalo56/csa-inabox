@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { jobId, startedAt, alreadyRunning } = startReindexJob(() => reindex());
+    const { jobId, startedAt, alreadyRunning } = startReindexJob((id) => reindex({ jobId: id }));
     return NextResponse.json(
       {
         ok: true,
