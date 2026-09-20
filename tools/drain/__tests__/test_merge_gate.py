@@ -36,10 +36,10 @@ import gates
 
 #: git global options that consume a following value, and the flag-only ones.
 _GIT_VALUE_OPTS = ("-c", "-C", "--git-dir", "--work-tree", "--namespace",
-                   "--exec-path", "--config-env")
-_GIT_FLAG_OPTS = ("--no-pager", "--bare", "--literal-pathspecs",
+                   "--exec-path", "--config-env", "--attr-source")
+_GIT_FLAG_OPTS = ("--no-pager", "-P", "--bare", "--literal-pathspecs",
                   "--no-replace-objects", "--paginate", "--no-optional-locks",
-                  "--icase-pathspecs")
+                  "--icase-pathspecs", "--no-advice", "--no-lazy-fetch")
 
 
 def _git_argv(args: list[str]) -> list[str]:
@@ -89,6 +89,12 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
     # Degenerate input must not raise or loop.
     assert _git_argv(["git"]) == []
     assert _git_argv(["git", "-c"]) == []
+    # Forms review measured as mis-parsed by the first table.
+    assert _git_argv(["git", "-P", "log"]) == ["log"]
+    assert _git_argv(["git", "--no-advice", "status"]) == ["status"]
+    assert _git_argv(["git", "--no-lazy-fetch", "show", "x"]) == ["show", "x"]
+    assert _git_argv(["git", "--attr-source=HEAD", "diff"]) == ["diff"]
+    assert _git_argv(["git", "--attr-source", "HEAD", "diff"]) == ["diff"]
 
 
 #: Exact number of `["git", ...]` argv literals across the modules below.
@@ -130,9 +136,15 @@ def _git_call_census(module_path):
 def test_every_git_invocation_routes_through_the_quoting_injection():
     """No `["git", ...]` literal reaches a runner without `sh()`/`git_argv()`.
 
-    Also fails on the two ways the literal walk can be blinded: binding
-    `"git"` to a name, and using a tuple instead of a list. Counts are PINNED
-    per module, so hiding a literal is itself the failure.
+    Blinding the walk is itself caught three ways: counts are PINNED per
+    module so hiding a literal fails; binding `"git"` to a name fails; a
+    tuple instead of a list fails.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5):
+    argv assembled at runtime -- `.append`, a name bound elsewhere, a value
+    returned by a helper. Review measured an `.append`-built unrouted call
+    surviving. The pinned counts blunt it (removing a literal to build one
+    dynamically fails the count) but do not close it.
 
     WHAT WOULD MAKE THIS FAIL: a raw `subprocess.run(["git", ...])`; a
     `_GIT = "git"` binding; a `("git", ...)` tuple; or any change to the
@@ -174,29 +186,44 @@ def test_every_git_invocation_routes_through_the_quoting_injection():
 def test_every_git_runner_decodes_as_utf8():
     """The flag is half the fix; a locale decode re-breaks it.
 
-    Every `subprocess.run` in `merge_gate.py` must pass `encoding=` or the
-    `TEXT_UTF8` mapping. Measured: with only `text=True`, `git ls-tree` returns
-    `probÃ©_dir` on a cp1252 box where the real name is `probé_dir`.
+    Every subprocess launcher in `merge_gate.py` must pass `encoding=` or
+    splat `TEXT_UTF8` BY NAME. Measured: with only `text=True`, `git ls-tree`
+    returns `probÃ©_dir` on a cp1252 box where the real name is `probé_dir`.
 
-    WHAT WOULD MAKE THIS FAIL: a `subprocess.run(..., text=True)` with no
+    Covers `run`, `Popen`, `check_output`, `call` and `check_call`: review
+    measured an undecoded `check_output` and `Popen` surviving a `run`-only
+    check, and `**{"text": True}` surviving an any-splat check.
+
+    NOT COVERED, disclosed rather than counted (`assertion-design.md` #5): a
+    launcher whose kwargs are assembled elsewhere and splatted from a
+    variable this walk cannot resolve. `TEXT_UTF8` is the only splat accepted,
+    so that shape fails CLOSED here.
+
+    WHAT WOULD MAKE THIS FAIL: any of those launchers with `text=True` and no
     codec, which is exactly what two call sites shipped with for a round.
     """
     tree = ast.parse(pathlib.Path(merge_gate.__file__).read_text(encoding="utf-8"))
+    launchers = {"run", "Popen", "check_output", "call", "check_call"}
     bare = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "run"):
+                and node.func.attr in launchers):
             continue
         kwargs = {k.arg for k in node.keywords if k.arg}
-        starred = any(k.arg is None for k in node.keywords)  # **TEXT_UTF8
-        if "encoding" not in kwargs and not starred:
+        # Only a TEXT_UTF8 splat counts. Any-splat let `**{"text": True}` pass.
+        splats_text_utf8 = any(
+            k.arg is None and isinstance(k.value, ast.Name) and k.value.id == "TEXT_UTF8"
+            for k in node.keywords
+        )
+        if "encoding" not in kwargs and not splats_text_utf8:
             bare.append(node.lineno)
     assert not bare, (
-        f"subprocess.run without an explicit codec at line(s) {bare}. Pass "
+        f"subprocess launcher without an explicit codec at line(s) {bare}. Pass "
         "`**TEXT_UTF8` (or `encoding=\"utf-8\"`): git emits raw UTF-8 bytes and "
         "a locale decode turns a non-ASCII path into mojibake, which matches "
         "nothing and excuses an absence."
     )
+
 
 POLICY = gates.load_policy(os.path.join(os.path.dirname(__file__), "..", "policy.json"))
 HEAD = "a" * 40
