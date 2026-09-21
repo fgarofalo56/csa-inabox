@@ -8,9 +8,17 @@
 # bump walks in. So the bar stays, and the number of OBJECTS carrying it drops.
 #
 # Measured 2026-09-20: 22 of 26 open PRs were Dependabot, each needing 2
-# reviews = 44 review runs, against ~5 runs once grouped. The backlog was not
-# CI-blocked — #4477 carried 38 check-runs, all COMPLETED — it was blocked on
-# review capacity that nobody was ever going to spend one bump at a time.
+# reviews = 44 review runs. Grouped steady state is ~8 version-lane PRs = ~16
+# runs — NOT "~5", which an earlier draft got by comparing RUNS against ENTRIES
+# and by ignoring that the three named groups below each open their own PR. The
+# saving is real and smaller than first claimed. The backlog was not CI-blocked:
+# #4477 carried 38 check-runs, all COMPLETED.
+#
+# GROUPING IS PER MANIFEST DIRECTORY, so it merges less than it looks like it
+# should. The `pip /` entry spans eleven directories (ten requirements/locks/*
+# plus the root), and #4617/#4618 are the SAME anyio bump in two of them — they
+# stay two PRs after this change. Collapsing those needs `directories:` (plural)
+# plus `group-by: dependency-name`, which is not attempted here.
 #
 # TWO catch-alls per entry, not one. A group defaults to
 # `applies-to: version-updates`, so a security-updates group is NOT redundant —
@@ -21,7 +29,10 @@
 # matches more than one rule, it's included in the first group that it matches."
 # The named groups above each catch-all exist for correctness reasons stated at
 # their sites; a catch-all placed BEFORE one silently swallows it and destroys
-# that reason. Keep every catch-all last in its entry.
+# that reason. Keep every catch-all last in its entry. Enforced by
+# scripts/ci/check_dependabot_group_order.py (wired in loom-guardrails.yml),
+# which also treats a group with NO `patterns` key as a catch-all — GitHub does,
+# and a checker that only knows `["*"]` reports green while a group sits dead.
 version: 2
 updates:
   - package-ecosystem: "pip"
@@ -94,7 +105,10 @@ updates:
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
     # The largest single cluster in the 2026-09-20 backlog: 10 of the 22 open
-    # Dependabot PRs were this one directory (#4477, #4598-#4606, #4636).
+    # Dependabot PRs were this one directory. An earlier draft wrote that range
+    # as "#4598-#4606", which silently included #4601 — a loom-duckdb uvicorn
+    # bump belonging to the pip entry above. A contiguous range is not a
+    # membership test; the members were enumerated individually after that.
     groups:
       portal-version:
         applies-to: version-updates

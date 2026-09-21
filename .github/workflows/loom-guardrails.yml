@@ -926,6 +926,18 @@ jobs:
       - name: 'cargo-dependabot-coverage (every Rust crate has a version-update lane)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-cargo-dependabot-coverage.mjs
+      # A catch-all dependabot group placed ABOVE a named one silently swallows
+      # it: GitHub raises no error, the file stays valid, and the named group
+      # stops existing in practice. `codeql-action` (three actions that must run
+      # the same release), `arrow-stack` and `azure-sdk` each carry a stated
+      # correctness reason, and nothing else in this repo reads dependabot.yml —
+      # so without this check the loss is invisible. Runs its own self-test
+      # first, because a guard that has never gone red has not been shown to work.
+      - name: 'dependabot-group-order (no catch-all shadows a named group)'
+        if: ${{ !cancelled() }}
+        run: |
+          python scripts/ci/check_dependabot_group_order.py --self-test
+          python scripts/ci/check_dependabot_group_order.py
       # A module that reaches INTO the lake account (role assignment, or an
       # `existing` reference inside loomDlzRg) must gate on loomStorageGrantable,
       # not on !empty(loomStorageAccount). #3196 split binding from granting but
