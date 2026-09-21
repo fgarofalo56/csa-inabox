@@ -100,7 +100,13 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
 #: Exact number of `["git", ...]` argv literals across the modules below.
 #: PINNED, not a floor: a floor with slack lets someone hide literals and
 #: sneak an unrouted call through green, which is measured behaviour.
-_GIT_ARGV_LITERALS = {"merge_gate.py": 11, "tick.py": 0, "gates.py": 0}
+#: merge_gate.py went 11 -> 14 when `base_update_facts` landed. RE-MEASURED,
+#: not adjusted to match: the three additions are `git rev-list --parents -n 1`,
+#: `git rev-parse <sha>^{tree}` and `git merge-tree --write-tree`, which resolve
+#: the facts the pure `gates.verdict_transfers_across_base_update` cannot look
+#: up itself. The other eleven are byte-identical. `gates.py` stays pinned at
+#: ZERO, which is the machine-checked half of "gates.py runs no subprocess".
+_GIT_ARGV_LITERALS = {"merge_gate.py": 14, "tick.py": 0, "gates.py": 0}
 
 
 def _git_call_census(module_path):
@@ -262,6 +268,13 @@ def _data(**over) -> dict:
         },
         "head": HEAD,
         "head_date": HEAD_DATE,
+        # The default fixture head is an ORDINARY commit, not a base update, so
+        # the re-pin refuses and verdicts pin to the head date exactly as they
+        # did before it existed. Tests that want the transfer pass their own
+        # `repin=` -- the two cases are driven separately on purpose, so a
+        # change to the default can never silently turn the re-pin on for every
+        # test in this file.
+        "repin": {"ok": False, "why": "head is not a base update", "date": ""},
         "comments": [APPROVAL],
         "base_sha": "b" * 40,
         "origin_main_sha": "b" * 40,
@@ -1983,3 +1996,76 @@ def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch)
     monkeypatch.setattr(merge_gate.subprocess, "run", fake)
     assert merge_gate._top_level_dirs_agree("MERGED") is False
     assert merge_gate.resolve_infra_ere("MERGED") is None
+
+
+# --- the re-pin, end to end through run_gates ---------------------------
+#
+# A BASE UPDATE MOVES THE HEAD FORWARD IN TIME. So the fixture below dates the
+# merge AFTER the approval and the PR-side parent BEFORE it: against the head
+# date the verdict is stale, against the parent's it is live. That gap is the
+# whole mechanism, and a fixture whose dates did not straddle the approval
+# would pass whether or not run_gates consulted the re-pin at all.
+
+_STALE_HEAD_DATE = "2026-09-11T12:00:00Z"   # the base-update merge: AFTER the approval
+_PARENT_DATE = "2026-09-11T09:00:00Z"       # the reviewed head:     BEFORE it
+
+
+def test_a_base_update_re_pins_the_verdict_to_its_parent():
+    """The verdict predates the merge but postdates what it reviewed, so it
+    counts -- and the gate says so out loud.
+
+    Breaks if: run_gates goes back to passing `data["head_date"]` into
+    parse_verdicts unconditionally. That is the exact regression this test
+    exists for, and no test in test_gates.py can see it.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": True, "why": "head is exactly the auto-merge of its parents",
+               "date": _PARENT_DATE},
+    )
+    gate = _gate(result, "2+3")
+    assert gate["ok"], gate["detail"]
+    assert "RE-PINNED" in gate["detail"], (
+        "the re-pin applied but the gate did not disclose it; a verdict counted "
+        "against a date that is not the head's must be stated")
+
+
+def test_negative_control_without_the_re_pin_the_same_verdict_is_stale():
+    """THE CONTROL, and it differs from the test above in ONE field.
+
+    Same comments, same head date, same everything -- only `repin.ok` flips.
+    If this passed, the test above would prove nothing, because the verdict
+    would have been counted for some reason other than the re-pin.
+
+    Breaks if: the re-pin is applied unconditionally, or `repin.ok` stops being
+    consulted -- either would make a stale verdict live on an ordinary push.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": False, "why": "head is not a base update", "date": ""},
+    )
+    gate = _gate(result, "2+3")
+    assert not gate["ok"], (
+        "a verdict predating the head counted WITHOUT a re-pin -- the timestamp "
+        "pin is not being applied at all")
+    assert "RE-PINNED" not in gate["detail"]
+
+
+def test_a_refused_re_pin_never_borrows_the_parent_date():
+    """`date` is populated but `ok` is False -- the shape a future refactor
+    produces when it resolves the date first and decides second.
+
+    The date must be IGNORED. Reading it whenever it is non-empty would make
+    every refusal silently transfer, which is the failure mode that looks
+    exactly like success.
+
+    Breaks if: the selection becomes `repin["date"] or data["head_date"]`.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": False, "why": "head tree != auto-merge", "date": _PARENT_DATE},
+    )
+    gate = _gate(result, "2+3")
+    assert not gate["ok"], (
+        "a REFUSED re-pin still used its parent date -- `ok` is not gating the "
+        "selection")
