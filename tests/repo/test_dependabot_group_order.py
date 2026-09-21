@@ -25,7 +25,12 @@ GUARD = REPO_ROOT / "scripts/ci/check_dependabot_group_order.py"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts/ci"))
 
-from check_dependabot_group_order import (  # noqa: E402
+# `scripts/ci` is not a package, so the guard is imported by path at runtime
+# and mypy cannot follow it. Ignored AT THE SITE rather than by adding an entry
+# to the `ignore_missing_imports` override in pyproject.toml: that list is for
+# third-party packages without stubs, and widening it would silence real
+# import errors across every first-party module.
+from check_dependabot_group_order import (  # type: ignore[import-not-found] # noqa: E402
     audit,
     is_catch_all,
     lane_of,
@@ -239,7 +244,13 @@ def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
         "catch": {"patterns": ["*"], "exclude-patterns": ["zzz"]},
         "dupe": {},
     }))
-    assert not starred and not patternless, (starred, patternless)
+    assert not starred, (
+        "the starred spelling flagged; the duplicate still serves `zzz`")
+    assert not patternless, (
+        "the patternless spelling flagged; the duplicate still serves `zzz`")
+    assert starred == patternless, (
+        f"the two spellings disagree: starred={starred} "
+        f"patternless={patternless} - same config, so same verdict")
 
 
 def test_an_undecidable_exclusion_falls_silent_not_flags():
