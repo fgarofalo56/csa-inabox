@@ -329,14 +329,19 @@ describe('cancel — the intent write is bounded (#3400 re-review)', () => {
  * sticky sessions (`ingress.stickySessions.affinity: 'sticky'`) or run a single
  * replica". Measured against the templates that actually deploy this console:
  *
- *   - admin-plane/main.bicep declares loom-console `multiRevision: true` with
- *     `minReplicas: 2`. Neither escape hatch describes the estate.
- *   - ACA REQUIRES `affinity:'none'` in multiple-revision mode, and
- *     app-deployments.bicep now ASSERTS that value on every deploy, with a
- *     comment naming this exact caller: "The one caller that wants affinity is
- *     SQL query-cancel — see #3400; its fix is a cross-replica cancel signal,
- *     not affinity." A sticky value set out-of-band failed 4 of 4
- *     console-bluegreen-roll runs.
+ *   - admin-plane/main.bicep declares loom-console `minReplicas: 2`. THE
+ *     REPLICA COUNT is what makes per-replica state wrong, and neither escape
+ *     hatch describes the estate. (It also declared `multiRevision: true`
+ *     until 2026-09-20; the console renders Single-revision mode now, and the
+ *     replica count did not change.)
+ *   - app-deployments.bicep ASSERTS `affinity:'none'` on every deploy, for
+ *     every ingress app. Until 2026-09-20 that assertion was scoped to
+ *     multiRevision apps and leaned on ACA REQUIRING `affinity:'none'` in
+ *     multiple-revision mode; Single mode lifts that requirement, so the
+ *     assertion was widened to stay load-bearing. Its comment names this exact
+ *     caller: "The one caller that wants affinity is SQL query-cancel — see
+ *     #3400; its fix is a cross-replica cancel signal, not affinity." A sticky
+ *     value set out-of-band failed 4 of 4 console-bluegreen-roll runs.
  *
  * So the product's own source instructed the operator to perform plumbing the
  * platform forbids and self-heals away — an R7 assertion the code never
@@ -390,7 +395,22 @@ describe('cancel route honesty (#3400)', () => {
     for (const [name, src] of SOURCES) {
       expect(src, `${name} does not say affinity is not the answer`).toMatch(/NOT SESSION AFFINITY|NOT "FIX" THIS WITH SESSION AFFINITY/i);
       expect(src, `${name} does not name the cross-replica signal`).toMatch(/cross-replica cancel signal/i);
-      expect(src, `${name} does not record the multiRevision constraint`).toMatch(/multiRevision/);
+      // RE-POINTED 2026-09-20, from /multiRevision/ to /minReplicas/.
+      //
+      // The old arm still had kill power — deleting the word reds it — so it
+      // was not dead. It had become something worse: after the console moved to
+      // Single revision mode, every surviving match in all three files is
+      // past-tense narration of that flag's REMOVAL, so the only input that
+      // could red it was rewording history, while its failure message claimed
+      // to pin a live deployment constraint. An arm whose message and whose
+      // witness describe different things is a trap for whoever next tidies the
+      // sentence it happens to match.
+      //
+      // The constraint that is actually load-bearing — and that the rewritten
+      // comments themselves now say is load-bearing — is the REPLICA COUNT.
+      // `minReplicas: 2` is why in-process `liveRequests` cannot answer a
+      // cancel, and it did not change when the revision mode did.
+      expect(src, `${name} does not record the replica-count constraint that makes per-replica state wrong`).toMatch(/minReplicas/);
     }
   });
 

@@ -2867,14 +2867,24 @@ jobs:
           # Same RBAC as the list above, so it adds no permission surface.
           #
           # THE PROJECTION CARRIES trafficWeight (#3798). Without it the gate
-          # reads "newest revision" as "what is serving", which is true only
-          # because app-deployments.bicep pins `latestRevision: true` on an app
-          # whose activeRevisionsMode is Multiple *so that traffic can be split
-          # imperatively* (console-bluegreen-roll.yml). The day that lane works,
-          # a roll can create a NEWER revision at WEIGHT 0 while the deploy's
-          # revision keeps 100% of the traffic — and recency would report
-          # `ahead`, i.e. "this apply did not leave the estate behind", about an
-          # estate serving the stale image.
+          # reads "newest revision" as "what is serving", which used to be true
+          # only because app-deployments.bicep pins `latestRevision: true` on an
+          # app whose activeRevisionsMode was Multiple *so that traffic could be
+          # split imperatively* (console-bluegreen-roll.yml). The day that lane
+          # works, a roll can create a NEWER revision at WEIGHT 0 while the
+          # deploy's revision keeps 100% of the traffic — and recency would
+          # report `ahead`, i.e. "this apply did not leave the estate behind",
+          # about an estate serving the stale image.
+          #
+          # AS OF 2026-09-20 NO APP IS IN Multiple MODE. loom-console was the
+          # only one, and it moved to Single (main.bicep dropped
+          # `multiRevision: true`) after Multiple-mode accumulation froze the
+          # estate — 251 active revisions, 484 replicas, all Unhealthy, 11
+          # commits of drift. console-bluegreen-roll.yml is disabled_manually.
+          # So newest == serving holds again today. The trafficWeight
+          # projection is KEPT anyway: it is what makes that an assertion
+          # rather than an assumption, and re-enabling the lane would silently
+          # restore the hazard.
           while IFS= read -r APP; do
             if [ -z "$APP" ]; then
               continue

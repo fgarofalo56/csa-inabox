@@ -124,10 +124,21 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // then persist, unopposed, on the one app whose comments spend twenty
       // lines explaining why sticky is the wrong fix.
       //
-      // So it is now unconditional. Behaviourally this is still a no-op for
-      // every app that was Single before — absent and 'none' are the same thing
-      // to ACA — but the guarantee no longer depends on which revision mode an
-      // app happens to be in.
+      // So it is now unconditional. This is believed to be behaviourally inert
+      // for the apps that were already Single, but state that precisely,
+      // because it is REASONED AND MEASURED, NOT DOCUMENTED: ACA's affinity
+      // enum is exactly {none, sticky}; 28 of 29 live ingress apps report
+      // `stickySessions: null` and issue no affinity cookie; and a binary enum
+      // whose absent state is not one value behaves as the other. Two
+      // independent reviews tried and neither could cite a Microsoft doc
+      // stating the default. If you find one, cite it here.
+      //
+      // What DOES change is representational and intended: the rendered
+      // template now carries `stickySessions.affinity:'none'` for all 28
+      // ingress apps instead of the one. ARM returns the key present-and-null
+      // today rather than normalising it, so this is a real diff in the
+      // compiled artifact — that IS the enforcement, and it is why the
+      // artifact was regenerated in the same change.
       //
       // Do NOT "fix" a scaled-out feature by flipping this to 'sticky': that is
       // what breaks blue-green, and lib/auth/msal.ts documents the console as
