@@ -25,6 +25,66 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.107.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.106.0...csa-inabox-v0.107.0) (2026-09-21)
+
+
+### Features
+
+* **drain:** a tracked, tested harness to drain all 297 open issues — and the gate that decides every merge is no longer gitignored ([#4483](https://github.com/fgarofalo56/csa-inabox/issues/4483)) ([a02cd41](https://github.com/fgarofalo56/csa-inabox/commit/a02cd41e6d42cf99a5a122ceeab6b3ecdda519ae))
+* **drain:** record the four operator decisions in the authority — resume-estate was failing closed, and KICKOFF pointed at a merged PR ([#4488](https://github.com/fgarofalo56/csa-inabox/issues/4488)) ([b1d4a68](https://github.com/fgarofalo56/csa-inabox/commit/b1d4a68ccfde88bfbe1546751dcbdfbe8bf9eeb6))
+* **drain:** the receipt write path, verified rather than asserted ([#4532](https://github.com/fgarofalo56/csa-inabox/issues/4532)) ([0348d37](https://github.com/fgarofalo56/csa-inabox/commit/0348d3715e68c08118a72840495422f6c7ef7426))
+* **rules:** every assertion must name the value that would break it ([#4519](https://github.com/fgarofalo56/csa-inabox/issues/4519)) ([c9dcc1d](https://github.com/fgarofalo56/csa-inabox/commit/c9dcc1d5475492d081b9d4aa07efe0ecc17294c4))
+
+
+### Bug Fixes
+
+* **ci:** allowlist [#4498](https://github.com/fgarofalo56/csa-inabox/issues/4498)'s TWO test fixtures on main — they are failing Secret Scan on every other PR ([#4516](https://github.com/fgarofalo56/csa-inabox/issues/4516)) ([28df85b](https://github.com/fgarofalo56/csa-inabox/commit/28df85bcbbd77b2d6e6e10ca99039f09d811b4b9))
+* **ci:** put the gitleaks allowlist on main — Secret Scan is red on every other PR ([#4507](https://github.com/fgarofalo56/csa-inabox/issues/4507)) ([a782cea](https://github.com/fgarofalo56/csa-inabox/commit/a782cea3dbbb065d6dd90d8702999da4b53c77fb))
+* **ci:** re-derive the security graph, stale since the route-guard module grew by 54 lines ([#4542](https://github.com/fgarofalo56/csa-inabox/issues/4542)) ([9d673ee](https://github.com/fgarofalo56/csa-inabox/commit/9d673eed9da026e4d74ec002915e64e6756dfdf4)), closes [#4540](https://github.com/fgarofalo56/csa-inabox/issues/4540)
+* **ci:** split the drain mutation matrix out of the Python Tests (3.10) required context, which had run out of clock ([#4626](https://github.com/fgarofalo56/csa-inabox/issues/4626)) ([cbaab22](https://github.com/fgarofalo56/csa-inabox/commit/cbaab2204db2f7d8b8b2ed2225b9c28990bdc862))
+* **ci:** the route-toolkit comment filter stops only one of four cloaking shapes, and its sibling guard kept the old copy (Refs [#4467](https://github.com/fgarofalo56/csa-inabox/issues/4467)) ([#4593](https://github.com/fgarofalo56/csa-inabox/issues/4593)) ([6bf53f5](https://github.com/fgarofalo56/csa-inabox/commit/6bf53f52d0856ca30dab9d22d511184c4d783add))
+* **ci:** the workflow-command encoder was not injective, so remote-influenced text could forge an annotation ([#4506](https://github.com/fgarofalo56/csa-inabox/issues/4506)) ([503193d](https://github.com/fgarofalo56/csa-inabox/commit/503193d350bd2034316522d59d4e244fdbb7b1f9))
+* **console:** move the console to Single revision mode, which is what actually stops the leak ([#4643](https://github.com/fgarofalo56/csa-inabox/issues/4643)) ([6d1949d](https://github.com/fgarofalo56/csa-inabox/commit/6d1949df07d6256cfee72f7c594bb475d2615c18))
+* **deploy:** the image-write mutex lived on the one resource every apply erases (Refs [#4448](https://github.com/fgarofalo56/csa-inabox/issues/4448)) ([#4562](https://github.com/fgarofalo56/csa-inabox/issues/4562)) ([b73f773](https://github.com/fgarofalo56/csa-inabox/commit/b73f773b258506e3c0d8db08fb50f9371f3df3c9))
+* **deps:** group Dependabot PRs, and guard the group ordering that fails silently ([#4641](https://github.com/fgarofalo56/csa-inabox/issues/4641)) ([f5f3966](https://github.com/fgarofalo56/csa-inabox/commit/f5f396617ba4cf6c4a941e602398e11c617420e7))
+* **deps:** the only Rust crate had security alerts and no version-update lane, so its fix could never arrive ([#4591](https://github.com/fgarofalo56/csa-inabox/issues/4591)) ([9e3a914](https://github.com/fgarofalo56/csa-inabox/commit/9e3a914e4be5c47282a3ad60fe2ad0196bf97a56))
+* **drain:** a ledger close never reached GitHub, so the next refresh called it a reopen and voided the receipt (Refs [#4545](https://github.com/fgarofalo56/csa-inabox/issues/4545)) ([#4552](https://github.com/fgarofalo56/csa-inabox/issues/4552)) ([6ff1696](https://github.com/fgarofalo56/csa-inabox/commit/6ff16962218922ab17d867bd2170e903c8399398))
+* **drain:** a park is supposed to stay OPEN on GitHub, so the reopen branch cannot key on TERMINAL ([#4541](https://github.com/fgarofalo56/csa-inabox/issues/4541)) ([6c7bd51](https://github.com/fgarofalo56/csa-inabox/commit/6c7bd51e4b856dabcc3625ca5a94eed6e040bdaa)), closes [#4535](https://github.com/fgarofalo56/csa-inabox/issues/4535)
+* **drain:** let gate 1 pass on a base delta no required workflow's push filter admits - refusing by default, behind an interlock (Refs [#4585](https://github.com/fgarofalo56/csa-inabox/issues/4585)) ([#4625](https://github.com/fgarofalo56/csa-inabox/issues/4625)) ([6bd8694](https://github.com/fgarofalo56/csa-inabox/commit/6bd86944dedd95c19d6a2e7d99d11b532f8ad0aa))
+* **drain:** merge_gate iterated only the required contexts, so an advisory RED coexisted with VERDICT: GO ([#4555](https://github.com/fgarofalo56/csa-inabox/issues/4555)) ([58e8002](https://github.com/fgarofalo56/csa-inabox/commit/58e800233ac73898574ed3a5fa62be24fdfa806f))
+* **drain:** the ci-green receipt named a measurement the CI topology cannot produce ([#4491](https://github.com/fgarofalo56/csa-inabox/issues/4491)) ([6e29f10](https://github.com/fgarofalo56/csa-inabox/commit/6e29f101255f8721acad9c120431d46374b3ba76))
+* **drain:** the job's own verdict is asked on all three routes, not one ([#4521](https://github.com/fgarofalo56/csa-inabox/issues/4521)) ([54db032](https://github.com/fgarofalo56/csa-inabox/commit/54db0328278c3eeccd7f2ec2304f5d4e19f1fab0))
+* **drain:** the required-contexts snapshot fell two behind live branch protection ([#4573](https://github.com/fgarofalo56/csa-inabox/issues/4573)) ([0c2c4c9](https://github.com/fgarofalo56/csa-inabox/commit/0c2c4c9743419788b027ecc9545e8815c9ada117))
+* **hooks:** block `python -` at the tool boundary — knowing the rule stopped none of six occurrences ([#4570](https://github.com/fgarofalo56/csa-inabox/issues/4570)) ([a77ba98](https://github.com/fgarofalo56/csa-inabox/commit/a77ba98ad3f33f0808f1f3112c4d3646ff993128))
+* **images:** loom-migrate and loom-setup-orchestrator inherit all three Trivy CRITICALs from the python-slim base layer, so the dist-upgrade is the only lever ([#4560](https://github.com/fgarofalo56/csa-inabox/issues/4560)) ([690333e](https://github.com/fgarofalo56/csa-inabox/commit/690333e83b794601cdcc5b454e73a15c398f33f0))
+* **images:** the loom-unity prune deleted on a probe whose error and no-match were the same observation (Refs [#4471](https://github.com/fgarofalo56/csa-inabox/issues/4471)) ([#4537](https://github.com/fgarofalo56/csa-inabox/issues/4537)) ([16b83e8](https://github.com/fgarofalo56/csa-inabox/commit/16b83e8ce9cc8496d829469b2beb98e369467df4))
+* **lakehouse:** /api/lakehouse/path accepted a container+path bound to no item — resolve both verbs against the caller's own lakehouse ([#4613](https://github.com/fgarofalo56/csa-inabox/issues/4613)) ([1c5b177](https://github.com/fgarofalo56/csa-inabox/commit/1c5b177738b2131dae5a09308150c476652a71ee))
+* **onelake:** validate DELETE adlsHints against the item's derived folder set ([#4596](https://github.com/fgarofalo56/csa-inabox/issues/4596)) ([0612e94](https://github.com/fgarofalo56/csa-inabox/commit/0612e94ca5f362816849d2b81536e8bfeb858cab))
+* **roll:** the reindex polled a signal that cannot converge, and named a cause it had not established ([#4498](https://github.com/fgarofalo56/csa-inabox/issues/4498)) ([bdbd440](https://github.com/fgarofalo56/csa-inabox/commit/bdbd440ea0219a17f1cb697829233a0cfd92536c))
+* **security:** bump anyio to 4.14.2 in all four lock files that pin it (CVE-2026-63374) ([#4642](https://github.com/fgarofalo56/csa-inabox/issues/4642)) ([7a442cc](https://github.com/fgarofalo56/csa-inabox/commit/7a442cc2a6d31430c5ee04f9a94958ac41ca0326))
+* **security:** two sibling data-product routes ran the same unscoped query the ports fix was for, and the module disclosing that named the wrong four ([#4540](https://github.com/fgarofalo56/csa-inabox/issues/4540)) ([1883a25](https://github.com/fgarofalo56/csa-inabox/commit/1883a25b36f36b5a11af9539ccee3cb17e11fdf0))
+
+
+### Documentation
+
+* **finishline:** record the six operator decisions and OP-15's dissolution, without claims about the document itself (Refs [#4495](https://github.com/fgarofalo56/csa-inabox/issues/4495)) ([0e01cc0](https://github.com/fgarofalo56/csa-inabox/commit/0e01cc0f907bce056053e763ae6ec458693b7810))
+* **images:** two Dockerfile comments asserted the opposite of what they measure, one of them invitingly (Refs [#4547](https://github.com/fgarofalo56/csa-inabox/issues/4547)) ([#4574](https://github.com/fgarofalo56/csa-inabox/issues/4574)) ([e6d28c0](https://github.com/fgarofalo56/csa-inabox/commit/e6d28c0892ffd4cc18c27dc2cdd034fb908859d7))
+
+
+### Tests
+
+* **items:** the recycle-bin verbs had no negative-tenancy arm, so a purge that bypassed the helper passed both specs (Refs [#3706](https://github.com/fgarofalo56/csa-inabox/issues/3706)) ([#4590](https://github.com/fgarofalo56/csa-inabox/issues/4590)) ([5a1c724](https://github.com/fgarofalo56/csa-inabox/commit/5a1c7241da25e515a353e209f2e8018610075cb0))
+
+
+### Continuous Integration
+
+* no gate compiled ANY .bicepparam, so il5.bicepparam was unverified on both axes at once ([#4539](https://github.com/fgarofalo56/csa-inabox/issues/4539)) ([51a02e3](https://github.com/fgarofalo56/csa-inabox/commit/51a02e34ccd1c77db0d9f5bf99a3af10da2d6b33))
+
+
+### Miscellaneous
+
+* **harness:** retire FINISHLINE — reconcile its 56 tasks, then archive the ledger (Refs [#4495](https://github.com/fgarofalo56/csa-inabox/issues/4495)) ([#4551](https://github.com/fgarofalo56/csa-inabox/issues/4551)) ([0094903](https://github.com/fgarofalo56/csa-inabox/commit/0094903daeaefd89888a8622df6d68a439bcfef0))
+
 ## [0.106.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.105.4...csa-inabox-v0.106.0) (2026-09-11)
 
 
