@@ -95,22 +95,85 @@ def test_a_named_pattern_is_not_a_catch_all():
 
 
 def test_a_narrowed_group_is_not_a_catch_all():
-    """A group narrowed by exclude-patterns / dependency-type / update-types
-    absorbs only PART of a later group, so reporting it as shadowing would
-    assert something untrue (R7).
+    """`dependency-type` and `update-types` narrow a group unconditionally.
 
-    GitHub's Example 1 bounds it: a `production` group above `rubocop*`
-    absorbs the production rubocop deps, but "development dependencies
-    matching rubocop* will be included in the rubocop group".
+    Each partitions on an axis `patterns` cannot express — production leaves
+    development, patch leaves minor and major — so such a group can never
+    fully swallow a later one, whatever that group matches.
 
-    Breaks if: `_narrowed` stops disqualifying any of the three keys — and the
-    failure mode is a REQUIRED check rejecting a correct config.
+    `exclude-patterns` is DELIBERATELY ABSENT here: it lives on the same axis
+    as `patterns`, so whether it spares the later group depends on what it
+    actually excludes. Tested in `subsumes`, not asserted by presence — see
+    test_an_irrelevant_exclusion_spares_nothing.
+
+    Breaks if: `_narrowed` stops disqualifying either key — and the failure
+    mode is a REQUIRED check rejecting a correct config.
     """
-    assert not is_catch_all({"patterns": ["*"],
-                             "exclude-patterns": ["azure-*"]})
     assert not is_catch_all({"dependency-type": "production"})
     assert not is_catch_all({"patterns": ["*"],
                              "update-types": ["version-update:semver-patch"]})
+
+
+def test_an_irrelevant_exclusion_spares_nothing():
+    """One unrelated exclude entry must not switch detection off.
+
+    The first fix for the exclude-patterns false positive disqualified ANY
+    group carrying the key, which silenced real shadowing: no azure package
+    matches `lodash`, so `azure-sdk` is fully absorbed and dead.
+
+    Breaks if: `exclude-patterns` goes back into `_narrowed`.
+    """
+    assert audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["lodash"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    })), "an exclusion covering nothing was treated as sparing the later group"
+
+
+def test_a_relevant_exclusion_does_spare():
+    """And the complementary direction, or the fix above is just noise.
+
+    Breaks if: exclusions stop being tested against the later group.
+    """
+    assert not audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["azure-*"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+    # Partial absorption: excluding ONE member of a broader later group does
+    # not spare the whole group.
+    assert audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["azure-identity"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+
+
+def test_an_undecidable_glob_falls_silent_rather_than_flagging():
+    """Error DIRECTION is the property, not accuracy.
+
+    A miss leaves the repo where it was before this guard existed; a false
+    flag blocks a correct merge in a required context. `azure-?` does not
+    cover `azure-*` — `azure-identity` matches neither — and the comparison
+    feeds a PATTERN where a NAME belongs, so `?` would match the literal `*`.
+
+    Breaks if: `_covers` stops refusing `?` and `[`.
+    """
+    assert not audit(_entry({
+        "q": {"patterns": ["azure-?"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+
+
+def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
+    """`fnmatch` normcases; `fnmatchcase` does not.
+
+    loom-guardrails runs on ubuntu while contributors run on Windows, so
+    `fnmatch` would let this guard and its own pytest disagree with CI.
+
+    Breaks if: `_covers` goes back to `fnmatch`.
+    """
+    assert not audit(_entry({
+        "upper": {"patterns": ["AZURE-*"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
 
 
 def test_lane_defaults_to_version_updates():

@@ -31,7 +31,7 @@ Run:  python scripts/ci/check_dependabot_group_order.py
 from __future__ import annotations
 
 import sys
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import yaml
@@ -43,24 +43,46 @@ VERSION_LANE = "version-updates"
 
 
 def _narrowed(group: dict) -> bool:
-    """True when `group` matches only a SUBSET of its lane.
+    """True when `group` matches only a SUBSET of its lane, unconditionally.
 
-    GitHub's Example 1 bounds the catch-all premise and the bound is easy to
-    miss: `production-dependencies: {dependency-type: production}` does absorb
-    production deps matching a later `rubocop*` group -- but the doc's very
-    next sentence says "development dependencies matching rubocop* will be
-    included in the rubocop group". The later group is NOT dead; it is
-    partially absorbed.
+    `dependency-type` and `update-types` ALWAYS leave a complementary slice --
+    production leaves development, patch leaves minor and major -- so a group
+    carrying either can never fully swallow a later one, whatever that later
+    group matches.
 
-    So a narrowed group must never be reported as shadowing, because the
-    message would assert something untrue (R7). `patterns: ["*"]` WITH
-    `exclude-patterns: ["azure-*"]` above `azure-sdk` is a CORRECT, idiomatic
-    config, and rejecting it in a required context is the assertion-design
-    "cannot pass" mode -- red against the fix as well as the defect.
+    `exclude-patterns` is DELIBERATELY NOT HERE, and an earlier version had it
+    wrong. Exclusions spare the later group only if they actually COVER it: a
+    catch-all excluding `pytest*` leaves `azure-sdk` just as dead as one with
+    no exclusions at all. Treating any exclusion as a blanket disqualifier
+    silenced real detections while fixing a false positive -- widening a
+    check until it retires a surviving arm. It is handled in `subsumes`,
+    where the later group's patterns are actually available to test against.
     """
-    return bool(group.get("exclude-patterns")
-                or group.get("dependency-type")
-                or group.get("update-types"))
+    return bool(group.get("dependency-type") or group.get("update-types"))
+
+
+def _covers(pattern: str, target: str) -> bool:
+    """Does glob `pattern` match everything glob `target` matches?
+
+    APPROXIMATE, and the property that matters is ERROR DIRECTION rather than
+    accuracy: when this cannot decide, it must fall SILENT, never flag. A miss
+    leaves the repo where it was before this guard existed; a false flag
+    blocks a correct merge in a required context. So anything beyond literals
+    and prefix globs is refused rather than guessed.
+
+    `?` and `[` in `pattern` are refused because the comparison feeds a
+    PATTERN in where a dependency NAME belongs: `fnmatch("azure-*", "azure-?")`
+    is True, the `?` matching the literal `*` character, so `azure-?` above
+    `azure-*` would be flagged DEAD when `azure-identity` matches neither.
+
+    `fnmatchcase`, never `fnmatch`: the latter normcases, so
+    `fnmatch("azure-*", "AZURE-*")` is True on Windows and False on Linux.
+    loom-guardrails runs on ubuntu while contributors run on Windows, which
+    would let this guard and its own pytest disagree with CI.
+    """
+    if "?" in pattern or "[" in pattern:
+        return False
+    return fnmatchcase(target, pattern)
 
 
 def is_catch_all(group: dict) -> bool:
@@ -73,7 +95,8 @@ def is_catch_all(group: dict) -> bool:
         `== ["*"]` and missed that, and its test ASSERTED the miss, so the fix
         would have arrived looking like a regression.
 
-    A narrowed group (see `_narrowed`) is never a catch-all.
+    Says nothing about `exclude-patterns`: a group can match everything and
+    still spare a later group by excluding it. That is `subsumes`' business.
     """
     if not isinstance(group, dict) or _narrowed(group):
         return False
@@ -88,25 +111,36 @@ def subsumes(earlier: dict, later: dict) -> bool:
 
     Covers the named-over-named case a wildcard check misses. Every named
     group in this repo is itself a prefix glob, so `azure-identity` added
-    after `azure-sdk`, or `codeql-init` after `codeql-action*`, is dead on
-    arrival -- and the codeql group exists because of a real outage (init at
-    v4.37.6 against analyze at v4.35.3 produced a 0-rule SARIF that froze the
-    code-scanning list while every merge went unscanned).
+    after `azure-*`, or `codeql-init` after `github/codeql-action*`, is dead
+    on arrival -- and the codeql group exists because of a real outage (init
+    at v4.37.6 against analyze at v4.35.3 produced a 0-rule SARIF that froze
+    the code-scanning list while every merge went unscanned).
 
-    Pattern-against-pattern matching is an APPROXIMATION. It decides prefix
-    globs, which is the shape that occurs here; it does not attempt full glob
-    algebra. Deliberately conservative: shadowing is reported only when EVERY
-    one of `later`'s patterns is matched by one of `earlier`'s.
+    EXCLUSIONS ARE TESTED, NOT ASSUMED. `earlier` spares `later` only when its
+    `exclude-patterns` cover EVERY pattern `later` carries; excluding
+    something unrelated spares nothing.
+
+    Conservative throughout: shadowing is reported only when every one of
+    `later`'s patterns is matched by one of `earlier`'s and excluded by none.
     """
     if _narrowed(earlier):
         return False
     pe, pl = earlier.get("patterns"), later.get("patterns")
+    ex = [str(x) for x in (earlier.get("exclude-patterns") or [])]
+
+    if pl is None:
+        # `later` matches everything; only an unrestricted catch-all covers it.
+        return pe is None and not ex
+    pl = [str(p) for p in pl]
+
+    # Anything `earlier` explicitly excludes, it does not swallow.
+    if pl and all(any(_covers(x, t) for x in ex) for t in pl):
+        return False
+
     if pe is None:
         return True
-    if pl is None:
-        return False
     pe = [str(p) for p in pe]
-    return all(any(fnmatch(str(x), p) for p in pe) for x in pl)
+    return all(any(_covers(p, t) for p in pe) for t in pl)
 
 
 def lane_of(group: dict) -> str:
@@ -273,7 +307,55 @@ def _self_test() -> int:
             "absorbs only part of the later group, so the message would "
             "assert something untrue (R7)")
 
-    print("self-test OK: 3 shadowing arms fire, 5 clean arms stay silent")
+    # AN IRRELEVANT EXCLUSION SPARES NOTHING. This arm exists because the
+    # first fix for the false positive above disqualified ANY group carrying
+    # `exclude-patterns`, which switched detection off wholesale: one unrelated
+    # entry and `azure-sdk` is dead with the guard green. Widening a check
+    # until it retires a surviving arm.
+    irrelevant = {
+        "updates": [{
+            "package-ecosystem": "pip", "directory": "/",
+            "groups": {
+                "catch": {"patterns": ["*"], "exclude-patterns": ["lodash"]},
+                "azure-sdk": {"patterns": ["azure-*"]},
+            },
+        }]
+    }
+    assert audit(irrelevant), (
+        "an exclusion that covers NOTHING the later group matches was treated "
+        "as sparing it - exclusions must be TESTED, not merely present")
+
+    # A RELEVANT exclusion does spare it, and must stay silent.
+    relevant = {
+        "updates": [{
+            "package-ecosystem": "pip", "directory": "/",
+            "groups": {
+                "catch": {"patterns": ["*"], "exclude-patterns": ["azure-*"]},
+                "azure-sdk": {"patterns": ["azure-*"]},
+            },
+        }]
+    }
+    assert not audit(relevant), (
+        "an exclusion covering the later group's patterns was still reported "
+        "as shadowing - the exclusion is what keeps that group alive")
+
+    # WHEN IT CANNOT DECIDE, IT MUST FALL SILENT. `azure-?` does not cover
+    # `azure-*` (azure-identity matches neither), and guessing produces a
+    # false RED in a required context.
+    undecidable = {
+        "updates": [{
+            "package-ecosystem": "pip", "directory": "/",
+            "groups": {
+                "q": {"patterns": ["azure-?"]},
+                "azure-sdk": {"patterns": ["azure-*"]},
+            },
+        }]
+    }
+    assert not audit(undecidable), (
+        "a `?` glob was treated as covering a `*` glob - the comparison feeds "
+        "a PATTERN where a NAME belongs, so `?` matches the literal `*`")
+
+    print("self-test OK: 4 shadowing arms fire, 7 clean arms stay silent")
     return 0
 
 
