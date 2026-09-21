@@ -129,8 +129,14 @@ def subsumes(earlier: dict, later: dict) -> bool:
     ex = [str(x) for x in (earlier.get("exclude-patterns") or [])]
 
     if pl is None:
-        # `later` matches everything; only an unrestricted catch-all covers it.
-        return pe is None and not ex
+        # `later` matches everything of its lane, so only a group that ALSO
+        # matches everything can swallow it -- patternless, or starred. An
+        # earlier version required `pe is None`, which missed the starred form
+        # and left a patternless duplicate after `patterns: ["*"]` silently
+        # dead while the reverse order fired correctly.
+        if ex:
+            return False
+        return pe is None or "*" in [str(p) for p in pe]
     pl = [str(p) for p in pl]
 
     # Anything `earlier` explicitly excludes, it does not swallow.
@@ -181,11 +187,19 @@ def audit(doc: dict) -> list[str]:
         where = f"{entry.get('package-ecosystem')} {entry.get('directory')}"
         groups = entry.get("groups") or {}
         for named, catcher, lane in shadowed(groups):
+            # SAY WHAT IS ESTABLISHED, NOT MORE (R7). When `catcher` carries
+            # exclusions that spare SOME of `named`'s packages, "can never
+            # match" is untrue -- the exclusion hands those back. The claim is
+            # therefore scoped to what subsumption actually decides.
+            partial = bool((groups.get(catcher) or {}).get("exclude-patterns"))
+            verdict = ("is reachable only for packages '{c}' explicitly "
+                       "excludes".format(c=catcher) if partial
+                       else "can never match")
             problems.append(
                 f"{where}: group '{named}' is DEAD - '{catcher}' is listed "
-                f"above it on the '{lane}' lane and matches everything "
-                f"'{named}' would have, so '{named}' can never match. Move it "
-                f"above '{catcher}', or narrow '{catcher}'. (GitHub: \"If a "
+                f"above it on the '{lane}' lane and matches what '{named}' "
+                f"would have, so '{named}' {verdict}. Move it above "
+                f"'{catcher}', or narrow '{catcher}'. (GitHub: \"If a "
                 f"dependency matches more than one rule, it's included in the "
                 f"first group that it matches.\")"
             )

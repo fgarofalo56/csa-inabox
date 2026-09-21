@@ -162,6 +162,53 @@ def test_an_undecidable_glob_falls_silent_rather_than_flagging():
     }))
 
 
+def test_a_patternless_duplicate_after_a_starred_catch_all_is_caught():
+    """Both spellings of "matches everything" must shadow each other.
+
+    An earlier version required the EARLIER group to be patternless, so
+    `{patterns:["*"]}` followed by a bare `{}` left the second silently dead
+    while the reverse order fired correctly — the same rule reaching a
+    different verdict depending on which spelling came first.
+
+    Breaks if: `subsumes` goes back to requiring `pe is None`.
+    """
+    assert audit(_entry({
+        "catch": {"patterns": ["*"]},
+        "dupe": {},
+    }))
+    assert audit(_entry({
+        "catch": {},
+        "dupe": {"patterns": ["*"]},
+    }))
+
+
+def test_a_partial_exclusion_does_not_claim_total_death():
+    """R7: the message must not assert more than subsumption established.
+
+    When the catcher excludes one member of a broader later group, that group
+    is still reachable for the excluded package, so "can never match" is
+    untrue.
+
+    Breaks if: the message goes back to a single unconditional phrasing.
+    """
+    problems = audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["azure-identity"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+    assert problems, "partial absorption should still be reported"
+    assert "can never match" not in problems[0], problems[0]
+    assert "excludes" in problems[0], problems[0]
+
+
+def test_a_total_shadow_still_says_can_never_match():
+    # Breaks if: the scoped wording leaks onto the unconditional case.
+    problems = audit(_entry({
+        "catch": {"patterns": ["*"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+    assert problems and "can never match" in problems[0], problems
+
+
 def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
     """`fnmatch` normcases; `fnmatchcase` does not.
 
