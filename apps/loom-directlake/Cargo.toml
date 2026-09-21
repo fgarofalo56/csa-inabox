@@ -65,16 +65,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 #
 # The unblocking event is a delta-rs release on arrow 59. Do not hand-edit the
 # lock to chase it; wait for the grouped dependabot PR and let CI compile it.
-arrow = "53"
+arrow = "54"
 parquet = "53"
-datafusion = "44"
+datafusion = "51"
 
 # delta-rs — reads the Delta log off ADLS the same way Direct Lake reads it off
 # OneLake. `datafusion` feature makes DeltaTable a TableProvider; `azure` pulls
 # object_store's Azure backend (Managed Identity via IMDS in-cluster). Optional
 # so the `engine`-only build (CI core-path test) stays lean.
 [dependencies.deltalake]
-version = "0.24"
+version = "0.30"
 features = ["datafusion", "azure"]
 optional = true
 
