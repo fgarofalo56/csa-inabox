@@ -17,6 +17,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,12 +38,12 @@ from check_dependabot_group_order import (  # type: ignore[import-not-found] # n
 )
 
 
-def _entry(groups: dict) -> dict:
+def _entry(groups: dict[str, Any]) -> dict[str, Any]:
     return {"updates": [{"package-ecosystem": "pip", "directory": "/",
                          "groups": groups}]}
 
 
-def test_guard_file_exists_and_is_tracked():
+def test_guard_file_exists_and_is_tracked() -> None:
     """The whole point is that it lives in the merged tree, not in temp/."""
     assert GUARD.is_file(), f"{GUARD} is missing"
     out = subprocess.run(
@@ -56,12 +57,12 @@ def test_guard_file_exists_and_is_tracked():
 
 # --- is_catch_all -------------------------------------------------------
 
-def test_explicit_wildcard_is_a_catch_all():
+def test_explicit_wildcard_is_a_catch_all() -> None:
     # Breaks if: `patterns: ["*"]` stops being recognised.
     assert is_catch_all({"patterns": ["*"]})
 
 
-def test_missing_patterns_key_is_also_a_catch_all():
+def test_missing_patterns_key_is_also_a_catch_all() -> None:
     """A group with no `patterns` matches everything of its lane.
 
     GitHub's Example 1 relies on exactly this. A checker that only knows the
@@ -78,7 +79,7 @@ def test_missing_patterns_key_is_also_a_catch_all():
     assert is_catch_all({"applies-to": "version-updates"})
 
 
-def test_a_wildcard_anywhere_in_the_list_is_a_catch_all():
+def test_a_wildcard_anywhere_in_the_list_is_a_catch_all() -> None:
     """`patterns` is an OR-LIST, so a wildcard ANYWHERE matches everything.
 
     THIS ASSERTION USED TO BE INVERTED. The first version of the guard
@@ -93,13 +94,13 @@ def test_a_wildcard_anywhere_in_the_list_is_a_catch_all():
     assert is_catch_all({"patterns": ["azure-*", "*"]})
 
 
-def test_a_named_pattern_is_not_a_catch_all():
+def test_a_named_pattern_is_not_a_catch_all() -> None:
     # Breaks if: the check widens to treat any group as a catch-all, which
     # would make every ordering look like shadowing.
     assert not is_catch_all({"patterns": ["azure-*"]})
 
 
-def test_a_narrowed_group_is_not_a_catch_all():
+def test_a_narrowed_group_is_not_a_catch_all() -> None:
     """`dependency-type` and `update-types` narrow a group unconditionally.
 
     Each partitions on an axis `patterns` cannot express — production leaves
@@ -119,7 +120,7 @@ def test_a_narrowed_group_is_not_a_catch_all():
                              "update-types": ["version-update:semver-patch"]})
 
 
-def test_an_irrelevant_exclusion_spares_nothing():
+def test_an_irrelevant_exclusion_spares_nothing() -> None:
     """One unrelated exclude entry must not switch detection off.
 
     The first fix for the exclude-patterns false positive disqualified ANY
@@ -134,7 +135,7 @@ def test_an_irrelevant_exclusion_spares_nothing():
     })), "an exclusion covering nothing was treated as sparing the later group"
 
 
-def test_a_relevant_exclusion_does_spare():
+def test_a_relevant_exclusion_does_spare() -> None:
     """An exclusion covering the later group's patterns keeps it alive.
 
     The PARTIAL case (excluding one member of a broader group) lives in
@@ -150,7 +151,7 @@ def test_a_relevant_exclusion_does_spare():
     }))
 
 
-def test_an_undecidable_glob_falls_silent_rather_than_flagging():
+def test_an_undecidable_glob_falls_silent_rather_than_flagging() -> None:
     """Error DIRECTION is the property, not accuracy.
 
     A miss leaves the repo where it was before this guard existed; a false
@@ -166,7 +167,7 @@ def test_an_undecidable_glob_falls_silent_rather_than_flagging():
     }))
 
 
-def test_a_patternless_duplicate_after_a_starred_catch_all_is_caught():
+def test_a_patternless_duplicate_after_a_starred_catch_all_is_caught() -> None:
     """Both spellings of "matches everything" must shadow each other.
 
     An earlier version required the EARLIER group to be patternless, so
@@ -186,7 +187,7 @@ def test_a_patternless_duplicate_after_a_starred_catch_all_is_caught():
     }))
 
 
-def test_a_partial_exclusion_falls_silent():
+def test_a_partial_exclusion_falls_silent() -> None:
     """A group the catcher partly excludes is NOT dead, so do not flag it.
 
     THIS TEST USED TO PIN THE WRONG VERDICT. It asserted the guard flagged
@@ -207,7 +208,7 @@ def test_a_partial_exclusion_falls_silent():
     }))
 
 
-def test_a_total_shadow_says_can_never_match_even_with_an_exclusion():
+def test_a_total_shadow_says_can_never_match_even_with_an_exclusion() -> None:
     """The mirror of the above: an IRRELEVANT exclusion must not soften the
     message.
 
@@ -227,7 +228,7 @@ def test_a_total_shadow_says_can_never_match_even_with_an_exclusion():
     assert "reachable only for" not in problems[0], problems[0]
 
 
-def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
+def test_an_exclusion_gives_the_same_verdict_in_both_spellings() -> None:
     """Spelling dependence survived once in the `pl is None` branch.
 
     `excl zzz` above a duplicate spelled `{patterns:["*"]}` fired, while the
@@ -256,7 +257,7 @@ def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
         "both spellings flagged; the duplicate still serves `zzz`")
 
 
-def test_an_undecidable_exclusion_falls_silent_not_flags():
+def test_an_undecidable_exclusion_falls_silent_not_flags() -> None:
     """A HELPER'S SAFE DEFAULT IS ONLY SAFE WHERE IT WAS WRITTEN FOR.
 
     `_covers` refuses to `False`, which is correct in the SUBSUMPTION test
@@ -282,7 +283,7 @@ def test_an_undecidable_exclusion_falls_silent_not_flags():
     }))
 
 
-def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
+def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci() -> None:
     """`fnmatch` normcases; `fnmatchcase` does not.
 
     loom-guardrails runs on ubuntu while contributors run on Windows, so
@@ -296,7 +297,7 @@ def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
     }))
 
 
-def test_lane_defaults_to_version_updates():
+def test_lane_defaults_to_version_updates() -> None:
     # Breaks if: the default changes, which would silently move every
     # undefined group onto the security lane.
     assert lane_of({}) == "version-updates"
@@ -305,7 +306,7 @@ def test_lane_defaults_to_version_updates():
 
 # --- audit --------------------------------------------------------------
 
-def test_catch_all_above_a_named_group_is_reported():
+def test_catch_all_above_a_named_group_is_reported() -> None:
     # Breaks if: ordering stops being evaluated (e.g. dict order is lost).
     problems = audit(_entry({
         "catch": {"patterns": ["*"]},
@@ -315,7 +316,7 @@ def test_catch_all_above_a_named_group_is_reported():
     assert "azure-sdk" in problems[0]
 
 
-def test_patternless_catch_all_above_a_named_group_is_reported():
+def test_patternless_catch_all_above_a_named_group_is_reported() -> None:
     # Breaks if: the patternless form stops counting as a catch-all.
     # Uses a bare group — one carrying `dependency-type` is narrowed and is
     # covered by test_a_narrowed_group_does_not_produce_a_false_positive.
@@ -327,7 +328,7 @@ def test_patternless_catch_all_above_a_named_group_is_reported():
         "a group with no `patterns` key did not count as a catch-all")
 
 
-def test_correct_order_is_silent():
+def test_correct_order_is_silent() -> None:
     # Breaks if: the guard starts firing on well-ordered files — noise that
     # would get it disabled.
     assert not audit(_entry({
@@ -336,7 +337,7 @@ def test_correct_order_is_silent():
     }))
 
 
-def test_lanes_do_not_shadow_each_other():
+def test_lanes_do_not_shadow_each_other() -> None:
     """`applies-to` is matched per lane, so a security catch-all above a
     version-lane named group shadows nothing.
 
@@ -348,7 +349,7 @@ def test_lanes_do_not_shadow_each_other():
     }))
 
 
-def test_a_prefix_glob_shadows_a_narrower_named_group():
+def test_a_prefix_glob_shadows_a_narrower_named_group() -> None:
     """NAMED OVER NAMED — the arm a catch-all-only check is silent on.
 
     Every named group in this repo is itself a prefix glob, so a narrower one
@@ -367,7 +368,7 @@ def test_a_prefix_glob_shadows_a_narrower_named_group():
     }))
 
 
-def test_a_narrowed_group_does_not_produce_a_false_positive():
+def test_a_narrowed_group_does_not_produce_a_false_positive() -> None:
     """The "cannot pass" mode: a REQUIRED check rejecting a correct config.
 
     `patterns: ["*"]` WITH `exclude-patterns: ["azure-*"]` above `azure-sdk`
@@ -387,7 +388,7 @@ def test_a_narrowed_group_does_not_produce_a_false_positive():
         })), f"false positive on a group narrowed by {sorted(narrowing)}"
 
 
-def test_unrelated_prefix_globs_do_not_shadow():
+def test_unrelated_prefix_globs_do_not_shadow() -> None:
     # Breaks if: subsumption widens to match unrelated prefixes.
     assert not audit(_entry({
         "azure-sdk": {"patterns": ["azure-*"]},
@@ -395,7 +396,7 @@ def test_unrelated_prefix_globs_do_not_shadow():
     }))
 
 
-def test_same_lane_shadowing_is_still_caught_when_lanes_are_explicit():
+def test_same_lane_shadowing_is_still_caught_when_lanes_are_explicit() -> None:
     # Breaks if: an explicit `applies-to` on both stops being compared.
     assert audit(_entry({
         "sec-catch": {"applies-to": "security-updates", "patterns": ["*"]},
@@ -406,7 +407,7 @@ def test_same_lane_shadowing_is_still_caught_when_lanes_are_explicit():
 
 # --- the real file ------------------------------------------------------
 
-def test_the_committed_dependabot_config_is_not_shadowed():
+def test_the_committed_dependabot_config_is_not_shadowed() -> None:
     """The regression arm. Breaks if: someone moves a catch-all up."""
     r = subprocess.run([sys.executable, str(GUARD)],
                        cwd=REPO_ROOT, capture_output=True, text=True)
@@ -414,7 +415,7 @@ def test_the_committed_dependabot_config_is_not_shadowed():
     assert "OK" in r.stdout
 
 
-def test_the_guards_own_self_test_passes():
+def test_the_guards_own_self_test_passes() -> None:
     """A guard that has never gone red has never been shown to work."""
     r = subprocess.run([sys.executable, str(GUARD), "--self-test"],
                        cwd=REPO_ROOT, capture_output=True, text=True)
@@ -422,7 +423,9 @@ def test_the_guards_own_self_test_passes():
     assert "self-test OK" in r.stdout
 
 
-def test_an_empty_updates_list_is_refused_not_reported_clean(tmp_path):
+def test_an_empty_updates_list_is_refused_not_reported_clean(
+    tmp_path: Path,
+) -> None:
     """A zero result must not read as 'clean' when it means 'read nothing'.
 
     Breaks if: `main` starts reporting OK over a file it parsed as empty.
