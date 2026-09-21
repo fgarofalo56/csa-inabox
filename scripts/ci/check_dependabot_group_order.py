@@ -61,28 +61,50 @@ def _narrowed(group: dict) -> bool:
     return bool(group.get("dependency-type") or group.get("update-types"))
 
 
+def _undecidable(pattern: str) -> bool:
+    """True when this comparison cannot decide `pattern` honestly.
+
+    The comparison feeds a PATTERN in where a dependency NAME belongs, so a
+    `?` or a character class produces nonsense: `fnmatchcase("azure-*",
+    "azure-?")` is True, the `?` matching the literal `*`.
+    """
+    return "?" in pattern or "[" in pattern
+
+
 def _covers(pattern: str, target: str) -> bool:
     """Does glob `pattern` match everything glob `target` matches?
 
-    APPROXIMATE, and the property that matters is ERROR DIRECTION rather than
-    accuracy: when this cannot decide, it must fall SILENT, never flag. A miss
-    leaves the repo where it was before this guard existed; a false flag
-    blocks a correct merge in a required context. So anything beyond literals
-    and prefix globs is refused rather than guessed.
-
-    `?` and `[` in `pattern` are refused because the comparison feeds a
-    PATTERN in where a dependency NAME belongs: `fnmatch("azure-*", "azure-?")`
-    is True, the `?` matching the literal `*` character, so `azure-?` above
-    `azure-*` would be flagged DEAD when `azure-identity` matches neither.
+    Undecidable -> False, which in the SUBSUMPTION test means "cannot show it
+    is swallowed", i.e. stay silent. Correct here, and ONLY here.
 
     `fnmatchcase`, never `fnmatch`: the latter normcases, so
     `fnmatch("azure-*", "AZURE-*")` is True on Windows and False on Linux.
     loom-guardrails runs on ubuntu while contributors run on Windows, which
     would let this guard and its own pytest disagree with CI.
     """
-    if "?" in pattern or "[" in pattern:
+    if _undecidable(pattern):
         return False
     return fnmatchcase(target, pattern)
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Might some package match BOTH globs? Undecidable -> True.
+
+    A SEPARATE FUNCTION ON PURPOSE. Reusing `_covers` here inverted its safe
+    default: `_covers` refuses to False, and False in the overlap test means
+    "no overlap", which FLAGS. So `exclude-patterns: ["azure-[ab]x"]` above a
+    group matching `azure-ax` reported that group dead when the exclusion
+    actually keeps it alive -- a false positive in the merge-blocking
+    direction, produced by the guard's own conservatism pointing backwards.
+
+    A HELPER'S SAFE DEFAULT IS ONLY SAFE IN THE POSITION IT WAS WRITTEN FOR,
+    and nothing at a call site makes that visible. Here the safe answer is
+    "assume they overlap", because overlap means the later group survives and
+    the guard falls silent.
+    """
+    if _undecidable(a) or _undecidable(b):
+        return True
+    return fnmatchcase(b, a) or fnmatchcase(a, b)
 
 
 def is_catch_all(group: dict) -> bool:
@@ -151,7 +173,7 @@ def subsumes(earlier: dict, later: dict) -> bool:
     # remediation this guard prints ("move it above") would itself change
     # behaviour, making `azure-sdk` capture every azure package when the
     # config deliberately routes only one there.
-    if any(_covers(t, x) or _covers(x, t) for x in ex for t in pl):
+    if any(_overlaps(x, t) for x in ex for t in pl):
         return False
 
     if pe is None:

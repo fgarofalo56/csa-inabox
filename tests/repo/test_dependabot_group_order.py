@@ -242,6 +242,32 @@ def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
     assert not starred and not patternless, (starred, patternless)
 
 
+def test_an_undecidable_exclusion_falls_silent_not_flags():
+    """A HELPER'S SAFE DEFAULT IS ONLY SAFE WHERE IT WAS WRITTEN FOR.
+
+    `_covers` refuses to `False`, which is correct in the SUBSUMPTION test
+    ("cannot show it is swallowed" -> stay silent) and INVERTED in the overlap
+    test, where `False` means "no overlap" and therefore FLAGS. Reusing it for
+    both made `exclude-patterns: ["azure-[ab]x"]` report a group dead that the
+    exclusion actually keeps alive — the guard's own conservatism pointing
+    backwards, in the merge-blocking direction.
+
+    `_overlaps` exists to hold the opposite default: undecidable means assume
+    overlap, so the later group is assumed alive and the guard stays quiet.
+
+    Breaks if: `_overlaps` is collapsed back into `_covers`.
+    """
+    assert not audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["azure-[ab]x"]},
+        "later": {"patterns": ["azure-ax"]},
+    })), "an undecidable exclusion was treated as no-overlap and flagged"
+
+    assert not audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["lod?sh"]},
+        "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+
+
 def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
     """`fnmatch` normcases; `fnmatchcase` does not.
 
