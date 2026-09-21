@@ -2876,15 +2876,29 @@ jobs:
           # report `ahead`, i.e. "this apply did not leave the estate behind",
           # about an estate serving the stale image.
           #
-          # AS OF 2026-09-20 NO APP IS IN Multiple MODE. loom-console was the
-          # only one, and it moved to Single (main.bicep dropped
-          # `multiRevision: true`) after Multiple-mode accumulation froze the
-          # estate — 251 active revisions, 484 replicas, all Unhealthy, 11
-          # commits of drift. console-bluegreen-roll.yml is disabled_manually.
-          # So newest == serving holds again today. The trafficWeight
+          # AS OF 2026-09-20 NO *COMMERCIAL* APP IS IN Multiple MODE.
+          # loom-console was the only one, and it moved to Single (main.bicep
+          # dropped `multiRevision: true`) after Multiple-mode accumulation
+          # froze the estate — 251 active revisions, 484 replicas, all
+          # Unhealthy, 11 commits of drift. console-bluegreen-roll.yml is
+          # disabled_manually.
+          #
+          # SAY "COMMERCIAL", NOT "NO APP". An earlier draft of this comment
+          # said no app anywhere, which is a claim this workstation cannot
+          # even check: the Gov console is a different tenant and Gov receipts
+          # come from Actions runs, never local az. `apps[]` is cloud-invariant
+          # and carried `multiRevision: true` at deploy time, and
+          # gov-console-roll.yml is green several times a day (6 of 6, latest
+          # 2026-09-20T05:00Z) — so the Gov console is very likely STILL
+          # Multiple and still accumulating a revision per roll, which is the
+          # exact mechanism that froze Commercial. That is tracked separately
+          # and is NOT fixed here; the bicep change reaches Gov only on its
+          # next deploy, and no Gov deploy receipt exists for it.
+          #
+          # So newest == serving holds for Commercial today. The trafficWeight
           # projection is KEPT anyway: it is what makes that an assertion
-          # rather than an assumption, and re-enabling the lane would silently
-          # restore the hazard.
+          # rather than an assumption, and it is the only arm that still
+          # watches Gov.
           while IFS= read -r APP; do
             if [ -z "$APP" ]; then
               continue

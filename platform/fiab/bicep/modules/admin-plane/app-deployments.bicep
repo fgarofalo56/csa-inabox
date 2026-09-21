@@ -127,18 +127,29 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // So it is now unconditional. This is believed to be behaviourally inert
       // for the apps that were already Single, but state that precisely,
       // because it is REASONED AND MEASURED, NOT DOCUMENTED: ACA's affinity
-      // enum is exactly {none, sticky}; 28 of 29 live ingress apps report
-      // `stickySessions: null` and issue no affinity cookie; and a binary enum
-      // whose absent state is not one value behaves as the other. Two
-      // independent reviews tried and neither could cite a Microsoft doc
-      // stating the default. If you find one, cite it here.
+      // enum is exactly {none, sticky}; 28 of the 29 ingress apps LIVE IN THE
+      // RESOURCE GROUP report `stickySessions: null`; and a binary enum whose
+      // absent state is not one value behaves as the other. Two independent
+      // reviews tried and neither could cite a Microsoft doc stating the
+      // default. If you find one, cite it here.
+      // NOT claimed: that those apps issue no affinity cookie. A draft of this
+      // comment said so and nothing established it -- 25 of the 28 are
+      // internal-only and the one reachable external probe failed on TLS. An
+      // unestablished clause inside the comment whose whole purpose is
+      // separating measured from assumed is the defect it warns about.
+      // ARM returns the key PRESENT-AND-NULL rather than normalising it, so
+      // "absent" is the accurate word for the template, not for the payload.
       //
-      // What DOES change is representational and intended: the rendered
-      // template now carries `stickySessions.affinity:'none'` for all 28
-      // ingress apps instead of the one. ARM returns the key present-and-null
-      // today rather than normalising it, so this is a real diff in the
-      // compiled artifact — that IS the enforcement, and it is why the
-      // artifact was regenerated in the same change.
+      // QUOTE THE POPULATION WITH THE NUMBER, because these are two different
+      // sets and an earlier draft of this comment conflated them. The 28/29
+      // above is the LIVE RESOURCE GROUP, which also holds ingress apps this
+      // module does not govern (maf.bicep, wrangler.bicep,
+      // transform-runner-aca.bicep, prpt-renderer.bicep, redis-oss-aca.bicep).
+      // What THIS module renders is `apps[]` from admin-plane/main.bicep:
+      // SIX entries carry `ingressPort`, so six apps gain the rendered
+      // `stickySessions.affinity:'none'` where one had it before. That diff IS
+      // the enforcement, and it is why the compiled artifact was regenerated
+      // in the same change.
       //
       // Do NOT "fix" a scaled-out feature by flipping this to 'sticky': that is
       // what breaks blue-green, and lib/auth/msal.ts documents the console as

@@ -76,15 +76,19 @@ while ingress session affinity is set.
 **That cause has since been removed at BOTH layers, in code, and neither fix has
 been exercised by a run of this workflow:**
 
-1. **The template.** `admin-plane/app-deployments.bicep` now renders
-   `ingress.stickySessions.affinity: 'none'` for any app carrying
-   `multiRevision: true` (#3399), and `main.bicep` sets `multiRevision: true` for
-   `loom-console` and nothing else. Before that change the property appeared
-   NOWHERE in `platform/fiab/bicep`, so an affinity set out-of-band could not be
-   cleared by any deploy — the template was neither setting nor unsetting the
-   value it was conflicting with. That is also the answer to "why did the console
-   move from Single to Multiple?": a deploy did it, deliberately, and the pairing
-   is now self-healing on every re-render.
+1. **The template.** `admin-plane/app-deployments.bicep` renders
+   `ingress.stickySessions.affinity: 'none'`. **As of 2026-09-20 it renders that
+   for every app carrying `ingressPort` (six of them), not only for apps
+   carrying `multiRevision: true` (#3399), and `main.bicep` no longer sets
+   `multiRevision: true` for `loom-console` or for anything else.** The widening
+   was required precisely because the console was the only `multiRevision` app,
+   so the old scoping would have taken the assertion out of the template along
+   with the flag. Before #3399 the property appeared NOWHERE in
+   `platform/fiab/bicep`, so an affinity set out-of-band could not be cleared by
+   any deploy — the template was neither setting nor unsetting the value it was
+   conflicting with. That was also the answer to "why did the console move from
+   Single to Multiple?": a deploy did it, deliberately. It has since moved back,
+   for the reasons in the banner above.
 2. **The workflow.** The *Ensure multiple-revision mode* step no longer exits 1
    with an unexplained code: it classifies the read failure separately from the
    write failure, enters the sticky branch ONLY when ARM's own error names it,
@@ -196,9 +200,22 @@ az containerapp revision list -n loom-console -g <rg> \
 
 ## One-time enablement on an already-deployed app
 
-If a console was deployed before this change (single-revision), the workflow's
-step 1 flips it to multiple-revision mode automatically on the first run. To do
-it by hand:
+> **DO NOT RUN THIS AS OF 2026-09-20.** Single-revision mode is now the intended
+> state for `loom-console` in every boundary, and the command below is exactly
+> the action the banner at the top of this file warns against: it flips the live
+> app to Multiple while `main.bicep` declares Single and no revision-retirement
+> step exists, so revisions accumulate until the next infra redeploy flips it
+> back. That accumulation is what froze the estate — 251 active revisions, 484
+> replicas, all Unhealthy, 11 commits of drift. The workflow's step 1 does the
+> same thing automatically, which is why the workflow is `disabled_manually`.
+>
+> This section is kept because it documents the mechanism, not because it is a
+> procedure to follow. If you genuinely need the lane back, follow *"If you want
+> this lane back"* in the banner first.
+
+If a console was deployed before #3399 (single-revision), the workflow's step 1
+flips it to multiple-revision mode automatically on the first run. To do it by
+hand:
 
 ```
 az containerapp revision set-mode -n loom-console -g <rg> --mode multiple
