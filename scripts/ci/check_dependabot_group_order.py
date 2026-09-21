@@ -139,8 +139,19 @@ def subsumes(earlier: dict, later: dict) -> bool:
         return pe is None or "*" in [str(p) for p in pe]
     pl = [str(p) for p in pl]
 
-    # Anything `earlier` explicitly excludes, it does not swallow.
-    if pl and all(any(_covers(x, t) for x in ex) for t in pl):
+    # AN EXCLUSION THAT OVERLAPS `later` LEAVES IT ALIVE, so fall silent.
+    # Three cases, and the middle one is why presence alone is not the test:
+    #   exclude ["lodash"]         vs ["azure-*"] -> no overlap, later is DEAD
+    #   exclude ["azure-identity"] vs ["azure-*"] -> overlap, later still
+    #                                                serves azure-identity
+    #   exclude ["azure-*"]        vs ["azure-*"] -> full cover, later alive
+    # An earlier round rescoped the MESSAGE for the middle case and left the
+    # FLAG, so a valid config still failed a required check -- the finding was
+    # closed at its label, not at its site. Silence is correct here: the
+    # remediation this guard prints ("move it above") would itself change
+    # behaviour, making `azure-sdk` capture every azure package when the
+    # config deliberately routes only one there.
+    if any(_covers(t, x) or _covers(x, t) for x in ex for t in pl):
         return False
 
     if pe is None:
@@ -187,19 +198,17 @@ def audit(doc: dict) -> list[str]:
         where = f"{entry.get('package-ecosystem')} {entry.get('directory')}"
         groups = entry.get("groups") or {}
         for named, catcher, lane in shadowed(groups):
-            # SAY WHAT IS ESTABLISHED, NOT MORE (R7). When `catcher` carries
-            # exclusions that spare SOME of `named`'s packages, "can never
-            # match" is untrue -- the exclusion hands those back. The claim is
-            # therefore scoped to what subsumption actually decides.
-            partial = bool((groups.get(catcher) or {}).get("exclude-patterns"))
-            verdict = ("is reachable only for packages '{c}' explicitly "
-                       "excludes".format(c=catcher) if partial
-                       else "can never match")
+            # "can never match" is unconditional again, and safely so: a
+            # catcher whose exclusions OVERLAP `named` no longer reaches this
+            # point -- `subsumes` falls silent there. An earlier round tried
+            # to rescope this sentence instead of fixing the flag, which left
+            # a valid config failing a required check AND produced a message
+            # that contradicted itself ("is DEAD ... is reachable only for").
             problems.append(
                 f"{where}: group '{named}' is DEAD - '{catcher}' is listed "
-                f"above it on the '{lane}' lane and matches what '{named}' "
-                f"would have, so '{named}' {verdict}. Move it above "
-                f"'{catcher}', or narrow '{catcher}'. (GitHub: \"If a "
+                f"above it on the '{lane}' lane and matches everything "
+                f"'{named}' would have, so '{named}' can never match. Move it "
+                f"above '{catcher}', or narrow '{catcher}'. (GitHub: \"If a "
                 f"dependency matches more than one rule, it's included in the "
                 f"first group that it matches.\")"
             )

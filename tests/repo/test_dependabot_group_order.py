@@ -130,18 +130,17 @@ def test_an_irrelevant_exclusion_spares_nothing():
 
 
 def test_a_relevant_exclusion_does_spare():
-    """And the complementary direction, or the fix above is just noise.
+    """An exclusion covering the later group's patterns keeps it alive.
+
+    The PARTIAL case (excluding one member of a broader group) lives in
+    test_a_partial_exclusion_falls_silent — an earlier version asserted here
+    that partial absorption should still flag, which mis-transcribed the
+    specification and pinned the defect a reviewer had already described.
 
     Breaks if: exclusions stop being tested against the later group.
     """
     assert not audit(_entry({
         "catch": {"patterns": ["*"], "exclude-patterns": ["azure-*"]},
-        "azure-sdk": {"patterns": ["azure-*"]},
-    }))
-    # Partial absorption: excluding ONE member of a broader later group does
-    # not spare the whole group.
-    assert audit(_entry({
-        "catch": {"patterns": ["*"], "exclude-patterns": ["azure-identity"]},
         "azure-sdk": {"patterns": ["azure-*"]},
     }))
 
@@ -182,31 +181,65 @@ def test_a_patternless_duplicate_after_a_starred_catch_all_is_caught():
     }))
 
 
-def test_a_partial_exclusion_does_not_claim_total_death():
-    """R7: the message must not assert more than subsumption established.
+def test_a_partial_exclusion_falls_silent():
+    """A group the catcher partly excludes is NOT dead, so do not flag it.
 
-    When the catcher excludes one member of a broader later group, that group
-    is still reachable for the excluded package, so "can never match" is
-    untrue.
+    THIS TEST USED TO PIN THE WRONG VERDICT. It asserted the guard flagged
+    this case while its own docstring explained why flagging was wrong —
+    accepting the finding in prose and ratifying the defect in the assertion,
+    three lines apart. Third instance of that shape in this file's history.
 
-    Breaks if: the message goes back to a single unconditional phrasing.
+    The remediation made it worse than a wording bug: "move it above 'catch'"
+    would make `azure-sdk` capture EVERY azure package, when the config
+    deliberately routes only `azure-identity` there. A correct config blocked
+    in a required check, with a fix that changes behaviour.
+
+    Breaks if: `subsumes` stops testing exclusions for OVERLAP.
     """
-    problems = audit(_entry({
+    assert not audit(_entry({
         "catch": {"patterns": ["*"], "exclude-patterns": ["azure-identity"]},
         "azure-sdk": {"patterns": ["azure-*"]},
     }))
-    assert problems, "partial absorption should still be reported"
-    assert "can never match" not in problems[0], problems[0]
-    assert "excludes" in problems[0], problems[0]
 
 
-def test_a_total_shadow_still_says_can_never_match():
-    # Breaks if: the scoped wording leaks onto the unconditional case.
+def test_a_total_shadow_says_can_never_match_even_with_an_exclusion():
+    """The mirror of the above: an IRRELEVANT exclusion must not soften the
+    message.
+
+    An earlier fix discriminated on `exclude-patterns` PRESENCE, so a
+    total-death case carrying `exclude-patterns: ["pytest*"]` rendered as
+    "reachable only for packages 'catch' explicitly excludes" — claiming it
+    receives packages it cannot match. Same R7 defect, pointing the other way.
+
+    Breaks if: the message goes back to branching on presence.
+    """
     problems = audit(_entry({
-        "catch": {"patterns": ["*"]},
+        "catch": {"patterns": ["*"], "exclude-patterns": ["pytest*"]},
         "azure-sdk": {"patterns": ["azure-*"]},
     }))
-    assert problems and "can never match" in problems[0], problems
+    assert problems, "no azure package matches pytest*, so azure-sdk is dead"
+    assert "can never match" in problems[0], problems[0]
+    assert "reachable only for" not in problems[0], problems[0]
+
+
+def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
+    """Spelling dependence survived once in the `pl is None` branch.
+
+    `excl zzz` above a duplicate spelled `{patterns:["*"]}` fired, while the
+    same config spelled `{}` did not. Both must agree: the duplicate still
+    serves `zzz`, so neither should flag.
+
+    Breaks if: the two branches diverge again.
+    """
+    starred = audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["zzz"]},
+        "dupe": {"patterns": ["*"]},
+    }))
+    patternless = audit(_entry({
+        "catch": {"patterns": ["*"], "exclude-patterns": ["zzz"]},
+        "dupe": {},
+    }))
+    assert not starred and not patternless, (starred, patternless)
 
 
 def test_matching_is_case_sensitive_so_the_guard_agrees_with_ci():
