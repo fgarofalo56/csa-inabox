@@ -244,13 +244,16 @@ def test_an_exclusion_gives_the_same_verdict_in_both_spellings():
         "catch": {"patterns": ["*"], "exclude-patterns": ["zzz"]},
         "dupe": {},
     }))
-    assert not starred, (
-        "the starred spelling flagged; the duplicate still serves `zzz`")
-    assert not patternless, (
-        "the patternless spelling flagged; the duplicate still serves `zzz`")
+    # THE EQUALITY GOES FIRST, and the order is load-bearing. Asserting it
+    # last made it UN-KILLABLE: if either individual assertion fails execution
+    # stops, and if both pass both are `[]`, so `[] == []` holds necessarily —
+    # assertion-design.md's own example. Checked first, it is the arm that
+    # actually fires on the disagreement this test is named for.
     assert starred == patternless, (
         f"the two spellings disagree: starred={starred} "
-        f"patternless={patternless} - same config, so same verdict")
+        f"patternless={patternless} — same config, so same verdict")
+    assert not starred, (
+        "both spellings flagged; the duplicate still serves `zzz`")
 
 
 def test_an_undecidable_exclusion_falls_silent_not_flags():
