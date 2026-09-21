@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13308905003240021383"
+      "templateHash": "16829017670487984228"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "18024623767376366909"
+              "templateHash": "8332686171996800692"
             }
           },
           "definitions": {
@@ -16942,7 +16942,6 @@
                         "external": true,
                         "healthPath": "/api/health",
                         "tier": "console",
-                        "multiRevision": true,
                         "minReplicas": 2,
                         "maxReplicas": 6,
                         "telemetryEnabled": "[variables('loomConsoleTelemetryEnabled')]",
@@ -17066,7 +17065,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3614515216360489680"
+                      "templateHash": "4959934690246711093"
                     }
                   },
                   "parameters": {
@@ -17224,7 +17223,7 @@
                         "workloadProfileName": "[if(contains(parameters('apps')[copyIndex()], 'workloadProfile'), parameters('apps')[copyIndex()].workloadProfile, 'Consumption')]",
                         "configuration": {
                           "activeRevisionsMode": "[if(and(contains(parameters('apps')[copyIndex()], 'multiRevision'), parameters('apps')[copyIndex()].multiRevision), 'Multiple', 'Single')]",
-                          "ingress": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), union(createObject('external', if(contains(parameters('apps')[copyIndex()], 'external'), parameters('apps')[copyIndex()].external, false()), 'targetPort', parameters('apps')[copyIndex()].ingressPort, 'transport', 'http', 'allowInsecure', false(), 'traffic', createArray(createObject('latestRevision', true(), 'weight', 100))), if(and(contains(parameters('apps')[copyIndex()], 'multiRevision'), parameters('apps')[copyIndex()].multiRevision), createObject('stickySessions', createObject('affinity', 'none')), createObject())), null())]",
+                          "ingress": "[if(contains(parameters('apps')[copyIndex()], 'ingressPort'), createObject('external', if(contains(parameters('apps')[copyIndex()], 'external'), parameters('apps')[copyIndex()].external, false()), 'targetPort', parameters('apps')[copyIndex()].ingressPort, 'transport', 'http', 'allowInsecure', false(), 'traffic', createArray(createObject('latestRevision', true(), 'weight', 100)), 'stickySessions', createObject('affinity', 'none')), null())]",
                           "registries": [
                             {
                               "server": "[parameters('acrLoginServer')]",
