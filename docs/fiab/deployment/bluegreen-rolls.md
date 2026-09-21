@@ -1,5 +1,36 @@
 # Blue-green console rolls (BR-BLUEGREEN)
 
+> **SUPERSEDED FOR THE COMMERCIAL CONSOLE, 2026-09-20.** `admin-plane/main.bicep`
+> no longer declares `multiRevision: true` for `loom-console`, so the app renders
+> **Single**-revision mode and this lane's premise no longer holds there. Read
+> this section before dispatching this workflow: its *Ensure multiple-revision
+> mode* step would flip the live app back to Multiple and **reopen the defect
+> below**.
+>
+> **Why it was reversed.** Multiple mode means `az containerapp update --image`
+> creates a revision and deactivates nothing, and this roll's rollback
+> re-updates the image rather than reactivating — so a *failed* roll added two.
+> Nothing retired them. Measured 2026-09-20: **251 active revisions holding 484
+> replicas** at `minReplicas: 2` apiece, **all Unhealthy**. New revisions
+> provisioned cleanly (`provisioningState: Provisioned`,
+> `provisioningError: null`) and then received **zero replicas against a floor of
+> two** — placement failing, not provisioning, which ACA reports no error for.
+> `Wait for revision health` timed out, auto-rollback landed on an equally
+> starved revision, and the estate sat **11 commits behind for two days**.
+> Confirmed causal by intervention: starved revisions took replicas the moment
+> older ones were deactivated.
+>
+> Set against that, this lane has **never once succeeded** (4 runs, 4 failures,
+> nothing since 2026-07-31 — the table below). The cost was being paid
+> continuously for a capability that has never worked.
+>
+> **If you want this lane back**, restore `multiRevision: true` in
+> `admin-plane/main.bicep` *and* ship revision retirement on the roll's success
+> path first — otherwise the accumulation resumes immediately. Note also that
+> `app-deployments.bicep` now asserts `affinity:'none'` for **every** ingress app
+> rather than only `multiRevision` ones, so the sticky-session conflict this lane
+> died on stays fixed either way.
+
 **Status:** active but **UNVERIFIED** — see *Verification status* below ·
 **Supersedes:** the in-place `az containerapp update --image` roll
 (`gov-console-roll.yml` and manual `containerapp update`).

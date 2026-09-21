@@ -99,22 +99,35 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // this only enables revisions to accumulate so a bad roll never becomes
       // an instant outage. See docs/fiab/deployment/bluegreen-rolls.md.
       activeRevisionsMode: (contains(app, 'multiRevision') && app.multiRevision) ? 'Multiple' : 'Single'
-      // MULTIPLE-REVISION MODE REQUIRES affinity:'none' — ACA enforces this, and
-      // until #3399 nothing in this template said so. `multiRevision: true` has
-      // been declared for loom-console since #2064 (2026-07-14), but ingress
-      // stickySessions appeared NOWHERE in platform/fiab/bicep, so when affinity
-      // was 'sticky' out-of-band ACA rejected EVERY attempt to switch the mode
-      // with ContainerAppInvalidIngressStickySessionRevisionMode — and no deploy
-      // could clear it, because the template neither set nor unset the value it
-      // was conflicting with. console-bluegreen-roll.yml failed 4 of 4 runs on
-      // exactly that, and has still never succeeded.
+      // AFFINITY IS ASSERTED FOR EVERY INGRESS APP, and the scoping changed on
+      // 2026-09-20 for a reason worth stating rather than silently widening.
       //
-      // Asserting it HERE makes the pairing self-healing: whatever affinity is
-      // live, the next deploy renders the one value its revision mode permits.
+      // The history: ACA REQUIRES affinity:'none' in multiple-revision mode.
+      // Until #3399 nothing in this template said so, and `multiRevision: true`
+      // had been declared for loom-console since #2064 while ingress
+      // stickySessions appeared NOWHERE in platform/fiab/bicep — so when
+      // affinity was 'sticky' out-of-band ACA rejected EVERY attempt to switch
+      // the mode with ContainerAppInvalidIngressStickySessionRevisionMode, and
+      // no deploy could clear it because the template neither set nor unset the
+      // value it was conflicting with. console-bluegreen-roll.yml failed 4 of 4
+      // runs on exactly that and has still never succeeded.
       //
-      // Scoped to multiRevision apps on purpose — a Single-mode app keeps the
-      // property absent, byte-identical to before. Absent already means 'none'
-      // to ACA, so this is a no-op for behaviour and a guarantee for the mode.
+      // #3399 asserted the value, but SCOPED IT TO multiRevision APPS, on the
+      // reasoning that a Single-mode app keeps the property absent and "absent
+      // already means 'none' to ACA". That reasoning is sound for BEHAVIOUR and
+      // wrong for ENFORCEMENT, and the difference only became visible when
+      // loom-console moved to Single mode: the console was the only
+      // multiRevision app, so scoping the assertion to multiRevision meant the
+      // assertion left the template with it. What had been keeping sticky
+      // sessions out was ACA's MODE REQUIREMENT, not this template's intent —
+      // and Single mode lifts that requirement. An out-of-band 'sticky' would
+      // then persist, unopposed, on the one app whose comments spend twenty
+      // lines explaining why sticky is the wrong fix.
+      //
+      // So it is now unconditional. Behaviourally this is still a no-op for
+      // every app that was Single before — absent and 'none' are the same thing
+      // to ACA — but the guarantee no longer depends on which revision mode an
+      // app happens to be in.
       //
       // Do NOT "fix" a scaled-out feature by flipping this to 'sticky': that is
       // what breaks blue-green, and lib/auth/msal.ts documents the console as
@@ -122,17 +135,16 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // Cosmos-persisted precisely so a round-robin request finds a warm cache).
       // The one caller that wants affinity is SQL query-cancel — see #3400; its
       // fix is a cross-replica cancel signal, not affinity.
-      ingress: contains(app, 'ingressPort') ? union({
+      ingress: contains(app, 'ingressPort') ? {
         external: contains(app, 'external') ? app.external : false
         targetPort: app.ingressPort
         transport: 'http'
         allowInsecure: false
         traffic: [{ latestRevision: true, weight: 100 }]
-      }, (contains(app, 'multiRevision') && app.multiRevision) ? {
         stickySessions: {
           affinity: 'none'
         }
-      } : {}) : null
+      } : null
       registries: [
         {
           server: acrLoginServer
