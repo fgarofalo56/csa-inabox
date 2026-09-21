@@ -2905,10 +2905,19 @@ jobs:
           # projection is KEPT anyway: it is what makes that an assertion
           # rather than an assumption. NOTE it does NOT watch Gov -- a draft
           # claimed it was "the only arm that still watches Gov", which is
-          # false: this step ends in `reconcile-policy.mjs --boundary
-          # commercial` (:2997), every --boundary in this file is commercial,
-          # and the app list comes from the Commercial RG. Nothing here reads
-          # Gov at all.
+          # false: this step ends in a `reconcile-policy.mjs --boundary
+          # commercial` call, EVERY --boundary occurrence in this file is
+          # commercial, and the app list comes from the Commercial RG. Nothing
+          # here reads Gov at all.
+          #
+          # NO LINE NUMBER ON PURPOSE. The draft cited that call by line. It
+          # was correct when written and wrong when committed: the same commit
+          # added ten lines ABOVE it, so the call shifted down by exactly that
+          # many and the citation walked out from under itself. A
+          # self-referential line number in a comment that sits above its
+          # referent breaks whenever the comment grows -- including, as here,
+          # in the very edit that writes it. "Every --boundary in this file is
+          # commercial" is the durable half and is checkable by grep.
           while IFS= read -r APP; do
             if [ -z "$APP" ]; then
               continue
