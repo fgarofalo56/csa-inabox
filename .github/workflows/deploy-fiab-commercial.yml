@@ -2883,41 +2883,32 @@ jobs:
           # Unhealthy, 11 commits of drift. console-bluegreen-roll.yml is
           # disabled_manually.
           #
-          # SAY "COMMERCIAL", NOT "NO APP". An earlier draft of this comment
-          # said no app anywhere, which is a claim this workstation cannot
-          # even check: the Gov console is a different tenant and Gov receipts
-          # come from Actions runs, never local az. `apps[]` is cloud-invariant
-          # and carried `multiRevision: true` at deploy time, and
-          # gov-console-roll.yml is rolling steadily -- 242 runs over
-          # 2026-07-14..09-20, 214 success / 19 cancelled / 9 failure -- so
-          # the Gov console is very likely STILL Multiple and still
-          # accumulating a revision per roll, which is the exact mechanism
-          # that froze Commercial. Tracked in #4644 and NOT fixed here; the
-          # bicep change reaches Gov only on its next deploy.
+          # SAY "COMMERCIAL", NOT "NO APP". Whether any GOV app is in Multiple
+          # mode is a claim this workstation cannot check: the Gov console is a
+          # different tenant, a local `az` returns the COMMERCIAL app, and Gov
+          # receipts come from Actions runs. `apps[]` is cloud-invariant and
+          # carried `multiRevision: true` at deploy time, and gov-console-roll
+          # is rolling steadily -- 242 runs over 2026-07-14..09-20, 214 success
+          # / 19 cancelled / 9 failure -- so the Gov console is very likely
+          # STILL Multiple and still accumulating a revision per roll, the
+          # exact mechanism that froze Commercial. Tracked in #4644 and NOT
+          # fixed here; the bicep change reaches Gov on its next deploy.
           #
-          # QUOTE THE POPULATION, NOT THE SAMPLE. A draft of this comment said
-          # "6 of 6", which was a review's `--limit` sample repeated here as a
-          # fact. The real population is above, it is stronger evidence than
-          # the sample was, and the sample had no business being written down
-          # as though it were the whole.
+          # QUOTE THE POPULATION, NOT THE SAMPLE. The run counts above are the
+          # whole population, not a `--limit` page of it.
           #
           # So newest == serving holds for Commercial today. The trafficWeight
           # projection is KEPT anyway: it is what makes that an assertion
-          # rather than an assumption. NOTE it does NOT watch Gov -- a draft
-          # claimed it was "the only arm that still watches Gov", which is
-          # false: this step ends in a `reconcile-policy.mjs --boundary
-          # commercial` call, EVERY --boundary occurrence in this file is
-          # commercial, and the app list comes from the Commercial RG. Nothing
-          # here reads Gov at all.
+          # rather than an assumption. It does NOT watch Gov -- this step ends
+          # in a `reconcile-policy.mjs --boundary commercial` call, EVERY
+          # --boundary occurrence in this file is commercial, and the app list
+          # comes from the Commercial RG. Nothing here reads Gov at all.
           #
-          # NO LINE NUMBER ON PURPOSE. The draft cited that call by line. It
-          # was correct when written and wrong when committed: the same commit
-          # added ten lines ABOVE it, so the call shifted down by exactly that
-          # many and the citation walked out from under itself. A
-          # self-referential line number in a comment that sits above its
-          # referent breaks whenever the comment grows -- including, as here,
-          # in the very edit that writes it. "Every --boundary in this file is
-          # commercial" is the durable half and is checkable by grep.
+          # NO LINE NUMBER ON PURPOSE. A self-referential line citation in a
+          # comment that sits above its referent breaks whenever the comment
+          # grows -- including in the very edit that writes it. "Every
+          # --boundary in this file is commercial" is the durable form and is
+          # checkable by grep.
           while IFS= read -r APP; do
             if [ -z "$APP" ]; then
               continue
