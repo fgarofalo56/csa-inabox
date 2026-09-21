@@ -57,23 +57,60 @@ def test_explicit_wildcard_is_a_catch_all():
 
 
 def test_missing_patterns_key_is_also_a_catch_all():
-    """THE FALSE NEGATIVE THIS GUARD EXISTS TO AVOID.
+    """A group with no `patterns` matches everything of its lane.
 
-    A group with no `patterns` matches everything of its dependency-type
-    (GitHub's own Example 1). A checker that only knows the explicit wildcard
-    reports GREEN while a named group sits shadowed.
+    GitHub's Example 1 relies on exactly this. A checker that only knows the
+    explicit wildcard reports GREEN while a named group sits shadowed.
+
+    NOTE the bound, which an earlier version of this test got wrong: a group
+    carrying `dependency-type` is NARROWED, so it absorbs only part of a later
+    group and is deliberately NOT a catch-all — see
+    test_a_narrowed_group_is_not_a_catch_all.
 
     Breaks if: `is_catch_all` starts requiring a `patterns` key.
     """
-    assert is_catch_all({"dependency-type": "production"})
     assert is_catch_all({})
+    assert is_catch_all({"applies-to": "version-updates"})
+
+
+def test_a_wildcard_anywhere_in_the_list_is_a_catch_all():
+    """`patterns` is an OR-LIST, so a wildcard ANYWHERE matches everything.
+
+    THIS ASSERTION USED TO BE INVERTED. The first version of the guard
+    compared `patterns == ["*"]` and this test asserted that
+    `["*", "azure-*"]` was NOT a catch-all — so the test RATIFIED the miss,
+    and whoever later fixed `is_catch_all` would have got a red test telling
+    them they had broken it. A test that pins a bug is worse than no test.
+
+    Breaks if: `is_catch_all` goes back to exact-list comparison.
+    """
+    assert is_catch_all({"patterns": ["*", "azure-*"]})
+    assert is_catch_all({"patterns": ["azure-*", "*"]})
 
 
 def test_a_named_pattern_is_not_a_catch_all():
     # Breaks if: the check widens to treat any group as a catch-all, which
     # would make every ordering look like shadowing.
     assert not is_catch_all({"patterns": ["azure-*"]})
-    assert not is_catch_all({"patterns": ["*", "azure-*"]})
+
+
+def test_a_narrowed_group_is_not_a_catch_all():
+    """A group narrowed by exclude-patterns / dependency-type / update-types
+    absorbs only PART of a later group, so reporting it as shadowing would
+    assert something untrue (R7).
+
+    GitHub's Example 1 bounds it: a `production` group above `rubocop*`
+    absorbs the production rubocop deps, but "development dependencies
+    matching rubocop* will be included in the rubocop group".
+
+    Breaks if: `_narrowed` stops disqualifying any of the three keys — and the
+    failure mode is a REQUIRED check rejecting a correct config.
+    """
+    assert not is_catch_all({"patterns": ["*"],
+                             "exclude-patterns": ["azure-*"]})
+    assert not is_catch_all({"dependency-type": "production"})
+    assert not is_catch_all({"patterns": ["*"],
+                             "update-types": ["version-update:semver-patch"]})
 
 
 def test_lane_defaults_to_version_updates():
@@ -97,8 +134,10 @@ def test_catch_all_above_a_named_group_is_reported():
 
 def test_patternless_catch_all_above_a_named_group_is_reported():
     # Breaks if: the patternless form stops counting as a catch-all.
+    # Uses a bare group — one carrying `dependency-type` is narrowed and is
+    # covered by test_a_narrowed_group_does_not_produce_a_false_positive.
     problems = audit(_entry({
-        "all-prod": {"dependency-type": "production"},
+        "catch": {},
         "azure-sdk": {"patterns": ["azure-*"]},
     }))
     assert problems, (
@@ -123,6 +162,53 @@ def test_lanes_do_not_shadow_each_other():
     assert not audit(_entry({
         "sec-catch": {"applies-to": "security-updates", "patterns": ["*"]},
         "azure-sdk": {"patterns": ["azure-*"]},
+    }))
+
+
+def test_a_prefix_glob_shadows_a_narrower_named_group():
+    """NAMED OVER NAMED — the arm a catch-all-only check is silent on.
+
+    Every named group in this repo is itself a prefix glob, so a narrower one
+    added after it is dead on arrival: `azure-identity` under `azure-*`,
+    `codeql-init` under `github/codeql-action*`.
+
+    Breaks if: `shadowed` goes back to comparing only against catch-alls.
+    """
+    assert audit(_entry({
+        "azure-sdk": {"patterns": ["azure-*"]},
+        "azure-identity": {"patterns": ["azure-identity"]},
+    }))
+    assert audit(_entry({
+        "broad": {"patterns": ["github/*"]},
+        "codeql-action": {"patterns": ["github/codeql-action*"]},
+    }))
+
+
+def test_a_narrowed_group_does_not_produce_a_false_positive():
+    """The "cannot pass" mode: a REQUIRED check rejecting a correct config.
+
+    `patterns: ["*"]` WITH `exclude-patterns: ["azure-*"]` above `azure-sdk`
+    is idiomatic and correct — the exclusion is precisely what keeps the later
+    group alive.
+
+    Breaks if: `_narrowed` stops disqualifying these keys.
+    """
+    for narrowing in (
+        {"patterns": ["*"], "exclude-patterns": ["azure-*"]},
+        {"dependency-type": "production"},
+        {"patterns": ["*"], "update-types": ["version-update:semver-patch"]},
+    ):
+        assert not audit(_entry({
+            "narrow": narrowing,
+            "azure-sdk": {"patterns": ["azure-*"]},
+        })), f"false positive on a group narrowed by {sorted(narrowing)}"
+
+
+def test_unrelated_prefix_globs_do_not_shadow():
+    # Breaks if: subsumption widens to match unrelated prefixes.
+    assert not audit(_entry({
+        "azure-sdk": {"patterns": ["azure-*"]},
+        "codeql-action": {"patterns": ["github/codeql-action*"]},
     }))
 
 

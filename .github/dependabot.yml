@@ -8,17 +8,19 @@
 # bump walks in. So the bar stays, and the number of OBJECTS carrying it drops.
 #
 # Measured 2026-09-20: 22 of 26 open PRs were Dependabot, each needing 2
-# reviews = 44 review runs. Grouped steady state is ~8 version-lane PRs = ~16
-# runs — NOT "~5", which an earlier draft got by comparing RUNS against ENTRIES
-# and by ignoring that the three named groups below each open their own PR. The
-# saving is real and smaller than first claimed. The backlog was not CI-blocked:
+# reviews = 44 review runs. The saving is real; DO NOT PUT A NUMBER ON IT.
+# Two drafts tried: "~5" counted update ENTRIES and "~8" counted version-lane
+# GROUPS, and both made the same error — substituting config objects for PRs.
+# Dependabot opens a PR per GROUP PER MANIFEST DIRECTORY, and `pip /` alone
+# spans eleven directories, so the ceiling is far above either figure. The
+# floor is broken by the same evidence cited below: #4617/#4618 are one bump
+# in two directories in one week. The backlog was not CI-blocked either:
 # #4477 carried 38 check-runs, all COMPLETED.
 #
-# GROUPING IS PER MANIFEST DIRECTORY, so it merges less than it looks like it
-# should. The `pip /` entry spans eleven directories (ten requirements/locks/*
-# plus the root), and #4617/#4618 are the SAME anyio bump in two of them — they
-# stay two PRs after this change. Collapsing those needs `directories:` (plural)
-# plus `group-by: dependency-name`, which is not attempted here.
+# GROUPING IS PER MANIFEST DIRECTORY, which is the whole reason a count is
+# hard. #4617/#4618 are the SAME anyio bump in two of the eleven `pip /`
+# directories and stay two PRs after this change. Collapsing those needs
+# `directories:` (plural) plus `group-by: dependency-name`, not attempted here.
 #
 # TWO catch-alls per entry, not one. A group defaults to
 # `applies-to: version-updates`, so a security-updates group is NOT redundant —
@@ -109,6 +111,20 @@ updates:
     # as "#4598-#4606", which silently included #4601 — a loom-duckdb uvicorn
     # bump belonging to the pip entry above. A contiguous range is not a
     # membership test; the members were enumerated individually after that.
+    #
+    # THE WEDGE HAZARD AND ITS REMEDY. A grouped PR is all-or-nothing: one
+    # breaking major holds the rest. `DO NOT CLOSE` below forbids the reflex
+    # without naming the alternative, so: use `@dependabot ignore <dep> <ver>`
+    # on the PR. That excludes the one offender and lets Dependabot reopen the
+    # group without it — unlike closing, which permanently suppresses the
+    # version for every package in the PR.
+    #
+    # NOT split by `dependency-type`. Measured on the 10 open portal PRs: 6 are
+    # `build(deps)` and 4 are `build(deps-dev)`, so a development-only
+    # catch-all yields 7 PRs where one catch-all yields 1, and leaves the six
+    # PRODUCTION packages — the ones that can actually break the portal — as
+    # costly as today. The eslint bump that motivated this is not
+    # representative of the directory.
     groups:
       portal-version:
         applies-to: version-updates
@@ -187,12 +203,21 @@ updates:
       # The catch-alls sit AFTER arrow-stack so the four crates above still
       # arrive as their own PR on the version lane. On the SECURITY lane they
       # do not: `applies-to` is matched per lane, so a security catch-all
-      # collects arrow crates too. That is acceptable only because thrift —
-      # the sole open cargo alert (GHSA-2f9f-gq7v-9h6m, medium) — cannot leave
-      # this graph until delta-rs ships on arrow 59, as measured above. If a
-      # takeable cargo advisory ever lands while the arrow bump is still
-      # un-takeable, split it back out rather than closing the combined PR:
-      # the DO-NOT-CLOSE rule above applies to every Dependabot PR here.
+      # collects arrow crates too.
+      #
+      # STATE THE MECHANISM THE RIGHT WAY ROUND. A draft said this was
+      # "acceptable only because thrift cannot leave this graph", which has it
+      # backwards: Dependabot opens a SECURITY PR ONLY WHEN A FIX IS
+      # REACHABLE, so while thrift is unfixable it raises nothing here at all
+      # and the grouping is inert rather than excused. When it stops being
+      # inert, the bump is takeable by construction.
+      #
+      # THE RESIDUAL RISK — written down because it CAN be false — is an
+      # advisory against arrow/parquet/datafusion/deltalake THEMSELVES whose
+      # only fix is a version this crate cannot take. Then the security group
+      # would carry a takeable advisory wedged behind an un-takeable one.
+      # Remedy is `@dependabot ignore <crate> <version>`, never closing: the
+      # DO-NOT-CLOSE rule above applies to every Dependabot PR here.
       cargo-version:
         applies-to: version-updates
         patterns: ["*"]
