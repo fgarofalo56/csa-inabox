@@ -2888,17 +2888,27 @@ jobs:
           # even check: the Gov console is a different tenant and Gov receipts
           # come from Actions runs, never local az. `apps[]` is cloud-invariant
           # and carried `multiRevision: true` at deploy time, and
-          # gov-console-roll.yml is green several times a day (6 of 6, latest
-          # 2026-09-20T05:00Z) — so the Gov console is very likely STILL
-          # Multiple and still accumulating a revision per roll, which is the
-          # exact mechanism that froze Commercial. That is tracked separately
-          # and is NOT fixed here; the bicep change reaches Gov only on its
-          # next deploy, and no Gov deploy receipt exists for it.
+          # gov-console-roll.yml is rolling steadily -- 242 runs over
+          # 2026-07-14..09-20, 214 success / 19 cancelled / 9 failure -- so
+          # the Gov console is very likely STILL Multiple and still
+          # accumulating a revision per roll, which is the exact mechanism
+          # that froze Commercial. Tracked in #4644 and NOT fixed here; the
+          # bicep change reaches Gov only on its next deploy.
+          #
+          # QUOTE THE POPULATION, NOT THE SAMPLE. A draft of this comment said
+          # "6 of 6", which was a review's `--limit` sample repeated here as a
+          # fact. The real population is above, it is stronger evidence than
+          # the sample was, and the sample had no business being written down
+          # as though it were the whole.
           #
           # So newest == serving holds for Commercial today. The trafficWeight
           # projection is KEPT anyway: it is what makes that an assertion
-          # rather than an assumption, and it is the only arm that still
-          # watches Gov.
+          # rather than an assumption. NOTE it does NOT watch Gov -- a draft
+          # claimed it was "the only arm that still watches Gov", which is
+          # false: this step ends in `reconcile-policy.mjs --boundary
+          # commercial` (:2997), every --boundary in this file is commercial,
+          # and the app list comes from the Commercial RG. Nothing here reads
+          # Gov at all.
           while IFS= read -r APP; do
             if [ -z "$APP" ]; then
               continue
