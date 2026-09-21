@@ -128,15 +128,23 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // for the apps that were already Single, but state that precisely,
       // because it is REASONED AND MEASURED, NOT DOCUMENTED: ACA's affinity
       // enum is exactly {none, sticky}; 28 of the 29 ingress apps LIVE IN THE
-      // RESOURCE GROUP report `stickySessions: null`; and a binary enum whose
-      // absent state is not one value behaves as the other. Two independent
-      // reviews tried and neither could cite a Microsoft doc stating the
-      // default. If you find one, cite it here.
+      // RESOURCE GROUP reported `stickySessions: null` AS OF 2026-09-20,
+      // BEFORE this change deployed; and a binary enum whose absent state is
+      // not one value behaves as the other. EXPECT THAT NUMBER TO FALL: the
+      // five non-console apps in `apps[]` (loom-mcp, loom-mcp-bridge,
+      // loom-activator, loom-mirroring, loom-direct-lake-shim) all read null
+      // today and are inside the 28, so the next infra deploy renders
+      // affinity:'none' on them and the count becomes 23 of 29. This
+      // measurement supports a change whose purpose is to falsify it; that is
+      // intended, not drift.
+      // Two independent reviews tried and neither could cite a Microsoft doc
+      // stating the default. If you find one, cite it here.
       // NOT claimed: that those apps issue no affinity cookie. A draft of this
-      // comment said so and nothing established it -- 25 of the 28 are
-      // internal-only and the one reachable external probe failed on TLS. An
-      // unestablished clause inside the comment whose whole purpose is
-      // separating measured from assumed is the defect it warns about.
+      // comment said so and nothing established it -- 25 of the 28 were
+      // internal-only as of 2026-09-20 and the one reachable external probe
+      // failed on TLS. An unestablished clause inside the comment whose whole
+      // purpose is separating measured from assumed is the defect it warns
+      // about.
       // ARM returns the key PRESENT-AND-NULL rather than normalising it, so
       // "absent" is the accurate word for the template, not for the payload.
       //
