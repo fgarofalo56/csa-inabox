@@ -560,6 +560,53 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def base_update_facts(head: str) -> tuple[list[str], str | None, str]:
+    """Resolve, from LOCAL git, the three facts the re-pin decision needs.
+
+    Returns `(parents, automerge_tree, head_tree)` for
+    `gates.verdict_transfers_across_base_update`, which is pure and cannot run
+    a subprocess itself. Every failure resolves to a value that function
+    REFUSES -- `[]`, `None`, `""` -- so an unreadable repository can only ever
+    lose a transfer, never fabricate one.
+
+    THE OBJECT MUST BE PRESENT LOCALLY. A PR head that was never fetched is not
+    an error to route around: `git rev-parse` fails, `head_tree` comes back
+    empty, and the decision refuses. The caller fetches `pull/N/head` first --
+    measured on #4648, whose head was absent and turned gate 1 into "cannot
+    resolve base or origin/main sha", a blindness that READS exactly like a
+    stale base.
+
+    NEVER discards stderr (R7): a failure says why, and says it as a failure
+    rather than as an empty result.
+    """
+    rc, out, err = sh(["git", "rev-list", "--parents", "-n", "1", head])
+    if rc != 0 or not out.strip():
+        print(f"WARNING: cannot read parents of {head[:12]} (rc={rc}): "
+              f"{err[:200]} - the re-pin will refuse", file=sys.stderr)
+        return [], None, ""
+    # `rev-list --parents -n1` prints "<commit> <parent>..." on one line.
+    parts = out.split()
+    parents = parts[1:]
+
+    rc, out, err = sh(["git", "rev-parse", f"{head}^{{tree}}"])
+    head_tree = out.strip() if rc == 0 else ""
+    if not head_tree:
+        print(f"WARNING: cannot resolve the tree of {head[:12]}: {err[:200]}",
+              file=sys.stderr)
+
+    automerge_tree: str | None = None
+    if len(parents) == 2:
+        # `merge-tree --write-tree` exits NON-ZERO on conflict and writes no
+        # usable tree. That is not an error to report -- it is the answer
+        # "this was not a clean auto-merge", which the decision refuses with a
+        # message distinct from "the trees differ".
+        rc, out, err = sh(["git", "merge-tree", "--write-tree",
+                           parents[0], parents[1]])
+        if rc == 0 and out.strip():
+            automerge_tree = out.strip().splitlines()[0].strip()
+    return parents, automerge_tree, head_tree
+
+
 def derive_context_scopes(
     repo: str, head: str, base_sha: str, origin_main_sha: str, required: list[str]
 ) -> list[gates.ContextScope]:
@@ -691,6 +738,39 @@ def collect(repo: str, number: int) -> dict:
     if not head_date:
         print(f"WARNING: could not resolve head commit date: {err[:200]}", file=sys.stderr)
 
+    # --- RE-PIN ACROSS A BASE UPDATE -------------------------------------
+    # Verdict liveness is a TIMESTAMP proxy, so `update-branch` retires every
+    # verdict beneath it even though it authors nothing. Where the head is
+    # provably the auto-merge of its two parents, the bytes the reviewer
+    # measured are still the bytes on offer, so verdicts are pinned to the
+    # PR-SIDE PARENT's date instead of the merge's.
+    #
+    # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
+    # branch, so the branch tip is the first parent. That is an assumption
+    # about GitHub's merge direction, and it is CHECKED rather than trusted --
+    # `verdict_transfers_across_base_update` requires the approved head to be
+    # among the parents, and the date below is read from whichever parent is
+    # named, so a reversed merge yields a refusal and not a wrong pin.
+    repin_ok, repin_why, repin_date = False, "head is not a base update", ""
+    parents, automerge_tree, head_tree = base_update_facts(head)
+    if len(parents) == 2:
+        repin_ok, repin_why = gates.verdict_transfers_across_base_update(
+            parents, parents[0], automerge_tree, head_tree
+        )
+        if repin_ok:
+            rc2, out2, err2 = sh(
+                ["gh", "api", f"repos/{repo}/commits/{parents[0]}",
+                 "--jq", ".commit.committer.date"]
+            )
+            repin_date = out2.strip() if rc2 == 0 else ""
+            if not repin_date:
+                # Refuse rather than fall back to the head date silently: an
+                # unresolvable parent date is an unmeasurable re-pin, and the
+                # strict behaviour is the safe one.
+                repin_ok = False
+                repin_why = (f"head is a pure base update, but the parent's date "
+                             f"could not be resolved ({err2[:120]}) - refusing")
+
     comments = [
         {"id": c.get("id", 0), "body": c.get("body") or "",
          "created_at": c.get("created_at", "")}
@@ -773,6 +853,7 @@ def collect(repo: str, number: int) -> dict:
         "pr": pr,
         "head": head,
         "head_date": head_date,
+        "repin": {"ok": repin_ok, "why": repin_why, "date": repin_date},
         "comments": comments,
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
@@ -1232,14 +1313,25 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
            "filter admits)", ok, why)
 
     # 2+3 -- verdicts, reduced by conjunction, pinned to the head they measured.
+    # SUBSCRIPTED, never `.get`: deleting the key is a loud KeyError rather than
+    # a silent fall-back to the strict date, which would look like the re-pin
+    # simply never applying.
+    repin = data["repin"]
+    pin_date = repin["date"] if repin["ok"] else data["head_date"]
     live, near = gates.parse_verdicts(
-        data["comments"], data["head_date"], policy["verdict_parsing"]["token_window_chars"]
+        data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
     )
     ok, why = gates.reduce_verdicts(live, near)
     detail = why + (
         f" | live={[(v.token, v.comment_id) for v in live]}"
         f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
     )
+    if repin["ok"]:
+        # Said out loud on every run it applies to. A verdict counted as live
+        # against a date that is NOT the head's is a material fact about how
+        # this decision was reached, and burying it would make the gate's
+        # output disagree with its own rule.
+        detail += f" | RE-PINNED to parent {repin['date']}: {repin['why']}"
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
     # The closing scan is computed HERE, above 3b, because 3b needs the issue
