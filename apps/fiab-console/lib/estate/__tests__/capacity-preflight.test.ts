@@ -238,6 +238,35 @@ describe('remediationFor — a concrete next step, never "check the logs"', () =
     expect(text).toMatch(/will NOT recreate it silently/);
   });
 
+  it('does NOT assert deletion, because a 404 does not establish it (R7)', () => {
+    // MEASURED 2026-09-22 on the live estate. `aasloomk6mvh5sm6z7do` was
+    // reported RESUME_FAILED / not-found; `az resource show --ids` returned it
+    // HEALTHY (S1, state Succeeded) at exactly the snapshot's resource id. The
+    // old text said "It was deleted or moved while the estate was paused" as a
+    // FACT and told the operator to redeploy -- the destructive answer to a
+    // non-problem, against a live resource.
+    //
+    // The same investigation then REFUTED the obvious second guess: the Console
+    // UAMI principal already holds Contributor twice plus Reader at that scope,
+    // so it was not an access gap either. Three causes produce an identical
+    // 404 -- no access, a stale snapshot id, and real deletion -- and two of
+    // the three remedies are destructive if applied to the wrong one. So the
+    // remediation must name all three and give the discriminating command.
+    //
+    // WHAT BREAKS THIS: restoring any sentence that states deletion as
+    // established fact; dropping the `az resource show` discriminator; or
+    // collapsing the three branches back into one, which is what made the
+    // original message confidently wrong.
+    const text = remediationFor('not-found', snapshotEntry());
+    expect(text).not.toMatch(/\bIt was deleted or moved\b/);
+    expect(text).toMatch(/az resource show/);
+    expect(text).toMatch(/403/);
+    expect(text).toMatch(/stale/i);
+    // Both destructive-if-wrong branches must be named explicitly.
+    expect(text).toMatch(/DO NOT redeploy/i);
+    expect(text).toMatch(/redeploy it from bicep/i);
+  });
+
   it('preserves the raw ARM text on an unknown failure and warns against assuming transience', () => {
     const text = remediationFor('unknown', snapshotEntry(), 'HTTP 418 I am a teapot');
     expect(text).toContain('HTTP 418 I am a teapot');
