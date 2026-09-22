@@ -25,6 +25,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.107.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.107.0...csa-inabox-v0.107.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **ci:** correct four version comments that read v2 while pinning v3.0.5 ([#4652](https://github.com/fgarofalo56/csa-inabox/issues/4652)) ([a082030](https://github.com/fgarofalo56/csa-inabox/commit/a082030912949ca837dc6ec61437ee4968773a84))
+* **drain:** teach the ci-green scope guard that a detector can live in its own job ([#4662](https://github.com/fgarofalo56/csa-inabox/issues/4662)) ([356290a](https://github.com/fgarofalo56/csa-inabox/commit/356290aa98741e6d353b12bf1e41b6d36004c08d))
+* **drain:** transfer a review verdict across a base update that authored nothing ([#4654](https://github.com/fgarofalo56/csa-inabox/issues/4654)) ([cefc911](https://github.com/fgarofalo56/csa-inabox/commit/cefc91180700c46054d428f2da77229705e36da6))
+* **estate:** a 404 on resume does not establish deletion — stop asserting it ([#4660](https://github.com/fgarofalo56/csa-inabox/issues/4660)) ([b13a43f](https://github.com/fgarofalo56/csa-inabox/commit/b13a43f47ddad6c9ede10e949eee808b1b61be98))
+* **iac:** migrate every Windows image off the deprecating .NET 6 Marketplace offer ([#4658](https://github.com/fgarofalo56/csa-inabox/issues/4658)) ([f78f2e4](https://github.com/fgarofalo56/csa-inabox/commit/f78f2e43de8b027f29aa90faff0e5794764a666e))
+* **monitor:** show why a cost query failed instead of asserting it was RBAC ([#4663](https://github.com/fgarofalo56/csa-inabox/issues/4663)) ([fb941ee](https://github.com/fgarofalo56/csa-inabox/commit/fb941eeab7ec9e7a1081c76714f626e8e6849bb4))
+
+
+### Performance Improvements
+
+* **ci:** run the vitest shards on separate runners, halving time-to-mergeable ([#4657](https://github.com/fgarofalo56/csa-inabox/issues/4657)) ([8d3dd9c](https://github.com/fgarofalo56/csa-inabox/commit/8d3dd9cbb7a7a7d6c7b6b21a2c618ad06b6fef9b))
+
 ## [0.107.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.106.0...csa-inabox-v0.107.0) (2026-09-21)
 
 
