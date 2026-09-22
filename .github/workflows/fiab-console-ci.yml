@@ -303,26 +303,17 @@ jobs:
         working-directory: portal/react-webapp
         run: npm test
 
-  vitest:
-    name: vitest (node 20)
+  # ── DETECTOR, EXTRACTED (was a step inside `vitest`) ──────────────────
+  # Its three-state answer now feeds TWO jobs instead of one. Extracted rather
+  # than copied: see the header of `vitest-shard` -- two copies of this logic is
+  # defect #3862 verbatim.
+  vitest-detect:
+    name: vitest — detect changes
     runs-on: ubuntu-latest
-    # 45m (was 25m, then 40m, then 55m). Two things trade time for correctness
-    # here: the coverage provider is istanbul (Babel instrumentation costs wall
-    # clock that v8's runtime-derived coverage did not) and maxForks is capped
-    # at 2 under CI to keep the main thread responsive to the 60s reporting-RPC
-    # deadline. MEASURED per-blob on this runner:
-    #     v8,       3 forks   534.52s + 562.76s = ~1097s   (25m43s, RED)
-    #     istanbul, 3 forks   728.94s + 751.68s = ~1481s   (25m43s, RED)
-    #     istanbul, 2 forks   783.84s + 816.73s = ~1601s   (27m40s, GREEN)
-    # Dropping a fork cost only ~7%, which is itself evidence that the MAIN
-    # THREAD was the bottleneck rather than worker parallelism. 45m is ~60%
-    # headroom over the green run. A TIMEOUT HERE WOULD BE A FALSE RED — it
-    # means this budget is too small, NOT that the RPC bug is back. Not a
-    # masked hang: the job still fails on any test failure or coverage miss.
-    timeout-minutes: 45
-    defaults:
-      run:
-        working-directory: apps/fiab-console
+    timeout-minutes: 10
+    outputs:
+      console: ${{ steps.changed.outputs.console }}
+      infra: ${{ steps.changed.outputs.infra }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -435,22 +426,132 @@ jobs:
             echo "Nothing this suite covers changed — skipping vitest, reporting this check green."
           fi
 
+
+  # ── THE SHARDS, ON SEPARATE RUNNERS ──────────────────────────────────
+  # Deliberately NOT named `vitest (node 20)`: that name belongs to the
+  # aggregator below, because it is the ROLL GATE. These jobs produce blobs and
+  # nothing reads their names.
+  #
+  # `fail-fast: false` is load-bearing. A shard that dies must NOT cancel its
+  # siblings, because the aggregator's missing-blob guard is what turns a dead
+  # shard into a loud failure; cancelling the others would replace one honest
+  # error with four ambiguous ones.
+  vitest-shard:
+    name: vitest shard ${{ matrix.shard }}/4
+    needs: vitest-detect
+    if: needs.vitest-detect.outputs.console == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: apps/fiab-console
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
       - name: Use Node.js 20
-        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
       - name: Install pnpm
-        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
         run: npm install -g pnpm@9
 
       - name: Install dependencies
-        if: steps.changed.outputs.console == 'true' || steps.changed.outputs.infra == 'true'
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
+        run: pnpm install --no-frozen-lockfile
+
+
+      - name: Run vitest shard ${{ matrix.shard }}/4 (blob only)
+        env:
+          # Unchanged from the single-job version, and still the reason sharding
+          # exists at all: at 6144 per fork the whole suite OOM-killed a fork on
+          # a ~16 GB runner and closed its IPC channel with NO blob written.
+          # Each shard now transforms ~325 files rather than ~651, so this is
+          # further from that wall than before, not nearer.
+          NODE_OPTIONS: --max-old-space-size=3072
+        # A shard's own exit code is NOT the verdict -- the aggregator is. That
+        # was a real bug in the first sharded version: shard 2 exited non-zero on
+        # the vitest-3 RPC reporting error and killed the job BEFORE the merge
+        # could run, so the actual gate never executed. The blob carries every
+        # test result, so the merge sees them all.
+        #
+        # Thresholds MUST be off per shard: a shard sees a QUARTER of the files,
+        # so its coverage lands far under the whole-suite floor and would fail
+        # every time for a reason that says nothing about the code.
+        run: |
+          set -euo pipefail
+          rm -rf .vitest-reports
+          pnpm vitest run --shard="${{ matrix.shard }}/4" --reporter=blob \
+            --coverage --coverage.reporter=json \
+            --coverage.thresholds.lines=0 --coverage.thresholds.statements=0 \
+            --coverage.thresholds.functions=0 --coverage.thresholds.branches=0 \
+            || echo "shard ${{ matrix.shard }} exited non-zero — the merge job is the verdict"
+          # A shard that produced no blob is fatal HERE as well as in the
+          # aggregator. Failing at the source names which shard died; the
+          # aggregator can only report that one is missing.
+          test -f ".vitest-reports/blob-${{ matrix.shard }}-4.json" || {
+            echo "::error::shard ${{ matrix.shard }} produced no blob"; exit 1; }
+
+      - name: Upload shard blob
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: apps/fiab-console/.vitest-reports/blob-${{ matrix.shard }}-4.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # ── THE GATE ─────────────────────────────────────────────────────────
+  # Keeps the name `vitest (node 20)` because loom-roll-and-validate.yml,
+  # scripts/ci/roll-gate-decision.mjs and release-please.yml all read a check-run
+  # of exactly this name. It is still the single enforcement point: every test
+  # from every shard, plus the ratcheting coverage floor, evaluated ONCE on the
+  # merged whole.
+  #
+  # `!cancelled()` rather than the default: when the detector says nothing this
+  # suite covers changed, `vitest-shard` is SKIPPED, and a skipped `needs` would
+  # skip this job too. A skipped required check is not the same as a green one --
+  # the roll gate reads `.conclusion` -- so this job must still run and conclude.
+  vitest:
+    name: vitest (node 20)
+    needs: [vitest-detect, vitest-shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Was 45m for the whole suite run twice. This job now only merges blobs and
+    # enforces the floor, but it ALSO still runs the infra-only path and the two
+    # type-checks, so the budget stays generous rather than fitted.
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/fiab-console
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 20
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
+        run: npm install -g pnpm@9
+
+      - name: Install dependencies
+        if: needs.vitest-detect.outputs.console == 'true' || needs.vitest-detect.outputs.infra == 'true'
         run: pnpm install --no-frozen-lockfile
 
       - name: Type-check the brain specs (#3963 — nothing compiled them)
-        if: steps.changed.outputs.console == 'true'
+        if: needs.vitest-detect.outputs.console == 'true'
         # WHY THIS EXISTS. `next build` type-checks against tsconfig.build.json,
         # and that file EXCLUDES `**/__tests__/**`. Vitest transpiles with esbuild
         # and does not type-check at all. So NO COMPILER READ THE BRAIN SPECS —
@@ -593,7 +694,7 @@ jobs:
           node "$tmp/brain-spec-triage.mjs" "$tmp/brain-spec-tsc.txt"
 
       - name: Type-check the Copilot UAT scoring decision (#4432 — same gap, different files)
-        if: steps.changed.outputs.console == 'true'
+        if: needs.vitest-detect.outputs.console == 'true'
         working-directory: .
         env:
           NODE_OPTIONS: --max-old-space-size=6144
@@ -618,85 +719,41 @@ jobs:
         # reasoning, so they are runnable locally in one command.
         run: node scripts/ci/check-copilot-decision-types.mjs
 
-      - name: Run vitest (with istanbul coverage floor)
-        if: steps.changed.outputs.console == 'true'
-        env:
-          # 3072, NOT the build job's 6144 — and the reduction is the point.
-          #
-          # A GitHub runner has ~16 GB. At 6144 per fork, 3 forks plus the main
-          # process can ask for ~24 GB, and the kernel kills a fork; its IPC
-          # channel then closes and vitest reports
-          #     Serialized Error: { code: 'ERR_IPC_CHANNEL_CLOSED' }
-          # with NO blob written for that shard. That is what the missing-blob
-          # guard below caught — before it, the merge would have graded half the
-          # suite and called the job green.
-          #
-          # Each shard now transforms ~651 files rather than 1302, so it does not
-          # need the whole-suite heap. 3072 x 3 forks + main fits with headroom.
-          NODE_OPTIONS: --max-old-space-size=3072
-        # SHARDED, and deliberately WITHIN one job rather than a matrix.
+
+      - name: Download shard blobs
+        if: needs.vitest-detect.outputs.console == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: vitest-blob-*
+          merge-multiple: true
+          path: apps/fiab-console/.vitest-reports
+
+      - name: Merge shard reports and enforce the coverage floor
+        if: needs.vitest-detect.outputs.console == 'true'
+        # THE gate: every test from all four shards + the ratcheting floor.
         #
-        # WHY SHARDED — FOR MEMORY. At 6144 per fork the whole suite OOM-killed a
-        # fork on a ~16 GB runner and closed its IPC channel
-        # (ERR_IPC_CHANNEL_CLOSED) with no blob written. Half-suite shards at 3072
-        # fit with headroom. That is the reason sharding is here and stays here.
+        # WHY --merge-reports FOR THE FLOOR. Each shard sees a quarter of the
+        # files, so its coverage is PARTIAL. Enforcing the floor per shard would
+        # compare a quarter of a numerator against a whole-suite floor and fail
+        # spuriously -- or, worse, pass while measuring less than it claims.
         #
-        # SHARDING IS **NOT** A REMEDY FOR `Timeout calling "onTaskUpdate"`, and
-        # the note that used to claim it "reduces the window" was wrong. #2944
-        # measured the mechanism: that error is a spec file blocking its own
-        # worker's event loop past birpc's hardcoded 60s reply deadline, so it is
-        # a function of ONE FILE's cumulative synchronous CPU. A shard still runs
-        # each file whole, so sharding cannot buy any of it back — nor can the
-        # fork cap (it reproduces at maxForks 1, with the main thread idle), nor
-        # the coverage provider. The actual culprit was
-        # lib/azure/__tests__/unity-audit-guard.test.ts at 108,699ms — the only
-        # file over 60s out of 1,354 — and it was fixed in the guard it exercises.
-        # See the poolOptions note in apps/fiab-console/vitest.config.ts for the
-        # controlled measurements before forming a theory about this error.
-        #
-        # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
-        # of this file and loom-roll-and-validate.yml, which reads a check-run of
-        # exactly that name. A matrix would rename it to `vitest (node 20) (1/2)`
-        # and silently break every deploy. Sharding inside the job keeps the
-        # check name, and the per-process file count is what matters anyway.
-        #
-        # WHY --merge-reports FOR THE FLOOR. Each shard sees only half the files,
-        # so its coverage is PARTIAL. Enforcing --cov-fail-under per shard would
-        # compare half a numerator against a whole-suite floor and fail
-        # spuriously — or, worse, pass while measuring less than it claims. The
-        # blob reports are merged first and the ratcheting floor (rel-T28) is
-        # enforced ONCE, on the whole.
+        # The missing-blob guard is repeated here and that repetition is
+        # deliberate: a shard job that never STARTED (runner shortage, a cancelled
+        # sibling) leaves no blob and also leaves no failing shard to notice it.
+        # Without this, the merge would silently grade three quarters of the
+        # suite and call the job green -- the exact failure the original
+        # single-job guard was written for.
         run: |
           set -euo pipefail
-          rm -rf .vitest-reports
-          for shard in 1 2; do
-            echo "::group::vitest shard $shard/2"
-            # A shard's own exit code is NOT the verdict, and letting `set -e`
-            # act on it was a real bug in the first version of this step: shard 2
-            # exited non-zero on the vitest-3 RPC reporting error and killed the
-            # job BEFORE the merge could run, so the actual gate never executed.
-            #
-            # This is not a suppression. The blob carries every test result, so
-            # the merge below sees all 1302 files and fails on any genuine test
-            # failure or on the coverage floor. Deferring to it is what makes the
-            # merge the single enforcement point rather than one of three.
-            # Thresholds MUST be off per shard. A shard sees half the files, so
-            # its coverage lands well under the whole-suite floor — it fails
-            # every time, for a reason that says nothing about the code. I wrote
-            # the commit message warning about exactly this and then dropped the
-            # disable flag in the next commit; CI caught it.
-            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json               --coverage.thresholds.lines=0 --coverage.thresholds.statements=0               --coverage.thresholds.functions=0 --coverage.thresholds.branches=0               || echo "shard $shard exited non-zero — the merge below is the verdict"
-            echo "::endgroup::"
+          for s in 1 2 3 4; do
+            test -f ".vitest-reports/blob-$s-4.json" || {
+              echo "::error::shard $s produced no blob — refusing to grade a partial suite"
+              exit 1; }
           done
-          # Fail loudly if a shard produced no blob — that IS fatal, because the
-          # merge would then silently grade half the suite.
-          test -f .vitest-reports/blob-1-2.json || { echo "::error::shard 1 produced no blob"; exit 1; }
-          test -f .vitest-reports/blob-2-2.json || { echo "::error::shard 2 produced no blob"; exit 1; }
-          # THE gate: every test from both shards + the ratcheting coverage floor.
           pnpm vitest --merge-reports --coverage
 
       - name: Run vitest (infra-reading suites only)
-        if: steps.changed.outputs.console != 'true' && steps.changed.outputs.infra == 'true'
+        if: needs.vitest-detect.outputs.console != 'true' && needs.vitest-detect.outputs.infra == 'true'
         working-directory: ${{ github.workspace }}
         env:
           NODE_OPTIONS: --max-old-space-size=3072
