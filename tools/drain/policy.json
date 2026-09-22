@@ -141,7 +141,7 @@
         "dbt Compile (sales)": ["Compile dbt models"],
         "next build (node 20)": ["Build (next build)"],
         "guardrails": "ALL",
-        "vitest (node 20)": ["Run vitest (with istanbul coverage floor)"],
+        "vitest (node 20)": ["Merge shard reports and enforce the coverage floor"],
         "changelog parser can read every commit message": ["Check every changelog-bound commit message"],
         "Bicep Params Compile": ["Negative control — prove this gate can fail", "Compile every tracked .bicepparam"],
         "brain security graph — committed artifact matches the tree": ["Re-extract and refuse drift"]
@@ -174,12 +174,13 @@
         "vitest (node 20)": {
           "workflow": ".github/workflows/fiab-console-ci.yml",
           "job": "vitest",
+          "detector_job": "vitest-detect",
           "gate_step": "Detect console changes",
           "outputs": [
             {
               "output": "console",
               "paths": ["apps/fiab-console/**", ".github/workflows/fiab-console-ci.yml"],
-              "gates": ["Run vitest (with istanbul coverage floor)"]
+              "gates": ["Merge shard reports and enforce the coverage floor"]
             },
             {
               "output": "infra",
