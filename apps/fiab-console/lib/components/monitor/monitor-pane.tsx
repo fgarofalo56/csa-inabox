@@ -1662,8 +1662,8 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
         {data?.subscriptionErrors?.length ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              Some subscriptions couldn&apos;t be queried (grant the Console UAMI <strong>Cost Management Reader</strong> there):{' '}
-              {data.subscriptionErrors.map((s) => shortSub(s.subscription)).join(', ')}.
+              Some subscriptions could not be queried: {data.subscriptionErrors.map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`).join(' · ')}
+              {data.subscriptionErrors.some((s) => /\b(401|403)\b|AuthorizationFailed|Forbidden/i.test(String(s.error ?? ''))) ? <> — grant the Console UAMI <strong>Cost Management Reader</strong> on the subscription reporting that.</> : null}
             </MessageBarBody>
           </MessageBar>
         ) : null}
