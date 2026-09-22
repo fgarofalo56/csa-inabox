@@ -1662,8 +1662,31 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
         {data?.subscriptionErrors?.length ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              Some subscriptions couldn&apos;t be queried (grant the Console UAMI <strong>Cost Management Reader</strong> there):{' '}
-              {data.subscriptionErrors.map((s) => shortSub(s.subscription)).join(', ')}.
+              {/*
+                SHOW THE ERROR, DO NOT DIAGNOSE IT. This used to discard
+                `s.error` and assert "grant the Console UAMI Cost Management
+                Reader there" for EVERY failure. Measured 2026-09-22: the UAMI
+                already held Cost Management Reader on both named subscriptions,
+                and the Cost Management query returned 200 for all three — so
+                the advice sent the operator to grant a role they had, while the
+                evidence that would have identified the real cause (a throttle,
+                a timeout, a missing billing scope) was thrown away before it
+                reached the screen. deploy-integrity R7: do not assert a cause
+                you did not establish.
+
+                The RBAC hint is still offered — but only when the error
+                actually says so.
+              */}
+              Some subscriptions could not be queried:{' '}
+              {data.subscriptionErrors
+                .map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`)
+                .join(' · ')}
+              {data.subscriptionErrors.some((s) => /\b(401|403)\b|AuthorizationFailed|Forbidden/i.test(String(s.error ?? ''))) ? (
+                <>
+                  {' '}— at least one of these is an authorization failure. Grant the
+                  Console UAMI <strong>Cost Management Reader</strong> on that subscription.
+                </>
+              ) : null}
             </MessageBarBody>
           </MessageBar>
         ) : null}
