@@ -38,7 +38,7 @@ param subnetId string
 @description('Windows Server image reference (ignored for Linux).')
 param windowsImageReference object = {
   publisher: 'MicrosoftWindowsServer'
-  offer: 'WindowsServer'
+  offer: 'windowsserver2022'
   sku: '2022-datacenter-azure-edition'
   version: 'latest'
 }

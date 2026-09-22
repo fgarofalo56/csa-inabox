@@ -219,7 +219,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
     storageProfile: {
       imageReference: {
         publisher: 'MicrosoftWindowsServer'
-        offer: 'WindowsServer'
+        offer: 'windowsserver2022'
         sku: '2022-datacenter-g2'
         version: 'latest'
       }
