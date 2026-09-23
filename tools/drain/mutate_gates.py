@@ -3456,6 +3456,19 @@ EXPECTED_SANDBOX_SKIPS = (
     # them, which need no checkout.
     "test_gates.py::test_positive_control_the_intersection_query_can_return_non_empty",
     "test_gates.py::test_positive_control_the_real_required_topology_is_measured_not_assumed",
+    # #4676. Both read real git history -- the two commits of the vitest step
+    # rename -- to keep the transcribed fixture constants honest against the
+    # repo. The sandbox copies only `tools/drain`, so there is no repository to
+    # read and they skip. DECLARED, and said out loud: NEITHER KILLS AN ARM.
+    #
+    # That is not a shrug, it is why `test_the_producer_asks_git_for_the_SHA_
+    # and_for_no_other_ref` exists. The first draft of #4676 had the producer
+    # guarded ONLY by these two, so arm AS3 -- the producer reading `HEAD:`'s
+    # blob for every sha -- would have SURVIVED the matrix while the real-git
+    # test sat green in the repo. The argv-intercepting test needs no checkout
+    # and is what actually kills AS3 here.
+    "test_ci_green_as_of.py::test_the_producer_reads_the_declaration_at_the_sha_not_off_disk",
+    "test_ci_green_as_of.py::test_the_rename_fixture_matches_what_policy_json_actually_carried",
 )
 
 

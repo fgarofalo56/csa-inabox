@@ -30,6 +30,7 @@ Run:  python -m pytest tools/drain/__tests__/
 from __future__ import annotations
 
 import copy
+import json
 import os
 import subprocess
 import sys
@@ -504,12 +505,10 @@ def test_the_rename_fixture_matches_what_policy_json_actually_carried():
     name to match HEAD, which is the edit #4676 warns the stale-declaration
     message used to invite.
     """
-    import json
-
-    run = _git("show", f"{RENAME_COMMIT}^:tools/drain/policy.json")
+    run = _git("show", f"{POLICY_RENAME_COMMIT}^:tools/drain/policy.json")
     if run.returncode != 0:
         pytest.skip(
-            f"{RENAME_COMMIT}^ is not in this object store "
+            f"{POLICY_RENAME_COMMIT}^ is not in this object store "
             f"(shallow clone?): {run.stderr.strip()[:120]}"
         )
     historical = json.loads(run.stdout)
@@ -517,8 +516,15 @@ def test_the_rename_fixture_matches_what_policy_json_actually_carried():
                 ["vitest (node 20)"])
     assert declared == [STEP_BEFORE_RENAME], (
         f"the pre-rename fixture says {STEP_BEFORE_RENAME!r} but policy.json at "
-        f"{RENAME_COMMIT}^ declared {declared!r}"
+        f"{POLICY_RENAME_COMMIT}^ declared {declared!r}"
     )
+    # And the WORKFLOW's rename is a different commit -- the 3h13m lag the two
+    # clocks exist for. If these two ever become the same sha, the lag-window
+    # test above is rehearsing a shape the repo no longer has.
+    workflow = _git("show", f"{WORKFLOW_RENAME_COMMIT}:.github/workflows/fiab-console-ci.yml")
+    if workflow.returncode == 0:
+        assert STEP_AFTER_RENAME in workflow.stdout
+        assert WORKFLOW_RENAME_COMMIT != POLICY_RENAME_COMMIT
     assert (POLICY["receipts"]["ci_green_rule"]["substantive_steps"]
             ["vitest (node 20)"] == [STEP_AFTER_RENAME])
 
@@ -543,6 +549,53 @@ def _skip_without_history():
         pytest.skip(
             f"{RENAME_COMMIT}^ is not in this object store (shallow clone?)"
         )
+
+
+def test_the_producer_asks_git_for_the_SHA_and_for_no_other_ref():
+    """The same question as the test below, asked WITHOUT a checkout.
+
+    THIS TEST EXISTS BECAUSE THE OTHER ONE SKIPS WHERE IT MATTERS MOST. The
+    mutation sandbox copies only `tools/drain`, so `_git` finds no repository
+    and every history-reading test there skips -- and a guard whose only live
+    instrument skips is a guard that cannot fire. Arm AS3 (the producer reads
+    `HEAD:`'s blob for every sha) would have SURVIVED the matrix while the
+    real-git test sat green in the repo.
+
+    So the argv is intercepted instead of the repository being read. That is a
+    contract ABOUT the predicate rather than a measurement of it, which is
+    weaker -- disclosed, not counted twice. The measurement is the test below;
+    this is what keeps AS3 killable where the arms actually run.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: `f"HEAD:{POLICY_TRACKED_PATH}"`, a bare
+    `POLICY_TRACKED_PATH`, or reading the file off disk (no `git show` at all).
+    """
+    merge_gate = _merge_gate()
+    seen = []
+
+    def fake_sh(args):
+        seen.append(list(args))
+        return 0, json.dumps({"receipts": {"ci_green_rule": {"substantive_steps": {}}}}), ""
+
+    original = merge_gate.sh
+    try:
+        merge_gate.sh = fake_sh
+        result = merge_gate.resolve_declaration_as_of("deadbeefcafe")
+    finally:
+        merge_gate.sh = original
+
+    assert result.error == ""
+    assert result.rule == {"substantive_steps": {}}
+    assert len(seen) == 1, f"expected exactly one git call, saw {seen}"
+    argv = seen[0]
+    assert argv[:2] == ["git", "show"]
+    # The SHA, and the path, and nothing else. A `HEAD:` or a bare path both
+    # fail here, and so does an extra ref sneaking in.
+    assert argv[2] == "deadbeefcafe:tools/drain/policy.json"
+    assert len(argv) == 3
+    # And the sha is carried onto the result, so a refusal downstream can name
+    # the sha it could not read rather than "a sha".
+    assert result.sha == "deadbeefcafe"
+    assert merge_gate.sh is original
 
 
 def test_the_producer_reads_the_declaration_at_the_sha_not_off_disk():
@@ -612,31 +665,57 @@ def test_the_producer_refuses_a_policy_with_no_ci_green_rule():
     reads downstream as "no substantive step is DECLARED" for every context, a
     refusal with the wrong cause on it.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: accepting a non-dict `ci_green_rule`.
-    Driven through a real git blob rather than a mock: `required_contexts.json`
-    sits beside `policy.json`, is valid JSON, and is not a policy.
+    CHECKOUT-FREE, for the reason given above: a test that skips in the
+    mutation sandbox guards nothing there.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: accepting a non-dict `ci_green_rule` --
+    `rule = at_sha.get(...)` with no `isinstance` -- which would return
+    `rule=None` with an EMPTY error for the `{}` case and `rule="ALL"` for a
+    string. Both are exercised below.
     """
     merge_gate = _merge_gate()
 
-    stand_in = "tools/drain/required_contexts.json"
-    run = _git("show", f"HEAD:{stand_in}")
-    if run.returncode != 0:
-        pytest.skip(f"{stand_in} is not at HEAD in this checkout")
-    import json
+    def resolve(document):
+        original = merge_gate.sh
+        try:
+            merge_gate.sh = lambda args: (0, json.dumps(document), "")
+            return merge_gate.resolve_declaration_as_of("deadbeefcafe")
+        finally:
+            merge_gate.sh = original
 
-    # The stand-in must PARSE and must NOT carry the key, or this test would
-    # pass for the wrong reason (an unparseable blob takes a different branch).
-    parsed = json.loads(run.stdout)
-    assert not (isinstance(parsed, dict)
-                and isinstance(parsed.get("receipts"), dict)
-                and "ci_green_rule" in parsed["receipts"])
+    for document in (
+        {},                                        # no `receipts` at all
+        {"receipts": {}},                          # receipts, no rule
+        {"receipts": {"ci_green_rule": "ALL"}},    # a rule of the wrong TYPE
+        {"receipts": {"ci_green_rule": []}},       # ditto, and falsy
+    ):
+        result = resolve(document)
+        assert result.rule is None, document
+        assert "no receipts.ci_green_rule object" in result.error, document
 
-    original = merge_gate.POLICY_TRACKED_PATH
+    # And the positive control on the same path: a well-formed document DOES
+    # resolve, so the four refusals above are about the shape and not about the
+    # fake `sh`.
+    ok = resolve({"receipts": {"ci_green_rule": {"substantive_steps": {"x": "ALL"}}}})
+    assert ok.error == ""
+    assert ok.rule == {"substantive_steps": {"x": "ALL"}}
+
+
+def test_the_producer_refuses_a_blob_that_is_not_json():
+    """Unparseable is a THIRD state, and it may not read as "no rule".
+
+    WHAT VALUE WOULD MAKE THIS FAIL: letting `json.JSONDecodeError` escape (the
+    receipt would crash rather than refuse), or catching it and returning the
+    same "no ci_green_rule object" sentence, which would send the reader to
+    look for a key in a file that does not parse.
+    """
+    merge_gate = _merge_gate()
+    original = merge_gate.sh
     try:
-        merge_gate.POLICY_TRACKED_PATH = stand_in
-        result = merge_gate.resolve_declaration_as_of("HEAD")
+        merge_gate.sh = lambda args: (0, "this is not json", "")
+        result = merge_gate.resolve_declaration_as_of("deadbeefcafe")
     finally:
-        merge_gate.POLICY_TRACKED_PATH = original
+        merge_gate.sh = original
     assert result.rule is None
-    assert "no receipts.ci_green_rule object" in result.error
-    assert merge_gate.POLICY_TRACKED_PATH == "tools/drain/policy.json"
+    assert "does not parse as JSON" in result.error
+    assert "no receipts.ci_green_rule object" not in result.error
