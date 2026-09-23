@@ -15,16 +15,20 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   classifyVitestGate,
   classifyAcrProbeError,
   resolveImageTag,
   checkRunSeconds,
+  collectShardRuns,
   consoleTouchedFromCommit,
   projectCheckRun,
   COMMIT_FILES_CAP,
   VITEST_CHECK_NAME,
   VITEST_MIN_PLAUSIBLE_SECONDS,
+  VITEST_SHARD_NAME_PREFIX,
+  VITEST_SHARD_NAME_RE,
 } from '../roll-gate-decision.mjs';
 
 /**
@@ -363,6 +367,347 @@ test('the floor is a named constant with the measured separation around it', () 
   assert.equal(VITEST_MIN_PLAUSIBLE_SECONDS, 120);
   assert.ok(VITEST_MIN_PLAUSIBLE_SECONDS > 14, 'must exceed the slowest observed skip');
   assert.ok(VITEST_MIN_PLAUSIBLE_SECONDS < 294, 'must sit under the fastest observed real run');
+});
+
+// ---------------------------------------------------------------------------
+// STATE 1c — GREEN, BUT WHICH JOB RAN IT? (#4679)
+//
+// #4657 split the suite onto four shard runners. `vitest (node 20)` kept its
+// name (it is a REQUIRED context and the roll gate) but became the MERGE job:
+// download blobs, enforce the coverage floor. It now completes in ~98s BY
+// DESIGN, and the 120s floor — pointed at it — refused every healthy roll of a
+// console-touching commit for two days.
+//
+// The pair these tests have to hold is the whole point:
+//   PASS   a sharded green SHA proceeds.
+//   REFUSE work that genuinely did not happen is still refused.
+// A suite that only pinned the first is satisfied by deleting the floor, which
+// is the defect this fix must not ship (assertion-design.md).
+// ---------------------------------------------------------------------------
+
+/** Measured 2026-09-23 at 2018829ce, run 35801391361 (jobs API). Sums to 2482. */
+const LIVE_SHARD_SECONDS = [462, 664, 720, 636];
+/** Measured on the same run: the MERGE job's own wall time. Under the floor. */
+const LIVE_MERGE_SECONDS = 98;
+
+const shard = ({
+  index,
+  total = 4,
+  seconds = 600,
+  conclusion = 'success',
+  status = 'completed',
+  started_at = '2026-09-23T00:17:39Z',
+  completed = true,
+} = {}) => ({
+  name: `vitest shard ${index}/${total}`,
+  status,
+  conclusion,
+  started_at,
+  completed_at: completed ? new Date(Date.parse(started_at) + seconds * 1000).toISOString() : undefined,
+});
+
+const shardsAt = (secs, over = {}) =>
+  secs.map((s, i) => shard({ index: i + 1, total: secs.length, seconds: s, ...over }));
+
+/**
+ * The unexpanded placeholder GitHub emits when the WHOLE matrix is skipped.
+ * Copied from the API, not invented — measured 2026-09-23 on two
+ * console-untouched main commits:
+ *   356290aa9  'vitest shard ${{ matrix.shard }}/4' | completed | skipped | 0s
+ *   a1acc9c29  'vitest shard ${{ matrix.shard }}/4' | completed | skipped | 0s
+ */
+const SKIPPED_MATRIX = {
+  name: 'vitest shard ${{ matrix.shard }}/4',
+  status: 'completed',
+  conclusion: 'skipped',
+  started_at: '2026-09-23T00:17:36Z',
+  completed_at: '2026-09-23T00:17:36Z',
+};
+
+test('LIVE RECEIPT 2018829ce: a sharded, green, console-touching SHA PROCEEDS', () => {
+  // THE #4679 REGRESSION. Fixture is the measured run verbatim: merge job 98s,
+  // shards 462/664/720/636. Before the fix this returned `refuse`.
+  // WHAT WOULD MAKE THIS FAIL: treating the 98s merge job as the evidence
+  // again, or dropping any one shard from the fixture (then 3/4 is missing).
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt(LIVE_SHARD_SECONDS)],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'pass', r.reason);
+  // Pin the AGGREGATE, not just the verdict: a pass reported without the shard
+  // evidence would mean the merge job's 98s was accepted after all.
+  assert.match(r.reason, /4 shard job\(s\) totalling 2482s/);
+});
+
+test('REFUSE ARM: four shards that all reported green in 10s each are refused', () => {
+  // Green over nothing, fabricated: every shard concluded success, combined
+  // wall time 40s. THIS IS THE MUTATION TARGET — remove the floor from the
+  // shards and this test is the one that goes from red to green.
+  // WHAT WOULD MAKE THIS FAIL: a combined wall time >= 120s (e.g. 4 x 30s).
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([10, 10, 10, 10])],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /COMBINED wall time was 40s/);
+  assert.match(r.reason, /under the 120s floor/);
+});
+
+test('CONTROL: the same four shards at 30s each reach the floor and pass', () => {
+  // The paired POSITIVE for the assertion above — without it, "refuse when
+  // fast" is satisfied by refusing always. 4 x 30 = 120 = the floor exactly,
+  // so this also pins the comparison direction.
+  // WHAT WOULD MAKE THIS FAIL: changing `combined < FLOOR` to `<=`.
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([30, 30, 30, 30])],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'pass', r.reason);
+});
+
+test('REFUSE ARM: a SKIPPED shard matrix on a console-touching commit is refused', () => {
+  // The #2631 change-detector defect, as it now presents: the detector said
+  // "console untouched", the matrix never expanded, and the merge job went
+  // green in 13s. consoleTouched=true contradicts the detector.
+  // WHAT WOULD MAKE THIS FAIL: consoleTouched=false (then it is a legitimate
+  // path-filtered green — pinned by the next test).
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: 13 }), SKIPPED_MATRIX],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /shard matrix was SKIPPED/);
+  assert.match(r.reason, /NO shard executed/);
+});
+
+test('a bicep-only commit whose shard matrix was skipped still PASSES', () => {
+  // LIVE RECEIPT 356290aa9 / a1acc9c29: console untouched, matrix skipped,
+  // merge job green in 78s / 13s. These must stay rollable — this is the
+  // documented path-filtered green, and refusing it would freeze the estate
+  // for every bicep-only commit, i.e. trade one outage for another.
+  // WHAT WOULD MAKE THIS FAIL: checking the skipped-matrix branch BEFORE the
+  // consoleTouched===false exit.
+  for (const seconds of [78, 13]) {
+    const r = classifyVitestGate({
+      checkRuns: [check({ seconds }), SKIPPED_MATRIX],
+      ciRuns: [doneRun],
+      consoleTouched: false,
+    });
+    assert.equal(r.decision, 'pass', `${seconds}s: ${r.reason}`);
+  }
+});
+
+test('REFUSE ARM: a shard that did not conclude success is refused despite a green merge job', () => {
+  // The merge job can be green while a shard is not: its missing-blob guard is
+  // the only thing that notices, and this gate must not depend on it.
+  // WHAT WOULD MAKE THIS FAIL: shard 3 concluding 'success'.
+  const runs = shardsAt(LIVE_SHARD_SECONDS);
+  runs[2] = { ...runs[2], conclusion: 'failure' };
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...runs],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /'vitest shard 3\/4' → 'failure'/);
+});
+
+test('REFUSE ARM: a shard that produced no check-run at all is refused', () => {
+  // A shard job that never STARTED leaves no blob AND no failing job. The
+  // denominator in the surviving names says how many there should have been.
+  // WHAT WOULD MAKE THIS FAIL: including shard 3/4 in the list.
+  const r = classifyVitestGate({
+    checkRuns: [
+      check({ seconds: LIVE_MERGE_SECONDS }),
+      shard({ index: 1, seconds: 462 }),
+      shard({ index: 2, seconds: 664 }),
+      shard({ index: 4, seconds: 636 }),
+    ],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /shard\(s\) 3\/4 produced no check-run/);
+});
+
+test('a missing shard in a TRUNCATED list WAITS — absence from a partial read is unknown', () => {
+  // The #2819 class, one level down. Same fixture as above; only completeness
+  // differs, so this pins that the difference is what decides.
+  // WHAT WOULD MAKE THIS FAIL: checkRunsComplete:true (then it refuses).
+  const r = classifyVitestGate({
+    checkRuns: [
+      check({ seconds: LIVE_MERGE_SECONDS }),
+      shard({ index: 1, seconds: 462 }),
+      shard({ index: 2, seconds: 664 }),
+      shard({ index: 4, seconds: 636 }),
+    ],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+    checkRunsComplete: false,
+  });
+  assert.equal(r.decision, 'wait');
+  assert.match(r.reason, /may be present but unread/);
+});
+
+test('a shard still in progress WAITS — never refused, never passed', () => {
+  // WHAT WOULD MAKE THIS FAIL: status 'completed' on shard 2.
+  const runs = shardsAt(LIVE_SHARD_SECONDS);
+  runs[1] = { ...runs[1], status: 'in_progress', conclusion: null };
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...runs],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'wait');
+  assert.match(r.reason, /'vitest shard 2\/4' is in_progress/);
+});
+
+test('an unmeasurable shard wall time is UNKNOWN, and unknown is refused', () => {
+  // WHAT WOULD MAKE THIS FAIL: giving shard 1 a completed_at (then 2482s).
+  const runs = shardsAt(LIVE_SHARD_SECONDS);
+  runs[0] = { ...runs[0], completed_at: undefined };
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...runs],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /could not be measured/);
+});
+
+test('pre-sharding SHAs stay adjudicable: with no shard runs, the merge job IS the suite', () => {
+  // A roll can be dispatched at any SHA, including one older than #4657. With
+  // no shard check-runs the old contract must hold EXACTLY — both directions.
+  // WHAT WOULD MAKE THIS FAIL: deleting the unsharded fallback (the 700s case
+  // would then refuse), or deleting the floor from it (the 10s case would pass).
+  assert.equal(
+    classifyVitestGate({ checkRuns: [check({ seconds: 700 })], ciRuns: [doneRun], consoleTouched: true })
+      .decision,
+    'pass',
+  );
+  assert.equal(
+    classifyVitestGate({ checkRuns: [check({ seconds: 10 })], ciRuns: [doneRun], consoleTouched: true })
+      .decision,
+    'refuse',
+  );
+});
+
+test('the two refusals are DISTINGUISHABLE: "did not run" vs "wrong job measured"', () => {
+  // The third acceptance box on #4679. Before the fix both cases printed the
+  // same sentence, and that is what left this undiagnosed for two days.
+  // WHAT WOULD MAKE THIS FAIL: emitting one shared message again — either
+  // assertion below then matches both fixtures, and the negative assertions
+  // (paired with positives here, not standing alone) go red.
+  const wrongJob = classifyVitestGate({
+    checkRuns: [check({ seconds: 10 })], // no shard runs at all
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  const didNotRun = classifyVitestGate({
+    checkRuns: [check({ seconds: 13 }), SKIPPED_MATRIX],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(wrongJob.decision, 'refuse');
+  assert.equal(didNotRun.decision, 'refuse');
+
+  // Only the unsharded fallback may raise the wrong-job hypothesis, because it
+  // is the only branch that could be measuring a job that no longer runs tests.
+  assert.match(wrongJob.reason, /PRE-SHARDING topology/);
+  assert.match(wrongJob.reason, /THIS GATE is what needs fixing, not CI/);
+  assert.doesNotMatch(didNotRun.reason, /PRE-SHARDING topology/);
+
+  // And only the skipped-matrix branch may assert that nothing executed.
+  assert.match(didNotRun.reason, /NO shard executed/);
+  assert.doesNotMatch(wrongJob.reason, /NO shard executed/);
+});
+
+test('the cancelled path borrows main\'s SHARD evidence, not main\'s merge-job wall time', () => {
+  // Closed AT THE SITE, not by label: main is sharded too, so mainSeconds is
+  // ~98s by design there as well and the borrow would have refused every time.
+  // WHAT WOULD MAKE THIS FAIL: reverting to mainSeconds alone (the 98s+2482s
+  // case refuses), or ignoring main's shard durations (the 40s case passes).
+  const borrowed = (mainCheckRuns) =>
+    classifyVitestGate({
+      checkRuns: [check({ conclusion: 'cancelled' })],
+      ciRuns: [doneRun],
+      consoleTouched: true,
+      mainVerification: {
+        ...mainRan,
+        mainSeconds: LIVE_MERGE_SECONDS,
+        mainCheckRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...mainCheckRuns],
+      },
+    });
+  assert.equal(borrowed(shardsAt(LIVE_SHARD_SECONDS)).decision, 'pass');
+  assert.equal(borrowed(shardsAt([10, 10, 10, 10])).decision, 'refuse');
+});
+
+test('collectShardRuns: latest attempt wins per shard, and placeholders are not shards', () => {
+  // WHAT WOULD MAKE THIS FAIL: sorting the other way (the 5s re-run would be
+  // dropped and seconds would read 600), or matching the placeholder as a shard
+  // (shards.length would be 2).
+  const t = collectShardRuns([
+    shard({ index: 1, seconds: 600, started_at: '2026-09-23T00:00:00Z' }),
+    shard({ index: 1, seconds: 5, started_at: '2026-09-23T01:00:00Z' }),
+    SKIPPED_MATRIX,
+  ]);
+  assert.equal(t.topology, 'sharded');
+  assert.equal(t.shards.length, 1);
+  assert.equal(t.shards[0].seconds, 5);
+  assert.equal(t.placeholders.length, 1);
+
+  assert.equal(collectShardRuns([SKIPPED_MATRIX]).topology, 'matrix-skipped');
+  assert.equal(collectShardRuns([check()]).topology, 'unsharded');
+});
+
+test('COUPLING GUARD: fiab-console-ci actually emits job names this gate recognises', () => {
+  // assertion-design.md #3 — lift the pattern from the source instead of
+  // transcribing it, so a rename cannot make the probe disagree with reality.
+  // This is the guard #4679 did not have: #4657 changed the CI topology and
+  // nothing anywhere said so.
+  // WHAT WOULD MAKE THIS FAIL: renaming the shard job, renaming the merge job,
+  // or changing `shard: [1,2,3,4]` without changing the `/4` in its name.
+  // NORMALISE CRLF FIRST. This guard silently no-opped on Windows until it was
+  // measured: `.gitattributes` does not pin this path, so the working tree can
+  // carry `\r\n`, and in JS regex `.` excludes `\r` as a line terminator — so
+  // `name: (.+)\n` matched NOTHING and the extraction asserts below were the
+  // only thing that noticed. A guard that passes on CI and cannot even parse
+  // its subject locally is the failure mode this repo keeps meeting.
+  const wf = readFileSync(
+    new URL('../../../.github/workflows/fiab-console-ci.yml', import.meta.url),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  const shardBlock = wf.slice(wf.indexOf('\n  vitest-shard:'));
+  assert.ok(shardBlock.startsWith('\n  vitest-shard:'), 'no `vitest-shard:` job in fiab-console-ci.yml');
+  const nameTemplate = /\n {4}name: (.+)\n/.exec(shardBlock);
+  assert.ok(nameTemplate, 'could not read the vitest-shard job name');
+  const matrix = /\n {8}shard: \[([^\]]+)\]\n/.exec(shardBlock);
+  assert.ok(matrix, 'could not read the vitest-shard matrix');
+  const values = matrix[1].split(',').map((v) => v.trim());
+
+  // The UNEXPANDED template is the placeholder shape: prefixed, but not a shard.
+  assert.ok(nameTemplate[1].startsWith(VITEST_SHARD_NAME_PREFIX));
+  assert.doesNotMatch(nameTemplate[1], VITEST_SHARD_NAME_RE);
+  assert.equal(nameTemplate[1], SKIPPED_MATRIX.name, 'the measured placeholder fixture is stale');
+
+  // Every EXPANDED name must be one this gate can adjudicate, and the
+  // denominator baked into the name must agree with the matrix length.
+  for (const v of values) {
+    const expanded = nameTemplate[1].replace('${{ matrix.shard }}', v);
+    const m = VITEST_SHARD_NAME_RE.exec(expanded);
+    assert.ok(m, `job name '${expanded}' is not recognised by VITEST_SHARD_NAME_RE`);
+    assert.equal(Number(m[2]), values.length, `'${expanded}' disagrees with the ${values.length}-way matrix`);
+  }
+
+  // And the merge job still carries the name the roll gate reads.
+  const mergeBlock = wf.slice(wf.indexOf('\n  vitest:\n'));
+  assert.ok(mergeBlock.startsWith('\n  vitest:\n'), 'no `vitest:` job in fiab-console-ci.yml');
+  assert.match(mergeBlock, new RegExp(`\\n {4}name: ${VITEST_CHECK_NAME.replace(/[()]/g, '\\$&')}\\n`));
 });
 
 // --- the pieces the I/O shell depends on -----------------------------------

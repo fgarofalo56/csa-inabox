@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 /**
- * Roll gate — wait for, then adjudicate, the `vitest (node 20)` check-run.
+ * Roll gate — wait for, then adjudicate, the console vitest suite for a SHA.
  *
  * Thin I/O shell around classifyVitestGate() in ./roll-gate-decision.mjs; all
  * the decision logic (and all the tests) live there.
+ *
+ * WHAT IT READS (#4679). The full check-run list for the SHA — not just
+ * `vitest (node 20)`. Since #4657 the suite executes in `vitest shard i/N`
+ * jobs and `vitest (node 20)` merely merges their blobs and enforces the
+ * coverage floor, so the shards are the evidence that the suite ran and the
+ * merge job is the evidence that it passed as a whole. The list was already
+ * fetched in full for paging reasons; the classifier now uses all of it.
  *
  * WHY IT POLLS (#2819). The previous gate read the check-run conclusion ONCE.
  * The roll is triggered by the image build completing, and vitest is slower
@@ -142,6 +149,13 @@ function fetchMainVerification() {
       // #2632: borrowing main's verdict is only sound if main's run ACTUALLY
       // executed. Without this the cancelled-path would accept a 10s green.
       mainSeconds: mainVitest ? checkRunSeconds(mainVitest) : null,
+      // #4679: and post-#4657 `vitest (node 20)` is the MERGE job on main as
+      // well (~98s by design), so the wall time above is no longer the
+      // evidence. Hand over main's whole check-run list and let the classifier
+      // adjudicate main's shard jobs the same way it adjudicates this SHA's.
+      // We only reach here with `complete === true`, asserted just above.
+      mainCheckRuns: runs.map(projectCheckRun),
+      mainCheckRunsComplete: true,
     };
   } catch (err) {
     console.log(`  main-branch verification unavailable: ${err.message.split('\n')[0]}`);

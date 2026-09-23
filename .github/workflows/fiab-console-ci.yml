@@ -429,8 +429,18 @@ jobs:
 
   # ── THE SHARDS, ON SEPARATE RUNNERS ──────────────────────────────────
   # Deliberately NOT named `vitest (node 20)`: that name belongs to the
-  # aggregator below, because it is the ROLL GATE. These jobs produce blobs and
-  # nothing reads their names.
+  # aggregator below, because it is a REQUIRED context.
+  #
+  # THESE NAMES ARE LOAD-BEARING (#4679). "nothing reads their names" was true
+  # for exactly two days and cost a two-day estate freeze. The roll gate
+  # (scripts/ci/roll-gate-decision.mjs) now adjudicates THESE jobs — it matches
+  # `VITEST_SHARD_NAME_RE` = /^vitest shard (\d+)\/(\d+)$/ against the
+  # check-run list and reads the shard count out of the denominator. So:
+  #   * renaming this job, or
+  #   * changing `shard: [1, 2, 3, 4]` without changing the `/4` in the name
+  # breaks the roll gate. `scripts/ci/__tests__/roll-gate-decision.test.mjs`
+  # ("COUPLING GUARD") parses THIS BLOCK and goes red if either happens, so the
+  # breakage surfaces on the PR that causes it rather than on the next roll.
   #
   # `fail-fast: false` is load-bearing. A shard that dies must NOT cancel its
   # siblings, because the aggregator's missing-blob guard is what turns a dead
@@ -514,6 +524,12 @@ jobs:
   # of exactly this name. It is still the single enforcement point: every test
   # from every shard, plus the ratcheting coverage floor, evaluated ONCE on the
   # merged whole.
+  #
+  # BUT IT IS NO LONGER A WITNESS THAT THE SUITE RAN (#4679). This job's own
+  # wall time is ~98s by design now — it downloads blobs and merges them. The
+  # roll gate's "did it actually run" floor therefore applies to the SHARDS'
+  # combined wall time, not to this job's; this job's conclusion still has to be
+  # `success`, because it is the only place the coverage floor is enforced.
   #
   # `!cancelled()` rather than the default: when the detector says nothing this
   # suite covers changed, `vitest-shard` is SKIPPED, and a skipped `needs` would
