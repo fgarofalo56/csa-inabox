@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "1186261733748709075"
+      "templateHash": "820118383775352530"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "18441035914343048636"
+              "templateHash": "11438451882383123011"
             }
           },
           "definitions": {
@@ -16266,7 +16266,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "9521361107868204331"
+                      "templateHash": "12954926930081596114"
                     }
                   },
                   "parameters": {
@@ -16439,7 +16439,7 @@
                         "storageProfile": {
                           "imageReference": {
                             "publisher": "MicrosoftWindowsServer",
-                            "offer": "windowsserver2022",
+                            "offer": "WindowsServer",
                             "sku": "2022-datacenter-azure-edition",
                             "version": "latest"
                           },
