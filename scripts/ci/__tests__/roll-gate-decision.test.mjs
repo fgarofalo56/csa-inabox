@@ -24,9 +24,11 @@ import {
   collectShardRuns,
   consoleTouchedFromCommit,
   projectCheckRun,
+  projectedMinShardSeconds,
   COMMIT_FILES_CAP,
   VITEST_CHECK_NAME,
   VITEST_MIN_PLAUSIBLE_SECONDS,
+  VITEST_SHARD_CALIBRATION,
   VITEST_SHARD_NAME_PREFIX,
   VITEST_SHARD_NAME_RE,
 } from '../roll-gate-decision.mjs';
@@ -818,6 +820,44 @@ test('COUPLING GUARD: fiab-console-ci actually emits job names this gate recogni
   assert.ok(
     mergeBlock.includes(`\n    name: ${VITEST_CHECK_NAME}\n`),
     `the merge job must still be named '${VITEST_CHECK_NAME}' — the roll gate reads a check-run of exactly that name`,
+  );
+
+  // ── THE N-SENSITIVITY TRIPWIRE ─────────────────────────────────────────
+  // The per-shard floor is a fixed number while a real shard's execution time
+  // falls as N rises, so widening the matrix eventually makes this gate refuse
+  // HEALTHY runs. The comment on VITEST_MIN_PLAUSIBLE_SECONDS says so and tells
+  // the next author to re-derive — but prose is not a control, and nobody
+  // re-derives on the strength of a paragraph. This turns it into a red test on
+  // the PR that widens the matrix.
+  //
+  // Projected from the MINIMUM (what the rule adjudicates), not the mean, and
+  // the constants are LIFTED from the module rather than transcribed.
+  // Measured break-point: N=20 refuses a healthy run outright. The tripwire
+  // sits at a 1.25x safety factor so it fires at N=16 — one widening early,
+  // while there is still headroom to re-derive in.
+  //
+  // WHAT WOULD MAKE THIS FAIL: changing `shard: [1, 2, 3, 4]` to 16 or wider.
+  // Proven by mutation, not asserted: see the PR body.
+  const projected = projectedMinShardSeconds(values.length);
+  const required = VITEST_MIN_PLAUSIBLE_SECONDS * VITEST_SHARD_CALIBRATION.guardSafetyFactor;
+  assert.ok(
+    projected >= required,
+    `The vitest matrix is ${values.length}-way. Projected worst-case wall time of the ` +
+      `FASTEST shard is ${projected.toFixed(0)}s, under the ${required.toFixed(0)}s tripwire ` +
+      `(${VITEST_MIN_PLAUSIBLE_SECONDS}s floor x ${VITEST_SHARD_CALIBRATION.guardSafetyFactor} safety). ` +
+      `At this width the roll gate is close to refusing HEALTHY runs — it refuses outright from N=20. ` +
+      `RE-DERIVE VITEST_MIN_PLAUSIBLE_SECONDS and VITEST_SHARD_CALIBRATION from a fresh measurement ` +
+      `of both populations (current: ${VITEST_SHARD_CALIBRATION.population}). Do NOT lower the floor ` +
+      `to make this green, and do not subtract an estimated setup cost.`,
+  );
+
+  // PAIRED POSITIVE, so the tripwire is not satisfied by a projection that can
+  // never clear it: the CURRENT width must have real headroom.
+  // WHAT WOULD MAKE THIS FAIL: a calibration edit that drives the projection
+  // below the floor at today's N=4.
+  assert.ok(
+    projected >= VITEST_MIN_PLAUSIBLE_SECONDS,
+    `at the current ${values.length}-way matrix the projection (${projected.toFixed(0)}s) must clear the floor`,
   );
 });
 

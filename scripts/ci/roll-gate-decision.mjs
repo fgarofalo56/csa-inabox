@@ -179,25 +179,92 @@ export const VITEST_SHARD_NAME_PREFIX = 'vitest shard ';
  * against" and is "independent of N"; both halves were false, and the wrong
  * comment is how the next author would have re-introduced it.
  *
- * Per shard the separation is real, and is the same shape #2632 measured:
+ * Per shard the separation is real, and is the same shape #2632 measured.
+ * These are POPULATION figures, not the cited run's: 139 successful
+ * `vitest shard i/N` jobs drawn from 121 fiab-console-ci runs in the
+ * post-sharding window (2026-09-21 .. 2026-09-23), 35 of which produced shard
+ * jobs. An earlier draft of this comment published 34s / 462s, which were both
+ * from run 35801391361 alone and both FLATTERED the margin — the
+ * sample-reported-as-population error, in the comment whose whole job is to
+ * stop the next author lowering the floor.
  *
- *     slowest setup-only shard observed     34s   (refused)
- *     fastest REAL shard observed          462s   (run 35801391361, shard 1/4;
- *                                                  next two: 521s, 558s)
+ *     slowest setup-only cost observed   39s   (run 35914400167, shard 1/4;
+ *                                               max non-vitest step total —
+ *                                               what a shard that executes
+ *                                               NOTHING costs)
+ *     fastest REAL shard observed       443s   (run 35753707196, shard 2/4;
+ *                                               exec 402s + setup 36s)
  *
- * 120s sits ~3.5x above the slowest setup-only shard and ~3.9x below the
- * fastest real one. Same constant, nothing widened, nothing subtracted.
+ * 120s sits 3.08x above the slowest setup-only cost and 3.69x below the
+ * fastest real shard. Nothing in the population lands in the 39s..443s gap.
+ * Same constant, nothing widened, nothing subtracted.
  *
- * THIS RULE IS N-SENSITIVE, said plainly rather than wished away: the floor is
- * a fixed number while a real shard's execution time falls as N rises. At the
- * measured 2345s of total execution, N=16 puts a healthy shard near 146s +
- * setup — still above 120s, but the margin is no longer comfortable. If the
- * matrix is widened far enough that a healthy shard approaches this floor,
- * RE-DERIVE the number from a fresh measurement of both populations. Do not
- * lower it to make a red gate green, and do not subtract an estimated setup
- * cost: a magic constant carved out of a guard is how the guard stops watching.
+ * THIS RULE IS N-SENSITIVE, and the arithmetic must be done on the MINIMUM
+ * because that is what the rule adjudicates — an earlier draft computed with
+ * the MEAN and therefore overstated the headroom. Shards are not balanced:
+ * over 34 complete runs the worst observed `fastest-shard-exec / mean-exec`
+ * ratio is 0.674 (run 35753707196: 402s against a 596s mean). Projecting the
+ * measured 2345s of total execution with that ratio and 39s of setup:
+ *
+ *     N=4    min shard 434s   3.62x   passes
+ *     N=8    min shard 237s   1.97x   passes
+ *     N=16   min shard 138s   1.15x   passes, but the margin is thin
+ *     N=19   min shard 122s   1.02x   passes by two seconds
+ *     N=20   min shard 118s   0.98x   REFUSES A HEALTHY RUN
+ *
+ * So **N=20 is where this floor starts refusing healthy runs**, not some
+ * distant hypothetical. That is not left to prose: the COUPLING GUARD in
+ * `__tests__/roll-gate-decision.test.mjs` reads the live matrix width out of
+ * fiab-console-ci.yml and recomputes this projection, and goes RED on the PR
+ * that widens the matrix past the safety factor — while there is still
+ * headroom, so the re-derivation happens BEFORE a healthy run is refused.
+ * If it fires: re-derive this constant from a fresh measurement of both
+ * populations. Do not lower it to make a red gate green, and do not subtract
+ * an estimated setup cost — a magic constant carved out of a guard is how the
+ * guard stops watching.
  */
 export const VITEST_MIN_PLAUSIBLE_SECONDS = 120;
+
+/**
+ * The measurements the per-shard floor is calibrated on, exported so the
+ * COUPLING GUARD can recompute the N-sensitivity projection instead of
+ * transcribing it (`assertion-design.md` §3: lift the numbers from the source,
+ * never copy them into the probe).
+ *
+ * Every field is a measurement, not an estimate. Re-derive with
+ * `temp/4679/pop.mjs`-style aggregation over the jobs API if the topology or
+ * the suite changes materially — and update `population` when you do, because
+ * a figure without its population is the defect this block exists to correct.
+ */
+export const VITEST_SHARD_CALIBRATION = Object.freeze({
+  population:
+    '139 successful `vitest shard i/N` jobs from 121 fiab-console-ci runs (35 with shards), 2026-09-21..2026-09-23',
+  /** Max non-vitest step total on any shard: what a shard that runs NOTHING costs. */
+  slowestSetupOnlySeconds: 39,
+  /** Min wall time of any shard that genuinely executed tests. */
+  fastestRealShardSeconds: 443,
+  /** Sum of the `Run vitest shard i/N` steps on run 35801391361. */
+  totalExecSeconds: 2345,
+  /** Worst observed fastest-shard-exec / mean-exec over 34 complete runs. */
+  worstFastestToMeanExecRatio: 0.674,
+  /**
+   * The guard trips while headroom REMAINS, not when the floor already
+   * refuses. 1.25 puts the tripwire at N=16 (true margin 1.15x) while the
+   * break is at N=20 — so the re-derivation is forced one widening early.
+   */
+  guardSafetyFactor: 1.25,
+});
+
+/**
+ * Worst-case wall time of the SLOWEST-to-be-adjudicated shard — i.e. the
+ * fastest one — for a matrix of width `n`, from the calibration above.
+ *
+ * Computed from the MINIMUM, not the mean: the rule adjudicates every shard
+ * individually, so the mean overstates the headroom by the imbalance factor.
+ */
+export function projectedMinShardSeconds(n, cal = VITEST_SHARD_CALIBRATION) {
+  return (cal.totalExecSeconds / n) * cal.worstFastestToMeanExecRatio + cal.slowestSetupOnlySeconds;
+}
 
 /**
  * Paths whose change obliges the vitest job to actually run. MUST stay in sync
