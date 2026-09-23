@@ -2632,8 +2632,33 @@ ARMS: list[tuple[str, str, str, str]] = [
          "a sha that is already present and readable - the wrong remedy for "
          "every merge older than 2026-09-15"),
         "gates.py",
-        "        if reason == DECL_PREDATES:",
-        "        if False:",
+        # NEWLINE-ANCHORED so the indentation is part of the needle. There are
+        # now TWO `if reason == DECL_PREDATES:` sites -- the refusal and
+        # `provenance_note` -- and the bare form matches inside the more deeply
+        # indented one as a substring.
+        "\n        if reason == DECL_PREDATES:",
+        "\n        if False:",
+    ),
+    (
+        ("AS9 a pass decided on an UNVERIFIED or PREDATES clock prints no "
+         "provenance at all, so a shallow clone silently degrades to pre-PR "
+         "behaviour while every pass still reads as verified"),
+        "gates.py",
+        "        if which == DECL_HEAD_UNVERIFIED:\n            reason =",
+        "        if False:\n            reason =",
+    ),
+    (
+        ("AS10 the hollow payload is a finished SENTENCE again, so the "
+         "second-clock refusal wraps it as if it were a list and prints the "
+         "trailing clause twice"),
+        "gates.py",
+        '            return False, "hollow", hollow\n',
+        ('            return False, "hollow", (\n'
+         '                f"its declared substantive step(s) {hollow} were SKIPPED - '
+         'the check "\n'
+         '                "concluded green having not done the thing it is required '
+         'for"\n'
+         '            )\n'),
     ),
     (
         ("AS7 HEAD's declaration is substituted UNDISCLOSED when the sha's "
@@ -4215,4 +4240,22 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # NO ARGUMENTS, AND SAYING SO IS CHEAPER THAN THE SURPRISE. An independent
+    # reviewer typed `mutate_gates.py --list`, which is not a flag, and got a
+    # FULL MATRIX -- 361 arms, 66 python processes -- because argv was ignored.
+    # They had to kill it by PID (never by name pattern, which would have hit
+    # other lanes on this box). A matrix takes hours and writes nothing until
+    # the preamble finishes, so an accidental launch reads as a hang.
+    if sys.argv[1:]:
+        print(
+            "mutate_gates.py takes NO arguments and always runs the FULL matrix "
+            "({} arms, one full suite execution each -- hours, not minutes).\n"
+            "You passed: {}\n"
+            "There is no --list and no arm filter. To inspect the arms, import "
+            "the module and read `ARMS`; to run a subset, set `mutate_gates.ARMS` "
+            "to a filtered list before calling `main()`.".format(
+                len(ARMS), " ".join(sys.argv[1:])),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     raise SystemExit(main())

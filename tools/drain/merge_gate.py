@@ -1211,13 +1211,24 @@ def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
 
     WHY A GIT READ AND NOT AN ALIAS TABLE. The declaration is a description of
     the workflow -- "the step that IS the check" per context -- and it is
-    versioned in the same commit as the workflow it describes. `8d3dd9cbb`
-    (#4657) renamed `vitest (node 20)`'s step in `fiab-console-ci.yml` AND in
-    `policy.json`, together. So the repo already records what the declaration
-    was on the day a given run happened; nothing has to be transcribed, and
-    there is no second copy to keep in agreement. An alias table would be one
-    rename away from being silently wrong -- the argument `README.md` already
-    makes for context spellings.
+    versioned in the same REPO as the workflow it describes, though NOT always
+    in the same commit. So the repo already records what the declaration was on
+    the day a given run happened; nothing has to be transcribed, and there is no
+    second copy to keep in agreement. An alias table would be one rename away
+    from being silently wrong -- the argument `README.md` already makes for
+    context spellings.
+
+    "NOT ALWAYS IN THE SAME COMMIT" IS THE LOAD-BEARING QUALIFIER, and an
+    earlier draft of this docstring omitted it and claimed the opposite as this
+    function's rationale. Measured: `8d3dd9cbb` (#4657, 2026-09-21 21:25)
+    renamed the vitest step in `fiab-console-ci.yml` and touched ONE file;
+    `356290aa9` (#4662, 2026-09-22 00:38) renamed it in `policy.json`. 3h13m
+    apart, three merges in between. If the same-commit claim were true the
+    consumer's `kind == "missing"` fallthrough would be dead code -- and
+    deleting it is arm AS4, the arm whose survival lets a rename launder a
+    hollow job. The false rationale pointed at the one deletion this mechanism
+    exists to prevent, which is why the qualifier is stated rather than
+    implied.
 
     FAILS TO A NAMED, CLASSIFIED ERROR, NOT TO A SILENT HEAD FALLBACK. Every
     failure returns `rule=None` with an `error` string AND a `reason` VALUE, and

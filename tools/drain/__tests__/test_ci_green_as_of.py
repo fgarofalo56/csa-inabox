@@ -8,11 +8,12 @@ make the declaration wrong for every merge AFTER the rename.
 
 Measured, on the attempt that found it:
 
-    PR #4593 merged 2026-09-20T01:24:35Z. Commit `8d3dd9cbb` (#4657,
-    2026-09-21) renamed `vitest (node 20)`'s substantive step from
-    `Run vitest (with istanbul coverage floor)` to `Merge shard reports and
-    enforce the coverage floor` -- in `fiab-console-ci.yml`, in
-    `substantive_steps` and in `scope_paths[].outputs[].gates`, in ONE commit.
+    PR #4593 merged 2026-09-20T01:24:35Z. `vitest (node 20)`'s substantive
+    step was renamed from `Run vitest (with istanbul coverage floor)` to
+    `Merge shard reports and enforce the coverage floor` in TWO commits:
+    `8d3dd9cbb` (#4657, 2026-09-21 21:25) moved it in `fiab-console-ci.yml`
+    and touched no other file; `356290aa9` (#4662, 2026-09-22 00:38) moved it
+    in `substantive_steps` and `scope_paths[].outputs[].gates`.
     `tick.py --record-receipt 4467 --from-pr 4593` then refused with
     `the declared step(s) ['Merge shard reports and enforce the coverage
     floor'] are ABSENT from this job - the declaration is stale`.
@@ -20,10 +21,11 @@ Measured, on the attempt that found it:
 THE CODE IS HEAD'S; THE DECLARATION IS THE SHA'S. Every predicate in
 `gates.py` is today's, because every hole reviewers found in rounds 5-16 is
 fixed at HEAD and must apply to every measurement. `ci_green_rule` is not a
-predicate -- it is a description of a workflow, versioned in the same commit as
-the workflow, and the repo therefore already records what it said on the day
-any given run happened. That is why this is a git read and NOT an alias table:
-there is nothing to transcribe and no second copy to keep in agreement.
+predicate -- it is a description of a workflow, versioned in the same REPO as
+the workflow (though not always in the same commit, which is what the two
+clocks below are for), and the repo therefore already records what it said on
+the day any given run happened. That is why this is a git read and NOT an alias
+table: there is nothing to transcribe and no second copy to keep in agreement.
 
 Run:  python -m pytest tools/drain/__tests__/
 """
@@ -99,10 +101,13 @@ def _rule_before_the_rename():
         "identical to HEAD's rule and could not witness the as-of resolution"
     )
     rule["substantive_steps"]["vitest (node 20)"] = [STEP_BEFORE_RENAME]
-    # THE SAME RENAME, IN THE SCOPE ROW. #4657 moved the name in three places in
-    # one commit, because all three are descriptions of one workflow. A fixture
-    # that renamed only `substantive_steps` would make arm AS2 -- the narrowing
-    # that swaps only that key -- survive.
+    # THE SAME RENAME, IN THE SCOPE ROW. `356290aa9` moved the name in BOTH
+    # policy keys in one commit -- `substantive_steps` and
+    # `scope_paths[].outputs[].gates` -- because both are descriptions of one
+    # workflow. (The WORKFLOW itself moved three hours earlier, in
+    # `8d3dd9cbb`; the two policy keys are what travel together.) A fixture
+    # that renamed only `substantive_steps` would make arm AS2 -- the
+    # narrowing that swaps only that key -- survive.
     moved = 0
     for output in rule["scope_paths"]["vitest (node 20)"]["outputs"]:
         gates_before = list(output["gates"])
@@ -518,14 +523,107 @@ def test_a_hollow_step_at_the_other_clock_is_not_reported_as_absent():
         "vitest (node 20)", job, POLICY,
         declared_at=gates.DeclarationAsOf(sha=SHA_BEFORE_RENAME, rule=as_of_rule))
     assert not ok, why
-    # The refusal must NOT claim HEAD's step is absent...
+    # THE WHOLE SENTENCE, not substrings. The previous version asserted three
+    # substrings -- "were SKIPPED", the step name, "not done the thing it is
+    # required for" -- and ALL THREE were satisfied by the garbled string a
+    # reviewer produced, in which `verdict()`'s hollow SENTENCE was wrapped as
+    # if it were `missing`'s LIST: "the declared step(s) its declared
+    # substantive step(s) [...] were SKIPPED - ... were SKIPPED". A test that
+    # passes over a broken message has no kill power on the thing it was
+    # written for, which is this repo's named defect class.
+    assert why == (
+        "the declared step(s) ['Run vitest (with istanbul coverage floor)'] are "
+        "ABSENT from this job - that is the declaration AS OF the measured sha "
+        "6bf53f52d085. HEAD's declaration names a DIFFERENT step, which this job "
+        "DOES carry, and it does not account for the context either: its declared "
+        "substantive step(s) ['Merge shard reports and enforce the coverage floor'] "
+        "were SKIPPED - the check concluded green having not done the thing it is "
+        "required for. So this is not a rename that the other clock resolves"
+    ), why
+    # The double-wrap specifically: each clause EXACTLY ONCE. Stated separately
+    # from the equality so a future wording change cannot quietly take the kill
+    # power on this defect with it.
+    assert why.count("were SKIPPED") == 1
+    assert why.count("not done the thing it is required for") == 1
+    assert why.count("the declared step(s)") == 1
+    # `clock(DECL_HEAD)` must not emit the bare "the declaration" beside "the
+    # declaration AS OF the measured sha" -- a reader cannot tell them apart.
+    assert "HEAD's declaration names a DIFFERENT step" in why
+    # The refusal must NOT claim HEAD's step is absent.
     assert "and so is every other declaration" not in why
-    # ...and must name what it actually is.
-    assert "were SKIPPED" in why
-    assert STEP_AFTER_RENAME in why
-    assert "not done the thing it is required for" in why
     # The remedy for a hollow check is not "re-read the declaration".
     assert "re-read it off a green run" not in why
+
+
+def test_an_unverified_or_predates_pass_says_so_in_the_pass_text():
+    """A pass decided on a clock that was never read must SAY it was not read.
+
+    An independent reviewer probed one fixture through four resolution states
+    and got ONE byte-identical sentence back. Two of those four are the ground
+    being weaker, and both CLOSE things: on a shallow clone
+    (`actions/checkout` is depth 1 by default) every sha is unreadable and the
+    whole feature degrades to pre-PR behaviour while every pass still reads as
+    verified; and every merge older than 2026-09-15 predates
+    `receipts.ci_green_rule` entirely -- which this package itself calls the
+    COMMON case for its backlog.
+
+    The refusal side already said "could NOT be read". The ACCEPTANCE side --
+    the side that closes things -- said nothing.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: `provenance_note` returning `""` for
+    `DECL_HEAD_UNVERIFIED`, which is the state at the previous head. That is
+    arm AS9, and the discriminating assertion is the LAST one: the four states
+    must not collapse to one string.
+    """
+    job = _job("vitest (node 20)",
+               steps=("Detect console changes", STEP_AFTER_RENAME))
+
+    states = {}
+    states["unreadable"] = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(
+            sha="a02cd41e6aaa", rule=None, reason=gates.DECL_UNREADABLE,
+            error="git show a02cd41e6aaa:tools/drain/policy.json exited 128: "
+                  "bad object"))
+    states["predates"] = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(
+            sha="a02cd41e6aaa", rule=None, reason=gates.DECL_PREDATES,
+            error="policy.json at a02cd41e6aaa carries no receipts.ci_green_rule "
+                  "object"))
+    states["none"] = gates.context_did_its_work("vitest (node 20)", job, POLICY)
+    states["verified"] = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(
+            sha="a02cd41e6aaa", rule=POLICY["receipts"]["ci_green_rule"]))
+
+    # Every one of the four is still a PASS. The disclosure must not change any
+    # verdict, only what the receipt says about it.
+    for name, (ok, _why) in states.items():
+        assert ok, f"{name} must still pass"
+
+    assert "NOT VERIFIED against the measured sha a02cd41e6aaa" in states["unreadable"][1]
+    assert "could NOT be read" in states["unreadable"][1]
+    assert "bad object" in states["unreadable"][1]
+
+    assert "NOT VERIFIED against the measured sha a02cd41e6aaa" in states["predates"][1]
+    assert "no `receipts.ci_green_rule`" in states["predates"][1]
+    assert "only declaration there has ever been" in states["predates"][1]
+
+    # No as-of resolution ATTEMPTED is a different fact from one that failed.
+    assert "NOT VERIFIED" not in states["none"][1]
+    assert "NOT VERIFIED" not in states["verified"][1]
+
+    # THE DISCRIMINATING ASSERTION. At the previous head all four were the same
+    # string; three distinct values is what the fix buys.
+    texts = {name: why for name, (_ok, why) in states.items()}
+    assert len(set(texts.values())) == 3, texts
+    assert texts["none"] == texts["verified"], (
+        "a verified as-of pass that AGREES with HEAD may read identically to no "
+        "resolution at all -- both are HEAD's current declaration, and the "
+        "difference between them is recorded by the absence of a NOT VERIFIED "
+        "clause, not by a positive one"
+    )
 
 
 def test_a_declaration_that_predates_the_key_is_not_told_to_fetch_the_sha():

@@ -2297,15 +2297,24 @@ class DeclarationAsOf:
     the workflow at HEAD says nothing true about a workflow that ran a week
     ago, and applying it there is #4676:
 
-        PR #4593 merged 2026-09-20T01:24:35Z. On 2026-09-21 commit `8d3dd9cbb`
-        (#4657) renamed `vitest (node 20)`'s substantive step from
-        `Run vitest (with istanbul coverage floor)` to
-        `Merge shard reports and enforce the coverage floor`, in `policy.json`
-        and in `fiab-console-ci.yml`, in one commit. The receipt then asked a
-        2026-09-20 run whether it had executed a step that would not exist
-        until 2026-09-21, found it absent, and printed "the declaration is
-        stale" -- pointing the reader at the one edit that would make the
-        declaration wrong for today's merges.
+        PR #4593 merged 2026-09-20T01:24:35Z. `vitest (node 20)`'s substantive
+        step was renamed from `Run vitest (with istanbul coverage floor)` to
+        `Merge shard reports and enforce the coverage floor` -- in the WORKFLOW
+        by `8d3dd9cbb` (#4657, 2026-09-21 21:25) and in `policy.json` by
+        `356290aa9` (#4662, 2026-09-22 00:38). TWO commits, 3h13m apart, with
+        three merges in between; `git show --stat 8d3dd9cbb` touches one file
+        and it is not `policy.json`. The receipt then asked a 2026-09-20 run
+        whether it had executed a step that would not exist until 2026-09-21,
+        found it absent, and printed "the declaration is stale" -- pointing the
+        reader at the one edit that would make the declaration wrong for
+        today's merges.
+
+        An earlier draft of this paragraph said the two moved "in one commit".
+        That was false, and it was not harmless prose: it is the premise that
+        makes the SECOND CLOCK below look like dead code, and deleting the
+        second clock is arm AS4 -- the arm whose survival lets a rename launder
+        a hollow job. A false rationale points at the one deletion this
+        mechanism exists to prevent.
 
     THIS IS NOT AN ALIAS TABLE, and the distinction is the reason the README
     refuses one for context spellings: an alias table is a second copy of the
@@ -2943,29 +2952,74 @@ def context_did_its_work(
             #
             # So the alternative lives in `alternative_accounted_for`, which asks
             # the scope question and this one as two halves of a single predicate.
-            return False, "hollow", (
-                f"its declared substantive step(s) {hollow} were SKIPPED - the check "
-                "concluded green having not done the thing it is required for"
-            )
+            # THE BARE LIST, exactly as `missing` returns one. It used to return
+            # a finished SENTENCE here, and the second-clock site wrapped it as
+            # if it were a list -- emitting "the declared step(s) its declared
+            # substantive step(s) [...] were SKIPPED - the check concluded green
+            # ... were SKIPPED", with the trailing clause printed twice. Two
+            # reviewers found it independently. A payload whose SHAPE depends on
+            # the kind is a payload every call site has to remember to special-
+            # case; rendering is `refusal_text`'s job, in one place.
+            return False, "hollow", hollow
         return True, "", f"executed its declared substantive step(s) {list(rule)}"
 
+    def refusal_text(kind: str, payload) -> str:
+        """Render one refusal payload into a sentence. ONE renderer, both sites."""
+        if kind == "hollow":
+            return (
+                f"its declared substantive step(s) {payload} were SKIPPED - the check "
+                "concluded green having not done the thing it is required for"
+            )
+        if kind == "missing":
+            return f"the declared step(s) {payload} are ABSENT from this job"
+        return str(payload)
+
+    def cap(text: str) -> str:
+        """Capitalise WITHOUT lowercasing the rest -- `str.capitalize()` turns
+        "HEAD's declaration" into "Head's declaration"."""
+        return text[:1].upper() + text[1:]
+
     def clock(which: str) -> str:
-        """How a message names one of the two declarations."""
+        """How a message names one of the two declarations.
+
+        `DECL_HEAD` says "HEAD's declaration" whenever an as-of resolution was
+        ATTEMPTED, and the bare "the declaration" only when none was -- because
+        in the two-clock sentences the bare form sat next to "the declaration AS
+        OF the measured sha" and a reader could not tell which was which.
+        """
         if which == DECL_AS_OF:
             return f"the declaration AS OF the measured sha {as_of_sha[:12]}"
-        if which == DECL_HEAD_UNVERIFIED:
+        if which in (DECL_HEAD_UNVERIFIED, DECL_HEAD_ROW_NEWER):
             return "HEAD's declaration"
-        if which == DECL_HEAD_ROW_NEWER:
-            return "HEAD's declaration"
-        return "the declaration"
+        return "HEAD's declaration" if declared_at is not None else "the declaration"
 
     def provenance_note(which: str, rule) -> str:
-        """The clause that says WHICH declaration decided, when it is not HEAD's
-        current one. NAMED, NOT FOLDED IN: a pass decided on a declaration HEAD
-        has since changed -- or on HEAD's because the sha's was silent -- is a
-        different claim from a pass decided on today's, and a reader counting
-        states should not have to diff `git show <sha>:tools/drain/policy.json`
-        to find out which they are looking at.
+        """The clause that says WHICH declaration decided, whenever that is not
+        HEAD's current one VERIFIED against the measured sha.
+
+        NAMED, NOT FOLDED IN. A pass decided on a declaration HEAD has since
+        changed -- or on HEAD's because the sha's was silent, unreadable, or
+        predates the key -- is a different claim from a pass decided on today's,
+        and a reader counting states should not have to diff
+        `git show <sha>:tools/drain/policy.json` to find out which.
+
+        THE UNVERIFIED CASES WERE SILENT UNTIL AN INDEPENDENT REVIEWER PROBED
+        THEM. One fixture through four resolution states returned ONE byte-
+        identical sentence: as-of UNREADABLE, as-of PREDATES, no as-of at all,
+        and as-of RESOLVED-and-equal. Two of those four are the ground being
+        weaker, and both close things:
+
+        - on a SHALLOW CLONE (`actions/checkout` is depth 1 by default) every
+          sha is unreadable, the whole feature degrades to pre-PR behaviour, and
+          every pass still reads as verified;
+        - every merge older than 2026-09-15 predates `receipts.ci_green_rule`
+          entirely -- which this package calls the COMMON case for its backlog --
+          and closed on a description written afterwards, worded identically to
+          a verified as-of pass.
+
+        The refusal side said "could NOT be read"; the acceptance side, which is
+        the side that CLOSES things, said nothing. That is this package's own
+        failure shape one level down, so it is now said on both sides.
         """
         if which == DECL_AS_OF and head_declared != rule:
             return (f" - {clock(which)}, which HEAD has since changed to "
@@ -2974,6 +3028,16 @@ def context_did_its_work(
             return (f" - HEAD's declaration, used because policy.json at the measured "
                     f"sha {as_of_sha[:12]} carried NO ROW for this context: the row is "
                     "NEWER than the sha, which is not a rename")
+        if which == DECL_HEAD_UNVERIFIED:
+            reason = declared_at.reason if declared_at else ""
+            where = (as_of_sha or "?")[:12]
+            if reason == DECL_PREDATES:
+                return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                        f"{where}: policy.json carried no `receipts.ci_green_rule` "
+                        "there, so HEAD's is the only declaration there has ever been")
+            detail = declared_at.error if declared_at else "no reason recorded"
+            return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                    f"{where}: the declaration there could NOT be read ({detail})")
         return ""
 
     first_which, first_rule = candidates[0]
@@ -3002,7 +3066,7 @@ def context_did_its_work(
             )
 
     if kind != "missing":
-        return False, payload
+        return False, refusal_text(kind, payload)
 
     # THE SECOND CLOCK'S OWN DIAGNOSIS, NOT THE FIRST'S SENTENCE REPEATED.
     #
@@ -3016,16 +3080,12 @@ def context_did_its_work(
     # two-states: the exact defect #4676 exists to end, reintroduced in the
     # branch that ends it.
     if other_kind and other_kind != "missing":
-        detail = (
-            f"the declared step(s) {other_payload} were SKIPPED"
-            if other_kind == "hollow" else str(other_payload)
-        )
         return False, (
             f"the declared step(s) {payload} are ABSENT from this job - that is "
-            f"{clock(first_which)}. {clock(other_which).capitalize()} names a DIFFERENT "
-            f"step, which this job DOES carry, and it does not account for the context "
-            f"either: {detail}. So this is not a rename that the other clock resolves; "
-            "the check concluded green having not done the thing it is required for"
+            f"{clock(first_which)}. {cap(clock(other_which))} names a DIFFERENT "
+            "step, which this job DOES carry, and it does not account for the "
+            f"context either: {refusal_text(other_kind, other_payload)}. So this is "
+            "not a rename that the other clock resolves"
         )
 
     # TWO REFUSALS, NOT ONE SENTENCE, and this is what #4676 cost. Before the
@@ -3057,7 +3117,8 @@ def context_did_its_work(
                 "job at that sha and HEAD's is the only one there has ever been. "
                 "There is nothing to fetch. Either this is not the job HEAD's "
                 "declaration describes, or that declaration needs re-reading off a "
-                "green run"
+                "CURRENT green run - never off a pre-rename one, which would write "
+                "the old spelling back into policy.json and break every merge since"
             )
         return False, (
             f"the declared step(s) {payload} are ABSENT from this job, and that "
