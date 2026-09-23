@@ -251,7 +251,8 @@ after it**. So the receipt establishes *the declared producer ran green*, not
 deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
 rather than a merge, and it discloses the time and sha gap in terms. Binding it
 is #4578 (fetch the run's date, compare it to the item's, refuse a run that
-predates it); the sha half waits on #4489 with the rest of the binding.
+predates it); the sha half is bound by neither, and #4489 did not deliver it
+-- that writer records WHICH PR, not which sha.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -441,8 +442,9 @@ concludes green having captured nothing.
 
 **What it does not establish.** That the evidence is *about* the item. Nothing
 stops a green roll being recorded against a second deploy-path item it never
-touched; the operator supplies that pairing, and the harness cannot check it
-until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
+touched; the operator supplies that pairing. `Item.pr` now records which PR a
+lane opened for an item (`tick.py --bind-pr`, #4489), but the `--from-run`
+path does not consult it, so that pairing is still unchecked. A refused receipt writes nothing — the
 ledger is byte-identical afterwards, verified by digest, **and no GitHub write
 happens either**, because the close runs only after every refusal has been
 passed.

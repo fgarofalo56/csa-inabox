@@ -12,7 +12,7 @@ says `{2: 298, 1: 1}`.
 
 The second version read `item.pr is not None` where the gate reads
 `item.pr == pr`, so an item bound to ANOTHER PR modelled as one-reviewer where
-the gate says two. LIVE as of #4489, which landed the writer.
+the gate says two. `tick.py --bind-pr` writes `Item.pr` (#4489).
 
 So the test here is not "does the model return a plausible number". It is **does
 the model agree with the real composition, item by item**. Anything less is a
@@ -141,9 +141,8 @@ def test_merge_time_counts_the_gate_not_the_receipt(tmp_path):
 
 def test_negative_control_an_item_bound_to_another_pr_is_not_corroborated(tmp_path):
     """The row that caught the second defect, on its own so a failure names it.
-    `item.pr is not None` accepted; `item.pr == pr` refuses. LIVE as of #4489,
-    which landed the writer (`tick.py --bind-pr`) -- so this row now measures
-    real bindings rather than a shape no production path could produce."""
+    `item.pr is not None` accepted; `item.pr == pr` refuses. `tick.py
+    --bind-pr` writes `Item.pr` (#4489), so this row measures real bindings."""
     led = _ledger(tmp_path, [(1, "W9-rest", "in-flight", 99, None)])
     counts, _one, _receipted = operating_point.merge_time(POLICY, led, pr=1)
     assert counts[2] == 1, counts

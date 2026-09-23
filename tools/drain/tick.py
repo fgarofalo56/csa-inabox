@@ -915,7 +915,8 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     branch as the reason the class takes a run rather than a merge, which is
     true, and the binding gap is disclosed in the comment with #4578 tracking
     the repair (fetch the run's date, compare it to the item's, refuse a run
-    that predates it; the sha half waits on #4489 with the rest of the binding).
+    that predates it; the sha half is bound by neither, and #4489 did not
+    deliver it -- that writer records WHICH PR, not which sha).
 
     The two branches are written out rather than assembled from fragments: a
     sentence this permanent should be readable in full at the place it is
@@ -1835,8 +1836,8 @@ def record_receipt_from_evidence(
       necessarily that item's lane -- but no longer absent.
     - `--from-run` is NOT bound, and cannot be from here: a workflow run carries
       no issue reference at all. Nothing stops a green roll being recorded
-      against a second deploy-path item it never touched. That one genuinely
-      waits on #4489.
+      against a second deploy-path item it never touched. `Item.pr` (#4489)
+      now records which PR a lane opened, but this path does not consult it.
     """
     item = led.items.get(number)
     if item is None:

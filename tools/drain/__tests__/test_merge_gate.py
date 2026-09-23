@@ -1487,8 +1487,8 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     # says so. The binding arm bypasses the state test, so a TERMINAL item bound
     # to this PR corroborates -- defensible, since a harness-written binding
     # outranks a state, but "is work the harness has in flight" is then false.
-    # LIVE as of #4489: `tick.py --bind-pr` writes `Item.pr`, so this arm fires
-    # in production and the sentence below is a live claim, not a latent one.
+    # `tick.py --bind-pr` writes `Item.pr` (#4489), so this arm fires in
+    # production and the sentence below is a claim about real behaviour.
     # Set directly here only to keep this a merge_gate unit test -- the writer
     # is exercised end to end in `test_poached_closes_refuses_a_bound_item`.
     # Kills MG35.
@@ -1539,9 +1539,8 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     # not own. `Ledger.save()` serialises the whole document from memory, so the
     # loser's cycle, state transitions and history do not merge, they vanish. A
     # merge gate does not write the thing it measures; `tick.py` owns the
-    # ledger. The writer LANDED in #4489 as `tick.py --bind-pr`, so this control
-    # is LIVE rather than declared inert -- and it is driven through that real
-    # writer in `test_poached_closes_refuses_a_bound_item` below.
+    # ledger. The writer is `tick.py --bind-pr` (#4489), and this control is
+    # driven through it in `test_poached_closes_refuses_a_bound_item` below.
     led.items[10].pr = 99
     led.save()
     # The SAME PR may re-run the gate as often as it likes.

@@ -80,8 +80,8 @@ Scope and autonomy are already decided — do not re-ask them:
     close and no second comment.
     It DOES check the evidence is ABOUT the item: `_pr_references_item` reads
     both `closingIssuesReferences` and a verb-agnostic body/commit scan. The
-    stronger binding — `Item.pr` — now has a writer (#4489), so a lane that
-    opens a PR should report it:
+    stronger binding — `Item.pr` — is written by `tick.py --bind-pr` (#4489),
+    so a lane that opens a PR should report it:
 
         python tools/drain/tick.py --bind-pr <ITEM> --pr <PR>
 

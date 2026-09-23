@@ -244,9 +244,8 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     record disagrees with the declaration -- which is the one thing on a PR that
     was not typed by its author.
 
-    **NO LONGER INERT (#4489).** `tick.py --bind-pr ITEM --pr N` now writes
-    `Item.pr`, so this reaches its real branch whenever a lane has reported its
-    PR. It is still SILENT on items with no binding, and that is deliberate
+    `tick.py --bind-pr ITEM --pr N` writes `Item.pr` (#4489), so this reaches
+    its real branch whenever a lane has reported its PR. It is still SILENT on items with no binding, and that is deliberate
     rather than a gap: an unbound item is one no lane reported, which is not
     evidence of a conflict.
 
@@ -296,8 +295,8 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
 # Locking a merge gate was the wrong answer to the wrong question. `tick.py`
 # owns the ledger and is the single writer by design; the binding belongs there,
 # written when a lane opens a PR for an item, not inferred by the gate from what
-# the PR says about itself. That writer LANDED as `tick.py --bind-pr` (#4489),
-# so `poached_closes` stays a READ and is now LIVE -- see its docstring.
+# the PR says about itself. That writer is `tick.py --bind-pr` (#4489);
+# `poached_closes` stays a READ and reads what it writes -- see its docstring.
 
 
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
@@ -351,9 +350,8 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     Without one of those, a declared close is treated like a mention: it may
     escalate, it may not explain.
 
-    `Item.pr` NOW HAS A WRITER -- `tick.py --bind-pr` (#4489) -- so the binding
-    arm is REACHABLE and the mid-flight test no longer carries all of the
-    weight. Read the next paragraph before relying on that, because the two arms
+    `Item.pr` is written by `tick.py --bind-pr` (#4489), so the binding arm is
+    reachable and the mid-flight test does not carry all of the weight. Read the next paragraph before relying on that, because the two arms
     are not equivalent: a binding BYPASSES the state test, so a TERMINAL item
     bound to this PR still corroborates. That is deliberate (a binding the
     harness wrote outranks a state it inferred) but it is not what "in flight"
@@ -421,8 +419,8 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     # WORD IT FROM THE ARM THAT MATCHED. "is work the harness has in flight" is
     # false of an item corroborated by its BINDING, which bypasses the state
     # test -- a `closed` item bound to this PR corroborates, and the docstring
-    # above says a terminal item is finished. LIVE as of #4489: `tick.py
-    # --bind-pr` writes `Item.pr`, so this arm now fires, and nothing clears the
+    # above says a terminal item is finished. `tick.py --bind-pr` writes
+    # `Item.pr` (#4489), so this arm fires, and nothing clears the
     # binding when the item goes terminal (`transition()` clears only
     # `audit_reason`). A bound-then-parked item therefore corroborates a
     # declared close. Deliberate, and stated here rather than left for an
@@ -1635,8 +1633,8 @@ def main() -> int:
             return 2
     # ...and REFUSE one the ledger binds to another PR. A receipt of the right
     # kind says the WORK is done; it says nothing about whether THIS PR is the
-    # work. LIVE as of #4489: `tick.py --bind-pr` writes `Item.pr`, so this
-    # pre-check can now fire. The writer is `tick.py`'s job and not this
+    # work. `tick.py --bind-pr` writes `Item.pr` (#4489), so this pre-check
+    # fires on a bound item. The writer is `tick.py`'s job and not this
     # module's -- writing it from here made a merge gate a writer of a ledger it
     # does not own, and lost updates. NOTE the coverage boundary: gate 6 itself
     # is exercised end to end by `test_poached_closes_refuses_a_bound_item`,
