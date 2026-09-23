@@ -24,11 +24,11 @@ azure = ["dep:deltalake"]
 
 [dependencies]
 # HTTP server (internal ingress; mirrors the script-runner ACA contract shape).
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.22"
+base64 = "0.23"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

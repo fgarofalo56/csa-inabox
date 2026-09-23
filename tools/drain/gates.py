@@ -4387,6 +4387,99 @@ def base_delta_is_inert(
     )
 
 
+def verdict_transfers_across_base_update(
+    head_parents: list[str] | None,
+    approved_head: str,
+    automerge_tree: str | None,
+    head_tree: str,
+) -> tuple[bool, str]:
+    """Does a verdict measured at `approved_head` still describe `head_tree`?
+
+    THE PROBLEM THIS EXISTS FOR. Verdict liveness is a TIMESTAMP proxy
+    (`parse_verdicts`: `when >= head_date`), so ANY new head -- including one
+    that authored not a single line -- retires every verdict beneath it. The
+    only remedy for a stale base is `update-branch`, which creates exactly such
+    a head. Combined with gate 1, which refuses a stale base, and with
+    `base_delta_is_inert`, which refuses EVERY delta on this repo today because
+    five required contexts declare no `on.push` path filter, the result is that
+    each merge invalidates every other open PR and the reviews must be re-run
+    to say the same thing about the same bytes. That is the loop that
+    serializes the queue, and it is a property of the PROXY, not of the diff.
+
+    THE TEST. A base update is a merge commit whose tree is exactly the
+    automatic merge of its two parents. If
+
+        merge-tree --write-tree <approved-head> <base-tip>  ==  <new-head>^{tree}
+
+    then the new head introduces NO content beyond what git computed, so the
+    bytes the reviewer measured are still the bytes on offer. The other parent
+    is the trunk, which arrived through its own merges and reviews. The verdict
+    transfers.
+
+    PURE BY CONSTRUCTION. `gates.py` runs no subprocess, so `automerge_tree`
+    and `head_tree` are resolved by the CALLER and injected -- the same
+    delegation `INFRA_READING_ERE` documents. A test can therefore drive the
+    resolved case, the conflicted case and the unresolvable case without a
+    repository.
+
+    THIS IS NOT A RECENCY TEST AND DOES NOT DISCHARGE ANYTHING. It answers one
+    question -- "is this head the same content?" -- and returns a verdict's
+    eligibility to be re-pinned, nothing more. `reduce_verdicts` remains a
+    CONJUNCTION: transferring an APPROVE never retires a REQUEST-CHANGES, and a
+    blocking verdict transfers by exactly the same rule. Widening this into
+    "the head is fine" would reinstate the recency semantics the package
+    refuses.
+
+    EVERY UNKNOWN REFUSES. An unresolvable tree, a conflicted auto-merge, a
+    head that is not a merge commit, a head whose parents do not include the
+    approved one: each returns False with the reason. A base update that
+    conflicted is not a base update -- somebody resolved it by hand, and a hand
+    resolution is new content that nobody has reviewed.
+    """
+    if not head_tree:
+        return False, "cannot resolve the head tree - unmeasurable, not a pass"
+    if not approved_head:
+        return False, "no approved head to transfer FROM - unmeasurable, not a pass"
+    parents = list(head_parents or [])
+    if len(parents) != 2:
+        # A base update is ALWAYS a two-parent merge. One parent is an ordinary
+        # commit -- somebody authored something, which is the case this must
+        # refuse. Three is an octopus merge, which `merge-tree` two-arg form
+        # cannot model, so it is refused rather than approximated.
+        return False, (
+            f"head has {len(parents)} parent(s), not 2 - only a two-parent "
+            f"merge can be a pure base update"
+        )
+    if approved_head not in parents:
+        # The verdict measured a head that is not an ancestor-by-parenthood of
+        # this one. It may still be reachable, but "reachable" is not the
+        # question: a commit between them could have authored anything.
+        return False, (
+            f"approved head {approved_head[:12]} is not a parent of this head "
+            f"(parents {[p[:12] for p in parents]}) - nothing to transfer"
+        )
+    if not automerge_tree:
+        # Distinct from "the trees differ". `merge-tree` writes no tree when the
+        # merge conflicts, and a conflicted merge that nevertheless produced a
+        # head means a human resolved it -- unreviewed content by definition.
+        return False, (
+            "the auto-merge of the two parents produced no tree (conflict, or "
+            "the caller could not resolve it) - unmeasurable, not a pass"
+        )
+    if automerge_tree != head_tree:
+        return False, (
+            f"head tree {head_tree[:12]} != auto-merge of its parents "
+            f"{automerge_tree[:12]} - this head carries content the merge did "
+            f"not produce, so it was NOT reviewed"
+        )
+    other = [p for p in parents if p != approved_head]
+    return True, (
+        f"head is exactly the auto-merge of {approved_head[:12]} and "
+        f"{(other[0] if other else approved_head)[:12]} (tree {head_tree[:12]}) "
+        f"- no content was authored, so the verdict measured these bytes"
+    )
+
+
 def issue_set_audit(
     before: list[int] | set[int], after: list[int] | set[int], intended: list[int]
 ) -> tuple[bool, str]:
