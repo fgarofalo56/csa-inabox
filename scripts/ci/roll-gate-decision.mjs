@@ -91,9 +91,19 @@ export const VITEST_CHECK_NAME = 'vitest (node 20)';
  *
  * 2482 seconds of execution, all green — and the duration floor below, applied
  * to the 98s MERGE job, refused the roll. It went on refusing every
- * console-touching commit for two days while the estate sat 15 commits behind
- * (build-marker sha=03f1ace17, stamp=20260921T230332Z). The floor was not
+ * console-touching commit for two days while the estate stayed pinned at
+ * build-marker sha=03f1ace17, stamp=20260921T230332Z. The floor was not
  * wrong; it was pointed at the wrong job.
+ *
+ * ON THE DRIFT COUNT, because getting it wrong here would be this rule's own
+ * defect: an earlier draft of this comment said "15 commits behind", which was
+ * never true. 15 is what `git rev-list --count 03f1ace17..HEAD` returns in a
+ * checkout whose local HEAD trails origin — staleness measured against the
+ * CHECKED-OUT HEAD instead of the remote, inside a fix for a staleness gate.
+ * Measured server-side with the compare API: 03f1ace17 was 16 behind this
+ * branch's base 4ff1e1fcc, and 17 behind main at 2026-09-23T20:20Z. The number
+ * only means something with its ref AND its timestamp, so quote both or quote
+ * neither — `git rev-list --count <sha>..origin/main`, never `..HEAD`.
  *
  * So the gate now adjudicates the jobs that do the work. The DENOMINATOR is
  * read out of the name rather than assumed to be 4, so re-sharding to 8 or 16

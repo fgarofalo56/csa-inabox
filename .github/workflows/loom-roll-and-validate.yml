@@ -655,9 +655,12 @@ jobs:
         #     vitest shard 1/4 462s   shard 2/4 664s   shard 3/4 720s
         #     vitest shard 4/4 636s   vitest (node 20)  98s
         # The 120s "did it actually run" floor, pointed at that 98s merge job,
-        # refused EVERY healthy console roll for two days; the estate sat 15
-        # commits behind at 03f1ace17 (deploy-integrity R1). The floor was not
-        # wrong — it was measuring the wrong job. It is NOT lowered: it now
+        # refused EVERY healthy console roll for two days; the estate stayed
+        # pinned at 03f1ace17 / 20260921T230332Z (deploy-integrity R1). Measured
+        # server-side, that was 16 behind this branch's base 4ff1e1fcc and 17
+        # behind main at 2026-09-23T20:20Z — count against origin/main and name
+        # the ref, never against a local HEAD that may trail it. The floor was
+        # not wrong — it was measuring the wrong job. It is NOT lowered: it now
         # applies PER SHARD. Not to their sum — a shard's wall time is
         # setup + execution, the setup term is paid N times, and the measured
         # per-shard setup on that run was 28/34/32/32 = 126s, which ALREADY
