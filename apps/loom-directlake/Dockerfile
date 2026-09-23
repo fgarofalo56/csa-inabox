@@ -24,8 +24,8 @@
 # ---------------------------------------------------------------------------
 
 # ---- Build stage: compile the release binary -------------------------------
-# Pinned to a specific Rust toolchain tag (bookworm base) so the arrow 53 /
-# datafusion 43 / deltalake 0.24 graph resolves reproducibly. Bump deliberately.
+# Pinned to a specific Rust toolchain tag (bookworm base) so the arrow 59 /
+# datafusion 55 / deltalake 1.0 graph resolves reproducibly. Bump deliberately.
 FROM rust:1-slim-bookworm AS build
 
 # Transitive native deps: pkg-config + build-essential cover any *-sys crate that
