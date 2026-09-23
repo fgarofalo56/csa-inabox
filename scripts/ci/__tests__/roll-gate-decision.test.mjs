@@ -704,10 +704,18 @@ test('COUPLING GUARD: fiab-console-ci actually emits job names this gate recogni
     assert.equal(Number(m[2]), values.length, `'${expanded}' disagrees with the ${values.length}-way matrix`);
   }
 
-  // And the merge job still carries the name the roll gate reads.
+  // And the merge job still carries the name the roll gate reads. A plain
+  // substring, not a regex built from the constant: escaping only `()` left
+  // backslashes unescaped, which CodeQL flagged as js/incomplete-sanitization
+  // (alert 1065) — and a hand-rolled escape is the wrong tool for an exact
+  // match anyway.
+  // WHAT WOULD MAKE THIS FAIL: renaming the `vitest:` job.
   const mergeBlock = wf.slice(wf.indexOf('\n  vitest:\n'));
   assert.ok(mergeBlock.startsWith('\n  vitest:\n'), 'no `vitest:` job in fiab-console-ci.yml');
-  assert.match(mergeBlock, new RegExp(`\\n {4}name: ${VITEST_CHECK_NAME.replace(/[()]/g, '\\$&')}\\n`));
+  assert.ok(
+    mergeBlock.includes(`\n    name: ${VITEST_CHECK_NAME}\n`),
+    `the merge job must still be named '${VITEST_CHECK_NAME}' — the roll gate reads a check-run of exactly that name`,
+  );
 });
 
 // --- the pieces the I/O shell depends on -----------------------------------
