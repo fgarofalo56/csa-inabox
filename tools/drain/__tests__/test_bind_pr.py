@@ -48,7 +48,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import tick
-from ledger import IN_FLIGHT, IN_REVIEW, READY, Ledger, LedgerChangedError
+from ledger import IN_FLIGHT, IN_REVIEW, NEEDS_AUDIT, READY, Ledger, LedgerChangedError
 
 import gates
 
@@ -179,6 +179,43 @@ def test_a_bound_item_is_not_handed_to_a_second_lane(tmp_path, monkeypatch):
 
     after = [i.number for i in tick.select_cycle(led, POLICY)]
     assert 1000 not in after, "a bound item must not be handed to a second lane"
+
+
+def test_binding_a_needs_audit_item_does_not_empty_the_audit_queue(tmp_path, monkeypatch):
+    """A bind must not discharge a receipt dispute as a side effect.
+
+    This is the gap a reviewer found in the PREVIOUS round's fix, and the
+    coverage gap that let it through: the fix made EVERY bind transition to
+    `in-review`, which silently moved a `needs-audit` item out of the audit
+    queue — and it never returns, because `upsert`'s reopen branch fires only
+    from a TERMINAL `was_state`. `transition()` clears `audit_reason` only on
+    terminal, so the item also kept an orphaned reason. No test in the suite
+    witnessed the difference in either direction, which is why the round-2 fix
+    passed 652 tests while introducing it.
+
+    BREAKS ON: widening the guard back to an unconditional
+    `led.transition(number, IN_REVIEW, ...)`. The item then reads `in-review`
+    and leaves `audit_queue()`.
+    """
+    led = _led(tmp_path)
+    led.items[1000].audit_reason = "reopened"
+    led.transition(1000, NEEDS_AUDIT, "receipt disputed")
+    _stub_gh(monkeypatch, expect_refs_args=(4564, 1000))
+
+    assert [i.number for i in tick.audit_queue(led)] == [1000], (
+        "control: the item must be IN the audit queue before the bind, or this "
+        "test would pass against a queue that is always empty"
+    )
+
+    tick.bind_pr_for_item(led, REPO, 1000, 4564)
+
+    assert led.items[1000].pr == 4564, "the binding itself is still recorded"
+    assert led.items[1000].state == NEEDS_AUDIT, (
+        "a disputed receipt is not discharged by a lane opening a PR"
+    )
+    assert [i.number for i in tick.audit_queue(led)] == [1000], (
+        "the item must still be queued for audit"
+    )
 
 
 def test_bind_is_idempotent_for_the_same_pr(tmp_path, monkeypatch):

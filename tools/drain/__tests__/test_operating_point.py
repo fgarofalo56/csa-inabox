@@ -12,7 +12,7 @@ says `{2: 298, 1: 1}`.
 
 The second version read `item.pr is not None` where the gate reads
 `item.pr == pr`, so an item bound to ANOTHER PR modelled as one-reviewer where
-the gate says two. Inert while nothing writes `Item.pr`; it arms on #4489.
+the gate says two. LIVE as of #4489, which landed the writer.
 
 So the test here is not "does the model return a plausible number". It is **does
 the model agree with the real composition, item by item**. Anything less is a

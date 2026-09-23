@@ -93,9 +93,9 @@ def merge_time(policy: dict, led: Ledger, pr: int | None = None
         # The first version said "exactly ... and nothing else" and was not: it
         # read `item.pr is not None` where the real test is `item.pr == pr`, so
         # an item bound to ANOTHER PR modelled as one-reviewer where the gate
-        # says two. Both reviewers found it. Latent (nothing writes `Item.pr`)
-        # and it arms on #4489 -- the same condition under which the wording
-        # fixes in `merge_gate` were made, applied one file over this time.
+        # says two. Both reviewers found it. LIVE as of #4489, which landed the
+        # writer (`tick.py --bind-pr`) -- the same condition under which the
+        # wording fixes in `merge_gate` were made, applied one file over.
         #
         # `SCHEDULED_STATES` is imported for the same reason: the states were
         # hardcoded here, so a fourth one would diverge the model in silence.

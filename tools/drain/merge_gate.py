@@ -258,11 +258,13 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     measures. `tick.py` is the single writer by design and saves through a CAS
     that REFUSES a concurrent write rather than overwriting it.
 
-    Coverage is honest about what it does and does not establish: the binding
-    and its refusals are pinned by `__tests__/test_bind_pr.py` and by mutation
-    arms PR1-PR4 (all KILLED). What is NOT yet pinned end-to-end is this
-    function firing on a real bound item through the whole gate -- the arms kill
-    the writer, not this consumer.
+    Coverage, stated precisely because the first version of this paragraph was
+    vaguer than the code: `test_poached_closes_refuses_a_bound_item` drives the
+    REAL writer and runs this function through `run_gates` to gate 6, so the
+    consumer IS pinned end to end. What is NOT pinned is the separate
+    `--allow-close` pre-check in `main()`, which calls this function directly
+    and has no test driving it. The refusals and the binding itself are pinned
+    by `__tests__/test_bind_pr.py` and by mutation arms PR1-PR4 (all KILLED).
     """
     if not closing or pr is None:
         return []
@@ -294,8 +296,8 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
 # Locking a merge gate was the wrong answer to the wrong question. `tick.py`
 # owns the ledger and is the single writer by design; the binding belongs there,
 # written when a lane opens a PR for an item, not inferred by the gate from what
-# the PR says about itself. `poached_closes` stays as a READ and is DECLARED
-# INERT until that writer exists -- see its docstring. Tracked in #4489.
+# the PR says about itself. That writer LANDED as `tick.py --bind-pr` (#4489),
+# so `poached_closes` stays a READ and is now LIVE -- see its docstring.
 
 
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
@@ -1633,9 +1635,12 @@ def main() -> int:
             return 2
     # ...and REFUSE one the ledger binds to another PR. A receipt of the right
     # kind says the WORK is done; it says nothing about whether THIS PR is the
-    # work. INERT until something writes `Item.pr` -- which is `tick.py`'s job,
-    # not this module's; writing it from here made a merge gate a writer of a
-    # ledger it does not own and lost updates. #4489.
+    # work. LIVE as of #4489: `tick.py --bind-pr` writes `Item.pr`, so this
+    # pre-check can now fire. The writer is `tick.py`'s job and not this
+    # module's -- writing it from here made a merge gate a writer of a ledger it
+    # does not own, and lost updates. NOTE the coverage boundary: gate 6 itself
+    # is exercised end to end by `test_poached_closes_refuses_a_bound_item`,
+    # but THIS `main()` pre-check has no test driving it.
     poached = poached_closes(allow_close, policy, pr=args.pr)
     if poached:
         print(f"refusing --allow-close: {'; '.join(poached)}", file=sys.stderr)

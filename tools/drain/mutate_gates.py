@@ -3247,8 +3247,8 @@ ARMS: list[tuple[str, str, str, str]] = [
          "Recording without the transition repairs the gate's corroboration and "
          "leaves the pay-for-it-twice defect exactly as it was"),
         "tick.py",
-        "    led.transition(number, IN_REVIEW, why=note)",
-        "    pass",
+        "        led.transition(number, IN_REVIEW, why=note)",
+        "        pass",
     ),
     (
         ("PR3 the bind stops checking the PR NAMES the item, so Item.pr becomes an "

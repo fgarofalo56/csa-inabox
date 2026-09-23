@@ -14,9 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 from typing import NamedTuple
 
@@ -646,7 +648,22 @@ def bind_pr_for_item(led: Ledger, repo: str, number: int, pr: int) -> str:
     # `in-review` is also simply true of a `ready` item that has a PR: the work
     # exists and is waiting on review. Being unschedulable is the point, not a
     # side effect.
-    led.transition(number, IN_REVIEW, why=note)
+    #
+    # SCOPED TO `in-flight` AND `ready`, because the unconditional version this
+    # replaced was over-broad by two states and a reviewer measured the cost.
+    # `transition()` clears `audit_reason` only on TERMINAL (ledger.py:565), so
+    # binding a `needs-audit` item moved it to `in-review` carrying an orphaned
+    # `audit_reason` and SILENTLY EMPTIED the audit queue -- and it never comes
+    # back, because `upsert`'s reopen branch fires only from a TERMINAL
+    # `was_state`. A `needs-audit` item is one whose receipt is IN DISPUTE; a
+    # lane binding a PR to it must not discharge that dispute as a side effect.
+    # `awaiting-receipt` is the same shape and currently unreachable (no
+    # production writer for it), but it is excluded on the same reasoning rather
+    # than on the accident of being unreachable.
+    if was in (IN_FLIGHT, READY):
+        led.transition(number, IN_REVIEW, why=note)
+    else:
+        item.history.append(f"{note} (state left at {was}: not a schedulable state)")
     return f"#{number}: {note}; state {was} -> {item.state}"
 
 
@@ -2036,6 +2053,14 @@ def main() -> int:
         attempts = 3
         for attempt in range(1, attempts + 1):
             if attempt > 1:
+                # BACKOFF WITH JITTER, not an immediate retry. A reviewer noted
+                # the first version fired all three attempts back to back,
+                # separated only by two GitHub reads -- against a rival window
+                # measured in tens of seconds that is three losses, not three
+                # chances, and two lanes retrying in lockstep can livelock.
+                # Jitter breaks the lockstep; the growing term gives the rival
+                # time to finish.
+                time.sleep(random.uniform(0.5, 1.5) * attempt)
                 led = Ledger(STATE_PATH, receipts=policy["receipts"]).load()
             try:
                 said = bind_pr_for_item(led, repo, args.bind_pr, args.pr)
@@ -2062,6 +2087,13 @@ def main() -> int:
                 return 1
             print(said)
             return 0
+        # UNREACHABLE while `attempts` is a positive literal -- every path in
+        # the loop returns. Present because every other branch of `main()`
+        # returns explicitly, and without it a restructure (or `attempts = 0`)
+        # would fall through past the record-receipt branch into the NORMAL TICK
+        # PATH: refresh, reap, select, save, for a command invoked as
+        # `--bind-pr`. Fail closed instead.
+        return 1
 
     if args.record_receipt is not None:
         # RETURNS BEFORE `read_live_issues`, deliberately. Recording a receipt is
