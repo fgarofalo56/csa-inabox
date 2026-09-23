@@ -1197,9 +1197,77 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     return not (at_merge - today)
 
 
-def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
-    data = collect_ci_green_evidence(repo, number)
-    receipt = gates.ci_green_receipt(
+#: The tracked path the `ci-green` declaration lives at. Read out of the repo at
+#: a SHA, never off disk, which is the whole point of `resolve_declaration_as_of`.
+POLICY_TRACKED_PATH = "tools/drain/policy.json"
+
+
+def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
+    """`receipts.ci_green_rule` as `policy.json` carried it AT `sha` (#4676).
+
+    Resolved HERE and injected, for the same reason `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive every state of this one.
+
+    WHY A GIT READ AND NOT AN ALIAS TABLE. The declaration is a description of
+    the workflow -- "the step that IS the check" per context -- and it is
+    versioned in the same commit as the workflow it describes. `8d3dd9cbb`
+    (#4657) renamed `vitest (node 20)`'s step in `fiab-console-ci.yml` AND in
+    `policy.json`, together. So the repo already records what the declaration
+    was on the day a given run happened; nothing has to be transcribed, and
+    there is no second copy to keep in agreement. An alias table would be one
+    rename away from being silently wrong -- the argument `README.md` already
+    makes for context spellings.
+
+    FAILS TO A NAMED ERROR, NOT TO A SILENT HEAD FALLBACK. Every failure --
+    no sha, an object the local store does not have, a path that did not exist
+    at that sha, unparseable JSON, a policy with no `ci_green_rule` (the shape
+    predates the nesting) -- returns `rule=None` with a `error` string. The
+    consumer then judges on HEAD's declaration and, if that turns out to name a
+    step the job does not have, says in those words that it could not verify
+    the declaration at the sha. The remedy for that is to fetch the sha; the
+    remedy for a genuinely stale declaration is to re-read it off a green run,
+    and printing one sentence for both is #4676.
+    """
+    if not sha:
+        return gates.DeclarationAsOf(sha="", rule=None, error="no merged sha was supplied")
+    rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])
+    if rc != 0:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None,
+            error=f"git show {sha[:12]}:{POLICY_TRACKED_PATH} exited {rc}: "
+                  f"{(err or '').strip()[:160]}",
+        )
+    try:
+        at_sha = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None,
+            error=f"policy.json at {sha[:12]} does not parse as JSON: {exc}",
+        )
+    rule = (at_sha or {}).get("receipts", {}).get("ci_green_rule")
+    if not isinstance(rule, dict):
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None,
+            error=f"policy.json at {sha[:12]} carries no receipts.ci_green_rule object "
+                  f"(found {type(rule).__name__})",
+        )
+    return gates.DeclarationAsOf(sha=sha, rule=rule, error="")
+
+
+def receipt_from_evidence(data: dict, policy: dict) -> gates.CiGreenReceipt:
+    """The ONE place `gates.ci_green_receipt` is called with collected evidence.
+
+    `merge_gate --ci-green-receipt` and `tick.py --record-receipt --from-pr`
+    both take this receipt, and they used to build the eight-keyword call
+    independently. The README's whole claim for the record path is that it
+    "cannot record a receipt `--ci-green-receipt` would not print" -- which two
+    hand-maintained call sites make a hope rather than a property. #4676 added a
+    ninth argument, and adding it to one of two call sites is this package's
+    most-repeated defect ("fixed on one side only"). One call site cannot be
+    half-updated.
+    """
+    return gates.ci_green_receipt(
         data["evidence"],
         merged_total_count=data["merged_total_count"],
         merged_changed_files=data["changed_files"],
@@ -1208,7 +1276,13 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) 
         trees_identical=data["trees_identical"],
         policy=policy,
         infra_ere=resolve_infra_ere(data["merged"]),
+        declared_at=resolve_declaration_as_of(data["merged"]),
     )
+
+
+def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
+    data = collect_ci_green_evidence(repo, number)
+    receipt = receipt_from_evidence(data, policy)
     if as_json:
         print(json.dumps({
             "pr": number,

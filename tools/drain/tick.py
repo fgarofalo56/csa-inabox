@@ -1865,16 +1865,11 @@ def record_receipt_from_evidence(
 
         _pr_references_item(repo, from_pr, number)
         data = merge_gate.collect_ci_green_evidence(repo, from_pr)
-        receipt = gates.ci_green_receipt(
-            data["evidence"],
-            merged_total_count=data["merged_total_count"],
-            merged_changed_files=data["changed_files"],
-            merged_branch=data["branch"],
-            merged_sha=data["merged"],
-            trees_identical=data["trees_identical"],
-            policy=policy,
-            infra_ere=merge_gate.resolve_infra_ere(data["merged"]),
-        )
+        # THE SAME CALL `--ci-green-receipt` MAKES, not a second copy of it.
+        # The README's claim for this path is that it "cannot record a receipt
+        # `--ci-green-receipt` would not print"; two hand-maintained argument
+        # lists made that a hope. #4676's `declared_at` was the ninth argument.
+        receipt = merge_gate.receipt_from_evidence(data, policy)
         if not receipt.ok:
             raise ReceiptRefusedError(
                 f"ci-green receipt for PR #{from_pr} is {receipt.summary}; "

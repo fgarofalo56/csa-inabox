@@ -303,6 +303,46 @@ rename case is resolved by **workflow identity** at the merged sha. An alias
 table would be one conditional `name:` expression away from being wrong,
 silently.
 
+**Nor is it keyed to a STEP's spelling at HEAD (#4676).** `policy.json`
+describes the workflow *as it is at HEAD*, so judging a merged PR's job against
+it asks a run from last week whether it executed a step created yesterday. It
+did not, and the refusal read *"the declaration is stale"* — pointing the reader
+at the one edit that would make the declaration wrong for every merge **after**
+the rename. Measured: PR #4593 merged 2026-09-20T01:24:35Z; `8d3dd9cbb` (#4657)
+renamed `vitest (node 20)`'s substantive step on 2026-09-21; the receipt for
+#4593 became unobtainable, in the receipt class that closes most of the ledger.
+
+The fix is the same shape as the one above, and for the same reason it is **not**
+an alias table: the declaration is **versioned in the same repo as the workflow
+it describes**, so the repo already records what it said on the day any given run
+happened. `merge_gate.resolve_declaration_as_of` reads
+`git show <merged-sha>:tools/drain/policy.json` and injects
+`receipts.ci_green_rule` as a `gates.DeclarationAsOf`, exactly as `push_trigger`
+and `infra_ere` are injected — `gates.py` runs no subprocess. **The code is
+HEAD's; the declaration is the sha's.** Every predicate stays today's, because
+every hole reviewers found in rounds 5–16 is fixed at HEAD and must apply to
+every measurement; only the *description of the workflow* moves with the sha.
+
+**A rename is not atomic, so there are two clocks.** The workflow and the
+declaration describing it are two files, and #4657 moved them 3h13m apart —
+`8d3dd9cbb` (`fiab-console-ci.yml`, 2026-09-21 21:25) and `356290aa9`
+(`policy.json`, 2026-09-22 00:38) — with **three merges in between** (#4652,
+#4654, #4658). Resolving strictly as-of refuses all three: the declaration at
+their sha names a step their job does not carry. So the sha's declaration is
+tried first and, **only when the step it names is ABSENT ENTIRELY**, HEAD's is
+tried; the receipt prints which one decided. Absence is the rename signature. A
+declared step that is PRESENT and **skipped** is a hollow check, never falls
+through, and still fails — otherwise a rename would launder exactly the defect
+this predicate exists for.
+
+Three refusal states, kept distinct because their remedies are opposite:
+
+| what happened | what the receipt says | remedy |
+|---|---|---|
+| neither clock's declaration describes the job | *"…and so is every other declaration this repo carries for it"* | re-read the declaration off a green run |
+| the declaration at the sha could not be read | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| no as-of resolution was attempted at all | today's sentence, unchanged | none; this is a direct unit call |
+
 **A green conclusion is not evidence the check did its WORK**, and fixing that
 nearly made the receipt unobtainable for the only class it closes. `policy.json`
 declares, per context, the step that IS the check

@@ -106,7 +106,11 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
 #: the facts the pure `gates.verdict_transfers_across_base_update` cannot look
 #: up itself. The other eleven are byte-identical. `gates.py` stays pinned at
 #: ZERO, which is the machine-checked half of "gates.py runs no subprocess".
-_GIT_ARGV_LITERALS = {"merge_gate.py": 14, "tick.py": 0, "gates.py": 0}
+#: Re-measured 2026-09-23, not edited to match: #4676 added ONE git call,
+#: `resolve_declaration_as_of`'s `git show <sha>:tools/drain/policy.json`, which
+#: reads the `ci-green` declaration at the sha being measured. 14 -> 15. The
+#: assertion below routes it like every other: it goes through `sh()`.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 15, "tick.py": 0, "gates.py": 0}
 
 
 def _git_call_census(module_path):

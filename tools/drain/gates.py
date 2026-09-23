@@ -2286,6 +2286,111 @@ class ContextEvidence:
 
 
 @dataclass(frozen=True)
+class DeclarationAsOf:
+    """`policy.json`'s `receipts.ci_green_rule` AS IT STOOD at a measured sha.
+
+    THE CODE IS HEAD'S; THE DECLARATION IS THE SHA'S. That split is the whole
+    of this type. `gates.py`'s predicates are today's -- every hole reviewers
+    found in rounds 5-16 is fixed at HEAD and must apply to every measurement.
+    But `receipts.ci_green_rule` is not a predicate, it is a DESCRIPTION of a
+    workflow: "the step that IS the check" for each context. A description of
+    the workflow at HEAD says nothing true about a workflow that ran a week
+    ago, and applying it there is #4676:
+
+        PR #4593 merged 2026-09-20T01:24:35Z. On 2026-09-21 commit `8d3dd9cbb`
+        (#4657) renamed `vitest (node 20)`'s substantive step from
+        `Run vitest (with istanbul coverage floor)` to
+        `Merge shard reports and enforce the coverage floor`, in `policy.json`
+        and in `fiab-console-ci.yml`, in one commit. The receipt then asked a
+        2026-09-20 run whether it had executed a step that would not exist
+        until 2026-09-21, found it absent, and printed "the declaration is
+        stale" -- pointing the reader at the one edit that would make the
+        declaration wrong for today's merges.
+
+    THIS IS NOT AN ALIAS TABLE, and the distinction is the reason the README
+    refuses one for context spellings: an alias table is a second copy of the
+    rename, maintained by hand, one rename away from being silently wrong. This
+    carries no names at all. It reads the declaration out of the repo at the sha
+    that is being measured -- the same repo, the same file, the same drift guard
+    (`__tests__/test_ci_green_declared.py`) that enforced its agreement with the
+    workflow AT THAT SHA. The rename is resolved by the repo's own history, as
+    the context case is resolved by workflow identity.
+
+    Resolved by the CALLER and injected, exactly as `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive the resolved case, the drifted case and the
+    unresolvable case. `merge_gate.resolve_declaration_as_of` is the producer.
+
+    Three states, and they are NOT interchangeable:
+
+    - `rule` is a dict  -- the declaration at `sha` was read. It GOVERNS.
+    - `rule is None` with `error` -- the attempt was made and FAILED. HEAD's
+      declaration is used, and any refusal that turns on a missing step says so
+      in different words, because the remedy is to obtain the sha, never to
+      edit `policy.json`.
+    - the whole object is `None` (the default everywhere) -- no as-of
+      resolution was attempted. Today's behaviour, today's message, unchanged;
+      this is what a direct unit call gets.
+    """
+
+    sha: str = ""
+    rule: dict | None = None
+    error: str = ""
+
+
+#: The provenance of the declaration a refusal or an acceptance was decided on.
+#: Returned by `_declaration_as_of` so a message can name WHICH declaration it
+#: read without re-deriving it, and so the two refusals below cannot be folded
+#: into one sentence again -- which is #4676's actual damage. They have OPPOSITE
+#: remedies: `DECL_HEAD_UNVERIFIED` means go and fetch the sha, `DECL_AS_OF` and
+#: `DECL_HEAD` mean re-read the declaration off a green run.
+DECL_HEAD = "head"
+DECL_AS_OF = "as-of"
+DECL_HEAD_UNVERIFIED = "head-unverified"
+
+
+def _declaration_as_of(
+    policy: dict, as_of: "DeclarationAsOf | None"
+) -> tuple[dict, str, str]:
+    """The policy whose `ci_green_rule` governs a job measured at `as_of.sha`.
+
+    Returns `(policy_to_use, provenance, sha)`. IDEMPOTENT by construction --
+    substituting the same rule twice yields the same dict -- and that property
+    is load-bearing because there are two resolution sites: `context_did_its_work`
+    resolves for itself (it must be able to name BOTH declarations, so it is
+    given the ORIGINAL policy), and `context_is_accounted_for` resolves once for
+    routes 2 and 3, which need only the governing rule. Two call sites over one
+    question is the shape this package keeps getting wrong; it is safe here only
+    because neither can produce an answer the other would not.
+
+    A SHALLOW COPY, two levels deep, never a mutation: `policy` is the caller's
+    loaded contract and is shared with every other context in the same receipt.
+    Writing into it would make the declaration used for context N+1 depend on
+    the sha resolved for context N -- an order-dependent gate, which is the
+    worst shape a gate can have because it is green on a re-run.
+    """
+    if as_of is None:
+        return policy, DECL_HEAD, ""
+    if not isinstance(as_of.rule, dict):
+        return policy, DECL_HEAD_UNVERIFIED, as_of.sha
+    receipts = dict(policy.get("receipts", {}))
+    receipts["ci_green_rule"] = as_of.rule
+    effective = dict(policy)
+    effective["receipts"] = receipts
+    return effective, DECL_AS_OF, as_of.sha
+
+
+def _declared_steps(name: str, policy: dict):
+    """`substantive_steps[name]` out of whichever policy is in hand."""
+    return (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+
+
+@dataclass(frozen=True)
 class ContextResult:
     """One required context's standing in the receipt."""
 
@@ -2326,6 +2431,7 @@ def ci_green_receipt(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> CiGreenReceipt:
     """The `ci-green` receipt, as a measurement that can actually be taken.
 
@@ -2350,6 +2456,11 @@ def ci_green_receipt(
     `merged_total_count` guards the whole receipt through `classify_missing`: if
     the merged sha carries ZERO check-runs, nothing ran at all and every
     "absence" above would be excused one by one into a vacuous pass.
+
+    `declared_at` carries `policy.json`'s `receipts.ci_green_rule` AS IT STOOD
+    at the merged sha (#4676). See `DeclarationAsOf`: the predicates are HEAD's,
+    the description of the workflow is the sha's, and without that split a step
+    rename retroactively makes every older PR's receipt unobtainable.
     """
     contexts: list[ContextResult] = []
     reasons: list[str] = []
@@ -2372,6 +2483,7 @@ def ci_green_receipt(
             trees_identical=trees_identical,
             policy=policy,
             infra_ere=infra_ere,
+            declared_at=declared_at,
         )
         contexts.append(result)
         if not result.ok:
@@ -2394,6 +2506,7 @@ def _one_context(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     if item.merged_check is not None:
         verdict, status = _outcome(item.merged_check)
@@ -2442,7 +2555,7 @@ def _one_context(
         # SKIPPED behind a change-detection gate.
         did_work, evidence, route = context_is_accounted_for(
             item.name, item.merged_job, merged_changed_files, policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
         )
         if not did_work:
             return ContextResult(
@@ -2483,7 +2596,7 @@ def _one_context(
         return _renamed_at_merge(
             item, merged_sha=merged_sha,
             merged_changed_files=merged_changed_files, policy=policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
         )
 
     if item.push_trigger is None:
@@ -2533,9 +2646,18 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
+    # THE MERGED SHA'S DECLARATION, ON A JOB THAT RAN AT THE PR HEAD, and that
+    # is sound here for one reason only: this branch is unreachable unless
+    # `trees_identical` (the refusal ~35 lines above). An identical tree means
+    # `tools/drain/policy.json` is byte-identical at both shas, so "the
+    # declaration as of the merged sha" and "as of the PR head" are the same
+    # object. If that guard is ever relaxed, this call needs the HEAD sha's
+    # declaration resolved separately -- it does not inherit correctness from
+    # the merged one.
     ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
         push_trigger=item.push_trigger, infra_ere=infra_ere,
+        declared_at=declared_at,
     )
     if not ran:
         return ContextResult(
@@ -2563,7 +2685,10 @@ def _one_context(
     )
 
 
-def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[bool, str]:
+def context_did_its_work(
+    name: str, job: dict | None, policy: dict,
+    declared_at: DeclarationAsOf | None = None,
+) -> tuple[bool, str]:
     """Did THIS context execute the step that IS the check?
 
     WHICH step, not how many, and the distinction is the whole control.
@@ -2591,13 +2716,56 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     spread across many steps (`guardrails` has 158) rather than concentrated in
     one. A LIST names the steps that must have executed, matched as substrings
     so a step's parenthetical detail can change without breaking the receipt.
+
+    `declared_at` (#4676) resolves WHICH declaration: the one at the sha this
+    job ran at, not the one at HEAD. See `DeclarationAsOf`. This function is
+    handed the ORIGINAL policy and resolves for itself, because it is the only
+    route that must be able to name BOTH declarations -- the sha's, which it
+    judged on, and HEAD's, which the reader is looking at. Passing it the
+    policy `context_is_accounted_for` had already substituted into made
+    `head_declared` read the as-of rule, the two compared equal, and the
+    provenance clause silently vanished from every real receipt while the unit
+    test went on passing. Measured on PR #4593: verdict correct, disclosure
+    absent.
+
+    TWO CLOCKS, IN PRECEDENCE ORDER, AND THE SECOND EXISTS BECAUSE THE RENAME
+    IS NOT ATOMIC. The workflow and the declaration that describes it are two
+    files, and #4657 changed one of them:
+
+        8d3dd9cbb  2026-09-21 21:25  .github/workflows/fiab-console-ci.yml
+        356290aa9  2026-09-22 00:38  tools/drain/policy.json
+
+    For 3h13m `policy.json` named `Run vitest (with istanbul coverage floor)`
+    while the job ran `Merge shard reports and enforce the coverage floor`, and
+    THREE merges landed in that window (#4652, #4654, #4658). Resolving strictly
+    as-of would refuse all three -- #4676 in mirror image, with the same wrong
+    remedy attached. So the declaration at the sha is tried FIRST, and when the
+    step it names is ABSENT ENTIRELY the other clock is tried, and which one
+    decided is printed.
+
+    ONLY ON `missing`, never on `hollow` or `ambiguous`. A declared step that is
+    PRESENT and SKIPPED is the check not doing its work -- the defect this whole
+    predicate exists for -- and falling through to a second declaration there
+    would let a rename launder a hollow job. Absence is the rename signature;
+    a skip is not.
     """
-    declared = (
-        policy.get("receipts", {})
-        .get("ci_green_rule", {})
-        .get("substantive_steps", {})
+    head_declared = _declared_steps(name, policy)
+    effective, provenance, as_of_sha = _declaration_as_of(policy, declared_at)
+    as_of_declared = (
+        _declared_steps(name, effective) if provenance == DECL_AS_OF else None
     )
-    if name not in declared:
+    #: (provenance, rule) in precedence order, deduplicated. A context the
+    #: as-of declaration has no row for falls through to HEAD's by the same
+    #: mechanism as a renamed step -- the row is simply newer than the sha.
+    candidates: list[tuple[str, object]] = []
+    if as_of_declared is not None:
+        candidates.append((DECL_AS_OF, as_of_declared))
+    if head_declared is not None and head_declared != as_of_declared:
+        candidates.append(
+            (DECL_HEAD_UNVERIFIED if provenance == DECL_HEAD_UNVERIFIED
+             else DECL_HEAD, head_declared)
+        )
+    if not candidates:
         return False, (
             f"no substantive step is DECLARED for {name!r} in policy.json "
             "(receipts.ci_green_rule.substantive_steps) - an undeclared context "
@@ -2656,84 +2824,168 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     def ran(step: dict) -> bool:
         return step_conclusion(step) != "skipped"
 
-    rule = declared[name]
-    if rule == "ALL":
-        skipped = [s for s in work if not ran(s)]
-        if skipped:
-            names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
-            return False, (
-                f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
-                f"are SKIPPED ({names})"
-            )
-        return True, f"declared ALL; every one of its {len(work)} work step(s) ran"
+    #: ONE DECLARATION OVER THIS JOB. Extracted so the two clocks are evaluated
+    #: by the SAME code -- a second copy of the matching rules, applied to the
+    #: fallback only, is how "fixed on one side only" gets written.
+    #:
+    #: Returns `(ok, kind, payload)`. `kind` is "" on success and otherwise one
+    #: of "all-skipped", "shape", "missing", "ambiguous", "hollow"; only
+    #: "missing" may fall through to the other clock.
+    def verdict(rule):
+        if rule == "ALL":
+            skipped = [s for s in work if not ran(s)]
+            if skipped:
+                names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+                return False, "all-skipped", (
+                    f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
+                    f"are SKIPPED ({names})"
+                )
+            return True, "", f"declared ALL; every one of its {len(work)} work step(s) ran"
 
-    if not isinstance(rule, list) or not rule:
-        return False, (
-            f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
-            "non-empty list of step names"
+        if not isinstance(rule, list) or not rule:
+            return False, "shape", (
+                f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
+                "non-empty list of step names"
+            )
+
+        missing, hollow, ambiguous = [], [], []
+        for wanted in rule:
+            # EVERY matching step, and EVERY one of them must have run. This used
+            # to be `any(ran(s) for s in matches)`, and an independent reviewer's
+            # mutation arm truncated the match list to `[:1]` and SURVIVED: with
+            # `any`, one running step satisfied a declaration no matter how many
+            # others matched and skipped, so narrowing the population was
+            # unobservable. A filter placed INSIDE the predicate beats a contract
+            # written about the predicate -- which is the whole lesson of the `N*`
+            # arms. `all` makes the size of the match set load-bearing, so a
+            # truncation changes an answer and a test can see it.
+            matches = [s for s in work if wanted in str(s.get("name") or "")]
+            if not matches:
+                missing.append(wanted)
+                continue
+            skipped = [s for s in matches if not ran(s)]
+            if len(skipped) == len(matches):
+                hollow.append(wanted)
+            elif skipped:
+                ambiguous.append(
+                    f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
+                    "are SKIPPED"
+                )
+        if missing:
+            return False, "missing", missing
+        if ambiguous:
+            # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched
+            # several steps with a MIXED outcome cannot say which one is the
+            # check, and round 5 answered a hollow primary with an alternative
+            # BEFORE reaching this refusal -- so a two-entry declaration with one
+            # hollow entry and one ambiguous entry returned a pass and this
+            # sentence was never printed. An independent reviewer demonstrated it
+            # synthetically; it was latent only because both rows that declare
+            # alternatives name exactly one primary step.
+            return False, "ambiguous", (
+                "a declaration matched several steps with a MIXED outcome, so which one "
+                f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
+                "the declaration name exactly one step"
+            )
+        if hollow:
+            # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
+            # blocker. Round 5 accepted "a declared alternative ran" as the
+            # context having done its work, inside this function -- which has no
+            # `changed_files` and cannot ask the only question that makes such an
+            # acceptance safe. `context_is_accounted_for` returned on `did` before
+            # the merged file list was ever consulted, so the `hits` refusal (a
+            # change detector that MISSED a change, the #3783 shape `policy.json`
+            # says must never be laundered) became unreachable whenever any
+            # alternative ran. Two reviewers found it independently, on different
+            # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
+            #
+            # So the alternative lives in `alternative_accounted_for`, which asks
+            # the scope question and this one as two halves of a single predicate.
+            return False, "hollow", (
+                f"its declared substantive step(s) {hollow} were SKIPPED - the check "
+                "concluded green having not done the thing it is required for"
+            )
+        return True, "", f"executed its declared substantive step(s) {list(rule)}"
+
+    def clock(which: str) -> str:
+        """How a message names one of the two declarations."""
+        if which == DECL_AS_OF:
+            return f"the declaration AS OF the measured sha {as_of_sha[:12]}"
+        if which == DECL_HEAD_UNVERIFIED:
+            return "HEAD's declaration"
+        return "the declaration"
+
+    first_which, first_rule = candidates[0]
+    ok, kind, payload = verdict(first_rule)
+    if ok:
+        return True, (
+            payload
+            + (
+                # NAMED, NOT FOLDED IN. A pass decided on a declaration HEAD has
+                # since changed is a different claim from a pass decided on
+                # today's, and a reader counting states should not have to diff
+                # `git show <sha>:tools/drain/policy.json` to find out which.
+                f" - {clock(first_which)}, which HEAD has since changed to "
+                f"{head_declared!r}"
+                if first_which == DECL_AS_OF and head_declared != first_rule
+                else ""
+            )
         )
 
-    missing, hollow, ambiguous = [], [], []
-    for wanted in rule:
-        # EVERY matching step, and EVERY one of them must have run. This used to
-        # be `any(ran(s) for s in matches)`, and an independent reviewer's
-        # mutation arm truncated the match list to `[:1]` and SURVIVED: with
-        # `any`, one running step satisfied a declaration no matter how many
-        # others matched and skipped, so narrowing the population was
-        # unobservable. A filter placed INSIDE the predicate beats a contract
-        # written about the predicate -- which is the whole lesson of the `N*`
-        # arms. `all` makes the size of the match set load-bearing, so a
-        # truncation changes an answer and a test can see it.
-        matches = [s for s in work if wanted in str(s.get("name") or "")]
-        if not matches:
-            missing.append(wanted)
-            continue
-        skipped = [s for s in matches if not ran(s)]
-        if len(skipped) == len(matches):
-            hollow.append(wanted)
-        elif skipped:
-            ambiguous.append(
-                f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
-                "are SKIPPED"
+    # THE OTHER CLOCK, ON `missing` ONLY. A rename is not atomic: the workflow
+    # and the declaration describing it are two files, and #4657 moved them 3h13m
+    # apart with three merges in between. A step the sha's declaration names and
+    # the job does not carry is that window; a step the job carries and SKIPPED is
+    # a hollow check, and must never fall through to a second declaration.
+    if kind == "missing" and len(candidates) > 1:
+        other_which, other_rule = candidates[1]
+        ok2, _kind2, payload2 = verdict(other_rule)
+        if ok2:
+            return True, (
+                f"{payload2} - {clock(other_which)}"
+                + (
+                    f", reached because {clock(first_which)} named {list(first_rule)}, "
+                    "which this job does not carry: the workflow and policy.json were "
+                    "renamed in different commits"
+                    if first_which == DECL_AS_OF else ""
+                )
             )
-    if missing:
+
+    if kind != "missing":
+        return False, payload
+
+    # TWO REFUSALS, NOT ONE SENTENCE, and this is what #4676 cost. Before the
+    # split there was one message -- "the declaration is stale, or this is not the
+    # job it describes; re-read it off a green run" -- and it was printed for a
+    # 2026-09-20 job that had been asked about a step created on 2026-09-21. The
+    # declaration was not stale; it was PERFECTLY current, and the sentence sent
+    # the reader to edit `policy.json`, the single edit that would have made the
+    # declaration wrong for every merge after the rename. The remedies are
+    # opposite, so the sentences have to be.
+    tried = " and ".join(
+        f"{clock(which)} named {list(rule) if isinstance(rule, list) else rule!r}"
+        for which, rule in candidates
+    )
+    if first_which == DECL_HEAD_UNVERIFIED:
         return False, (
-            f"the declared step(s) {missing} are ABSENT from this job - the declaration "
-            "is stale, or this is not the job it describes; re-read it off a green run"
+            f"the declared step(s) {payload} are ABSENT from this job, and that "
+            f"declaration is HEAD's: the one as of the measured sha "
+            f"{(as_of_sha or '?')[:12]} could NOT be read "
+            f"({(declared_at.error if declared_at else 'no reason recorded')}), so "
+            "whether these steps existed there is UNKNOWN. Obtain that sha (`git "
+            "fetch origin <sha>`) and re-measure - do NOT edit policy.json, whose "
+            "declaration is correct for HEAD"
         )
-    if ambiguous:
-        # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched several
-        # steps with a MIXED outcome cannot say which one is the check, and
-        # round 5 answered a hollow primary with an alternative BEFORE reaching
-        # this refusal -- so a two-entry declaration with one hollow entry and
-        # one ambiguous entry returned a pass and this sentence was never
-        # printed. An independent reviewer demonstrated it synthetically; it was
-        # latent only because both rows that declare alternatives name exactly
-        # one primary step.
+    if first_which == DECL_AS_OF:
         return False, (
-            "a declaration matched several steps with a MIXED outcome, so which one "
-            f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
-            "the declaration name exactly one step"
+            f"the declared step(s) {payload} are ABSENT from this job, and so is every "
+            f"other declaration this repo carries for it ({tried}) - so it is stale at "
+            "that sha too, or this is not the job it describes; re-read it off a green run"
         )
-    if hollow:
-        # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
-        # blocker. Round 5 accepted "a declared alternative ran" as the context
-        # having done its work, inside this function -- which has no
-        # `changed_files` and cannot ask the only question that makes such an
-        # acceptance safe. `context_is_accounted_for` returned on `did` before
-        # the merged file list was ever consulted, so the `hits` refusal (a
-        # change detector that MISSED a change, the #3783 shape `policy.json`
-        # says must never be laundered) became unreachable whenever any
-        # alternative ran. Two reviewers found it independently, on different
-        # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
-        #
-        # So the alternative lives in `alternative_accounted_for`, which asks
-        # the scope question and this one as two halves of a single predicate.
-        return False, (
-            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
-            "concluded green having not done the thing it is required for"
-        )
-    return True, f"executed its declared substantive step(s) {list(rule)}"
+    return False, (
+        f"the declared step(s) {payload} are ABSENT from this job - the declaration "
+        "is stale, or this is not the job it describes; re-read it off a green run"
+    )
 
 
 #: A `scope_paths` output may declare its scope to BE the producing workflow's
@@ -2774,6 +3026,7 @@ def context_is_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> tuple[bool, str, str]:
     """ONE question -- is this green check accounted for? -- asked in one place.
 
@@ -2921,16 +3174,36 @@ def context_is_accounted_for(
             "individual steps, its scope, or its alternatives say"
         ), ""
 
-    did, evidence = context_did_its_work(name, job, policy)
+    # THE DECLARATION IS SUBSTITUTED ONCE, HERE, FOR ROUTES 2 AND 3 (#4676).
+    #
+    # `substantive_steps`, `alternatives` and `scope_paths` are all descriptions
+    # of the SAME workflow, so all three move together when it is renamed --
+    # swapping only the first would fix route 1 and leave routes 2 and 3 asking
+    # a 2026-09-20 job about a 2026-09-21 step name. That is this file's own
+    # recurring defect ("fixed on one side only"), and arm `AS2` in
+    # `mutate_gates.py` is exactly that narrowing, so a test has to see it.
+    #
+    # ROUTE 1 IS HANDED THE ORIGINAL POLICY AND THE `DeclarationAsOf`, NOT THE
+    # SUBSTITUTED ONE, and that is not a style choice. It resolves for itself
+    # because it must be able to name BOTH declarations -- the sha's, which it
+    # judged on, and HEAD's, which the reader is looking at. Passing it
+    # `effective` made `head_declared` read the substituted rule, the two
+    # compared equal, and the provenance clause silently vanished from every
+    # real receipt while the unit test -- which called the predicate directly
+    # with HEAD's policy -- went on passing. Measured on PR #4593 before it was
+    # fixed: verdict correct, disclosure absent.
+    effective, _provenance, _as_of_sha = _declaration_as_of(policy, declared_at)
+
+    did, evidence = context_did_its_work(name, job, policy, declared_at=declared_at)
     if did:
         return True, evidence, ACCOUNTED_DID_WORK
     excused, why = scope_untouched_at_merge(
-        name, job, changed_files, policy,
+        name, job, changed_files, effective,
         push_trigger=push_trigger, infra_ere=infra_ere)
     if excused:
         return True, why, ACCOUNTED_SCOPE_SKIP
     alt_ok, alt_why = alternative_accounted_for(
-        name, job, changed_files, policy,
+        name, job, changed_files, effective,
         push_trigger=push_trigger, infra_ere=infra_ere)
     if alt_ok:
         return True, alt_why, ACCOUNTED_ALTERNATIVE
@@ -3931,7 +4204,7 @@ def _is_bookkeeping_step(name: str) -> bool:
 
 def _renamed_at_merge(
     item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict,
-    infra_ere: str | None = None,
+    infra_ere: str | None = None, declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     """The per-event RENAME case, on evidence rather than on a green run.
 
@@ -4007,7 +4280,8 @@ def _renamed_at_merge(
         )
     ran = [
         (j, context_is_accounted_for(
-            item.name, j, merged_changed_files, policy, infra_ere=infra_ere))
+            item.name, j, merged_changed_files, policy, infra_ere=infra_ere,
+            declared_at=declared_at))
         for j in jobs
     ]
     usable = [
