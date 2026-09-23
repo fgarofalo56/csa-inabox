@@ -63,7 +63,8 @@ def _led(tmp_path, numbers=(1000,)) -> Ledger:
     return led
 
 
-def _stub_gh(monkeypatch, *, pr_rc=0, pr_state="OPEN", references=True):
+def _stub_gh(monkeypatch, *, pr_rc=0, pr_state="OPEN", references=True,
+             expect_refs_args=None):
     """Answer the two reads `bind_pr_for_item` makes.
 
     `references` drives `_pr_references_item`, which is stubbed rather than fed
@@ -82,6 +83,16 @@ def _stub_gh(monkeypatch, *, pr_rc=0, pr_state="OPEN", references=True):
     monkeypatch.setattr(tick, "sh", fake_sh)
 
     def fake_refs(_repo, pr_number, item):
+        # PIN THE ARGUMENT ORDER. Production calls
+        # `_pr_references_item(repo, pr, number)` against a signature of
+        # `(repo, pr_number, item)`. A stub that ignores its arguments cannot
+        # witness a swap, so `(repo, number, pr)` — asking whether PR #1000
+        # references issue #4564 — would pass every test here while checking
+        # the wrong thing entirely. This assertion is what makes the swap red.
+        assert expect_refs_args is None or (pr_number, item) == expect_refs_args, (
+            f"_pr_references_item called with {(pr_number, item)}, "
+            f"expected {expect_refs_args} — arguments swapped?"
+        )
         if not references:
             raise tick.ReceiptRefusedError(f"PR #{pr_number} does not name #{item}")
 
@@ -102,7 +113,7 @@ def test_bind_records_the_pr_and_moves_the_state(tmp_path, monkeypatch):
     """
     led = _led(tmp_path)
     led.transition(1000, IN_FLIGHT, "selected")
-    _stub_gh(monkeypatch)
+    _stub_gh(monkeypatch, expect_refs_args=(4564, 1000))
 
     said = tick.bind_pr_for_item(led, REPO, 1000, 4564)
 
@@ -117,20 +128,57 @@ def test_bind_records_the_pr_and_moves_the_state(tmp_path, monkeypatch):
     )
 
 
-def test_bind_while_ready_records_without_inventing_a_transition(tmp_path, monkeypatch):
-    """#4619's exact shape: a PR exists for an item the ledger never laned.
+def test_bind_while_ready_also_leaves_the_schedulable_pool(tmp_path, monkeypatch):
+    """#4619's shape: a PR exists for an item the ledger never laned.
 
-    BREAKS ON: forcing every bind through `in-flight -> in-review`, which would
-    either raise or fabricate a lane that never ran.
+    The FIRST version of this test asserted the opposite — that a `ready` item
+    keeps its state — on the reasoning that inventing a lane that never ran
+    would be a lie. A reviewer measured what that costs: `select_cycle` skips
+    anything `!= READY`, so a bound `ready` item stays SELECTABLE, the next
+    cycle hands it to a second lane, and that lane cannot even report back
+    because a re-bind to a DIFFERENT PR is refused. "Pay for the work twice" —
+    the exact harm this writer exists to stop — on the exact case #4489 cites.
+
+    BREAKS ON: restoring the state-preserving branch for `ready` items. The
+    assertion below then reads `ready` and the item is schedulable again.
     """
     led = _led(tmp_path)
-    _stub_gh(monkeypatch)
+    _stub_gh(monkeypatch, expect_refs_args=(4621, 1000))
 
     tick.bind_pr_for_item(led, REPO, 1000, 4621)
 
     assert led.items[1000].pr == 4621
-    assert led.items[1000].state == READY, "a ready item stays ready"
-    assert any("state unchanged" in h for h in led.items[1000].history)
+    assert led.items[1000].state == IN_REVIEW, (
+        "a bound ready item must leave the schedulable pool, or a second lane "
+        "redoes the work and then cannot report it"
+    )
+    assert not led.items[1000].schedulable or led.items[1000].state != READY
+
+
+def test_a_bound_item_is_not_handed_to_a_second_lane(tmp_path, monkeypatch):
+    """The property finding 2 is really about, pinned through `select_cycle`.
+
+    Asserting the STATE is a proxy; asserting that the selector does not pick
+    the item is the thing that matters, and it is what fails if anyone later
+    makes `in-review` schedulable again.
+
+    BREAKS ON: the bind leaving a `ready` item in `ready` (the original bug —
+    `select_cycle` then returns it), or `select_cycle` being widened past
+    `state == READY`.
+    """
+    led = _led(tmp_path)
+    _stub_gh(monkeypatch, expect_refs_args=(4621, 1000))
+
+    before = [i.number for i in tick.select_cycle(led, POLICY)]
+    assert 1000 in before, (
+        "control: the item must be selectable BEFORE the bind, or this test "
+        "would pass against a selector that never returns anything"
+    )
+
+    tick.bind_pr_for_item(led, REPO, 1000, 4621)
+
+    after = [i.number for i in tick.select_cycle(led, POLICY)]
+    assert 1000 not in after, "a bound item must not be handed to a second lane"
 
 
 def test_bind_is_idempotent_for_the_same_pr(tmp_path, monkeypatch):

@@ -1487,9 +1487,12 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     # says so. The binding arm bypasses the state test, so a TERMINAL item bound
     # to this PR corroborates -- defensible, since a harness-written binding
     # outranks a state, but "is work the harness has in flight" is then false.
-    # Unreachable until #4489 lands a writer; wording it now means the sentence
-    # does not become wrong on the day it arms. Kills MG35.
-    led.items[10].pr = 1          # the fixture PR; set by hand, nothing writes it
+    # LIVE as of #4489: `tick.py --bind-pr` writes `Item.pr`, so this arm fires
+    # in production and the sentence below is a live claim, not a latent one.
+    # Set directly here only to keep this a merge_gate unit test -- the writer
+    # is exercised end to end in `test_poached_closes_refuses_a_bound_item`.
+    # Kills MG35.
+    led.items[10].pr = 1          # the fixture PR
     led.save()
     bound = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
     detail = _gate(bound, "3b")["detail"]
@@ -1529,15 +1532,16 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     led.save()
 
     assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
-    # The binding is set DIRECTLY here, because nothing writes it in production
-    # and this module no longer tries to. `bind_pr` used to, from `main()` --
-    # and both reviewers reproduced a lost update: an unlocked read-modify-write
-    # on the drain's only durable record, reaching (via the worktree fallback) a
-    # checkout this process does not own. `Ledger.save()` serialises the whole
-    # document from memory, so the loser's cycle, state transitions and history
-    # do not merge, they vanish. A merge gate does not write the thing it
-    # measures; `tick.py` owns the ledger. The writer is tracked in #4489, and
-    # until it exists this control is DECLARED INERT rather than claimed.
+    # The binding is set DIRECTLY here to keep this a merge_gate unit test.
+    # `bind_pr` used to write it from `main()` -- and both reviewers reproduced
+    # a lost update: an unlocked read-modify-write on the drain's only durable
+    # record, reaching (via the worktree fallback) a checkout this process does
+    # not own. `Ledger.save()` serialises the whole document from memory, so the
+    # loser's cycle, state transitions and history do not merge, they vanish. A
+    # merge gate does not write the thing it measures; `tick.py` owns the
+    # ledger. The writer LANDED in #4489 as `tick.py --bind-pr`, so this control
+    # is LIVE rather than declared inert -- and it is driven through that real
+    # writer in `test_poached_closes_refuses_a_bound_item` below.
     led.items[10].pr = 99
     led.save()
     # The SAME PR may re-run the gate as often as it likes.
@@ -1553,6 +1557,49 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     # Silent when it cannot tell: no ledger, or no binding, is not a conflict.
     assert merge_gate.poached_closes([10], POLICY, str(tmp_path / "none.json"), pr=2) == []
     assert merge_gate.poached_closes([], POLICY, path, pr=2) == []
+
+
+def test_poached_closes_refuses_a_bound_item(tmp_path, monkeypatch):
+    """Gate 6 refuses a second PR's declared close of an item THE REAL WRITER bound.
+
+    #4489's acceptance line: "A second PR declaring a close of a bound item is
+    refused by gate 6 -- with a test that fails without the writer." Every other
+    poach test sets `Item.pr` by hand, so none of them fails when the writer is
+    removed; this one drives `tick.bind_pr_for_item` and therefore does.
+
+    BREAKS ON: deleting `item.pr = pr` from the writer (mutation arm PR1). The
+    bind then records nothing, `poached_closes` finds no binding, and its
+    documented silence-when-it-cannot-tell returns `[]` -- so the assertion that
+    PR #1 is refused goes red. That is the difference between this test and its
+    hand-set siblings, and it is why the acceptance line asks for it.
+    """
+    import tick
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "issue 10", "W6-ci", lane="lane:ci", size=1)
+    led.transition(10, "in-flight", "selected")
+    led.save()
+
+    # The writer's two GitHub reads, stubbed: it is the BINDING under test here,
+    # not `gh`. Both are exercised against the real thing in test_bind_pr.py.
+    monkeypatch.setattr(
+        tick, "sh",
+        lambda _args: (0, json.dumps(
+            {"number": 99, "state": "OPEN", "headRefName": "fix/x"}), ""),
+    )
+    monkeypatch.setattr(tick, "_pr_references_item", lambda _repo, _pr, _item: None)
+
+    tick.bind_pr_for_item(led, "owner/repo", 10, 99)
+    led.save()
+
+    # The bound PR is unaffected; a DIFFERENT PR is refused by gate 6.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    assert merge_gate.poached_closes([10], POLICY, path, pr=1) == ["#10 is bound to PR 99"]
+    result = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert not _gate(result, "6 ")["ok"]
+    assert "POACHED" in _gate(result, "6 ")["detail"]
 
 
 def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):

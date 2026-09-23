@@ -34,7 +34,6 @@ from ledger import (
     TERMINAL,
     Ledger,
     LedgerChangedError,
-    _now,
 )
 
 import gates
@@ -631,15 +630,23 @@ def bind_pr_for_item(led: Ledger, repo: str, number: int, pr: int) -> str:
     was = item.state
     item.pr = pr
     note = f"bound PR #{pr} ({meta.get('state', '?')}, {meta.get('headRefName', '?')})"
-    if was == IN_FLIGHT:
-        # The state change is the half that stops the reaper taking it back.
-        led.transition(number, IN_REVIEW, why=note)
-    else:
-        # Binding without a state change is legal -- an item can acquire a PR
-        # while `ready` (a lane opened one before the ledger laned it, which is
-        # #4619's exact shape) -- but it must still leave a trace, or the
-        # binding appears in `state.json` with no record of when or why.
-        item.history.append(f"{_now()} {note} (state unchanged: {was})")
+    # EVERY bind moves the item to `in-review`, including one that was `ready`.
+    #
+    # The first version left a `ready` item's state alone, on the reasoning that
+    # a PR can appear before the ledger lanes the item (#4619's exact shape) and
+    # inventing a lane that never ran would be a lie. A reviewer measured what
+    # that actually costs, and the reasoning was wrong in the direction that
+    # matters: `select_cycle` skips anything `!= READY`, so a bound `ready` item
+    # stays SELECTABLE. Lane A opens the PR and binds it; the next cycle hands
+    # the same item to lane B; lane B redoes the work and then cannot report at
+    # all, because this function refuses a re-bind to a DIFFERENT PR. That is
+    # "pay for the work twice" -- the precise harm this writer exists to stop --
+    # reproduced on the one case the issue cites.
+    #
+    # `in-review` is also simply true of a `ready` item that has a PR: the work
+    # exists and is waiting on review. Being unschedulable is the point, not a
+    # side effect.
+    led.transition(number, IN_REVIEW, why=note)
     return f"#{number}: {note}; state {was} -> {item.state}"
 
 
@@ -2006,26 +2013,55 @@ def main() -> int:
         if args.pr is None:
             print("--bind-pr needs --pr <PR>", file=sys.stderr)
             return 2
-        try:
-            said = bind_pr_for_item(led, repo, args.bind_pr, args.pr)
-        except PrBindRefusedError as exc:
-            print(f"BIND REFUSED - NOTHING WRITTEN: {exc}", file=sys.stderr)
-            return 1
-        try:
-            # A lane binding from one worktree must never clobber another lane's
-            # transitions; see the helper's docstring for why this is the only
-            # safe save shape here (#4489).
-            _save_refusing_lost_update(led)
-        except LedgerChangedError as exc:
-            print(
-                f"LEDGER CHANGED UNDER THIS BIND - NOTHING WRITTEN: {exc}\n"
-                "  Another lane wrote while this one was deciding. Re-run it; "
-                "the bind re-reads and a same-PR re-bind is a no-op.",
-                file=sys.stderr,
-            )
-            return 1
-        print(said)
-        return 0
+        if args.record_receipt is not None:
+            # Both write, and --bind-pr used to win silently. An operator who
+            # passed both got one transaction and no hint that the other was
+            # dropped.
+            print("--bind-pr and --record-receipt are separate transactions; "
+                  "pass one at a time", file=sys.stderr)
+            return 2
+        # BOUNDED RETRY, because contention here is routine rather than
+        # exceptional. An ordinary tick holds its read across a full refresh of
+        # some four hundred issues, and this bind holds one across a pair of
+        # GitHub reads, so the two overlap often with four lanes live. Losing
+        # the CAS and exiting would
+        # leave the item unbound and reaped next cycle -- the original defect,
+        # recurring under exactly the concurrency the design exists to survive.
+        #
+        # Safe by construction: a re-bind of the SAME pr is idempotent (pinned
+        # by `test_bind_is_idempotent_for_the_same_pr`), and each attempt
+        # RE-READS the ledger, so a retry cannot double-write or resurrect a
+        # state another writer has since changed. A different-PR bind still
+        # refuses on the re-read, which is the behaviour we want to keep.
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                led = Ledger(STATE_PATH, receipts=policy["receipts"]).load()
+            try:
+                said = bind_pr_for_item(led, repo, args.bind_pr, args.pr)
+            except PrBindRefusedError as exc:
+                print(f"BIND REFUSED - NOTHING WRITTEN: {exc}", file=sys.stderr)
+                return 1
+            try:
+                _save_refusing_lost_update(led)
+            except LedgerChangedError as exc:
+                if attempt < attempts:
+                    print(
+                        f"ledger changed under this bind (attempt {attempt}/{attempts}) "
+                        "- re-reading and retrying",
+                        file=sys.stderr,
+                    )
+                    continue
+                print(
+                    f"LEDGER CHANGED UNDER THIS BIND - NOTHING WRITTEN: {exc}\n"
+                    f"  Lost the CAS {attempts} times; another writer is very "
+                    "busy. Re-run it; the bind re-reads and a same-PR re-bind "
+                    "is a no-op.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(said)
+            return 0
 
     if args.record_receipt is not None:
         # RETURNS BEFORE `read_live_issues`, deliberately. Recording a receipt is

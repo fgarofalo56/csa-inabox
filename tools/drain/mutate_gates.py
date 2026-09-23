@@ -3243,11 +3243,12 @@ ARMS: list[tuple[str, str, str, str]] = [
     ),
     (
         ("PR2 the bind stops MOVING THE STATE, so the PR is recorded but the item "
-         "stays in-flight and the next cycle reaps it anyway. Recording without "
-         "the transition repairs the gate's corroboration and leaves the work loss"),
+         "stays schedulable and the next cycle hands it to a second lane. "
+         "Recording without the transition repairs the gate's corroboration and "
+         "leaves the pay-for-it-twice defect exactly as it was"),
         "tick.py",
-        "        led.transition(number, IN_REVIEW, why=note)",
-        "        pass",
+        "    led.transition(number, IN_REVIEW, why=note)",
+        "    pass",
     ),
     (
         ("PR3 the bind stops checking the PR NAMES the item, so Item.pr becomes an "

@@ -349,14 +349,20 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     Without one of those, a declared close is treated like a mention: it may
     escalate, it may not explain.
 
-    `Item.pr` HAS NO WRITER, so the mid-flight test carries all of the weight
-    today and the binding arm is unreachable. A previous round wrote the binding
+    `Item.pr` NOW HAS A WRITER -- `tick.py --bind-pr` (#4489) -- so the binding
+    arm is REACHABLE and the mid-flight test no longer carries all of the
+    weight. Read the next paragraph before relying on that, because the two arms
+    are not equivalent: a binding BYPASSES the state test, so a TERMINAL item
+    bound to this PR still corroborates. That is deliberate (a binding the
+    harness wrote outranks a state it inferred) but it is not what "in flight"
+    implies, and this docstring previously told an auditor the arm could not
+    fire at all.
+
+    The writer lives in `tick.py`, not here. A previous round wrote the binding
     from `main()` and this docstring said so; that write is DELETED, because
     from a worktree it rewrote the primary checkout's ledger unlocked and both
-    reviewers reproduced a lost update. Nothing accrues. The writer belongs in
-    `tick.py`, which owns the ledger -- #4489. Said here because a reader
-    auditing whether this corroboration is safe was previously told it rests on
-    an accrual that does not exist.
+    reviewers reproduced a lost update. `tick.py` owns the ledger and saves
+    through a CAS that refuses a concurrent write.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
     `reduce_verdicts` uses. That is the `hit` branch's job: a PR touching a
@@ -413,9 +419,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     # WORD IT FROM THE ARM THAT MATCHED. "is work the harness has in flight" is
     # false of an item corroborated by its BINDING, which bypasses the state
     # test -- a `closed` item bound to this PR corroborates, and the docstring
-    # above says a terminal item is finished. Unreachable while `Item.pr` has no
-    # writer; it arms the moment #4489 lands one, which is when a latent wrong
-    # sentence becomes a live one.
+    # above says a terminal item is finished. LIVE as of #4489: `tick.py
+    # --bind-pr` writes `Item.pr`, so this arm now fires, and nothing clears the
+    # binding when the item goes terminal (`transition()` clears only
+    # `audit_reason`). A bound-then-parked item therefore corroborates a
+    # declared close. Deliberate, and stated here rather than left for an
+    # auditor to discover, because the previous wording said it could not
+    # happen.
     bound_here = [n for n in corroborated if led.items[n].pr == pr]
     if corroborated:
         # The STRONGEST, not the lowest-numbered. `corroborated[0]` reported
@@ -435,10 +445,11 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
 
     stale = [n for n in closing if n in led.items]
     if stale:
-        # The binding clause ONLY when there is a binding. `Item.pr` has no
-        # writer, so "bound to PR None" was what this said about all 299 items
-        # -- a fact asserted about a system that has no bindings, the same shape
-        # as the "was taken under None" message repaired in `ledger.py`.
+        # The binding clause ONLY when there is a binding. Before #4489 landed a
+        # writer, "bound to PR None" was what this said about all 299 items -- a
+        # fact asserted about a system that had no bindings, the same shape as
+        # the "was taken under None" message repaired in `ledger.py`. Bindings
+        # exist now, but most items still carry none, so the guard stays.
         item = led.items[stale[0]]
         return None, (
             f"#{stale} is declared closed but the ledger has it in "

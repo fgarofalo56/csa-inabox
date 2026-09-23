@@ -78,8 +78,18 @@ Scope and autonomy are already decided — do not re-ask them:
     WRITTEN - THE ISSUE IS CLOSED UPSTREAM` with the exception type and says to
     re-run: the closer sees CLOSED and short-circuits, so there is no second
     close and no second comment.
-    It does NOT check the evidence is ABOUT the item — that binding
-    needs `Item.pr`, which still has no writer (#4489). Measure the operating
+    It DOES check the evidence is ABOUT the item: `_pr_references_item` reads
+    both `closingIssuesReferences` and a verb-agnostic body/commit scan. The
+    stronger binding — `Item.pr` — now has a writer (#4489), so a lane that
+    opens a PR should report it:
+
+        python tools/drain/tick.py --bind-pr <ITEM> --pr <PR>
+
+    That records the PR and moves the item to `in-review`, which is what stops
+    the next cycle reaping it as "lane never returned" and handing the same work
+    to a second lane. A bound item is neither reaped nor re-selected; note the
+    other edge of that, which is that an ABANDONED PR leaves its item parked in
+    `in-review` with no release verb yet. Measure the operating
     point with `python tools/drain/operating_point.py --merge-gate`.
     Run the gate from the PRIMARY checkout if you can; from a worktree it falls
     back to the primary's ledger via git's common dir, and if that fails it
