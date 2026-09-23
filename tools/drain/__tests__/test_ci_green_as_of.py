@@ -109,7 +109,12 @@ def _rule_before_the_rename():
         output["gates"] = [
             STEP_BEFORE_RENAME if g == STEP_AFTER_RENAME else g for g in gates_before
         ]
-        moved += sum(1 for a, b in zip(gates_before, output["gates"]) if a != b)
+        # `strict=True` is not padding: the comprehension above is built FROM
+        # `gates_before`, so the two are the same length by construction, and a
+        # future edit that makes them differ would make `moved` silently
+        # under-count rather than raise.
+        moved += sum(1 for a, b in zip(gates_before, output["gates"], strict=True)
+                     if a != b)
     assert moved == 1, (
         f"expected exactly one scope-row gate to carry the renamed step, moved {moved}"
     )
@@ -279,7 +284,7 @@ def test_the_as_of_declaration_governs_the_alternatives_and_the_scope_row_too():
     assert "Run vitest (infra-reading suites only)" in evidence
 
 
-def test_an_unreadable_as_of_declaration_refuses_in_DIFFERENT_words():
+def test_an_unreadable_as_of_declaration_refuses_in_different_words():
     """The two failure modes have OPPOSITE remedies, so they get two sentences.
 
     - the declaration is stale at HEAD  -> re-read it off a green run.
@@ -438,7 +443,7 @@ def test_the_lag_window_between_the_workflow_rename_and_the_policy_rename():
     assert "renamed in different commits" in why
 
 
-def test_the_other_clock_is_reached_on_ABSENCE_only_never_on_a_SKIP():
+def test_the_other_clock_is_reached_on_absence_only_never_on_a_skip():
     """A hollow check may not be laundered by a rename.
 
     `missing` -- the declared name is nowhere in the job -- is the rename
@@ -467,8 +472,8 @@ def test_the_other_clock_is_reached_on_ABSENCE_only_never_on_a_SKIP():
     assert by_name[STEP_BEFORE_RENAME] == "skipped"
     assert by_name[STEP_AFTER_RENAME] == "success"
     head_ok, _ = gates.context_did_its_work("vitest (node 20)", job, POLICY)
-    assert head_ok, "HEAD's declaration must ACCEPT this job, or the fallback " \
-                    "could not have laundered it and this test proves nothing"
+    assert head_ok, ("HEAD's declaration must ACCEPT this job, or the fallback "
+                     "could not have laundered it and this test proves nothing")
 
     ok, why = gates.context_did_its_work(
         "vitest (node 20)", job, POLICY,
@@ -476,6 +481,237 @@ def test_the_other_clock_is_reached_on_ABSENCE_only_never_on_a_SKIP():
     assert not ok, why
     assert "were SKIPPED" in why
     assert STEP_BEFORE_RENAME in why
+
+
+def test_a_hollow_step_at_the_other_clock_is_not_reported_as_absent():
+    """R7. The "and so is every other declaration" sentence can be FALSE.
+
+    An independent reviewer executed this branch: with the sha's clock
+    `missing` and HEAD's clock `hollow`, the code discarded the second verdict's
+    KIND and fell into the absence refusal, which asserted that HEAD's step was
+    absent too. It was not -- it was PRESENT and SKIPPED. The sentence stated a
+    fact the code had not established and prescribed "re-read it off a green
+    run" for a state whose real diagnosis is a hollow check. That is
+    one-sentence-for-two-states: the defect this PR exists to end, reintroduced
+    in the branch that ends it.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: `ok2, _kind2, payload2 = verdict(...)` --
+    discarding the kind. The refusal then reads "and so is every other
+    declaration this repo carries for it" about a step the job carries. The
+    fixture below is exactly the reviewer's: the as-of step appears NOWHERE in
+    the job, HEAD's step is present and skipped.
+    """
+    as_of_rule = _rule_before_the_rename()
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes", STEP_AFTER_RENAME),
+        skipped=(STEP_AFTER_RENAME,),
+    )
+    # The fixture's arithmetic, asserted rather than trusted.
+    names = [s["name"] for s in job["steps"]]
+    assert STEP_BEFORE_RENAME not in names, "the as-of step must be ABSENT"
+    assert STEP_AFTER_RENAME in names, "HEAD's step must be PRESENT"
+    head_step = next(s for s in job["steps"] if s["name"] == STEP_AFTER_RENAME)
+    assert head_step["conclusion"] == "skipped"
+
+    ok, why = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(sha=SHA_BEFORE_RENAME, rule=as_of_rule))
+    assert not ok, why
+    # The refusal must NOT claim HEAD's step is absent...
+    assert "and so is every other declaration" not in why
+    # ...and must name what it actually is.
+    assert "were SKIPPED" in why
+    assert STEP_AFTER_RENAME in why
+    assert "not done the thing it is required for" in why
+    # The remedy for a hollow check is not "re-read the declaration".
+    assert "re-read it off a green run" not in why
+
+
+def test_a_declaration_that_predates_the_key_is_not_told_to_fetch_the_sha():
+    """`substantive_steps` arrives in `6e29f1012` (2026-09-15, #4491).
+
+    For every merge older than that the blob IS readable and simply carries no
+    `receipts.ci_green_rule`. Telling the reader to `git fetch` a sha they
+    already have is the same wrong-remedy shape #4676 is about, and for a
+    backlog closing pre-2026-09-15 merges it is the common case, not an edge.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: collapsing `DECL_PREDATES` back into
+    `DECL_UNREADABLE`, or discriminating them by grepping `error` (the two
+    messages share most of their words; only `git fetch` and `nothing to fetch`
+    separate them, which is why the branch is on the REASON VALUE).
+    """
+    job = _job("vitest (node 20)",
+               steps=("Detect console changes", STEP_BEFORE_RENAME))
+
+    predates = gates.DeclarationAsOf(
+        sha="a02cd41e6aaa", rule=None, reason=gates.DECL_PREDATES,
+        error="policy.json at a02cd41e6aaa carries no receipts.ci_green_rule object "
+              "(found NoneType)",
+    )
+    ok, why = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY, declared_at=predates)
+    assert not ok
+    assert "nothing to fetch" in why.lower()
+    assert "the key did not exist yet" in why
+    assert "git fetch" not in why
+
+    # POSITIVE CONTROL on the same branch: a genuinely unreadable object DOES
+    # get told to fetch. Without this the assertion above is satisfied by
+    # deleting the fetch advice everywhere.
+    unreadable = gates.DeclarationAsOf(
+        sha="a02cd41e6aaa", rule=None, reason=gates.DECL_UNREADABLE,
+        error="git show a02cd41e6aaa:tools/drain/policy.json exited 128: bad object",
+    )
+    ok2, why2 = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY, declared_at=unreadable)
+    assert not ok2
+    assert "git fetch" in why2
+    assert "bad object" in why2
+    assert "nothing to fetch" not in why2.lower()
+
+
+def test_a_row_newer_than_the_sha_is_disclosed_not_silently_substituted():
+    """HEAD's declaration used because the sha's had NO ROW is a third fact.
+
+    Reachable today: `Bicep Params Compile` and the brain-security-graph row
+    were added to `substantive_steps` on 2026-09-18 in `0c2c4c974`, so every
+    merge before that date hits this for those two contexts. A pass used to
+    print no provenance clause at all -- an undisclosed substitution, against
+    this module's own "NAMED, NOT FOLDED IN" principle.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: labelling that candidate `DECL_HEAD`
+    instead of `DECL_HEAD_ROW_NEWER`, which restores the silent pass.
+    """
+    # A declaration that is otherwise HEAD's but has no row for this context.
+    no_row = copy.deepcopy(POLICY["receipts"]["ci_green_rule"])
+    del no_row["substantive_steps"]["vitest (node 20)"]
+    assert "vitest (node 20)" not in no_row["substantive_steps"]
+
+    job = _job("vitest (node 20)",
+               steps=("Detect console changes", STEP_AFTER_RENAME))
+    ok, why = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(sha="0c2c4c974aaa", rule=no_row))
+    assert ok, why
+    assert "carried NO ROW for this context" in why
+    assert "NEWER than the sha" in why
+    assert "0c2c4c974aaa" in why
+    # It is NOT reported as a rename -- a different fact with a different cause.
+    assert "which HEAD has since changed to" not in why
+
+    # POSITIVE CONTROL: with the row present and identical to HEAD's, the pass
+    # carries NO provenance clause. Without this, an implementation that
+    # annotated every pass would satisfy the assertions above.
+    plain_ok, plain_why = gates.context_did_its_work(
+        "vitest (node 20)", job, POLICY,
+        declared_at=gates.DeclarationAsOf(
+            sha="0c2c4c974aaa", rule=POLICY["receipts"]["ci_green_rule"]))
+    assert plain_ok
+    assert "NO ROW" not in plain_why
+    assert "NEWER than the sha" not in plain_why
+
+
+def test_routes_2_and_3_are_deliberately_single_clocked():
+    """The asymmetry is a DECISION, pinned so a change to it must be deliberate.
+
+    Route 1 gets two clocks because its fallthrough is reachable only on
+    `missing` -- a name absent from the job entirely, the rename signature.
+    Routes 2 and 3 refuse for reasons about the merged FILE LIST and the
+    detector, where "try the other declaration" would let a scope refusal under
+    one clock be overridden by an acceptance under the other. That is the
+    #3783 laundering shape, so they are single-clocked and fail closed.
+
+    THIS TEST PINS THE COST, not the benefit: a lag-window job whose primary is
+    skipped under HEAD's spelling and whose declared alternative ran is REFUSED.
+    It is labelled as such rather than counted as coverage of a behaviour
+    anybody wants.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: extending the fallthrough to routes 2 and
+    3 -- at which point this test goes red and whoever did it has to say so
+    here, which is the entire point of pinning it.
+    """
+    as_of_rule = _rule_before_the_rename()
+    # HEAD's primary skipped, HEAD's alternative run -- the shape route 2 would
+    # accept under HEAD's declaration alone.
+    job = _job(
+        "vitest (node 20)",
+        steps=("Detect console changes", STEP_AFTER_RENAME,
+               "Run vitest (infra-reading suites only)"),
+        skipped=(STEP_AFTER_RENAME,),
+    )
+    # POSITIVE CONTROL: under HEAD's declaration alone this IS accepted, so the
+    # refusal below is the single-clock decision and not some other failure.
+    head_ok, _head_why, head_route = gates.context_is_accounted_for(
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE)
+    assert head_ok
+    assert head_route == gates.ACCOUNTED_ALTERNATIVE
+
+    acct, why, route = gates.context_is_accounted_for(
+        "vitest (node 20)", job, MERGED_FILES, POLICY, infra_ere=INFRA_ERE,
+        declared_at=gates.DeclarationAsOf(sha=SHA_BEFORE_RENAME, rule=as_of_rule))
+    assert not acct, why
+    assert route == ""
+
+
+def test_the_receipt_call_has_exactly_one_non_test_site():
+    """The fold is a PROPERTY only if something holds it at one call site.
+
+    `merge_gate.receipt_from_evidence` exists so `--ci-green-receipt` and
+    `tick.py --record-receipt` cannot compute different receipts. Nothing
+    stopped a future edit from re-splitting it, which makes the README's claim
+    a hope again -- the same gap `_GIT_ARGV_LITERALS` exists to close for git
+    argv.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: a second `gates.ci_green_receipt(` outside
+    `__tests__`, i.e. exactly the re-split. Counted over every non-test module
+    in the package, so a call added to any of them is seen -- not just the two
+    that have one today.
+
+    COUNTED BY AST, NOT BY GREP, and that is not fastidiousness: the first
+    version counted source text and FAILED on `mutate_gates.py`, whose AS8 arm
+    carries the re-split call as a STRING LITERAL. A raw-source census cannot
+    tell a call from a quoted one -- the same shape as a guard satisfied by a
+    comment -- so it would have been both a false positive here and, for a call
+    hidden in a docstring, a false negative elsewhere.
+    """
+    import ast
+    import pathlib
+
+    drain = pathlib.Path(__file__).resolve().parent.parent
+    sites = {}
+    for path in sorted(drain.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        n = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else (
+                fn.id if isinstance(fn, ast.Name) else None)
+            if name == "ci_green_receipt":
+                n += 1
+        if n:
+            sites[path.name] = n
+    assert sites == {"merge_gate.py": 1}, (
+        f"`gates.ci_green_receipt(` must have exactly one non-test call site, in "
+        f"merge_gate.receipt_from_evidence. Found {sites}. Two call sites make "
+        "'tick cannot record a receipt --ci-green-receipt would not print' a hope "
+        "rather than a property -- #4676 added a ninth argument to that call."
+    )
+
+    # POSITIVE CONTROL: the walk can SEE a call. Without this, a census that
+    # matched nothing at all -- a broken visitor, a wrong attribute name --
+    # would report `{}` and fail on the equality rather than on the reason, or
+    # pass outright if the expectation were ever loosened to "at most one".
+    probe = ast.parse("import gates\ngates.ci_green_receipt(1)\nci_green_receipt(2)\n")
+    seen = sum(
+        1 for node in ast.walk(probe)
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "attr", None) or getattr(node.func, "id", None))
+        == "ci_green_receipt"
+    )
+    assert seen == 2, f"the AST walk cannot see a call it should ({seen} of 2)"
 
 
 def _git(*args):
@@ -551,7 +787,7 @@ def _skip_without_history():
         )
 
 
-def test_the_producer_asks_git_for_the_SHA_and_for_no_other_ref():
+def test_the_producer_asks_git_for_the_sha_and_for_no_other_ref():
     """The same question as the test below, asked WITHOUT a checkout.
 
     THIS TEST EXISTS BECAUSE THE OTHER ONE SKIPS WHERE IT MATTERS MOST. The
@@ -630,7 +866,7 @@ def test_the_producer_reads_the_declaration_at_the_sha_not_off_disk():
             != after.rule["substantive_steps"]["vitest (node 20)"])
 
 
-def test_the_producer_fails_to_a_NAMED_error_never_to_a_silent_head_fallback():
+def test_the_producer_fails_to_a_named_error_never_to_a_silent_head_fallback():
     """Every failure carries `rule=None` AND a reason git actually gave.
 
     `deploy-integrity.md` R7: an error may not state as fact something it did
@@ -678,7 +914,7 @@ def test_the_producer_refuses_a_policy_with_no_ci_green_rule():
     def resolve(document):
         original = merge_gate.sh
         try:
-            merge_gate.sh = lambda args: (0, json.dumps(document), "")
+            merge_gate.sh = lambda _args: (0, json.dumps(document), "")
             return merge_gate.resolve_declaration_as_of("deadbeefcafe")
         finally:
             merge_gate.sh = original
@@ -712,7 +948,7 @@ def test_the_producer_refuses_a_blob_that_is_not_json():
     merge_gate = _merge_gate()
     original = merge_gate.sh
     try:
-        merge_gate.sh = lambda args: (0, "this is not json", "")
+        merge_gate.sh = lambda _args: (0, "this is not json", "")
         result = merge_gate.resolve_declaration_as_of("deadbeefcafe")
     finally:
         merge_gate.sh = original

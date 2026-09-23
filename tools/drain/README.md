@@ -335,13 +335,54 @@ declared step that is PRESENT and **skipped** is a hollow check, never falls
 through, and still fails — otherwise a rename would launder exactly the defect
 this predicate exists for.
 
-Three refusal states, kept distinct because their remedies are opposite:
+Four refusal states, kept distinct because their remedies are opposite:
 
 | what happened | what the receipt says | remedy |
 |---|---|---|
 | neither clock's declaration describes the job | *"…and so is every other declaration this repo carries for it"* | re-read the declaration off a green run |
-| the declaration at the sha could not be read | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| the sha's clock is ABSENT but HEAD's names a step the job carries **skipped** | *"HEAD's declaration names a DIFFERENT step, which this job DOES carry … the check concluded green having not done the thing it is required for"* | fix the check, not the declaration |
+| the declaration at the sha could not be READ | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| the declaration at the sha PREDATES the key | *"…carries no `receipts.ci_green_rule` AT ALL — the key did not exist yet … There is nothing to fetch"* | nothing to fetch; HEAD's is the only declaration there has ever been |
 | no as-of resolution was attempted at all | today's sentence, unchanged | none; this is a direct unit call |
+
+The second row is the one this file got wrong once: the code discarded the
+second clock's *kind*, so a step that was PRESENT and SKIPPED at HEAD was
+reported as absent — stating as fact something it had not established
+(`deploy-integrity.md` R7), in the branch written to end exactly that. The
+fourth row is the same class: `substantive_steps` arrives in `6e29f1012`
+(2026-09-15, #4491), so every merge older than that resolves to "no rule", and
+telling the reader to `git fetch` a sha they already have is a wrong remedy for
+what is, on a backlog of pre-2026-09-15 merges, the common case.
+
+**A pass says which clock decided it**, and there are three ways that can differ
+from HEAD's current declaration — a rename (*"which HEAD has since changed
+to …"*), the lag window (*"reached because the declaration as of … named …,
+which this job does not carry"*), and a row that is **newer than the sha**
+(*"policy.json at the measured sha carried NO ROW for this context"*, reachable
+for the two rows added in `0c2c4c974` on 2026-09-18). None is folded into the
+others; a silent substitution is the thing this whole mechanism is against.
+
+**Routes 2 and 3 are deliberately single-clocked.** Route 1's fallthrough is
+safe only because it is reachable on `missing` alone — a name absent from the
+job entirely. `scope_untouched_at_merge` and `alternative_accounted_for` refuse
+for reasons about the merged *file list* and the detector, where "try the other
+declaration" would let a scope refusal under one clock be overridden by an
+acceptance under the other — the #3783 laundering shape. The cost is that a
+lag-window job whose primary is skipped under HEAD's spelling and whose declared
+alternative ran is refused; that is fail-closed, it is unrealised on all three
+real lag-window merges, and `test_routes_2_and_3_are_deliberately_single_clocked`
+pins it so changing it has to be deliberate.
+
+**What this does NOT establish: a rename is indistinguishable from a
+CORRECTION.** If a declaration row was ever *wrong* at sha S — naming a step
+that was not the check — and has since been corrected at HEAD, a merge at S is
+now judged by the wrong declaration, and the correction stops applying
+retroactively. Measured across all six versions of `substantive_steps` since it
+was introduced: **two row additions (`0c2c4c974`) and one rename (`356290aa9`),
+zero corrections.** The risk is real and currently unrealised. It matters
+because the two are textually identical — a row whose value changed — so no
+amount of reading the diff can tell them apart; only the intent behind the
+commit can, and the receipt cannot read intent.
 
 **A green conclusion is not evidence the check did its WORK**, and fixing that
 nearly made the receipt unobtainable for the only class it closes. `policy.json`

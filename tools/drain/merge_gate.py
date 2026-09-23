@@ -1219,22 +1219,33 @@ def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
     rename away from being silently wrong -- the argument `README.md` already
     makes for context spellings.
 
-    FAILS TO A NAMED ERROR, NOT TO A SILENT HEAD FALLBACK. Every failure --
-    no sha, an object the local store does not have, a path that did not exist
-    at that sha, unparseable JSON, a policy with no `ci_green_rule` (the shape
-    predates the nesting) -- returns `rule=None` with a `error` string. The
-    consumer then judges on HEAD's declaration and, if that turns out to name a
-    step the job does not have, says in those words that it could not verify
-    the declaration at the sha. The remedy for that is to fetch the sha; the
-    remedy for a genuinely stale declaration is to re-read it off a green run,
-    and printing one sentence for both is #4676.
+    FAILS TO A NAMED, CLASSIFIED ERROR, NOT TO A SILENT HEAD FALLBACK. Every
+    failure returns `rule=None` with an `error` string AND a `reason` VALUE, and
+    the three causes have three different remedies:
+
+    - `DECL_UNREADABLE` -- the object is not in this store. FETCH IT.
+    - `DECL_PREDATES` -- the blob was read and carries no `receipts.ci_green_rule`
+      at all. The key arrives in `6e29f1012` (2026-09-15, #4491), so for any
+      merge older than that there is nothing to resolve and nothing to fetch.
+      An independent reviewer measured the first version of this telling the
+      reader to `git fetch` a sha that was already present and readable -- the
+      same wrong-remedy shape #4676 is about, one state over, and for a backlog
+      closing pre-2026-09-15 merges it is the COMMON case.
+    - `DECL_UNPARSEABLE` -- the blob is not JSON.
+
+    The reason is a VALUE and not a substring of `error` deliberately: a
+    consumer that discriminated by grepping the message would be a
+    bare-substring signal, which is a measured misclassification shape here.
     """
     if not sha:
-        return gates.DeclarationAsOf(sha="", rule=None, error="no merged sha was supplied")
+        return gates.DeclarationAsOf(
+            sha="", rule=None, reason=gates.DECL_NO_SHA,
+            error="no merged sha was supplied",
+        )
     rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])
     if rc != 0:
         return gates.DeclarationAsOf(
-            sha=sha, rule=None,
+            sha=sha, rule=None, reason=gates.DECL_UNREADABLE,
             error=f"git show {sha[:12]}:{POLICY_TRACKED_PATH} exited {rc}: "
                   f"{(err or '').strip()[:160]}",
         )
@@ -1242,17 +1253,17 @@ def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
         at_sha = json.loads(out)
     except json.JSONDecodeError as exc:
         return gates.DeclarationAsOf(
-            sha=sha, rule=None,
+            sha=sha, rule=None, reason=gates.DECL_UNPARSEABLE,
             error=f"policy.json at {sha[:12]} does not parse as JSON: {exc}",
         )
     rule = (at_sha or {}).get("receipts", {}).get("ci_green_rule")
     if not isinstance(rule, dict):
         return gates.DeclarationAsOf(
-            sha=sha, rule=None,
+            sha=sha, rule=None, reason=gates.DECL_PREDATES,
             error=f"policy.json at {sha[:12]} carries no receipts.ci_green_rule object "
                   f"(found {type(rule).__name__})",
         )
-    return gates.DeclarationAsOf(sha=sha, rule=rule, error="")
+    return gates.DeclarationAsOf(sha=sha, rule=rule, error="", reason="")
 
 
 def receipt_from_evidence(data: dict, policy: dict) -> gates.CiGreenReceipt:

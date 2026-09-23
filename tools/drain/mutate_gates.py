@@ -2595,12 +2595,12 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`scope_paths` stay on HEAD's clock, so routes 2 and 3 ask a "
          "pre-rename job about a post-rename step"),
         "gates.py",
-        '    receipts = dict(policy.get("receipts", {}))\n'
-        '    receipts["ci_green_rule"] = as_of.rule',
-        '    receipts = dict(policy.get("receipts", {}))\n'
-        '    _narrowed = dict(receipts.get("ci_green_rule", {}))\n'
-        '    _narrowed["substantive_steps"] = as_of.rule.get("substantive_steps", {})\n'
-        '    receipts["ci_green_rule"] = _narrowed',
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    receipts["ci_green_rule"] = as_of.rule'),
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    _narrowed = dict(receipts.get("ci_green_rule", {}))\n'
+         '    _narrowed["substantive_steps"] = as_of.rule.get("substantive_steps", {})\n'
+         '    receipts["ci_green_rule"] = _narrowed'),
     ),
     (
         ("AS3 the PRODUCER reads HEAD's policy blob for every sha, so the "
@@ -2617,6 +2617,48 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         '    if kind == "missing" and len(candidates) > 1:',
         "    if len(candidates) > 1:",
+    ),
+    (
+        ("AS5 the second clock's KIND is discarded again, so a step that is "
+         "PRESENT and SKIPPED at HEAD is reported as ABSENT - an R7 lie, and "
+         "one-sentence-for-two-states inside the fix for one-sentence-for-"
+         "two-states"),
+        "gates.py",
+        "        ok2, other_kind, other_payload = verdict(other_rule)",
+        "        ok2, _discarded_kind, other_payload = verdict(other_rule)",
+    ),
+    (
+        ("AS6 a declaration that PREDATES `substantive_steps` is told to fetch "
+         "a sha that is already present and readable - the wrong remedy for "
+         "every merge older than 2026-09-15"),
+        "gates.py",
+        "        if reason == DECL_PREDATES:",
+        "        if False:",
+    ),
+    (
+        ("AS7 HEAD's declaration is substituted UNDISCLOSED when the sha's "
+         "declaration carried no row for the context - the row is newer than "
+         "the sha, and the pass says nothing about it"),
+        "gates.py",
+        "            head_which = DECL_HEAD_ROW_NEWER",
+        "            head_which = DECL_HEAD",
+    ),
+    (
+        ("AS8 the receipt call is RE-SPLIT into two hand-maintained argument "
+         "lists, so `tick` can once again record a receipt "
+         "`--ci-green-receipt` would not print"),
+        "tick.py",
+        "        receipt = merge_gate.receipt_from_evidence(data, policy)",
+        ("        receipt = gates.ci_green_receipt(\n"
+         "            data[\"evidence\"],\n"
+         "            merged_total_count=data[\"merged_total_count\"],\n"
+         "            merged_changed_files=data[\"changed_files\"],\n"
+         "            merged_branch=data[\"branch\"],\n"
+         "            merged_sha=data[\"merged\"],\n"
+         "            trees_identical=data[\"trees_identical\"],\n"
+         "            policy=policy,\n"
+         "            infra_ere=merge_gate.resolve_infra_ere(data[\"merged\"]),\n"
+         "        )"),
     ),
     (
         ("CB4f the ALL rule accepts any number of skipped steps, so guardrails "
@@ -3461,8 +3503,8 @@ EXPECTED_SANDBOX_SKIPS = (
     # repo. The sandbox copies only `tools/drain`, so there is no repository to
     # read and they skip. DECLARED, and said out loud: NEITHER KILLS AN ARM.
     #
-    # That is not a shrug, it is why `test_the_producer_asks_git_for_the_SHA_
-    # and_for_no_other_ref` exists. The first draft of #4676 had the producer
+    # That is not a shrug, it is why
+    # `test_the_producer_asks_git_for_the_sha_and_for_no_other_ref` exists. The first draft of #4676 had the producer
     # guarded ONLY by these two, so arm AS3 -- the producer reading `HEAD:`'s
     # blob for every sha -- would have SURVIVED the matrix while the real-git
     # test sat green in the repo. The argv-intercepting test needs no checkout

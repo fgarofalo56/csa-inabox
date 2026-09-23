@@ -1813,10 +1813,15 @@ def record_receipt_from_evidence(
     R2 invariant catches a class that MOVED, not a caller who named the wrong
     one up front.
 
-    `ci-green` is RE-MEASURED here rather than trusted: `merge_gate` collects
-    the evidence and `gates.ci_green_receipt` decides, the same two calls the
-    `--ci-green-receipt` report makes, so this path cannot record a receipt the
-    report would not print. Everything else is run-backed and goes through
+    `ci-green` is RE-MEASURED here rather than trusted, and since #4676 it is
+    literally the SAME CALL the report makes: `merge_gate.collect_ci_green_evidence`
+    then `merge_gate.receipt_from_evidence`, which is the one place
+    `gates.ci_green_receipt` is invoked outside the tests. It used to be "the
+    same two calls" -- two hand-maintained argument lists that happened to
+    agree, so "this path cannot record a receipt the report would not print"
+    was a hope rather than a property. One shared call site makes it the
+    property, and `test_the_receipt_call_has_exactly_one_non_test_site` keeps
+    it at one. Everything else is run-backed and goes through
     `verify_run_backed_receipt`.
 
     This is deliberately NOT "record whatever the operator says". `tick.py`'s

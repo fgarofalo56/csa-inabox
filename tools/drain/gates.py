@@ -2336,6 +2336,34 @@ class DeclarationAsOf:
     sha: str = ""
     rule: dict | None = None
     error: str = ""
+    #: WHY `rule` is None, as a value rather than a substring of `error`. The
+    #: three causes have three remedies and a consumer that discriminated them
+    #: by grepping `error` would be a bare-substring signal -- a measured
+    #: misclassification shape in this repo. `DECL_PREDATES` in particular is
+    #: NOT fixable by fetching: the key genuinely did not exist at that sha.
+    reason: str = ""
+
+
+#: Why an as-of declaration could not be resolved. Opposite remedies, so they
+#: are values the consumer branches on, never text it matches.
+#:
+#:   DECL_UNREADABLE   the object is not in this store -> FETCH IT
+#:   DECL_PREDATES     the blob was read and carries no `receipts.ci_green_rule`
+#:                     at all. The key was introduced in `6e29f1012` (2026-09-15,
+#:                     #4491), so for every merge older than that there is no
+#:                     declaration to resolve and HEAD's is the only one that has
+#:                     ever described the context. NOTHING TO FETCH -- and for a
+#:                     backlog closing merges from before that date this is the
+#:                     COMMON case, not an edge, which is why it gets its own
+#:                     sentence. An independent reviewer measured the old message
+#:                     telling the reader to fetch a sha that was already present
+#:                     and readable.
+#:   DECL_UNPARSEABLE  the blob is not JSON -> a different question entirely
+#:   DECL_NO_SHA       no sha was supplied
+DECL_UNREADABLE = "unreadable"
+DECL_PREDATES = "predates-the-key"
+DECL_UNPARSEABLE = "unparseable"
+DECL_NO_SHA = "no-sha"
 
 
 #: The provenance of the declaration a refusal or an acceptance was decided on.
@@ -2347,10 +2375,18 @@ class DeclarationAsOf:
 DECL_HEAD = "head"
 DECL_AS_OF = "as-of"
 DECL_HEAD_UNVERIFIED = "head-unverified"
+#: HEAD's declaration used because the sha's declaration carried NO ROW for this
+#: context -- the row is NEWER than the sha, which is a different fact from a
+#: rename and from an unreadable declaration. Reachable today: two rows were
+#: added to `substantive_steps` on 2026-09-18 in `0c2c4c974`, so every merge
+#: before that date hits this for those two contexts. It used to be labelled
+#: `DECL_HEAD` and a pass printed no provenance clause at all -- an undisclosed
+#: substitution, against this module's own "NAMED, NOT FOLDED IN" principle.
+DECL_HEAD_ROW_NEWER = "head-row-newer"
 
 
 def _declaration_as_of(
-    policy: dict, as_of: "DeclarationAsOf | None"
+    policy: dict, as_of: DeclarationAsOf | None
 ) -> tuple[dict, str, str]:
     """The policy whose `ci_green_rule` governs a job measured at `as_of.sha`.
 
@@ -2761,10 +2797,16 @@ def context_did_its_work(
     if as_of_declared is not None:
         candidates.append((DECL_AS_OF, as_of_declared))
     if head_declared is not None and head_declared != as_of_declared:
-        candidates.append(
-            (DECL_HEAD_UNVERIFIED if provenance == DECL_HEAD_UNVERIFIED
-             else DECL_HEAD, head_declared)
-        )
+        if provenance == DECL_HEAD_UNVERIFIED:
+            head_which = DECL_HEAD_UNVERIFIED
+        elif provenance == DECL_AS_OF and as_of_declared is None:
+            # The sha's declaration WAS read and simply has no row for this
+            # context: the row is newer than the sha. Labelled distinctly so the
+            # pass discloses it rather than reading as an ordinary HEAD decision.
+            head_which = DECL_HEAD_ROW_NEWER
+        else:
+            head_which = DECL_HEAD
+        candidates.append((head_which, head_declared))
     if not candidates:
         return False, (
             f"no substantive step is DECLARED for {name!r} in policy.json "
@@ -2913,36 +2955,44 @@ def context_did_its_work(
             return f"the declaration AS OF the measured sha {as_of_sha[:12]}"
         if which == DECL_HEAD_UNVERIFIED:
             return "HEAD's declaration"
+        if which == DECL_HEAD_ROW_NEWER:
+            return "HEAD's declaration"
         return "the declaration"
+
+    def provenance_note(which: str, rule) -> str:
+        """The clause that says WHICH declaration decided, when it is not HEAD's
+        current one. NAMED, NOT FOLDED IN: a pass decided on a declaration HEAD
+        has since changed -- or on HEAD's because the sha's was silent -- is a
+        different claim from a pass decided on today's, and a reader counting
+        states should not have to diff `git show <sha>:tools/drain/policy.json`
+        to find out which they are looking at.
+        """
+        if which == DECL_AS_OF and head_declared != rule:
+            return (f" - {clock(which)}, which HEAD has since changed to "
+                    f"{head_declared!r}")
+        if which == DECL_HEAD_ROW_NEWER:
+            return (f" - HEAD's declaration, used because policy.json at the measured "
+                    f"sha {as_of_sha[:12]} carried NO ROW for this context: the row is "
+                    "NEWER than the sha, which is not a rename")
+        return ""
 
     first_which, first_rule = candidates[0]
     ok, kind, payload = verdict(first_rule)
     if ok:
-        return True, (
-            payload
-            + (
-                # NAMED, NOT FOLDED IN. A pass decided on a declaration HEAD has
-                # since changed is a different claim from a pass decided on
-                # today's, and a reader counting states should not have to diff
-                # `git show <sha>:tools/drain/policy.json` to find out which.
-                f" - {clock(first_which)}, which HEAD has since changed to "
-                f"{head_declared!r}"
-                if first_which == DECL_AS_OF and head_declared != first_rule
-                else ""
-            )
-        )
+        return True, payload + provenance_note(first_which, first_rule)
 
     # THE OTHER CLOCK, ON `missing` ONLY. A rename is not atomic: the workflow
     # and the declaration describing it are two files, and #4657 moved them 3h13m
     # apart with three merges in between. A step the sha's declaration names and
     # the job does not carry is that window; a step the job carries and SKIPPED is
     # a hollow check, and must never fall through to a second declaration.
+    other_kind, other_payload, other_which = "", None, ""
     if kind == "missing" and len(candidates) > 1:
         other_which, other_rule = candidates[1]
-        ok2, _kind2, payload2 = verdict(other_rule)
+        ok2, other_kind, other_payload = verdict(other_rule)
         if ok2:
             return True, (
-                f"{payload2} - {clock(other_which)}"
+                f"{other_payload} - {clock(other_which)}"
                 + (
                     f", reached because {clock(first_which)} named {list(first_rule)}, "
                     "which this job does not carry: the workflow and policy.json were "
@@ -2953,6 +3003,30 @@ def context_did_its_work(
 
     if kind != "missing":
         return False, payload
+
+    # THE SECOND CLOCK'S OWN DIAGNOSIS, NOT THE FIRST'S SENTENCE REPEATED.
+    #
+    # An independent reviewer executed this branch: with the sha's clock
+    # `missing` and HEAD's clock `hollow`, the code discarded `kind2` and fell
+    # into the refusal below, which asserts "and so is every other declaration
+    # this repo carries for it" -- about a step that is PRESENT in the job and
+    # SKIPPED. That states as fact something the code did not establish
+    # (`deploy-integrity.md` R7) and prescribes "re-read it off a green run" for
+    # a state whose real diagnosis is a hollow check. It is one-sentence-for-
+    # two-states: the exact defect #4676 exists to end, reintroduced in the
+    # branch that ends it.
+    if other_kind and other_kind != "missing":
+        detail = (
+            f"the declared step(s) {other_payload} were SKIPPED"
+            if other_kind == "hollow" else str(other_payload)
+        )
+        return False, (
+            f"the declared step(s) {payload} are ABSENT from this job - that is "
+            f"{clock(first_which)}. {clock(other_which).capitalize()} names a DIFFERENT "
+            f"step, which this job DOES carry, and it does not account for the context "
+            f"either: {detail}. So this is not a rename that the other clock resolves; "
+            "the check concluded green having not done the thing it is required for"
+        )
 
     # TWO REFUSALS, NOT ONE SENTENCE, and this is what #4676 cost. Before the
     # split there was one message -- "the declaration is stale, or this is not the
@@ -2967,11 +3041,28 @@ def context_did_its_work(
         for which, rule in candidates
     )
     if first_which == DECL_HEAD_UNVERIFIED:
+        why_unreadable = declared_at.error if declared_at else "no reason recorded"
+        reason = declared_at.reason if declared_at else ""
+        if reason == DECL_PREDATES:
+            # NOT "fetch the sha". The object is present and readable; the KEY
+            # did not exist yet (`substantive_steps` arrives in `6e29f1012`,
+            # 2026-09-15). Telling a reader to fetch a sha they already have is
+            # the same class of wrong-remedy message #4676 is about, and for a
+            # backlog closing merges older than that date it is the common case.
+            return False, (
+                f"the declared step(s) {payload} are ABSENT from this job, and that "
+                f"declaration is HEAD's: policy.json at the measured sha "
+                f"{(as_of_sha or '?')[:12]} carries no `receipts.ci_green_rule` AT ALL "
+                "- the key did not exist yet, so no declaration ever described this "
+                "job at that sha and HEAD's is the only one there has ever been. "
+                "There is nothing to fetch. Either this is not the job HEAD's "
+                "declaration describes, or that declaration needs re-reading off a "
+                "green run"
+            )
         return False, (
             f"the declared step(s) {payload} are ABSENT from this job, and that "
             f"declaration is HEAD's: the one as of the measured sha "
-            f"{(as_of_sha or '?')[:12]} could NOT be read "
-            f"({(declared_at.error if declared_at else 'no reason recorded')}), so "
+            f"{(as_of_sha or '?')[:12]} could NOT be read ({why_unreadable}), so "
             "whether these steps existed there is UNKNOWN. Obtain that sha (`git "
             "fetch origin <sha>`) and re-measure - do NOT edit policy.json, whose "
             "declaration is correct for HEAD"
@@ -3183,15 +3274,35 @@ def context_is_accounted_for(
     # recurring defect ("fixed on one side only"), and arm `AS2` in
     # `mutate_gates.py` is exactly that narrowing, so a test has to see it.
     #
-    # ROUTE 1 IS HANDED THE ORIGINAL POLICY AND THE `DeclarationAsOf`, NOT THE
-    # SUBSTITUTED ONE, and that is not a style choice. It resolves for itself
-    # because it must be able to name BOTH declarations -- the sha's, which it
-    # judged on, and HEAD's, which the reader is looking at. Passing it
+    # ROUTE 1 IS ALSO HANDED THE ORIGINAL POLICY AND THE `DeclarationAsOf`, NOT
+    # THE SUBSTITUTED ONE, and that is not a style choice. It resolves for
+    # itself because it must be able to name BOTH declarations -- the sha's,
+    # which it judged on, and HEAD's, which the reader is looking at. Passing it
     # `effective` made `head_declared` read the substituted rule, the two
     # compared equal, and the provenance clause silently vanished from every
     # real receipt while the unit test -- which called the predicate directly
     # with HEAD's policy -- went on passing. Measured on PR #4593 before it was
     # fixed: verdict correct, disclosure absent.
+    #
+    # ROUTES 2 AND 3 GET ONE CLOCK, DELIBERATELY, and an independent reviewer
+    # was right that the asymmetry needed stating rather than leaving to be
+    # rediscovered. Route 1's second clock is safe because it is reachable ONLY
+    # on `missing` -- a step name absent from the job entirely, which is the
+    # rename signature and nothing else. Routes 2 and 3 have no equivalent
+    # restriction: `scope_untouched_at_merge` and `alternative_accounted_for`
+    # refuse for reasons that are about the merged FILE LIST and the detector,
+    # not about a name being absent, so "try the other declaration when the
+    # first refuses" would let a scope refusal under one clock be overridden by
+    # an acceptance under the other. That is a weakening, and it is the shape
+    # `#3783` says must never be laundered.
+    #
+    # The cost is stated too: a lag-window job whose primary is skipped under
+    # HEAD's spelling and whose declared alternative ran is REFUSED here, where
+    # HEAD's declaration alone would have returned ACCOUNTED_ALTERNATIVE. That
+    # is fail-closed, it is not realised on any of the three real lag-window
+    # merges (#4652, #4654, #4658 all pass through route 1's fallthrough), and
+    # `test_routes_2_and_3_are_deliberately_single_clocked` pins it so a future
+    # change to it is a deliberate edit rather than a silent one.
     effective, _provenance, _as_of_sha = _declaration_as_of(policy, declared_at)
 
     did, evidence = context_did_its_work(name, job, policy, declared_at=declared_at)
