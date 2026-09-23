@@ -149,14 +149,43 @@ export const VITEST_SHARD_NAME_PREFIX = 'vitest shard ';
  * two minutes, change this WITH the measurement that justifies it — do not
  * widen it to make a red gate green.
  *
- * WHAT IT IS APPLIED TO, AFTER SHARDING (#4679). The quantity this constant
- * was calibrated on is "wall time spent executing the suite". Before #4657 one
- * job held all of it. After #4657 it is spread across N shard jobs, so the
- * comparable quantity is their COMBINED wall time — 2482s at 2018829ce — and
- * that is what the floor is now applied to when the shards are present. The
- * number is deliberately unchanged: summing the shards back up restores the
- * quantity the 120s was measured against, so nothing is loosened. It is also
- * independent of N, which is the property the pre-#4679 shape lacked.
+ * WHAT IT IS APPLIED TO, AFTER SHARDING (#4679). PER SHARD. Every shard job
+ * must clear this floor on its own.
+ *
+ * NOT to the SUM, and the first version of this fix got that wrong in a way
+ * that re-opened #2631. A shard job's wall time is `setup + execution`, and the
+ * setup term is paid N times. Measured on run 35801391361 (jobs API, steps
+ * array), the NON-vitest steps per shard were:
+ *
+ *     shard 1/4  28s      shard 3/4  32s
+ *     shard 2/4  34s      shard 4/4  32s     -> 126s
+ *
+ * 126s already exceeds 120s. So under a sum rule, four shards that checked out,
+ * installed dependencies and executed ZERO TESTS would have PASSED this gate:
+ * the effective floor on executed test time was 120 - 126 = -6s. That is #2631
+ * rebuilt by the change meant to preserve the guard against it. At N=8 the
+ * setup term is ~250s and the rule would be pure decoration. The earlier
+ * comment here claimed summing "restores the quantity the 120s was measured
+ * against" and is "independent of N"; both halves were false, and the wrong
+ * comment is how the next author would have re-introduced it.
+ *
+ * Per shard the separation is real, and is the same shape #2632 measured:
+ *
+ *     slowest setup-only shard observed     34s   (refused)
+ *     fastest REAL shard observed          462s   (run 35801391361, shard 1/4;
+ *                                                  next two: 521s, 558s)
+ *
+ * 120s sits ~3.5x above the slowest setup-only shard and ~3.9x below the
+ * fastest real one. Same constant, nothing widened, nothing subtracted.
+ *
+ * THIS RULE IS N-SENSITIVE, said plainly rather than wished away: the floor is
+ * a fixed number while a real shard's execution time falls as N rises. At the
+ * measured 2345s of total execution, N=16 puts a healthy shard near 146s +
+ * setup — still above 120s, but the margin is no longer comfortable. If the
+ * matrix is widened far enough that a healthy shard approaches this floor,
+ * RE-DERIVE the number from a fresh measurement of both populations. Do not
+ * lower it to make a red gate green, and do not subtract an estimated setup
+ * cost: a magic constant carved out of a guard is how the guard stops watching.
  */
 export const VITEST_MIN_PLAUSIBLE_SECONDS = 120;
 
@@ -362,15 +391,22 @@ function shardVerdict({ shards, placeholders }, { consoleTouched, where, checkRu
     };
   }
 
-  const combined = shards.reduce((acc, s) => acc + s.seconds, 0);
-  if (combined < VITEST_MIN_PLAUSIBLE_SECONDS) {
+  // THE FLOOR, PER SHARD (#4679). A shard whose wall time is under the floor
+  // did not execute tests: setup alone costs 28-34s (measured), and the
+  // fastest shard that genuinely ran the suite took 462s.
+  //
+  // Summing here instead would be the defect this arm exists to prevent —
+  // N x setup (126s at N=4) already clears 120s, so four setup-only shards
+  // would pass. See the VITEST_MIN_PLAUSIBLE_SECONDS comment.
+  const tooFast = shards.filter((s) => s.seconds < VITEST_MIN_PLAUSIBLE_SECONDS);
+  if (tooFast.length > 0) {
     return {
       decision: 'refuse',
-      reason: `the ${total} vitest shard jobs ${where} all concluded success but their COMBINED wall time was ${combined}s (${shards
+      reason: `${tooFast.length} of ${total} vitest shard jobs ${where} concluded success under the ${VITEST_MIN_PLAUSIBLE_SECONDS}s floor for a shard that actually executed tests (${tooFast
         .map((s) => `${s.run.name}=${s.seconds}s`)
         .join(
-          ' + ',
-        )}) — under the ${VITEST_MIN_PLAUSIBLE_SECONDS}s floor for a suite that actually executed (measured 2026-09-23 at 2018829ce: 462+664+720+636 = 2482s; a change-detector skip is 8–14s), and ${why}. The shards reported green without executing. A green check that never ran is not verification (#2631/#2632).`,
+          ', ',
+        )}) — and ${why}. Setup alone costs 28-34s on a shard that runs nothing, while the fastest shard observed to really execute took 462s; a shard under this floor reported green without running tests. A green check that never ran is not verification (#2631/#2632).`,
     };
   }
 
@@ -531,8 +567,11 @@ export function classifyVitestGate({
         : (() => {
             const t = collectShardRuns(checkRuns);
             if (t.topology !== 'sharded') return '';
-            const combined = t.shards.reduce((a, s) => a + (s.seconds ?? 0), 0);
-            return ` over ${t.shards.length} shard job(s) totalling ${combined}s of execution`;
+            const fastest = Math.min(...t.shards.map((s) => s.seconds ?? 0));
+            // The FASTEST shard is named, not the total: the floor is
+            // per-shard, so the total would advertise a quantity this gate
+            // does not adjudicate (#4679).
+            return ` over ${t.shards.length} shard job(s), the fastest ${fastest}s (floor ${VITEST_MIN_PLAUSIBLE_SECONDS}s each)`;
           })();
     return {
       decision: 'pass',

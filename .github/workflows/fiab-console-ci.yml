@@ -527,9 +527,11 @@ jobs:
   #
   # BUT IT IS NO LONGER A WITNESS THAT THE SUITE RAN (#4679). This job's own
   # wall time is ~98s by design now — it downloads blobs and merges them. The
-  # roll gate's "did it actually run" floor therefore applies to the SHARDS'
-  # combined wall time, not to this job's; this job's conclusion still has to be
-  # `success`, because it is the only place the coverage floor is enforced.
+  # roll gate's "did it actually run" floor therefore applies PER SHARD (not to
+  # the shards' sum: N x per-shard setup, 126s at N=4, already clears the 120s
+  # floor, so a sum rule would pass four shards that ran nothing). This job's
+  # conclusion still has to be `success`, because it is the only place the
+  # coverage floor is enforced.
   #
   # `!cancelled()` rather than the default: when the detector says nothing this
   # suite covers changed, `vitest-shard` is SKIPPED, and a skipped `needs` would

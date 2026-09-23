@@ -385,10 +385,21 @@ test('the floor is a named constant with the measured separation around it', () 
 // is the defect this fix must not ship (assertion-design.md).
 // ---------------------------------------------------------------------------
 
-/** Measured 2026-09-23 at 2018829ce, run 35801391361 (jobs API). Sums to 2482. */
+/** Measured 2026-09-23 at 2018829ce, run 35801391361 (jobs API). */
 const LIVE_SHARD_SECONDS = [462, 664, 720, 636];
 /** Measured on the same run: the MERGE job's own wall time. Under the floor. */
 const LIVE_MERGE_SECONDS = 98;
+/**
+ * The NON-vitest (setup) steps of each shard on that same run, from the jobs
+ * API `steps` array: checkout + setup-node + pnpm + install + upload.
+ *
+ * THIS IS THE REACHABLE FLOOR-BREAKING INPUT. A shard that sets up and then
+ * executes nothing costs this much and no less, so it is what a "green over
+ * nothing" shard actually looks like. Their SUM is 126s — which is why the
+ * first version of this fix, which applied the 120s floor to the sum, would
+ * have PASSED four shards that ran zero tests.
+ */
+const SETUP_ONLY_SECONDS = [28, 34, 32, 32];
 
 const shard = ({
   index,
@@ -435,33 +446,59 @@ test('LIVE RECEIPT 2018829ce: a sharded, green, console-touching SHA PROCEEDS', 
     consoleTouched: true,
   });
   assert.equal(r.decision, 'pass', r.reason);
-  // Pin the AGGREGATE, not just the verdict: a pass reported without the shard
-  // evidence would mean the merge job's 98s was accepted after all.
-  assert.match(r.reason, /4 shard job\(s\) totalling 2482s/);
+  // Pin the SHARD evidence, not just the verdict: a pass reported without it
+  // would mean the merge job's 98s was accepted after all. The FASTEST shard
+  // is named because the floor is per-shard.
+  assert.match(r.reason, /4 shard job\(s\), the fastest 462s \(floor 120s each\)/);
 });
 
-test('REFUSE ARM: four shards that all reported green in 10s each are refused', () => {
-  // Green over nothing, fabricated: every shard concluded success, combined
-  // wall time 40s. THIS IS THE MUTATION TARGET — remove the floor from the
-  // shards and this test is the one that goes from red to green.
-  // WHAT WOULD MAKE THIS FAIL: a combined wall time >= 120s (e.g. 4 x 30s).
+test('REFUSE ARM: shards that only SET UP and ran nothing are refused', () => {
+  // THE MUTATION TARGET, rebuilt on a REACHABLE input. 28/34/32/32s are the
+  // measured non-vitest step totals of the four shards in run 35801391361 —
+  // i.e. exactly what a shard costs when it checks out, installs, and executes
+  // no tests. An earlier version of this arm used 4 x 10s, which a production
+  // shard CANNOT emit (setup alone is 28-34s), so it was driven by an
+  // unreachable value and did not witness the floor at all.
+  //
+  // Their SUM is 126s, which CLEARS the 120s floor. So this fixture also
+  // discriminates the per-shard rule from the sum rule: under a sum rule it
+  // PASSES, re-opening #2631.
+  // WHAT WOULD MAKE THIS FAIL: any shard at or above 120s.
+  assert.equal(
+    SETUP_ONLY_SECONDS.reduce((a, b) => a + b, 0),
+    126,
+    'the fixture must sum ABOVE the floor, or it does not discriminate sum-vs-per-shard',
+  );
   const r = classifyVitestGate({
-    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([10, 10, 10, 10])],
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt(SETUP_ONLY_SECONDS)],
     ciRuns: [doneRun],
     consoleTouched: true,
   });
-  assert.equal(r.decision, 'refuse');
-  assert.match(r.reason, /COMBINED wall time was 40s/);
-  assert.match(r.reason, /under the 120s floor/);
+  assert.equal(r.decision, 'refuse', r.reason);
+  assert.match(r.reason, /4 of 4 vitest shard jobs .* under the 120s floor/);
+  assert.match(r.reason, /vitest shard 1\/4=28s/);
 });
 
-test('CONTROL: the same four shards at 30s each reach the floor and pass', () => {
-  // The paired POSITIVE for the assertion above — without it, "refuse when
-  // fast" is satisfied by refusing always. 4 x 30 = 120 = the floor exactly,
-  // so this also pins the comparison direction.
-  // WHAT WOULD MAKE THIS FAIL: changing `combined < FLOOR` to `<=`.
+test('REFUSE ARM: one real shard cannot carry three setup-only siblings', () => {
+  // The sharpest sum-vs-per-shard discriminator. 462 + 28 + 34 + 32 = 556s,
+  // comfortably over any plausible sum floor, while three quarters of the
+  // suite demonstrably did not run.
+  // WHAT WOULD MAKE THIS FAIL: raising shards 2-4 to >= 120s.
   const r = classifyVitestGate({
-    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([30, 30, 30, 30])],
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([462, 28, 34, 32])],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse', r.reason);
+  assert.match(r.reason, /3 of 4 vitest shard jobs/);
+});
+
+test('CONTROL: four shards at exactly the floor pass', () => {
+  // The paired POSITIVE — without it, "refuse when fast" is satisfied by
+  // refusing always. 120s is reachable: ~31s setup + ~89s execution.
+  // WHAT WOULD MAKE THIS FAIL: changing `s.seconds < FLOOR` to `<=`.
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), ...shardsAt([120, 120, 120, 120])],
     ciRuns: [doneRun],
     consoleTouched: true,
   });
@@ -629,8 +666,9 @@ test('the two refusals are DISTINGUISHABLE: "did not run" vs "wrong job measured
 test('the cancelled path borrows main\'s SHARD evidence, not main\'s merge-job wall time', () => {
   // Closed AT THE SITE, not by label: main is sharded too, so mainSeconds is
   // ~98s by design there as well and the borrow would have refused every time.
-  // WHAT WOULD MAKE THIS FAIL: reverting to mainSeconds alone (the 98s+2482s
-  // case refuses), or ignoring main's shard durations (the 40s case passes).
+  // WHAT WOULD MAKE THIS FAIL: reverting to mainSeconds alone (the sharded
+  // case refuses), or ignoring main's shard durations (the setup-only case
+  // passes).
   const borrowed = (mainCheckRuns) =>
     classifyVitestGate({
       checkRuns: [check({ conclusion: 'cancelled' })],
@@ -643,7 +681,72 @@ test('the cancelled path borrows main\'s SHARD evidence, not main\'s merge-job w
       },
     });
   assert.equal(borrowed(shardsAt(LIVE_SHARD_SECONDS)).decision, 'pass');
-  assert.equal(borrowed(shardsAt([10, 10, 10, 10])).decision, 'refuse');
+  assert.equal(borrowed(shardsAt(SETUP_ONLY_SECONDS)).decision, 'refuse');
+});
+
+// --- the two interlocks that survived `if (false)` in review -----------------
+// Both of these were live, correct and witnessed by NOTHING: mutating them to
+// `if (false)` left the suite at 71 pass / 0 fail. They are killed here rather
+// than disclosed, because both are reachable.
+
+test('a DENOMINATOR disagreement refuses, and says so rather than mis-counting', () => {
+  // REACHABLE: re-running CI on a SHA after the matrix width changes leaves the
+  // old attempt's `i/4` check-runs beside the new attempt's `i/8` on the same
+  // commit. Without the guard, `total` silently becomes whichever denominator
+  // sorted first and the gate adjudicates against the wrong shard count.
+  // WHAT WOULD MAKE THIS FAIL (and does, under `if (false)`): the message
+  // becomes the missing-shard one, because total=4 makes 2/4..4/4 look absent.
+  const mixed = classifyVitestGate({
+    checkRuns: [
+      check({ seconds: LIVE_MERGE_SECONDS }),
+      shard({ index: 1, total: 4, seconds: 462 }),
+      shard({ index: 2, total: 8, seconds: 664 }),
+    ],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(mixed.decision, 'refuse');
+  assert.match(mixed.reason, /disagree about how many shards/);
+
+  // A zero denominator is the arm with the sharpest teeth: without the guard
+  // the 1..total loop never runs, nothing is reported missing, and the single
+  // shard sails through as a PASS over an empty suite.
+  const zero = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS }), shard({ index: 1, total: 0, seconds: 462 })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(zero.decision, 'refuse', zero.reason);
+  assert.match(zero.reason, /disagree about how many shards/);
+});
+
+test('an UNSHARDED read of a TRUNCATED list waits — it must not fall through to the merge-job floor', () => {
+  // The interlock on the fallthrough branch itself. Seeing no shard check-runs
+  // means "pre-sharding topology" ONLY if the list was read in full; in a
+  // truncated read the shards may simply be in the unread tail, and adjudicating
+  // that as the pre-sharding shape applies the floor to the merge job — the
+  // #4679 defect, reached by the paging route.
+  // WHAT WOULD MAKE THIS FAIL (and does, under `if (false)`): it refuses with
+  // the PRE-SHARDING message instead of waiting.
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+    checkRunsComplete: false,
+  });
+  assert.equal(r.decision, 'wait', r.reason);
+  assert.match(r.reason, /the topology decides what counts as evidence/);
+
+  // PAIRED POSITIVE: the same fixture with a COMPLETE read must still reach the
+  // pre-sharding branch, or the wait above would be satisfied by waiting always.
+  const complete = classifyVitestGate({
+    checkRuns: [check({ seconds: LIVE_MERGE_SECONDS })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+    checkRunsComplete: true,
+  });
+  assert.equal(complete.decision, 'refuse');
+  assert.match(complete.reason, /PRE-SHARDING topology/);
 });
 
 test('collectShardRuns: latest attempt wins per shard, and placeholders are not shards', () => {
