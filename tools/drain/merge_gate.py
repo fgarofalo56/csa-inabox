@@ -244,14 +244,25 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     record disagrees with the declaration -- which is the one thing on a PR that
     was not typed by its author.
 
-    **INERT TODAY, AND SAID SO RATHER THAN IMPLIED.** `Item.pr` has no writer:
-    0 of 299 live items carry one, so this returns `[]` for every real input.
-    It is kept, not deleted, because the check is right and the missing half is
-    a writer in `tick.py` -- which owns the ledger and is its single writer by
-    design. The previous round wrote the binding from HERE instead, and both
-    reviewers reproduced a lost update on the drain's only durable record. A
-    merge gate does not get to mutate the thing it measures. Tracked in #4489;
-    until then this is a declared-inert control, not a working one.
+    **NO LONGER INERT (#4489).** `tick.py --bind-pr ITEM --pr N` now writes
+    `Item.pr`, so this reaches its real branch whenever a lane has reported its
+    PR. It is still SILENT on items with no binding, and that is deliberate
+    rather than a gap: an unbound item is one no lane reported, which is not
+    evidence of a conflict.
+
+    The writer lives in `tick.py`, not here, and the reason is worth keeping.
+    A previous round wrote the binding from THIS file, and both reviewers
+    reproduced a lost update on the drain's only durable record -- `Ledger.save()`
+    serialises the whole document from memory, so the loser's transitions do not
+    merge, they vanish. A merge gate does not get to mutate the thing it
+    measures. `tick.py` is the single writer by design and saves through a CAS
+    that REFUSES a concurrent write rather than overwriting it.
+
+    Coverage is honest about what it does and does not establish: the binding
+    and its refusals are pinned by `__tests__/test_bind_pr.py` and by mutation
+    arms PR1-PR4 (all KILLED). What is NOT yet pinned end-to-end is this
+    function firing on a real bound item through the whole gate -- the arms kill
+    the writer, not this consumer.
     """
     if not closing or pr is None:
         return []
