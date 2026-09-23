@@ -29666,7 +29666,7 @@
             "declaredSinkCount": 7,
             "sinks": [
               {
-                "id": "console:member:1270",
+                "id": "console:member:1273",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29676,7 +29676,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1271",
+                "id": "console:member:1274",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29686,7 +29686,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1276",
+                "id": "console:member:1279",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29696,7 +29696,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1277",
+                "id": "console:member:1280",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29706,7 +29706,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1278",
+                "id": "console:member:1281",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29716,7 +29716,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1323",
+                "id": "console:member:1326",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -29726,7 +29726,7 @@
                 "childProvenRedacting": null
               },
               {
-                "id": "console:member:1331",
+                "id": "console:member:1334",
                 "surface": "console",
                 "accessPath": "member",
                 "wholeExpressionBounded": false,
@@ -50089,9 +50089,9 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-20T04:13:42.762Z",
-      "commit": "d0fe49f7072a27ea932a5ae9a1100ae3d6e9c003",
-      "inputsDigest": "8e1bed809e36f5a3",
+      "generatedAt": "2026-09-21T20:14:52.309Z",
+      "commit": "7b123e2365259dc2e20552e596cf0835a834c772",
+      "inputsDigest": "d423f080b92cabdf",
       "filesScanned": 2115,
       "scanScopes": [
         {
@@ -51188,7 +51188,7 @@
         },
         {
           "subject": "scripts/** (*.ps1, *.py, *.sh, *.yaml)",
-          "reason": "189 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
+          "reason": "190 file(s) under a SCANNED root were seen and NOT read: this extractor lexes JavaScript/TypeScript only, so a workflow YAML `run:` block, a shell step or a Python script is outside the examined population even though it publishes to the same PUBLIC Actions log. C4 output therefore says nothing about these files. Recorded with a count so the narrowing is countable rather than inferred from a scope string — which is how the `.github/**` gap survived until 2026-08-24."
         },
         {
           "subject": ".github/** (*.py, *.sh, *.yaml, *.yml)",

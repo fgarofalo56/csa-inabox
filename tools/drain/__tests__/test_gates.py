@@ -2821,3 +2821,125 @@ def test_every_receipt_class_is_reachable():
     assert set(classes) == {
         "guard-or-test-only", "deploy-path", "estate-behaviour", "ui-surface", "human-only"
     }
+
+
+# --- verdict_transfers_across_base_update -------------------------------
+#
+# THE CONTROL IN THIS BLOCK IS THE POINT, and it is the one that is easy to
+# write un-killably. A merge commit and its FIRST PARENT auto-merge to the SAME
+# tree, so a "negative" fixture built by swapping the head for its parent
+# passes for a reason that has nothing to do with the gate. Every refusing
+# fixture below therefore differs in CONTENT -- a different tree sha -- or in
+# SHAPE (parent count, membership, unresolvability).
+
+A = "a" * 40          # the approved head: what the reviewer measured
+B = "b" * 40          # the base tip it was merged with
+T_MERGE = "1" * 40    # tree of the clean auto-merge of A and B
+T_OTHER = "2" * 40    # a DIFFERENT tree -- content nobody reviewed
+
+
+def test_a_pure_base_update_transfers_the_verdict():
+    """The whole purpose: update-branch authored nothing, so the bytes the
+    reviewer measured are the bytes on offer.
+
+    Breaks if: the tree comparison is dropped, or parent membership stops
+    being required -- either would make this return False and the queue would
+    stay serialized.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, T_MERGE, T_MERGE)
+    assert ok, why
+    assert "auto-merge" in why
+
+
+def test_a_head_carrying_new_content_does_not_transfer():
+    """THE ARM THAT MUST FIRE. Same parents, same approved head -- only the
+    TREE differs, which is exactly the case where somebody pushed a fix on top
+    of the base update and no reviewer has seen it.
+
+    This fixture differs from the accepting one in CONTENT ALONE (T_OTHER vs
+    T_MERGE). That is deliberate: a fixture that instead swapped the head for
+    its first parent would auto-merge to the same tree and pass without
+    exercising anything.
+
+    Breaks if: `automerge_tree != head_tree` stops refusing.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, T_MERGE, T_OTHER)
+    assert not ok
+    assert "NOT reviewed" in why
+
+
+def test_a_conflicted_automerge_refuses_rather_than_comparing():
+    """`merge-tree` writes NO tree when the merge conflicts, so a head that
+    exists anyway was hand-resolved -- unreviewed content by definition.
+
+    Breaks if: an unresolvable tree is treated as "no difference". Note the
+    distinction being pinned: None must NOT take the equality path, where
+    `None != T_MERGE` would coincidentally also refuse but for the wrong
+    reason and with the wrong message.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, None, T_MERGE)
+    assert not ok
+    assert "conflict" in why
+    assert "NOT reviewed" not in why, (
+        "a conflict was reported as a content difference; the two are "
+        "different findings and the operator acts on them differently")
+
+
+def test_an_ordinary_commit_is_not_a_base_update():
+    """One parent means somebody authored something. A base update is always a
+    two-parent merge.
+
+    Breaks if: the parent-count check is removed -- which would let an ordinary
+    push inherit a verdict merely by having a matching tree.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "1 parent" in why
+
+
+def test_an_octopus_merge_refuses_rather_than_approximating():
+    """Three parents cannot be modelled by the two-arg merge-tree the caller
+    runs, so the answer is unknown, so it refuses.
+
+    Breaks if: the check becomes `len(parents) >= 2`.
+    """
+    ok, why = gates.verdict_transfers_across_base_update(
+        [A, B, "c" * 40], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "3 parent" in why
+
+
+def test_a_verdict_from_outside_the_parents_does_not_transfer():
+    """Reachability is NOT the question. A commit between the approved head and
+    this merge could have authored anything, and the tree equality would still
+    hold for the parents actually merged.
+
+    Breaks if: parent membership stops being required.
+    """
+    ok, why = gates.verdict_transfers_across_base_update(
+        [B, "c" * 40], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "not a parent" in why
+
+
+def test_an_unresolvable_head_tree_is_not_a_pass():
+    """Fails CLOSED on an unmeasurable input, like every other gate here.
+
+    Breaks if: an empty head tree compares equal to an empty automerge tree and
+    returns True -- the "two unknowns agree" shape.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, "", "")
+    assert not ok
+    assert "unmeasurable" in why
+
+
+def test_the_transfer_is_direction_agnostic_about_which_parent_is_approved():
+    """update-branch puts the PR head first; a merge made the other way round
+    puts it second. The rule is about CONTENT, so parent ORDER must not decide
+    it.
+
+    Breaks if: the check becomes `parents[0] == approved_head`, which passes
+    the common case and silently refuses the other one.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([B, A], A, T_MERGE, T_MERGE)
+    assert ok, why

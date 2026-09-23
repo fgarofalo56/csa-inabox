@@ -3233,6 +3233,39 @@ ARMS: list[tuple[str, str, str, str]] = [
         ('    record("1 base == origin/main (or a delta no required context reads)",\n'
          "           ok, why)"),
     ),
+    (
+        ("PR1 the Item.pr WRITER is removed, so a bound lane records nothing and "
+         "the item is reaped as 'lane never returned' - the #4489 defect exactly, "
+         "and the one that cost 46 strandings and duplicate work on #4495/#4619"),
+        "tick.py",
+        "    item.pr = pr\n",
+        "",
+    ),
+    (
+        ("PR2 the bind stops MOVING THE STATE, so the PR is recorded but the item "
+         "stays schedulable and the next cycle hands it to a second lane. "
+         "Recording without the transition repairs the gate's corroboration and "
+         "leaves the pay-for-it-twice defect exactly as it was"),
+        "tick.py",
+        "        led.transition(number, IN_REVIEW, why=note)",
+        "        pass",
+    ),
+    (
+        ("PR3 the bind stops checking the PR NAMES the item, so Item.pr becomes an "
+         "integer the caller typed - no stronger than the author's own claim, "
+         "which is the weakness #4489 says this binding exists to remove"),
+        "tick.py",
+        "        _pr_references_item(repo, pr, number)",
+        "        pass",
+    ),
+    (
+        ("PR4 the lost-update refusal becomes a plain save, reintroducing the "
+         "unlocked read-modify-write two reviewers blocked on the merge_gate "
+         "attempt: the loser's transitions do not merge, they vanish"),
+        "tick.py",
+        "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
+        "    led.save()\n",
+    ),
 ]
 
 

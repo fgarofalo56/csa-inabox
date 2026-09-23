@@ -100,7 +100,13 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
 #: Exact number of `["git", ...]` argv literals across the modules below.
 #: PINNED, not a floor: a floor with slack lets someone hide literals and
 #: sneak an unrouted call through green, which is measured behaviour.
-_GIT_ARGV_LITERALS = {"merge_gate.py": 11, "tick.py": 0, "gates.py": 0}
+#: merge_gate.py went 11 -> 14 when `base_update_facts` landed. RE-MEASURED,
+#: not adjusted to match: the three additions are `git rev-list --parents -n 1`,
+#: `git rev-parse <sha>^{tree}` and `git merge-tree --write-tree`, which resolve
+#: the facts the pure `gates.verdict_transfers_across_base_update` cannot look
+#: up itself. The other eleven are byte-identical. `gates.py` stays pinned at
+#: ZERO, which is the machine-checked half of "gates.py runs no subprocess".
+_GIT_ARGV_LITERALS = {"merge_gate.py": 14, "tick.py": 0, "gates.py": 0}
 
 
 def _git_call_census(module_path):
@@ -262,6 +268,13 @@ def _data(**over) -> dict:
         },
         "head": HEAD,
         "head_date": HEAD_DATE,
+        # The default fixture head is an ORDINARY commit, not a base update, so
+        # the re-pin refuses and verdicts pin to the head date exactly as they
+        # did before it existed. Tests that want the transfer pass their own
+        # `repin=` -- the two cases are driven separately on purpose, so a
+        # change to the default can never silently turn the re-pin on for every
+        # test in this file.
+        "repin": {"ok": False, "why": "head is not a base update", "date": ""},
         "comments": [APPROVAL],
         "base_sha": "b" * 40,
         "origin_main_sha": "b" * 40,
@@ -1474,9 +1487,12 @@ def test_negative_control_a_stale_mention_cannot_buy_a_weaker_gate(tmp_path):
     # says so. The binding arm bypasses the state test, so a TERMINAL item bound
     # to this PR corroborates -- defensible, since a harness-written binding
     # outranks a state, but "is work the harness has in flight" is then false.
-    # Unreachable until #4489 lands a writer; wording it now means the sentence
-    # does not become wrong on the day it arms. Kills MG35.
-    led.items[10].pr = 1          # the fixture PR; set by hand, nothing writes it
+    # `tick.py --bind-pr` writes `Item.pr` (#4489), so this arm fires in
+    # production and the sentence below is a claim about real behaviour.
+    # Set directly here only to keep this a merge_gate unit test -- the writer
+    # is exercised end to end in `test_poached_closes_refuses_a_bound_item`.
+    # Kills MG35.
+    led.items[10].pr = 1          # the fixture PR
     led.save()
     bound = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
     detail = _gate(bound, "3b")["detail"]
@@ -1516,15 +1532,15 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     led.save()
 
     assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
-    # The binding is set DIRECTLY here, because nothing writes it in production
-    # and this module no longer tries to. `bind_pr` used to, from `main()` --
-    # and both reviewers reproduced a lost update: an unlocked read-modify-write
-    # on the drain's only durable record, reaching (via the worktree fallback) a
-    # checkout this process does not own. `Ledger.save()` serialises the whole
-    # document from memory, so the loser's cycle, state transitions and history
-    # do not merge, they vanish. A merge gate does not write the thing it
-    # measures; `tick.py` owns the ledger. The writer is tracked in #4489, and
-    # until it exists this control is DECLARED INERT rather than claimed.
+    # The binding is set DIRECTLY here to keep this a merge_gate unit test.
+    # `bind_pr` used to write it from `main()` -- and both reviewers reproduced
+    # a lost update: an unlocked read-modify-write on the drain's only durable
+    # record, reaching (via the worktree fallback) a checkout this process does
+    # not own. `Ledger.save()` serialises the whole document from memory, so the
+    # loser's cycle, state transitions and history do not merge, they vanish. A
+    # merge gate does not write the thing it measures; `tick.py` owns the
+    # ledger. The writer is `tick.py --bind-pr` (#4489), and this control is
+    # driven through it in `test_poached_closes_refuses_a_bound_item` below.
     led.items[10].pr = 99
     led.save()
     # The SAME PR may re-run the gate as often as it likes.
@@ -1540,6 +1556,49 @@ def test_negative_control_a_close_the_ledger_binds_to_another_pr_is_refused(tmp_
     # Silent when it cannot tell: no ledger, or no binding, is not a conflict.
     assert merge_gate.poached_closes([10], POLICY, str(tmp_path / "none.json"), pr=2) == []
     assert merge_gate.poached_closes([], POLICY, path, pr=2) == []
+
+
+def test_poached_closes_refuses_a_bound_item(tmp_path, monkeypatch):
+    """Gate 6 refuses a second PR's declared close of an item THE REAL WRITER bound.
+
+    #4489's acceptance line: "A second PR declaring a close of a bound item is
+    refused by gate 6 -- with a test that fails without the writer." Every other
+    poach test sets `Item.pr` by hand, so none of them fails when the writer is
+    removed; this one drives `tick.bind_pr_for_item` and therefore does.
+
+    BREAKS ON: deleting `item.pr = pr` from the writer (mutation arm PR1). The
+    bind then records nothing, `poached_closes` finds no binding, and its
+    documented silence-when-it-cannot-tell returns `[]` -- so the assertion that
+    PR #1 is refused goes red. That is the difference between this test and its
+    hand-set siblings, and it is why the acceptance line asks for it.
+    """
+    import tick
+    from ledger import Ledger
+
+    path = str(tmp_path / "state.json")
+    led = Ledger(path, receipts=POLICY["receipts"])
+    led.upsert(10, "issue 10", "W6-ci", lane="lane:ci", size=1)
+    led.transition(10, "in-flight", "selected")
+    led.save()
+
+    # The writer's two GitHub reads, stubbed: it is the BINDING under test here,
+    # not `gh`. Both are exercised against the real thing in test_bind_pr.py.
+    monkeypatch.setattr(
+        tick, "sh",
+        lambda _args: (0, json.dumps(
+            {"number": 99, "state": "OPEN", "headRefName": "fix/x"}), ""),
+    )
+    monkeypatch.setattr(tick, "_pr_references_item", lambda _repo, _pr, _item: None)
+
+    tick.bind_pr_for_item(led, "owner/repo", 10, 99)
+    led.save()
+
+    # The bound PR is unaffected; a DIFFERENT PR is refused by gate 6.
+    assert merge_gate.poached_closes([10], POLICY, path, pr=99) == []
+    assert merge_gate.poached_closes([10], POLICY, path, pr=1) == ["#10 is bound to PR 99"]
+    result = _run(body="Closes #10", commits=[], allow_close=[10], state_path=path)
+    assert not _gate(result, "6 ")["ok"]
+    assert "POACHED" in _gate(result, "6 ")["detail"]
 
 
 def test_a_mention_of_an_escalating_item_still_escalates(tmp_path):
@@ -1983,3 +2042,76 @@ def test_an_empty_ls_tree_listing_fails_closed_rather_than_agreeing(monkeypatch)
     monkeypatch.setattr(merge_gate.subprocess, "run", fake)
     assert merge_gate._top_level_dirs_agree("MERGED") is False
     assert merge_gate.resolve_infra_ere("MERGED") is None
+
+
+# --- the re-pin, end to end through run_gates ---------------------------
+#
+# A BASE UPDATE MOVES THE HEAD FORWARD IN TIME. So the fixture below dates the
+# merge AFTER the approval and the PR-side parent BEFORE it: against the head
+# date the verdict is stale, against the parent's it is live. That gap is the
+# whole mechanism, and a fixture whose dates did not straddle the approval
+# would pass whether or not run_gates consulted the re-pin at all.
+
+_STALE_HEAD_DATE = "2026-09-11T12:00:00Z"   # the base-update merge: AFTER the approval
+_PARENT_DATE = "2026-09-11T09:00:00Z"       # the reviewed head:     BEFORE it
+
+
+def test_a_base_update_re_pins_the_verdict_to_its_parent():
+    """The verdict predates the merge but postdates what it reviewed, so it
+    counts -- and the gate says so out loud.
+
+    Breaks if: run_gates goes back to passing `data["head_date"]` into
+    parse_verdicts unconditionally. That is the exact regression this test
+    exists for, and no test in test_gates.py can see it.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": True, "why": "head is exactly the auto-merge of its parents",
+               "date": _PARENT_DATE},
+    )
+    gate = _gate(result, "2+3")
+    assert gate["ok"], gate["detail"]
+    assert "RE-PINNED" in gate["detail"], (
+        "the re-pin applied but the gate did not disclose it; a verdict counted "
+        "against a date that is not the head's must be stated")
+
+
+def test_negative_control_without_the_re_pin_the_same_verdict_is_stale():
+    """THE CONTROL, and it differs from the test above in ONE field.
+
+    Same comments, same head date, same everything -- only `repin.ok` flips.
+    If this passed, the test above would prove nothing, because the verdict
+    would have been counted for some reason other than the re-pin.
+
+    Breaks if: the re-pin is applied unconditionally, or `repin.ok` stops being
+    consulted -- either would make a stale verdict live on an ordinary push.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": False, "why": "head is not a base update", "date": ""},
+    )
+    gate = _gate(result, "2+3")
+    assert not gate["ok"], (
+        "a verdict predating the head counted WITHOUT a re-pin -- the timestamp "
+        "pin is not being applied at all")
+    assert "RE-PINNED" not in gate["detail"]
+
+
+def test_a_refused_re_pin_never_borrows_the_parent_date():
+    """`date` is populated but `ok` is False -- the shape a future refactor
+    produces when it resolves the date first and decides second.
+
+    The date must be IGNORED. Reading it whenever it is non-empty would make
+    every refusal silently transfer, which is the failure mode that looks
+    exactly like success.
+
+    Breaks if: the selection becomes `repin["date"] or data["head_date"]`.
+    """
+    result = _run(
+        head_date=_STALE_HEAD_DATE,
+        repin={"ok": False, "why": "head tree != auto-merge", "date": _PARENT_DATE},
+    )
+    gate = _gate(result, "2+3")
+    assert not gate["ok"], (
+        "a REFUSED re-pin still used its parent date -- `ok` is not gating the "
+        "selection")
