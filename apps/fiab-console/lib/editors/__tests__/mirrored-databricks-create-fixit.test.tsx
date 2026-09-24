@@ -91,10 +91,50 @@ beforeEach(() => {
 });
 
 /**
- * Drive the real create flow: pick the workspace, open the dialog, fill the two
- * required fields, submit. Returns once the create POST has resolved.
+ * The create dialog's submit control (#4685).
+ *
+ * ONE function, called by both `createMirror` and the aria-hidden probe below,
+ * so the probe exercises the query the suite actually uses rather than a
+ * transcription of it (`assertion-design.md` "done" #3 — lift the pattern from
+ * the source, do not copy it). Reverting this body to a bare
+ * `screen.getByRole('button', { name: /Create mirror/i })` is the mutation that
+ * the probe is built to catch.
+ *
+ * Both modifiers are load-bearing, and each was MEASURED against this dialog
+ * rather than assumed (scratch run, 2026-09-24, worktree at `a5db87c98`):
+ *
+ *   - `findBy*` + `timeout` closes the LATE-RENDER class. Every other step in
+ *     `openCreateDialog` already waits; this query was the file's only
+ *     synchronous one, and it is the line all three recorded CI failures landed
+ *     on (#4685), across two unrelated branches whose diffs cannot reach the
+ *     console.
+ *   - `hidden: true` closes the ARIA-HIDDEN class, which `findBy*` alone does
+ *     NOT: with `aria-hidden="true"` on the surface, `findByRole` without this
+ *     modifier times out exactly as `getByRole` throws (measured: resolved=false
+ *     at a 1200ms budget). That is the state this file's own `afterEach`
+ *     docblock measured landing from t=300ms, and it is why the one-line fix
+ *     proposed in #4685 would have closed only half the failure surface.
+ *
+ * The widening is deliberate and narrow: this is PLUMBING — it locates a
+ * control in order to click it — and it stays unambiguous, `hidden: true`
+ * matching exactly ONE button both before and after the mutation. It is the
+ * same convention, for the same jsdom reason, as the dialog-internal queries in
+ * `azure-sql-server-editor-bind.test.tsx:159` and
+ * `spark-job-definition-lineage.test.tsx:135`. Every ASSERTION in this file
+ * stays strict — the `Fix it` / `Gate registry` / gate-title queries are
+ * untouched, so a gate that renders only inside the a11y tree's blind spot
+ * still fails them.
  */
-async function createMirror(user: ReturnType<typeof userEvent.setup>) {
+function findCreateMirrorButton() {
+  return screen.findByRole('button', { name: /Create mirror/i, hidden: true }, { timeout: 5000 });
+}
+
+/**
+ * Drive the real create flow up to the point of submission: pick the workspace,
+ * open the dialog, fill the two required fields. Split out of `createMirror` so
+ * the #4685 probe can reach the open dialog without submitting it.
+ */
+async function openCreateDialog(user: ReturnType<typeof userEvent.setup>) {
   render(<FluentProvider theme={webLightTheme}><MirroredDatabricksEditor item={'mirrored-databricks' as any} id="new" /></FluentProvider>);
 
   // Workspace picker — "New mirror" stays disabled until one is chosen. The
@@ -123,8 +163,15 @@ async function createMirror(user: ReturnType<typeof userEvent.setup>) {
   await user.type(name, 'Sales mirror');
   const catalog = await screen.findByLabelText(/Unity Catalog name/i, undefined, { timeout: 5000 });
   await user.type(catalog, 'sales');
+}
 
-  await user.click(screen.getByRole('button', { name: /Create mirror/i }));
+/**
+ * Drive the real create flow: pick the workspace, open the dialog, fill the two
+ * required fields, submit. Returns once the create POST has resolved.
+ */
+async function createMirror(user: ReturnType<typeof userEvent.setup>) {
+  await openCreateDialog(user);
+  await user.click(await findCreateMirrorButton());
 }
 
 /** A marker long enough that an accidental substring match is implausible. */
@@ -340,5 +387,79 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     // A fully paired mirror closes the dialog; no gate, no Fix-it anywhere.
     await waitFor(() => expect(screen.queryByText(/endpoint not yet queryable/i)).toBeNull());
     expect(screen.queryByRole('button', { name: /Fix it/i })).toBeNull();
+  });
+
+  /**
+   * #4685 — THE SUBMIT QUERY SURVIVES FLUENT'S ARIA-HIDDEN UNWIND.
+   *
+   * WHY THIS EXISTS AT ALL. The fix for #4685 is one line inside
+   * `findCreateMirrorButton`, and on its own NOTHING in this repo witnesses it:
+   * reverting that line to a bare `getByRole` leaves all six tests above green
+   * locally and restores a probabilistic CI failure with no input that reddens
+   * it on demand. An unwitnessed change to a test file is exactly the shape
+   * `assertion-design.md` refuses, so the guard ships with a probe that has
+   * deterministic kill power over it.
+   *
+   * THE VALUE THAT MAKES THIS TEST FAIL: `aria-hidden="true"` on
+   * `.fui-DialogSurface`. That is not a hypothetical — it is the state this
+   * file's own `afterEach` docblock measured Fluent's modal bookkeeping landing
+   * on a live surface from t=300ms, and every `*ByRole` query is blind to it.
+   * With the attribute applied, a bare `getByRole` throws
+   * (`Unable to find an accessible element…`) and a plain `findByRole` merely
+   * times out instead; only the `hidden: true` form resolves. So this test goes
+   * RED the moment `findCreateMirrorButton` loses either modifier.
+   *
+   * WHAT IT DOES NOT CLAIM. It does not reproduce the CI failure, and it does
+   * not decide between the two candidate mechanisms (late render vs aria-hidden
+   * unwind) — #4685 records that the fast-runner correlation is a risk factor,
+   * not a demonstrated cause. It pins the property the fix is FOR: this query
+   * resolves in both states. The dialog genuinely failing to open is still a
+   * product regression, and the six tests above still fail on it, because
+   * `openCreateDialog` waits on the dialog's own fields before this runs.
+   */
+  it('the create-dialog submit query survives an aria-hidden surface (#4685)', async () => {
+    const user = userEvent.setup();
+    createResponse = {
+      ok: true,
+      created: true,
+      mirror: { id: 'm1', state: { sqlEndpoint: 'ep' } },
+      pairing: { ok: true, tablesResolved: 3, tablesSkipped: 0 },
+    };
+    await openCreateDialog(user);
+
+    // POSITIVE CONTROL, before the mutation: the query resolves against a
+    // normal, visible dialog. This passes under the reverted helper too — which
+    // is the point. It localises this test's kill power to the aria-hidden
+    // state alone, rather than to "the button exists at all".
+    expect(await findCreateMirrorButton()).toBeTruthy();
+
+    // THE FIXTURE REACHES THE RULE (`assertion-design.md` "done" #3). Exactly
+    // one surface to mark, and the attribute genuinely removes the button from
+    // the accessibility tree — so a green below cannot be read as "the mutation
+    // did nothing", which is the ambiguity a bare green mutation arm carries.
+    const surfaces = document.querySelectorAll('.fui-DialogSurface');
+    expect(surfaces.length, 'exactly one dialog surface to mark aria-hidden').toBe(1);
+    (surfaces[0] as HTMLElement).setAttribute('aria-hidden', 'true');
+    expect(
+      () => screen.getByRole('button', { name: /Create mirror/i }),
+      'aria-hidden must actually hide the submit button from an unwidened role query',
+    ).toThrow(/Unable to find an accessible element/);
+
+    // THE ASSERTION THAT CARRIES THE KILL POWER: the helper's own query —
+    // called, not transcribed, so a future edit to it cannot drift away from
+    // what this pins — still resolves against the hidden surface…
+    const submit = await findCreateMirrorButton();
+    expect(submit).toBeTruthy();
+    // …and what it returns is the live submit control, not merely some node
+    // bearing that name: clicking it issues the create POST.
+    await user.click(submit);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([u, i]: any[]) => String(u).startsWith('/api/items/mirrored-databricks?') && i?.method === 'POST',
+        ).length,
+        'the located button must actually submit the create',
+      ).toBe(1),
+    );
   });
 });
