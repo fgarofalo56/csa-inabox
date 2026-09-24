@@ -958,8 +958,21 @@ def test_main_refuses_two_write_verbs_in_one_invocation(monkeypatch, tmp_path, a
         (["--decline", "1", "--decision", "d", "--owner", "o"], "--owner"),
         (["--park", "1", "--blocker", "b", "--owner", "o", "--decision", "d"], "--decision"),
         (["--record-receipt", "1", "--pr", "2"], "--pr"),
+        # THE TWO ROWS THIS PR ADDED TO THE GUARD, AND THE WITNESS FOR THEM.
+        # Their absence here was a review finding and it is the SAME
+        # config-coverage shape as the gap they close, one layer up: the guard
+        # was widened from four flags to six and its parametrisation was left at
+        # four, so deleting either new row left all 733 tests green. Measured
+        # with a positive control that fired on the `--blocker` row.
+        #
+        # They are driven with `--bind-pr` rather than bare, so the argv is a
+        # REAL mis-pairing (a receipt flag beside the wrong verb) rather than a
+        # lone flag that any "no verb at all" fallback would also catch.
+        (["--bind-pr", "1", "--pr", "2", "--from-pr", "3"], "--from-pr"),
+        (["--bind-pr", "1", "--pr", "2", "--from-run", "9"], "--from-run"),
     ],
-    ids=["blocker-on-decline", "owner-on-decline", "decision-on-park", "pr-on-record"],
+    ids=["blocker-on-decline", "owner-on-decline", "decision-on-park", "pr-on-record",
+         "from-pr-on-bind", "from-run-on-bind"],
 )
 def test_main_refuses_a_value_flag_whose_verb_was_not_passed(
     monkeypatch, tmp_path, argv, flag, capsys

@@ -308,14 +308,23 @@ ARMS: list[tuple[str, str, str, str]] = [
         '"THIS ISSUE STAYS OPEN, DELIBERATELY. The two cells of the "',
     ),
     (
+        ("DP8 the MIRROR of DP4, on the DECLINE body. A separate arm because "
+         "DP4 mutates only the park branch, so on its own it closes the finding "
+         "by its LABEL rather than at its SITE - the same reason L27 exists "
+         "beside L26. A reviewer built this one by hand and it killed; "
+         "promoting it means the next reader does not have to"),
+        "tick.py",
+        'f"{observed} Unlike a park, the decline\'s fate DOES depend on which "',
+        '"THIS ISSUE IS STILL OPEN. The decline\'s fate depends on which "',
+    ),
+    (
         ("DP5 the AUTHORITY bar is removed, so two terminal-state capabilities "
          "run with no entry in policy.json at all - the emergent-behaviour "
          "shape `action_is_permitted` fails closed to prevent"),
         "tick.py",
         "    permitted, permit_note = gates.action_is_permitted(action, policy)",
         '    permitted, permit_note = True, "not asked"',
-    ),
-    (
+    ),    (
         ("DP6 policy.json REVOKES `park-item` and the verb must stop working. "
          "This is the arm that proves the authority has a BLAST RADIUS rather "
          "than being prose - the marker_any_of defect this file records finding "
