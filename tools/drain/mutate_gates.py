@@ -107,7 +107,11 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "M5 reduce by RECENCY instead of conjunction",
         "gates.py",
-        'if any(v.token == "REQUEST-CHANGES" for v in live):',
+        # The condition grew an `and v.comment_id not in discharged` clause
+        # (#4704). The ARM is unchanged in intent -- replace the conjunction
+        # over the whole live set with "whatever landed last" -- but the needle
+        # has to track the line it aims at or it silently SKIPs.
+        'if any(v.token == "REQUEST-CHANGES" and v.comment_id not in discharged for v in live):',
         'if live and live[-1].token == "REQUEST-CHANGES":',
     ),
     (
@@ -163,7 +167,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "N6 CANNOT-ASSESS stops blocking",
         "gates.py",
-        'if any(v.token == "CANNOT-ASSESS" for v in live):',
+        # Same needle drift as M5 -- see the note there (#4704).
+        'if any(v.token == "CANNOT-ASSESS" and v.comment_id not in discharged for v in live):',
         "if False:",
     ),
     (
@@ -3482,6 +3487,92 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
         "    led.save()\n",
+    ),
+    # -- verdict SUPERSESSION (#4704, measured on PR #4693) ------------------
+    # The discharge that had to exist, and the seven ways it fails OPEN. Every
+    # needle below is in `gates.py`, which no other lane is editing this round;
+    # the two that had to change in place are M5 and N6, whose anchored
+    # condition grew a `discharged` clause -- see the notes at those arms.
+    (
+        ("SS1 the parsed supersession ids are DROPPED at the parse site, so the "
+         "feature is inert and #4693's shape strands again - the exact state "
+         "before #4704, which is the one a revert would land back in"),
+        "gates.py",
+        "                            supersedes=sup_ids, malformed_supersessions=sup_bad))",
+        "                            supersedes=(), malformed_supersessions=sup_bad))",
+    ),
+    (
+        ("SS2 the id MATCH is dropped: any supersession discharges EVERY live "
+         "block, so a reviewer who addressed one finding silently clears a "
+         "second reviewer's unrelated one"),
+        "gates.py",
+        ("    discharged = {\n"
+         "        target\n"
+         "        for v in live\n"
+         "        if v.token not in BLOCKING_TOKENS\n"
+         "        for target in v.supersedes\n"
+         "    }\n"),
+        ("    discharged = {\n"
+         "        v.comment_id\n"
+         "        for v in live\n"
+         "        if v.token in BLOCKING_TOKENS\n"
+         "        if any(w.supersedes for w in live)\n"
+         "    }\n"),
+    ),
+    (
+        ("SS3 the refusal is COMPUTED and then not consulted - the reporting-to-"
+         "nobody shape N7 records one level up. A supersession naming a missing "
+         "id, a near-miss, or nothing at all becomes a silent no-op"),
+        "gates.py",
+        "    if refusal:\n        return False, refusal\n",
+        "    if False:\n        return False, refusal\n",
+    ),
+    (
+        ("SS4 the SUPERSEDED verdict's token is not checked, so an APPROVE can "
+         "be superseded - which both legitimises a meaningless discharge and "
+         "lets a supersession delete the very approval the gate requires"),
+        "gates.py",
+        "            elif by_id[target].token not in BLOCKING_TOKENS:",
+        "            elif False:",
+    ),
+    (
+        ("SS5 supersession lines are read off RAW lines instead of prose, so a "
+         "quoted / fenced / collapsed `SUPERSEDES` from a relayed previous "
+         "round discharges a live block - formatting granting what it may only "
+         "ever refuse"),
+        "gates.py",
+        "    for line, prose in classify_lines(body):",
+        "    for line, prose in ((ln, True) for ln in body.splitlines()):",
+    ),
+    (
+        ("SS6 the line remainder is MINED FOR DIGITS again rather than required "
+         "to be ids only - `SUPERSEDES the round-3 finding` then discharges "
+         "whichever verdict happens to be comment 3. Caught by this feature's "
+         "own test on its first run"),
+        "gates.py",
+        ("        rest = bare[len(SUPERSESSION_MARKER):].replace(\",\", \" \").replace(\"#\", \" \")\n"
+         "        parts = rest.split()\n"
+         "        if parts and all(p.isdigit() for p in parts):\n"
+         "            ids.extend(int(p) for p in parts)\n"),
+        ("        found = re.findall(r\"\\d+\", bare[len(SUPERSESSION_MARKER):])\n"
+         "        if found:\n"
+         "            ids.extend(int(n) for n in found)\n"),
+    ),
+    (
+        ("SS7 the supersession is narrowed to the TOKEN WINDOW, so whether a "
+         "discharge works becomes a function of how long the reviewer's header "
+         "happened to be - a silent no-op with no diagnosis"),
+        "gates.py",
+        "        sup_ids, sup_bad = _supersessions(body)",
+        "        sup_ids, sup_bad = _supersessions(head)",
+    ),
+    (
+        ("SS8 a SUPERSEDES line on a comment that announces no verdict goes back "
+         "to producing no near-miss at all, so an author who believes they "
+         "cleared a block meets no contradiction anywhere in the output"),
+        "gates.py",
+        "            elif sup_ids or sup_bad:",
+        "            elif False:",
     ),
 ]
 

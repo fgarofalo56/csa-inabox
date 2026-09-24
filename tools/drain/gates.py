@@ -216,6 +216,18 @@ VERDICT_TOKENS = ("REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS")
 BLOCKING_TOKENS = ("REQUEST-CHANGES", "CANNOT-ASSESS")
 MARKERS = ("Independent review", "Independent re-review")
 
+#: How a later verdict DISCHARGES a specific earlier block, by id:
+#:
+#:     Independent re-review of #4693 at eaeacfee4 - APPROVE
+#:     SUPERSEDES 5820420955
+#:
+#: Uppercase and at the start of its own line, exactly like the verdict tokens.
+#: Lowercase "supersedes the earlier finding" is ordinary English and appears in
+#: review prose constantly; it must never move a gate. Tests build their
+#: fixtures from THIS constant rather than transcribing the word, so a typo here
+#: cannot leave a probe agreeing with itself while disagreeing with the parser.
+SUPERSESSION_MARKER = "SUPERSEDES"
+
 # Which function implements each `merge_gate` key in policy.json. The mapping is
 # checked BOTH WAYS by `__tests__/test_policy.py`: a key with no implementation
 # is prose wearing a control's clothes, and an implementation with no key is a
@@ -246,6 +258,23 @@ VERDICT_PARSING_IMPLEMENTED_BY = {
     "must_postdate_head_commit": "gates.parse_verdicts (postdates)",
     "note": "prose, deliberately - it explains the three above",
 }
+
+# DECLARED NOWHERE YET, AND SAYING SO IS THE POINT (#4704).
+#
+# `SUPERSESSION_MARKER` and the discharge rule in `_refuse_supersessions` are a
+# behaviour of `gates.reduce_verdicts` that `policy.json` does not yet name --
+# precisely the "implemented but not declared" shape `assert_policy_matches_code`
+# refuses one direction of. It is NOT added to the mapping above in this change
+# because adding it there without the matching authority key raises, and
+# `policy.json` is owned by another live lane (#4699/PR #4702) this round;
+# editing it here would collide with work in flight.
+#
+# `reduce_verdicts_by: "conjunction"` remains TRUE as written: the reduction is
+# still a conjunction, taken over the verdicts that survive an explicit,
+# self-identifying discharge. What is undeclared is the marker literal and the
+# five conditions under which a discharge is honoured. Follow-up: declare
+# `verdict_parsing.supersession_marker` + `merge_gate.supersession_must_name_a_live_block`
+# and add both to the mappings above, once policy.json is free.
 
 
 # The rest of the file. Everything here is either implemented or DECLARED as
@@ -702,11 +731,28 @@ def _unannounced_kind(prior_verdict: str) -> str:
 
 @dataclass
 class Verdict:
-    """One parsed review verdict, pinned to the head it measured."""
+    """One parsed review verdict, pinned to the head it measured.
+
+    `supersedes` names the earlier verdicts this one DISCHARGES, read off
+    `SUPERSEDES` lines in the same comment. It is deliberately a property of
+    the comment rather than of the reducer: on this repo every verdict is
+    posted through `gh` under ONE GitHub account, so the API attributes all of
+    them to the same author and the gate genuinely cannot tell two independent
+    reviewers apart. "Latest verdict per author" is therefore not available
+    here, and implementing it would let one reviewer's APPROVE silently
+    discharge another reviewer's block. An explicit, self-identifying marker is
+    the only discharge this data can support.
+
+    NEW FIELDS GO LAST AND CARRY DEFAULTS: the suite constructs `Verdict`
+    POSITIONALLY (`gates.Verdict("APPROVE", "t2", 2)`), so inserting a field
+    anywhere above would silently re-bind `comment_id` to a timestamp.
+    """
 
     token: str
     created_at: str
     comment_id: int
+    supersedes: tuple[int, ...] = ()
+    malformed_supersessions: tuple[str, ...] = ()
 
 
 @dataclass
@@ -880,6 +926,54 @@ def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | N
     return next((v.token for v in live), None)
 
 
+def _supersessions(body: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """(ids this comment discharges, malformed supersession lines).
+
+    WHOLE BODY, not `body[:window]`, and PROSE ONLY.
+
+    The window bounds where a verdict may be ANNOUNCED, because announcing is
+    the forgeable direction and `_marker_lines` answers it by position. A
+    supersession is different in kind: it is only ever read off a comment that
+    has ALREADY announced a live verdict under that strict rule, so the actor
+    who can write one is the actor who just granted the verdict. Bounding it at
+    200 characters would instead make a legitimate discharge silently
+    ineffective as a function of how long the reviewer's header happened to be
+    -- the silent-no-op shape this package keeps filing.
+
+    What DOES bound it is `classify_lines`: a quoted, fenced, indented,
+    collapsed or HTML-commented `SUPERSEDES` line is a CITATION of a previous
+    round, not an act, and discharges nothing. Same asymmetry as the rest of
+    this module -- formatting may refuse to GRANT, and a discharge is a grant.
+
+    A `SUPERSEDES` line whose remainder is not EXCLUSIVELY comment ids is
+    returned as MALFORMED rather than mined for digits, and `reduce_verdicts`
+    refuses on it. Both halves of that matter, and the second was measured by
+    this feature's own test on its first run: `SUPERSEDES the round-3 finding`
+    yielded `3` under a bare `\\d+` scan, so an English sentence silently
+    discharged whichever verdict happened to be comment 3. Ignoring the line
+    instead would be the mirror failure -- its author believes a block is
+    cleared while the gate silently disagrees. Failing open on a control's own
+    input is the defect this feature exists to avoid, not one to reproduce
+    inside it.
+
+    `#` and `,` are tolerated as separators (`SUPERSEDES #5820420955`,
+    `SUPERSEDES 1, 3`); anything else on the line makes it malformed.
+    """
+    ids: list[int] = []
+    malformed: list[str] = []
+    for line, prose in classify_lines(body):
+        bare = line.strip()
+        if not prose or not bare.startswith(SUPERSESSION_MARKER):
+            continue
+        rest = bare[len(SUPERSESSION_MARKER):].replace(",", " ").replace("#", " ")
+        parts = rest.split()
+        if parts and all(p.isdigit() for p in parts):
+            ids.extend(int(p) for p in parts)
+        else:
+            malformed.append(bare[:120])
+    return tuple(ids), tuple(malformed)
+
+
 def parse_verdicts(
     comments: list[dict], head_date: str | None, window: int = 200
 ) -> tuple[list[Verdict], list[NearMiss]]:
@@ -912,6 +1006,7 @@ def parse_verdicts(
         postdates = bool(head_date) and when >= head_date
 
         token, saw_template = _token_of(head)
+        sup_ids, sup_bad = _supersessions(body)
         # `has_marker` is now "this comment ANNOUNCES a verdict in the window",
         # not "the word appears somewhere in the body". Scanning the whole body
         # let a quoted header from a previous round decide the gate.
@@ -1049,6 +1144,22 @@ def parse_verdicts(
                              f"begin with one of {MARKERS}",
                              NEAR_NO_MARKER, blocks=False)
                 )
+            elif sup_ids or sup_bad:
+                # A supersession is carried BY a verdict; it is not a verdict.
+                # Written on a comment that announces nothing it discharges
+                # nothing -- which is the SAFE direction, and exactly why it
+                # has to be said out loud. The author believes a block is
+                # cleared and the gate believes otherwise; that disagreement
+                # used to produce no output at all, because none of the
+                # branches above fire for a comment whose only unusual feature
+                # is this line.
+                near.append(
+                    NearMiss(cid, when,
+                             f"carries a {SUPERSESSION_MARKER} line but announces no verdict "
+                             "on its FIRST line - a supersession is carried BY a verdict, so "
+                             "this discharges nothing",
+                             NEAR_NO_MARKER, blocks=False)
+                )
             continue
         if not postdates:
             near.append(
@@ -1056,7 +1167,8 @@ def parse_verdicts(
                          NEAR_PREDATES_HEAD, blocks=False)
             )
             continue
-        live.append(Verdict(token=token, created_at=when, comment_id=cid))
+        live.append(Verdict(token=token, created_at=when, comment_id=cid,
+                            supersedes=sup_ids, malformed_supersessions=sup_bad))
 
     return live, near
 
@@ -1255,6 +1367,60 @@ def _token_of(head: str) -> tuple[str | None, bool]:
     return None, saw_template
 
 
+def _refuse_supersessions(live: list[Verdict]) -> str:
+    """"" if every supersession present is well formed and addressed; else why not.
+
+    REFUSED, NEVER IGNORED. Every condition below is one where an implementation
+    that simply skipped the unrecognised id would fail OPEN -- the discharge
+    silently does nothing, or worse, silently does something else -- and failing
+    open on this control's own input is the defect it exists to prevent.
+
+    A supersession is honoured only when ALL of these hold:
+
+    - its carrier is a LIVE verdict at this head (enforced by construction:
+      `supersedes` is read off the comment that produced this `Verdict`);
+    - its carrier is NOT itself blocking. A block cannot discharge a block.
+      Without this, `[RC(a) SUPERSEDES b, RC(b) SUPERSEDES a, APPROVE(c)]`
+      mutually annihilates into GO -- two blocks cancelling each other with no
+      reviewer ever withdrawing either;
+    - it does not name its own carrier, which would be self-discharge;
+    - the id it names IS a live verdict here. A stale id, a near-miss id, or an
+      id from a comment that predates the head names nothing this reduction can
+      see, so honouring it would be honouring a guess;
+    - the verdict it names is BLOCKING. Discharging an APPROVE has no legitimate
+      use, and reading it as one would let a supersession remove the very
+      approval the gate requires.
+    """
+    by_id = {v.comment_id: v for v in live}
+    problems: list[str] = []
+    for v in live:
+        for bad in v.malformed_supersessions:
+            problems.append(f"#{v.comment_id} wrote {bad!r}, which names no comment id")
+        if not v.supersedes:
+            continue
+        if v.token in BLOCKING_TOKENS:
+            problems.append(
+                f"#{v.comment_id} is a {v.token} - a block cannot discharge a block"
+            )
+            continue
+        for target in v.supersedes:
+            if target == v.comment_id:
+                problems.append(f"#{v.comment_id} names ITSELF")
+            elif target not in by_id:
+                problems.append(
+                    f"#{v.comment_id} names {target}, which is not a live verdict at this head"
+                )
+            elif by_id[target].token not in BLOCKING_TOKENS:
+                problems.append(
+                    f"#{v.comment_id} names {target}, which is a {by_id[target].token} "
+                    "and not a block"
+                )
+    if not problems:
+        return ""
+    return (f"{SUPERSESSION_MARKER} refused ({len(problems)}): "
+            + "; ".join(problems[:3]))
+
+
 def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> tuple[bool, str]:
     """Decide GO/NO-GO from live verdicts by CONJUNCTION, not recency.
 
@@ -1266,18 +1432,52 @@ def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> 
     PR; a reducer that only reads the parsed set returns GO for the PR they
     blocked. That is the exact 2026-09-11 incident, and reporting the near-miss
     to nobody did not fix it.
+
+    THE ONE DISCHARGE, AND WHY IT HAD TO EXIST (#4704, measured on PR #4693).
+    Normally a block is followed by a PUSH, and the push voids every sha-pinned
+    verdict, so no stale block survives. The gap is the case where the finding
+    is NOT IN THE DIFF -- on #4693 it was a squash body the coordinator authors
+    at merge time. Nothing can be pushed; the coordinator fixes it; the reviewer
+    re-adjudicates at the UNCHANGED head and approves. The reduction then saw
+    `[REQUEST-CHANGES, APPROVE, APPROVE]`, all live, all pinned to one sha, and
+    returned NO-GO forever. `update-branch` does not rescue it either: the gate
+    re-pins across a merge that authors no content, so the block is carried
+    forward with the approvals -- correctly.
+
+    So a verdict may discharge a NAMED earlier block, and only one it names.
+    The conjunction is unchanged over what remains; recency still discharges
+    nothing; and an unnamed block still blocks. A malformed or unaddressed
+    supersession is REFUSED (see `_refuse_supersessions`), never skipped.
     """
+    refusal = _refuse_supersessions(live)
+    # FIRST, ahead of every other reason. A malformed control input must not be
+    # masked by a NO-GO that happens to agree with it: `[APPROVE SUPERSEDES 999]`
+    # beside a blocking near-miss is NO-GO either way, and reporting only the
+    # near-miss would leave the broken supersession invisible until the round
+    # where it is the only thing standing between the PR and a merge.
+    if refusal:
+        return False, refusal
+
+    discharged = {
+        target
+        for v in live
+        if v.token not in BLOCKING_TOKENS
+        for target in v.supersedes
+    }
+    note = (f" | {SUPERSESSION_MARKER} discharged {sorted(discharged)}"
+            if discharged else "")
+
     blocking_near = [n for n in (near or []) if n.blocks]
     if blocking_near:
         reasons = "; ".join(f"#{n.comment_id} {n.reason}" for n in blocking_near[:3])
-        return False, f"unparseable review at head ({len(blocking_near)}): {reasons}"
-    if any(v.token == "REQUEST-CHANGES" for v in live):
-        return False, "live REQUEST-CHANGES"
-    if any(v.token == "CANNOT-ASSESS" for v in live):
-        return False, "live CANNOT-ASSESS"
+        return False, f"unparseable review at head ({len(blocking_near)}): {reasons}{note}"
+    if any(v.token == "REQUEST-CHANGES" and v.comment_id not in discharged for v in live):
+        return False, "live REQUEST-CHANGES" + note
+    if any(v.token == "CANNOT-ASSESS" and v.comment_id not in discharged for v in live):
+        return False, "live CANNOT-ASSESS" + note
     if not any(v.token == "APPROVE" for v in live):
-        return False, "no live APPROVE at head"
-    return True, "live APPROVE, zero live blocking verdicts"
+        return False, "no live APPROVE at head" + note
+    return True, "live APPROVE, zero live blocking verdicts" + note
 
 
 # ---------------------------------------------------------------------------

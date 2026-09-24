@@ -2943,3 +2943,317 @@ def test_the_transfer_is_direction_agnostic_about_which_parent_is_approved():
     """
     ok, why = gates.verdict_transfers_across_base_update([B, A], A, T_MERGE, T_MERGE)
     assert ok, why
+
+
+# ---------------------------------------------------------------------------
+# Supersession -- the ONE explicit discharge (#4704, measured on PR #4693)
+# ---------------------------------------------------------------------------
+#
+# The configuration that stranded #4693: the finding was NOT IN THE DIFF (a
+# squash body the coordinator authors at merge time), so nothing could be
+# pushed to void the block; the coordinator fixed it; the same reviewer
+# re-adjudicated at the UNCHANGED head and approved. `[RC, APPROVE, APPROVE]`,
+# all live, all pinned to one sha, NO-GO forever.
+#
+# Every fixture below goes through `parse_verdicts` on REAL COMMENT TEXT rather
+# than constructing `Verdict(supersedes=(1,))` by hand. A test that sets the
+# field directly cannot witness `_supersessions` at all -- it would pass with
+# the marker parser deleted, which is the "could not fail" shape
+# `assertion-design.md` is about.
+
+#: LIFTED from the source, never transcribed. A typo here would otherwise make
+#: the probe agree with itself while disagreeing with the parser.
+SUP = gates.SUPERSESSION_MARKER
+
+LATER = "2026-09-11T11:00:00Z"
+
+
+def _review(cid, token, supersedes=None, pad="", wrap=None):
+    """A real review comment, optionally carrying a supersession line.
+
+    `wrap` CITES the supersession instead of stating it, in each of the idioms
+    `classify_lines` enumerates.
+    """
+    body = f"## Independent re-review - {token}\n\n{pad}Head `abc`."
+    if supersedes is not None:
+        line = f"{SUP} {supersedes}"
+        block = {
+            None: line,
+            "quote": f"> {line}",
+            "fence": f"```\n{line}\n```",
+            "indent": f"    {line}",
+            "details": f"<details>\n{line}\n</details>",
+            "comment": f"<!--\n{line}\n-->",
+        }[wrap]
+        body += f"\n\n{block}\n"
+    return _c(cid, body, LATER)
+
+
+def _reduce(comments):
+    live, near = gates.parse_verdicts(comments, HEAD)
+    return gates.reduce_verdicts(live, near)
+
+
+def test_an_approve_that_names_the_block_discharges_it():
+    """#4693's shape exactly, and the only thing this feature adds.
+
+    Breaks if: the `SUPERSEDES` line is not parsed at all (the state before
+    #4704 -- this returns NO-GO "live REQUEST-CHANGES"), or if the id is read
+    but not matched against the blocking verdict's comment id.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert ok, why
+    assert SUP in why, f"the discharge must be said out loud: {why}"
+    assert "1" in why, f"the discharge must NAME what it cleared: {why}"
+
+
+def test_negative_control_an_approve_with_no_supersession_still_blocks():
+    """THE PROPERTY BEING PRESERVED, and the arm most likely to be lost.
+
+    Conjunction, not recency: a later APPROVE that names nothing discharges
+    nothing. This is the same input as the test above minus the marker line.
+
+    Breaks if: the discharge is loosened to "any later APPROVE clears any
+    earlier block" -- i.e. if the id match is dropped, this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_discharging_one_block_does_not_discharge_another():
+    """`[RC(1), RC(3), APPROVE(2) SUPERSEDES 1]` -> still NO-GO.
+
+    Breaks if: the discharge is computed as "a supersession is present, so
+    clear the blocks" rather than as a set of NAMED ids -- then block 3, which
+    nobody addressed, vanishes and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+    assert "[1]" in why, f"the partial discharge is still reported: {why}"
+
+
+def test_a_supersession_may_name_several_blocks_on_one_line():
+    """Both ids, one line. Pairs with the test above: that one pins that an
+    UNNAMED block survives, this one pins that a NAMED one does not have to
+    survive just because it was listed second.
+
+    Breaks if: only the first integer on the line is read -- then block 3 is
+    undischarged and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1 3"),
+    ])
+    assert ok, why
+
+
+def test_negative_control_a_supersession_naming_a_missing_id_is_refused():
+    """REFUSED, not ignored -- failing open here would be the whole defect.
+
+    The fixture carries NO block, deliberately: with one, the reduction is
+    NO-GO either way and the assertion would have no kill power. Alone, an
+    implementation that skips an unrecognised id returns GO.
+
+    Breaks if: `discharged` is built by set union without checking that each id
+    is present -- then this returns GO on an APPROVE that discharged nothing.
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="999")])
+    assert not ok
+    assert SUP in why, why
+    assert "999" in why, f"the refusal must name the unresolvable id: {why}"
+
+
+def test_negative_control_a_supersession_naming_an_approve_is_refused():
+    """An id that IS a verdict but is NOT a block.
+
+    Breaks if: the target's token is never inspected -- then this returns GO,
+    and the same hole lets a supersession delete the only live APPROVE.
+    """
+    ok, why = _reduce([
+        _review(1, "APPROVE"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "not a block" in why, why
+
+
+def test_negative_control_a_supersession_naming_a_near_miss_is_refused_not_ignored():
+    """A blocking NEAR-MISS is not a verdict, so it cannot be superseded.
+
+    PINS THE REASON, NOT THE VERDICT, and says so: the reduction is NO-GO
+    either way here (the near-miss blocks on its own), so `not ok` alone has no
+    kill power for this arm. What distinguishes refusal from silence is WHICH
+    reason is reported.
+
+    Breaks if: an id that is not in the live verdict set is skipped -- then the
+    reported reason is "unparseable review at head", the broken supersession is
+    invisible, and it stays invisible until the round where it is the only
+    thing between the PR and a merge.
+    """
+    ok, why = _reduce([
+        _c(1, "## Independent re-review - CHANGES REQUIRED\n\nHead `abc`.", LATER),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert why.startswith(SUP), f"the refusal must outrank the near-miss: {why}"
+
+
+def test_negative_control_a_block_cannot_discharge_a_block():
+    """Mutual annihilation: `[RC(1) SUPERSEDES 2, RC(2) SUPERSEDES 1, APPROVE(3)]`.
+
+    Two blocks cancel each other and no reviewer ever withdrew either.
+
+    Breaks if: any live verdict may carry an honoured supersession, rather than
+    only a non-blocking one -- then both blocks are discharged, the APPROVE
+    satisfies the last condition, and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES", supersedes="2"),
+        _review(2, "REQUEST-CHANGES", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "cannot discharge a block" in why, why
+
+
+def test_negative_control_a_supersession_cannot_name_itself():
+    """PINS THE REASON, NOT THE VERDICT, and says so: the block at 1 is
+    undischarged either way, so this is NO-GO with or without the self-check.
+
+    Breaks if: the `target == v.comment_id` arm is removed -- the reported
+    reason becomes "live REQUEST-CHANGES", and self-discharge becomes a legal
+    no-op that reads as an act.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="2"),
+    ])
+    assert not ok
+    assert "names ITSELF" in why
+
+
+@pytest.mark.parametrize("wrap", ["fence", "indent", "details", "comment", "quote"])
+def test_negative_control_a_cited_supersession_discharges_nothing(wrap):
+    """Formatting may refuse to GRANT, and a discharge IS a grant.
+
+    A `SUPERSEDES` line that is quoted, fenced, indented, collapsed or
+    HTML-commented is a CITATION of a previous round -- relaying a verdict
+    inside a fence is how this program moves them around -- not an act.
+
+    Breaks if: `_supersessions` iterates raw lines instead of `classify_lines`
+    prose -- then a cited line discharges a live block and this returns GO.
+
+    WHICH ARMS ACTUALLY KILL, disclosed rather than counted (assertion-design
+    §5): `fence`, `indent`, `details` and `comment` each kill that mutation,
+    because `line.strip()` leaves those lines starting with the marker. `quote`
+    does NOT -- `.strip()` never removes the `>`, so `startswith(SUP)` is False
+    either way and the arm survives it. It is kept as a second, independent
+    guard on the idiom that produced the original bypass, and it is NOT counted
+    as coverage of the `classify_lines` call. Measured: the first version of
+    this test used `quote` alone and the raw-lines mutant SURVIVED the suite.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1", wrap=wrap),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_a_supersedes_line_with_no_id_is_refused():
+    """`SUPERSEDES the round-3 finding` names nothing addressable.
+
+    THIS FIXTURE IS DELIBERATELY DIGIT-BEARING. Its first run caught the
+    parser mining `3` out of "round-3" under a bare `\\d+` scan, so an English
+    sentence discharged whichever verdict happened to be comment 3. The
+    remainder of the line must be ids and separators ONLY.
+
+    No block in the fixture, for the same reason as the missing-id test: with
+    one, both implementations return NO-GO and the arm is blind.
+
+    Breaks if: a non-id remainder is mined for digits (the reason becomes
+    "names 3, which is not a live verdict"), or is dropped rather than recorded
+    as malformed (this returns GO while its author believes they discharged
+    something).
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="the round-3 finding")])
+    assert not ok
+    assert SUP in why, why
+    assert "no comment id" in why, why
+
+
+def test_a_supersession_tolerates_the_hash_and_comma_separators():
+    """`SUPERSEDES #1, 3` is the shape a human actually types. Pairs with the
+    test above: that one pins what is REFUSED, this one pins that the refusal
+    did not swallow the ordinary spelling.
+
+    Breaks if: `#` or `,` is not normalised to a separator -- the line becomes
+    malformed and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="#1, 3"),
+    ])
+    assert ok, why
+
+
+def test_a_supersession_below_the_token_window_still_registers():
+    """DELIBERATE, and asserted so a later narrowing is a decision, not a drift.
+
+    `token_window_chars` bounds where a verdict may be ANNOUNCED, because
+    announcing is the forgeable direction. The supersession is read off a
+    comment that has already announced a live verdict under that strict rule,
+    so bounding it too would only make a legitimate discharge silently
+    ineffective as a function of header length.
+
+    The fixture asserts its own arithmetic rather than trusting the pad: the
+    marker must genuinely start past the window.
+
+    Breaks if: `_supersessions` is narrowed to `body[:window]` -- then the
+    block is undischarged and this returns NO-GO.
+    """
+    comment = _review(2, "APPROVE", supersedes="1", pad="filler. " * 40)
+    window = gates.load_policy(
+        os.path.join(os.path.dirname(__file__), "..", "policy.json")
+    )["verdict_parsing"]["token_window_chars"]
+    assert comment["body"].index(SUP) > window, (
+        "the pad must push the marker PAST the window, or this test witnesses "
+        f"nothing: index={comment['body'].index(SUP)} window={window}"
+    )
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), comment])
+    assert ok, why
+
+
+def test_a_supersession_on_a_comment_that_announces_no_verdict_is_reported():
+    """It discharges nothing -- the safe direction -- which is exactly why it
+    must not be silent. None of the other near-miss branches fire for a comment
+    whose only unusual feature is this line.
+
+    Breaks if: the branch is removed -- `near` comes back empty for comment 5
+    and the author's belief that a block was cleared meets no contradiction.
+    """
+    live, near = gates.parse_verdicts(
+        [_c(5, f"Fixed the squash body.\n\n{SUP} 1\n", LATER)], HEAD
+    )
+    assert live == []
+    assert [n.comment_id for n in near] == [5]
+    assert SUP in near[0].reason
+    assert not near[0].blocks, "an unannounced supersession is not a block"
