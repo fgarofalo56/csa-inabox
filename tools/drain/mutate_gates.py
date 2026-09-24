@@ -3465,6 +3465,109 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
         "    led.save()\n",
     ),
+    # -- #4699: the way OUT of a terminal state ----------------------------
+    #
+    # APPENDED AT THE END rather than filed next to the DP arms, deliberately:
+    # `mutate_gates.py` is edited by several lanes at once and an insertion in
+    # the middle of the list conflicts with every one of them. Order carries no
+    # meaning here -- `_run_arms` walks the list and each arm is independent.
+    #
+    # EVERY ANCHOR BELOW IS IN CODE THIS CHANGE ADDED, which is the other half of
+    # the same discipline. The one arm that anchors on a pre-existing line (UP8,
+    # the reaper) uses a line no other arm touches; and the obvious spelling for
+    # UP4's anchor was NOT available, because `permitted, permit_note = ...` is
+    # verbatim arm DP5's needle in `_dispose` -- adding a second copy silently
+    # re-aims DP5 at whichever is higher in the file. Measured:
+    # `test_every_arm_anchor_is_present_and_unique_in_the_current_source` went
+    # red with `DP5 -> 2 matches in tick.py`, which is why `_reverse`'s locals
+    # are named `reversal_permitted` / `reversal_note`.
+    (
+        ("UP1 the reversal's REASON check is removed. STRONGER than DP1-DP3: "
+         "those three still end in a ledger refusal because `transition` has its "
+         "own bar, so deleting them only moves WHEN. `transition(n, READY, why)` "
+         "has NO `why` refusal at all, so this mutant lets a reasonless reversal "
+         "SUCCEED - and the park's blocker was published verbatim, so the public "
+         "record would carry a reversal with no stated grounds"),
+        "tick.py",
+        "    if not reason or not reason.strip():",
+        "    if False:",
+    ),
+    (
+        ("UP2 the STATE GUARD collapses, so `--unpark` reverses a DECLINED item "
+         "(or a live in-flight one on a typo'd number) and records "
+         "'reversed from parked' in the history of an item that was never "
+         "parked - a false line in the only audit trail there is (R7)"),
+        "tick.py",
+        "    wrong_state = item.state != from_state",
+        "    wrong_state = False",
+    ),
+    (
+        ("UP3 the CLOSED-ISSUE refusal is removed. #4699 names this one by "
+         "itself: a terminal item whose issue is closed has had something happen "
+         "the harness did not record, and re-queueing it papers over that"),
+        "tick.py",
+        '    if seen.state != "OPEN":',
+        "    if False:",
+    ),
+    (
+        ("UP4 the AUTHORITY bar is removed, so returning an item to the "
+         "SCHEDULABLE QUEUE happens with no entry in policy.json at all - the "
+         "emergent-behaviour shape `action_is_permitted` fails closed to "
+         "prevent, and the mirror of DP5 one verb later"),
+        "tick.py",
+        "    reversal_permitted, reversal_note = gates.action_is_permitted(action, policy)",
+        '    reversal_permitted, reversal_note = True, "not asked"',
+    ),
+    (
+        ("UP5 policy.json REVOKES `unpark-item` and the verb must stop working. "
+         "The arm that proves the NEW grant has a BLAST RADIUS rather than being "
+         "prose - the marker_any_of defect this file records finding in itself "
+         "twice, asked of the reversal grant the way DP6 asks it of the park"),
+        "policy.json",
+        '    "unpark-item",\n',
+        "",
+    ),
+    (
+        ("UP6 the READ-BACK COMPARISON collapses, so a mojibaked correction is "
+         "accepted and stands permanently on a public issue. `gh` has posted a "
+         "UTF-8 body as cp1252 mojibake AT EXIT 0 in this repo, and a reversal's "
+         "reason is published verbatim, so a correction whose text arrived "
+         "corrupted is worse than none - it reads as authoritative"),
+        "tick.py",
+        '    if landed.replace("\\r\\n", "\\n") != body.replace("\\r\\n", "\\n"):',
+        "    if False:",
+    ),
+    (
+        ("UP7 the STALE BLOCKER survives the reversal, so the ledger reads "
+         "`state=ready blocker='no in-VNet runner exists'` and a cold reader "
+         "cannot tell that from a live blocker on a schedulable item. Worse, "
+         "`transition`'s park bar is only that BOTH fields are truthy, so a "
+         "later `--park` with no `--blocker` would be accepted on the stale one. "
+         "The `L30` audit_reason defect, one field over"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        "",
+    ),
+    (
+        ("UP8 the REAPER is widened past `in-flight` - the obvious "
+         "generalisation - so `--reap` sweeps `parked`, `declined` AND "
+         "`in-review` back to `ready`, silently undoing every disposition and "
+         "every PR binding in one command that prints only a count. The new verb "
+         "must be the ONLY route out of a terminal state; this is the arm that "
+         "asks whether a SECOND one opened"),
+        "tick.py",
+        "        if item.state == IN_FLIGHT:",
+        "        if item.state != READY:",
+    ),
+    (
+        ("UP9 the history stops naming the PRIOR STATE, so the round trip is no "
+         "longer auditable: `state.json` carries a `ready` item with no record "
+         "that it was ever parked, and the public comment is then the only trace "
+         "of a disposition the ledger made"),
+        "tick.py",
+        'f"reversed from {from_state} ({REVERSAL_FLAGS[from_state]}): {reason}",',
+        'f"reversed: {reason}",',
+    ),
 ]
 
 

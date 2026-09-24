@@ -32,7 +32,9 @@
     "resume-estate",
     "pause-estate",
     "park-item",
-    "decline-item"
+    "decline-item",
+    "unpark-item",
+    "undecline-item"
   ],
   "_estate": "Operator decision 2026-09-12: RESUME ON DEMAND, PER DEPLOY ITEM. The estate stays paused; resume only when a W1 item is ready for its deploy-run receipt, take the receipt, re-pause. Both verbs are permitted unattended because a resume the harness cannot pause again is worse than one it can. Before this they were absent, so action_is_permitted() failed closed on them and every deploy-path receipt was unreachable.",
   "_dispositions": "#4677, 2026-09-24. `park-item` and `decline-item` are the authority for the two TERMINAL states no program could previously reach, and they are listed here rather than riding on `comment` because that is the whole design of this file: action_is_permitted() fails closed, so a capability arrives by a deliberate edit and not as emergent behaviour. Riding on `comment` was the first shape and a reviewer blocked it -- two terminal-state capabilities would have arrived under the most general write permission with no edit here at all, which is exactly the marker_any_of defect this file records finding in itself twice. The PRECEDENT is ledger.py's own comment on CLOSES_ON_GITHUB: 'when a decline path exists it adds itself here deliberately, the way this line was added'. They are SEPARATE actions, not one `dispose-item`, because matching is EXACT and the two bars differ (a park needs blocker AND owner; a decline needs a recorded decision) -- revoking one must not revoke the other. NEITHER CLOSES A GITHUB ISSUE: a park is blocked-not-done and a decline's disposal carries --reason not-planned, which rests on a judgement no program made. Deciding WHICH items are parks or declines is triage and is not granted by this line.",
@@ -75,6 +77,7 @@
     "writer_is_never_the_reviewer": "enforced by TOOL ACCESS, not by instruction: the reviewer agent is read-only"
   },
 
+  "_reversals": "#4699, 2026-09-24. `unpark-item` and `undecline-item` are the authority for LEAVING the two terminal states, and they are listed here rather than riding on `park-item`/`decline-item` for a reason that is the inverse of the one above. If an unpark rode on `park-item`, revoking the authority to PARK would silently revoke the authority to UNPARK -- and every item already parked would be stranded permanently, which is the exact ratchet #4699 exists to remove, reintroduced by its own fix. They do not ride on `comment` either, for the reason `_dispositions` gives: returning an item to the schedulable queue is a capability, not a comment. WHAT THEY DO NOT GRANT: no receipt is recorded by a reversal (closing still needs one, R2) and no GitHub issue is opened, closed or reopened -- a reversal REFUSES an item whose issue is closed, because that state means something happened the harness did not record. Deciding WHICH parks were mistaken is triage and is not granted by this line. Measured motivation: #2958 was parked on a blocker that had already cleared, its receipt (run 36037056251) existed, and the harness correctly refused to record it against a terminal item with no sanctioned way to leave that state.",
   "stop_and_ask": {
     "_": "Hard refusals. tick.py will not emit a brief containing these, and a lane that reports one must park the item.",
     "publish_security_advisory": "outward-facing and irreversible; operator decides once the fix is DEPLOYED",
