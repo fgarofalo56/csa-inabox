@@ -131,14 +131,46 @@ beforeEach(() => {
  * is reached by exactly one consumer (`utils/focus/getTabDestination.js`,
  * tab-order pruning; the only other references are its own definition and the
  * `utils/index.js` barrel), and the only reachability assertion on the click
- * path is `pointer-events`. So a widened query finds AND clicks a control no
- * assistive technology could reach, and nothing else in this repo would notice:
+ * path is `pointer-events`.
+ *
+ * BUT THE WIDENING SURRENDERS LESS THAN THAT ALONE SUGGESTS, and the narrower
+ * claim is the true one. `hidden: true` flips the VISIBILITY filter
+ * (`queries/role.js:185`) and NOT the NAME filter at `:173`, which runs
+ * `computeAccessibleName` — and `dom-accessibility-api@0.5.16` returns the
+ * EMPTY STRING for a node that is itself hidden (`isHidden` at
+ * `accessible-name-and-description.js:28-36`, consulted from `:406`). Every
+ * `*ByRole` in this file is name-matched, so the name filter re-hides much of
+ * what the visibility filter let through. Measured over a plain button in this
+ * same jsdom stack, counting matches for (A) role only + `hidden: true`,
+ * (B) role + name + `hidden: true` — what `findCreateMirrorButton` does — and
+ * (C) role + name, strict — what the positive control below does:
+ *
+ *     mechanism                                      A    B    C
+ *     visible (positive control)                     1    1    1
+ *     `aria-hidden` on the BUTTON                    1    0    0
+ *     `display: none` on the BUTTON                  1    0    0
+ *     `[hidden]` on the BUTTON                       1    0    0
+ *     `visibility: hidden` inherited from a parent   1    0    0
+ *     `aria-hidden` on the PARENT                    1    1    0
+ *     `display: none` on the PARENT                  1    1    0
+ *     `aria-hidden` on the SURFACE                   1    1    0
+ *
+ * So FOUR of the seven hiding mechanisms red this helper on their own. What the
+ * widening actually surrenders is the ANCESTOR-level three: a control held out
+ * of the accessibility tree by something ABOVE it, which a widened query finds
+ * AND clicks. Narrowing the claim makes the case for the strict control
+ * STRONGER rather than weaker — it names the exact regression that ONE line is
+ * the only witness to, instead of a set most of which the helper catches
+ * itself. An earlier revision of this docblock asserted the unnarrowed version;
+ * a reviewer measured the name filter and it was wrong.
+ *
+ * And nothing else in this repo would notice the ancestor case:
  * `mirrored-databricks.test.tsx` carries no `ByRole` query at all, and the axe
  * ratchet (`e2e/a11y.uat.ts`) enumerates 22 surfaces, none an
  * `/items/mirrored-databricks/*` route — and no workflow references it, so it
  * runs on the in-VNet UAT runner rather than in PR CI. That coverage is bought
  * back deliberately, by the STRICT positive control inside the aria-hidden
- * probe.
+ * probe, and arm Dpar is its witness (PR #4693 §3).
  *
  * It is also a NEW way for this helper to fail: `findBy*` rejects on more than
  * one match, and `hidden: true` enlarges the candidate set to the whole
@@ -542,14 +574,29 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     // other way of hiding the submit is left exactly as rendered.
     surface.removeAttribute('aria-hidden');
 
-    // POSITIVE CONTROL 2, STRICT — this is the coverage `hidden: true`
-    // surrenders, bought back deliberately. The query is document-rooted, so it
-    // reddens if the submit control is unreachable to the accessibility tree
-    // for any reason other than that ONE cleared attribute on that ONE node:
+    // POSITIVE CONTROL 2, STRICT — the coverage `hidden: true` surrenders,
+    // bought back deliberately. The query is document-rooted, so it reddens if
+    // the submit control is unreachable to the accessibility tree for any
+    // reason other than that ONE cleared attribute on that ONE node:
     // `hidden`, `display: none`, an inherited `visibility: hidden`, or an
-    // `aria-hidden` on the button or on any other ancestor. WHAT VALUE MAKES IT
-    // FAIL, measured rather than asserted: arm D sets `aria-hidden="true"` on
-    // the BUTTON at this point, and this line throws (PR #4693 §3).
+    // `aria-hidden` on the button or on any other ancestor. For the
+    // ANCESTOR-level cases it is the ONLY thing that reddens; for the rest the
+    // widened helper below reddens by itself, because it is name-matched (the
+    // measured table in `findCreateMirrorButton`'s docblock).
+    //
+    // WHAT VALUE MAKES *THIS LINE* FAIL, measured rather than asserted: arm
+    // Dpar sets `aria-hidden="true"` on the submit control's PARENT at this
+    // point. This line throws `Unable to find an accessible element with the
+    // role "button"…` and it is the run's ONLY red (1 failed | 7 passed);
+    // delete these four lines, keep the identical mutation, and the file is
+    // `8 passed (8)`, rc 0. So the kill belongs to THIS assertion, not to the
+    // test (PR #4693 §3).
+    //
+    // Deliberately NOT arm D. Marking the BUTTON itself also reds this line —
+    // but it reds the widened helper below too (measured: arm D_noctl, red at
+    // `findCreateMirrorButton`), so it cannot separate "the control has kill
+    // power" from "the mutation broke the probe anyway". An arm that reds
+    // either way is not a witness (`assertion-design.md`, "done" #1).
     expect(
       screen.getByRole('button', { name: /Create mirror/i }),
       'the submit control must be reachable in the accessibility tree in the steady state',
