@@ -41,6 +41,14 @@ POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
 # and the cold-start KICKOFF names #4487 as the FIRST TASK. A title-substring
 # heuristic classifies an issue by what it MENTIONS, not by what it IS.
 #
+# THAT PARAGRAPH IS HISTORY, AND THIS CHANGE IS WHAT MADE IT HISTORY. #4487
+# carries `lane:ci`, and with the title arm demoted below the lane loop an
+# unpinned #4487 now reaches W6-ci -- `guard-or-test-only`, closable. The
+# previous `mutate_gates.py` B1 description was blocked in review for
+# generalising the old sentence to a set it was no longer true of, and the same
+# staleness sits here. It is kept rather than deleted because it records WHY
+# the pin was added; the pin's live justification is the latch argument below.
+#
 # #4485 is pinned for ORDERING, not for that reason -- measured, it falls to
 # W6-ci, whose class is already `guard-or-test-only`, so the pin changes its
 # stream and not its receipt. Recorded because a comment that gives one reason

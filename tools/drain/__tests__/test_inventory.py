@@ -103,7 +103,15 @@ def test_negative_control_the_harness_own_issues_are_pinned_not_title_matched():
     class. The ledger would then have demanded a LIVE ESTATE receipt for a
     path-filter fix in a workflow file and refused every other kind, and the
     cold-start KICKOFF names #4487 as the FIRST TASK. A title-substring
-    heuristic classifies an issue by what it MENTIONS, not by what it IS."""
+    heuristic classifies an issue by what it MENTIONS, not by what it IS.
+
+    THE PARAGRAPH ABOVE DESCRIBES THE STATE BEFORE #4694's PRECEDENCE FIX. With
+    the title arm demoted below the lane loop, an unpinned #4487 with `lane:ci`
+    reaches W6-ci, not W4 -- which is why this test's assertions are worded as
+    "W0-harness", the pin's verdict, rather than as "not W4". WHAT MAKES EACH
+    FAIL: dropping that number from `HARNESS` (measured: it reds this test and
+    no other for #4485/#4487).
+    """
     import ledger
 
     for number, title in (
