@@ -45,7 +45,24 @@ POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
 # W6-ci, whose class is already `guard-or-test-only`, so the pin changes its
 # stream and not its receipt. Recorded because a comment that gives one reason
 # for two entries invites the next reader to trust it for both.
-HARNESS = {4466, 4467, 4468, 4469, 4485, 4487}
+#
+# {4533, 4544, 4545, 4578, 4579} are the GENERAL FORM of the #4487 fix (#4694).
+# #4487 was pinned one at a time; measured against the live ledger at 76377a86e,
+# nine further items reached W4-receipts on the title substring alone and five
+# of them are pure-harness changes to `tools/drain/*.py` with NO ESTATE SURFACE.
+# `estate-behaviour`'s producer is `loom-synthetic-monitor`, and no monitor run
+# can witness an edit to this file -- so those five were UNCLOSABLE, not merely
+# mislabelled. Demonstrated on #4545, whose fix merged in #4552 and which still
+# refused every receipt kind it could offer:
+#
+#     RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER:
+#     #4545 is 'estate-behaviour' and needs a estate receipt, which is
+#     established by a workflow run - pass --from-run
+#
+# The pin is load-bearing here and the precedence fix below is NOT a substitute
+# for it: all five are unlabelled, so moving the title arm after the lane loop
+# leaves them in W4 exactly as before. Two independent defects, two remedies.
+HARNESS = {4466, 4467, 4468, 4469, 4485, 4487, 4533, 4544, 4545, 4578, 4579}
 DEPLOY = {4451, 4461, 4464, 4471, 4472, 4473, 3676, 2958}
 SECURITY = {4456, 4457, 4458, 4460, 3941, 3338}
 RECEIPTS = {4470, 4432, 3720, 2626, 2583, 2581, 4361, 4183, 4405, 4406, 4387, 4442}
@@ -56,6 +73,30 @@ def stream_for(number: int, title: str, labels: set[str]) -> str:
 
     Order IS precedence: a Gov-drift issue that also blocks the deploy path
     belongs to the deploy stream, because R1 makes that the thing that preempts.
+
+    THE TWO W4 ARMS SIT ON OPPOSITE SIDES OF THE LANE LOOP, DELIBERATELY (#4694).
+    They are not one rule with two triggers -- they carry different evidence and
+    so they get different precedence:
+
+    - `number in RECEIPTS` is a HUMAN DECISION about one issue, by number. It
+      outranks a label, because a person looked at that issue and said so.
+    - `"receipt" in title.lower()` is a SUBSTRING. It classifies an issue by
+      what it MENTIONS, not by what it IS, and it used to outrank an explicit
+      `lane:*` label a human applied. Measured at 76377a86e: #3965 carries
+      `lane:bicep` and got `estate-behaviour` (W4) instead of `deploy-path`
+      (W7-bicep) because its title contains the word "receipt". A label a human
+      applied deliberately is the strongest classification signal in the system
+      and a substring was discarding it.
+
+    The substring arm is kept rather than deleted: with the lane loop ahead of
+    it, it still catches an UNLABELLED issue that is genuinely about an owed
+    receipt (#4554 is one today), which is the honest answer until someone
+    labels it.
+
+    What would break this ordering: an issue with `lane:console` and "receipt"
+    in its title must return "W5-console". Re-order the two arms and it returns
+    "W4-receipts" -- that is the assertion in
+    `test_an_explicit_lane_label_outranks_a_title_substring`.
     """
     if number in HARNESS:
         return "W0-harness"
@@ -65,7 +106,7 @@ def stream_for(number: int, title: str, labels: set[str]) -> str:
         return "W2-security"
     if "drift-gov" in labels or "drift-commercial" in labels:
         return "W3-gov"
-    if number in RECEIPTS or "receipt" in title.lower():
+    if number in RECEIPTS:
         return "W4-receipts"
     for lane, stream in (
         ("lane:ci", "W6-ci"),
@@ -75,6 +116,8 @@ def stream_for(number: int, title: str, labels: set[str]) -> str:
     ):
         if lane in labels:
             return stream
+    if "receipt" in title.lower():
+        return "W4-receipts"
     return "W9-rest"
 
 

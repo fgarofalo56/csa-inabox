@@ -2289,9 +2289,10 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if prior_verdict in BLOCKING_TOKENS:",
     ),
     (
-        "B1 #4487 falls through to W4-receipts on its TITLE, demanding an estate receipt",
+        ("B1 the by-number stream pins are dropped, so every pinned item falls "
+         "through to W4-receipts on its TITLE and demands an estate receipt"),
         "build_inventory.py",
-        "HARNESS = {4466, 4467, 4468, 4469, 4485, 4487}",
+        "HARNESS = {4466, 4467, 4468, 4469, 4485, 4487, 4533, 4544, 4545, 4578, 4579}",
         "HARNESS = {4466, 4467, 4468, 4469}",
     ),
     (
