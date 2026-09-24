@@ -259,7 +259,7 @@ VERDICT_PARSING_IMPLEMENTED_BY = {
     "note": "prose, deliberately - it explains the three above",
 }
 
-# DECLARED NOWHERE YET, AND SAYING SO IS THE POINT (#4704).
+# DECLARED NOWHERE YET, AND SAYING SO IS THE POINT (#4704). TRACKED IN #4708.
 #
 # `SUPERSESSION_MARKER` and the discharge rule in `_refuse_supersessions` are a
 # behaviour of `gates.reduce_verdicts` that `policy.json` does not yet name --
@@ -272,9 +272,24 @@ VERDICT_PARSING_IMPLEMENTED_BY = {
 # `reduce_verdicts_by: "conjunction"` remains TRUE as written: the reduction is
 # still a conjunction, taken over the verdicts that survive an explicit,
 # self-identifying discharge. What is undeclared is the marker literal and the
-# five conditions under which a discharge is honoured. Follow-up: declare
-# `verdict_parsing.supersession_marker` + `merge_gate.supersession_must_name_a_live_block`
-# and add both to the mappings above, once policy.json is free.
+# five conditions under which a discharge is honoured. #4708 carries both keys
+# --- `verdict_parsing.supersession_marker` and
+# `merge_gate.supersession_must_name_a_live_block` --- to be added to the
+# mappings above once policy.json is free.
+#
+# #4708 ALSO PINS THE SAFETY PROPERTY THIS FEATURE RESTS ON, which the
+# consequence review measured and neither this module nor #4704 stated:
+# `worst_verdict_in_history` reads HISTORY, not `live`, and is untouched here --
+# so once anyone has blocked, `review_requirement` returns 2 permanently and
+# gate 3b demands two live approvals. A block plus ONE approve carrying a
+# discharge is still NO-GO. A discharge therefore does not lower the reviewer
+# bar; it takes two approvals PLUS an explicit named discharge per block, which
+# is strictly more than the same PR would have needed had nobody blocked.
+#
+# That coupling is undeclared and untested, and it is the hazard: making
+# `worst_verdict_in_history` "consistently" respect supersession is a plausible
+# tidy-up that would silently drop the floor to one comment with every test in
+# this change still green. #4708's second box names the value that turns it red.
 
 
 # The rest of the file. Everything here is either implemented or DECLARED as
@@ -940,10 +955,14 @@ def _supersessions(body: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
     ineffective as a function of how long the reviewer's header happened to be
     -- the silent-no-op shape this package keeps filing.
 
-    What DOES bound it is `classify_lines`: a quoted, fenced, indented,
-    collapsed or HTML-commented `SUPERSEDES` line is a CITATION of a previous
-    round, not an act, and discharges nothing. Same asymmetry as the rest of
-    this module -- formatting may refuse to GRANT, and a discharge is a grant.
+    What DOES bound it is `classify_lines`: a quoted, lazily-continued, fenced,
+    indented, HTML-wrapped or HTML-commented `SUPERSEDES` line is a CITATION of
+    a previous round, not an act, and discharges nothing. Same asymmetry as the
+    rest of this module -- formatting may refuse to GRANT, and a discharge is a
+    grant. THIS IS THE ONLY PLACE THE PROSE FLAG GRANTS ANYTHING; its other two
+    callers only record. That is why `classify_lines` is fail-closed about
+    anything it cannot confidently call the author's own words, and why the
+    enumeration there was replaced by a rule.
 
     A `SUPERSEDES` line whose remainder is not EXCLUSIVELY comment ids is
     returned as MALFORMED rather than mined for digits, and `reduce_verdicts`
@@ -958,6 +977,16 @@ def _supersessions(body: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
 
     `#` and `,` are tolerated as separators (`SUPERSEDES #5820420955`,
     `SUPERSEDES 1, 3`); anything else on the line makes it malformed.
+
+    `isascii()` IS LOAD-BEARING and fails BOTH ways without it. `str.isdigit()`
+    is True for digits in every script and for superscripts, while `int()`
+    accepts only the decimal ones -- so `SUPERSEDES <U+00B2>` raised
+    `ValueError` straight out of `parse_verdicts`, taking the merge gate down
+    with a traceback at both unguarded call sites, and `SUPERSEDES <U+0661>`
+    (Arabic-Indic one), `<U+FF11>` (fullwidth) and `<U+0967>` (Devanagari) were
+    silently HONOURED as id 1. The quiet half is the dangerous one: a non-ASCII
+    spelling performing a real discharge is the mined-digits defect above
+    wearing different glyphs.
     """
     ids: list[int] = []
     malformed: list[str] = []
@@ -967,7 +996,7 @@ def _supersessions(body: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
             continue
         rest = bare[len(SUPERSESSION_MARKER):].replace(",", " ").replace("#", " ")
         parts = rest.split()
-        if parts and all(p.isdigit() for p in parts):
+        if parts and all(p.isascii() and p.isdigit() for p in parts):
             ids.extend(int(p) for p in parts)
         else:
             malformed.append(bare[:120])
@@ -1175,10 +1204,77 @@ def parse_verdicts(
 
 FENCES = ("```", "~~~")
 
+#: HTML5 VOID elements. They have no closing tag, so one at the start of a line
+#: opens NOTHING. Without this exemption a `<br>` or a badge `<img>` in an
+#: ordinary review body would latch every line below it as non-prose, and a
+#: legitimate discharge would stop working as a silent function of unrelated
+#: markup above it -- the silent-no-op shape this module keeps filing.
+VOID_HTML = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+#: A line that BEGINS an HTML tag. Anchored: a `<` further along the line is
+#: ordinary prose (`` `<sha>` ``, `a <details> block`), and treating those as
+#: openers latches on this repo's own way of writing about markup.
+_HTML_OPEN = re.compile(r"^<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])")
+_HTML_CLOSE = re.compile(r"^</([A-Za-z][A-Za-z0-9-]*)\s*>")
+
+
+def _lines(text: str) -> list[str]:
+    """Split on the line endings GITHUB honours, which is not what Python does.
+
+    `str.splitlines()` also breaks on `\\v \\f \\x1c \\x1d \\x1e \\x85 \\u2028
+    \\u2029` -- eight characters CommonMark does not treat as line endings. Each
+    one therefore MANUFACTURES a line: `"> cited<U+2028>SUPERSEDES 1"` is one
+    quoted line on GitHub and two lines to `splitlines()`, the second of them
+    unquoted and, before this, prose. Measured against GitHub's own renderer
+    (`POST /markdown`, mode=gfm, 2026-09-24): all eight render inside the
+    blockquote. `\\r` alone IS a CommonMark line ending and is kept as one.
+
+    NOT a drop-in for `splitlines()`: a newline-terminated body yields one extra
+    trailing `""` here. Deliberately NOT trimmed -- no caller can observe it
+    (`_announces("")` is False and `""` is prose, so the empty line is dropped
+    by every one of the four consumers), and a branch no input can reach is a
+    branch no mutation can kill.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
 
 def _is_quoted(line: str) -> bool:
     """A Markdown blockquote. A quoted verdict is a CITATION, never a decision."""
     return line.lstrip().startswith(">")
+
+
+def _continues_paragraph(bare: str) -> bool:
+    """Would this line be LAZY CONTINUATION of the blockquote paragraph above?
+
+    CommonMark lets a paragraph inside a blockquote run onto the next line with
+    no `>` -- so this renders ENTIRELY inside the quote:
+
+        > the previous round said
+        SUPERSEDES 1
+
+    `_is_quoted` is a per-line test and called the second line prose. Measured
+    against GitHub's renderer: it is inside the `<blockquote>`. Pure ASCII, no
+    exotic input, and the most likely accidental relay shape there is.
+
+    Only PARAGRAPH text continues lazily; a line that STARTS A NEW BLOCK
+    interrupts the quote and is genuinely prose. Fences, HTML tags and further
+    `>` lines never reach here -- `classify_lines` has already branched on all
+    three -- so the only interrupters left to name are the ATX heading, the
+    setext underline, the thematic break and the list item. Naming exactly the
+    reachable ones is deliberate: a guard no input can reach is a guard no
+    mutation can kill, which is the tell this module keeps recording.
+    """
+    if not bare or bare[:1] in "#=":
+        return False                     # ATX heading, setext underline
+    if bare[:1] in "-*+_" and (len(bare) == 1 or bare[1:2] in " \t"
+                               or set(bare) <= set("-*_ ")):
+        return False                     # list bullet, thematic break
+    head, _, rest = bare.partition(" ")
+    return not (head[:-1].isdigit() and head[-1:] in ".)" and rest)
+
 
 
 def classify_lines(head: str) -> list[tuple[str, bool]]:
@@ -1191,26 +1287,59 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
 
     - **blockquote** (`>`, nested or indented) -- a coordinator comment reading
       "do NOT merge on this" scored GO because it quoted a previous round.
+    - **lazy continuation of a blockquote** -- the line AFTER a `>` line, with
+      no `>` and no blank line between, still renders inside the quote.
     - **fenced code** (``` / ~~~) -- relaying agent output in a fence is how
       this program moves verdicts around, and `KICKOFF.md` is itself a fenced
       paste-this block.
     - **indented code** (4+ spaces) -- and note the old strip set `"#*_> \\t"`
       removed the very spaces that MAKE it a code block, so it read as a header.
-    - **`<details>`** -- the standard way to collapse a superseded review. This
-      PR is carrying five.
+    - **any HTML element** -- `<details>` is the standard way to collapse a
+      superseded review, and it was the only tag this function knew. A fourth
+      review measured `<pre>`, `<blockquote>`, `<code>`, `<samp>`, `<kbd>` and
+      `<q>` all reading as prose while GitHub renders their content quoted or
+      literal. Enumerating those six would have been the same mistake one tag
+      deeper, so the rule is now positional-by-tag: a line BEGINNING an HTML
+      tag is not prose, and an unclosed element holds until its close.
     - **HTML comment** -- invisible when rendered; a verdict nobody can see.
+      Detected wherever `<!--` opens on the line, not only at its start,
+      because `see below <!--` hides everything after it just as completely.
 
     Each one produced a live APPROVE with zero blocking near-misses, which is
     exactly what the verdict gate needs to record GO.
+
+    THE HTML RULE IS DELIBERATELY WIDER THAN THE MEASURED QUOTING SET. GitHub
+    renders `<div>`, `<table>` and an unknown `<mytag>` with their content
+    VISIBLE, and sanitises `<script>`/`<style>`/`<textarea>` away entirely
+    (measured, `POST /markdown`, 2026-09-24) -- so calling those non-prose is
+    over-strict. Over-strict is the safe direction here: the only thing the
+    prose flag GRANTS is a supersession (`_supersessions`), and refusing one is
+    a visible NO-GO the author can fix, where granting one is a block nobody
+    withdrew. The two report-only callers just record more, never less.
+
+    AND THE ONE GAP THAT IS LEFT OPEN ON PURPOSE, because it is a trade and not
+    an oversight: `_HTML_OPEN` is ANCHORED, so `relaying <pre>` followed by a
+    pasted `SUPERSEDES` line still reads as prose and still grants. Un-anchoring
+    it was measured rather than argued -- run through this very classifier over
+    the 50 verdict comments on ten recent PRs, a mid-line scan newly demotes a
+    prose line in 28 of 50 bodies raw, and in 6 of 50 (12%) even after inline
+    code spans are stripped, because this program's reviewers quote shell output
+    full of `<file>`, `<path>`, `<sha>` and `<title>`. That trades one input
+    shape nobody writes for a silent non-grant in one verdict body in eight, and
+    a silent no-op is the failure this module keeps filing. Pinned by
+    `test_disclosed_gap_a_mid_line_html_opener_still_grants` so that closing it
+    later is a decision rather than a drift.
     """
     out: list[tuple[str, bool]] = []
     fence: str | None = None      # the OPENING delimiter, not a boolean
-    details = 0
+    html: list[str] = []          # open element names, innermost last
     in_comment = False
-    for line in head.splitlines():
+    quoted_para = False           # a blockquote paragraph is open above us
+    for line in _lines(head):
         bare = line.strip()
         lowered = bare.lower()
-        opens_comment = bare.startswith("<!--") and "-->" not in bare
+        # The LAST `<!--` decides: `a <!-- b --> c <!-- d` is still open.
+        opens_comment = "<!--" in bare and "-->" not in bare.rsplit("<!--", 1)[1]
 
         if fence is not None:
             # Only a run of the SAME character, at least as long and carrying no
@@ -1221,6 +1350,7 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
             char = fence[0]
             closes = bare and set(bare) == {char} and len(bare) >= len(fence)
             out.append((line, False))
+            quoted_para = False
             if closes:
                 fence = None
             continue
@@ -1228,19 +1358,31 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
         if opener:
             fence = bare[: len(bare) - len(bare.lstrip(opener[0]))]
             out.append((line, False))
+            quoted_para = False
             continue
 
-        if lowered.startswith("<details"):
-            # A ONE-LINE <details>...</details> is balanced. Counting only the
-            # opener left the depth at 1 for the rest of the window on a
-            # construct that renders perfectly on GitHub.
-            if "</details" not in lowered:
-                details += 1
+        closing = _HTML_CLOSE.match(bare)
+        if closing:
+            name = closing.group(1).lower()
+            if name in html:
+                while html and html.pop() != name:
+                    pass
             out.append((line, False))
+            quoted_para = False
             continue
-        if lowered.startswith("</details"):
-            details = max(0, details - 1)
+        opening = _HTML_OPEN.match(bare)
+        if opening:
+            name = opening.group(1).lower()
+            # A ONE-LINE `<details>...</details>` is balanced, and a void or
+            # self-closing tag opens nothing. Counting only the opener left the
+            # depth at 1 for the rest of the window on a construct that renders
+            # perfectly on GitHub.
+            if (name not in VOID_HTML
+                    and f"</{name}" not in lowered
+                    and not bare.endswith("/>")):
+                html.append(name)
             out.append((line, False))
+            quoted_para = False
             continue
 
         # INDENT IS MEASURED IN TABS TOO. `len(line) - len(line.lstrip(" "))`
@@ -1248,18 +1390,23 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
         # that MAKES a line a code block was removed by the matcher and never
         # seen by the classifier. Same citation, spelled the other way.
         indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip(" "))
+        quoted = _is_quoted(line)
+        lazy = quoted_para and indent < 4 and _continues_paragraph(bare)
         prose = (
             not in_comment
-            and details == 0
-            and not _is_quoted(line)
+            and not html
+            and not quoted
+            and not lazy
             and indent < 4
         )
         out.append((line, prose))
+        quoted_para = (quoted or lazy) and not in_comment
         if opens_comment:
             in_comment = True
         elif in_comment and "-->" in bare:
             in_comment = False
     return out
+
 
 
 def _announces(line: str) -> bool:
@@ -1444,10 +1591,22 @@ def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> 
     re-pins across a merge that authors no content, so the block is carried
     forward with the approvals -- correctly.
 
-    So a verdict may discharge a NAMED earlier block, and only one it names.
-    The conjunction is unchanged over what remains; recency still discharges
+    So a verdict may discharge a NAMED block, and only one it names. The
+    conjunction is unchanged over what remains; recency still discharges
     nothing; and an unnamed block still blocks. A malformed or unaddressed
     supersession is REFUSED (see `_refuse_supersessions`), never skipped.
+
+    NO TEMPORAL ORDERING IS ENFORCED, and this used to say "an earlier block"
+    as though one were. A carrier may name a target created AFTER it -- both
+    reviewers measured it, and the prose is corrected here rather than the code,
+    deliberately. Reaching that shape means editing an already-posted comment,
+    which is an equally-trusted act (you could edit the block itself), so the
+    comparison buys nothing against any actor who is not already inside the
+    trust boundary. What it would cost is a new silent no-op: GitHub timestamps
+    have one-second resolution, so two comments posted in the same second tie,
+    and a tie under a strict `<` would make a legitimate discharge fail with no
+    diagnosis. A gate that refuses for a reason it cannot explain is the failure
+    this module keeps filing, and it is a worse trade than the gap.
     """
     refusal = _refuse_supersessions(live)
     # FIRST, ahead of every other reason. A malformed control input must not be

@@ -1171,8 +1171,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G5 a QUOTED verdict counts as a decision",
         "gates.py",
-        "            and not _is_quoted(line)",
-        "            and True",
+        "        quoted = _is_quoted(line)",
+        "        quoted = False",
     ),
     (
         "G6 a line that MENTIONS a marker counts as one that announces it",
@@ -1443,8 +1443,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "C2d a one-line <details>...</details> leaves the depth counter open",
         "gates.py",
-        '            if "</details" not in lowered:\n                details += 1',
-        "            details += 1",
+        '                    and f"</{name}" not in lowered\n',
+        "                    and True\n",
     ),
     (
         "C2e a BLOCKING token is only counted in prose, so formatting reduces a block",
@@ -1459,16 +1459,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            elif blocking_mention and not cited:",
     ),
     (
-        "C3 a verdict header inside <details> counts as a decision",
+        "C3 a verdict header inside <details> (or any other HTML element) counts as a decision",
         "gates.py",
-        "            and details == 0",
-        "            and True",
+        "            and not html\n",
+        "            and True\n",
     ),
     (
         "C4 a verdict header inside an HTML comment counts as a decision",
         "gates.py",
-        "            not in_comment\n            and details == 0",
-        "            details == 0",
+        "            not in_comment\n            and not html",
+        "            not html",
     ),
     (
         "C5 a cited verdict vanishes without a trace again",
@@ -3552,7 +3552,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         ("        rest = bare[len(SUPERSESSION_MARKER):].replace(\",\", \" \").replace(\"#\", \" \")\n"
          "        parts = rest.split()\n"
-         "        if parts and all(p.isdigit() for p in parts):\n"
+         "        if parts and all(p.isascii() and p.isdigit() for p in parts):\n"
          "            ids.extend(int(p) for p in parts)\n"),
         ("        found = re.findall(r\"\\d+\", bare[len(SUPERSESSION_MARKER):])\n"
          "        if found:\n"
@@ -3573,6 +3573,102 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "            elif sup_ids or sup_bad:",
         "            elif False:",
+    ),
+    # -- round 2: the discharge is the FIRST place the prose flag GRANTS ------
+    # Before #4704 `classify_lines` only ever fed two report-only callers, so a
+    # missed idiom under-reported a near-miss. `_supersessions` turned the same
+    # flag into a grant, and a reviewer measured six HTML idioms, a blockquote's
+    # lazy continuation and a mid-line comment open all discharging a live block
+    # they never addressed. Each arm below removes one of those closures.
+    (
+        ("SS9 the HTML rule goes back to the ENUMERATION it replaced - only "
+         "`<details>` - so a SUPERSEDES inside <pre>, <blockquote>, <code>, "
+         "<samp>, <kbd> or <q> discharges a live block while GitHub renders it "
+         "quoted or literal. The measured round-2 blocker, restored"),
+        "gates.py",
+        ('_HTML_OPEN = re.compile(r"^<([A-Za-z][A-Za-z0-9-]*)(?=[\\s/>])")\n'
+         '_HTML_CLOSE = re.compile(r"^</([A-Za-z][A-Za-z0-9-]*)\\s*>")\n'),
+        ('_HTML_OPEN = re.compile(r"^<(details)(?=[\\s/>])")\n'
+         '_HTML_CLOSE = re.compile(r"^</(details)\\s*>")\n'),
+    ),
+    (
+        ("SS10 lazy blockquote continuation stops being tracked, so the line "
+         "AFTER a `>` line - pure ASCII, the commonest relay shape of all - "
+         "reads as prose and discharges, while GitHub renders it inside the "
+         "blockquote"),
+        "gates.py",
+        "        lazy = quoted_para and indent < 4 and _continues_paragraph(bare)",
+        "        lazy = False",
+    ),
+    (
+        ("SS11 the `isascii` half of the id test is dropped, which fails BOTH "
+         "ways: `SUPERSEDES <U+00B2>` raises ValueError out of parse_verdicts "
+         "at two unguarded call sites, and `SUPERSEDES <U+0661>` is silently "
+         "HONOURED as id 1"),
+        "gates.py",
+        "        if parts and all(p.isascii() and p.isdigit() for p in parts):",
+        "        if parts and all(p.isdigit() for p in parts):",
+    ),
+    (
+        ("SS12 lines are split with `str.splitlines()` again, which breaks on "
+         "eight characters GitHub does not treat as line endings - so a "
+         "separator MANUFACTURES an unquoted prose line out of the middle of a "
+         "quoted or indented one"),
+        "gates.py",
+        '    return text.replace("\\r\\n", "\\n").replace("\\r", "\\n").split("\\n")',
+        "    return text.splitlines()",
+    ),
+    (
+        ("SS13 an HTML comment is only noticed when it opens at the START of a "
+         "line, so `see below <!--` hides a SUPERSEDES that still discharges - "
+         "a grant that is INVISIBLE in the rendered comment, which is worse "
+         "than a cited one"),
+        "gates.py",
+        '        opens_comment = "<!--" in bare and "-->" not in bare.rsplit("<!--", 1)[1]',
+        '        opens_comment = bare.startswith("<!--") and "-->" not in bare',
+    ),
+    (
+        ("SS14 the VOID-element exemption is dropped, so a `<br>` or a badge "
+         "`<img>` in an ordinary review body latches every line below it as "
+         "non-prose and a legitimate discharge silently stops working"),
+        "gates.py",
+        "            if (name not in VOID_HTML\n",
+        "            if (name not in frozenset()\n",
+    ),
+    (
+        ("SS15 every line after a quoted one is swept into the blockquote, "
+         "not just paragraph continuation - so a heading or a list item that "
+         "genuinely INTERRUPTS the quote is misreported as cited"),
+        "gates.py",
+        "    if not bare or bare[:1] in \"#=\":\n        return False",
+        "    if True:\n        return True",
+    ),
+    (
+        ("SS16 a closing HTML tag stops popping the element stack, so the "
+         "`</details>` that ends a collapsed previous round never ends it - "
+         "every discharge written below ANY collapsed block silently stops "
+         "working, which is the no-op this closure exists to avoid causing"),
+        "gates.py",
+        "            if name in html:\n                while html and html.pop() != name:\n",
+        "            if False:\n                while html and html.pop() != name:\n",
+    ),
+    (
+        ("SS17 the printed verdict tuple drops `supersedes` again, so the run "
+         "says WHICH block was discharged and never BY WHICH COMMENT - and "
+         "nothing else durable records it, since before-*.json holds only "
+         "pr/head/open_issues and the squash body is untouched"),
+        "merge_gate.py",
+        "        f\" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}\"",
+        "        f\" | live={[(v.token, v.comment_id) for v in live]}\"",
+    ),
+    (
+        ("SS18 a SELF-CLOSING tag opens a region. Load-bearing only for a "
+         "NON-void tag such as `<div/>`: a `<br/>` fixture is caught by "
+         "VOID_HTML as well and SURVIVED this arm on a green suite, which is "
+         "the fixture-not-arm defect SS5 recorded one round earlier"),
+        "gates.py",
+        '                    and not bare.endswith("/>")):',
+        "                    and True):",
     ),
 ]
 
@@ -3758,6 +3854,23 @@ def _clean_env() -> dict[str, str]:
     return env
 
 
+#: HOW EVERY PYTEST SUBPROCESS HERE IS DECODED, and it is not `text=True` alone.
+#:
+#: `text=True` decodes with the PLATFORM encoding -- cp1252 on the Windows hosts
+#: this runs on -- so one non-ASCII byte anywhere in pytest's output raises
+#: `UnicodeDecodeError` inside `subprocess`'s reader THREAD. The exception is
+#: reported against `threading`, `proc.stdout` comes back as `None`, and the
+#: matrix dies mid-arm with a traceback that names neither the arm nor the
+#: cause. Measured 2026-09-24 on arm SS11, whose fixture values are non-ASCII
+#: digits by construction -- the first test in this repo whose FAILURE output
+#: could not be decoded.
+#:
+#: CI runs under a UTF-8 locale and would never have reproduced it, so the only
+#: place this bites is the local run a reviewer does. No arm covers it: `main()`
+#: is called by nothing, exactly as this module's own dispatch note records.
+_DECODE = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def _collected(tests_dir: Path, cwd: Path) -> int | None:
     """How many tests pytest COLLECTS in a tree. None when it cannot say.
 
@@ -3777,7 +3890,7 @@ def _collected(tests_dir: Path, cwd: Path) -> int | None:
     out = subprocess.run(
         [sys.executable, "-m", "pytest", str(tests_dir), "--collect-only", "-q",
          "-o", "addopts=", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, cwd=cwd, env=_clean_env(),
+        capture_output=True, **_DECODE, cwd=cwd, env=_clean_env(),
     )
     if out.returncode != 0:
         return None
@@ -3825,7 +3938,7 @@ def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | No
     than appending to it.
     """
     verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
-    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox,
+    out = subprocess.run(verbose, capture_output=True, **_DECODE, cwd=sandbox,
                          env=_clean_env())
     if out.returncode != 0:
         return None
@@ -4249,7 +4362,7 @@ def main() -> int:
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
         # every red below is noise and the run proves nothing.
-        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
+        control = subprocess.run(cmd, capture_output=True, **_DECODE, cwd=sandbox,
                                  env=_clean_env())
         tail = (control.stdout.strip().splitlines() or [""])[-1]
         print(f"CONTROL rc={control.returncode}  {tail[:70]}")
@@ -4312,7 +4425,7 @@ def main() -> int:
         # trusting rather than measuring.
         with_meta = subprocess.run(
             [c for c in cmd if c not in ("--deselect", deselect)],
-            capture_output=True, text=True, cwd=sandbox, env=_clean_env(),
+            capture_output=True, **_DECODE, cwd=sandbox, env=_clean_env(),
         )
         selected_with = _passed_count(with_meta.stdout)
         selected_without = _passed_count(control.stdout)
@@ -4394,8 +4507,8 @@ def main() -> int:
         def _run(filename: str, mutated: str) -> tuple[int, str]:
             _write_lf(sandbox / filename, mutated)
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      cwd=sandbox, env=_clean_env())
+                proc = subprocess.run(cmd, capture_output=True,
+                                      **_DECODE, cwd=sandbox, env=_clean_env())
             finally:
                 _write_lf(sandbox / filename, originals[filename])
             return proc.returncode, proc.stdout
