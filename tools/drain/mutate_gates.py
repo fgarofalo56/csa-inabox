@@ -255,6 +255,92 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if state in TERMINAL:\n            item.audit_reason = None\n",
         "",
     ),
+    # -- #4677: the two terminal states no program could reach --------------
+    #
+    # `ledger.transition()` already refuses a park without both fields and a
+    # decline without a decision (arms L3, L6, L10 above), so deleting a CLI
+    # check changes NO LEDGER OUTCOME -- every one of these three mutants still
+    # ends in a refusal. What it changes is WHEN: `_dispose` posts the
+    # disposition comment before it transitions, so a check deleted here lets a
+    # park or a decline be PUBLISHED on a public issue and then refused, and no
+    # re-run removes the comment.
+    #
+    # That is why the tests that kill these assert `calls == []` rather than
+    # only the exception. An assertion that watched the exception alone would be
+    # satisfied by the ledger's own refusal and would witness nothing -- the
+    # could-not-fail shape `assertion-design.md` is about.
+    (
+        ("DP1 the CLI park check drops the BLOCKER half, so a blocker-less park "
+         "is published on the issue before the ledger refuses it"),
+        "tick.py",
+        "    if not blocker or not blocker.strip():",
+        "    if False:",
+    ),
+    (
+        ("DP2 the CLI park check drops the OWNER half -- a separate arm because "
+         "it is a separate check, and `transition` can only say that ONE of the "
+         "two is missing"),
+        "tick.py",
+        "    if not owner or not owner.strip():",
+        "    if False:",
+    ),
+    (
+        ("DP3 the CLI decline check drops the recorded DECISION, so a decline "
+         "with no reason is published before the ledger refuses it"),
+        "tick.py",
+        "    if not decision or not decision.strip():",
+        "    if False:",
+    ),
+    # -- #4677 round 2: the three findings an independent review raised --------
+    (
+        ("DP4 the park body stops REPORTING the state it read and goes back to "
+         "ASSERTING the issue is open - a claim about a state the code did not "
+         "establish. Reachable on exactly the population the verb serves: "
+         "`_dispose` admits a needs-audit/departed item and the refresh matrix "
+         "carries `parked | departed -> survives parked`, so the ledger "
+         "contemplates a parked item whose issue is CLOSED. Measured "
+         "2026-09-24: of the four items #4677 names, #2958 is OPEN and "
+         "#4534/#4582/#4664 are CLOSED (R7, on an unrevisable artifact). 366 "
+         "arms missed it because NO TEST RENDERED A BODY FOR A DEPARTED ITEM - "
+         "a missing case, not a weak arm"),
+        "tick.py",
+        'f"{observed} The park stands either way, and the two cells of the "',
+        '"THIS ISSUE STAYS OPEN, DELIBERATELY. The two cells of the "',
+    ),
+    (
+        ("DP8 the MIRROR of DP4, on the DECLINE body. A separate arm because "
+         "DP4 mutates only the park branch, so on its own it closes the finding "
+         "by its LABEL rather than at its SITE - the same reason L27 exists "
+         "beside L26. A reviewer built this one by hand and it killed; "
+         "promoting it means the next reader does not have to"),
+        "tick.py",
+        'f"{observed} Unlike a park, the decline\'s fate DOES depend on which "',
+        '"THIS ISSUE IS STILL OPEN. The decline\'s fate depends on which "',
+    ),
+    (
+        ("DP5 the AUTHORITY bar is removed, so two terminal-state capabilities "
+         "run with no entry in policy.json at all - the emergent-behaviour "
+         "shape `action_is_permitted` fails closed to prevent"),
+        "tick.py",
+        "    permitted, permit_note = gates.action_is_permitted(action, policy)",
+        '    permitted, permit_note = True, "not asked"',
+    ),    (
+        ("DP6 policy.json REVOKES `park-item` and the verb must stop working. "
+         "This is the arm that proves the authority has a BLAST RADIUS rather "
+         "than being prose - the marker_any_of defect this file records finding "
+         "in itself twice, asked of the new grant"),
+        "policy.json",
+        '    "park-item",\n',
+        "",
+    ),
+    (
+        ("DP7 `--status` stops refusing a write verb passed beside it, so "
+         "`--status --park N ...` prints the counts and exits 0 having parked "
+         "NOTHING - the silent-drop defect through a third door"),
+        "tick.py",
+        "    if args.status and named:",
+        "    if False:",
+    ),
     # -- the cycle ---------------------------------------------------------
     (
         "T1 the refresh invents a receipt and closes what left GitHub",
