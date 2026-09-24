@@ -511,8 +511,12 @@ test('reachability: EVERY response-derived sink in the step is defused, not just
   //       it preserves the status instead of discarding it.
   //   `echo "... $(...) ..."`              — ARGUMENT position never carries
   //       its status to errexit.
-  //   `local x; x=$(...)` inside a function — function-local, and the wrapper
-  //       bodies are excluded below because they are audited separately.
+  //   `local x; x=$(...)` inside a function — function-local. NOTE this shape
+  //       is NOT itself a reason to exclude anything: `x=$(...)` on its own
+  //       line after a `local x` declaration IS the bare shape and DOES die at
+  //       the assignment. Only `local x=$(...)` on ONE line masks the status.
+  //       The wrapper bodies were once excluded wholesale on this reasoning;
+  //       they are not any more (see the exclusion note below).
   //
   // ONE FURTHER EXCLUSION, AND THE ASSERTION THAT MAKES IT SOUND.
   // `arm_get()` contains `safe_url="$(printf … | flatten)"`, which IS bare.
@@ -537,19 +541,29 @@ test('reachability: EVERY response-derived sink in the step is defused, not just
     + 'verdictless exit. Either guard the call or guard the assignment.',
   );
   const armGetBody = liveFnBody('arm_get').split('\n').map((s) => s.trim());
-  // `arm_err` IS NOT IN THIS LIST, and its absence is the point. It used to be,
-  // carrying a bare `e="$(flatten < arm_err.txt)"` behind an exclusion with
-  // nothing pinning why the exclusion held — the same unsound-by-omission shape
-  // this whole file exists to find, and the one `arm_get` above is careful to
-  // avoid by asserting its call sites. Raised on #4564 by the 2026-09-21
-  // consequence review. The assignment was GUARDED rather than pinned, so the
-  // exclusion is gone and `bareAssign` below now audits that body directly.
-  // WHAT VALUE MAKES THIS FAIL: reverting arm_err's assignment to the bare
-  // form. It then appears in `bareAssign` and the deepEqual goes red, which is
-  // what the exclusion used to suppress.
-  const wrapperBodies = ['jq_defused', 'defuse_cmds', 'flatten']
-    .flatMap((fn) => liveFnBody(fn).split('\n').map((s) => s.trim()))
-    .concat(armGetBody);
+  // THE EXCLUSION LIST IS DOWN TO ONE ENTRY, and that is the point.
+  //
+  // It used to carry four wrapper bodies. `arm_err` was dropped when its bare
+  // assignment was guarded (2026-09-21 consequence review). Re-review then
+  // measured the remaining three — `jq_defused`, `defuse_cmds`, `flatten` —
+  // and found ZERO bare assignments in any of them, so emptying the array left
+  // the arm green. An exclusion that excludes nothing is not harmless: it is
+  // dead code sitting in the path, silently ready to cover the first bare
+  // assignment anyone adds to those bodies. That is the same hole `arm_err`
+  // had, still open for everything added later.
+  //
+  // So they are NOT excluded any more. `bareAssign` below now audits them
+  // directly, which IS the arm that goes red when one of them stops being
+  // clean — no separate assertion needed, and no list to keep true.
+  //
+  // `arm_get` stays, because unlike the other four it genuinely contains a
+  // bare `safe_url="$(printf … | flatten)"`. Its exclusion is sound only
+  // because of the call-site assertion immediately above, which is why that
+  // assertion exists and why this one entry is not simply deleted too.
+  // WHAT VALUE MAKES THIS FAIL: adding a bare `VAR="$(...)"` to jq_defused,
+  // defuse_cmds or flatten. Before this change it was swallowed; now it lands
+  // in `bareAssign` and the deepEqual goes red naming the line.
+  const wrapperBodies = armGetBody;
   const bareAssign = lines
     .filter((r) => BARE_ASSIGN.test(r.t))
     .filter((r) => !/\|\|\s*\w+=\$\?/.test(r.t))      // OR-list that captures rc

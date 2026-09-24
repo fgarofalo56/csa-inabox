@@ -392,11 +392,23 @@ test('--apply: a re-read that FAILS mid-retry is UNKNOWN + rc 2, and claims noth
   //                        script scores this target ENABLED, giving enabled=1
   //                        and rc 1. This single assertion kills the defect.
   //   tally unknown=1   <- same mutation; pre-fix it reads `enabled=1 unknown=0`.
-  //   ~3s               <- replacing the accumulated SLEPT with the old
+  //   ~3s              <- replacing the accumulated SLEPT with the old
   //                        `$((RETRY_UNIT * 6))`, which prints ~6s here.
-  //   1 re-read(s)      <- printing the loop variable `${attempt}` (2) instead
+  //   1 re-read(s)     <- printing the loop variable `${attempt}` (2) instead
   //                        of the count of re-reads that RETURNED (1).
-  //   no lag sentence   <- any reintroduction of LAGNOTE on this path.
+  //   isDisabled=false <- dropping LAST_SEEN. The line then reports how MANY
+  //                        re-reads returned without ever saying WHICH value,
+  //                        which is R6-poor even while R7-honest.
+  //   NEXT:            <- deleting the remediation. R7 is satisfied by saying
+  //                        nothing; R6 is not.
+  //   no lag sentence  <- any reintroduction of LAGNOTE on this path.
+  //
+  // WHY RETRY_UNIT=1 HERE, stated at full strength. On the LAGNOTE path the
+  // accumulated figures equal the old `RETRY_UNIT * 6` constant at EVERY value
+  // of RETRY_UNIT, because that path is only reached when all three attempts
+  // ran and 1+2+3 = 6. So no arm on that path can witness the change at all,
+  // at any setting. THIS arm -- the early break -- is the only one that can,
+  // and only at a non-zero unit, since at 0 both figures are 0.
   const dir = makeShimDir();
   try {
     const r = run({ APPLY: true, AZ_SHOW_TRUE_FROM: '4', AZ_SHOW_FAIL_AT: '3', RETRY_UNIT: '1' }, dir);
@@ -414,6 +426,10 @@ test('--apply: a re-read that FAILS mid-retry is UNKNOWN + rc 2, and claims noth
     assert.match(unknownLine, /COULD NOT BE PERFORMED/, 'the line does not say the re-read could not be performed');
     assert.match(unknownLine, /1 re-read\(s\) returned a value/, 'the re-read count is not the number that actually returned');
     assert.match(unknownLine, /~3s were waited/, 'the elapsed figure is not the time actually slept — 1s + 2s');
+    // R6: the line must carry the observation it DID make, and a next action.
+    assert.match(unknownLine, /last value the host actually returned was isDisabled=false/, 'the observed pre-failure value was discarded, so the line says how many re-reads returned but never which value');
+    assert.match(unknownLine, /NEXT: the write already landed/, 'the refusal gives no next action, which satisfies R7 by saying nothing and drops R6');
+    assert.match(unknownLine, /Microsoft\.Web\/sites\/functions\/read/, 'the persistent-failure branch does not name the read action it would need');
     assert.match(r.stdout, /targets=3 ok=2 gone=0 enabled=0 unknown=1 applyfail=0/, 'the tally does not show the failed re-read scored as UNKNOWN');
   } finally {
     rmSync(dir, { recursive: true, force: true });

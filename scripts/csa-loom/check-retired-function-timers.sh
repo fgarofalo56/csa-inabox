@@ -145,10 +145,45 @@
 #       `appsettings set`, guarded by `&& ! az` in an `if` condition
 #                                     <- WAS BARE; this is the other half
 #   0 bare `az` at line start (`grep -cE '^[[:space:]]*az '` == 0)
-#   12 arithmetic expansions `$((…))`, measured NOT to carry a command status —
-#       including the zero-valued `resolved=$((0))` — against a negative control
-#       (`V="$(false)"`) that did abort, so the zero is a result and not a
-#       blind probe. Four were added with the corroboration branch.
+#   ARITHMETIC EXPANSIONS `$((…))` — ENUMERATED BY TARGET, never counted.
+#       This was the ONE row in this audit that was a bare number with no row
+#       set behind it, so the count WAS the claim and nothing could be checked
+#       against it. It duly went false a THIRD time: the round-13 commit took
+#       it from 12 to 14 — adding SLEPT, REREADS and the sixth `unknown=`,
+#       minus the `$((RETRY_UNIT * 6))` that left the LAGNOTE string — in the
+#       same commit that fixed a different false claim, which is precisely the
+#       failure mode the paragraph above describes. Enumerated now, so the next
+#       edit that adds one has a row to land in rather than a number to
+#       invalidate silently.
+#
+#       None of them carries a command status. Measured against a negative
+#       control (`V="$(false)"`) that DID abort the script, so a clean result
+#       here is a result and not a blind probe — including the zero-valued
+#       `resolved=$((0))` case.
+#
+#       TALLY INCREMENTS — exactly one per verdict arm (10):
+#         unknown=  x6  the listing failed · absent + direct read DENIED ·
+#                       absent + direct read did not establish absence ·
+#                       host exists, app settings unreadable · host exists,
+#                       definition unreadable · post-write re-read could not
+#                       be performed  <- the sixth, added round 13
+#         gone=     x1  absence corroborated by a 404
+#         applyfail=x1  the --apply write was denied
+#         ok=       x1  both reads agree on disabled
+#         enabled=  x1  a readable definition that is not disabled
+#       RETRY-LOOP BOOKKEEPING (3), all added or kept at round 13:
+#         sleep $((attempt * RETRY_UNIT))   the backoff itself
+#         SLEPT=                            accumulated AS slept, so the
+#                                           elapsed figure cannot be a stale
+#                                           constant
+#         REREADS=                          re-reads that actually RETURNED
+#       DERIVED TOTAL (1):
+#         resolved=$((ok + gone + enabled))
+#
+#       Fourteen rows, and the ROW SET is the claim — check it, not the
+#       number. Re-derive by stripping comment lines first and counting `$((`
+#       in what remains; a raw grep returns more because it counts this prose,
+#       which is how two earlier revisions measured this wrong.
 #   1 `[[ … ]] && APPLY=1`, measured safe: a short-circuited AND-list mid-script
 #       does not trip errexit
 #
@@ -424,6 +459,11 @@ for t in "${TARGETS[@]}"; do
     REREAD_FAILED=0   # did the loop exit because a read FAILED, not disagreed?
     REREADS=0         # re-reads that actually RETURNED a value
     SLEPT=0           # seconds actually slept, summed as they are slept
+    LAST_SEEN="$SHOWN"  # the last value the host ACTUALLY returned. Kept
+                        # because SHOWN is emptied on a failed read, and an
+                        # UNKNOWN that throws away the observation it DID make
+                        # is R6-poor even when it is R7-honest: "1 re-read
+                        # returned a value" never says WHICH value.
     for attempt in 1 2 3; do
       sleep $((attempt * RETRY_UNIT))
       SLEPT=$((SLEPT + attempt * RETRY_UNIT))
@@ -435,12 +475,13 @@ for t in "${TARGETS[@]}"; do
       fi
       REREADS=$((REREADS + 1))
       SHOWN="${SHOWN//$'\r'/}"
+      LAST_SEEN="$SHOWN"
       if [[ "$SHOWN" == "true" ]]; then
         break
       fi
     done
     if [[ $REREAD_FAILED -eq 1 ]]; then
-      echo "  UNKNOWN  ${APP}/${FN}: the --apply write SUCCEEDED and ${SETTING} reads true, but the post-write re-read of isDisabled COULD NOT BE PERFORMED — ${REREADS} re-read(s) returned a value and ~${SLEPT}s were waited before a read failed. This run did NOT establish whether the write took effect, and it does NOT rule out a host-restart lag. NOT the same as disabled, and NOT the same as a confirmed hazard." >&2
+      echo "  UNKNOWN  ${APP}/${FN}: the --apply write SUCCEEDED and ${SETTING} reads true, but the post-write re-read of isDisabled COULD NOT BE PERFORMED — ${REREADS} re-read(s) returned a value and ~${SLEPT}s were waited before a read failed. The last value the host actually returned was isDisabled=${LAST_SEEN:-<unset>}, which predates the restart and may be stale. This run did NOT establish whether the write took effect, and it does NOT rule out a host-restart lag. NEXT: the write already landed, so re-run this script WITHOUT --apply in a minute or two — a plain verify settles it and changes nothing. If the re-read keeps failing, the fault is in the READ, not the write: a 429/5xx is transient and a re-run clears it, while a persistent failure means the identity lacks Microsoft.Web/sites/functions/read on /subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Web/sites/${APP}." >&2
       unknown=$((unknown + 1))
       continue
     fi
