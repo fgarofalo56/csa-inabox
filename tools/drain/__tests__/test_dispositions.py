@@ -71,10 +71,28 @@ assertion never executes**. Every arm still scored killed, so the matrix looked
 right while the docstring's claim about which assertion had the kill power was
 false. Read the mutated run, do not reason about it.
 
+## Round 2: the case no test constructed
+
+Two independent reviewers found the same R7 defect, and the matrix could not
+have: the park body asserted "THIS ISSUE STAYS OPEN, DELIBERATELY"
+unconditionally, while three of the four live items #4677 names (#4534, #4582,
+#4664) are CLOSED. **No test rendered a body for a departed item** -- the
+state-asymmetry test built both items `ready`, and the refresh test drove the
+departed shape but asserted STATE ONLY. An arm cannot be killed in a case the
+suite never constructs, which is the same class as the `_refusal` near-miss one
+layer up: not a weak arm, a missing fixture.
+
+`_dispose` now READS the issue state (the pattern `close_issue_on_github`
+already uses) and the body reports what it saw. `test_a_disposition_body_reports_the_state_it_read_and_asserts_none`
+is parametrised over BOTH `OPEN` and `CLOSED` for that reason: a fixture that
+could only produce `OPEN` cannot distinguish "reports what it read" from
+"always says OPEN", which is exactly the bug.
+
 Run: python -m pytest tools/drain/__tests__/test_dispositions.py
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -121,22 +139,53 @@ def _live(numbers, labels=("lane:ci", "sp:1")):
     ]
 
 
-def _stub_gh(monkeypatch, *, rc=0, err=""):
-    """Record every argv `tick.sh` is handed, and answer with `rc`.
+def _stub_gh(monkeypatch, *, rc=0, err="", issue_state="OPEN", view_rc=0):
+    """Record every argv `tick.sh` is handed, and answer each `gh` sub-command.
 
     RETURNS THE LIST rather than a count. Half the assertions here are about
     WHICH command ran -- `gh issue comment` and never `gh issue close` -- and a
     counter cannot tell those apart, which is precisely the acceptance line
     ("neither closes the GitHub issue") that a count would leave unwitnessed.
+
+    `issue_state` answers the `gh issue view` that `_dispose` makes before
+    composing a body. It is a PARAMETER rather than a constant because the whole
+    point of that read is that the body reports what was seen, and a fixture that
+    could only produce one answer could not witness the other.
+
+    `view_rc` and `rc` are SEPARATE so a test can fail the comment while the read
+    succeeds. Collapsing them would have made `test_a_failed_comment_...` fail at
+    the READ instead, i.e. exercise a different branch than its name claims --
+    the fixture-never-reaches-the-rule shape `assertion-design.md` is about.
     """
     calls: list[list[str]] = []
 
     def fake_sh(args):
         calls.append(list(args))
+        if args[:3] == ["gh", "issue", "view"]:
+            if view_rc != 0:
+                return view_rc, "", "could not resolve host: github.com"
+            # THE URL IS BUILT FROM THE `--repo` ARGV, not from the module
+            # constant. `_read_issue_on_github` compares the url it got back
+            # against the repo it asked about (the transferred-issue guard), and
+            # a hard-coded owner made every `main()`-driven test refuse with
+            # "an issue this tool was not asked about" -- a fixture disagreeing
+            # with the rule, which is the shape that makes a test measure the
+            # wrong branch while looking right.
+            asked = args[args.index("--repo") + 1]
+            return 0, json.dumps({
+                "state": issue_state,
+                "title": "an issue",
+                "url": f"https://github.com/{asked}/issues/{args[3]}",
+            }), ""
         return rc, "", err
 
     monkeypatch.setattr(tick, "sh", fake_sh)
     return calls
+
+
+def _bodies(calls) -> list[str]:
+    """Every `--body` argv element, in order. The comment calls, and only those."""
+    return [c[c.index("--body") + 1] for c in calls if "--body" in c]
 
 
 def _unchanged(item) -> tuple:
@@ -277,11 +326,11 @@ def test_a_disposition_comments_on_the_issue_and_never_closes_it(
     dispose(led)
 
     verbs = [(c[1], c[2]) for c in calls if c[0] == "gh"]
-    assert verbs == [("issue", "comment")], (
-        "a disposition posts exactly one comment and closes NOTHING; "
-        f"the harness ran {calls}"
+    assert verbs == [("issue", "view"), ("issue", "comment")], (
+        "a disposition READS the issue state, posts exactly one comment, and "
+        f"closes NOTHING; the harness ran {calls}"
     )
-    argv = calls[0]
+    argv = calls[1]
     assert argv[3] == str(BLOCKED_ON_A_RUNNER)
     assert "--repo" in argv
     assert REPO in argv
@@ -293,21 +342,22 @@ def test_a_disposition_comments_on_the_issue_and_never_closes_it(
     )
 
 
-def test_the_park_comment_says_the_issue_stays_open_and_the_decline_names_its_escape(
+def test_the_park_comment_refuses_the_declines_escape_and_the_decline_names_it(
     monkeypatch, tmp_path
 ):
     """The bodies are UNREVISABLE once posted, so the asymmetry is pinned.
 
     WHAT MAKES THIS FAIL: swap the two bodies, or collapse them into one shared
     template. The park and the decline differ on the single fact a reader of the
-    issue most needs -- what happens to the ISSUE -- and a shared template is
-    exactly how `_receipt_comment`'s two routes came to say the same wrong thing
-    (its own docstring records it).
+    issue most needs — what the harness will and will not do to the ISSUE — and
+    a shared template is exactly how `_receipt_comment`'s two routes came to say
+    the same wrong thing (its own docstring records it).
 
-    The decline body naming `--reason not-planned` is not decoration: the next
-    refresh WILL demote a declined-but-open item, and without the escape stated
-    at the artifact the reader is standing on, that demotion reads as the
-    harness undoing itself.
+    The decline body naming `--reason not-planned` is not decoration: while the
+    issue is open, the next refresh WILL demote the item, and without the escape
+    stated at the artifact the reader is standing on, that demotion reads as the
+    harness undoing itself. The park body must NOT name it, because a park has
+    no such escape and offering one invites the close #4535 refused.
     """
     led = _led(tmp_path, numbers=(BLOCKED_ON_A_RUNNER, BOT_FILED_SELF_RESOLVED))
     calls = _stub_gh(monkeypatch)
@@ -315,10 +365,9 @@ def test_the_park_comment_says_the_issue_stays_open_and_the_decline_names_its_es
     tick.park_item(led, POLICY, REPO, BLOCKED_ON_A_RUNNER, "no runner", "operator")
     tick.decline_item(led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: self-resolved")
 
-    park_body = calls[0][calls[0].index("--body") + 1]
-    decline_body = calls[1][calls[1].index("--body") + 1]
+    park_body, decline_body = _bodies(calls)
 
-    assert "STAYS OPEN" in park_body
+    assert "WILL NOT CLOSE THIS ISSUE" in park_body
     assert "not-planned" not in park_body, (
         "a park has no close at all; offering the decline's disposal would invite "
         "exactly the close #4535 refused"
@@ -328,6 +377,149 @@ def test_the_park_comment_says_the_issue_stays_open_and_the_decline_names_its_es
         "escape that makes the decline stand has to be named where the reader is"
     )
     assert "needs-audit" in decline_body
+
+
+@pytest.mark.parametrize(
+    ("dispose", "label"),
+    [
+        (
+            lambda led, n: tick.park_item(led, POLICY, REPO, n, "no runner", "operator"),
+            "park",
+        ),
+        (
+            lambda led, n: tick.decline_item(led, POLICY, REPO, n, "operator: self-resolved"),
+            "decline",
+        ),
+    ],
+    ids=["park", "decline"],
+)
+@pytest.mark.parametrize("state", [READY, IN_FLIGHT, NEEDS_AUDIT], ids=lambda s: str(s))
+@pytest.mark.parametrize("issue_state", ["OPEN", "CLOSED"])
+def test_a_disposition_body_reports_the_state_it_read_and_asserts_none(
+    monkeypatch, tmp_path, dispose, label, state, issue_state
+):
+    """MUTATION ARM: DP4 — the park body asserts the issue is open again.
+
+    THE REVIEW BLOCKER THIS EXISTS FOR, raised independently by both reviewers,
+    and the gap it fills is a MISSING CASE rather than a weak arm. The park body
+    used to open, unconditionally, with "THIS ISSUE STAYS OPEN, DELIBERATELY" —
+    a claim about the ISSUE'S state that nothing on this path established. It is
+    reachable on exactly the population #4677 serves: `_dispose` refuses only an
+    unknown or already-terminal item, so a `needs-audit`/departed item gets here,
+    and `refresh_from_github`'s own matrix carries the cell
+    `parked | departed -> survives parked` — the ledger explicitly contemplates a
+    parked item whose issue is closed.
+
+    Measured 2026-09-24 on the four cases #4677 names: #2958 OPEN, but #4534,
+    #4582 and #4664 all CLOSED. Three of four would have published a sentence
+    that was false at the moment it posted (R7, unrevisable artifact). Cheap to
+    fix only because no real item has been disposed yet.
+
+    **Why 366 arms did not catch it.** Nothing rendered a body for a departed
+    item. The old state-asymmetry test built both items `ready`, and the refresh
+    test drove the departed shape but asserted STATE ONLY. A matrix cannot kill
+    an arm in a case no test constructs — the same class as this file's other
+    disclosed near-miss (`_refusal`), one layer up.
+
+    WHAT MAKES EACH ASSERTION FAIL:
+    - `issue_state in body` — hard-code either state into the body (that IS
+      DP4), or stop passing the read through, and the `CLOSED` parameter goes
+      red while `OPEN` stays green. **That asymmetry is the whole design of this
+      parametrisation**: a fixture that could only produce `OPEN` could not
+      distinguish "reports what it read" from "always says OPEN", which is
+      precisely the bug.
+    - `STATE_READ_DISCLOSURE in body` — drop the observation framing and assert
+      the present tense instead. The read happens a moment before the post and
+      the issue can close a second later, so a standing claim is the same R7
+      error one step down the road.
+
+    `NEEDS_AUDIT` is the item-state parameter that fills the reviewer's gap;
+    `READY` and `IN_FLIGHT` are here so the claim is about EVERY non-terminal
+    origin rather than about one.
+    """
+    led = _led(tmp_path)
+    calls = _stub_gh(monkeypatch, issue_state=issue_state)
+    if state != READY:
+        if state == NEEDS_AUDIT:
+            led.items[BLOCKED_ON_A_RUNNER].audit_reason = "departed"
+        led.transition(BLOCKED_ON_A_RUNNER, state, "fixture")
+
+    dispose(led, BLOCKED_ON_A_RUNNER)
+    body = _bodies(calls)[0]
+
+    # LIFTED from the module, never transcribed (assertion-design #3): a probe
+    # carrying its own copy of the sentence can drift from the implementation.
+    assert tick.STATE_READ_DISCLOSURE in body, (
+        f"the {label} body must frame the state as an OBSERVATION it read, not "
+        "as a standing claim; the issue can change a second after the post"
+    )
+    assert f"{tick.STATE_READ_DISCLOSURE} {issue_state}." in body, (
+        f"the body must report the state it actually READ ({issue_state}); "
+        "three of the four items #4677 names are CLOSED, and a body hard-coded "
+        "to OPEN is false on all three"
+    )
+    # Both cells stay documented whichever was observed, because a reader who
+    # closes this issue tomorrow needs to know what happens then.
+    assert "while this issue is OPEN" in body
+    assert "if this issue is CLOSED" in body
+
+    # ABSENCE, PAIRED with the positives above (assertion-design #4) and
+    # DECLARED FOR WHAT IT IS: this is a REGRESSION GUARD on the exact sentence
+    # that was reverted, not a discovery instrument. It cannot find the same
+    # claim reworded — the positive assertions above are what do that — and a
+    # clean result here is not evidence the body is honest.
+    assert "THIS ISSUE STAYS OPEN" not in body
+
+
+def test_a_disposition_refuses_when_the_issue_state_cannot_be_read(monkeypatch, tmp_path):
+    """UNREADABLE IS NOT "OPEN" (deploy-integrity R7), and the body needs to know.
+
+    WHAT MAKES THIS FAIL: default the state to `OPEN` when the read fails, or
+    swallow the read error. Either publishes a permanent sentence reporting a
+    state the tool never observed — the roll that said "the tag does not exist"
+    when the truth was "I could not reach the registry", on an artifact that
+    cannot be edited afterwards.
+
+    `_comments == []` is the assertion that sees it: the read is the FIRST `gh`
+    call, so a failure here must leave the issue with no comment at all.
+    """
+    led = _led(tmp_path)
+    calls = _stub_gh(monkeypatch, view_rc=1)
+    before = _unchanged(led.items[BLOCKED_ON_A_RUNNER])
+
+    exc = _refusal(lambda: tick.park_item(
+        led, POLICY, REPO, BLOCKED_ON_A_RUNNER, "no runner", "operator"))
+
+    assert _bodies(calls) == [], "an unreadable state must not publish a guess"
+    assert isinstance(exc, tick.DispositionCommentFailedError)
+    assert "UNKNOWN" in str(exc)
+    assert _unchanged(led.items[BLOCKED_ON_A_RUNNER]) == before
+
+
+def test_dispose_refuses_a_state_it_does_not_record(monkeypatch, tmp_path):
+    """REVIEW FINDING: `_dispose(..., CLOSED, ...)` used to raise a bare KeyError.
+
+    It raised from `DISPOSITION_HEADS[target_state]` while the composed call's
+    ARGUMENTS were being evaluated — fail-closed (a reviewer measured
+    `gh calls: []`) but unreadable, and it meant `post_disposition_comment`'s
+    `CLOSES_ON_GITHUB` mirror guard could never fire through this route at all.
+
+    WHAT MAKES THIS FAIL: remove the target-state check and the refusal reverts
+    to `KeyError: 'closed'`, which `main()` does not catch and which tells the
+    operator nothing about what it should have passed instead.
+    """
+    led = _led(tmp_path)
+    calls = _stub_gh(monkeypatch)
+
+    exc = _refusal(lambda: tick._dispose(
+        led, POLICY, REPO, BLOCKED_ON_A_RUNNER, CLOSED, [("X", "y")], "why"))
+
+    assert isinstance(exc, tick.DispositionRefusedError), (
+        f"a bad target state must refuse like everything else here, not raise "
+        f"{type(exc).__name__}"
+    )
+    assert "--record-receipt" in str(exc), "and it must name what to use instead"
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +908,7 @@ def test_main_parks_an_item_and_persists_it(monkeypatch, tmp_path):
     persisted = Ledger(state, receipts=POLICY["receipts"]).load()
     assert persisted.items[BLOCKED_ON_A_RUNNER].state == PARKED
     assert persisted.items[BLOCKED_ON_A_RUNNER].owner == "operator"
-    assert [c[1:3] for c in calls] == [["issue", "comment"]]
+    assert [c[1:3] for c in calls] == [["issue", "view"], ["issue", "comment"]]
 
 
 def test_main_declines_an_item_and_persists_it(monkeypatch, tmp_path):
@@ -785,6 +977,35 @@ def test_main_refuses_a_value_flag_whose_verb_was_not_passed(
     rc, _state = _main_over(monkeypatch, tmp_path, argv)
     assert rc == 2
     assert flag in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--status", "--park", "1", "--blocker", "b", "--owner", "o"],
+        ["--status", "--decline", "1", "--decision", "d"],
+        ["--status", "--record-receipt", "1"],
+        ["--status", "--bind-pr", "1", "--pr", "2"],
+    ],
+    ids=["park", "decline", "record", "bind"],
+)
+def test_main_refuses_a_write_verb_passed_beside_status(monkeypatch, tmp_path, argv):
+    """REVIEW FINDING: `--status` is a READ and returns FIRST.
+
+    WHAT MAKES THIS FAIL: drop the check and `--status --park N --blocker x
+    --owner y` prints the counts and exits **0 having parked nothing** — the
+    operator is told the queue's state and never told their transaction was
+    discarded. Exactly the silent-drop defect the two-verb and value-with-no-verb
+    checks exist for, through a THIRD door nobody had closed.
+
+    `rc == 2` is the assertion that sees it: the unfixed code exits 0.
+    `calls == []` additionally pins that nothing was published before the
+    refusal.
+    """
+    calls = _stub_gh(monkeypatch)
+    rc, _state = _main_over(monkeypatch, tmp_path, argv)
+    assert rc == 2, "an unfixed --status swallows the write verb and exits 0"
+    assert calls == []
 
 
 def test_main_refuses_a_disposition_with_no_ledger(monkeypatch, tmp_path):
@@ -923,35 +1144,73 @@ def test_a_lost_cas_is_reported_as_one(monkeypatch, tmp_path, capsys):
     assert "THE COMMENT IS ON THE ISSUE" in err
 
 
-def test_a_disposition_is_gated_on_the_comment_permission(monkeypatch, tmp_path):
-    """`gates.action_is_permitted` FAILS CLOSED, and this path is subject to it.
+@pytest.mark.parametrize(
+    ("revoke", "dispose"),
+    [
+        ("comment", "park"),
+        ("comment", "decline"),
+        ("park-item", "park"),
+        ("decline-item", "decline"),
+    ],
+    ids=["comment-blocks-park", "comment-blocks-decline", "park-item", "decline-item"],
+)
+def test_a_disposition_is_gated_on_the_autonomy_contract(
+    monkeypatch, tmp_path, revoke, dispose
+):
+    """`gates.action_is_permitted` FAILS CLOSED, and BOTH bars are checked.
 
-    WHAT MAKES THIS FAIL: post without asking. `permitted_unattended` is the
-    authority for what the harness may do unattended, and a write path that does
-    not consult it is a capability the operator never granted -- the README's
-    own "fails closed is not a figure of speech" case, where `resume-estate`
-    being absent made every deploy-path receipt unreachable.
+    THE REVIEW FINDING: the first shape had only `comment`, so two new
+    TERMINAL-STATE capabilities arrived under the most general write permission
+    in `policy.json` with no edit to that file at all. `action_is_permitted`'s
+    own docstring is written against exactly that — "adding a new capability is
+    a deliberate edit to policy.json rather than an emergent behaviour" — and
+    `policy.json` records finding the mirror defect (an authority whose value
+    changed nothing) in itself twice.
 
-    The policy is copied and the permission REMOVED, rather than a new action
-    name being invented: an invented name would be refused by the fall-through
-    for a reason unrelated to the real list, and would pass even if the call
-    named the wrong action.
+    WHAT MAKES EACH PARAMETER FAIL:
+    - `park-item` / `decline-item` — delete the `action_is_permitted` call in
+      `_dispose` and the verb runs with no authority bar at all. These are also
+      the arms that prove the policy edit has BLAST RADIUS: removing the entry
+      from `policy.json` alone must refuse the verb, or the file is prose.
+    - `comment` — delete the gate in `post_disposition_comment` and a revoked
+      comment permission stops refusing.
+
+    `calls == []` pins that every refusal is SILENT UPSTREAM, which is the
+    property the whole ordering of `_dispose` exists to give.
+
+    The POSITIVE CONTROL below matters: if the action were already absent from
+    the live policy, this test would pass over a file that never granted it.
     """
     led = _led(tmp_path)
     calls = _stub_gh(monkeypatch)
-    no_comment = dict(POLICY)
-    no_comment["permitted_unattended"] = [
-        a for a in POLICY["permitted_unattended"] if a != "comment"
-    ]
-    assert "comment" in POLICY["permitted_unattended"], (
-        "the positive control: if `comment` were already absent this test would "
-        "pass over a policy that never granted it"
+    assert revoke in POLICY["permitted_unattended"], (
+        f"positive control: {revoke!r} must be GRANTED in the live policy, or "
+        "this test passes over a permission that was never there"
     )
+    revoked = dict(POLICY)
+    revoked["permitted_unattended"] = [
+        a for a in POLICY["permitted_unattended"] if a != revoke
+    ]
 
-    with pytest.raises(tick.DispositionCommentFailedError, match="comment"):
-        tick.park_item(led, no_comment, REPO, BLOCKED_ON_A_RUNNER, "b", "o")
+    if dispose == "park":
+        call = lambda: tick.park_item(led, revoked, REPO, BLOCKED_ON_A_RUNNER, "b", "o")  # noqa: E731
+    else:
+        call = lambda: tick.decline_item(led, revoked, REPO, BLOCKED_ON_A_RUNNER, "d")  # noqa: E731
+    exc = _refusal(call)
 
-    assert calls == []
+    assert _bodies(calls) == [], (
+        f"a revoked {revoke!r} must publish nothing; ran {calls}"
+    )
+    if revoke != "comment":
+        # THE AUTHORITY BAR RUNS BEFORE THE STATE READ, so an unpermitted verb
+        # costs zero GitHub calls. `comment` is checked inside
+        # `post_disposition_comment`, which is downstream of the read, so that
+        # parameter legitimately spends one READ-ONLY `gh issue view`. Asserting
+        # `calls == []` for it would be asserting a property it does not have,
+        # and a read is not a publication -- the claim that matters is the one
+        # above.
+        assert calls == [], f"an unpermitted {revoke!r} must not even read; ran {calls}"
+    assert revoke in str(exc), "the message must name the action that was refused"
     assert led.items[BLOCKED_ON_A_RUNNER].state == READY
 
 

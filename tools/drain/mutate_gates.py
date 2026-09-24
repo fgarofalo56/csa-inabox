@@ -291,6 +291,47 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if not decision or not decision.strip():",
         "    if False:",
     ),
+    # -- #4677 round 2: the three findings an independent review raised --------
+    (
+        ("DP4 the park body stops REPORTING the state it read and goes back to "
+         "ASSERTING the issue is open - a claim about a state the code did not "
+         "establish. Reachable on exactly the population the verb serves: "
+         "`_dispose` admits a needs-audit/departed item and the refresh matrix "
+         "carries `parked | departed -> survives parked`, so the ledger "
+         "contemplates a parked item whose issue is CLOSED. Measured "
+         "2026-09-24: of the four items #4677 names, #2958 is OPEN and "
+         "#4534/#4582/#4664 are CLOSED (R7, on an unrevisable artifact). 366 "
+         "arms missed it because NO TEST RENDERED A BODY FOR A DEPARTED ITEM - "
+         "a missing case, not a weak arm"),
+        "tick.py",
+        'f"{observed} The park stands either way, and the two cells of the "',
+        '"THIS ISSUE STAYS OPEN, DELIBERATELY. The two cells of the "',
+    ),
+    (
+        ("DP5 the AUTHORITY bar is removed, so two terminal-state capabilities "
+         "run with no entry in policy.json at all - the emergent-behaviour "
+         "shape `action_is_permitted` fails closed to prevent"),
+        "tick.py",
+        "    permitted, permit_note = gates.action_is_permitted(action, policy)",
+        '    permitted, permit_note = True, "not asked"',
+    ),
+    (
+        ("DP6 policy.json REVOKES `park-item` and the verb must stop working. "
+         "This is the arm that proves the authority has a BLAST RADIUS rather "
+         "than being prose - the marker_any_of defect this file records finding "
+         "in itself twice, asked of the new grant"),
+        "policy.json",
+        '    "park-item",\n',
+        "",
+    ),
+    (
+        ("DP7 `--status` stops refusing a write verb passed beside it, so "
+         "`--status --park N ...` prints the counts and exits 0 having parked "
+         "NOTHING - the silent-drop defect through a third door"),
+        "tick.py",
+        "    if args.status and named:",
+        "    if False:",
+    ),
     # -- the cycle ---------------------------------------------------------
     (
         "T1 the refresh invents a receipt and closes what left GitHub",

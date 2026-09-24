@@ -608,9 +608,29 @@ not done — closing its issue is how a backlog lies about itself (R2, #4535) �
 a decline's disposal is `gh issue close --reason not-planned`, a different close
 with a different reason resting on a judgement no program made.
 
+**Both are gated on the autonomy contract**, as `park-item` and `decline-item` in
+`permitted_unattended` — not on the general `comment` permission they first rode
+in on. `action_is_permitted()` fails closed precisely so a capability arrives by a
+deliberate edit to `policy.json` rather than as emergent behaviour, and two new
+*terminal-state* verbs are exactly that kind of capability. Separate actions, not
+one `dispose-item`: matching is EXACT and revoking one must not revoke the other.
+
 **Both post the reason as an issue comment**, because `state.json` is gitignored:
-a disposition recorded only there exists nowhere the next reader will look. The
-comment goes **first** and the ledger write second, and that ordering is argued
+a disposition recorded only there exists nowhere the next reader will look.
+
+**The body reports the issue state it READ; it never asserts one.** `_dispose`
+reads the issue immediately before posting, using the same
+`_read_issue_on_github` the close path uses, and the comment says what that read
+saw — framed as an observation at a moment, because the issue can close a second
+later. The first version asserted *"THIS ISSUE STAYS OPEN, DELIBERATELY"*
+unconditionally, which is false on a departed item: `_dispose` admits a
+`needs-audit` item and the refresh matrix carries `parked | departed -> survives
+parked`, so the ledger explicitly contemplates a parked item whose issue is
+closed. Measured on the four items #4677 names — #2958 OPEN, #4534/#4582/#4664
+**CLOSED**. An unreadable state REFUSES rather than guessing (R7: unreadable is
+not "open"), publishing nothing.
+
+**The comment goes first, the ledger write second**, and that ordering is argued
 rather than inherited from `--record-receipt` (whose reason is #4545 and does not
 carry here, since neither state is closed upstream). If the ledger write fails,
 the issue carries a true statement and the item is still in the queue, so a
