@@ -582,6 +582,61 @@ this affects as non-terminal rather than silently closable.
 
 ---
 
+## Parking and declining — the other two terminal states
+
+```bash
+# genuinely blocked. Refused, writing and posting NOTHING, without BOTH.
+python tools/drain/tick.py --park <ITEM> --blocker '<what blocks it>' --owner '<who clears it>'
+# will not do, on a recorded decision.
+python tools/drain/tick.py --decline <ITEM> --decision '<who decided, on what grounds>'
+```
+
+**Until #4677 these two states were unreachable by any program.** `Ledger` has
+defined five states since it was written and `drained()` — this program's
+documented exit condition — is true only when every item is `closed`, `parked`
+or `declined`; `tick.py` could reach exactly one of the three. Both bars were
+enforced in `ledger.transition()` and neither was reachable from a command line,
+so a lane that correctly concluded *"blocked on X, owned by Y"* had nowhere to
+put that conclusion and the item went back to `ready` on the next reap to be
+redone by the next lane — #4675's failure, one state over. A 380-item backlog
+does not close entirely on receipts, so the exit condition was unattainable by
+construction.
+
+**Neither closes the GitHub issue, and that is the design rather than an
+omission.** `CLOSES_ON_GITHUB` is `closed` and nothing else. A park is blocked,
+not done — closing its issue is how a backlog lies about itself (R2, #4535) — and
+a decline's disposal is `gh issue close --reason not-planned`, a different close
+with a different reason resting on a judgement no program made.
+
+**Both post the reason as an issue comment**, because `state.json` is gitignored:
+a disposition recorded only there exists nowhere the next reader will look. The
+comment goes **first** and the ledger write second, and that ordering is argued
+rather than inherited from `--record-receipt` (whose reason is #4545 and does not
+carry here, since neither state is closed upstream). If the ledger write fails,
+the issue carries a true statement and the item is still in the queue, so a
+re-run costs one duplicate comment. The other ordering makes the item terminal
+with no public trace — and `_dispose` refuses a terminal item, so no re-run ever
+repairs it. Silent-and-unrepairable versus loud-and-duplicated.
+
+**The CLI checks duplicate the ledger's bars on purpose.** Delete them and a
+missing blocker is still refused — by `transition`, *after* the comment has been
+published. So what they buy is that the refusal is **silent upstream**, and the
+tests that pin them assert zero `gh` calls rather than only the exception, which
+the ledger's own refusal would satisfy while witnessing nothing. Mutation arms
+DP1/DP2/DP3.
+
+**A park survives the refresh; a decline does not, and the asymmetry is the
+point.** `REOPEN_DISPUTES` is `closed`/`declined`. An open issue is a park's
+expected condition and disputes nothing; an open issue after a decline means the
+decline never reached GitHub or someone is contesting it, and both want a look.
+The park has no escape from a demotion and the decline does — close the issue by
+hand and it stands — which is why one is in that tuple and the other is not. The
+decline's comment names that escape at the artifact the reader is standing on.
+
+Deciding *which* items are parks or declines is triage, not this verb.
+
+---
+
 ## Autonomy
 
 `policy.json` is the authority — not this table, and not habit.
