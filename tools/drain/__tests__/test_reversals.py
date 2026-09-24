@@ -1085,7 +1085,9 @@ def _published_surfaces() -> dict[str, str]:
     `--record-receipt` and `--reap` (which it did not). A hand-maintained list
     cannot see its own gaps -- the exact hazard
     `test_every_value_flag_the_parser_knows_is_refused_without_its_verb`
-    enumerates the parser to avoid, applied there and not here.
+    enumerates the parser to avoid. That sibling also carries a POSITIVE
+    CONTROL on its enumeration and this one did not, which was the second half
+    of the same finding; the control is at the comprehension below.
 
     THE ARM MATTERS MORE THAN THE FIX. UP16 poisons `--unpark`'s help line,
     which the literal tuple already named, so it proves the helper renders THAT
@@ -1112,6 +1114,25 @@ def _published_surfaces() -> dict[str, str]:
         for action in parser._actions
         if action.help and action.option_strings
     }
+    # THE POSITIVE CONTROL ON THE ENUMERATION, and its absence was a real gap
+    # rather than a tidiness point. An attribute REMOVAL would be loud
+    # (`AttributeError`), but an `_actions` that is emptied or reshaped is
+    # SILENT: a reviewer made this comprehension iterate `[]` and the class
+    # test still PASSED while UP16, UP19 and the `--decline` arm all went
+    # green -- 0 surfaces scanned, 0 complaints, and only the mutation matrix
+    # reporting SURVIVED would have said so.
+    # WHAT MAKES THIS FAIL: any change that stops the enumeration reaching the
+    # parser's flags -- an empty `_actions`, a renamed attribute, a filter that
+    # excludes everything. `--park` is the probe rather than `--unpark`
+    # because it is a PRE-EXISTING flag no literal list in this file names, so
+    # it witnesses the enumeration itself and not this PR's two additions.
+    # The same guard, for the same stated reason, is on
+    # `test_every_value_flag_the_parser_knows_is_refused_without_its_verb`.
+    assert "--help[park]" in helps, (
+        "the parser enumeration came back without `--park`, so this helper is "
+        f"scanning {len(helps)} help lines rather than the parser's flags and "
+        "every caller below would report clean over nothing"
+    )
     here = os.path.dirname(os.path.abspath(__file__))
     docs = {}
     for name in ("README.md", "policy.json"):
@@ -1424,6 +1445,92 @@ def test_a_receipt_survives_a_reversal_and_the_body_says_so(monkeypatch, tmp_pat
         "is the shared-template defect this whole function keeps re-finding"
     )
     assert "THIS VERB VOIDED NONE" in out, "and so must what the operator sees on stdout"
+
+
+def test_the_reversal_stdout_names_the_other_route_only_where_there_is_one(
+    monkeypatch, tmp_path,
+):
+    """MUTATION ARM UP21. The `voided_elsewhere` branch, which had NO witness.
+
+    THE GAP THIS CLOSES, measured by a reviewer rather than argued: delete the
+    whole branch -- `voided_elsewhere = ""` unconditionally -- and the suite was
+    792 green. Every other branching published text added in that round got an
+    arm; this one got neither an arm nor an assertion. The only stdout
+    assertion in this file pins `"THIS VERB VOIDED NONE"`, which is the SHARED
+    prefix, so nothing distinguished the `declined` stdout from the `parked`
+    one and a reader could not tell the branch was ever taken.
+
+    WHAT MAKES THIS FAIL, and it is a PAIR because a single-sided assertion
+    here is satisfiable two ways:
+
+    - delete the branch (or its `if`) so the clause never appears -> the
+      `declined` assertion reds;
+    - make it UNCONDITIONAL so `parked` gets it too -> the `parked` assertion
+      reds, and that is the mutation a "just always say it" simplification
+      would introduce. `parked` is not in `REOPEN_DISPUTES`, so on that state
+      the sentence would be FALSE: there is no second route to have voided
+      anything.
+
+    The two states are lifted from `ledger`'s own constant at runtime, so
+    moving a state into or out of `REOPEN_DISPUTES` re-aims this test instead
+    of leaving a transcribed claim behind -- the same property L26 exercises
+    one function over.
+
+    STDOUT, NOT A POSTED COMMENT. This clause is the one place the reversal
+    gets the TENSE right (*"WOULD have voided"*) where the published decline
+    body is indicative; it is also the revisable surface of the two, which is
+    why the wording note sits here and not on the comment.
+    """
+    assert DECLINED in REOPEN_DISPUTES, (
+        "the premise, read from the constant rather than transcribed: the "
+        "declined half of this pair is only meaningful while `declined` has a "
+        f"second route out. Got {REOPEN_DISPUTES!r}"
+    )
+    assert PARKED not in REOPEN_DISPUTES, (
+        "and the parked half is only a control while `parked` does NOT -- if "
+        "this ever changes, the absence assertion below stops being a fact "
+        "about the branch and starts being a false claim"
+    )
+
+    led = _led(tmp_path)
+    item = led.items[STRANDED_BY_A_CLEARED_BLOCKER]
+    item.blocker, item.owner = "no runner", "op"
+    led.transition(STRANDED_BY_A_CLEARED_BLOCKER, PARKED, "parked on a blocker")
+    _stub_gh(monkeypatch)
+    parked_out = tick.unpark_item(
+        led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "operator: runner is up")
+
+    led_d = _led(tmp_path / "declined")
+    led_d.transition(
+        STRANDED_BY_A_CLEARED_BLOCKER, DECLINED, "operator decided: will not do")
+    _stub_gh(monkeypatch)
+    declined_out = tick.undecline_item(
+        led_d, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "operator: contested")
+
+    assert "WOULD have voided it" in declined_out, (
+        "the DECLINE stdout must name the other route and what it would have "
+        "done, because that route is real and reaches the opposite R2 outcome "
+        f"in the same window. Got: {declined_out!r}"
+    )
+    assert "REOPEN_DISPUTES" in declined_out, (
+        "and must name WHY it applies here, so the operator can check the "
+        "claim against the constant rather than taking it"
+    )
+    assert "WOULD have voided it" not in parked_out, (
+        "and the PARK stdout must NOT -- `parked` has no second route out, so "
+        "the sentence would be false on that state. This is the half a "
+        "shared, unconditional string would break, and the shared prefix "
+        f"assertion elsewhere cannot see it. Got: {parked_out!r}"
+    )
+    # THE POSITIVE HALF of the absence assertion above, split per stdout: both
+    # are real reversal output carrying the shared prefix, so the `not in` is
+    # witnessing a missing CLAUSE and not a missing (or empty) string.
+    assert "THIS VERB VOIDED NONE" in parked_out, (
+        f"the park stdout is not reversal output at all. Got: {parked_out!r}"
+    )
+    assert "THIS VERB VOIDED NONE" in declined_out, (
+        f"the decline stdout is not reversal output at all. Got: {declined_out!r}"
+    )
 
 
 def test_the_two_routes_out_of_a_reopen_disputed_state_disagree_about_the_receipt(

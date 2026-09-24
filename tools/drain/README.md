@@ -638,7 +638,9 @@ its state. Measured: a `parked` item holding `deploy-run`, one refresh with the
 lane relabelled, and the receipt is `None` with the item still `parked`. That
 is state-independent, so the disclosure is shared between the park and decline
 bodies deliberately — shared text is the defect when the two states differ and
-the right answer when they do not.
+the right answer when they do not. The mechanism is `ledger.py`'s and
+pre-existing; this PR does not widen it and does not fix it. Tracked as
+**#4710**.
 
 The reason to keep is that a reversal disputes the **disposition**, not
 evidence taken while the item was still in the queue — and voiding here would
@@ -664,14 +666,48 @@ simultaneously selectable by `select_cycle()` and acceptable to
 `merge_gate.ledger_receipt_ready`, so it can be picked up for work and closed
 without work in the same tick. Latent, population zero (above), and
 pre-existing — `reap_stranded` reaches the same shape. Second: **#2874 and
-#2958 are the same shape and only one of them gets named.** Both are `parked`,
-both `W1-deploy`/`lane:bicep`, both class `deploy-path` with required kind
-`deploy-run`, and neither has a producing run — `loom-roll-and-validate` is the
-declared producer and run `36037056251` is `loom-ui-verify`, which produces
-`g1-browser`. Unparking *either* returns a selectable item whose receipt is
-unreachable until the receipt-class question lands (#4703). That is a reason to
-be deliberate about which live unparks are run, not a reason to withhold the
-verb.
+#2958 are the same shape, and the hazard is the OPPOSITE of the one an earlier
+draft of this paragraph published.** Both are `parked`, both
+`W1-deploy`/`lane:bicep`, both class `deploy-path` with required kind
+`deploy-run`.
+
+This paragraph used to say that *"neither has a producing run"* and that
+unparking either *"returns a selectable item whose receipt is unreachable until
+the receipt-class question lands (#4703)"*. **Both halves are RETRACTED. They
+are false, and false in the unsafe direction.** Measured on a copy of the live
+ledger at blob `a8ec1fc5`, driving the real `record_receipt_from_evidence` with
+the GitHub close replaced by a sentinel — so reaching the sentinel means every
+guard before it passed:
+
+| #2874 | evidence offered | outcome |
+|---|---|---|
+| `parked` (today) | green `loom-roll-and-validate` run `36053481220` | REFUSED at the TERMINAL guard |
+| after `--unpark` | the same run | **every guard passes** — would record `deploy-run` |
+| after `--unpark` | `loom-ui-verify` run `36037056251` | REFUSED: wrong workflow |
+| after `--unpark` | failed roll `35921787674` | REFUSED: concluded `failure` |
+
+#2958 passes the same chain on the same run. So the receipt is **reachable**,
+and what it would record is unbound twice over. `--from-run` carries no issue
+reference, which `record_receipt_from_evidence`'s own docstring says: nothing
+stops a green roll being recorded against a deploy-path item it never touched.
+And `receipt_producers` has **no boundary dimension at all** — three kinds,
+three workflow names, and zero occurrences of `gov`, `gcch`, `gcc`, `il5`,
+`boundary`, `commercial` or `cloud` anywhere in that map including its own note
+— while #2874 is **GCC-High** and `loom-roll-and-validate` says of itself that
+it is *"hard-wired to the Commercial estate … there is no Gov branch here to
+scope"*. A green Commercial roll would be accepted as the receipt for a
+GCC-High drift item. **That is #4709** — not #4703, which asks which *class* an
+item resolves to rather than what a class's *producer* is scoped to.
+
+**The terminal guard is presently the only thing preventing this, and this PR
+ships the verb that lifts it.** Unreachable *blocks* and asserts nothing;
+reachable-and-unbound *closes* the item and publishes a verification claim,
+which is the failure `deploy-integrity.md` R2 exists to prevent. So the order
+matters: the receipt question wants settling **before** either live unpark, not
+after. The operator has recorded that neither #2874 nor #2958 will be unparked
+until #4709 lands. That is a reason to sequence the live unparks behind an open
+issue — not a reason to withhold the verb, and not a claim that the verb itself
+is unsafe.
 
 **A reversible park should be made more readily — and the public churn is
 real.** The bars did not move: a park still needs a blocker and an owner, a

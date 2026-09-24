@@ -3862,7 +3862,9 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`--reap`. A hand-maintained list cannot see its own gaps -- the "
          "exact argument this package makes for enumerating the parser in "
          "`test_every_value_flag_the_parser_knows_is_refused_without_its_verb`, "
-         "applied there and not here.\n"
+         "applied there and not here UNTIL THIS ARM FORCED IT. The sibling's "
+         "positive control on its own enumeration followed a round later, and "
+         "is now at the comprehension in `_published_surfaces()`.\n"
          "         `--park` IS THE RIGHT TARGET because no list named it and "
          "no other test reads its help text, so a surviving mutant here means "
          "the enumeration is gone and nothing else would say so. Reds "
@@ -3895,6 +3897,33 @@ ARMS: list[tuple[str, str, str, str]] = [
         "README.md",
         "that verb is the only route out of `parked`, a claim about `parked` and *not*\n",
         "that verb is the only route out of a terminal state, a claim about `parked` and *not*\n",
+    ),
+    (
+        ("UP21 the reversal stdout's `voided_elsewhere` clause is DELETED, so "
+         "the `declined` and `parked` outputs become byte-identical. THIS ARM "
+         "SURVIVED when it was first run by a reviewer -- 792 passed with the "
+         "whole branch replaced by `\"\"`. It was the one branching published "
+         "text in its round with neither an arm nor an assertion behind it: "
+         "the only stdout assertion in the file pins `THIS VERB VOIDED NONE`, "
+         "which is the SHARED prefix, so nothing could tell the two states "
+         "apart.\n"
+         "         THE DELETION IS THE RIGHT MUTATION rather than making the "
+         "clause unconditional, because deletion is the shape that actually "
+         "survived; the unconditional shape is covered by the OTHER half of "
+         "the same test's pair, which asserts the clause is ABSENT from the "
+         "`parked` output -- on that state the sentence would be false, since "
+         "`parked` is not in REOPEN_DISPUTES and has no second route to have "
+         "voided anything. Reds "
+         "`test_the_reversal_stdout_names_the_other_route_only_where_there_"
+         "is_one` on the `declined` assertion"),
+        "tick.py",
+        ('    voided_elsewhere = (\n'
+         '        f" The next refresh over this open issue WOULD have voided it "\n'
+         '        f"(`{from_state}` is in REOPEN_DISPUTES); this verb does not."\n'
+         '        if from_state in REOPEN_DISPUTES\n'
+         '        else ""\n'
+         '    )\n'),
+        '    voided_elsewhere = ""  # UP21: the per-state clause is gone\n',
     ),
 ]
 
