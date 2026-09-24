@@ -704,10 +704,41 @@ ships the verb that lifts it.** Unreachable *blocks* and asserts nothing;
 reachable-and-unbound *closes* the item and publishes a verification claim,
 which is the failure `deploy-integrity.md` R2 exists to prevent. So the order
 matters: the receipt question wants settling **before** either live unpark, not
-after. The operator has recorded that neither #2874 nor #2958 will be unparked
-until #4709 lands. That is a reason to sequence the live unparks behind an open
-issue — not a reason to withhold the verb, and not a claim that the verb itself
-is unsafe.
+after.
+
+**So the hold is CODE, not this paragraph.** `tick.REVERSAL_HOLDS` names #2874
+and #2958 with the reason each is held and the issue that lifts it, and
+`tick._refuse_if_held` refuses a reversal of either — on `--unpark` and
+`--undecline` alike, before any `gh` call. The earlier draft of this section
+recorded the constraint as an operator intention and left the README as the only
+thing holding it. That does not survive its own argument: this PR adds
+`unpark-item` to `permitted_unattended`, where `dispatch-roll` and
+`close-on-receipt` already sit, so the whole chain — unpark, dispatch a
+Commercial roll, record it, close the issue with a public "verified" comment —
+is reachable by a lane with no human in it, and **nothing on that path reads
+this file**. A constraint whose violation publishes a false verification claim
+has to be a property.
+
+The hold is keyed on the ISSUE NUMBER and on nothing else, because the number is
+the one thing about an item a lane cannot move — `blocker`, `lane`,
+`receipt_class` and the title are all writable from inside a lane or movable by
+a label change, and this package measured a lane label moving an item's receipt
+class. An entry whose reason is blanked still holds: the hold is the entry, not
+its text. A key that cannot be read as an issue number refuses *every* reversal
+rather than being skipped, because an unreadable hold set is not an empty one.
+An empty map holds nothing, and is the expected end state.
+
+**It is an interlock, not the fix.** A hold names items; the repair is a
+boundary dimension in `receipt_producers`, and that is **#4709**. The two are
+not interchangeable: #2958 is *Commercial*, so a boundary-aware producer map
+would accept its roll — its exposure is the other half of the same gap, an
+unbound `--from-run` against an item that actually owes an `/admin/readiness`
+receipt for DuckLake and RisingWave. A boundary guard alone would cover one of
+the two items. There is also no boundary field on `Item` to read; #2874's
+GCC-High-ness is knowable only from its title text and its `drift-gov` label,
+and deriving that is #4709's design work. Delete both entries when it lands.
+None of this is a reason to withhold the verb, and none of it is a claim that
+the verb itself is unsafe.
 
 **A reversible park should be made more readily — and the public churn is
 real.** The bars did not move: a park still needs a blocker and an owner, a

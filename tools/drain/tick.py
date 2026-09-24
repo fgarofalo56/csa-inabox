@@ -1285,6 +1285,143 @@ REVERSAL_HEADS = {
 #: instead of leaving the operator to guess which of the two they wanted.
 REVERSAL_FLAGS = {PARKED: "--unpark", DECLINED: "--undecline"}
 
+#: ITEMS HELD AGAINST REVERSAL, keyed by issue number, valued with the reason.
+#: Read by `_refuse_if_held`, which is called by `_reverse` before any `gh` call.
+#: EMPTY IS THE EXPECTED END STATE -- these two entries are lifted by #4709, by
+#: DELETING them.
+#:
+#: WHY THIS EXISTS AS CODE AND NOT AS A PARAGRAPH IN THE README. This PR adds
+#: `unpark-item` to `permitted_unattended`, where `dispatch-roll` and
+#: `close-on-receipt` already sit. So the whole chain -- unpark, dispatch a
+#: Commercial roll, record it, close the issue with a public "verified" comment
+#: -- becomes reachable by a lane with no human in it, and NOTHING ON THAT PATH
+#: READS `tools/drain/README.md`. A constraint whose violation publishes a false
+#: verification claim cannot be held by a document the actor is not required to
+#: read; that is this repo's own position (memory informs, only hooks execute)
+#: and it is the argument `policy.json`'s `action_is_permitted` note makes about
+#: capabilities one field over. The README still carries the reasoning. This
+#: carries the refusal.
+#:
+#: WHY HERE AND NOT IN `policy.json`, which is where a reviewer proposed it and
+#: is the better home once it can have one: `gates.policy_keys_without_implementation`
+#: requires every non-`_` policy leaf to be DECLARED in a `gates.py` mapping, so
+#: a `reversal_holds` map there needs a `gates.py` edit this PR does not own.
+#: Measured, not assumed -- a dict with numeric keys reports
+#: `['reversal_holds.2874', 'reversal_holds.2958']` missing and reds six
+#: `test_policy.py` tests. The constant is also strictly harder to fail open: a
+#: JSON map can be missing, can be a non-object, and can be an unreadable file,
+#: and each of those is a branch that has to decide correctly. A module constant
+#: has none of them. `ledger.CLOSES_ON_GITHUB` is the same shape and the
+#: precedent -- a policy-bearing constant beside the code that enforces it, with
+#: `policy.json` carrying the prose (`_reversal_holds`).
+#:
+#: KEYED ON THE ISSUE NUMBER, which is the one thing about an item a lane cannot
+#: move. `blocker`, `lane`, `receipt_class`, `audit_reason` and the title are all
+#: writable from inside a lane or movable by a label change -- this package
+#: MEASURED a lane label moving an item's receipt class and voiding its receipt
+#: -- so a hold keyed on any of them could be cleared by editing a field the
+#: actor already owns. `state.json` is gitignored and lane-writable, for the same
+#: reason it is not the place for this either.
+REVERSAL_HOLDS = {
+    2874: (
+        "#4709 must land first. #2874 is GCC-High (`drift-gov`) and resolves to "
+        "`deploy-path` -> `deploy-run` -> `loom-roll-and-validate`, which says of "
+        "itself that it is hard-wired to the Commercial estate, and "
+        "`receipt_producers` carries no boundary dimension at all. Measured on a "
+        "copy of the live ledger at blob a8ec1fc5: parked, the receipt chain "
+        "refuses at the terminal guard; after an unpark, a green Commercial roll "
+        "passes every guard and would be recorded as the receipt for a GCC-High "
+        "item."
+    ),
+    2958: (
+        "#4709 must land first. #2958 is COMMERCIAL, so a boundary-aware producer "
+        "map would accept its roll -- this hold is the other half of the same gap. "
+        "`--from-run` carries no issue reference (`record_receipt_from_evidence`'s "
+        "own docstring), so nothing binds a green roll to the deploy-path item it "
+        "is recorded against, and what #2958 actually owes is an `/admin/readiness` "
+        "receipt for DuckLake and RisingWave that no roll establishes. Measured: "
+        "after an unpark it passes the same chain on the same run as #2874."
+    ),
+}
+
+
+def _refuse_if_held(number: int, from_state: str, holds: dict | None = None) -> None:
+    """Refuse a reversal of an item that is NAMED in `REVERSAL_HOLDS`. Fails CLOSED.
+
+    WHAT IT IS NOT. It is not the boundary fix. A hold names ITEMS; the repair is
+    a boundary dimension in `receipt_producers`, which is #4709, and which this
+    cannot substitute for -- #2958 is Commercial and a boundary-aware producer map
+    would accept its roll, so a boundary guard ALONE would cover one of the two
+    items held here. There is also no boundary field on `Item` to read: its fields
+    are `number, title, stream, state, lane, size, pr, receipt_kind, receipt_ref,
+    receipt_taken_under, receipt_class, audit_reason, blocker, owner, review_by,
+    history`, and #2874's GCC-High-ness is knowable only from its title text and
+    its `drift-gov` label. Deriving that is #4709's design work. This is the
+    interlock that stands until it lands, because THIS PR is what removes the
+    barrier that stands today -- the terminal guard.
+
+    TWO WAYS A PERMISSIVE VERSION FAILS OPEN, and each names the value:
+
+    1. **a key that is not the plain integer.** `REVERSAL_HOLDS = {"#2874": ...}`
+       or `{"2874 ": ...}` under a plain `number in holds` lookup matches NOTHING
+       and lifts the hold SILENTLY -- a transcription slip as an off switch. Keys
+       are normalised (`#`, surrounding whitespace, a string key), so those still
+       hold; a key that is not an issue number at ALL (`"2874-bicep"`) has no
+       right item to match, so it refuses EVERY reversal and names the key
+       rather than being skipped. An unreadable hold set is not an empty one.
+    2. **an entry whose reason is blank.** `REVERSAL_HOLDS = {2874: ""}` under a
+       `if holds.get(number):` test lifts the hold by emptying one string -- the
+       "one field the actor already owns" shape. The hold is the ENTRY; its text
+       is documentation. A blank one still refuses and says so.
+
+    An EMPTY map means nothing is held, and is the expected end state once #4709
+    lands. That is the one thing (1) must not be read as forbidding, so it is a
+    distinct path and not an accident of truthiness.
+
+    STATE-AGNOSTIC ON PURPOSE. Both held items are `parked` today, but the check
+    sits in the shared `_reverse` and covers `--undecline` too, so an item cannot
+    walk out of a hold by being declined and then undeclined.
+
+    WHAT THE REFUSAL MUST NOT CLAIM (R7): that the blocker still holds. Nothing
+    here re-measures anything. It reports that an operator recorded a hold on this
+    item, and quotes what they recorded.
+
+    `holds` is a parameter with a DEFAULT rather than a module read, so a test can
+    drive the shapes above without editing a tracked constant -- and the default
+    is the shipped map, so the call site cannot accidentally be handed an empty
+    one.
+    """
+    if holds is None:
+        holds = REVERSAL_HOLDS
+    normalised: dict[int, object] = {}
+    for key, why in holds.items():
+        try:
+            normalised[int(str(key).strip().lstrip("#").strip())] = why
+        except ValueError:
+            raise ReversalRefusedError(
+                f"#{number}: refusing to reverse a {from_state} - `REVERSAL_HOLDS` "
+                f"carries the key {key!r}, which cannot be read as an issue number. "
+                "A hold nobody can match is a hold that does not hold, so this "
+                "refuses rather than skipping it. Fix or remove that key. Nothing "
+                "was written or posted."
+            ) from None
+    if number not in normalised:
+        return
+    why = normalised[number]
+    recorded = why.strip() if isinstance(why, str) else ""
+    if not recorded:
+        recorded = (
+            "The entry names no reason - which does NOT lift the hold: the hold is "
+            "the ENTRY in `REVERSAL_HOLDS`, not its text."
+        )
+    raise ReversalRefusedError(
+        f"#{number} is HELD: `tick.REVERSAL_HOLDS` names it, and a reversal refuses "
+        f"a held item. RECORDED REASON: {recorded} This is an operator hold on THIS "
+        f"ITEM - it is not a judgement about the {from_state} reason, and nothing "
+        "here re-measured the blocker. Lift it by DELETING the entry (a tracked, "
+        "reviewable edit), not by emptying its text. Nothing was written or posted."
+    )
+
 
 def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
     """The comment a reversal posts. THE PERMANENT PUBLIC RECORD, and a CORRECTION.
@@ -1672,7 +1809,7 @@ def _reverse(
     comment. The reverse ordering would leave an item back in the queue with a
     public record still saying it is terminal, in a file that is gitignored.
 
-    REFUSES, WRITING AND POSTING NOTHING, on five conditions, in this order --
+    REFUSES, WRITING AND POSTING NOTHING, on six conditions, in this order --
     cheapest and most local first, so a refusal costs as few GitHub calls as the
     thing being refused deserves:
 
@@ -1681,9 +1818,17 @@ def _reverse(
     3. the item is not in `from_state` (an `--unpark` aimed at a declined item is
        not a typo to absorb -- the two reversals carry different justifications);
     4. the action is not permitted by `policy.json`;
-    5. the GitHub issue is CLOSED.
+    5. the item is NAMED IN `REVERSAL_HOLDS` (see `_refuse_if_held`);
+    6. the GitHub issue is CLOSED.
 
-    (5) IS THE ONE THE ISSUE ASKED FOR BY NAME. A terminal item whose issue is
+    (5) SITS ABOVE THE GITHUB READ AND BELOW THE STATE GUARD, and both halves of
+    that placement are deliberate. Above the read, because a held item should
+    cost zero GitHub calls -- the property the authority bar one line up buys the
+    same way. Below the state guard, because `--unpark` aimed at a declined item
+    is a different mistake and deserves its own message; a hold that pre-empted
+    it would answer a question the operator did not ask.
+
+    (6) IS THE ONE THE ISSUE ASKED FOR BY NAME. A terminal item whose issue is
     closed has had something happen to it that this verb did not observe -- an
     out-of-band close, a decline's documented `--reason not-planned` disposal,
     a transfer. Returning it to the queue would paper over that, and the refresh
@@ -1753,6 +1898,12 @@ def _reverse(
             f"#{number}: refusing to reverse a {from_state} - `{action}` is "
             f"{reversal_note}. Nothing was written or posted."
         )
+    # THE NAMED HOLD, still before any GitHub call. Separate from the authority
+    # bar because they answer different questions: `action_is_permitted` asks
+    # whether the HARNESS may reverse anything, this asks whether THIS ITEM may
+    # be reversed yet. Collapsing them would mean revoking `unpark-item` to hold
+    # one item -- which strands every other parked item, the #4699 ratchet again.
+    _refuse_if_held(number, from_state)
     try:
         seen = _read_issue_on_github(repo, number)
     except IssueCloseFailedError as exc:

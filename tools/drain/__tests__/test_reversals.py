@@ -117,6 +117,35 @@ BOT_FILED_SELF_RESOLVED = 4534
 #: A comment id the stub hands back, so the read-back has something to fetch.
 POSTED_COMMENT_ID = "5819347261"
 
+#: THE SHIPPED HOLD MAP, snapshotted at import BEFORE the autouse fixture below
+#: can patch it. The hold tests re-install this; every other test runs without
+#: it. Read as a snapshot rather than as `tick.REVERSAL_HOLDS` at use time, so a
+#: test cannot accidentally assert against a map some other test emptied.
+SHIPPED_HOLDS = dict(tick.REVERSAL_HOLDS)
+
+
+@pytest.fixture(autouse=True)
+def _holds_lifted(monkeypatch):
+    """EVERY test here runs with `REVERSAL_HOLDS` EMPTY; the hold tests re-install it.
+
+    WHY THIS IS NECESSARY AND NOT A CONVENIENCE: the happy-path fixture number
+    IS `2958`, which is one of the two items the shipped map holds. Without this
+    the module's own fixture would be permanently unreversible and 23 tests
+    about other properties entirely would red on the hold -- a fixture that
+    never reaches the rule it is written about, in both directions at once.
+
+    WHY AUTOUSE AND BLANKET rather than a per-test lift: the alternative is 27
+    call sites each passing a variant policy, and a lift that is missed at one
+    of them is a test that reds for a reason its name does not mention. One
+    place, stated once.
+
+    WHAT THIS COSTS, disclosed: no test in this module exercises the SHIPPED map
+    except the four below, and `test_the_shipped_holds_still_name_both_items` is
+    the positive control that reds if the shipped entries are emptied or
+    removed. Without that control this fixture would be an off switch.
+    """
+    monkeypatch.setattr(tick, "REVERSAL_HOLDS", {})
+
 
 def _led(tmp_path, numbers=(STRANDED_BY_A_CLEARED_BLOCKER,)) -> Ledger:
     led = Ledger(str(tmp_path / "state.json"), receipts=POLICY["receipts"])
@@ -907,6 +936,173 @@ def test_a_reversal_is_gated_on_the_autonomy_contract(
         assert calls == [], f"an unpermitted {revoke!r} must not even read; ran {calls}"
     assert revoke in str(exc), "the message must name the action that was refused"
     assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == state
+
+
+# ---------------------------------------------------------------------------
+# THE NAMED HOLD -- two items the operator has held against reversal until #4709
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_holds_still_name_both_items():
+    """THE POSITIVE CONTROL for the autouse fixture, and for the hold itself.
+
+    WHAT MAKES THIS FAIL: emptying `REVERSAL_HOLDS`, deleting either entry, or
+    blanking either reason. Without it, `_holds_lifted` would be an off switch --
+    every test in this module would pass over a hold that had been removed, which
+    is precisely the "a control that watches nothing" shape.
+
+    The reasons are asserted non-empty and to NAME #4709 because a hold whose
+    text does not say what lifts it is a hold nobody can retire; the entries are
+    meant to be deleted when that issue lands, and an operator reading the
+    refusal has to be told which issue that is.
+    """
+    assert set(SHIPPED_HOLDS) == {2874, 2958}, (
+        f"the shipped hold set moved: {sorted(SHIPPED_HOLDS)}. If #4709 landed, "
+        "delete this assertion with the entries; do not loosen it"
+    )
+    for number, why in SHIPPED_HOLDS.items():
+        assert isinstance(why, str), f"#{number}'s reason is not a string"
+        assert why.strip(), f"#{number} holds with no reason"
+        assert "#4709" in why, f"#{number}'s hold must name the issue that lifts it"
+
+
+@pytest.mark.parametrize("held", sorted(SHIPPED_HOLDS), ids=lambda n: f"held-{n}")
+def test_a_reversal_refuses_a_held_item_before_any_github_call(
+    monkeypatch, tmp_path, held
+):
+    """MUTATION ARM UP22 (the `_refuse_if_held` call deleted from `_reverse`).
+
+    WHAT MAKES THIS FAIL: delete the call, and the unpark proceeds -- `calls`
+    becomes the three-verb happy path and the item reaches `ready`. That is the
+    exact behaviour this hold exists to prevent, because the item then becomes
+    selectable and a green Commercial roll is one `--record-receipt` away from
+    being published as its verification.
+
+    `calls == []` is load-bearing and is not decoration: it pins that the hold
+    sits ABOVE the GitHub read, so a held item costs zero API calls. A hold
+    placed after the read would satisfy every other assertion here.
+
+    PARAMETRISED OVER THE SHIPPED SET rather than over a literal pair, so adding
+    a third hold without a test is impossible and lifting one does not leave a
+    test asserting a hold that no longer exists.
+    """
+    monkeypatch.setattr(tick, "REVERSAL_HOLDS", SHIPPED_HOLDS)
+    led = _led(tmp_path, numbers=(held,))
+    _stub_gh(monkeypatch)
+    tick.park_item(led, POLICY, REPO, held, "a blocker", "an owner")
+    calls, posted = _stub_gh(monkeypatch)
+
+    exc = _refusal(lambda: tick.unpark_item(
+        led, POLICY, REPO, held, "lane: the blocker cleared"))
+
+    assert calls == [], f"a held item must not even be read; ran {calls}"
+    assert posted == [], f"a held item must publish nothing; posted {posted}"
+    assert led.items[held].state == PARKED
+    assert "HELD" in str(exc), f"the refusal must say the item is held; got: {exc}"
+    assert str(held) in str(exc), f"the refusal must name the item; got: {exc}"
+    assert "#4709" in str(exc), "the refusal must name the issue that lifts the hold"
+    assert "Nothing was written or posted" in str(exc)
+
+
+def test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it(
+    monkeypatch, tmp_path
+):
+    """WHAT MAKES THIS FAIL: move the call from `_reverse` into `unpark_item`.
+
+    Both held items are `parked` today, so a hold wired only into the unpark
+    path would pass every other test in this file. It would also leave a route
+    out: decline the held item, then `--undecline` it, and it is back in the
+    queue having never met the hold. The check lives in the SHARED `_reverse`
+    for that reason, and this is the assertion that distinguishes the two
+    placements.
+    """
+    monkeypatch.setattr(tick, "REVERSAL_HOLDS", SHIPPED_HOLDS)
+    held = min(SHIPPED_HOLDS)
+    led = _led(tmp_path, numbers=(held,))
+    _stub_gh(monkeypatch)
+    tick.decline_item(led, POLICY, REPO, held, "operator: not planned")
+    calls, posted = _stub_gh(monkeypatch)
+
+    exc = _refusal(lambda: tick.undecline_item(
+        led, POLICY, REPO, held, "operator: withdrawn"))
+
+    assert calls == [], f"a held item must not even be read; ran {calls}"
+    assert posted == [], f"a held item must publish nothing; posted {posted}"
+    assert led.items[held].state == DECLINED
+    assert "HELD" in str(exc)
+
+
+@pytest.mark.parametrize(
+    ("holds", "expect"),
+    [
+        ({"#2874": "held"}, "HELD"),
+        ({"2874 ": "held"}, "HELD"),
+        ({"2874-bicep": "held"}, "cannot be read as an issue number"),
+        ({2874: "  "}, "the hold is"),
+        ({2874: None}, "the hold is"),
+    ],
+    ids=["hash-key-still-matches", "whitespace-key-still-matches",
+         "unreadable-key-refuses-everything", "blank-reason-still-holds",
+         "no-reason-still-holds"],
+)
+def test_the_hold_cannot_be_lifted_by_editing_one_field(
+    monkeypatch, tmp_path, holds, expect
+):
+    """MUTATION ARM UP23, and the five values a PERMISSIVE hold fails on.
+
+    Each row is a concrete edit an actor with write access to this file could
+    make, under which a naive `if number in holds:` / `if holds.get(number):`
+    lifts the hold and exits 0:
+
+    - `"#2874"` and `"2874 "` -- a plausible transcription of an issue number.
+      A bare membership test against the int key matches NOTHING, so the hold is
+      silently gone. Both are normalised, so both still refuse.
+    - `"2874-bicep"` -- a key that is not an issue number at all. There is no
+      right item to match it to, so this refuses EVERY reversal and names the
+      key: an unreadable hold set is not an empty one (R7). `expect` is the key
+      complaint rather than `HELD` for exactly that reason.
+    - `""` / `None` as the reason -- clearing one string. The hold is the ENTRY;
+      the refusal still fires and says so rather than reading a blank as a lift.
+
+    WHAT MAKES THESE FAIL: replace the normalising loop with
+    `if number in holds:` (rows 1-2 stop refusing, row 3 stops refusing) or
+    guard on `if holds.get(number):` (rows 4-5 stop refusing).
+    """
+    monkeypatch.setattr(tick, "REVERSAL_HOLDS", holds)
+    led = _led(tmp_path, numbers=(2874,))
+    _stub_gh(monkeypatch)
+    tick.park_item(led, POLICY, REPO, 2874, "a blocker", "an owner")
+    calls, posted = _stub_gh(monkeypatch)
+
+    exc = _refusal(lambda: tick.unpark_item(led, POLICY, REPO, 2874, "a reason"))
+
+    assert calls == [], f"a held item must not even be read; ran {calls}"
+    assert posted == [], f"a held item must publish nothing; posted {posted}"
+    assert led.items[2874].state == PARKED
+    assert expect in str(exc), f"got: {exc}"
+
+
+def test_an_empty_hold_map_holds_nothing(monkeypatch, tmp_path):
+    """THE NEGATIVE CONTROL, and the shape #4709 leaves behind.
+
+    WHAT MAKES THIS FAIL: a `_refuse_if_held` that refuses when the map is empty
+    -- i.e. reading "no holds" as "holds unknown". That would be fail-closed in
+    the wrong place: it makes the expected end state, after both entries are
+    deleted, an unreversible harness.
+
+    It is also what proves the four refusals above are the HOLD firing and not
+    `_refuse_if_held` refusing everything it is handed.
+    """
+    monkeypatch.setattr(tick, "REVERSAL_HOLDS", {})
+    led = _led(tmp_path, numbers=(2874,))
+    _stub_gh(monkeypatch)
+    tick.park_item(led, POLICY, REPO, 2874, "a blocker", "an owner")
+    _stub_gh(monkeypatch)
+
+    said = tick.unpark_item(led, POLICY, REPO, 2874, "lane: the blocker cleared")
+
+    assert led.items[2874].state == READY
+    assert "HELD" not in said
 
 
 # ---------------------------------------------------------------------------

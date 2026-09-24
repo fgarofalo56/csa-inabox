@@ -3925,6 +3925,79 @@ ARMS: list[tuple[str, str, str, str]] = [
          '    )\n'),
         '    voided_elsewhere = ""  # UP21: the per-state clause is gone\n',
     ),
+    (
+        ("UP22 the NAMED HOLD is deleted from `_reverse`, so a held item "
+         "reverses. This is the arm for the whole interlock: with the call "
+         "gone, `--unpark 2874` walks the three-verb happy path, the item "
+         "reaches `ready` and becomes selectable -- and a green COMMERCIAL "
+         "roll is then one `--record-receipt` away from being published as "
+         "the verification of a GCC-HIGH item, which is the failure R2 "
+         "exists to prevent. The mutation is a DELETION rather than a "
+         "weakening because deletion is what an actor lifting a hold would "
+         "actually do, and because the call site is one line: anything "
+         "subtler would be testing the helper rather than its wiring.\n"
+         "         WHAT IT COULD NOT HAVE PRODUCED: a green run. Both the "
+         "`calls == []` assertion (the hold sits ABOVE the GitHub read) and "
+         "the state assertion fail on the mutant, so a SURVIVED here would "
+         "mean the tests never reach the hold at all. Reds "
+         "`test_a_reversal_refuses_a_held_item_before_any_github_call` on "
+         "both parameters and "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "    _refuse_if_held(number, from_state)\n",
+        "    # UP22: the named hold is gone\n",
+    ),
+    (
+        ("UP23 the hold's key NORMALISATION is replaced by a bare membership "
+         "test, which is the permissive version a reviewer would write. It "
+         "lifts a hold SILENTLY on three separate edits -- `{'#2874': ...}`, "
+         "`{'2874 ': ...}` and a key that is not an issue number at all -- "
+         "because a string key never equals an int `number`, so the lookup "
+         "matches nothing and the function returns as though nothing were "
+         "held. A hold an actor can switch off with a transcription slip is "
+         "not a control, and the silence is the whole defect: the shipped "
+         "code REFUSES on an unreadable key rather than skipping it, because "
+         "an unreadable hold set is not an empty one (R7).\n"
+         "         THE MUTANT STILL HOLDS THE INT KEYS, deliberately: a "
+         "mutation that lifted every hold would also red the two arms above "
+         "and could not distinguish 'the normalisation is gone' from 'the "
+         "hold is gone'. Reds "
+         "`test_the_hold_cannot_be_lifted_by_editing_one_field` on the three "
+         "string-key parameters and leaves the two blank-reason ones green, "
+         "which is the discriminating split"),
+        "tick.py",
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[int(str(key).strip().lstrip("#").strip())] = why\n'),
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[key] = why  # UP23: no normalisation\n'),
+    ),
+    (
+        ("UP24 `REVERSAL_HOLDS` is EMPTIED, which is the edit an actor lifting "
+         "a hold without authority would make, and the arm that proves the "
+         "test module's autouse `_holds_lifted` fixture is not an OFF SWITCH. "
+         "That fixture patches the map empty for every test in the file -- it "
+         "has to, because the happy-path fixture number IS #2958 -- so without "
+         "an arm aimed at the SHIPPED constant, deleting both entries would "
+         "leave the whole suite green. Note the second-order blindness this "
+         "kills as well: `test_a_reversal_refuses_a_held_item_before_any_"
+         "github_call` is parametrised over `sorted(SHIPPED_HOLDS)`, so an "
+         "empty map does not RED it, it collects ZERO cases and the test "
+         "silently stops existing. The set-equality assertion in "
+         "`test_the_shipped_holds_still_name_both_items` is what turns that "
+         "disappearance into a failure, which is why it asserts the SET and "
+         "not a count.\n"
+         "         WHEN #4709 LANDS this arm is deleted with the entries; it "
+         "is not a permanent claim that a hold must exist. Reds "
+         "`test_the_shipped_holds_still_name_both_items` and errors "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "REVERSAL_HOLDS = {\n",
+        "REVERSAL_HOLDS = {}\n_UP24_LIFTED = {\n",
+    ),
 ]
 
 
