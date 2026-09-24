@@ -46,12 +46,21 @@ POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
 # stream and not its receipt. Recorded because a comment that gives one reason
 # for two entries invites the next reader to trust it for both.
 #
-# {4533, 4544, 4545, 4578, 4579} are the GENERAL FORM of the #4487 fix (#4694).
-# #4487 was pinned one at a time; measured against the live ledger at 76377a86e,
-# nine further items reached W4-receipts on the title substring alone and five
-# of them are pure-harness changes to `tools/drain/*.py` with NO ESTATE SURFACE.
+# The pinned harness numbers OTHER THAN {4466, 4467, 4468, 4469} are the
+# GENERAL FORM of the #4487 fix (#4694). #4487 was pinned one at a time. Two
+# populations, because they give different numbers and a bare one would be
+# meaningless:
+#
+#   * `tools/drain/state.json` at 76377a86e (402 items, a SNAPSHOT):  9 items
+#     reached W4-receipts on the title substring alone.
+#   * live open issues read from GitHub on 2026-09-24 (397 open):    12.
+#
+# The ledger is the smaller number because it lags -- #4676, #4680 and #4694
+# had not been refreshed into it. SEVEN of those twelve are pure-harness
+# changes to `tools/drain/*.py` with NO ESTATE SURFACE, and those seven are
+# what is pinned here.
 # `estate-behaviour`'s producer is `loom-synthetic-monitor`, and no monitor run
-# can witness an edit to this file -- so those five were UNCLOSABLE, not merely
+# can witness an edit to this file -- so those seven were UNCLOSABLE, not merely
 # mislabelled. Demonstrated on #4545, whose fix merged in #4552 and which still
 # refused every receipt kind it could offer:
 #
@@ -59,10 +68,49 @@ POINTS = {"sp:1": 1, "sp:3": 3, "sp:5": 5, "sp:8": 8, "sp:13": 13}
 #     #4545 is 'estate-behaviour' and needs a estate receipt, which is
 #     established by a workflow run - pass --from-run
 #
-# The pin is load-bearing here and the precedence fix below is NOT a substitute
-# for it: all five are unlabelled, so moving the title arm after the lane loop
-# leaves them in W4 exactly as before. Two independent defects, two remedies.
-HARNESS = {4466, 4467, 4468, 4469, 4485, 4487, 4533, 4544, 4545, 4578, 4579}
+# The pin is load-bearing, but NOT for the reason the first draft of this
+# comment gave. That draft said "all five are unlabelled, so the precedence fix
+# below is not a substitute for it" -- true when written on 2026-09-24, FALSE
+# five hours later: a triage pass put `lane:ci` on {4533, 4544, 4545, 4578,
+# 4579} between 16:18Z and 16:23Z. Measured against live GitHub afterwards,
+# with the precedence fix and those five pins REMOVED, every one of them routes
+# to W6-ci -- whose class is already `guard-or-test-only`. So for those five
+# the pin is not, today, what makes them closable; the lane label is.
+#
+# What the pin does is LATCH that, and #4545 is the measurement that says it is
+# needed. Its own ledger history:
+#
+#     2026-09-18T17:56:54Z  stream W0-harness -> W4-receipts
+#     2026-09-18T17:56:54Z  lane lane:ci -> None
+#     2026-09-18T17:56:54Z  receipt class guard-or-test-only -> estate-behaviour
+#
+# It held `lane:ci` and was closable. Removing ONE label on GitHub -- an edit
+# nobody would think of as touching receipts -- silently made it unclosable. A
+# label is the classification; the pin is what survives a label edit. That is
+# the claim this comment now makes, and the value that would falsify it is a
+# demotion-by-unlabelling that the pin failed to stop.
+#
+# {4676, 4694} are the SAME predicate applied to the residue the live scan
+# still showed after the five: pure `tools/drain/*` items with no estate
+# surface, carrying only `csa-loom` (no `lane:*`) as of 2026-09-24 and so
+# reaching W4-receipts on their titles. #4694 is the issue THIS change closes
+# -- unpinned, the fix would refresh its own closing issue into
+# `estate-behaviour` and then refuse the `ci-green` receipt that closes it. A
+# change that creates the defect it repairs is not a fix.
+#
+# #4680 is in that same residue and is deliberately NOT pinned. It is about
+# `.github/workflows/loom-ui-verify.yml` and a zeroed ACA runner fleet -- real
+# estate surface, so `W0-harness` would be a misclassification, not a rescue.
+# Its routing wants a `lane:*` label on GitHub, which is not this file's to
+# apply. Pinning it to make a number go down is the failure this rule set
+# calls closing a finding by its LABEL rather than at its SITE.
+#
+# This pin list is a LATCH, not a classifier: it does not scale, and every new
+# harness issue whose title says "receipt" will land in W4 until it is labelled.
+# The durable remedy is a label reader (`ledger.py` names `receipt-class:` as
+# the obvious next writer); tracked separately rather than smuggled in here.
+HARNESS = {4466, 4467, 4468, 4469, 4485, 4487, 4533, 4544, 4545, 4578, 4579,
+           4676, 4694}
 DEPLOY = {4451, 4461, 4464, 4471, 4472, 4473, 3676, 2958}
 SECURITY = {4456, 4457, 4458, 4460, 3941, 3338}
 RECEIPTS = {4470, 4432, 3720, 2626, 2583, 2581, 4361, 4183, 4405, 4406, 4387, 4442}
@@ -90,8 +138,13 @@ def stream_for(number: int, title: str, labels: set[str]) -> str:
 
     The substring arm is kept rather than deleted: with the lane loop ahead of
     it, it still catches an UNLABELLED issue that is genuinely about an owed
-    receipt (#4554 is one today), which is the honest answer until someone
-    labels it.
+    receipt, which is the honest answer until someone labels it. Naming a
+    specific issue here was tried and retracted -- the first draft said "#4554
+    is one today" and #4554 was labelled `lane:console` within the hour, which
+    is precisely the routing this ordering is meant to give it. A docstring
+    cannot hold a fact that lives on GitHub. What it can hold is the RULE, and
+    the rule's live residue is measured by the scan in the PR, not asserted
+    here.
 
     What would break this ordering: an issue with `lane:console` and "receipt"
     in its title must return "W5-console". Re-order the two arms and it returns

@@ -299,6 +299,60 @@ def test_negative_control_the_stream_is_derived_without_the_pin_file(tmp_path):
     assert [i.stream for i in led.items.values()].count("W9-rest") == 0
 
 
+def test_a_populated_inventory_cache_shadows_stream_for_entirely(tmp_path):
+    """`tick.py` is `streams.get(number) or stream_for(...)`, so for any number
+    IN `inventory.json` the classifier is NEVER CALLED. That makes #4694's
+    precedence fix INERT on the live path for every cached item, and nothing
+    tested it: the five tests added with that fix all call `stream_for`
+    directly, so a fully green suite says nothing about what a refresh does.
+
+    Measured on the operator's box on 2026-09-24: `tools/drain/inventory.json`
+    exists (gitignored, 297 entries, highest issue #4473, written 2026-09-11)
+    and pins #3965, #4242 and #4408 -- the exact three items the precedence
+    fix was written to move -- to `W4-receipts`. The fix only appears to work
+    there because the five NEWLY PINNED items postdate the cache.
+
+    WHAT MAKES THIS FAIL: changing `streams.get(number) or stream_for(...)` so
+    the classifier wins (then the first block reads `W7-bicep`/`deploy-path`),
+    or dropping the cache read entirely.
+
+    The second block is the POSITIVE PAIR. Without it this test is satisfied by
+    a `stream_for` that returns "W4-receipts" for everything, and it would also
+    survive deleting the precedence fix outright -- an absence-only assertion
+    (`assertion-design.md` "done" #4).
+
+    This test DESCRIBES the shadowing; it does not endorse it. Dropping or
+    regenerating the cache is a deliberate act with a blast radius far wider
+    than this PR (11 items are mis-streamed by cache staleness today,
+    independently of this change), so it is tracked separately.
+    """
+    # #3965's live shape: a `lane:bicep` item whose title contains "receipt".
+    issue = {
+        "number": 3965,
+        "title": (
+            "bicep-sync: cost-export.bicep is allowlisted, not wired — routing "
+            "decision + Gov receipt owed by the admin-plane/main.bicep lane"
+        ),
+        "labels": [{"name": "lane:bicep"}, {"name": "sp:5"}],
+    }
+
+    cached = Ledger(str(tmp_path / "cached.json"), receipts=POLICY["receipts"])
+    tick.refresh_from_github(cached, {3965: "W4-receipts"}, [issue])
+    assert cached.items[3965].stream == "W4-receipts"
+    assert cached.items[3965].effective_receipt_class == "estate-behaviour", (
+        "the cached item must be the UNCLOSABLE class, or this test is not "
+        "measuring the harm the shadowing causes"
+    )
+
+    uncached = Ledger(str(tmp_path / "uncached.json"), receipts=POLICY["receipts"])
+    tick.refresh_from_github(uncached, {}, [issue])
+    assert uncached.items[3965].stream == "W7-bicep", (
+        "with no cache entry the precedence fix must route this by its lane "
+        "label -- if it does not, the first block proves nothing about the CACHE"
+    )
+    assert uncached.items[3965].effective_receipt_class == "deploy-path"
+
+
 # ---------------------------------------------------------------------------
 # Reaping -- "a dead session costs at most the cycle in flight"
 # ---------------------------------------------------------------------------

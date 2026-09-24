@@ -324,7 +324,8 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    permitted, permit_note = gates.action_is_permitted(action, policy)",
         '    permitted, permit_note = True, "not asked"',
-    ),    (
+    ),
+    (
         ("DP6 policy.json REVOKES `park-item` and the verb must stop working. "
          "This is the arm that proves the authority has a BLAST RADIUS rather "
          "than being prose - the marker_any_of defect this file records finding "
@@ -2289,11 +2290,27 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if prior_verdict in BLOCKING_TOKENS:",
     ),
     (
-        ("B1 the by-number stream pins are dropped, so every pinned item falls "
-         "through to W4-receipts on its TITLE and demands an estate receipt"),
+        # Anchored on the CALL SITE, not on the `HARNESS` literal. The literal
+        # changes every time a number is pinned, and each such change dragged
+        # this file along with it -- which is how the previous description was
+        # made false. `if number in HARNESS:` occurs exactly once and does not
+        # move when the set does, so the mutation semantics are identical and
+        # the coupling is gone.
+        #
+        # The description deliberately carries NO COUNT and names NO ISSUE. The
+        # version this replaced said "every pinned item falls through to
+        # W4-receipts on its TITLE"; two of the seven it dropped carried
+        # `lane:ci` and fell to W6-ci instead, and the first attempt at THIS
+        # description said "the other seven" and was falsified in the same
+        # round by adding two more pins. A description that counts the set it
+        # mutates rots on the next edit to that set. This one states the RULE
+        # and the WITNESS -- the fixtures that catch the arm pass no labels.
+        ("B1 the harness pin is narrowed to its first four numbers, so an "
+         "UNLABELLED harness item is classified by its TITLE instead and lands "
+         "in W4-receipts, demanding an estate receipt it can never obtain"),
         "build_inventory.py",
-        "HARNESS = {4466, 4467, 4468, 4469, 4485, 4487, 4533, 4544, 4545, 4578, 4579}",
-        "HARNESS = {4466, 4467, 4468, 4469}",
+        "    if number in HARNESS:",
+        "    if number in {4466, 4467, 4468, 4469}:",
     ),
     (
         "P11 a policy read via a LOCAL ALIAS is invisible to the allow-list scan",
