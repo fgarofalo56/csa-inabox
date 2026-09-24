@@ -12,12 +12,15 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
+import {
+  assertNoServerOwnedStateChange, carryServerDerivedScope, ServerOwnedStateError,
+} from '@/app/api/items/_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,13 +29,7 @@ function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
 }
 
-export async function GET(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const GET = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     // READ resolves via owner → workspace ACL → item-level grant (rel-T87), so
     // a user the item was shared with can open it (any role admits read).
@@ -42,12 +39,9 @@ export async function GET(
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const PATCH = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
@@ -57,11 +51,42 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     if (!access) return err('Item not found', 404, 'not_found');
     if (!access.canWrite) return err('Read-only access', 403, 'forbidden');
     const item = access.item;
+    const nextState = 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state;
+    // #4619 — `state` is replaced WHOLESALE below with no schema validation, and
+    // this is the route `lib/api/workspaces.ts:272` (`updateItem`) puts every
+    // generic editor save through. A handful of its TOP-LEVEL keys are not user
+    // data: they record what the provisioning engine created for this item, and
+    // other code derives a security-relevant scope from them. Reject-on-change,
+    // so a body that round-trips them unchanged, or omits them, is unaffected.
+    //
+    // `assertNoServerOwnedStateChange`, NOT the narrower scope assert. It calls
+    // the scope assert and then adds the depth-blind server-owned key check
+    // (#3611: `secretRef` names a Key Vault secret a later delete acts on,
+    // `engineObject` names a query-engine object a later query acts on) plus the
+    // `__proto__` refusal. This route's sibling at `items/[type]/[id]` has
+    // always called the fuller one; calling only the scope assert here left that
+    // class open on a PATCH route, which review measured.
+    try {
+      assertNoServerOwnedStateChange(nextState, item.state);
+    } catch (e: any) {
+      if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
+      throw e;
+    }
+    // #4619 — the assert permits OMISSION, and `state` is replaced WHOLESALE
+    // below, so a body that merely LEAVES OUT a server-derived key DELETES it.
+    // That is the bypass: one request edits `state.database` AND drops
+    // `state.provisioning`, so a resolver that prefers the receipt has no
+    // receipt left to prefer. Rebase those keys onto what this item carries.
+    // Assert FIRST (an attempted change stays a 400, never a silent
+    // substitution), carry SECOND (an omission preserves instead of deleting).
+    const carriedState = nextState && typeof nextState === 'object'
+      ? carryServerDerivedScope(nextState as Record<string, unknown>, item.state)
+      : nextState;
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
       description: 'description' in body ? (body.description?.trim() || undefined) : item.description,
-      state: 'state' in body && body.state && typeof body.state === 'object' ? body.state : item.state,
+      state: carriedState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();
@@ -77,15 +102,9 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   } catch (e: any) {
     return err(e?.message || 'Failed to update item', 500, 'cosmos_error');
   }
-}
+});
 
-export async function DELETE(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> }
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const DELETE = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     // DELETE is destructive: require WORKSPACE-level write (owner or a
     // workspace Admin/Member). An item-level `Edit` grant confers edit, not
@@ -122,4 +141,4 @@ export async function DELETE(
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');
   }
-}
+});
