@@ -73,9 +73,20 @@ const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = 
  * SERVER-OWNED ITEM STATE — keys a REQUEST BODY may never introduce or change
  * (#3611).
  *
- * THE DEFECT THIS CLOSES. The generic item PATCH
+ * THE DEFECT THIS CLOSES — stated as HISTORY, because that is what it is. As
+ * measured in #3611, the generic item PATCH
  * (`app/api/items/[type]/[id]/route.ts`) and {@link updateOwnedItem} both
  * replaced `state` WHOLESALE from the request body, with no field validation.
+ *
+ * DO NOT READ THOSE TWO AS THE CURRENT COVERAGE. #4621 widened the rule to a
+ * THIRD caller (`app/api/cosmos-items/[type]/[id]/route.ts`) and these lines
+ * went on saying two until review measured it. So this docblock STOPS
+ * ENUMERATING rather than being corrected to a new number that the next
+ * widening will falsify in turn — the same "link, do not restate" conclusion
+ * the neighbouring #4619 rule reached after being wrong about ITS writer set
+ * twice. The live set is derivable, and a derivation cannot go stale:
+ *
+ *     git grep -n 'assertNoServerOwnedStateChange(' -- apps/ | grep -v __tests__
  * `state` is a free-form bag, but a handful of its keys are not user data at
  * all — they NAME a platform resource that a later request DESTROYS or READS
  * with the Console's own managed identity. Measured sinks on this tree:

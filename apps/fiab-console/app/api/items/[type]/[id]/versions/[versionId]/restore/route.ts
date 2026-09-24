@@ -39,13 +39,15 @@ export const dynamic = 'force-dynamic';
 // baselining the guard, not satisfying it.
 //
 // `withSession` returns `apiUnauthorized()` itself, which is exactly what the
-// removed prologue returned, so the 401 contract is unchanged. The local
-// try/catch is KEPT: `withSession` genericizes an unexpected throw through
-// `apiServerError`, but it does not know that `cosmos_not_configured` must
-// surface as a 503 with its own code, and losing that would turn an honest
-// infra gate into an opaque 500.
-export const POST = withSession<{ type: string; id: string; versionId: string }>(
-  async (_req: NextRequest, { session, params }) => {
+// removed prologue returned, so the 401 contract is unchanged — and that is now
+// WITNESSED rather than asserted: the versions suite has a `401 when
+// unauthenticated` arm on THIS route which fails if that branch stops firing
+// (before this round the suite's only 401 arm drove the sibling GET, so nothing
+// in the tree could see a regression here). The local try/catch is KEPT:
+// `withSession` genericizes an unexpected throw through `apiServerError`, but it
+// does not know that `cosmos_not_configured` must surface as a 503 with its own
+// code, and losing that would turn an honest infra gate into an opaque 500.
+export const POST = withSession<{ type: string; id: string; versionId: string }>(async (_req: NextRequest, { session, params }) => {
   try {
     const access = await resolveItemAccessByOid(session, params.id, params.type);
     if (!access) return apiNotFound('Item not found');
@@ -81,9 +83,8 @@ export const POST = withSession<{ type: string; id: string; versionId: string }>
     // roll back a BINDING will find that restore no longer does it, and there is
     // no other supported path for `state.storageAccount` on an existing item
     // (see the `SERVER_DERIVED_SCOPE_KEYS` block in `server-derived-scope.ts`).
-    // That is a
-    // real affordance loss. It is the accepted trade because a restore that
-    // silently re-points a grant coordinate is worse. Tracked on #4619.
+    // That is a real affordance loss. It is the accepted trade because a restore
+    // that silently re-points a grant coordinate is worse. Tracked on #4619.
     const restoredState = carryServerDerivedScope(
       (version.content?.state ?? live.state ?? {}) as Record<string, unknown>,
       live.state,
