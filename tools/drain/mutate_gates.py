@@ -3568,6 +3568,36 @@ ARMS: list[tuple[str, str, str, str]] = [
         'f"reversed from {from_state} ({REVERSAL_FLAGS[from_state]}): {reason}",',
         'f"reversed: {reason}",',
     ),
+    (
+        ("UP10 the PARK COMMENT BODY goes back to naming no mechanism - "
+         "'resolve the blocker and say so here', which was true when written and "
+         "became false the moment `--unpark` shipped. This is the arm for a "
+         "defect class the rest of the matrix cannot see: the mutant changes a "
+         "string that is PUBLISHED VERBATIM on a public issue and republished on "
+         "every park, so a stale sentence here is R7 on an unrevisable surface "
+         "rather than a stale comment. Its sibling defect - the park body citing "
+         "#2874 (a Gov bicep-drift ITEM) for a rule that is #4535 - is pinned by "
+         "the same test, and the DECLINE branch of the same function already "
+         "cited #4535, so the two adjacent branches disagreed.\n"
+         "         THE WHOLE BLOCK, NOT ITS FIRST LINE, and that is a correction "
+         "measured rather than reasoned. The first version of this arm replaced "
+         "only `\"TO UNPARK IT: resolve the blocker, then run \"` -- and Python "
+         "concatenates adjacent string literals, so the following six lines "
+         "survived and the mutant body STILL contained `--unpark <n>`. It scored "
+         "SURVIVED against a test that was working perfectly: a WEAK MUTATION, "
+         "not a blind suite, and the two are indistinguishable from the verdict "
+         "alone. Same lesson as arm M3 above, in a different syntax"),
+        "tick.py",
+        ('            "TO UNPARK IT: resolve the blocker, then run "\n'
+         '            "`tick.py --unpark <n> --reason \'<why the blocker no longer holds>\'`. "\n'
+         '            "That verb is the ONLY route out of a terminal state - a refresh and "\n'
+         '            "`--reap` both leave a parked item alone, deliberately - and it posts "\n'
+         '            "its reason here, so this comment is corrected on the public record "\n'
+         '            "rather than only in the ledger (#4699). The harness will not "\n'
+         '            "re-select this item until somebody runs it.\\n\\n"\n'),
+        ('            "TO UNPARK IT: resolve the blocker and say so here. The park is "\n'
+         '            "terminal, so the harness will not re-select this item on its own.\\n\\n"\n'),
+    ),
 ]
 
 

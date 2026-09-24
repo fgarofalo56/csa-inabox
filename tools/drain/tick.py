@@ -837,15 +837,22 @@ def _disposition_comment(
             "refresh matrix are why:\n"
             "- while this issue is OPEN, that is a park's EXPECTED condition, so "
             "being open disputes nothing and the refresh leaves the item alone "
-            "(`REOPEN_DISPUTES` excludes `parked` - #2874, where every refresh "
-            "demoted every park and the drain's exit condition became unreachable "
-            "for anything genuinely blocked);\n"
+            "(`REOPEN_DISPUTES` excludes `parked` - #4535, where the reopen "
+            "branch was keyed on TERMINAL wholesale, so every refresh demoted "
+            "every park and the drain's exit condition became unreachable for "
+            "anything genuinely blocked; #2874 is the ITEM that demonstrated it, "
+            "demoted thirteen seconds after it was parked);\n"
             "- if this issue is CLOSED, the departure cell leaves the park "
             "standing too (`parked | departed -> survives parked`), because the "
             "issue being closed does not establish that the blocker lifted and "
             "there is no state meaning 'park resolved'.\n\n"
-            "TO UNPARK IT: resolve the blocker and say so here. The park is "
-            "terminal, so the harness will not re-select this item on its own.\n\n"
+            "TO UNPARK IT: resolve the blocker, then run "
+            "`tick.py --unpark <n> --reason '<why the blocker no longer holds>'`. "
+            "That verb is the ONLY route out of a terminal state - a refresh and "
+            "`--reap` both leave a parked item alone, deliberately - and it posts "
+            "its reason here, so this comment is corrected on the public record "
+            "rather than only in the ledger (#4699). The harness will not "
+            "re-select this item until somebody runs it.\n\n"
             f"{tail}"
         )
     return (
@@ -865,8 +872,13 @@ def _disposition_comment(
         "- if this issue is CLOSED, the decline stands as recorded and nothing "
         "disputes it (`declined | departed -> expected -> survives`). There is "
         "nothing left to do.\n\n"
-        "That escape is the whole reason `declined` and `parked` are treated "
-        "differently: a demoted decline has a legal way out and a park has none.\n\n"
+        "That asymmetry is why `declined` and `parked` are treated differently "
+        "by the REFRESH: a decline seen open is demoted and has a legal way out "
+        "of that demotion, and a park is never demoted in the first place. "
+        "NEITHER IS A DEAD END. To reverse this decline, run "
+        "`tick.py --undecline <n> --reason '<who reversed it, on what grounds>'` "
+        "(a park's mirror is `--unpark`, #4699). An explicit verb is the only "
+        "route out of a terminal state, and it posts its reason here.\n\n"
         f"{tail}"
     )
 
@@ -1253,11 +1265,18 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
     """The comment a reversal posts. THE PERMANENT PUBLIC RECORD, and a CORRECTION.
 
     This one carries a duty the disposition bodies do not: the park's comment is
-    already on the issue, it says "the park is terminal, so the harness will not
-    re-select this item on its own", and after a reversal THAT SENTENCE IS
-    FALSE. A reversal that wrote only to a gitignored `state.json` would leave a
-    public artifact asserting the opposite of the truth -- which is the R7 defect
-    this package keeps finding in itself, on an unrevisable surface.
+    already on the issue saying the harness will not re-select the item, and
+    after a reversal that is no longer the situation. A reversal that wrote only
+    to a gitignored `state.json` would leave a public artifact describing a state
+    that has been reversed -- the R7 defect this package keeps finding in itself,
+    on an unrevisable surface.
+
+    THE PARK BODY WAS ALSO UPDATED, and the two halves are not interchangeable.
+    `_disposition_comment` now names `--unpark` as the mechanism, so a park
+    posted from here on tells its reader what to run; this comment is what
+    corrects a park that is ALREADY published, including the ones posted before
+    the verb existed (#2958's, which said "resolve the blocker and say so here"
+    and named no mechanism because there was none).
 
     WHAT IT MUST NOT CLAIM, and the list is shorter than the dispositions' only
     because this verb establishes more before it speaks:
@@ -1530,14 +1549,19 @@ def _reverse(
     # zero reads as well as zero writes -- the property `_dispose` buys the same
     # way and for the same reason.
     #
-    # THE LOCALS ARE NAMED `reversal_*` AND THAT IS LOAD-BEARING, not style. The
-    # obvious spelling -- `permitted, permit_note` -- is VERBATIM the anchor of
-    # mutation arm DP5 over in `_dispose`, and an anchor that matches twice is
+    # THE LOCALS ARE NAMED `reversal_*` AND THAT IS LOAD-BEARING, not style.
+    # **DO NOT "SIMPLIFY" THIS BACK TO `permitted, permit_note`.** That spelling
+    # is VERBATIM the anchor of mutation arm DP5 over in `_dispose`, and
+    # `mutate_gates` aims an arm by substring: a needle that matches twice is
     # silently re-aimed at whichever copy is higher in the file, DISARMING the
-    # arm. Measured: adding this function with the obvious names turned
+    # arm rather than erroring. Measured while writing this function -- adding it
+    # with the obvious names turned
     # `test_every_arm_anchor_is_present_and_unique_in_the_current_source` red
-    # with `DP5 -> 2 matches in tick.py`, which is the meta-test earning its
-    # place. Arm UP4 anchors on the names below.
+    # with `DP5 -> 2 matches in tick.py`, which is that meta-test earning its
+    # place. It is the same recurrence #4695 hit from the other direction, where
+    # an arm anchored on a verbatim copy of a set literal and broke when the set
+    # changed. The right fix is a UNIQUE anchor here, never a loosened
+    # uniqueness assertion there. Arm UP4 anchors on the names below.
     action = REVERSAL_ACTIONS[from_state]
     reversal_permitted, reversal_note = gates.action_is_permitted(action, policy)
     if not reversal_permitted:

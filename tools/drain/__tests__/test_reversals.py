@@ -979,6 +979,63 @@ def test_a_reversal_records_no_receipt_and_reopens_the_receipt_path(
     )
 
 
+@pytest.mark.parametrize(
+    ("state", "other"), [(PARKED, DECLINED), (DECLINED, PARKED)], ids=[PARKED, DECLINED]
+)
+def test_the_disposition_body_names_the_verb_that_reverses_it(state, other):
+    """MUTATION ARM UP10: the park body goes back to naming no mechanism.
+
+    THE DEFECT THIS CHANGE WOULD OTHERWISE HAVE CREATED. Before #4699 the park
+    comment said *"TO UNPARK IT: resolve the blocker and say so here. The park is
+    terminal, so the harness will not re-select this item on its own."* -- true
+    when written, because there was no verb. Shipping `--unpark` without touching
+    that sentence leaves a permanent public artifact telling every future reader
+    there is no mechanism, when there is one. That is R7 on an unrevisable
+    surface, and it republishes on EVERY park the harness performs.
+
+    The decline half is the mirror, and its own stale claim was *"a demoted
+    decline has a legal way out and a park has none"* -- false the moment
+    `--unpark` exists.
+
+    WHAT MAKES THIS FAIL: remove the verb name from either body, or name the
+    WRONG one. The flag is read from `tick.REVERSAL_FLAGS` rather than
+    transcribed (assertion-design #3), so a probe cannot disagree with the
+    implementation, and the `other` parameter pins that each body gives ITS OWN
+    verb as the runnable instruction -- a body that told the reader to run the
+    other one would pass a bare membership check. Both bodies MENTION the
+    sibling flag in passing, which is why the assertion is on the `<n>`
+    placeholder form: that is the one a reader copies.
+
+    THE CITATION ASSERTION IS SEPARATE AND IS NOT COSMETIC. The park body cited
+    `#2874` for the rule that `REOPEN_DISPUTES` excludes `parked`. Measured:
+    #4535 is the DEFECT ("a parked item cannot stay parked", CLOSED); #2874 is
+    "bicep-drift (Gov (GCC-High)): 17 unmanaged delta(s)" (OPEN) -- the ITEM that
+    was parked and demoted thirteen seconds later. The decline branch of the very
+    same function already cited #4535 correctly, so the two adjacent branches
+    disagreed. WHAT MAKES IT FAIL: cite #2874 as the defect again.
+    """
+    body = tick._disposition_comment(state, [("EVIDENCE", "x")], "OPEN")
+    mine = f"{tick.REVERSAL_FLAGS[state]} <n>"
+    theirs = f"{tick.REVERSAL_FLAGS[other]} <n>"
+
+    assert mine in body, (
+        f"a {state} body that names no runnable way out tells every future "
+        "reader there is no mechanism, permanently and publicly"
+    )
+    assert theirs not in body, (
+        f"the {state} body must give {mine!r} as the instruction, never {theirs!r}"
+    )
+    assert "#4535" in body, (
+        "the REOPEN_DISPUTES rule is #4535 (the defect); #2874 is the bicep-drift "
+        "ITEM that demonstrated it"
+    )
+    if state == PARKED:
+        assert "#2874 is the ITEM" in body, (
+            "#2874 is kept only with its actual role named - dropping it entirely "
+            "would lose the measurement, and naming it alone misattributes"
+        )
+
+
 # ---------------------------------------------------------------------------
 # WIRING -- a verb main() does not dispatch is a verb that does not exist
 # ---------------------------------------------------------------------------
