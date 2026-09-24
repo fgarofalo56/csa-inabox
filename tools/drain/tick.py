@@ -35,6 +35,7 @@ from ledger import (
     NEEDS_AUDIT,
     PARKED,
     READY,
+    REOPEN_DISPUTES,
     TERMINAL,
     Ledger,
     LedgerChangedError,
@@ -1332,20 +1333,56 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
     committed one function over. The two corrections are now written out in
     full, and each quotes only what its own disposition actually says.
 
-    THE RECEIPT PARAGRAPH RECORDS A DECISION, not an inherited default. A
-    receipt SURVIVES a reversal: nothing on the park or decline path voids one,
-    and after the reversal `receipt_kind`/`receipt_ref`/`receipt_taken_under`
-    are still attached, so `Ledger.receipt_ok()` -- which
-    `merge_gate.ledger_receipt_ready` calls -- is True. `upsert`'s REOPEN
-    branch VOIDS the receipt on an identical-looking shape, so the asymmetry
-    needs a reason rather than silence, and the reason is what each event
-    disputes: a reopen disputes the very claim the receipt closed on, while a
-    reversal disputes the DISPOSITION and says nothing about evidence taken
-    while the item was still non-terminal. Voiding here would destroy valid
-    evidence -- a receipt names a run id that can age out of retention -- to
-    make one sentence simpler. The receipt is KEPT, and the body now says so
-    instead of leaving "closing it still requires the normal receipt path" to
-    be read as "it comes back owing one".
+    THE RECEIPT PARAGRAPH RECORDS A DECISION, not an inherited default, and it
+    is PER-STATE because the measurement is. A receipt SURVIVES a reversal:
+    nothing on either reversal path voids one, so after it
+    `receipt_kind`/`receipt_ref`/`receipt_taken_under` are still attached and
+    `Ledger.receipt_ok()` -- which `merge_gate.ledger_receipt_ready` calls --
+    is True. The reason to keep is that a reversal disputes the DISPOSITION and
+    says nothing about evidence taken while the item was still non-terminal;
+    voiding would destroy valid evidence (a receipt names a run id that can age
+    out of retention) to make one sentence simpler, and it would be a NEW
+    asymmetry rather than the removal of one -- `reap_stranded` and `upsert`'s
+    departed-rescue both reach `ready` without voiding anything.
+
+    WHAT THE SENTENCE USED TO SAY, AND WHY IT WAS FALSE ON HALF THE STATES.
+    Both bodies carried *"that is deliberately UNLIKE a reopen, which voids the
+    receipt because a reopen disputes the very claim that receipt closed on"*.
+    `CLOSES_ON_GITHUB` is `(CLOSED,)`, so a decline NEVER shuts its issue:
+    nothing closed, and there is no "claim that receipt closed on" for the
+    state whose comment carried it. That is the same published-universal-
+    falsified-by-the-sibling-state class this PR already repaired twice on this
+    branch, committed inside the justification for the fix, and the class scan
+    could not reach it because that scan reads `only route out of <X>` only.
+
+    WHAT IT SAYS NOW, AND THE MEASUREMENT BEHIND IT. `parked` is not in
+    `REOPEN_DISPUTES` and `declined` is, so the two states genuinely differ and
+    the branch is taken on the constant rather than on a literal. Driven
+    through the real `refresh_from_github` from one start state (#4534 as a
+    fixture, `tmp_path` ledger, receipt `ci-green`, issue OPEN -- which for a
+    decline is its NORMAL condition, not a signal):
+
+        PATH A  do nothing, one refresh  -> needs-audit  receipt=None  ok=False
+        PATH B  --undecline              -> ready        receipt kept  ok=True
+        CONTROL park + one refresh       -> parked       receipt kept  ok=True
+
+    So on the decline side THIS PR CREATES A SECOND ROUTE OUT OF ONE STATE and
+    the two disagree about R2. The decision is to KEEP -- the park side has no
+    second route to disagree with, the population is empty by construction
+    (see below), and the refresh's void fires on a condition that is a
+    decline's ordinary one -- but the body now SAYS the divergence rather than
+    justifying it with an event that cannot have happened.
+    `test_the_two_routes_out_of_a_reopen_disputed_state_disagree_about_the_receipt`
+    pins the measurement and UP17/UP18 witness the text.
+
+    THE POPULATION IS EMPTY BY CONSTRUCTION, and the body says "may" rather
+    than implying this is an ordinary shape. `Ledger.record_receipt` is the
+    only writer of `receipt_kind`, and its only non-test caller is
+    `_record_close_in_ledger`, which pairs it with `transition(CLOSED)` under a
+    rollback -- so no tool path leaves a non-closed item holding a receipt at
+    all. Census of the live ledger, whole file, taken by a reviewer: 416 items,
+    11 hold a receipt, all 11 `closed`, 0 parked or declined. A hand-edited
+    `state.json` reaches the shape; nothing in this package does.
     """
     head = REVERSAL_HEADS[from_state]
     if from_state == PARKED:
@@ -1367,6 +1404,71 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
             "`--undecline` window; one posted before it named no verb, because "
             "none existed."
         )
+    # WHAT VOIDS A RECEIPT WITHOUT LEAVING THE STATE AT ALL, and it is shared
+    # between the two branches DELIBERATELY -- which is the opposite of the
+    # shared-template defect this function keeps re-finding, because this fact
+    # is genuinely state-independent: `upsert`'s class-change void is not gated
+    # on the item's state and fires on a `parked` item and a `declined` one
+    # alike. Sharing text is wrong when the two states differ; it is right when
+    # they do not, and the test for that is a measurement, not a preference.
+    #
+    # IT IS HERE BECAUSE THE PARK SENTENCE BELOW IS ABOUT ROUTES OUT and an
+    # earlier draft of it read "NOTHING VOIDS ONE ON THIS ROUTE OR ANY OTHER
+    # OUT OF `parked`" -- true as written and false as read. Measured while
+    # attacking it: seed a parked item with a `deploy-run` receipt, move its
+    # lane label `lane:bicep` -> `lane:console`, run one refresh, and the
+    # receipt is `None` with the item still `parked`. A near-universal that
+    # survives only on a careful reading of its own scope is the defect class
+    # this whole paragraph exists to stop repeating.
+    class_change = (
+        "ONE THING VOIDS A RECEIPT WITHOUT LEAVING THIS STATE AT ALL, said "
+        "here because the sentence above is about ROUTES OUT and a reader "
+        "could fairly take it wider: if a refresh sees this item's RECEIPT "
+        "CLASS change - a lane label moving, say - it voids the receipt and "
+        f"the item stays {from_state}, because the evidence was about a "
+        "different question. "
+    )
+    if from_state in REOPEN_DISPUTES:
+        # THE STATE HAS A SECOND ROUTE OUT, AND IT DISAGREES. Branching on the
+        # constant rather than on `DECLINED` so that adding a state to
+        # `REOPEN_DISPUTES` -- or removing `declined` from it -- re-aims this
+        # paragraph instead of leaving a transcribed claim behind.
+        receipts = (
+            "NO RECEIPT IS RECORDED BY THIS, AND THIS VERB VOIDS NONE - a "
+            "reversal disputes the DISPOSITION, not evidence taken while the "
+            f"item was still in the queue, so an item that held a valid "
+            f"receipt before it was {from_state} still holds it here and may "
+            "already satisfy R2 (no tool path produces that shape: a receipt "
+            "is recorded only alongside the close, so it takes a hand-edited "
+            "`state.json`). SAY THE REST OF IT PLAINLY, because this verb is "
+            f"not the only way out of `{from_state}`: that state is in "
+            "`REOPEN_DISPUTES`, so doing NOTHING for one cycle ALSO leaves it "
+            "- by another door and to a different place. The next refresh "
+            f"over this still-open issue demotes the item to `{NEEDS_AUDIT}` "
+            "and VOIDS the receipt, while typing this verb returns it to "
+            "`ready` and this verb keeps it. Two routes out of one state, "
+            "disagreeing about R2, and the operator picks which by acting or "
+            "waiting. That refresh's void is NOT a dispute about a claim some "
+            "close rested on - nothing here or in the disposition closed the "
+            f"issue (`CLOSES_ON_GITHUB` is {list(CLOSES_ON_GITHUB)}); it "
+            "fires on the issue being OPEN, which for a "
+            f"`{from_state}` item is its ordinary condition rather than a "
+            "signal. Reconciling the two belongs to `ledger.py` and is not "
+            f"settled here. {class_change}"
+        )
+    else:
+        receipts = (
+            f"NO RECEIPT IS RECORDED BY THIS, AND NO ROUTE OUT OF "
+            f"`{from_state}` VOIDS ONE - a reversal disputes the DISPOSITION, "
+            "not evidence taken while the item was still in the queue, so an "
+            f"item that held a valid receipt before it was {from_state} still "
+            "holds it and may already satisfy R2 (no tool path produces that "
+            "shape: a receipt is recorded only alongside the close, so it "
+            f"takes a hand-edited `state.json`). `{from_state}` is NOT in "
+            "`REOPEN_DISPUTES` - the refresh leaves it alone, and so does "
+            "`--reap` - so there is no second route out of it to disagree "
+            f"with this one. {class_change}"
+        )
     return (
         f"{head}\n\n"
         f"PRIOR STATE: {from_state}\n"
@@ -1386,12 +1488,7 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
         "WHAT THIS DOES NOT ESTABLISH: nothing here adjudicates the reason above. "
         "The harness records a reversal supplied by a lane or an operator; it "
         "does not verify that the blocker actually lifted or that the decision "
-        "was wrong. NO RECEIPT IS RECORDED BY THIS, AND NONE IS VOIDED: a "
-        "reversal disputes the DISPOSITION, not evidence taken while the item "
-        f"was still in the queue, so an item that held a valid receipt before it "
-        f"was {from_state} still holds it and may already satisfy R2. That is "
-        "deliberately UNLIKE a reopen, which voids the receipt because a reopen "
-        "disputes the very claim that receipt closed on. Closing this item "
+        f"was wrong. {receipts}Closing this item "
         "still requires the normal receipt path (deploy-integrity R2) - one it "
         "may or may not already hold. This comment is posted BEFORE the ledger "
         f"write, so if that write did not land the item is still {from_state} "
@@ -1726,10 +1823,17 @@ def _reverse(
             "here and the correction is on the issue; nothing was saved. Re-run "
             "the same command - the only cost is a second comment."
         ) from exc
+    voided_elsewhere = (
+        f" The next refresh over this open issue WOULD have voided it "
+        f"(`{from_state}` is in REOPEN_DISPUTES); this verb does not."
+        if from_state in REOPEN_DISPUTES
+        else ""
+    )
     return (
         f"#{number}: reversed from {from_state} ({note}); state {from_state} -> "
-        f"{item.state}. NO RECEIPT WAS RECORDED AND NONE WAS VOIDED - closing "
-        "still needs one, which this item may or may not already hold."
+        f"{item.state}. NO RECEIPT WAS RECORDED AND THIS VERB VOIDED NONE - "
+        "closing still needs one, which this item may or may not already "
+        f"hold.{voided_elsewhere}"
     )
 
 
@@ -3162,7 +3266,8 @@ def build_parser() -> argparse.ArgumentParser:
              "Only while the issue is OPEN and the ledger still says declined: "
              "a refresh demotes it to needs-audit (nothing left to reverse) and "
              "a closed issue is refused (re-open it first). Records no receipt "
-             "and voids none; closing still needs one",
+             "and THIS VERB voids none - but that refresh, the other route out "
+             "of `declined`, DOES void one. Closing still needs one",
     )
     parser.add_argument(
         "--reason", metavar="TEXT",

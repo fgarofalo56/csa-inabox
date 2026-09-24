@@ -86,8 +86,10 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import tick
+from build_inventory import stream_for
 from ledger import (
     CLOSED,
+    CLOSES_ON_GITHUB,
     DECLINED,
     IN_FLIGHT,
     IN_REVIEW,
@@ -1067,18 +1069,54 @@ def test_a_reversal_records_no_receipt_and_reopens_the_receipt_path(
 def _published_surfaces() -> dict[str, str]:
     """Every string this package puts in front of a reader, rendered.
 
-    FOUR POSTED BODIES AND THE TWO HELP LINES, because a surface is not a file
-    -- it is every SITE within it. The round that introduced the defect below
-    swept the two disposition bodies and missed that `build_parser()` carries
-    the same sentence to anyone who types `--help`.
+    FOUR POSTED BODIES, EVERY HELP LINE THE PARSER CARRIES, THE README AND
+    `policy.json` -- because a surface is not a file, it is every SITE within
+    it. The round that introduced the defect below swept the two disposition
+    bodies and missed that `build_parser()` carries the same sentence to anyone
+    who types `--help`.
+
+    THE HELP LINES ARE ENUMERATED FROM `build_parser()`, NOT LISTED, and that
+    is a repair. The first version of this helper iterated the literal tuple
+    `("unpark", "undecline")` -- 2 of the parser's 18 flags -- while the PR
+    describing it claimed a sweep BY CLASS. Measured by a reviewer and
+    re-measured here with nothing mutated on disk: wrap `build_parser` so a
+    false universal lands on one help line, and the scan goes RED on `--unpark`
+    (which the tuple named) and stays GREEN on `--park`, `--decline`,
+    `--record-receipt` and `--reap` (which it did not). A hand-maintained list
+    cannot see its own gaps -- the exact hazard
+    `test_every_value_flag_the_parser_knows_is_refused_without_its_verb`
+    enumerates the parser to avoid, applied there and not here.
+
+    THE ARM MATTERS MORE THAN THE FIX. UP16 poisons `--unpark`'s help line,
+    which the literal tuple already named, so it proves the helper renders THAT
+    line and cannot prove the helper enumerates the parser -- nothing in it
+    varies the listing. UP19 poisons `--park`, a flag no list names, and is the
+    arm that witnesses this paragraph.
+
+    `README.md` AND `policy.json` ARE SURFACES TOO, and were blind for the same
+    reason one file over: the README's `--unpark` paragraph carries the claim
+    class in prose and no instrument read it. UP20 witnesses that one does now.
+    They are read as raw text rather than parsed; the scans below are regexes
+    over published prose and markdown/JSON structure is not in their way.
+
+    WHAT THIS STILL CANNOT SEE, stated so a clean run is not over-read: ONE
+    PHRASING. Its callers scan `only route out of <X>`. A false universal spelt
+    any other way passes -- UP11's own replacement text spells one *"a demoted
+    decline has a legal way out and a park has none"*, and it is a sibling test
+    rather than this scan that catches it. A clean result is evidence that this
+    phrasing is absent, not that the class is.
     """
     parser = tick.build_parser()
     helps = {
-        f"--help[{flag}]": next(
-            a.help for a in parser._actions if f"--{flag}" in a.option_strings
-        )
-        for flag in ("unpark", "undecline")
+        f"--help[{action.option_strings[0].lstrip('-')}]": action.help
+        for action in parser._actions
+        if action.help and action.option_strings
     }
+    here = os.path.dirname(os.path.abspath(__file__))
+    docs = {}
+    for name in ("README.md", "policy.json"):
+        with open(os.path.join(here, "..", name), encoding="utf-8") as handle:
+            docs[name] = handle.read()
     return {
         f"disposition[{PARKED}]": tick._disposition_comment(
             PARKED, [("EVIDENCE", "x")], "OPEN"),
@@ -1087,6 +1125,7 @@ def _published_surfaces() -> dict[str, str]:
         f"reversal[{PARKED}]": tick._reversal_comment(PARKED, "why", "OPEN"),
         f"reversal[{DECLINED}]": tick._reversal_comment(DECLINED, "why", "OPEN"),
         **helps,
+        **docs,
     }
 
 
@@ -1115,6 +1154,23 @@ def test_no_published_surface_claims_a_verb_is_the_only_route_out_of_a_state_the
     scan is CASE-INSENSITIVE, which the first version of the probe was not --
     it scored the park body clean because that body spells it "the ONLY route
     out", a needle narrower than the string it meant to find.
+
+    WHICH ARM WITNESSES WHICH CLAUSE, named rather than left to luck. The
+    `in TERMINAL` clause is covered by UP10, UP15, UP16 and UP19. The
+    `not in REOPEN_DISPUTES` clause has NO arm in the UP series at all -- a
+    reviewer was about to record it as unwitnessed and then found that **L26**
+    covers it: that arm adds `parked` to `REOPEN_DISPUTES` itself, and this
+    test reds with *"disposition[parked] claims to be the only route out of
+    'parked', but 'parked' is in REOPEN_DISPUTES"*. A transcribed copy of the
+    constant could not have moved, so L26 is also the proof that the runtime
+    read above is live. Written down here because "an arm exists somewhere" is
+    not something the next reader can check.
+
+    WHAT THIS SCAN CANNOT SEE: ONE PHRASING -- see `_published_surfaces()`.
+    UP11's own replacement text carries a false universal spelt differently
+    ("a demoted decline has a legal way out and a park has none") and a sibling
+    test, not this one, catches it. A clean result here is evidence about this
+    phrasing, not about the class.
     """
     claim = re.compile(r"only route out of\s+(\S+)", re.IGNORECASE)
     scoped_to: dict[str, list[str]] = {}
@@ -1264,21 +1320,37 @@ def test_undecline_is_refused_in_both_branches_the_decline_body_names(
 def test_a_receipt_survives_a_reversal_and_the_body_says_so(monkeypatch, tmp_path):
     """MUTATION ARM UP13. The decision, pinned so it cannot drift back silently.
 
-    A receipt survives a park: nothing on either disposition path voids one, and
-    `record_receipt_from_evidence` refuses a terminal item, so any receipt a
-    terminal item holds was taken while it was still in the queue. After a
-    reversal it is STILL attached and `Ledger.receipt_ok()` -- which
+    A receipt survives a park: nothing on either disposition path voids one, so
+    after a reversal it is STILL attached and `Ledger.receipt_ok()` -- which
     `merge_gate.ledger_receipt_ready` calls -- is True.
 
-    `upsert`'s REOPEN branch voids on an identical-looking shape, so the
-    asymmetry is a DECISION and is recorded as one: a reopen disputes the very
-    claim the receipt closed on, a reversal disputes the DISPOSITION and says
-    nothing about evidence. Voiding would destroy a valid run reference that can
-    age out of retention, to make one sentence simpler.
+    THE REASON, RESTATED, because the first version of this docstring gave one
+    that is false on the sibling state. It said *"a reopen disputes the very
+    claim the receipt closed on"* -- and `CLOSES_ON_GITHUB` is `(CLOSED,)`, so
+    a DECLINE never shuts its issue and no close ever happened for the state
+    that argument was reused on. The reason that survives measurement is
+    narrower: a reversal disputes the DISPOSITION and says nothing about
+    evidence taken while the item was still non-terminal, and voiding would be
+    a NEW asymmetry rather than the removal of one -- `reap_stranded` and
+    `upsert`'s departed-rescue both reach `ready` without voiding anything.
+
+    A SECOND LEG OF THE ORIGINAL ARGUMENT WAS VACUOUS AND IS DROPPED.
+    *"`record_receipt_from_evidence` refuses a terminal item, so any receipt a
+    terminal item holds was taken validly beforehand"* is true and does no
+    work: `Ledger.record_receipt` is the only writer of `receipt_kind` and its
+    only non-test caller pairs it with `transition(CLOSED)` under a rollback,
+    so no tool path produces a receipted park or decline at all. Census of the
+    live ledger, whole file: 416 items, 11 hold a receipt, all 11 `closed`, 0
+    parked or declined. The population this decision governs is empty BY
+    CONSTRUCTION, not by luck; this test reaches the shape by writing the
+    fields directly, which is what a hand-edited `state.json` does.
 
     WHAT MAKES THIS FAIL: void the receipt in `_reverse` (the first assertion),
     or leave the published body saying only "closing it still requires the
-    normal receipt path", which reads as "it comes back owing one" (the second).
+    normal receipt path", which reads as "it comes back owing one" (the
+    second). The body anchors are read per-state rather than as one literal --
+    the two states say different true things now, and a single shared anchor is
+    what produced the defect this docstring is about.
     """
     led = _led(tmp_path)
     item = led.items[STRANDED_BY_A_CLEARED_BLOCKER]
@@ -1302,12 +1374,275 @@ def test_a_receipt_survives_a_reversal_and_the_body_says_so(monkeypatch, tmp_pat
     assert led.receipt_ok(item)[0], (
         "so merge_gate.ledger_receipt_ready is satisfied on the way back in"
     )
-    assert "NONE IS VOIDED" in tick._reversal_comment(PARKED, "why", "OPEN"), (
+    park_body = tick._reversal_comment(PARKED, "why", "OPEN")
+    assert f"NO ROUTE OUT OF `{PARKED}` VOIDS ONE" in park_body, (
         "the published body must SAY the receipt is kept - otherwise 'closing "
         "still requires the normal receipt path' reads as 'it comes back owing "
-        "one', which is false in exactly this case"
+        "one', which is false in exactly this case. The park's claim is the "
+        "STRONG one (no route out of `parked` voids anything) because `parked` "
+        "is not in REOPEN_DISPUTES"
     )
-    assert "NONE WAS VOIDED" in out, "and so must what the operator sees on stdout"
+    decline_body = tick._reversal_comment(DECLINED, "why", "OPEN")
+    assert "THIS VERB VOIDS NONE" in decline_body, (
+        "and the decline's is the WEAK one, scoped to the verb, because the "
+        "refresh is a second route out of `declined` and it DOES void"
+    )
+    assert f"NO ROUTE OUT OF `{DECLINED}` VOIDS ONE" not in decline_body, (
+        "the park's strong claim must NOT be published on the decline, which "
+        "is the shared-template defect this whole function keeps re-finding"
+    )
+    assert "THIS VERB VOIDED NONE" in out, "and so must what the operator sees on stdout"
+
+
+def test_the_two_routes_out_of_a_reopen_disputed_state_disagree_about_the_receipt(
+    tmp_path,
+):
+    """MUTATION ARM UP17. The divergence THIS PR CREATES, measured not argued.
+
+    Before this PR a `declined` item had exactly one route out -- the refresh's
+    demotion -- so there was nothing for it to disagree with. `--undecline` is
+    a second route, and the two reach opposite `deploy-integrity` R2 outcomes
+    from one start state in one window. That is a consequence of the keep
+    decision and it was published nowhere and pinned by nothing.
+
+    DRIVEN THROUGH THE REAL `refresh_from_github`, not through a paraphrase of
+    it, with the issue OPEN -- which for a decline is its ORDINARY condition,
+    since `CLOSES_ON_GITHUB` is `(CLOSED,)` and nothing shuts a decline's
+    issue. The park control is in the same test because a control that lives in
+    another file is one an arm can retire without anyone noticing:
+
+        PATH A  do nothing, one refresh  -> needs-audit  receipt=None  ok=False
+        PATH B  the reversal's own write -> ready        receipt kept  ok=True
+        CONTROL park + one refresh       -> parked       receipt kept  ok=True
+
+    WHAT MAKES THIS FAIL: void the receipt on the reversal (PATH B's kept-check
+    reds), stop voiding it on the refresh (PATH A's None-check reds), put
+    `parked` into `REOPEN_DISPUTES` so the control acquires a second route (the
+    control reds), or delete the divergence sentence from the published decline
+    body (the last two assertions red). The states are read from `ledger`'s own
+    constants at runtime, so changing `REOPEN_DISPUTES` re-aims this test
+    rather than leaving a transcribed claim behind.
+
+    THE POPULATION IS EMPTY BY CONSTRUCTION and this test says so rather than
+    implying otherwise: `Ledger.record_receipt`'s only non-test caller pairs it
+    with `transition(CLOSED)`, so no tool path produces a receipted decline.
+    This reaches the shape the way a hand-edited `state.json` does -- which the
+    README documents as a supported move, which is why this is worth pinning
+    at all rather than dismissing as unreachable.
+    """
+    assert DECLINED in REOPEN_DISPUTES, (
+        "the premise, lifted from the constant rather than transcribed: this "
+        f"test is about the states in {REOPEN_DISPUTES} that a reversal verb "
+        "also reaches"
+    )
+    assert PARKED not in REOPEN_DISPUTES, (
+        "and `parked` is the control precisely because it is OUT -- it has no "
+        "second route out to disagree with its reversal verb"
+    )
+    assert DECLINED not in CLOSES_ON_GITHUB, (
+        "and the reason the OLD justification was false: a decline never shuts "
+        "its issue, so 'the very claim that receipt closed on' named an event "
+        "that cannot have happened for this state"
+    )
+
+    def _receipted(state: str, why: str) -> tuple[Ledger, object]:
+        # THE STREAM IS THE ONE THE REFRESH WILL RECOMPUTE, and that is not
+        # cosmetic. Seeded with `_led`'s `W6-ci` this test RED with the receipt
+        # `None` on PATH B as well -- and the cause was not the reversal: the
+        # refresh re-derives the stream from the title via `stream_for`, got
+        # `W1-deploy`, and `upsert`'s CLASS-CHANGE branch voided the receipt
+        # before the reopen branch was ever reached. Both paths would have
+        # shown `None` for a reason that has nothing to do with the divergence
+        # this test is about, and the DIVERGENCE assertion would have been the
+        # one that reported it. Seeding the settled stream removes the
+        # confound; the assertion below proves it is gone rather than assuming.
+        led = Ledger(str(tmp_path / state / "state.json"),
+                     receipts=POLICY["receipts"])
+        led.upsert(STRANDED_BY_A_CLEARED_BLOCKER,
+                   f"issue {STRANDED_BY_A_CLEARED_BLOCKER}",
+                   stream_for(STRANDED_BY_A_CLEARED_BLOCKER,
+                              f"issue {STRANDED_BY_A_CLEARED_BLOCKER}",
+                              ["lane:ci", "sp:1"]),
+                   lane="lane:ci", size=1)
+        item = led.items[STRANDED_BY_A_CLEARED_BLOCKER]
+        item.receipt_kind = POLICY["receipts"][item.effective_receipt_class]
+        item.receipt_ref = "run-36037056251"
+        item.receipt_taken_under = item.effective_receipt_class
+        if state == PARKED:
+            item.blocker, item.owner = "no runner", "op"
+        led.transition(STRANDED_BY_A_CLEARED_BLOCKER, state, why)
+        assert led.receipt_ok(item)[0], f"the precondition for {state}"
+        return led, item
+
+    live = _live((STRANDED_BY_A_CLEARED_BLOCKER,))
+
+    led_a, item_a = _receipted(DECLINED, "operator decided: will not do")
+    class_before = item_a.effective_receipt_class
+    tick.refresh_from_github(led_a, {}, live)
+    assert item_a.effective_receipt_class == class_before, (
+        "THE ANTI-CONFOUND, asserted rather than assumed: `upsert` voids a "
+        "receipt on a CLASS CHANGE as well as on a reopen, and if the class "
+        "moved under this refresh the `receipt_kind is None` below would be "
+        "witnessing the wrong branch. It moved on the first draft of this test"
+    )
+    assert item_a.state == NEEDS_AUDIT, (
+        "PATH A: one refresh over the open issue demotes it -- `declined` is "
+        f"in REOPEN_DISPUTES. Got {item_a.state!r}"
+    )
+    assert item_a.receipt_kind is None, (
+        "PATH A: and VOIDS the receipt. If this stops being true the published "
+        "divergence sentence becomes false in the other direction"
+    )
+    assert led_a.receipt_ok(item_a)[0] is False, (
+        "so merge_gate.ledger_receipt_ready goes False on PATH A -- the R2 "
+        "outcome that PATH B does not reach"
+    )
+
+    led_b, item_b = _receipted(DECLINED, "operator decided: will not do")
+    led_b.transition(STRANDED_BY_A_CLEARED_BLOCKER, READY, "reversed from declined")
+    tick.refresh_from_github(led_b, {}, live)
+    assert item_b.state == READY, "PATH B: and a later refresh leaves it there"
+    assert item_b.receipt_kind == POLICY["receipts"][item_b.effective_receipt_class], (
+        "PATH B: the verb KEEPS the receipt. This is the decision, and the "
+        "assertion that would red if it were reversed to void-for-symmetry"
+    )
+    assert led_b.receipt_ok(item_b)[0] is True, (
+        "THE DIVERGENCE: same start state, same window, opposite R2 outcomes. "
+        f"PATH A -> {led_a.receipt_ok(item_a)} / PATH B -> "
+        f"{led_b.receipt_ok(item_b)}"
+    )
+
+    led_c, item_c = _receipted(PARKED, "parked on a measured blocker")
+    tick.refresh_from_github(led_c, {}, live)
+    assert (item_c.state, item_c.receipt_kind is None) == (PARKED, False), (
+        "THE CONTROL, and it is what makes the park body's STRONGER claim "
+        "true: `parked` is not in REOPEN_DISPUTES, the refresh leaves it "
+        f"alone, so there is no second route to disagree with. Got "
+        f"{item_c.state!r} receipt={item_c.receipt_kind!r}"
+    )
+
+    # THE VOID THAT IS NOT A ROUTE OUT, measured because the park body's claim
+    # is scoped to routes out and an earlier draft of it was not. Same parked
+    # item, same refresh, only the LANE LABEL moves -- which moves the receipt
+    # CLASS, and `upsert` voids on a class change without touching the state.
+    led_d, item_d = _receipted(PARKED, "parked on a measured blocker")
+    class_before = item_d.effective_receipt_class
+    tick.refresh_from_github(led_d, {}, _live((STRANDED_BY_A_CLEARED_BLOCKER,),
+                                              labels=("lane:console", "sp:1")))
+    assert item_d.effective_receipt_class != class_before, (
+        "the precondition for this leg: the lane label must actually MOVE the "
+        f"receipt class. Got {class_before!r} both times, so the leg below "
+        "would be witnessing nothing"
+    )
+    assert item_d.state == PARKED, (
+        "it did NOT leave `parked` -- which is what makes this a counterexample "
+        "to the wider reading of the park claim rather than a second route out"
+    )
+    assert item_d.receipt_kind is None, (
+        "and its receipt is GONE. So 'nothing voids one on this route or any "
+        "other out of `parked`' is true only on a careful reading of its own "
+        "scope, and the published body now discloses this case explicitly "
+        "instead of relying on that reading"
+    )
+
+    body = tick._reversal_comment(DECLINED, "why", "OPEN")
+    assert "REOPEN_DISPUTES" in body, (
+        "THE PUBLISHED HALF: the decline body must NAME the other route, not "
+        "merely be silent about it. A measurement nobody can read off the "
+        "artifact is not a disclosure"
+    )
+    assert NEEDS_AUDIT in body, (
+        "and must say where that route LANDS, which is the half that makes it "
+        "actionable rather than ominous"
+    )
+    assert "VOIDS the receipt" in body, (
+        "and must say what the other route does to the receipt. Silence here "
+        "is what let the false 'UNLIKE a reopen' sentence stand for two rounds"
+    )
+    assert "this verb keeps it" in body, (
+        "and what THIS one does, so the two are legible as a divergence "
+        "rather than as one fact stated twice"
+    )
+
+
+@pytest.mark.parametrize("state", [PARKED, DECLINED], ids=[PARKED, DECLINED])
+def test_no_published_surface_asserts_a_close_that_never_happened(state):
+    """MUTATION ARM UP18. THE CLASS, one turn on from the `only route` scan.
+
+    WHAT SHIPPED, and it was introduced by the fix for the same class twice
+    over. Both reversal bodies carried *"that is deliberately UNLIKE a reopen,
+    which voids the receipt because a reopen disputes the very claim that
+    receipt closed on"*. `CLOSES_ON_GITHUB` is `(CLOSED,)`. A DECLINE never
+    shuts its issue, so for the state that sentence was published on, NOTHING
+    EVER CLOSED -- the clause presupposes an event that cannot have happened.
+    It sat on three surfaces (the posted body, the docstring, `README.md`) and
+    the round-2 class scan could not see it, because that scan reads
+    `only route out of <X>` and this is a different phrasing of the same
+    defect: a universal true of one state, republished on its sibling.
+
+    WHAT MAKES THIS FAIL: write any past-tense close claim -- "closed on",
+    "the close", "when it was closed" -- into a surface rendered for a state
+    that is not in `CLOSES_ON_GITHUB`. Reinstating the old sentence verbatim
+    (UP18) reds `[declined]` and leaves `[parked]` green, which is the shape
+    that makes this a class test rather than a string check: the same text is
+    legitimate for a state the harness really does close.
+
+    THE POSITIVE HALF IS NOT DECORATION. Without it this is satisfiable by
+    deleting every mention of receipts from both bodies, which is exactly the
+    absence-only failure `assertion-design.md` #4 names. Each body must still
+    make its receipt claim, scoped to what is true of its own state.
+
+    THE STATES COME FROM THE CONSTANT at runtime, so adding `declined` to
+    `CLOSES_ON_GITHUB` -- which its own comment says a future decline path
+    would do -- retires this parameter automatically instead of leaving a stale
+    assertion asserting the opposite of the code.
+    """
+    body = tick._reversal_comment(state, "why", "OPEN")
+    if state not in CLOSES_ON_GITHUB:
+        closed_claims = re.findall(
+            r"receipt closed on|claim the receipt closed|"
+            r"the close (?:it|this item) rested on",
+            body,
+            re.IGNORECASE,
+        )
+        assert not closed_claims, (
+            f"the {state!r} reversal body asserts a CLOSE that never happened: "
+            f"{closed_claims}. {state!r} is not in {list(CLOSES_ON_GITHUB)}, so "
+            "nothing here shut the issue and there is no claim a close rested "
+            "on. This is the published-universal-falsified-by-the-sibling-"
+            "state class, in a phrasing the `only route out of` scan cannot see"
+        )
+
+    assert "NO RECEIPT IS RECORDED BY THIS" in body, (
+        "THE POSITIVE HALF, so this is not satisfied by saying nothing about "
+        "receipts at all. Every reversal body must still make the claim"
+    )
+    strong = f"NO ROUTE OUT OF `{state}` VOIDS ONE"
+    if state in REOPEN_DISPUTES:
+        assert strong not in body, (
+            f"{state!r} HAS a second route out (the refresh) and it voids, so "
+            "the strong no-route-voids-it claim is false here"
+        )
+        assert "THIS VERB VOIDS NONE" in body, (
+            "it must make the WEAK claim instead, scoped to the verb"
+        )
+    else:
+        assert strong in body, (
+            f"{state!r} is not in REOPEN_DISPUTES, so the strong claim is true "
+            "and the body should make it rather than under-claiming"
+        )
+    assert "WITHOUT LEAVING THIS STATE AT ALL" in body, (
+        "AND BOTH BODIES MUST DISCLOSE THE ONE VOID THAT IS NOT A ROUTE OUT. "
+        "An earlier draft of the park text read 'NOTHING VOIDS ONE ON THIS "
+        "ROUTE OR ANY OTHER OUT OF `parked`' -- true as written, false as "
+        "read. Measured while attacking it: a parked item holding a "
+        "`deploy-run` receipt, lane label moved `lane:bicep` -> "
+        "`lane:console`, one refresh, and the receipt is None with the item "
+        "still `parked`. `upsert`'s class-change void is not gated on state, "
+        "so this clause is SHARED between the two branches on purpose -- "
+        "shared text is the defect when the states differ and the right answer "
+        "when they do not"
+    )
 
 
 @pytest.mark.parametrize("state", [PARKED, DECLINED], ids=[PARKED, DECLINED])

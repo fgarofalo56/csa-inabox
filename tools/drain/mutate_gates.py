@@ -51,8 +51,18 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
+#:
+#: `README.md` JOINED THIS LIST IN #4702 AND HAD TO. `_published_surfaces()`
+#: now reads it, because the README carried the same false-universal claim
+#: class as the posted bodies and no instrument read it. A read of a file the
+#: sandbox does not carry raises `FileNotFoundError` in EVERY arm -- the
+#: tautological-kill shape `COPIED`'s own note records for
+#: `required_contexts.json`, which is how this was caught before it shipped.
+#: Being in SOURCES as well as COPIED is deliberate: it makes the README
+#: mutable (UP20 poisons it, which is the only thing that witnesses the new
+#: read) and puts it inside the untouched-tree digest.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "operating_point.py", "policy.json"]
+           "operating_point.py", "policy.json", "README.md"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -3610,13 +3620,32 @@ ARMS: list[tuple[str, str, str, str]] = [
          "`declined` is in `REOPEN_DISPUTES`, `needs-audit` is not in "
          "`TERMINAL`, and one `upsert` over an open issue moves it -- and the "
          "SAME body says so three lines up. It was introduced by the fix for "
-         "three sentences of exactly this kind, which is why the test it reds "
-         "checks the CLASS (every 'only route out of X' across all four posted "
-         "bodies AND both --help lines) rather than the sentence that was "
-         "caught. THIS IS UP10'S MIRROR, and its absence was a real gap: UP10 "
-         "mutates the park branch and reds `...[parked]` alone, so the "
-         "`[declined]` parameter had no arm at all and its kill power was "
-         "asserted rather than shown.\n"
+         "three sentences of exactly this kind.\n"
+         "         WHAT IT ACTUALLY REDS, CORRECTED, because this description "
+         "used to say 'the test it reds checks the CLASS' and UP15's -- in "
+         "this same file -- states UP11's kill set correctly and differently. "
+         "Measured: UP11 does NOT touch the class test at all. Its replacement "
+         "is the genuine pre-#4699 text, which carries no `only route out of` "
+         "sentence in any form, so the class scan finds nothing to score and "
+         "stays green; what reds is "
+         "`..._names_the_undecline_window_and_both_refusals` and "
+         "`..._names_the_verb_that_reverses_it[declined]`. UP15 is the arm "
+         "that reinstates the false universal and reaches the class test from "
+         "the decline side. An arm's description naming a kill set it does not "
+         "have is the same defect class the arms themselves are about, one "
+         "level up, and a reviewer found it by running UP11 rather than "
+         "reading it.\n"
+         "         WHAT IT STILL IS: UP10'S MIRROR, and its absence was a real "
+         "gap -- UP10 mutates the park branch and reds `...[parked]` alone, so "
+         "the `[declined]` parameter of the verb-naming test had no arm at all "
+         "and its kill power was asserted rather than shown.\n"
+         "         ONE MORE THING ITS REPLACEMENT DEMONSTRATES, and it is a "
+         "limit on the class scan rather than on this arm: that pre-#4699 text "
+         "carries a false universal in a DIFFERENT PHRASING -- 'a demoted "
+         "decline has a legal way out and a park has none' -- which the "
+         "`only route out of <X>` scan cannot see. A sibling test catches it. "
+         "A clean class scan is evidence that ONE phrasing is absent, not that "
+         "the class is.\n"
          "         THE NEEDLE IS THE WHOLE BLOCK AND THE REPLACEMENT IS THE "
          "REAL PRE-#4699 TEXT, both measured rather than reasoned about. The "
          "first version of this arm replaced only the block's FIRST THREE LINES "
@@ -3750,17 +3779,122 @@ ARMS: list[tuple[str, str, str, str]] = [
          "terminal state'. The help text is a PUBLISHED SURFACE too -- anyone "
          "who types `--help` reads it -- and the round-1 sweep of this claim "
          "swept the two posted bodies and missed it, because a surface is not "
-         "a file, it is every SITE within it. This arm exists to prove that "
-         "`_published_surfaces()` genuinely reads `build_parser()` rather than "
-         "listing it: without a mutation on the help side, the two `--help` "
-         "entries in that helper are an unwitnessed claim, and a scan that "
-         "silently covered four surfaces instead of six would report exactly "
-         "the same clean result"),
+         "a file, it is every SITE within it.\n"
+         "         WHAT THIS ARM PROVES, NARROWED, because the claim it "
+         "carried was the strongest sentence in the section and was false. It "
+         "proves `_published_surfaces()` RENDERS THE `--unpark` HELP LINE. It "
+         "does NOT prove that helper enumerates `build_parser()`: when it was "
+         "written the helper iterated a literal `(\"unpark\", \"undecline\")` "
+         "tuple -- 2 of 18 flags -- and this arm poisons a flag that tuple "
+         "already names, so nothing in it varies the listing. A reviewer "
+         "demonstrated the gap at runtime with nothing mutated: RED on "
+         "`--unpark`, GREEN on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. UP19 is the arm that witnesses the enumeration; this one "
+         "keeps its own narrower witness"),
         "tick.py",
         ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
          '             "ONLY route out of `parked` -- a refresh and --reap both leave a "\n'),
         ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
          '             "ONLY route out of a terminal state -- a refresh and --reap both leave a "\n'),
+    ),
+    (
+        ("UP17 the RECEIPT PARAGRAPH of the reversal body goes back to the "
+         "state-blind text that shipped at round 2, false clause and all: "
+         "*\"NONE IS VOIDED ... that is deliberately UNLIKE a reopen, which "
+         "voids the receipt because a reopen disputes the very claim that "
+         "receipt closed on\"*. `CLOSES_ON_GITHUB` is `(closed,)`, so a "
+         "DECLINE never shuts its issue -- for the state that sentence was "
+         "published on, nothing ever closed and the clause presupposes an "
+         "event that cannot have happened. THE THIRD INSTANCE of the "
+         "published-universal-falsified-by-the-sibling-state class on this "
+         "branch, committed inside the justification for the fix for the "
+         "second, and invisible to the round-2 class scan because that scan "
+         "reads `only route out of <X>` and this is a different phrasing.\n"
+         "         IT MUTATES THE INTERPOLATION, NOT THE BRANCH, so the "
+         "`if/else` above still computes `receipts` and the arm is not "
+         "confusable with UP18: this one restores the FALSE CLOSE CLAIM, "
+         "UP18 restores the STATE-BLINDNESS without it. Expected reds: "
+         "`..._asserts_a_close_that_never_happened[declined]` (the clause) and "
+         "`[parked]` (the strong claim goes missing), "
+         "`..._a_receipt_survives_a_reversal_and_the_body_says_so`, and "
+         "`..._two_routes_out_of_a_reopen_disputed_state_disagree...` on its "
+         "published half"),
+        "tick.py",
+        '        f"was wrong. {receipts}Closing this item "\n',
+        ('        "was wrong. NO RECEIPT IS RECORDED BY THIS, AND NONE IS VOIDED: a "\n'
+         '        "reversal disputes the DISPOSITION, not evidence taken while the item "\n'
+         '        "was still in the queue, so an item that held a valid receipt still "\n'
+         '        "holds it and may already satisfy R2. That is deliberately UNLIKE a "\n'
+         '        "reopen, which voids the receipt because a reopen disputes the very "\n'
+         '        "claim that receipt closed on. Closing this item "\n'),
+    ),
+    (
+        ("UP18 the receipt paragraph's PER-STATE BRANCH is neutered, so both "
+         "states receive the PARK text -- which is TRUE of `parked` and FALSE "
+         "of `declined`. No false close claim is reinstated; this arm isolates "
+         "the STATE-BLINDNESS on its own, which is the defect underneath both "
+         "of the two the round-2 fix already repaired: one body's true claim "
+         "republished verbatim on its sibling.\n"
+         "         WHY IT IS NOT A DUPLICATE OF UP17. UP17 restores a claim "
+         "that is false everywhere (nothing was ever closed, for either "
+         "state); this restores a claim that is TRUE for `parked` and false "
+         "only for `declined`, which is the shape a reviewer cannot catch by "
+         "reading one body. It reds `..._asserts_a_close_that_never_happened` "
+         "on `[declined]` only, at `strong not in body`, and leaves `[parked]` "
+         "GREEN -- an arm that reds both parameters would be reporting on "
+         "something other than the sibling-state asymmetry.\n"
+         "         THE BRANCH IS FALSIFIED RATHER THAN DELETED so the `else` "
+         "body stays exactly as shipped and the mutation is one token wide: an "
+         "arm that rewrites both branches is testing its own replacement text"),
+        "tick.py",
+        "    if from_state in REOPEN_DISPUTES:\n",
+        "    if False:  # UP18: both states now get the PARK (strong) text\n",
+    ),
+    (
+        ("UP19 the `--park` HELP LINE gains 'the only route out of a terminal "
+         "state'. THIS IS THE ARM UP16 WAS SAID TO BE and is not. "
+         "`_published_surfaces()` used to iterate a literal "
+         "`(\"unpark\", \"undecline\")` tuple while the PR describing it "
+         "claimed a sweep BY CLASS -- 2 of `build_parser()`'s 18 flags. A "
+         "reviewer wrapped `build_parser` at runtime, mutated nothing on disk, "
+         "and showed the scan RED on `--unpark` and GREEN with the identical "
+         "false universal on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. A hand-maintained list cannot see its own gaps -- the "
+         "exact argument this package makes for enumerating the parser in "
+         "`test_every_value_flag_the_parser_knows_is_refused_without_its_verb`, "
+         "applied there and not here.\n"
+         "         `--park` IS THE RIGHT TARGET because no list named it and "
+         "no other test reads its help text, so a surviving mutant here means "
+         "the enumeration is gone and nothing else would say so. Reds "
+         "`test_no_published_surface_claims_a_verb_is_the_only_route_out_of_a_"
+         "state_the_refresh_demotes` at the `in TERMINAL` clause, because "
+         "`a` is not a state"),
+        "tick.py",
+        '        help="record this item as PARKED - genuinely blocked (needs --blocker AND "\n',
+        ('        help="record this item as PARKED - the only route out of a terminal "\n'
+         '             "state. Genuinely blocked (needs --blocker AND "\n'),
+    ),
+    (
+        ("UP20 the README's `--unpark` paragraph swaps its correctly-scoped "
+         "claim for the false universal. `README.md` carries the same claim "
+         "class as the posted bodies -- the round-2 sweep fixed its text and "
+         "left NO instrument reading it, so the next edit that reintroduced "
+         "the sentence would ship green. It is now a surface "
+         "`_published_surfaces()` renders, and this is what witnesses that: "
+         "without it the README read is an unwitnessed claim and a helper that "
+         "silently dropped the file would report the same clean result.\n"
+         "         THE README JOINED `SOURCES` AND `COPIED` FOR THIS, and the "
+         "second was mandatory rather than incidental: a test reading a file "
+         "the sandbox does not carry raises `FileNotFoundError` on EVERY arm, "
+         "which scores 200+ tautological kills -- the shape `COPIED`'s own "
+         "note records for `required_contexts.json`. Caught before it shipped "
+         "by reading that note.\n"
+         "         NOT A `.py` FILE, deliberately. `policy.json` was already "
+         "in SOURCES, so prose-and-data mutation is an established shape here "
+         "and the digest handles bytes rather than syntax"),
+        "README.md",
+        "that verb is the only route out of `parked`, a claim about `parked` and *not*\n",
+        "that verb is the only route out of a terminal state, a claim about `parked` and *not*\n",
     ),
 ]
 

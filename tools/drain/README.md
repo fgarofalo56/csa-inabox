@@ -614,12 +614,78 @@ would not buy a route — a reversal over a closed issue returns the item to
 `ready` and the very next `refresh_from_github` finds it absent from the open
 set, flags it `departed` and demotes it again.
 
-**A reversal records no receipt and voids none.** A receipt survives a park or
-a decline, so an item that held a valid one comes back still holding it and may
-already satisfy R2. That is deliberately unlike `upsert`'s reopen branch, which
-*does* void: a reopen disputes the very claim the receipt closed on, while a
-reversal disputes the disposition and says nothing about evidence taken while
-the item was still in the queue.
+**A reversal records no receipt, and voids none on the route it takes — but on
+the decline side that is not the only route, and the other one voids.** A
+receipt survives a park or a decline, so an item that held a valid one comes
+back still holding it and may already satisfy R2. `parked` is not in
+`REOPEN_DISPUTES`, so no other route leaves that state at all — the refresh and
+`--reap` both leave a park alone. `declined` **is**, and the two routes out of
+it disagree: do nothing for one cycle and the next `refresh_from_github` over
+the still-open issue demotes the item to `needs-audit` *and voids the receipt*;
+type `--undecline` and it stays. Measured from one start state, `tmp_path`
+ledger, issue OPEN:
+
+| route out of `declined` | state | receipt | `receipt_ok()` |
+|---|---|---|---|
+| one refresh (do nothing) | `needs-audit` | voided | `False` |
+| `--undecline` | `ready` | kept | `True` |
+| *control:* park + one refresh | `parked` | kept | `True` |
+
+**One void is not a route out at all, and both bodies say so.** If a refresh
+sees an item's *receipt class* change — a lane label moving `lane:bicep` to
+`lane:console`, say — `upsert` voids the receipt and the item does not leave
+its state. Measured: a `parked` item holding `deploy-run`, one refresh with the
+lane relabelled, and the receipt is `None` with the item still `parked`. That
+is state-independent, so the disclosure is shared between the park and decline
+bodies deliberately — shared text is the defect when the two states differ and
+the right answer when they do not.
+
+The reason to keep is that a reversal disputes the **disposition**, not
+evidence taken while the item was still in the queue — and voiding here would
+be a *new* asymmetry rather than the removal of one, since `reap_stranded` and
+`upsert`'s departed-rescue both reach `ready` without voiding anything. What
+this paragraph deliberately no longer says is that a reopen *"disputes the very
+claim the receipt closed on"*: `CLOSES_ON_GITHUB` is `(closed,)`, a decline
+never shuts its issue, so for the state that sentence was published on nothing
+ever closed. The refresh's void fires on the issue being OPEN, which for a
+decline is its ordinary condition rather than a signal; reconciling the two
+belongs to `ledger.py` and is not settled by #4699.
+
+**No tool path produces a receipted park or decline.** `Ledger.record_receipt`
+is the only writer of `receipt_kind` and its only non-test caller pairs it with
+`transition(closed)` under a rollback. Census of the live ledger: 416 items, 11
+hold a receipt, all 11 `closed`, 0 parked or declined. The population above is
+empty *by construction*; a hand-edited `state.json` — which this README
+documents — reaches it, and nothing in the tool does.
+
+**Two consequences of a reversal that nothing couples, noted rather than
+gated.** First: an item that comes back to `ready` holding a receipt is
+simultaneously selectable by `select_cycle()` and acceptable to
+`merge_gate.ledger_receipt_ready`, so it can be picked up for work and closed
+without work in the same tick. Latent, population zero (above), and
+pre-existing — `reap_stranded` reaches the same shape. Second: **#2874 and
+#2958 are the same shape and only one of them gets named.** Both are `parked`,
+both `W1-deploy`/`lane:bicep`, both class `deploy-path` with required kind
+`deploy-run`, and neither has a producing run — `loom-roll-and-validate` is the
+declared producer and run `36037056251` is `loom-ui-verify`, which produces
+`g1-browser`. Unparking *either* returns a selectable item whose receipt is
+unreachable until the receipt-class question lands (#4703). That is a reason to
+be deliberate about which live unparks are run, not a reason to withhold the
+verb.
+
+**A reversible park should be made more readily — and the public churn is
+real.** The bars did not move: a park still needs a blocker and an owner, a
+reversal still needs a reason, and neither verb is reachable from
+`refresh_from_github`, `reap_stranded` or `select_cycle`, so the harness cannot
+oscillate on its own. What changed is the cost of being wrong: permanent
+removal from the drain becomes N permanent public comments. #2958 already
+carries 13 comments, four of them the 2026-09-24 park and its corrections
+inside a 3.5-hour window; an `--unpark` makes it five. So a park is cheaper to
+*reverse* and no cheaper to *justify*, and the thread pays the difference. The
+failure on #2958 was not parking too readily — it was a blocker carried forward
+and published as a fact without re-measuring at head. Reversibility removes the
+reason to hesitate over the park; it does not touch the reason to measure
+first.
 
 **Both reversals are gated on the autonomy contract** as `unpark-item` and
 `undecline-item`, listed separately from `park-item`/`decline-item` on purpose:
