@@ -29,9 +29,11 @@ from ledger import (
     AUDIT_DEPARTED,
     CLOSED,
     CLOSES_ON_GITHUB,
+    DECLINED,
     IN_FLIGHT,
     IN_REVIEW,
     NEEDS_AUDIT,
+    PARKED,
     READY,
     TERMINAL,
     Ledger,
@@ -665,6 +667,522 @@ def bind_pr_for_item(led: Ledger, repo: str, number: int, pr: int) -> str:
     else:
         item.history.append(f"{note} (state left at {was}: not a schedulable state)")
     return f"#{number}: {note}; state {was} -> {item.state}"
+
+
+class DispositionRefusedError(Exception):
+    """A park or a decline did not meet its bar. NOTHING is written, ANYWHERE.
+
+    Its own class, not `ReceiptRefusedError`, for the reason `PrBindRefusedError`
+    has one (deploy-integrity R7): a refused receipt says the evidence did not
+    establish that the work is DONE. A refused disposition says the opposite kind
+    of thing -- the work is NOT done and the reason offered for stopping is not
+    good enough. Printing one over the other names the wrong half of the ledger.
+
+    "Nothing, anywhere" is structural rather than aspirational: every check that
+    raises this runs BEFORE `post_disposition_comment`, so a refusal cannot leave
+    a comment on a public issue. That ordering is the whole value of these checks
+    over the ones `ledger.transition()` already enforces -- see `_dispose`.
+    """
+
+
+class DispositionCommentFailedError(Exception):
+    """The disposition comment was NOT posted, so NOTHING was written anywhere.
+
+    Separate from `DispositionRefusedError` because the bar may have been met
+    perfectly and the WRITE failed. The ledger side is established on every
+    route here: `_dispose` posts before it transitions, so a failure at this
+    point leaves the item exactly as it was.
+    """
+
+
+class LedgerWriteAfterCommentError(Exception):
+    """The comment LANDED and the ledger write that should follow did not.
+
+    The sibling of `LedgerWriteAfterCloseError`, and it needs its own word for
+    the same reason: the two records disagree, and which one moved is the first
+    thing the operator has to know. Here the public artifact carries the
+    disposition and the ledger does not, so the item is STILL IN THE QUEUE --
+    which is the recoverable direction, because a re-run is legal and its only
+    cost is a duplicate comment.
+
+    DISCLOSED AS UNREACHABLE TODAY, per assertion-design.md #5 and in the form
+    `_record_close_in_ledger` uses two functions away -- its absence here was a
+    review finding, because the two siblings made the same kind of claim and
+    only one of them qualified it. In the CURRENT call graph nothing can reach
+    the `except` that raises this: `transition` refuses a park only without a
+    blocker AND owner and a decline only without a decision, and `park_item` /
+    `decline_item` have already refused on exactly those three before
+    `_dispose` is entered. There is no input that makes it run, and the test
+    that covers it MONKEYPATCHES `transition` to raise rather than pretending
+    otherwise.
+
+    It is kept because the invariant it protects is real and the call graph is
+    not a guarantee: `_dispose` sets `blocker` and `owner` and `transition`
+    appends a history line, so any future transition rule -- or any caller that
+    reaches `_dispose` without the CLI checks -- lands on an item mutated by a
+    write that was then refused, with a comment already public.
+    """
+
+
+#: THE FIRST LINE OF EVERY DISPOSITION COMMENT, held as a constant because it is
+#: what a future reader (or a future de-duplicating read, the #4579 shape) would
+#: have to match on. `_receipt_comment`'s equivalent prefix is embedded in its
+#: f-string and is transcribed into `close_issue_on_github`'s remediation text by
+#: hand; one of those two copies is the kind of thing that drifts.
+DISPOSITION_HEADS = {
+    PARKED: "Drain harness: PARKED - blocked, not done.",
+    DECLINED: "Drain harness: DECLINED - will not do.",
+}
+
+#: THE AUTONOMY ACTION EACH DISPOSITION REQUIRES, checked in `_dispose`. Held as
+#: a map so the action name is derived from the STATE rather than typed at the
+#: call site: `action_is_permitted` matches exactly and fails closed, so a
+#: typo'd literal would refuse every park forever with a message blaming the
+#: policy file. Read alongside `policy.json`'s `_dispositions` note.
+DISPOSITION_ACTIONS = {
+    PARKED: "park-item",
+    DECLINED: "decline-item",
+}
+
+#: THE CLAUSE THAT TIES EACH BODY TO AN OBSERVATION RATHER THAN A CLAIM, and the
+#: reason it is a named constant rather than prose inside the f-strings: a test
+#: lifts it from here instead of transcribing it, so a probe cannot disagree with
+#: the implementation (assertion-design #3).
+#:
+#: THE DEFECT IT REPAIRS, found by two independent reviewers and reachable on the
+#: exact population this verb exists to serve. The park body used to open,
+#: unconditionally, "THIS ISSUE STAYS OPEN, DELIBERATELY" -- a claim about the
+#: ISSUE'S STATE that nothing on this path established. `_dispose` refuses only an
+#: unknown or already-terminal item, so a `needs-audit`/departed item reaches this
+#: function, and `refresh_from_github`'s own matrix carries the cell
+#: `parked | departed -> survives parked`: the ledger EXPLICITLY contemplates a
+#: parked item whose issue is closed while the comment announced it stays open.
+#: Measured 2026-09-24 on the four cases #4677 names -- #2958 OPEN, but #4534,
+#: #4582 and #4664 all CLOSED. Three of the four would have published a sentence
+#: that was false at the moment it posted (deploy-integrity R7, on an unrevisable
+#: public artifact). Cheap to fix now only because no real item has been disposed
+#: yet; after the first one it is permanent.
+#:
+#: SO THE STATE IS READ, using the pattern `close_issue_on_github` already uses
+#: in this file rather than a new one. The first fix for this merely DISCLOSED
+#: that the tool does not read it -- honest, and weaker than it needed to be when
+#: `_read_issue_on_github` was two hundred lines away.
+#:
+#: AND IT IS STILL AN OBSERVATION, NOT A STANDING CLAIM. The read happens
+#: immediately before the post and the issue can be closed a second later, so the
+#: body says what was read and when. Asserting the present tense would be the
+#: same R7 error one step down the road.
+STATE_READ_DISCLOSURE = (
+    "THIS ISSUE'S STATE WHEN THIS COMMENT WAS POSTED, read from GitHub "
+    "immediately beforehand (an observation at a moment, not a standing claim - "
+    "it can change after):"
+)
+
+
+def _disposition_comment(
+    target_state: str, evidence: list[tuple[str, str]], issue_state: str
+) -> str:
+    """The comment a park or a decline posts. THE PERMANENT PUBLIC RECORD.
+
+    Like `_receipt_comment`, this is unrevisable once posted, so the two bodies
+    are written out in full rather than assembled from a shared template: a
+    shared template is how the two receipt routes came to say the same wrong
+    thing, and the park/decline pair differs on the one fact that matters most
+    -- what happens to the ISSUE.
+
+    **WHAT EACH BODY MUST NOT CLAIM, AND THE SECOND ENTRY IS A REPAIR.**
+
+    1. The comment is posted BEFORE the ledger write (see `_dispose`), so it
+       cannot say "this item is parked in the ledger" -- on the write-failed path
+       that is false. Both bodies state the DISPOSITION and its EVIDENCE, which
+       are true at the moment of posting because they are the caller's own input.
+    2. Neither body may assert the ISSUE'S OWN STATE as a fact the code did not
+       establish. See `STATE_READ_DISCLOSURE` for the measurement and for why the
+       state is now READ and reported as an observation.
+
+    **BOTH CELLS ARE STATED EVEN THOUGH ONE IS OBSERVED**, deliberately. The
+    reader of a park needs to know the park stands either way -- that is what
+    makes the #2874 demotion and the departure cell legible -- and a body that
+    named only the observed cell would leave someone who closes the issue
+    tomorrow with no idea what happens next. The observation says which holds
+    TODAY; the cells say why neither breaks the disposition.
+
+    **AND WHY THE DECLINE BODY NAMES ITS ESCAPE.** The decline survives only the
+    departed cell and is demoted on the open one. That demotion is deliberate and
+    documented, but from the outside it reads as the harness undoing itself -- so
+    the body names `gh issue close --reason not-planned` at the place the next
+    reader is standing, and says plainly that on an already-closed issue there is
+    nothing left to do.
+    """
+    head = DISPOSITION_HEADS[target_state]
+    facts = "\n".join(f"{label}: {value}" for label, value in evidence)
+    observed = f"{STATE_READ_DISCLOSURE} {issue_state}."
+    tail = (
+        "WHAT THIS DOES NOT ESTABLISH: nothing here adjudicates the reason above. "
+        "The harness records a disposition supplied by a lane or an operator; it "
+        "does not verify that the blocker is real or that the decision was the "
+        "right one. This comment is posted BEFORE the ledger write, so if that "
+        "write did not land the item is still in the queue and a re-run posts "
+        "this again."
+    )
+    if target_state == PARKED:
+        return (
+            f"{head}\n\n{facts}\n\n"
+            "THE HARNESS WILL NOT CLOSE THIS ISSUE. `parked` is a terminal state "
+            "in the drain ledger and it is NOT a close: the work is blocked, not "
+            "done, and closing a blocked item's issue is how a backlog lies about "
+            "itself (deploy-integrity R2). `CLOSES_ON_GITHUB` is `closed` and "
+            "nothing else.\n\n"
+            f"{observed} The park stands either way, and the two cells of the "
+            "refresh matrix are why:\n"
+            "- while this issue is OPEN, that is a park's EXPECTED condition, so "
+            "being open disputes nothing and the refresh leaves the item alone "
+            "(`REOPEN_DISPUTES` excludes `parked` - #2874, where every refresh "
+            "demoted every park and the drain's exit condition became unreachable "
+            "for anything genuinely blocked);\n"
+            "- if this issue is CLOSED, the departure cell leaves the park "
+            "standing too (`parked | departed -> survives parked`), because the "
+            "issue being closed does not establish that the blocker lifted and "
+            "there is no state meaning 'park resolved'.\n\n"
+            "TO UNPARK IT: resolve the blocker and say so here. The park is "
+            "terminal, so the harness will not re-select this item on its own.\n\n"
+            f"{tail}"
+        )
+    return (
+        f"{head}\n\n{facts}\n\n"
+        "THE HARNESS DOES NOT CLOSE A DECLINED ISSUE, and that is not an "
+        "oversight. A decline's disposal is `gh issue close --reason not-planned` "
+        "-- a different close, with a different reason, resting on a judgement no "
+        "program made -- so `CLOSES_ON_GITHUB` excludes `declined` and this tool "
+        "does not perform it.\n\n"
+        f"{observed} Unlike a park, the decline's fate DOES depend on which "
+        "holds:\n"
+        "- while this issue is OPEN, the next refresh demotes the ledger item to "
+        "`needs-audit`, because a declined item seen open again means either the "
+        "decline never reached GitHub or somebody is disputing it (#4535) - both "
+        "want a look. Closing this issue by hand with `--reason not-planned` is "
+        "what makes the decline stand;\n"
+        "- if this issue is CLOSED, the decline stands as recorded and nothing "
+        "disputes it (`declined | departed -> expected -> survives`). There is "
+        "nothing left to do.\n\n"
+        "That escape is the whole reason `declined` and `parked` are treated "
+        "differently: a demoted decline has a legal way out and a park has none.\n\n"
+        f"{tail}"
+    )
+
+
+def post_disposition_comment(
+    policy: dict, repo: str, number: int, target_state: str, body: str
+) -> str:
+    """Post the disposition on the ISSUE, and never touch its open/closed state.
+
+    THE MIRROR OF `close_issue_on_github`'S GUARD, and it is here for the same
+    reason that one is: so a future route cannot acquire the wrong behaviour by
+    forgetting. That function refuses to CLOSE anything outside
+    `CLOSES_ON_GITHUB`; this one refuses to be used FOR a state inside it. A
+    `closed` item's public record is posted by the closer, in the same argv as
+    the close, and a second route that commented without closing would produce
+    exactly the artifact #4545 is about -- a ledger close with no upstream one.
+
+    DISCLOSED AS UNREACHABLE FROM `_dispose`, and the disclosure is a review
+    finding: a reviewer measured `_dispose(..., CLOSED, ...)` and got a bare
+    `KeyError: 'closed'` out of `DISPOSITION_HEADS` while the arguments were
+    being evaluated, so this guard never ran through the composed route its own
+    text is written about. `_dispose` now refuses an unrecognised target state
+    with a message of its own, BEFORE reaching here -- which makes this guard
+    defence-in-depth for callers that bypass `_dispose`, not a live branch of the
+    production path. The test that pins it calls this function DIRECTLY and says
+    so at its site; it is not counted as coverage of any composed route
+    (assertion-design #5).
+
+    NOT IDEMPOTENT, and not pretending to be. `close_issue_on_github` reads the
+    issue first and short-circuits; there is no equivalent read here, because
+    the thing that would have to be read is the COMMENT LIST, and de-duplicating
+    against it is #4579's open problem rather than a solved one. What bounds the
+    duplication instead is the caller: `_dispose` refuses a TERMINAL item, so the
+    only way to post twice is a ledger write that failed after the comment
+    landed -- which is a visible, reported state, not a silent one.
+    """
+    if target_state in CLOSES_ON_GITHUB:
+        raise DispositionCommentFailedError(
+            f"refusing to comment-without-closing on #{number} for state "
+            f"{target_state!r}: {list(CLOSES_ON_GITHUB)} close the issue, and the "
+            "comment for those states is posted by `close_issue_on_github` in the "
+            "same argv as the close (#4545)"
+        )
+    permitted, why = gates.action_is_permitted("comment", policy)
+    if not permitted:
+        raise DispositionCommentFailedError(
+            f"refusing to comment on #{number}: `comment` is {why}"
+        )
+    try:
+        rc, _out, err = sh(
+            ["gh", "issue", "comment", str(number), "--repo", repo, "--body", body]
+        )
+    except OSError as exc:
+        raise DispositionCommentFailedError(
+            f"cannot run `gh` to comment on #{number}: {exc}. Nothing was written."
+        ) from exc
+    if rc != 0:
+        raise DispositionCommentFailedError(
+            f"`gh issue comment {number}` failed (rc={rc}): {err[:200]}. Nothing was "
+            "written to the ledger and the item is unchanged. WHETHER THE COMMENT "
+            "LANDED IS NOT ESTABLISHED BY THIS: a mutation that reached the server "
+            "and whose response did not reach the client exits the same way as one "
+            "that never left (R7). Re-running is safe and its worst case is a "
+            "duplicate comment on an issue that is still in the queue"
+        )
+    return f"#{number}: disposition comment posted"
+
+
+def _dispose(
+    led: Ledger, policy: dict, repo: str, number: int, target_state: str,
+    evidence: list[tuple[str, str]], why: str,
+) -> str:
+    """Record a park or a decline: comment on the issue, then write the ledger.
+
+    THE TWO TERMINAL STATES THAT NO PROGRAM COULD REACH (#4677). `Ledger` has
+    defined five states since it was written and `drained()` -- this program's
+    documented exit condition -- is true only when every item is `closed`,
+    `parked` or `declined`. `tick.py` could reach exactly one of the three. A
+    lane that correctly concluded "blocked on X, owned by Y" had nowhere to put
+    that conclusion, so the item returned to `ready` on the next reap to be
+    redone by the next lane: #4675's failure, one state over. The live ledger
+    holds one parked item, reached by a path that no longer exists.
+
+    THE COMMENT GOES FIRST, AND THE ORDERING IS ARGUED RATHER THAN INHERITED.
+    `record_receipt_from_evidence` also writes GitHub first, but for a DIFFERENT
+    reason -- there, the ledger-first ordering IS #4545, because a ledger close
+    with the issue still open is read as a reopen and voids the receipt. Neither
+    of these states is closed upstream, so that argument does not carry, and the
+    two orderings have to be compared on their own terms:
+
+    - **comment, then ledger** (this one). If the ledger write fails, the issue
+      carries a comment stating a disposition and the item is still in the
+      queue. Nothing false has been published -- the comment states the
+      disposition and its evidence, which were true when posted, and says in
+      terms that the ledger write follows it. The item is re-selectable and a
+      re-run costs one duplicate comment.
+    - **ledger, then comment.** If the comment fails, the item is TERMINAL with
+      no public trace at all, and `state.json` is gitignored -- so the whole
+      existence of the disposition is a local file. Worse, it is PERMANENT:
+      `_dispose` refuses a terminal item, so no re-run ever repairs it. That is
+      the shape `close_issue_on_github` names as the reason its close and its
+      comment share one argv, and it is exactly what this issue's acceptance
+      ("the next reader finds it where they are, not in a gitignored local
+      file") forbids.
+
+    Silent-and-unrepairable versus loud-and-duplicated, the same trade the
+    closer took, decided the same way.
+
+    REFUSES, WRITING NOTHING AND POSTING NOTHING, when the item is unknown or is
+    already terminal. Re-disposing a terminal item would rewrite the evidence a
+    previous disposition rests on, which is the refusal
+    `record_receipt_from_evidence` makes at its own top.
+    """
+    if number not in led.items:
+        raise DispositionRefusedError(
+            f"#{number} is not in the ledger, so there is nothing to record a "
+            f"{target_state} against. Refresh first, or check the number."
+        )
+    # THE TARGET STATE IS VALIDATED HERE, WITH A MESSAGE, and that is a review
+    # finding rather than tidiness. `_dispose(..., CLOSED, ...)` used to raise a
+    # bare `KeyError: 'closed'` out of `DISPOSITION_HEADS[target_state]` while
+    # the composed call's arguments were being evaluated -- fail-closed (a
+    # reviewer measured `gh calls: []`) but unreadable, and it meant
+    # `post_disposition_comment`'s `CLOSES_ON_GITHUB` mirror guard could never
+    # fire through this route at all. Now a bad state refuses like everything
+    # else here, and that guard is disclosed at its own site for what it is.
+    if target_state not in DISPOSITION_HEADS:
+        raise DispositionRefusedError(
+            f"#{number}: {target_state!r} is not a disposition this verb records "
+            f"- only {sorted(DISPOSITION_HEADS)}. A `{CLOSED}` item is closed by "
+            "`--record-receipt`, in the same argv as its receipt comment (#4545)."
+        )
+    item = led.items[number]
+    # Via a named flag rather than `if item.state in TERMINAL:`, and via
+    # `_save_refusing_lost_update` rather than an inline guarded save below, for
+    # the reason `bind_pr_for_item` gives at its own copy of both: mutation arms
+    # RW5 and RW14 anchor on those exact lines elsewhere in this file, and an
+    # anchor that matches twice silently DISARMS the arm -- the runner needs a
+    # unique site. Measured here: adding the obvious spellings broke both.
+    already_terminal = item.state in TERMINAL
+    if already_terminal:
+        raise DispositionRefusedError(
+            f"#{number} is already {item.state} - terminal. Refusing to re-dispose "
+            f"it as {target_state}; that would rewrite the evidence the existing "
+            "disposition rests on."
+        )
+
+    # THE AUTHORITY BAR, AND IT IS SEPARATE FROM THE EVIDENTIARY ONE.
+    #
+    # `park_item`'s blocker/owner checks ask whether the REASON is good enough.
+    # This asks whether the harness may do this AT ALL, and the two are not the
+    # same question. The first shape of this change had only the evidentiary bar
+    # and let both verbs ride on `comment` in `post_disposition_comment` -- so
+    # two new TERMINAL-STATE capabilities arrived under the most general write
+    # permission in the file, with no edit to `policy.json`. A reviewer blocked
+    # it, correctly: `action_is_permitted` FAILS CLOSED precisely so that adding
+    # a capability is a deliberate edit rather than emergent behaviour, and
+    # `policy.json` records finding the mirror of this defect in itself twice.
+    #
+    # PER STATE, not one `dispose-item`. Matching is EXACT by design, the two
+    # bars differ, and revoking the authority to decline must not silently
+    # revoke the authority to park.
+    #
+    # AND IT RUNS BEFORE `post_disposition_comment`, so a revoked action refuses
+    # with nothing published -- the same property the evidentiary checks buy.
+    action = DISPOSITION_ACTIONS[target_state]
+    # NOT `why`, and the name is load-bearing rather than cosmetic: `why` is this
+    # function's own PARAMETER -- the disposition reason that `transition` writes
+    # into the item's history. The first version of this check unpacked into it
+    # and every park's history line read `-> parked (permitted unattended)` with
+    # the blocker and owner gone. Caught by the history assertion in
+    # `test_park_records_the_state_the_blocker_the_owner_and_the_reason`, which
+    # exists because the issue's acceptance asks for the reason in BOTH places.
+    permitted, permit_note = gates.action_is_permitted(action, policy)
+    if not permitted:
+        raise DispositionRefusedError(
+            f"#{number}: refusing to record a {target_state} - `{action}` is "
+            f"{permit_note}. Nothing was written or posted."
+        )
+
+    # READ THE ISSUE'S STATE BEFORE COMPOSING THE BODY, using the pattern
+    # `close_issue_on_github` already uses rather than a new one. The body
+    # reports what this read saw, so no sentence in it asserts a state the code
+    # did not establish -- see `STATE_READ_DISCLOSURE` for the measurement that
+    # made this necessary.
+    #
+    # A FAILED READ REFUSES, PUBLISHING NOTHING. `_read_issue_on_github` raises
+    # `IssueCloseFailedError` on every route it cannot answer -- unreadable is
+    # not "closed" (R7) -- and that is re-raised as a comment failure here
+    # because that is what it means on this path: the disposition may be
+    # perfectly sound and the tool could not compose a truthful body, so nothing
+    # goes out. Fail-closed costs a re-run; guessing costs an unrevisable false
+    # sentence on a public issue.
+    try:
+        seen = _read_issue_on_github(repo, number)
+    except IssueCloseFailedError as exc:
+        raise DispositionCommentFailedError(
+            f"#{number}: could not read the issue's state before composing the "
+            f"{target_state} comment, so whether it is open is UNKNOWN - not "
+            f"'open' ({exc}). Nothing was posted and nothing was written; the "
+            "item is unchanged and still in the queue."
+        ) from exc
+
+    note = post_disposition_comment(
+        policy, repo, number, target_state,
+        _disposition_comment(target_state, evidence, seen.state),
+    )
+    # EVERYTHING FROM HERE IS A POST-COMMENT FAILURE and is reported as one. The
+    # rollback restores the item, so `main()` saves nothing -- but the COMMENT IS
+    # PUBLISHED, and a message that says "nothing was written" without saying so
+    # is false in the half the operator has to act on (R7).
+    was = item.state
+    before = (item.blocker, item.owner)
+    history_len = len(item.history)
+    try:
+        if target_state == PARKED:
+            # The ledger's own bar (`transition` refuses a park without BOTH)
+            # reads these fields, so they are set before the call rather than
+            # recorded after it.
+            item.blocker, item.owner = evidence[0][1], evidence[1][1]
+        led.transition(number, target_state, why)
+    except Exception as exc:
+        (item.blocker, item.owner) = before
+        del item.history[history_len:]
+        raise LedgerWriteAfterCommentError(
+            f"#{number}: the disposition comment was posted and the ledger write "
+            f"that should have followed failed: {exc}. The item is STILL {was} "
+            "here and the comment is on the issue; nothing was saved. Re-run the "
+            "same command - the only cost is a second comment, and the item is "
+            "still in the queue until one of them is followed by a write."
+        ) from exc
+    return f"#{number}: {target_state} ({note}); state {was} -> {item.state}"
+
+
+def park_item(
+    led: Ledger, policy: dict, repo: str, number: int,
+    blocker: str | None, owner: str | None,
+) -> str:
+    """Record that this item is genuinely BLOCKED, naming the blocker and owner.
+
+    THE BAR IS THE LEDGER'S, SURFACED AT THE CLI, AND THE DUPLICATION IS THE
+    POINT. `ledger.transition()` already refuses a park without both fields, so
+    these two checks change no outcome for the LEDGER -- delete them and a
+    missing blocker still ends in a refusal. What they change is WHEN the refusal
+    happens: before `_dispose` posts anything. Without them a `--park` with no
+    owner publishes a permanent comment on a public issue announcing a park that
+    is then refused, and no re-run removes it.
+
+    So the value these checks carry is not "the park is refused" -- it is "the
+    refusal is silent upstream", and the test that pins them asserts exactly that
+    (zero `gh` calls), because an assertion that only watched the exception would
+    be satisfied by the ledger's own refusal and would witness nothing.
+
+    THEY ARE TWO CHECKS, NOT ONE CONJUNCTION, deliberately. `transition` asks
+    `not (blocker and owner)` and can only say "one of these is missing"; a lane
+    that passed `--blocker` and forgot `--owner` needs to be told WHICH. It also
+    gives the mutation matrix two separate anchors, so deleting the owner check
+    alone is a mutation the suite can see.
+    """
+    if not blocker or not blocker.strip():
+        raise DispositionRefusedError(
+            f"#{number}: refusing to park without a named BLOCKER - pass "
+            "--blocker '<what is blocking it>'. A park with no blocker is "
+            "indistinguishable from forgetting, and nothing was written or posted."
+        )
+    if not owner or not owner.strip():
+        raise DispositionRefusedError(
+            f"#{number}: refusing to park without a named OWNER - pass "
+            "--owner '<who owns clearing it>'. A park with no owner is how an "
+            "item leaves the queue without leaving the backlog, and nothing was "
+            "written or posted."
+        )
+    blocker, owner = blocker.strip(), owner.strip()
+    return _dispose(
+        led, policy, repo, number, PARKED,
+        [("BLOCKER", blocker), ("OWNER", owner)],
+        f"blocked on {blocker}; owner {owner}",
+    )
+
+
+def decline_item(
+    led: Ledger, policy: dict, repo: str, number: int, decision: str | None
+) -> str:
+    """Record that this item WILL NOT BE DONE, on a recorded decision.
+
+    THE DECISION TEXT IS PASSED TO `transition` VERBATIM as its `why`, rather
+    than wrapped in a sentence. That is load-bearing rather than tidy: the
+    ledger's own refusal tests `why and why.strip()`, so any wrapper -- even
+    `f"declined: {decision}"` -- makes that check pass on a decision of None,
+    and the ledger's bar would be satisfied by this function's own prose. Passing
+    it through means the CLI check and the ledger check are testing the SAME
+    string, and deleting the one here leaves the other genuinely guarding.
+
+    What the check here still buys is the same thing the park's two buy: the
+    refusal happens before `_dispose` publishes anything. Its test asserts zero
+    `gh` calls for that reason.
+
+    THIS DOES NOT CLOSE THE ISSUE, and the comment says so at length. A
+    decline's disposal is `gh issue close --reason not-planned` -- a judgement no
+    program made -- so `CLOSES_ON_GITHUB` excludes `declined` and the next
+    refresh will demote this item to `needs-audit` while the issue stays open.
+    That asymmetry with `parked` is the documented behaviour (#4535), it is
+    pinned by a test alongside the park's survival, and the escape is named in
+    the comment where the next reader will be standing.
+    """
+    if not decision or not decision.strip():
+        raise DispositionRefusedError(
+            f"#{number}: refusing to decline without a recorded DECISION - pass "
+            "--decision '<who decided, and on what grounds>'. 'Will not do' with "
+            "no recorded reason is how a backlog declines itself drained, and "
+            "nothing was written or posted."
+        )
+    decision = decision.strip()
+    return _dispose(
+        led, policy, repo, number, DECLINED, [("DECISION", decision)], decision,
+    )
 
 
 class ReceiptRefusedError(Exception):
@@ -1978,7 +2496,85 @@ def main() -> int:
         "--from-run", metavar="RUN_ID",
         help="for a run-backed item: the workflow run that establishes the receipt",
     )
+    parser.add_argument(
+        "--park", type=int, metavar="ITEM",
+        help="record this item as PARKED - genuinely blocked (needs --blocker AND "
+             "--owner; refused without both). Does NOT close the GitHub issue: a "
+             "park is blocked, not done, and its issue is supposed to stay open",
+    )
+    parser.add_argument(
+        "--blocker", metavar="TEXT",
+        help="for --park: WHAT is blocking it",
+    )
+    parser.add_argument(
+        "--owner", metavar="WHO",
+        help="for --park: WHO owns clearing the blocker",
+    )
+    parser.add_argument(
+        "--decline", type=int, metavar="ITEM",
+        help="record this item as DECLINED - will not do (needs --decision). Does "
+             "NOT close the GitHub issue; a decline's disposal is `gh issue close "
+             "--reason not-planned`, by hand, on a judgement no program made",
+    )
+    parser.add_argument(
+        "--decision", metavar="TEXT",
+        help="for --decline: WHO decided and on what grounds",
+    )
     args = parser.parse_args()
+
+    # ONE WRITE VERB PER INVOCATION, CHECKED OVER THE WHOLE SET.
+    #
+    # This replaces the pairwise `--bind-pr` / `--record-receipt` check that used
+    # to sit inside the bind branch, and the generalisation is the point: that
+    # check was written when there were two write verbs, and adding a third and a
+    # fourth to it pairwise is three more comparisons nobody would remember to
+    # make. The failure it exists to stop is the one that check named -- two
+    # transactions passed, one silently dropped, no hint to the operator.
+    write_verbs = [
+        ("--bind-pr", args.bind_pr),
+        ("--record-receipt", args.record_receipt),
+        ("--park", args.park),
+        ("--decline", args.decline),
+    ]
+    named = [flag for flag, value in write_verbs if value is not None]
+    if len(named) > 1:
+        print(f"{' and '.join(named)} are separate transactions; pass one at a time",
+              file=sys.stderr)
+        return 2
+    # `--status` IS A READ AND IT RETURNS FIRST, so a write verb passed beside it
+    # was silently DISCARDED: `--status --park N --blocker x --owner y` printed
+    # the counts and exited 0 having parked nothing. Found in review. Exactly the
+    # same defect as the value-with-no-verb case below -- a transaction the
+    # operator asked for, dropped without a word -- and it is checked here rather
+    # than inside the `--status` branch so it cannot be reintroduced by moving
+    # that branch.
+    if args.status and named:
+        print(f"--status is a READ and returns before any write; {named[0]} would "
+              "be silently discarded. Pass one at a time", file=sys.stderr)
+        return 2
+    # A VALUE WITH NO VERB IS DROPPED SILENTLY OTHERWISE, which is the same defect
+    # one level down: `--park 5 --decision x` would park the item and discard the
+    # decision without a word.
+    #
+    # THE SET IS CLOSED OVER ALL SIX VALUE FLAGS, and it covered four until a
+    # reviewer measured the gap: `tick.py --from-pr 1234` with no
+    # `--record-receipt` fell through to `read_live_issues` and ran an ordinary
+    # cycle, silently discarding the value -- precisely the class this comment
+    # names. A guard that covers two thirds of its own stated scope is the
+    # config-coverage shape, so the remedy is to close the set rather than to
+    # narrow the sentence.
+    for value, flag, verb, verb_value in (
+        (args.blocker, "--blocker", "--park", args.park),
+        (args.owner, "--owner", "--park", args.park),
+        (args.decision, "--decision", "--decline", args.decline),
+        (args.pr, "--pr", "--bind-pr", args.bind_pr),
+        (args.from_pr, "--from-pr", "--record-receipt", args.record_receipt),
+        (args.from_run, "--from-run", "--record-receipt", args.record_receipt),
+    ):
+        if value is not None and verb_value is None:
+            print(f"{flag} is only read by {verb}, which was not passed - refusing "
+                  "rather than dropping it silently", file=sys.stderr)
+            return 2
 
     policy = gates.load_policy(POLICY_PATH)
     repo = policy["repo"]
@@ -2030,13 +2626,6 @@ def main() -> int:
             return 2
         if args.pr is None:
             print("--bind-pr needs --pr <PR>", file=sys.stderr)
-            return 2
-        if args.record_receipt is not None:
-            # Both write, and --bind-pr used to win silently. An operator who
-            # passed both got one transaction and no hint that the other was
-            # dropped.
-            print("--bind-pr and --record-receipt are separate transactions; "
-                  "pass one at a time", file=sys.stderr)
             return 2
         # BOUNDED RETRY, because contention here is routine rather than
         # exceptional. An ordinary tick holds its read across a full refresh of
@@ -2242,6 +2831,78 @@ def main() -> int:
                   file=sys.stderr)
             return 1
         print(recorded.summary)
+        return 0
+
+    if args.park is not None or args.decline is not None:
+        # RETURNS BEFORE `read_live_issues`, for the reason the two branches
+        # above do: a disposition is a transaction about ONE item, and a refresh
+        # rewrites every item's state. It matters more here than anywhere -- the
+        # refresh is the operation that DEMOTES a declined item, so bolting the
+        # two together would let a `--decline` be undone by the same command that
+        # recorded it.
+        if not led.loaded_from_disk:
+            print(
+                f"NO LEDGER at {STATE_PATH} - nothing to dispose. "
+                "Seed it with:  python tools/drain/tick.py --bootstrap",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            if args.park is not None:
+                said = park_item(led, policy, repo, args.park, args.blocker, args.owner)
+            else:
+                said = decline_item(led, policy, repo, args.decline, args.decision)
+        except DispositionRefusedError as exc:
+            # THE STRONG CLAIM, and it is structural: every check that raises
+            # this runs before `_dispose` posts, so no comment exists.
+            print(
+                f"DISPOSITION REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        except DispositionCommentFailedError as exc:
+            # A DIFFERENT DIAGNOSIS AND A DIFFERENT WORD (R7). The disposition
+            # may have been perfectly well-formed and the WRITE failed. "NOT
+            # CONFIRMED" rather than "not posted", because `gh` exiting non-zero
+            # over a mutation that reached the server looks identical to one that
+            # never left. The ledger half IS established: untouched.
+            print(
+                f"COMMENT NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        except LedgerWriteAfterCommentError as exc:
+            print(f"LEDGER NOT WRITTEN - THE COMMENT IS ON THE ISSUE: {exc}",
+                  file=sys.stderr)
+            return 1
+        try:
+            # if_unchanged, and NO RETRY LOOP -- unlike `--bind-pr`, which
+            # retries three times. The difference is that a retry here would
+            # re-enter `_dispose` and POST A SECOND COMMENT on every attempt, so
+            # the thing that makes a bind safe to retry (a same-PR re-bind is a
+            # no-op) has no analogue. Losing the CAS costs one re-run by the
+            # operator and one duplicate comment; retrying would cost three.
+            _save_refusing_lost_update(led)
+        except Exception as exc:
+            # BOUND TO `Exception` for the reason the record path's twin is: the
+            # STATE CLAIM holds for any exception out of `save()` -- the write is
+            # a temp file plus an `os.replace`, so either the replace landed and
+            # nothing after it can raise, or the file on disk is untouched -- and
+            # under a narrow bound the operator would get a traceback about a file
+            # rename that never mentions the comment now sitting on a public
+            # issue. The exception TYPE is printed so a lost CAS (the expected
+            # one, with four lanes live) is distinguishable from a filesystem
+            # failure rather than flattened into one story.
+            print(f"LEDGER NOT WRITTEN - THE COMMENT IS ON THE ISSUE: "
+                  f"{type(exc).__name__}: {exc}\n"
+                  f"  The upstream side is settled - {said} - and only the ledger "
+                  "write did not happen, so the item is STILL IN THE QUEUE and "
+                  "will be re-selected. RE-RUN THE SAME COMMAND: its only cost is "
+                  "a duplicate comment, and nothing is terminal until a write "
+                  "follows one of them.",
+                  file=sys.stderr)
+            return 1
+        print(said)
         return 0
 
     live = read_live_issues(repo)

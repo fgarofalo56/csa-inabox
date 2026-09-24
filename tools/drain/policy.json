@@ -30,9 +30,12 @@
     "dispatch-roll",
     "playwright-walk-live-console",
     "resume-estate",
-    "pause-estate"
+    "pause-estate",
+    "park-item",
+    "decline-item"
   ],
   "_estate": "Operator decision 2026-09-12: RESUME ON DEMAND, PER DEPLOY ITEM. The estate stays paused; resume only when a W1 item is ready for its deploy-run receipt, take the receipt, re-pause. Both verbs are permitted unattended because a resume the harness cannot pause again is worse than one it can. Before this they were absent, so action_is_permitted() failed closed on them and every deploy-path receipt was unreachable.",
+  "_dispositions": "#4677, 2026-09-24. `park-item` and `decline-item` are the authority for the two TERMINAL states no program could previously reach, and they are listed here rather than riding on `comment` because that is the whole design of this file: action_is_permitted() fails closed, so a capability arrives by a deliberate edit and not as emergent behaviour. Riding on `comment` was the first shape and a reviewer blocked it -- two terminal-state capabilities would have arrived under the most general write permission with no edit here at all, which is exactly the marker_any_of defect this file records finding in itself twice. The PRECEDENT is ledger.py's own comment on CLOSES_ON_GITHUB: 'when a decline path exists it adds itself here deliberately, the way this line was added'. They are SEPARATE actions, not one `dispose-item`, because matching is EXACT and the two bars differ (a park needs blocker AND owner; a decline needs a recorded decision) -- revoking one must not revoke the other. NEITHER CLOSES A GITHUB ISSUE: a park is blocked-not-done and a decline's disposal carries --reason not-planned, which rests on a judgement no program made. Deciding WHICH items are parks or declines is triage and is not granted by this line.",
 
   "review": {
     "_": "Operator decision 2026-09-12, after W0 took EIGHT POSTED rounds with two reviewers (count them: gh pr view 4483 --json comments). That intensity was right for the merge gate ITSELF and is not the default for ordinary lanes. Read by tick.write_brief so every lane is told its own review requirement, and re-decided by merge_gate gate 3b on the REAL changed files.",
