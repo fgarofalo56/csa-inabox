@@ -140,7 +140,7 @@ export const PUT = withSession<Params>(async (req: NextRequest, { session, param
   // job is a scrub-on-export / reattach-on-import round trip that deliberately
   // moves secret-shaped keys around, so applying the depth-blind rule here is a
   // separate change with its own blast radius on a published operation. Not
-  // made, and not implied: see the note in `item-crud.ts`.
+  // made, and not implied: see the note in `server-derived-scope.ts`.
   //
   // Assert FIRST (a CHANGE stays a 400, never a silent substitution), carry
   // SECOND (an OMISSION preserves instead of deleting) — the same order as the

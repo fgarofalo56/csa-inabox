@@ -13,24 +13,39 @@
  * read-only share cannot restore, exactly like it cannot save.
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { getItemVersion, recordItemVersion } from '@/lib/versions/item-version-store';
 import { carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { apiOk, apiError, apiUnauthorized, apiForbidden, apiNotFound, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiForbidden, apiNotFound, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string; versionId: string }> },
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+// route-toolkit migration (loom-next-level R3, boy-scout): this route was one of
+// the hand-rolled `getSession()` + 401 prologues in
+// `scripts/ci/route-toolkit-baseline.json`, and #4619 touched it to add the
+// carry below — so the ratchet required clearing it here rather than later.
+//
+// `scripts/codemods/migrate-route-toolkit.mjs` SKIPS this file with
+// "body declares its own `params` (collision)": the old prologue's
+// `const params = await props.params` shadows the `params` that `withSession`
+// supplies. That is codemod conservatism, not a genuine obstacle — the
+// migration deletes the colliding declaration — so this was done BY HAND to the
+// same shape as `cosmos-items/[type]/[id]/route.ts`, which this PR migrated for
+// the same reason. TOUCH_EXEMPT was deliberately NOT used: exempting a path is
+// baselining the guard, not satisfying it.
+//
+// `withSession` returns `apiUnauthorized()` itself, which is exactly what the
+// removed prologue returned, so the 401 contract is unchanged. The local
+// try/catch is KEPT: `withSession` genericizes an unexpected throw through
+// `apiServerError`, but it does not know that `cosmos_not_configured` must
+// surface as a 503 with its own code, and losing that would turn an honest
+// infra gate into an opaque 500.
+export const POST = withSession<{ type: string; id: string; versionId: string }>(
+  async (_req: NextRequest, { session, params }) => {
   try {
     const access = await resolveItemAccessByOid(session, params.id, params.type);
     if (!access) return apiNotFound('Item not found');
@@ -65,7 +80,8 @@ export async function POST(
     // THE COST, disclosed rather than discovered later: an operator who wants to
     // roll back a BINDING will find that restore no longer does it, and there is
     // no other supported path for `state.storageAccount` on an existing item
-    // (see the `SERVER_DERIVED_SCOPE_KEYS` block in `item-crud.ts`). That is a
+    // (see the `SERVER_DERIVED_SCOPE_KEYS` block in `server-derived-scope.ts`).
+    // That is a
     // real affordance loss. It is the accepted trade because a restore that
     // silently re-points a grant coordinate is worse. Tracked on #4619.
     const restoredState = carryServerDerivedScope(
@@ -97,4 +113,4 @@ export async function POST(
     }
     return apiServerError(e, 'Failed to restore item version', 'cosmos_error');
   }
-}
+});
