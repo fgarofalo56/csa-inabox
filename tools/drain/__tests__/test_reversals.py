@@ -1211,10 +1211,22 @@ def test_the_decline_body_names_the_undecline_window_and_both_refusals():
     `test_undecline_is_refused_in_both_branches_the_decline_body_names`): the
     decline body told the reader to close the issue with `--reason not-planned`
     to make the decline stand, and ALSO to run `--undecline` to reverse it --
-    and doing the first permanently forecloses the second (closed-issue guard),
-    while not doing it defers the item to the next refresh's demotion (state
-    guard). On the live ledger at the time, all four declined items had CLOSED
-    issues, so the verb had ZERO reachable targets.
+    and doing the first makes the second REFUSE (closed-issue guard), while not
+    doing it defers the item to the next refresh's demotion (state guard). On
+    the live ledger at the time, all four declined items had CLOSED issues, so
+    the verb had ZERO reachable targets.
+
+    "PERMANENTLY FORECLOSES" IS WHAT THIS DOCSTRING USED TO SAY, AND IT IS
+    FALSE. Round 1's F2 said it, the round-3 brief repeated it, and both
+    round-2 reviewers independently disproved it rather than accepting it: a
+    closed issue is a PREREQUISITE the operator controls, not a strand. Re-open
+    the issue and the verb is available again -- measured end to end, refusal
+    first (ledger untouched, zero gh writes), then re-open, then a successful
+    reversal to `ready`. And if a refresh intervenes the item is
+    `needs-audit`/`reopened`, which `audit_queue()` selects and which needs no
+    verb at all. Neither order dead-ends. A word that overstates the guard by
+    one adverb is the same defect class as the claims this file is full of, and
+    it survived two rounds because nobody attacked the adverb.
 
     Each guard is right on its own; the published instruction is what created
     the pincer. So the body must name the WINDOW and both refusals rather than
@@ -1257,6 +1269,25 @@ def test_undecline_is_refused_in_both_branches_the_decline_body_names(
     WHAT MAKES THIS FAIL: loosen either guard. Both refusals are deliberate and
     this test is the record that they compose into a narrow window -- which is
     the fact the published body is now required to state.
+
+    THE WINDOW HAS NEVER DESCRIBED THE LIVE POPULATION, and saying so is the
+    difference between a guard and a story about a guard. Measured from two
+    instruments rather than one, against ledger blob `a8ec1fc5` -- the GitHub
+    issues API for the close, the ledger's own history lines for the decline:
+
+        #4534  closed 2026-09-17T11:46Z  declined 2026-09-24T15:47Z
+        #4582  closed 2026-09-18T20:01Z  declined 2026-09-24T15:47Z
+        #4664  closed 2026-09-22T16:49Z  declined 2026-09-24T15:47Z
+        #4670  closed 2026-09-23T16:48Z  declined 2026-09-24T18:53Z
+
+    Every one was shut on GitHub DAYS BEFORE the harness declined it, so none
+    of them ever sat in the open-issue window this test pins. All four land on
+    the closed-issue refusal from the first moment they were declined, and the
+    route back for all four is re-open-then-reverse. The window is a real
+    property of the guards AND an empty set on that ledger; those are different
+    claims and only the first is what this test establishes. The figures are
+    anchored to a blob rather than to "today" because a figure with no ref
+    reads as current forever.
 
     THE THIRD LEG IS THE POSITIVE CONTROL and it is not decoration: without it
     the first two are satisfied by a verb that refuses everything, which is the
@@ -1340,9 +1371,10 @@ def test_a_receipt_survives_a_reversal_and_the_body_says_so(monkeypatch, tmp_pat
     work: `Ledger.record_receipt` is the only writer of `receipt_kind` and its
     only non-test caller pairs it with `transition(CLOSED)` under a rollback,
     so no tool path produces a receipted park or decline at all. Census of the
-    live ledger, whole file: 416 items, 11 hold a receipt, all 11 `closed`, 0
-    parked or declined. The population this decision governs is empty BY
-    CONSTRUCTION, not by luck; this test reaches the shape by writing the
+    live ledger, whole file, at blob `a8ec1fc5`: 416 items, 11 hold a receipt,
+    all 11 `closed`, 0 parked or declined -- the two parked items are #2874 and
+    #2958 and neither holds one. The population this decision governs is empty
+    BY CONSTRUCTION, not by luck; this test reaches the shape by writing the
     fields directly, which is what a hand-edited `state.json` does.
 
     WHAT MAKES THIS FAIL: void the receipt in `_reverse` (the first assertion),

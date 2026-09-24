@@ -1380,7 +1380,7 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
     only writer of `receipt_kind`, and its only non-test caller is
     `_record_close_in_ledger`, which pairs it with `transition(CLOSED)` under a
     rollback -- so no tool path leaves a non-closed item holding a receipt at
-    all. Census of the live ledger, whole file, taken by a reviewer: 416 items,
+    all. Census of the live ledger, whole file, at blob `a8ec1fc5`: 416 items,
     11 hold a receipt, all 11 `closed`, 0 parked or declined. A hand-edited
     `state.json` reaches the shape; nothing in this package does.
     """

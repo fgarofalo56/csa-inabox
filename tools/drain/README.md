@@ -653,7 +653,7 @@ belongs to `ledger.py` and is not settled by #4699.
 
 **No tool path produces a receipted park or decline.** `Ledger.record_receipt`
 is the only writer of `receipt_kind` and its only non-test caller pairs it with
-`transition(closed)` under a rollback. Census of the live ledger: 416 items, 11
+`transition(closed)` under a rollback. Census of the live ledger at blob `a8ec1fc5`: 416 items, 11
 hold a receipt, all 11 `closed`, 0 parked or declined. The population above is
 empty *by construction*; a hand-edited `state.json` — which this README
 documents — reaches it, and nothing in the tool does.
