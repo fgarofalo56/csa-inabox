@@ -10,12 +10,23 @@
  * from scratch tooling under `temp/`, and review's standing finding was that the
  * receipt could therefore be believed but not re-derived. It is landed here,
  * under the repo's existing `__tests__/mutation/{mutations,run-arms}.mjs`
- * convention (five packages already use it), so the table in the PR body is
- * reproducible from the tree by anyone:
+ * convention, so the table in the PR body is reproducible from the tree by
+ * anyone:
  *
  *     cd apps/fiab-console
  *     node app/api/items/_lib/__tests__/mutation/run-arms.mjs
  *     node app/api/items/_lib/__tests__/mutation/run-arms.mjs A16   # one arm
+ *
+ * That convention is stated precisely here, because a loose count is the class
+ * of thing this PR keeps being blocked on: FIVE packages carried a
+ * `__tests__/mutation/` directory before this one, four of them with exactly
+ * this `{mutations,run-arms}.mjs` filename pair — `lib/foundry`'s runner is
+ * named `run-sql-ref-guard-arms.mjs`. Derive it rather than trusting the
+ * sentence, with a needle that has no `*` + `/` in it, because that sequence
+ * would END this very comment — a bug the first draft of these lines shipped
+ * and `node` caught on the next run:
+ *
+ *     git ls-files | grep -E 'mutation/run-arms\.mjs$'     # 5, with this one
  *
  * RUN IT IN A `git worktree`, not your lane tree. The runner restores every file
  * from an in-memory copy in a `finally` and re-checks the tree, but
