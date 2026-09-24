@@ -25,16 +25,19 @@ the drain, and a blocker clearing is the EXPECTED case, not the exceptional one.
 
 ## The constraint that shapes the whole design
 
-`REOPEN_DISPUTES` excludes `parked` because of **#2874**: keyed on `TERMINAL`,
+`REOPEN_DISPUTES` excludes `parked` because of **#4535**: keyed on `TERMINAL`,
 every refresh demoted every park, `needs-audit` is non-terminal, and `drained()`
 -- this program's documented exit condition -- became unreachable for anything
-genuinely blocked. It lasted thirteen seconds.
+genuinely blocked. **#2874 is the ITEM that demonstrated it** -- a bicep-drift
+issue, parked and demoted thirteen seconds later -- NOT the defect's tracking
+issue. #4699 and several comments in this package cite `#2874` as though it were
+the latter; both numbers are named here so the swap is not inherited again.
 
 **The property that makes a park stable is the same one that makes it
 irreversible.** So the remedy cannot be a looser refresh. It is an EXPLICIT
 verb, and the tests below pin BOTH halves of that: the verb works, AND the
 refresh and the reaper still leave a terminal item completely alone. The second
-half is the arm most easily missed, because the new verb and the #2874 guard
+half is the arm most easily missed, because the new verb and the #4535 guard
 pull in opposite directions -- `test_reopen_disputes_still_excludes_parked_and_the_verb_is_the_only_way_out`
 is the negative control, and it asserts on the CONSTANT as well as on behaviour.
 
@@ -820,7 +823,7 @@ def test_a_reversal_is_gated_on_the_autonomy_contract(
 
 
 # ---------------------------------------------------------------------------
-# THE #2874 NEGATIVE CONTROL -- the new verb must be the ONLY route out
+# THE #4535 NEGATIVE CONTROL -- the new verb must be the ONLY route out
 # ---------------------------------------------------------------------------
 
 
@@ -828,13 +831,15 @@ def test_reopen_disputes_still_excludes_parked_and_the_verb_is_the_only_way_out(
     monkeypatch, tmp_path
 ):
     """THE ARM MOST LIKELY TO BE MISSED (#4699 says so by name), because the new
-    verb and the #2874 guard pull in OPPOSITE directions.
+    verb and the #4535 guard pull in OPPOSITE directions.
 
-    #2874: `REOPEN_DISPUTES` was keyed on `TERMINAL`, so every refresh demoted
+    #4535: `REOPEN_DISPUTES` was keyed on `TERMINAL`, so every refresh demoted
     every park to `needs-audit` -- which is non-terminal -- and `drained()`
-    became unreachable for anything genuinely blocked. It lasted thirteen
-    seconds. The obvious way to make a park reversible is to loosen that, and
-    loosening it restores #2874 exactly.
+    became unreachable for anything genuinely blocked. **#2874 is the ITEM that
+    demonstrated it**, demoted thirteen seconds after it was parked; it is a
+    bicep-drift issue and NOT the defect's tracking issue, which is what #4699
+    calls it. The obvious way to make a park reversible is to loosen that guard,
+    and loosening it restores #4535 exactly.
 
     SO THIS TEST ASSERTS BOTH HALVES OVER ONE LEDGER, and neither half alone
     would be coverage:
@@ -853,7 +858,7 @@ def test_reopen_disputes_still_excludes_parked_and_the_verb_is_the_only_way_out(
       world.
     """
     assert PARKED not in REOPEN_DISPUTES, (
-        "#2874: a park is BLOCKED, not done - its issue is SUPPOSED to be open, "
+        "#4535: a park is BLOCKED, not done - its issue is SUPPOSED to be open, "
         "so being open disputes nothing and a refresh must leave it alone. If "
         "this is how the reversal was implemented, the reversal is wrong."
     )
@@ -875,7 +880,7 @@ def test_reopen_disputes_still_excludes_parked_and_the_verb_is_the_only_way_out(
     for _ in range(2):
         tick.refresh_from_github(led, {}, _live((STRANDED_BY_A_CLEARED_BLOCKER,)))
         assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == PARKED, (
-            "a refresh must NOT be a route out of a park (#2874)"
+            "a refresh must NOT be a route out of a park (#4535)"
         )
         assert led.drained() is True
 

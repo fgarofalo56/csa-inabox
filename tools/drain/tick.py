@@ -1459,10 +1459,16 @@ def _reverse(
     blocker clearing is the EXPECTED case.
 
     THIS IS THE ONLY ROUTE OUT, AND THAT IS THE DESIGN CONSTRAINT, not a
-    side-effect. `REOPEN_DISPUTES` excludes `parked` because #2874 measured every
-    refresh demoting every park -- thirteen seconds from ship to regression --
-    which made `drained()` unreachable for anything genuinely blocked. So the
-    property that makes a park stable is the same one that makes it
+    side-effect. `REOPEN_DISPUTES` excludes `parked` because of **#4535** --
+    `upsert` keyed the reopen branch on `TERMINAL` wholesale, so every refresh
+    demoted every park to `needs-audit`, which is non-terminal, and `drained()`
+    became unreachable for anything genuinely blocked. **#2874 is the ITEM that
+    demonstrated it**, parked and demoted thirteen seconds later; it is a
+    bicep-drift issue, not the defect's tracking issue, and #4699 (and several
+    comments in this package) cite it as though it were. Both numbers are named
+    here so the next reader does not inherit the swap.
+
+    So the property that makes a park stable is the same one that makes it
     irreversible, and the remedy is an EXPLICIT verb rather than a loosened
     refresh: nothing in `refresh_from_github` or `reap_stranded` changes, and the
     tests assert both still leave a terminal item alone.
@@ -3017,7 +3023,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--unpark", type=int, metavar="ITEM",
         help="reverse a PARK and return the item to ready (needs --reason). The "
              "ONLY route out of a terminal state: a refresh and --reap both leave "
-             "a parked item alone, deliberately (#2874). Records NO receipt",
+             "a parked item alone, deliberately (#4535). Records NO receipt",
     )
     parser.add_argument(
         "--undecline", type=int, metavar="ITEM",
@@ -3402,7 +3408,7 @@ def main() -> int:
         # RETURNS BEFORE `read_live_issues`, for the reason the disposition
         # branch does: a reversal is a transaction about ONE item, and a refresh
         # rewrites every item's state. Here it also matters that the refresh is
-        # the thing that must NEVER reach a terminal item (#2874) -- running one
+        # the thing that must NEVER reach a terminal item (#4535) -- running one
         # inside the only verb that legitimately does would make the two
         # indistinguishable in any log.
         if not led.loaded_from_disk:
