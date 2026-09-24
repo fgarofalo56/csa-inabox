@@ -15,7 +15,7 @@ as literal OSS code over Arrow instead of reimplementing VertiPaq.
 
 ```
 apps/loom-directlake/
-  Cargo.toml            # arrow 53 / parquet 53 / datafusion 43 / deltalake 0.24 (azure)
+  Cargo.toml            # arrow 59 / parquet 59 / datafusion 55 / deltalake 1.0 (azure)
   Dockerfile            # multi-stage: rust:1.82 builder → debian-slim runtime, non-root uid 10001
   fixtures/sales.parquet# bundled tiny star-schema fact — makes /scan run with ZERO Azure
   src/
@@ -186,29 +186,37 @@ temporary `schema()`); the shipped binary itself built clean on both feature
 sets. That is the whole argument for the lane: nothing else in the repository
 could ever have surfaced them.
 
-## Known vulnerability — `thrift 0.17.0` (Dependabot #94, GHSA-2f9f-gq7v-9h6m)
+## Resolved vulnerability — `thrift 0.17.0` (Dependabot #94, GHSA-2f9f-gq7v-9h6m)
 
-**Status: open, accepted, and NOT fixable by any dependency bump available
-today.** Recorded here so it is a disclosed trade rather than a surprise.
+**Status: RESOLVED 2026-09-23 by the arrow-59 stack bump (#3982).** `thrift` is
+no longer in `Cargo.lock` at any version. The history is kept because the
+re-check trigger this section defined is exactly what fired, and because the
+shape of the blocker recurs.
 
 * Severity **moderate**, class *Memory Allocation with Excessive Size Value* —
   a DoS on a parser fed a malformed value. Not RCE, not information disclosure.
-* The chain is `loom-directlake → deltalake 0.24 → parquet 53.4.1 → thrift 0.17`.
-  `thrift` is pulled by **`parquet` and nothing else** in the lock.
-* First patched `thrift` is **0.23.0**. Measured against crates.io: **every**
-  `parquet` release up to and including **58.4.0** declares a non-optional
-  `thrift = "^0.17"`, which cannot resolve to 0.23; `parquet` drops the `thrift`
-  crate entirely only at **59.0.0**. The newest `deltalake` (**0.32.4**) pins
-  `arrow ^58` / `parquet ^58`. **No published delta-rs release can reach
-  parquet 59**, so there is no version combination that clears this advisory
-  while the `abfss://` Delta path exists — which is the point of the service.
-* **Exposure is bounded by construction**: ingress is `external: false` (the
-  Console BFF over the CAE VNet is the only caller), both BFF routes are
-  tenant-admin gated, the container runs non-root (uid 10001) with an ACA memory
-  cap, and it parses only the customer's **own** lake files. A malformed Parquet
-  file in your own lake can restart your own replica.
-* **Re-check trigger**: when `deltalake` publishes a release requiring
-  `arrow`/`parquet` **≥ 59**, bump this crate and regenerate `Cargo.lock`. That
-  is the single condition that resolves it.
+* The chain was `loom-directlake → deltalake 0.24 → parquet 53.4.1 → thrift 0.17`.
+  `thrift` was pulled by **`parquet` and nothing else** in the lock.
+* First patched `thrift` is **0.23.0**, and it was unreachable on semver:
+  `parquet` declared `thrift ^0.17` (`>=0.17.0, <0.18.0` for a 0.x crate), and a
+  `[patch.crates-io]` replacement must still SATISFY the original requirement.
+  `parquet` drops the `thrift` crate entirely at **59.0.0**.
+* **What unblocked it**: `deltalake-core 1.0.0`, published **2026-09-21**, is the
+  first delta-rs release on `arrow ^59` / `parquet ^59` / `datafusion ^55`. The
+  previous newest (0.32.4) was still on `arrow ^58` / `parquet ^58`, i.e. still
+  thrift-bearing. That single publication is what made a thrift-free graph exist.
+* **The bump had to move all four together.** The grouped dependabot PR #4630
+  tried `arrow 54` + `datafusion 51`, which resolved `parquet 57.3.1` — it kept
+  `thrift` AND split the graph across two arrow majors, so
+  `arrow::datatypes::Schema` stopped being the same type as
+  `datafusion::arrow::datatypes::Schema` and this crate failed to compile with
+  5× `E0308`. Check `cargo tree -d` for a duplicated `arrow` before trusting any
+  future group bump here.
+* **Exposure while it was open was bounded by construction**: ingress is
+  `external: false` (the Console BFF over the CAE VNet is the only caller), both
+  BFF routes are tenant-admin gated, the container runs non-root (uid 10001) with
+  an ACA memory cap, and it parses only the customer's **own** lake files.
+* **Next re-check trigger**: raising `parquet` to 60 needs a `deltalake` release
+  that admits `arrow 60`. None exists as of 2026-09-23.
 
 [axum]: https://github.com/tokio-rs/axum

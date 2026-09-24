@@ -34,9 +34,13 @@ run-name: >-
 # rollout now has to PROVE the new build is live before declaring success.
 #
 # ROLL-GATE SEQUENCE (rel-T22 / blocker B13):
-#   1. Gate — vitest: confirm the `vitest (node 20)` required check CONCLUDED
-#      success for the commit being rolled (cheap + exact, via the check-runs
-#      API). An untested/failed commit is refused BEFORE anything ships.
+#   1. Gate — vitest: confirm the console suite actually RAN and passed for the
+#      commit being rolled (cheap + exact, via the check-runs API). Since #4657
+#      that means the `vitest shard i/N` jobs — which is where the suite
+#      executes — plus the `vitest (node 20)` merge job that enforces the
+#      coverage floor. An untested/failed commit is refused BEFORE anything
+#      ships. Pointing this gate at the merge job alone froze the estate for two
+#      days (#4679).
 #      The gate WAITS for a verdict rather than reading once: vitest is slower
 #      than the image build that triggers this roll, so a single read lands
 #      while the check is still in_progress (#2819). Three states, kept apart —
@@ -126,7 +130,8 @@ on:
 permissions:
   contents: read
   issues: write
-  # Read the `vitest (node 20)` check-run conclusion for the rolled commit.
+  # Read the `vitest (node 20)` and `vitest shard i/N` check-run conclusions for
+  # the rolled commit (#4679 — the shards are where the suite executes).
   checks: read
 
 # SERIALIZE ROLLS AGAINST THE SAME CONTAINER APP (#3159).
@@ -637,11 +642,38 @@ jobs:
           echo "::error::REFUSING TO ROLL — the image-exists preflight itself failed with exit $STATUS, which is not one of its verdicts (0 present / 3 absent / 4 unproven / 5 re-lock unverified). Nothing is established about $REF. This is a defect in the gate invocation, not a statement about the registry; see scripts/ci/assert-acr-image-tags.sh."
           exit 1
 
-      - name: Gate — require vitest (node 20) success for the rolled commit
+      - name: Gate — require the vitest suite (shards + merge) to have run for the rolled commit
         id: vitest_gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ROLL_VITEST_WAIT_MINUTES: ${{ vars.LOOM_ROLL_VITEST_WAIT_MINUTES || '50' }}
+        # #4679: THIS GATE ADJUDICATES THE SHARD JOBS, NOT JUST `vitest (node 20)`.
+        # #4657 (8d3dd9cbb, 2026-09-21) moved the suite onto four shard runners.
+        # `vitest (node 20)` kept its name — it is a REQUIRED context and this
+        # gate reads it — but became the MERGE job: download blobs, enforce the
+        # coverage floor. Measured at 2018829ce / run 35801391361:
+        #     vitest shard 1/4 462s   shard 2/4 664s   shard 3/4 720s
+        #     vitest shard 4/4 636s   vitest (node 20)  98s
+        # The 120s "did it actually run" floor, pointed at that 98s merge job,
+        # refused EVERY healthy console roll for two days; the estate stayed
+        # pinned at 03f1ace17 / 20260921T230332Z (deploy-integrity R1). Measured
+        # server-side, that was 16 behind this branch's base 4ff1e1fcc and 17
+        # behind main at 2026-09-23T20:20Z — count against origin/main and name
+        # the ref, never against a local HEAD that may trail it. The floor was
+        # not wrong — it was measuring the wrong job. It is NOT lowered: it now
+        # applies PER SHARD. Not to their sum — a shard's wall time is
+        # setup + execution, the setup term is paid N times, and the measured
+        # per-shard setup on that run was 28/34/32/32 = 126s, which ALREADY
+        # clears 120s. A sum rule would therefore have passed four shards that
+        # executed zero tests, re-opening #2631. Per shard the separation is
+        # clean: slowest setup-only shard 34s, fastest real shard 462s.
+        #
+        # A SHA with no `vitest shard i/N` check-runs is adjudicated under the
+        # pre-sharding topology (the merge job's own wall time), so rolling a
+        # commit older than #4657 still works — and that refusal SAYS it made
+        # that assumption, so the next topology change fails loudly instead of
+        # blaming CI.
+        #
         # #2819: this gate used to read the check-run conclusion ONCE and refuse
         # when it was empty — but `.conclusion` is null while a check is QUEUED
         # or IN_PROGRESS, so "still running" was reported as

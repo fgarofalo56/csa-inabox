@@ -35,7 +35,7 @@
  *
  * If confirmation cannot be reached — the poll budget is exhausted, the job doc
  * stops advancing (installs are detached floating promises on a console running
- * minReplicas:2/maxReplicas:6/multiRevision, so a scale-in can kill an install
+ * minReplicas:2/maxReplicas:6, so a scale-in can kill an install
  * mid-write and the doc simply stops moving — #3905 P2), or the doc cannot be
  * read — the entry becomes `unknown`. A poll loop that exhausts and then claims
  * success would be WORSE than the original bug because it looks measured.

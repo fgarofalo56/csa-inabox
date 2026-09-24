@@ -251,7 +251,8 @@ after it**. So the receipt establishes *the declared producer ran green*, not
 deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
 rather than a merge, and it discloses the time and sha gap in terms. Binding it
 is #4578 (fetch the run's date, compare it to the item's, refuse a run that
-predates it); the sha half waits on #4489 with the rest of the binding.
+predates it); the sha half is bound by neither, and #4489 did not deliver it
+-- that writer records WHICH PR, not which sha.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -301,6 +302,112 @@ is measured at the PR head (where it ran) through `check_suite_id`, and the
 rename case is resolved by **workflow identity** at the merged sha. An alias
 table would be one conditional `name:` expression away from being wrong,
 silently.
+
+**Nor is it keyed to a STEP's spelling at HEAD (#4676).** `policy.json`
+describes the workflow *as it is at HEAD*, so judging a merged PR's job against
+it asks a run from last week whether it executed a step created yesterday. It
+did not, and the refusal read *"the declaration is stale"* — pointing the reader
+at the one edit that would make the declaration wrong for every merge **after**
+the rename. Measured: PR #4593 merged 2026-09-20T01:24:35Z; `8d3dd9cbb` (#4657)
+renamed `vitest (node 20)`'s substantive step on 2026-09-21; the receipt for
+#4593 became unobtainable, in the receipt class that closes most of the ledger.
+
+The fix is the same shape as the one above, and for the same reason it is **not**
+an alias table: the declaration is **versioned in the same repo as the workflow
+it describes**, so the repo already records what it said on the day any given run
+happened. `merge_gate.resolve_declaration_as_of` reads
+`git show <merged-sha>:tools/drain/policy.json` and injects
+`receipts.ci_green_rule` as a `gates.DeclarationAsOf`, exactly as `push_trigger`
+and `infra_ere` are injected — `gates.py` runs no subprocess. **The code is
+HEAD's; the declaration is the sha's.** Every predicate stays today's, because
+every hole reviewers found in rounds 5–16 is fixed at HEAD and must apply to
+every measurement; only the *description of the workflow* moves with the sha.
+
+**A rename is not atomic, so there are two clocks.** The workflow and the
+declaration describing it are two files, and #4657 moved them 3h13m apart —
+`8d3dd9cbb` (`fiab-console-ci.yml`, 2026-09-21 21:25) and `356290aa9`
+(`policy.json`, 2026-09-22 00:38) — with **three merges in between** (#4652,
+#4654, #4658). Resolving strictly as-of refuses all three: the declaration at
+their sha names a step their job does not carry. So the sha's declaration is
+tried first and, **only when the step it names is ABSENT ENTIRELY**, HEAD's is
+tried; the receipt prints which one decided. Absence is the rename signature. A
+declared step that is PRESENT and **skipped** is a hollow check, never falls
+through, and still fails — otherwise a rename would launder exactly the defect
+this predicate exists for.
+
+**Five** refusal states, kept distinct because their remedies are opposite:
+
+| what happened | what the receipt says | remedy |
+|---|---|---|
+| neither clock's declaration describes the job | *"…and so is every other declaration this repo carries for it"* | re-read the declaration off a green run |
+| the sha's clock is ABSENT but HEAD's names a step the job carries **skipped** | *"HEAD's declaration names a DIFFERENT step, which this job DOES carry, and it does not account for the context either: its declared substantive step(s) […] were SKIPPED…"* | fix the check, not the declaration |
+| the declaration at the sha could not be READ | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| the declaration at the sha PREDATES the key | *"…carries no `receipts.ci_green_rule` AT ALL — the key did not exist yet … There is nothing to fetch"* | nothing to fetch; HEAD's is the only declaration there has ever been |
+| no as-of resolution was attempted at all | today's sentence, unchanged | none; this is a direct unit call |
+
+The second row is the one this file got wrong twice. First the code discarded
+the second clock's *kind*, so a step that was PRESENT and SKIPPED at HEAD was
+reported as absent — stating as fact something it had not established
+(`deploy-integrity.md` R7), in the branch written to end exactly that. Then the
+fix for it wrapped a finished sentence as if it were a list and printed the
+trailing clause twice, while the test's three substring assertions were all
+satisfied by the garbled string. The test now pins the **whole sentence** and
+that each clause occurs exactly once. The fourth row is the same class:
+`substantive_steps` arrives in `6e29f1012` (2026-09-15, #4491), so every merge
+older than that resolves to "no rule", and telling the reader to `git fetch` a
+sha they already have is a wrong remedy for what is, on a backlog of
+pre-2026-09-15 merges, the common case.
+
+**A pass says which clock decided it, and whether that clock was ever READ.**
+Five ways it can differ from "HEAD's current declaration, verified against the
+sha": a rename (*"which HEAD has since changed to …"*), the lag window
+(*"reached because the declaration as of … named …, which this job does not
+carry"*), a row **newer than the sha** (*"policy.json at the measured sha
+carried NO ROW for this context"*, reachable for the two rows added in
+`0c2c4c974` on 2026-09-18), an **unreadable** sha (*"NOT VERIFIED against the
+measured sha … could NOT be read"*), and one that **predates the key** (*"NOT
+VERIFIED … policy.json carried no `receipts.ci_green_rule` there"*). None is
+folded into the others; a silent substitution is the thing this whole mechanism
+is against.
+
+The last two of those five were **silent until a reviewer probed them**: one
+fixture through four resolution states returned one byte-identical sentence.
+Both matter for what can CLOSE. `actions/checkout` is depth 1 by default, so on
+a shallow clone every sha is unreadable, the feature degrades to pre-PR
+behaviour, and every pass still read as verified; and every merge older than
+2026-09-15 predates the key, which is the **common** case for this backlog. The
+refusal side said "could NOT be read"; the acceptance side — the side that
+closes things — said nothing. It does now.
+
+**Routes 2 and 3 are deliberately single-clocked.** Route 1's fallthrough is
+safe only because it is reachable on `missing` alone — a name absent from the
+job entirely. `scope_untouched_at_merge` and `alternative_accounted_for` refuse
+for reasons about the merged *file list* and the detector, where "try the other
+declaration" would let a scope refusal under one clock be overridden by an
+acceptance under the other — the #3783 laundering shape. The cost is that a
+lag-window job whose primary is skipped under HEAD's spelling and whose declared
+alternative ran is refused; that is fail-closed, it is unrealised on all three
+real lag-window merges, and `test_routes_2_and_3_are_deliberately_single_clocked`
+pins it so changing it has to be deliberate.
+
+**What this does NOT establish: a rename is indistinguishable from a
+CORRECTION.** If a declaration row was ever *wrong* at sha S — naming a step
+that was not the check — and has since been corrected at HEAD, a merge at S is
+now judged by the wrong declaration, and the correction stops applying
+retroactively. Measured across all six versions of `substantive_steps` since it
+was introduced: **two row additions (`0c2c4c974`) and one rename (`356290aa9`),
+zero corrections.** The risk is real and currently unrealised. It matters
+because the two are textually identical — a row whose value changed — so no
+amount of reading the diff can tell them apart; only the intent behind the
+commit can, and the receipt cannot read intent.
+
+**Also not established: the PREDATES path has no live receipt.** It is covered
+by a unit test and by mutation arm AS6, and it is the path whose acceptance
+side was silent until it was fixed — but no `--ci-green-receipt` has been taken
+against a merge older than 2026-09-15. Nor has anyone enumerated whether any
+open backlog item would close on a receipt passing ONLY through an unverified
+clock; that needs `--ci-green-receipt` over every ci-green-eligible item's
+merge, it has not been run, and the population is **not** asserted to be empty.
 
 **A green conclusion is not evidence the check did its WORK**, and fixing that
 nearly made the receipt unobtainable for the only class it closes. `policy.json`
@@ -441,8 +548,9 @@ concludes green having captured nothing.
 
 **What it does not establish.** That the evidence is *about* the item. Nothing
 stops a green roll being recorded against a second deploy-path item it never
-touched; the operator supplies that pairing, and the harness cannot check it
-until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
+touched; the operator supplies that pairing. `Item.pr` now records which PR a
+lane opened for an item (`tick.py --bind-pr`, #4489), but the `--from-run`
+path does not consult it, so that pairing is still unchecked. A refused receipt writes nothing — the
 ledger is byte-identical afterwards, verified by digest, **and no GitHub write
 happens either**, because the close runs only after every refusal has been
 passed.

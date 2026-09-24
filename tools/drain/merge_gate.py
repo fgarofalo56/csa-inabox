@@ -244,14 +244,26 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     record disagrees with the declaration -- which is the one thing on a PR that
     was not typed by its author.
 
-    **INERT TODAY, AND SAID SO RATHER THAN IMPLIED.** `Item.pr` has no writer:
-    0 of 299 live items carry one, so this returns `[]` for every real input.
-    It is kept, not deleted, because the check is right and the missing half is
-    a writer in `tick.py` -- which owns the ledger and is its single writer by
-    design. The previous round wrote the binding from HERE instead, and both
-    reviewers reproduced a lost update on the drain's only durable record. A
-    merge gate does not get to mutate the thing it measures. Tracked in #4489;
-    until then this is a declared-inert control, not a working one.
+    `tick.py --bind-pr ITEM --pr N` writes `Item.pr` (#4489), so this reaches
+    its real branch whenever a lane has reported its PR. It is still SILENT on items with no binding, and that is deliberate
+    rather than a gap: an unbound item is one no lane reported, which is not
+    evidence of a conflict.
+
+    The writer lives in `tick.py`, not here, and the reason is worth keeping.
+    A previous round wrote the binding from THIS file, and both reviewers
+    reproduced a lost update on the drain's only durable record -- `Ledger.save()`
+    serialises the whole document from memory, so the loser's transitions do not
+    merge, they vanish. A merge gate does not get to mutate the thing it
+    measures. `tick.py` is the single writer by design and saves through a CAS
+    that REFUSES a concurrent write rather than overwriting it.
+
+    Coverage, stated precisely because the first version of this paragraph was
+    vaguer than the code: `test_poached_closes_refuses_a_bound_item` drives the
+    REAL writer and runs this function through `run_gates` to gate 6, so the
+    consumer IS pinned end to end. What is NOT pinned is the separate
+    `--allow-close` pre-check in `main()`, which calls this function directly
+    and has no test driving it. The refusals and the binding itself are pinned
+    by `__tests__/test_bind_pr.py` and by mutation arms PR1-PR4 (all KILLED).
     """
     if not closing or pr is None:
         return []
@@ -283,8 +295,8 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
 # Locking a merge gate was the wrong answer to the wrong question. `tick.py`
 # owns the ledger and is the single writer by design; the binding belongs there,
 # written when a lane opens a PR for an item, not inferred by the gate from what
-# the PR says about itself. `poached_closes` stays as a READ and is DECLARED
-# INERT until that writer exists -- see its docstring. Tracked in #4489.
+# the PR says about itself. That writer is `tick.py --bind-pr` (#4489);
+# `poached_closes` stays a READ and reads what it writes -- see its docstring.
 
 
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
@@ -338,14 +350,19 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     Without one of those, a declared close is treated like a mention: it may
     escalate, it may not explain.
 
-    `Item.pr` HAS NO WRITER, so the mid-flight test carries all of the weight
-    today and the binding arm is unreachable. A previous round wrote the binding
+    `Item.pr` is written by `tick.py --bind-pr` (#4489), so the binding arm is
+    reachable and the mid-flight test does not carry all of the weight. Read the next paragraph before relying on that, because the two arms
+    are not equivalent: a binding BYPASSES the state test, so a TERMINAL item
+    bound to this PR still corroborates. That is deliberate (a binding the
+    harness wrote outranks a state it inferred) but it is not what "in flight"
+    implies, and this docstring previously told an auditor the arm could not
+    fire at all.
+
+    The writer lives in `tick.py`, not here. A previous round wrote the binding
     from `main()` and this docstring said so; that write is DELETED, because
     from a worktree it rewrote the primary checkout's ledger unlocked and both
-    reviewers reproduced a lost update. Nothing accrues. The writer belongs in
-    `tick.py`, which owns the ledger -- #4489. Said here because a reader
-    auditing whether this corroboration is safe was previously told it rests on
-    an accrual that does not exist.
+    reviewers reproduced a lost update. `tick.py` owns the ledger and saves
+    through a CAS that refuses a concurrent write.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
     `reduce_verdicts` uses. That is the `hit` branch's job: a PR touching a
@@ -402,9 +419,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     # WORD IT FROM THE ARM THAT MATCHED. "is work the harness has in flight" is
     # false of an item corroborated by its BINDING, which bypasses the state
     # test -- a `closed` item bound to this PR corroborates, and the docstring
-    # above says a terminal item is finished. Unreachable while `Item.pr` has no
-    # writer; it arms the moment #4489 lands one, which is when a latent wrong
-    # sentence becomes a live one.
+    # above says a terminal item is finished. `tick.py --bind-pr` writes
+    # `Item.pr` (#4489), so this arm fires, and nothing clears the
+    # binding when the item goes terminal (`transition()` clears only
+    # `audit_reason`). A bound-then-parked item therefore corroborates a
+    # declared close. Deliberate, and stated here rather than left for an
+    # auditor to discover, because the previous wording said it could not
+    # happen.
     bound_here = [n for n in corroborated if led.items[n].pr == pr]
     if corroborated:
         # The STRONGEST, not the lowest-numbered. `corroborated[0]` reported
@@ -424,10 +445,11 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
 
     stale = [n for n in closing if n in led.items]
     if stale:
-        # The binding clause ONLY when there is a binding. `Item.pr` has no
-        # writer, so "bound to PR None" was what this said about all 299 items
-        # -- a fact asserted about a system that has no bindings, the same shape
-        # as the "was taken under None" message repaired in `ledger.py`.
+        # The binding clause ONLY when there is a binding. Before #4489 landed a
+        # writer, "bound to PR None" was what this said about all 299 items -- a
+        # fact asserted about a system that had no bindings, the same shape as
+        # the "was taken under None" message repaired in `ledger.py`. Bindings
+        # exist now, but most items still carry none, so the guard stays.
         item = led.items[stale[0]]
         return None, (
             f"#{stale} is declared closed but the ledger has it in "
@@ -558,6 +580,53 @@ def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
               f"{err[:200]} - gate 1 will refuse rather than assume", file=sys.stderr)
         return None
     return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def base_update_facts(head: str) -> tuple[list[str], str | None, str]:
+    """Resolve, from LOCAL git, the three facts the re-pin decision needs.
+
+    Returns `(parents, automerge_tree, head_tree)` for
+    `gates.verdict_transfers_across_base_update`, which is pure and cannot run
+    a subprocess itself. Every failure resolves to a value that function
+    REFUSES -- `[]`, `None`, `""` -- so an unreadable repository can only ever
+    lose a transfer, never fabricate one.
+
+    THE OBJECT MUST BE PRESENT LOCALLY. A PR head that was never fetched is not
+    an error to route around: `git rev-parse` fails, `head_tree` comes back
+    empty, and the decision refuses. The caller fetches `pull/N/head` first --
+    measured on #4648, whose head was absent and turned gate 1 into "cannot
+    resolve base or origin/main sha", a blindness that READS exactly like a
+    stale base.
+
+    NEVER discards stderr (R7): a failure says why, and says it as a failure
+    rather than as an empty result.
+    """
+    rc, out, err = sh(["git", "rev-list", "--parents", "-n", "1", head])
+    if rc != 0 or not out.strip():
+        print(f"WARNING: cannot read parents of {head[:12]} (rc={rc}): "
+              f"{err[:200]} - the re-pin will refuse", file=sys.stderr)
+        return [], None, ""
+    # `rev-list --parents -n1` prints "<commit> <parent>..." on one line.
+    parts = out.split()
+    parents = parts[1:]
+
+    rc, out, err = sh(["git", "rev-parse", f"{head}^{{tree}}"])
+    head_tree = out.strip() if rc == 0 else ""
+    if not head_tree:
+        print(f"WARNING: cannot resolve the tree of {head[:12]}: {err[:200]}",
+              file=sys.stderr)
+
+    automerge_tree: str | None = None
+    if len(parents) == 2:
+        # `merge-tree --write-tree` exits NON-ZERO on conflict and writes no
+        # usable tree. That is not an error to report -- it is the answer
+        # "this was not a clean auto-merge", which the decision refuses with a
+        # message distinct from "the trees differ".
+        rc, out, err = sh(["git", "merge-tree", "--write-tree",
+                           parents[0], parents[1]])
+        if rc == 0 and out.strip():
+            automerge_tree = out.strip().splitlines()[0].strip()
+    return parents, automerge_tree, head_tree
 
 
 def derive_context_scopes(
@@ -691,6 +760,39 @@ def collect(repo: str, number: int) -> dict:
     if not head_date:
         print(f"WARNING: could not resolve head commit date: {err[:200]}", file=sys.stderr)
 
+    # --- RE-PIN ACROSS A BASE UPDATE -------------------------------------
+    # Verdict liveness is a TIMESTAMP proxy, so `update-branch` retires every
+    # verdict beneath it even though it authors nothing. Where the head is
+    # provably the auto-merge of its two parents, the bytes the reviewer
+    # measured are still the bytes on offer, so verdicts are pinned to the
+    # PR-SIDE PARENT's date instead of the merge's.
+    #
+    # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
+    # branch, so the branch tip is the first parent. That is an assumption
+    # about GitHub's merge direction, and it is CHECKED rather than trusted --
+    # `verdict_transfers_across_base_update` requires the approved head to be
+    # among the parents, and the date below is read from whichever parent is
+    # named, so a reversed merge yields a refusal and not a wrong pin.
+    repin_ok, repin_why, repin_date = False, "head is not a base update", ""
+    parents, automerge_tree, head_tree = base_update_facts(head)
+    if len(parents) == 2:
+        repin_ok, repin_why = gates.verdict_transfers_across_base_update(
+            parents, parents[0], automerge_tree, head_tree
+        )
+        if repin_ok:
+            rc2, out2, err2 = sh(
+                ["gh", "api", f"repos/{repo}/commits/{parents[0]}",
+                 "--jq", ".commit.committer.date"]
+            )
+            repin_date = out2.strip() if rc2 == 0 else ""
+            if not repin_date:
+                # Refuse rather than fall back to the head date silently: an
+                # unresolvable parent date is an unmeasurable re-pin, and the
+                # strict behaviour is the safe one.
+                repin_ok = False
+                repin_why = (f"head is a pure base update, but the parent's date "
+                             f"could not be resolved ({err2[:120]}) - refusing")
+
     comments = [
         {"id": c.get("id", 0), "body": c.get("body") or "",
          "created_at": c.get("created_at", "")}
@@ -773,6 +875,7 @@ def collect(repo: str, number: int) -> dict:
         "pr": pr,
         "head": head,
         "head_date": head_date,
+        "repin": {"ok": repin_ok, "why": repin_why, "date": repin_date},
         "comments": comments,
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
@@ -1094,9 +1197,104 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     return not (at_merge - today)
 
 
-def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
-    data = collect_ci_green_evidence(repo, number)
-    receipt = gates.ci_green_receipt(
+#: The tracked path the `ci-green` declaration lives at. Read out of the repo at
+#: a SHA, never off disk, which is the whole point of `resolve_declaration_as_of`.
+POLICY_TRACKED_PATH = "tools/drain/policy.json"
+
+
+def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
+    """`receipts.ci_green_rule` as `policy.json` carried it AT `sha` (#4676).
+
+    Resolved HERE and injected, for the same reason `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive every state of this one.
+
+    WHY A GIT READ AND NOT AN ALIAS TABLE. The declaration is a description of
+    the workflow -- "the step that IS the check" per context -- and it is
+    versioned in the same REPO as the workflow it describes, though NOT always
+    in the same commit. So the repo already records what the declaration was on
+    the day a given run happened; nothing has to be transcribed, and there is no
+    second copy to keep in agreement. An alias table would be one rename away
+    from being silently wrong -- the argument `README.md` already makes for
+    context spellings.
+
+    "NOT ALWAYS IN THE SAME COMMIT" IS THE LOAD-BEARING QUALIFIER, and an
+    earlier draft of this docstring omitted it and claimed the opposite as this
+    function's rationale. Measured: `8d3dd9cbb` (#4657, 2026-09-21 21:25)
+    renamed the vitest step in `fiab-console-ci.yml` and touched ONE file;
+    `356290aa9` (#4662, 2026-09-22 00:38) renamed it in `policy.json`. 3h13m
+    apart, three merges in between. If the same-commit claim were true the
+    consumer's `kind == "missing"` fallthrough would be dead code -- and
+    deleting it is arm AS4, the arm whose survival lets a rename launder a
+    hollow job. The false rationale pointed at the one deletion this mechanism
+    exists to prevent, which is why the qualifier is stated rather than
+    implied.
+
+    FAILS TO A NAMED, CLASSIFIED ERROR, NOT TO A SILENT HEAD FALLBACK. Every
+    failure returns `rule=None` with an `error` string AND a `reason` VALUE.
+    FOUR causes, and they do not share a remedy:
+
+    - `DECL_UNREADABLE` -- the object is not in this store. FETCH IT.
+    - `DECL_PREDATES` -- the blob was read and carries no `receipts.ci_green_rule`
+      at all. The key arrives in `6e29f1012` (2026-09-15, #4491), so for any
+      merge older than that there is nothing to resolve and nothing to fetch.
+      An independent reviewer measured the first version of this telling the
+      reader to `git fetch` a sha that was already present and readable -- the
+      same wrong-remedy shape #4676 is about, one state over, and for a backlog
+      closing pre-2026-09-15 merges it is the COMMON case.
+    - `DECL_UNPARSEABLE` -- the blob is not JSON.
+    - `DECL_NO_SHA` -- no sha was supplied at all. A CALLER error rather than a
+      repo state, which is why the consumer words it with `DECL_UNREADABLE`
+      ("could NOT be read") rather than giving it a fifth sentence: there is no
+      sha to fetch or to date. Four causes, three consumer sentences, and the
+      asymmetry is stated rather than left to look like an oversight.
+
+    The reason is a VALUE and not a substring of `error` deliberately: a
+    consumer that discriminated by grepping the message would be a
+    bare-substring signal, which is a measured misclassification shape here.
+    """
+    if not sha:
+        return gates.DeclarationAsOf(
+            sha="", rule=None, reason=gates.DECL_NO_SHA,
+            error="no merged sha was supplied",
+        )
+    rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])
+    if rc != 0:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_UNREADABLE,
+            error=f"git show {sha[:12]}:{POLICY_TRACKED_PATH} exited {rc}: "
+                  f"{(err or '').strip()[:160]}",
+        )
+    try:
+        at_sha = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_UNPARSEABLE,
+            error=f"policy.json at {sha[:12]} does not parse as JSON: {exc}",
+        )
+    rule = (at_sha or {}).get("receipts", {}).get("ci_green_rule")
+    if not isinstance(rule, dict):
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_PREDATES,
+            error=f"policy.json at {sha[:12]} carries no receipts.ci_green_rule object "
+                  f"(found {type(rule).__name__})",
+        )
+    return gates.DeclarationAsOf(sha=sha, rule=rule, error="", reason="")
+
+
+def receipt_from_evidence(data: dict, policy: dict) -> gates.CiGreenReceipt:
+    """The ONE place `gates.ci_green_receipt` is called with collected evidence.
+
+    `merge_gate --ci-green-receipt` and `tick.py --record-receipt --from-pr`
+    both take this receipt, and they used to build the eight-keyword call
+    independently. The README's whole claim for the record path is that it
+    "cannot record a receipt `--ci-green-receipt` would not print" -- which two
+    hand-maintained call sites make a hope rather than a property. #4676 added a
+    ninth argument, and adding it to one of two call sites is this package's
+    most-repeated defect ("fixed on one side only"). One call site cannot be
+    half-updated.
+    """
+    return gates.ci_green_receipt(
         data["evidence"],
         merged_total_count=data["merged_total_count"],
         merged_changed_files=data["changed_files"],
@@ -1105,7 +1303,13 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) 
         trees_identical=data["trees_identical"],
         policy=policy,
         infra_ere=resolve_infra_ere(data["merged"]),
+        declared_at=resolve_declaration_as_of(data["merged"]),
     )
+
+
+def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
+    data = collect_ci_green_evidence(repo, number)
+    receipt = receipt_from_evidence(data, policy)
     if as_json:
         print(json.dumps({
             "pr": number,
@@ -1232,14 +1436,25 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
            "filter admits)", ok, why)
 
     # 2+3 -- verdicts, reduced by conjunction, pinned to the head they measured.
+    # SUBSCRIPTED, never `.get`: deleting the key is a loud KeyError rather than
+    # a silent fall-back to the strict date, which would look like the re-pin
+    # simply never applying.
+    repin = data["repin"]
+    pin_date = repin["date"] if repin["ok"] else data["head_date"]
     live, near = gates.parse_verdicts(
-        data["comments"], data["head_date"], policy["verdict_parsing"]["token_window_chars"]
+        data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
     )
     ok, why = gates.reduce_verdicts(live, near)
     detail = why + (
         f" | live={[(v.token, v.comment_id) for v in live]}"
         f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
     )
+    if repin["ok"]:
+        # Said out loud on every run it applies to. A verdict counted as live
+        # against a date that is NOT the head's is a material fact about how
+        # this decision was reached, and burying it would make the gate's
+        # output disagree with its own rule.
+        detail += f" | RE-PINNED to parent {repin['date']}: {repin['why']}"
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
     # The closing scan is computed HERE, above 3b, because 3b needs the issue
@@ -1519,9 +1734,12 @@ def main() -> int:
             return 2
     # ...and REFUSE one the ledger binds to another PR. A receipt of the right
     # kind says the WORK is done; it says nothing about whether THIS PR is the
-    # work. INERT until something writes `Item.pr` -- which is `tick.py`'s job,
-    # not this module's; writing it from here made a merge gate a writer of a
-    # ledger it does not own and lost updates. #4489.
+    # work. `tick.py --bind-pr` writes `Item.pr` (#4489), so this pre-check
+    # fires on a bound item. The writer is `tick.py`'s job and not this
+    # module's -- writing it from here made a merge gate a writer of a ledger it
+    # does not own, and lost updates. NOTE the coverage boundary: gate 6 itself
+    # is exercised end to end by `test_poached_closes_refuses_a_bound_item`,
+    # but THIS `main()` pre-check has no test driving it.
     poached = poached_closes(allow_close, policy, pr=args.pr)
     if poached:
         print(f"refusing --allow-close: {'; '.join(poached)}", file=sys.stderr)

@@ -14,9 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+import time
 import urllib.parse
 from typing import NamedTuple
 
@@ -28,6 +30,7 @@ from ledger import (
     CLOSED,
     CLOSES_ON_GITHUB,
     IN_FLIGHT,
+    IN_REVIEW,
     NEEDS_AUDIT,
     READY,
     TERMINAL,
@@ -489,6 +492,181 @@ def emit(led: Ledger, policy: dict, chosen: list, triage: list, audit: list) -> 
     return "\n".join(lines)
 
 
+def _save_refusing_lost_update(led: Ledger) -> None:
+    """Persist the ledger, REFUSING a lost update rather than overwriting.
+
+    A one-line helper with a real job: `Ledger.save()` serialises the whole
+    document from memory, so a plain save by a second lane does not merge the
+    first lane's transitions -- it erases them. `if_unchanged=True` turns that
+    into a `LedgerChangedError` the caller reports. Two independent reviewers
+    blocked the earlier `merge_gate.bind_pr` attempt over exactly this (#4489),
+    so the safe form is named rather than left to each call site to remember.
+    """
+    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite
+
+
+class PrBindRefusedError(Exception):
+    """The PR offered does not bind to this item. NOTHING is written.
+
+    A distinct class from `ReceiptRefusedError` because the two say different
+    things (deploy-integrity R7): a refused receipt means the evidence did not
+    establish that the work is DONE; a refused bind means the harness will not
+    record WHO is holding the item. Neither writes, and conflating them in one
+    message would make a bind refusal read as a completion failure.
+    """
+
+
+def bind_pr_for_item(led: Ledger, repo: str, number: int, pr: int) -> str:
+    """Record that a lane opened PR `pr` for item `number` (#4489).
+
+    THE GAP THIS CLOSES, measured 2026-09-22. `Item.pr` has existed since the
+    ledger was written and nothing wrote it, and `tick.py` exposed no verb by
+    which a lane could report progress at all. The only ways out of `in-flight`
+    were `--record-receipt` (which demands a MERGED PR or a concluded run, i.e.
+    terminal) and `--reap` (back to `ready`). A lane that did its work and
+    opened a PR had nowhere to put that fact, so the item sat `in-flight` until
+    the next cycle reaped it as "lane never returned".
+
+    That is not a bookkeeping nit; it loses work. On the live ledger:
+
+        #4495  state=ready  pr=None  "reaped at cycle 13 - lane never returned"
+               ... while PR #4564 (fix/4495-op19-function-apps) was OPEN
+        #4619  state=ready  pr=None  never laned at all
+               ... while PR #4621 (fix/4619-server-derived-scope) was OPEN
+
+    Both were returned to `ready` and are schedulable again, so the next cycle
+    may hand the same item to a second lane and pay for the work twice. Across
+    14 cycles the ledger records **46** "lane never returned" events and no item
+    has reached a terminal state since 2026-09-17.
+
+    WHY HERE AND NOT IN `merge_gate.py`. It was tried there once (`bind_pr`) and
+    two independent reviewers blocked it: the worktree fallback resolves
+    `state.json` from the PRIMARY checkout, so a lane running the gate from its
+    own worktree rewrote a ledger it does not own; and it was an unlocked
+    read-modify-write on the only durable record with up to four lanes live,
+    which both reviewers reproduced as a lost update (`Ledger.save()` serialises
+    the whole document from memory, so the loser's transitions do not merge --
+    they vanish). `tick.py` is the single writer by design, and the caller here
+    saves with `if_unchanged=True`, so a concurrent write is REFUSED rather than
+    silently overwriting. That is #4489's "do not reintroduce an unlocked
+    read-modify-write" acceptance line, satisfied structurally.
+
+    Refuses, writing nothing, when:
+      - the item is unknown to the ledger;
+      - the item is already terminal (binding a PR to a closed item would
+        assert work is in flight that is not);
+      - the PR cannot be read from GitHub -- UNREADABLE is not "does not
+        exist", and reporting the second over the first is the R7 error this
+        package keeps paying for;
+      - the item is already bound to a DIFFERENT PR. That is the poaching case
+        `merge_gate.poached_closes()` exists to catch, and it is refused here at
+        the source rather than left for the gate to notice later.
+
+    Re-binding the SAME pr is a no-op that still succeeds, so a lane that re-runs
+    the command after a dropped connection does not have to reason about whether
+    the first call landed.
+    """
+    # Phrased as a membership test on the ledger rather than `item is None`, and
+    # the terminal check via a named flag rather than `if item.state in
+    # TERMINAL:`, because mutation arms RW8 and RW5 anchor on those exact lines
+    # elsewhere in this file. An anchor that matches twice silently disarms the
+    # arm (the runner needs a unique site), so duplicating one here would retire
+    # a live witness to buy nothing. Same reason `_save_refusing_lost_update`
+    # exists below instead of an inline `led.save(if_unchanged=True)` (RW14).
+    if number not in led.items:
+        raise PrBindRefusedError(
+            f"#{number} is not in the ledger, so there is nothing to bind PR "
+            f"#{pr} to. Refresh first, or check the number."
+        )
+    item = led.items[number]
+    already_terminal = item.state in TERMINAL
+    if already_terminal:
+        raise PrBindRefusedError(
+            f"#{number} is {item.state} - terminal. Refusing to bind PR #{pr} to "
+            "an item that is not in flight; reopen it first if that is wrong."
+        )
+    if item.pr is not None and item.pr != pr:
+        raise PrBindRefusedError(
+            f"#{number} is already bound to PR #{item.pr}; refusing to re-bind it "
+            f"to #{pr}. Two PRs claiming one item is exactly what "
+            "`merge_gate.poached_closes()` refuses at merge time - resolve which "
+            "PR owns this item before continuing."
+        )
+
+    # READ THE PR BEFORE WRITING. A number that does not resolve must not become
+    # a binding: the whole value of `Item.pr` to gate 3b is that the HARNESS
+    # produced it, so recording an unverified integer would make the gate's
+    # strongest corroboration as weak as the author's own typing.
+    rc, out, err = sh(
+        ["gh", "pr", "view", str(pr), "--repo", repo, "--json", "number,state,headRefName"]
+    )
+    if rc != 0:
+        raise PrBindRefusedError(
+            f"could not read PR #{pr} from {repo} (rc={rc}), so whether it exists is "
+            f"UNKNOWN - not 'no'. Nothing written. gh stderr: {err[:200]}"
+        )
+    try:
+        meta = json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise PrBindRefusedError(
+            f"PR #{pr} read returned unparseable JSON ({exc}); nothing written."
+        ) from exc
+
+    # THE PR MUST NAME THE ITEM. Without this the binding is only an integer the
+    # caller typed, which is precisely the weakness #4489 says `Item.pr` exists
+    # to remove -- a binding worth trusting at gate 3b has to be a fact the
+    # harness established, not a claim it transcribed. `_pr_references_item`
+    # already reads BOTH surfaces (`closingIssuesReferences` and a verb-agnostic
+    # body/commit scan, so a bare `Refs #N` counts) and its own docstring notes
+    # it is weaker than this binding -- which is the right way round: it is the
+    # evidence, this is the record.
+    try:
+        _pr_references_item(repo, pr, number)
+    except ReceiptRefusedError as exc:
+        raise PrBindRefusedError(
+            f"PR #{pr} does not name #{number} anywhere in its body, its commit "
+            f"trail or its closing references, so it is not evidence of a lane "
+            f"holding this item. Nothing written. ({exc})"
+        ) from exc
+
+    was = item.state
+    item.pr = pr
+    note = f"bound PR #{pr} ({meta.get('state', '?')}, {meta.get('headRefName', '?')})"
+    # EVERY bind moves the item to `in-review`, including one that was `ready`.
+    #
+    # The first version left a `ready` item's state alone, on the reasoning that
+    # a PR can appear before the ledger lanes the item (#4619's exact shape) and
+    # inventing a lane that never ran would be a lie. A reviewer measured what
+    # that actually costs, and the reasoning was wrong in the direction that
+    # matters: `select_cycle` skips anything `!= READY`, so a bound `ready` item
+    # stays SELECTABLE. Lane A opens the PR and binds it; the next cycle hands
+    # the same item to lane B; lane B redoes the work and then cannot report at
+    # all, because this function refuses a re-bind to a DIFFERENT PR. That is
+    # "pay for the work twice" -- the precise harm this writer exists to stop --
+    # reproduced on the one case the issue cites.
+    #
+    # `in-review` is also simply true of a `ready` item that has a PR: the work
+    # exists and is waiting on review. Being unschedulable is the point, not a
+    # side effect.
+    #
+    # SCOPED TO `in-flight` AND `ready`, because the unconditional version this
+    # replaced was over-broad by two states and a reviewer measured the cost.
+    # `transition()` clears `audit_reason` only on TERMINAL (ledger.py:565), so
+    # binding a `needs-audit` item moved it to `in-review` carrying an orphaned
+    # `audit_reason` and SILENTLY EMPTIED the audit queue -- and it never comes
+    # back, because `upsert`'s reopen branch fires only from a TERMINAL
+    # `was_state`. A `needs-audit` item is one whose receipt is IN DISPUTE; a
+    # lane binding a PR to it must not discharge that dispute as a side effect.
+    # `awaiting-receipt` is the same shape and currently unreachable (no
+    # production writer for it), but it is excluded on the same reasoning rather
+    # than on the accident of being unreachable.
+    if was in (IN_FLIGHT, READY):
+        led.transition(number, IN_REVIEW, why=note)
+    else:
+        item.history.append(f"{note} (state left at {was}: not a schedulable state)")
+    return f"#{number}: {note}; state {was} -> {item.state}"
+
+
 class ReceiptRefusedError(Exception):
     """The evidence offered does not establish the receipt. Never recorded."""
 
@@ -737,7 +915,8 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     branch as the reason the class takes a run rather than a merge, which is
     true, and the binding gap is disclosed in the comment with #4578 tracking
     the repair (fetch the run's date, compare it to the item's, refuse a run
-    that predates it; the sha half waits on #4489 with the rest of the binding).
+    that predates it; the sha half is bound by neither, and #4489 did not
+    deliver it -- that writer records WHICH PR, not which sha).
 
     The two branches are written out rather than assembled from fragments: a
     sentence this permanent should be readable in full at the place it is
@@ -1634,10 +1813,15 @@ def record_receipt_from_evidence(
     R2 invariant catches a class that MOVED, not a caller who named the wrong
     one up front.
 
-    `ci-green` is RE-MEASURED here rather than trusted: `merge_gate` collects
-    the evidence and `gates.ci_green_receipt` decides, the same two calls the
-    `--ci-green-receipt` report makes, so this path cannot record a receipt the
-    report would not print. Everything else is run-backed and goes through
+    `ci-green` is RE-MEASURED here rather than trusted, and since #4676 it is
+    literally the SAME CALL the report makes: `merge_gate.collect_ci_green_evidence`
+    then `merge_gate.receipt_from_evidence`, which is the one place
+    `gates.ci_green_receipt` is invoked outside the tests. It used to be "the
+    same two calls" -- two hand-maintained argument lists that happened to
+    agree, so "this path cannot record a receipt the report would not print"
+    was a hope rather than a property. One shared call site makes it the
+    property, and `test_the_receipt_call_has_exactly_one_non_test_site` keeps
+    it at one. Everything else is run-backed and goes through
     `verify_run_backed_receipt`.
 
     This is deliberately NOT "record whatever the operator says". `tick.py`'s
@@ -1657,8 +1841,8 @@ def record_receipt_from_evidence(
       necessarily that item's lane -- but no longer absent.
     - `--from-run` is NOT bound, and cannot be from here: a workflow run carries
       no issue reference at all. Nothing stops a green roll being recorded
-      against a second deploy-path item it never touched. That one genuinely
-      waits on #4489.
+      against a second deploy-path item it never touched. `Item.pr` (#4489)
+      now records which PR a lane opened, but this path does not consult it.
     """
     item = led.items.get(number)
     if item is None:
@@ -1686,16 +1870,11 @@ def record_receipt_from_evidence(
 
         _pr_references_item(repo, from_pr, number)
         data = merge_gate.collect_ci_green_evidence(repo, from_pr)
-        receipt = gates.ci_green_receipt(
-            data["evidence"],
-            merged_total_count=data["merged_total_count"],
-            merged_changed_files=data["changed_files"],
-            merged_branch=data["branch"],
-            merged_sha=data["merged"],
-            trees_identical=data["trees_identical"],
-            policy=policy,
-            infra_ere=merge_gate.resolve_infra_ere(data["merged"]),
-        )
+        # THE SAME CALL `--ci-green-receipt` MAKES, not a second copy of it.
+        # The README's claim for this path is that it "cannot record a receipt
+        # `--ci-green-receipt` would not print"; two hand-maintained argument
+        # lists made that a hope. #4676's `declared_at` was the ninth argument.
+        receipt = merge_gate.receipt_from_evidence(data, policy)
         if not receipt.ok:
             raise ReceiptRefusedError(
                 f"ci-green receipt for PR #{from_pr} is {receipt.summary}; "
@@ -1779,6 +1958,15 @@ def main() -> int:
              "refusals still apply",
     )
     parser.add_argument(
+        "--bind-pr", type=int, metavar="ITEM",
+        help="record that a lane opened a PR for this item (needs --pr) and move "
+             "it in-flight -> in-review, so the reaper stops taking it back",
+    )
+    parser.add_argument(
+        "--pr", type=int, metavar="PR",
+        help="for --bind-pr: the PR the lane opened for that item",
+    )
+    parser.add_argument(
         "--record-receipt", type=int, metavar="ITEM",
         help="verify a receipt for this item from the evidence below and CLOSE it",
     )
@@ -1828,6 +2016,85 @@ def main() -> int:
         print(json.dumps(led.counts(), indent=1))
         print("drained:", led.drained())
         return 0
+
+    if args.bind_pr is not None:
+        # RETURNS BEFORE `read_live_issues`, for the same reason
+        # `--record-receipt` does: this is a transaction about ONE item, and a
+        # refresh rewrites every item's state.
+        if not led.loaded_from_disk:
+            print(
+                f"NO LEDGER at {STATE_PATH} - nothing to bind against. "
+                "Seed it with:  python tools/drain/tick.py --bootstrap",
+                file=sys.stderr,
+            )
+            return 2
+        if args.pr is None:
+            print("--bind-pr needs --pr <PR>", file=sys.stderr)
+            return 2
+        if args.record_receipt is not None:
+            # Both write, and --bind-pr used to win silently. An operator who
+            # passed both got one transaction and no hint that the other was
+            # dropped.
+            print("--bind-pr and --record-receipt are separate transactions; "
+                  "pass one at a time", file=sys.stderr)
+            return 2
+        # BOUNDED RETRY, because contention here is routine rather than
+        # exceptional. An ordinary tick holds its read across a full refresh of
+        # some four hundred issues, and this bind holds one across a pair of
+        # GitHub reads, so the two overlap often with four lanes live. Losing
+        # the CAS and exiting would
+        # leave the item unbound and reaped next cycle -- the original defect,
+        # recurring under exactly the concurrency the design exists to survive.
+        #
+        # Safe by construction: a re-bind of the SAME pr is idempotent (pinned
+        # by `test_bind_is_idempotent_for_the_same_pr`), and each attempt
+        # RE-READS the ledger, so a retry cannot double-write or resurrect a
+        # state another writer has since changed. A different-PR bind still
+        # refuses on the re-read, which is the behaviour we want to keep.
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                # BACKOFF WITH JITTER, not an immediate retry. A reviewer noted
+                # the first version fired all three attempts back to back,
+                # separated only by two GitHub reads -- against a rival window
+                # measured in tens of seconds that is three losses, not three
+                # chances, and two lanes retrying in lockstep can livelock.
+                # Jitter breaks the lockstep; the growing term gives the rival
+                # time to finish.
+                time.sleep(random.uniform(0.5, 1.5) * attempt)
+                led = Ledger(STATE_PATH, receipts=policy["receipts"]).load()
+            try:
+                said = bind_pr_for_item(led, repo, args.bind_pr, args.pr)
+            except PrBindRefusedError as exc:
+                print(f"BIND REFUSED - NOTHING WRITTEN: {exc}", file=sys.stderr)
+                return 1
+            try:
+                _save_refusing_lost_update(led)
+            except LedgerChangedError as exc:
+                if attempt < attempts:
+                    print(
+                        f"ledger changed under this bind (attempt {attempt}/{attempts}) "
+                        "- re-reading and retrying",
+                        file=sys.stderr,
+                    )
+                    continue
+                print(
+                    f"LEDGER CHANGED UNDER THIS BIND - NOTHING WRITTEN: {exc}\n"
+                    f"  Lost the CAS {attempts} times; another writer is very "
+                    "busy. Re-run it; the bind re-reads and a same-PR re-bind "
+                    "is a no-op.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(said)
+            return 0
+        # UNREACHABLE while `attempts` is a positive literal -- every path in
+        # the loop returns. Present because every other branch of `main()`
+        # returns explicitly, and without it a restructure (or `attempts = 0`)
+        # would fall through past the record-receipt branch into the NORMAL TICK
+        # PATH: refresh, reap, select, save, for a command invoked as
+        # `--bind-pr`. Fail closed instead.
+        return 1
 
     if args.record_receipt is not None:
         # RETURNS BEFORE `read_live_issues`, deliberately. Recording a receipt is

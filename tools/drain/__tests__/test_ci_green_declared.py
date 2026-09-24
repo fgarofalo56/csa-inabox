@@ -362,9 +362,9 @@ def test_negative_control_a_declared_alternative_that_ran_is_work_not_an_excuse(
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
-               "Run vitest (with istanbul coverage floor)",
+               "Merge shard reports and enforce the coverage floor",
                "Run vitest (infra-reading suites only)"),
-        skipped=("Run vitest (with istanbul coverage floor)",),
+        skipped=("Merge shard reports and enforce the coverage floor",),
     )
     # The primary is SKIPPED, so the plain predicate refuses -- that is the
     # question it is able to answer.
@@ -445,9 +445,9 @@ def test_blocker_the_alternative_route_excludes_outputs_whose_work_ran():
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
-               "Run vitest (with istanbul coverage floor)",
+               "Merge shard reports and enforce the coverage floor",
                "Run vitest (infra-reading suites only)"),
-        skipped=("Run vitest (with istanbul coverage floor)",),
+        skipped=("Merge shard reports and enforce the coverage floor",),
     )
     # MERGED_FILES is a drain footprint: it matches `infra`, and not `console`.
     assert any(f.startswith("tools/") for f in MERGED_FILES)
@@ -529,9 +529,9 @@ def test_negative_control_a_skipped_alternative_is_not_work():
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
-               "Run vitest (with istanbul coverage floor)",
+               "Merge shard reports and enforce the coverage floor",
                "Run vitest (infra-reading suites only)"),
-        skipped=("Run vitest (with istanbul coverage floor)",
+        skipped=("Merge shard reports and enforce the coverage floor",
                  "Run vitest (infra-reading suites only)"),
     )
     outside_both = ["apps/loom-vscode/package.json", "apps/loom-vscode/src/ext.ts"]
@@ -555,9 +555,9 @@ def test_negative_control_an_unresolvable_infra_ere_fails_closed():
     job = _job(
         "vitest (node 20)",
         steps=("Detect console changes",
-               "Run vitest (with istanbul coverage floor)",
+               "Merge shard reports and enforce the coverage floor",
                "Run vitest (infra-reading suites only)"),
-        skipped=("Run vitest (with istanbul coverage floor)",
+        skipped=("Merge shard reports and enforce the coverage floor",
                  "Run vitest (infra-reading suites only)"),
     )
     outside_both = ["apps/loom-vscode/package.json"]
@@ -915,8 +915,24 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
             f"{name}: no job in {row['workflow']} publishes this context - the "
             "`name:` changed, or the row points at the wrong workflow"
         )
-        assert row["gate_step"] in job, (
-            f"{name}: its declared gate step is not in ITS OWN job block"
+        # THE DETECTOR MAY LIVE IN ANOTHER JOB. `vitest (node 20)` was split so
+        # its shards run on separate runners; the detector became its own job and
+        # the gating moved from `steps.<id>.outputs.X` to
+        # `needs.<detector-job>.outputs.X`. Extracting it was NOT optional -- a
+        # second copy of that 107-line fail-open detector is defect #3862
+        # verbatim -- so the guard has to model the split rather than forbid it.
+        #
+        # `detector_job` DEFAULTS to `job`, so every same-job row is byte-for-byte
+        # unaffected and keeps asserting exactly what it asserted before.
+        detector_job_key = row.get("detector_job", row["job"])
+        detector_job = _job_block(text, detector_job_key)
+        assert detector_job is not None, (
+            f"{name}: its declared detector job {detector_job_key!r} is not in "
+            f"{row['workflow']}"
+        )
+        assert row["gate_step"] in detector_job, (
+            f"{name}: its declared gate step is not in its detector job "
+            f"{detector_job_key!r}"
         )
 
         # ---- THE MISSING DIRECTION (round 8 BLOCKER, found by BOTH reviewers)
@@ -952,12 +968,23 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
         assert parsed_steps, (
             f"{name}: job {row['job']!r} parsed to no steps"
         )
+        # TWO STEP LISTS, and conflating them is a real mistake this guard
+        # caught immediately: the DETECTOR is resolved in `detector_job`, but the
+        # GATED steps are resolved in `job`. When the detector was extracted,
+        # pointing both at the detector job made every declared gate resolve to
+        # ZERO steps -- the guard reported "output claims to gate X, which
+        # resolves to 0 steps", which is exactly right and exactly not what the
+        # refactor had broken.
+        detector_steps = _job_steps(text, detector_job_key)
+        assert detector_steps, (
+            f"{name}: detector job {detector_job_key!r} parsed to no steps"
+        )
         detectors = [
-            s for s in parsed_steps
+            s for s in detector_steps
             if row["gate_step"] in str(s.get("name") or "")
         ]
         assert detectors, (
-            f"{name}: no step in job {row['job']!r} has a name containing its "
+            f"{name}: no step in job {detector_job_key!r} has a name containing its "
             f"declared gate step {row['gate_step']!r}"
         )
         detector_ids = []
@@ -975,6 +1002,18 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
         for step_id in detector_ids:
             gated_on |= set(re.findall(
                 rf"steps\.{re.escape(step_id)}\.outputs\.([A-Za-z0-9_-]+)", job))
+        if detector_job_key != row["job"]:
+            # CROSS-JOB: a detector in another job publishes JOB outputs, so the
+            # consumer writes `needs.<detector-job>.outputs.X` and the
+            # `steps.<id>.` form above cannot appear at all. Matching only the
+            # step form here would leave `gated_on` EMPTY and trip the assert
+            # below -- which would read as "the detector's shape changed" when
+            # the truth is that this guard could not see the reference. A guard
+            # that cannot express the arrangement it is auditing reports a
+            # defect that is its own.
+            gated_on |= set(re.findall(
+                rf"needs\.{re.escape(detector_job_key)}\.outputs\.([A-Za-z0-9_-]+)",
+                job))
         declared_names = {spec["output"] for spec in row["outputs"]}
         assert gated_on, (
             f"{name}: no step in its job block is gated on the outputs of "
@@ -1026,7 +1065,7 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
                 # The delegation itself is the contract. If the detector stops
                 # reading the trigger out of its own file, the declaration below
                 # stops describing it -- and that is precisely the silent drift.
-                assert "python_trigger_scope.py --changed-file" in job, (
+                assert "python_trigger_scope.py --changed-file" in detector_job, (
                     f"{name}: {row['workflow']}'s detector no longer delegates to the "
                     "shared scope script, so `on.push.paths` is no longer its scope"
                 )
@@ -1045,20 +1084,24 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
                 # Same contract, for a scope that is DERIVED rather than
                 # written. The declaration says "whatever that script prints";
                 # if the job stops asking the script, it stops being true.
-                assert "derive-infra-reading-suites.mjs --ere" in job, (
+                assert "derive-infra-reading-suites.mjs --ere" in detector_job, (
                     f"{name}: output {spec['output']!r} declares its scope as the "
-                    "ERE that script computes, and its own job block no longer "
-                    "runs it"
+                    "ERE that script computes, and its detector job block no "
+                    "longer runs it"
                 )
-                assert f'echo "{spec["output"]}=true"' in job, (
-                    f"{name}: its job block never sets {spec['output']}=true"
+                assert f'echo "{spec["output"]}=true"' in detector_job, (
+                    f"{name}: its detector job block never sets {spec['output']}=true"
                 )
                 continue
 
             shapes.add("literal")
             found = None
-            for match in re.finditer(r"grep -qE '([^']+)'", job):
-                tail = job[match.end():match.end() + 400]
+            # THE DETECTOR'S OWN BLOCK. The grep that sets the output lives
+            # wherever the detector lives, which is no longer necessarily the
+            # job being gated. For a same-job row `detector_job` IS `job`, so
+            # this is byte-identical for every row that was not split.
+            for match in re.finditer(r"grep -qE '([^']+)'", detector_job):
+                tail = detector_job[match.end():match.end() + 400]
                 if f'echo "{spec["output"]}=true"' not in tail:
                     continue
                 found = {
@@ -1067,7 +1110,7 @@ def test_the_declared_scope_matches_the_workflows_own_change_detector():
                 }
                 break
             assert found is not None, (
-                f"{name}: no `grep -qE` in its own job block sets "
+                f"{name}: no `grep -qE` in its detector job block sets "
                 f"{spec['output']}=true - the detector's shape changed"
             )
             declared = {
@@ -1378,7 +1421,7 @@ def test_a_declared_step_matches_as_a_substring():
     ok, _ = gates.context_did_its_work(
         "vitest (node 20)",
         _job("vitest (node 20)",
-             steps=("Run vitest (with istanbul coverage floor) — #4432",)),
+             steps=("Merge shard reports and enforce the coverage floor — #4432",)),
         POLICY,
     )
     assert ok
@@ -1444,9 +1487,9 @@ def test_negative_control_a_declaration_matching_several_steps_with_a_mixed_outc
     """
     job = _job(
         "vitest (node 20)",
-        steps=("Run vitest (with istanbul coverage floor)",
-               "Run vitest (with istanbul coverage floor) — second leg"),
-        skipped=("Run vitest (with istanbul coverage floor) — second leg",),
+        steps=("Merge shard reports and enforce the coverage floor",
+               "Merge shard reports and enforce the coverage floor — second leg"),
+        skipped=("Merge shard reports and enforce the coverage floor — second leg",),
     )
     ok, why = gates.context_did_its_work("vitest (node 20)", job, POLICY)
     assert not ok
@@ -1486,8 +1529,8 @@ def test_every_failing_context_contributes_a_reason():
                 merged_check=_green("vitest (node 20)"),
                 merged_job=_job("vitest (node 20)",
                                 steps=("Detect console changes",
-                                       "Run vitest (with istanbul coverage floor)"),
-                                skipped=("Run vitest (with istanbul coverage floor)",))),
+                                       "Merge shard reports and enforce the coverage floor"),
+                                skipped=("Merge shard reports and enforce the coverage floor",))),
         ],
         merged_changed_files=[*MERGED_FILES, "apps/fiab-console/app/page.tsx"],
     )
