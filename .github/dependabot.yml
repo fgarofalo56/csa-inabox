@@ -152,13 +152,19 @@ updates:
   # PRs do NOT. So the crate was being watched for "you are vulnerable" and never
   # for "a fix is now available", and that gap is the whole problem here:
   #
-  # thrift cannot leave this graph today. Measured with a real resolver
-  # (cargo 1.98.0, 2026-09-18): arrow-rs dropped the thrift crate at parquet
-  # 59.0.0, but delta-rs has NOT followed — deltalake-core 0.32.4, the newest
-  # published, still pins `arrow ^58` / `parquet ^58` / `datafusion ^53.1.0`,
-  # and parquet 58 still depends on `thrift ^0.17`. The fix therefore arrives
-  # upstream, on delta-rs's schedule, in a release nobody here is watching for.
-  # This entry is that watch.
+  # the fix had to arrive upstream, on delta-rs's schedule, in a release nobody
+  # here was watching for. This entry is that watch — and the watch paid out.
+  #
+  # RESOLVED 2026-09-23 (#3982, PR #4681). At the time this entry was written
+  # (2026-09-18, cargo 1.98.0) thrift could not leave the graph: arrow-rs had
+  # dropped the thrift crate at parquet 59.0.0, but the newest delta-rs
+  # (deltalake-core 0.32.4) still pinned `arrow ^58` / `parquet ^58` /
+  # `datafusion ^53.1.0`, and parquet 58 still depended on `thrift ^0.17`.
+  # `deltalake-core 1.0.0` was then published on 2026-09-21 declaring
+  # `arrow ^59` / `parquet ^59` / `datafusion ^55`, and the crate moved onto it.
+  # thrift is now absent from `apps/loom-directlake/Cargo.lock` entirely.
+  #
+  # The entry stays: the next such fix will arrive the same way.
   - package-ecosystem: "cargo"
     directory: "/apps/loom-directlake"
     schedule:

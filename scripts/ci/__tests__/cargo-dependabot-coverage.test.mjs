@@ -577,6 +577,17 @@ test('the real dependabot.yml groups the arrow stack in one lockstep group', () 
   // 55 + deltalake 0.32 together links arrow 58.4.0 AND 59.3.0, datafusion
   // 53.1.0 AND 55.1.0, parquet 58.4.0 AND 59.3.0 — two TableProvider traits, so
   // src/scan.rs stops compiling, and thrift 0.17.0 survives via parquet 58.
+  //
+  // UPDATE 2026-09-23 (#3982, PR #4681). That deltalake-0.32 combination is no
+  // longer the one anyone would reach for — deltalake-core 1.0.0 (2026-09-21)
+  // is on arrow/parquet 59 + datafusion 55, the crate moved onto it, and thrift
+  // is gone from the lock. The pin still holds, and it now has a REAL instance
+  // rather than a hypothetical one: dependabot PR #4630 raised the group to
+  // arrow 54 + datafusion 51, which resolved arrow 54.2.1 AND 57.3.1 and
+  // parquet 53.4.0 AND 57.3.1, kept thrift 0.17.0, and failed all three cargo
+  // lanes with E0308 x5 (engine-only) / x7 (default) / x7 (release). A split
+  // arrow graph is the failure mode; `cargo tree -d` is how you see it.
+  //
   // Grouping does not PREVENT that resolution; it makes the four arrive as one
   // reviewable PR, which `cargo build --locked` in loom-directlake-ci.yml then
   // rejects. FAILS IF: someone removes a pattern, letting dependabot raise the
