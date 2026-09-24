@@ -93,37 +93,84 @@ beforeEach(() => {
 /**
  * The create dialog's submit control (#4685).
  *
- * ONE function, called by both `createMirror` and the aria-hidden probe below,
- * so the probe exercises the query the suite actually uses rather than a
- * transcription of it (`assertion-design.md` "done" #3 — lift the pattern from
- * the source, do not copy it). Reverting this body to a bare
- * `screen.getByRole('button', { name: /Create mirror/i })` is the mutation that
- * the probe is built to catch.
+ * ONE function, called by `createMirror` and by BOTH #4685 probes below, so the
+ * probes exercise the query the suite actually uses rather than a transcription
+ * of it (`assertion-design.md` "done" #3 — lift the pattern from the source, do
+ * not copy it). Reverting this body is the mutation the probes are built to
+ * catch, and each modifier now has its OWN probe:
  *
- * Both modifiers are load-bearing, and each was MEASURED against this dialog
- * rather than assumed (scratch run, 2026-09-24, worktree at `a5db87c98`):
+ *   - `findBy*` + `timeout` closes the LATE-RENDER class, witnessed by
+ *     `…survives a late-attached submit control`. MEASURED (arm C): swapping
+ *     this body to `getByRole(…, { hidden: true })` — keeping the widening,
+ *     dropping only the wait — reds that probe, and it was the ONLY red on that
+ *     run (1 failed / 7 passed).
+ *   - `hidden: true` closes the A11Y-INVISIBLE class, which `findBy*` alone does
+ *     NOT, witnessed by `…survives an aria-hidden surface`. MEASURED (arm B):
+ *     dropping only `hidden: true` reds that probe and leaves the late-attach
+ *     one green; with `aria-hidden="true"` on the surface a plain `findByRole`
+ *     merely times out where a bare `getByRole` (arm A) throws. Arm B's run
+ *     carried one OTHER red, in `a dismissed failure does not re-render`, at its
+ *     `.fui-DialogSurface` teardown wait — which reds at base too on a loaded
+ *     machine (PR #4693 §4, issue #4698). The mutation did not cause it and this
+ *     claim does not rest on it.
  *
- *   - `findBy*` + `timeout` closes the LATE-RENDER class. Every other step in
- *     `openCreateDialog` already waits; this query was the file's only
- *     synchronous one, and it is the line all three recorded CI failures landed
- *     on (#4685), across two unrelated branches whose diffs cannot reach the
- *     console.
- *   - `hidden: true` closes the ARIA-HIDDEN class, which `findBy*` alone does
- *     NOT: with `aria-hidden="true"` on the surface, `findByRole` without this
- *     modifier times out exactly as `getByRole` throws (measured: resolved=false
- *     at a 1200ms budget). That is the state this file's own `afterEach`
- *     docblock measured landing from t=300ms, and it is why the one-line fix
- *     proposed in #4685 would have closed only half the failure surface.
+ * So this file reddens when the helper loses EITHER modifier — and that claim is
+ * measured arm by arm (PR #4693 §3). An earlier revision of this docblock
+ * asserted it having run only arms A and B, which die for the SAME reason and
+ * cannot distinguish the halves; a reviewer ran arm C and it was GREEN. The
+ * claim is restated here only because the probe that makes it true now exists.
  *
- * The widening is deliberate and narrow: this is PLUMBING — it locates a
- * control in order to click it — and it stays unambiguous, `hidden: true`
- * matching exactly ONE button both before and after the mutation. It is the
- * same convention, for the same jsdom reason, as the dialog-internal queries in
- * `azure-sql-server-editor-bind.test.tsx:159` and
- * `spark-job-definition-lineage.test.tsx:135`. Every ASSERTION in this file
- * stays strict — the `Fix it` / `Gate registry` / gate-title queries are
- * untouched, so a gate that renders only inside the a11y tree's blind spot
- * still fails them.
+ * THE WIDENING, AT FULL WIDTH. `hidden: true` does not narrow one predicate, it
+ * BYPASSES the accessibility filter. In `@testing-library/dom@10.4.1`
+ * (`dist/role-helpers.js`) `isSubtreeInaccessible` returns true for
+ * `element.hidden === true` (:34), `aria-hidden="true"` (:37) and
+ * `display: none` (:41); `isInaccessible` additionally short-circuits on an
+ * inherited `visibility: hidden` (:67); and :169 is the switch —
+ * `return hidden === false ? isInaccessible(element) === false : true`. The
+ * click does not re-check it: in `@testing-library/user-event@14.6.1` `isVisible`
+ * is reached by exactly one consumer (`utils/focus/getTabDestination.js`,
+ * tab-order pruning; the only other references are its own definition and the
+ * `utils/index.js` barrel), and the only reachability assertion on the click
+ * path is `pointer-events`. So a widened query finds AND clicks a control no
+ * assistive technology could reach, and nothing else in this repo would notice:
+ * `mirrored-databricks.test.tsx` carries no `ByRole` query at all, and the axe
+ * ratchet (`e2e/a11y.uat.ts`) enumerates 22 surfaces, none an
+ * `/items/mirrored-databricks/*` route — and no workflow references it, so it
+ * runs on the in-VNet UAT runner rather than in PR CI. That coverage is bought
+ * back deliberately, by the STRICT positive control inside the aria-hidden
+ * probe.
+ *
+ * It is also a NEW way for this helper to fail: `findBy*` rejects on more than
+ * one match, and `hidden: true` enlarges the candidate set to the whole
+ * document including hidden subtrees. Measured on this dialog, before and after
+ * the attribute: exactly ONE match either way. It would go red loudly rather
+ * than pass quietly.
+ *
+ * PRECEDENT, AND HOW THIS DIFFERS FROM IT. `hidden: true` is already in use at
+ * 16 executable query sites across 4 sibling files — `activator.test.tsx` (1),
+ * `azure-sql-server-editor-bind.test.tsx` (6),
+ * `spark-job-definition-lineage.test.tsx` (5),
+ * `stored-function-editor.test.tsx` (4); counted as non-comment occurrences of
+ * the literal, `git grep`-scoped to tracked files. But every one of those is
+ * ENABLING: each documents that jsdom never resolves its portalled surface into
+ * the accessibility tree at all, so the query does not work without the
+ * modifier. Here it is PROPHYLACTIC — the bare query finds this button in the
+ * steady state, which is why arm A leaves the six pre-existing tests green
+ * (measured independently by both #4693 reviewers on quiet machines; on a
+ * heavily loaded one base itself reds three of them, so that arm cannot be read
+ * off a loaded run — PR #4693 §4). Same modifier, different warrant. "The same
+ * jsdom reason" was overstated, and it is why the strict control below exists.
+ *
+ * Every PRESENCE assertion in this file stays strict — but be precise about
+ * what that buys, and about the one exception. The presence assertions (the
+ * `Fix it` / `Gate registry` / gate-title queries) do fail if a gate renders
+ * only inside the accessibility tree's blind spot. The ABSENCE ones pass for
+ * the wrong reason under exactly that state — the second direction the
+ * `afterEach` docblock warns about. That is pre-existing, is not introduced
+ * here, and is not closed by this change. The exception is deliberate and runs
+ * the other way: probe 2's `queryAllByRole(…, { hidden: true }).length === 0`
+ * is widened ON PURPOSE, because absence under the WIDEST query is strictly
+ * stronger than absence under a narrow one.
  */
 function findCreateMirrorButton() {
   return screen.findByRole('button', { name: /Create mirror/i, hidden: true }, { timeout: 5000 });
@@ -390,32 +437,78 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
   });
 
   /**
-   * #4685 — THE SUBMIT QUERY SURVIVES FLUENT'S ARIA-HIDDEN UNWIND.
+   * #4685, PROBE 1 OF 2 — THE SUBMIT QUERY SURVIVES AN A11Y-INVISIBLE SURFACE.
    *
-   * WHY THIS EXISTS AT ALL. The fix for #4685 is one line inside
+   * WHY THE PROBES EXIST AT ALL. The fix for #4685 is one line inside
    * `findCreateMirrorButton`, and on its own NOTHING in this repo witnesses it:
-   * reverting that line to a bare `getByRole` leaves all six tests above green
-   * locally and restores a probabilistic CI failure with no input that reddens
-   * it on demand. An unwitnessed change to a test file is exactly the shape
-   * `assertion-design.md` refuses, so the guard ships with a probe that has
-   * deterministic kill power over it.
+   * reverting that line to a bare `getByRole` leaves the six tests that predate
+   * #4685 green (measured by both #4693 reviewers on quiet machines) and
+   * restores a probabilistic CI failure with no input that reddens it on
+   * demand. An unwitnessed change to a test file is exactly the shape
+   * `assertion-design.md` refuses, so the guard ships with TWO probes which
+   * between them have deterministic kill power over both modifiers — one each,
+   * because a single probe cannot distinguish them (arms A and B both die of
+   * a11y-blindness, one by throwing and one by timing out).
    *
-   * THE VALUE THAT MAKES THIS TEST FAIL: `aria-hidden="true"` on
-   * `.fui-DialogSurface`. That is not a hypothetical — it is the state this
-   * file's own `afterEach` docblock measured Fluent's modal bookkeeping landing
-   * on a live surface from t=300ms, and every `*ByRole` query is blind to it.
-   * With the attribute applied, a bare `getByRole` throws
-   * (`Unable to find an accessible element…`) and a plain `findByRole` merely
-   * times out instead; only the `hidden: true` form resolves. So this test goes
-   * RED the moment `findCreateMirrorButton` loses either modifier.
+   * THE VALUE THAT MAKES THIS ONE FAIL: `aria-hidden="true"` on
+   * `.fui-DialogSurface`. Not hypothetical, and now observed twice:
+   *   - this file's own `afterEach` docblock measured Fluent's modal
+   *     bookkeeping landing it on a LIVE surface from t=300ms; and
+   *   - CI run 35943862992 (PR #4689, whose diff is 15 workflow YAMLs and
+   *     cannot reach the console) threw at the pre-#4685 submit query — line
+   *     127 as it stood on `main` at 76377a86e, named by its ref because line
+   *     numbers in this file have since moved — with an
+   *     accessible tree that held this editor's toolbar buttons, six tabs, the
+   *     `Databricks mirrors` tree and the `Workspace` combobox but NO `textbox`
+   *     and no dialog role — moments after `findByLabelText(/Display name/i)`
+   *     and `/Unity Catalog name/i` had both resolved AND been typed into.
+   *     Those are DOM-rooted queries and are NOT blind to aria-hidden, so the
+   *     dialog's content was out of the accessibility tree while the page
+   *     behind it was still in it.
+   * That second observation is BOUNDED, deliberately: the error dump's DOM
+   * print ends mid-tab-strip with an ellipsis, inside the app root, so it is
+   * cut before anything portalled to the end of `<body>`. It therefore does NOT
+   * establish whether the surface was still in the DOM (hidden) or had left it
+   * (unmounted). Under the first reading `hidden: true` is the
+   * modifier that closes it and `findBy*` alone would merely time out; under
+   * the second the guard still FAILS, correctly, because a dialog that closes
+   * itself is a product regression. Neither reading is asserted here
+   * (`deploy-integrity.md` R7).
    *
-   * WHAT IT DOES NOT CLAIM. It does not reproduce the CI failure, and it does
-   * not decide between the two candidate mechanisms (late render vs aria-hidden
-   * unwind) — #4685 records that the fast-runner correlation is a risk factor,
-   * not a demonstrated cause. It pins the property the fix is FOR: this query
-   * resolves in both states. The dialog genuinely failing to open is still a
-   * product regression, and the six tests above still fail on it, because
-   * `openCreateDialog` waits on the dialog's own fields before this runs.
+   * WHY HARDEN HERE, when this file's own `afterEach` docblock reaches the
+   * OTHER remedy — "draining the timer queue between tests removes the cause
+   * rather than hardening each assertion". Both are right, about different
+   * instances, and this PR does not overturn it:
+   *   - The flush is a TEST BOUNDARY, and cannot touch the instance this file
+   *     measures WITHIN one test. `a dismissed failure does not re-render`
+   *     records the FIRST dialog's unwind marking the SECOND, already-mounted
+   *     surface aria-hidden ~300ms later, inside a single test; no `afterEach`
+   *     runs in between. Hardening is the only remedy available there.
+   *   - The flush's arithmetic is not established in either direction. The
+   *     unwind was probed at 300ms INTERVALS, so t=300 is an upper bound on
+   *     when it lands, not a measurement of it — 50ms may or may not be enough
+   *     and that sampling cannot say. Raising 50 to some N without a value that
+   *     reddens at N-1 is precisely the unwitnessed change this PR exists to
+   *     refuse, so the flush is left alone and tracked in #4698 rather than
+   *     nudged.
+   *
+   * WHAT NEITHER PROBE CLAIMS. They do not reproduce the CI failure and do not
+   * decide its mechanism. Note what `retry` does to the odds: `vitest.config
+   * .ts:154` sets `retry: process.env.CI ? 2 : 0` and no workflow passes
+   * `--retry`, so every recorded red survived THREE attempts — measured in run
+   * 35943862992, where both failures carry `(retry x2)` and each printed three
+   * identical stacks at `:127:27`, while two OTHER tests in the same file
+   * passed `(retry x1)`, i.e. lost their first attempt and recovered. Four of
+   * six red on attempt 1 is a run-wide condition rather than six independent
+   * draws, which would compound as p³. That names no cause, and nothing here
+   * rests on one.
+   *
+   * A dialog that genuinely never opens is still caught: `openCreateDialog`
+   * waits on the dialog's own labelled fields first, so it fails there. That is
+   * FIVE of the six pre-existing tests, not six — the sixth, the gate-registry
+   * one, imports `getGate` and never opens a dialog. A #4693 reviewer built
+   * that arm (the `New mirror` trigger made inert) and measured 6 of 7 red at
+   * `findByLabelText(/Display name/i)`, with the registry test the lone passer.
    */
   it('the create-dialog submit query survives an aria-hidden surface (#4685)', async () => {
     const user = userEvent.setup();
@@ -427,10 +520,11 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     };
     await openCreateDialog(user);
 
-    // POSITIVE CONTROL, before the mutation: the query resolves against a
-    // normal, visible dialog. This passes under the reverted helper too — which
-    // is the point. It localises this test's kill power to the aria-hidden
-    // state alone, rather than to "the button exists at all".
+    // POSITIVE CONTROL 1, before the mutation: the helper's own query resolves
+    // against a normal, visible dialog. This passes under the mutants too —
+    // which is the point. It localises this test's kill power to the hidden
+    // state alone, rather than to "the button exists at all". It is also
+    // AWAITED FIRST so the strict control below cannot race the render.
     expect(await findCreateMirrorButton()).toBeTruthy();
 
     // THE FIXTURE REACHES THE RULE (`assertion-design.md` "done" #3). Exactly
@@ -439,7 +533,29 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     // did nothing", which is the ambiguity a bare green mutation arm carries.
     const surfaces = document.querySelectorAll('.fui-DialogSurface');
     expect(surfaces.length, 'exactly one dialog surface to mark aria-hidden').toBe(1);
-    (surfaces[0] as HTMLElement).setAttribute('aria-hidden', 'true');
+    const surface = surfaces[0] as HTMLElement;
+
+    // Clear the ONE attribute this file has twice measured Fluent's modal
+    // unwind writing onto a LIVE surface, so the strict control below measures
+    // the PRODUCT's accessibility rather than the harness's leftovers — and so
+    // this probe does not reintroduce the very flake it exists to close. Every
+    // other way of hiding the submit is left exactly as rendered.
+    surface.removeAttribute('aria-hidden');
+
+    // POSITIVE CONTROL 2, STRICT — this is the coverage `hidden: true`
+    // surrenders, bought back deliberately. The query is document-rooted, so it
+    // reddens if the submit control is unreachable to the accessibility tree
+    // for any reason other than that ONE cleared attribute on that ONE node:
+    // `hidden`, `display: none`, an inherited `visibility: hidden`, or an
+    // `aria-hidden` on the button or on any other ancestor. WHAT VALUE MAKES IT
+    // FAIL, measured rather than asserted: arm D sets `aria-hidden="true"` on
+    // the BUTTON at this point, and this line throws (PR #4693 §3).
+    expect(
+      screen.getByRole('button', { name: /Create mirror/i }),
+      'the submit control must be reachable in the accessibility tree in the steady state',
+    ).toBeTruthy();
+
+    surface.setAttribute('aria-hidden', 'true');
     expect(
       () => screen.getByRole('button', { name: /Create mirror/i }),
       'aria-hidden must actually hide the submit button from an unwidened role query',
@@ -459,6 +575,93 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
           ([u, i]: any[]) => String(u).startsWith('/api/items/mirrored-databricks?') && i?.method === 'POST',
         ).length,
         'the located button must actually submit the create',
+      ).toBe(1),
+    );
+  });
+
+  /**
+   * #4685, PROBE 2 OF 2 — THE SUBMIT QUERY WAITS OUT A LATE-ATTACHED CONTROL.
+   *
+   * WHY THIS EXISTS. Probe 1 does not witness the `findBy*` + `timeout` half of
+   * the guard. Measured by a reviewer and reproduced here as arm C: keep
+   * `hidden: true`, drop the wait — `getByRole(…, { hidden: true })` — and
+   * probe 1 stays GREEN. Arms A and B both die of a11y-blindness, one by
+   * throwing and one by timing out, so neither separates the halves either. The
+   * `findBy*` half is the one #4685 proposed as its one-line fix, so shipping it
+   * unwitnessed is the exact shape `assertion-design.md` refuses.
+   *
+   * THE VALUE THAT MAKES THIS FAIL: the submit control not being in the DOM at
+   * the moment the query runs. Stated plainly, this is a SYNTHETIC late attach
+   * — the control is detached and re-attached on a timer. It is not a
+   * reproduction of the CI failure and does not claim to be; it is the
+   * deterministic input that separates `findBy*` from `getBy*`, which a timing
+   * guard otherwise cannot have. The re-attach delay (250ms) is long against a
+   * synchronous query, which throws at t=0, and short against the helper's
+   * 5000ms budget, so neither direction is a race.
+   *
+   * WHY DETACH THE REAL NODE rather than render a decoy: the assertion then
+   * pins that the query resolves to the SAME element, and the click at the end
+   * proves that element is still wired to the create POST. A decoy would prove
+   * only that `findBy*` waits, which is `@testing-library`'s property, not
+   * ours.
+   */
+  it('the create-dialog submit query survives a late-attached submit control (#4685)', async () => {
+    const user = userEvent.setup();
+    createResponse = {
+      ok: true,
+      created: true,
+      mirror: { id: 'm1', state: { sqlEndpoint: 'ep' } },
+      pairing: { ok: true, tablesResolved: 3, tablesSkipped: 0 },
+    };
+    await openCreateDialog(user);
+
+    // Same order as probe 1: the widened query first, so nothing below races
+    // the render; then clear the measured-transient attribute; then a STRICT
+    // grab, which is the same bought-back coverage probe 1 asserts.
+    expect(await findCreateMirrorButton()).toBeTruthy();
+    const surfaces = document.querySelectorAll('.fui-DialogSurface');
+    expect(surfaces.length, 'exactly one dialog surface').toBe(1);
+    (surfaces[0] as HTMLElement).removeAttribute('aria-hidden');
+    const submit = screen.getByRole('button', { name: /Create mirror/i });
+    const parent = submit.parentElement;
+    expect(parent, 'the submit control must have a parent to detach from').toBeTruthy();
+    const anchor = submit.nextSibling;
+
+    parent!.removeChild(submit);
+
+    // THE FIXTURE REACHES THE RULE: even the WIDENED query finds nothing now,
+    // so a green below cannot be read as "the mutation did nothing".
+    expect(
+      screen.queryAllByRole('button', { name: /Create mirror/i, hidden: true }).length,
+      'the detach must remove the submit control from every role query',
+    ).toBe(0);
+
+    const reattach = setTimeout(() => {
+      parent!.insertBefore(submit, anchor && anchor.parentNode === parent ? anchor : null);
+    }, 250);
+    try {
+      // THE ASSERTION THAT CARRIES THE KILL POWER: the helper's own query —
+      // called, not transcribed — waits the control out. A synchronous query
+      // here throws at t=0 whether or not it is widened: that is arm A and
+      // arm C, and arm C is the one proving `findBy*` + `timeout` is
+      // load-bearing independently of `hidden: true`.
+      expect(
+        await findCreateMirrorButton(),
+        'the query must resolve to the SAME control that was re-attached',
+      ).toBe(submit);
+    } finally {
+      clearTimeout(reattach);
+    }
+
+    // …and the re-attached node is not merely present but still wired: clicking
+    // it issues exactly one create POST.
+    await user.click(submit);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([u, i]: any[]) => String(u).startsWith('/api/items/mirrored-databricks?') && i?.method === 'POST',
+        ).length,
+        'the re-attached button must actually submit the create',
       ).toBe(1),
     );
   });
