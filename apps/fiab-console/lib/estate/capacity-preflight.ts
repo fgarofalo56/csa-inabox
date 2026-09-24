@@ -140,9 +140,21 @@ export function remediationFor(
       );
     case 'not-found':
       return (
-        `${entry.name} no longer exists at the resource id recorded in the pause snapshot. It was `
-        + 'deleted or moved while the estate was paused. The snapshot records its SKU and settings; '
-        + 'redeploy it from bicep, then resume. Loom will NOT recreate it silently.'
+        `ARM answered 404 for ${entry.name}. That is NOT proof it was deleted, and there are THREE `
+        + 'causes this error cannot tell apart. Discriminate before acting, because two of the three '
+        + 'remedies are destructive if applied to the wrong one. Run '
+        + '`az resource show --ids <the id in the snapshot>` as an operator, and then: '
+        + '(1) IT RETURNS THE RESOURCE and the Console UAMI (LOOM_UAMI_CLIENT_ID) has no role on it '
+        + `— an access gap. Azure answers 404 rather than 403 for a resource the caller cannot see. `
+        + `Grant the UAMI Contributor on ${entry.name} in '${entry.resourceGroup}' and resume. `
+        + 'DO NOT redeploy: the resource is live. '
+        + '(2) IT RETURNS THE RESOURCE and the UAMI already has a role — then the SNAPSHOT ID is '
+        + 'stale, not the resource. The resource was recreated, renamed or moved since the pause, so '
+        + 'the recorded id points at something that no longer exists while the resource itself is '
+        + 'healthy. Re-pause and resume to re-snapshot, or correct the recorded id. Redeploying here '
+        + 'would overwrite a working resource. '
+        + '(3) IT 404s FOR YOU TOO — it really is gone. The snapshot records its SKU and settings; '
+        + 'redeploy it from bicep, then resume. Loom will NOT recreate it silently in any case.'
       );
     case 'transient':
       return (

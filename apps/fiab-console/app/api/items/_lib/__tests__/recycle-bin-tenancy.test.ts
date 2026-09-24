@@ -36,6 +36,25 @@ const wsQueries: any[] = [];
 /** What the workspace point read should resolve to, per test. */
 let wsDoc: any = null;
 
+/**
+ * The ACL ladder's answer, if the code under test ever asks it.
+ *
+ * Today `loadRecycledItem` never calls `resolveWorkspaceAccessByOid`, so this
+ * mock is INERT on the current tree — it is not coverage, it is the harness the
+ * "shared-workspace member" test below needs in order to be a REAL kill rather
+ * than an incidental one. Without it, migrating `loadRecycledItem` to the
+ * canonical ladder makes tests fail on an unmocked `workspaceRolesContainer` —
+ * a broken-harness red that a future author would "fix" by completing the mock,
+ * at which point the widening ships green. Completing it up front means the
+ * widening is refused on its merits.
+ */
+let aclAccess: any = null;
+
+vi.mock('@/lib/auth/workspace-access', () => ({
+  resolveWorkspaceAccessByOid: vi.fn(async () => aclAccess),
+  ambientAccessOptsFor: vi.fn(async () => ({})),
+}));
+
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({
     items: { query: () => ({ fetchAll: async () => ({ resources: [RECYCLED] }) }) },
@@ -50,6 +69,11 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
       query: (spec: any) => { wsQueries.push(spec); return { fetchAll: async () => ({ resources: [] }) }; },
     },
   })),
+  // Present so the canonical ladder's direct-role lookup does not throw if a
+  // future widening reaches it — see `aclAccess` above.
+  workspaceRolesContainer: vi.fn(async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
+  })),
   auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
 }));
 
@@ -61,6 +85,7 @@ beforeEach(() => {
   wsPointReads.length = 0;
   wsQueries.length = 0;
   wsDoc = null;
+  aclAccess = null;
   vi.clearAllMocks();
 });
 
@@ -79,15 +104,19 @@ describe('#3706 — loadRecycledItem is owner-scoped, and must stay that way', (
   });
 
   it('refuses when the workspace tenant does not POSITIVELY match the caller', async () => {
-    // The wrong shape is `caller && doc.tid && caller !== doc.tid`, which lets a
-    // claim-less session through by short-circuit (cf. bfd67ed1). This asserts
-    // the match is required, not merely un-contradicted.
+    // FAILS IF the `resource.tenantId !== tenantId` comparison is dropped: the
+    // point read resolves a workspace owned by tenant-B and the item comes back.
     wsDoc = { id: RECYCLED.workspaceId, tenantId: 'tenant-B' };
 
     expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
   });
 
   it('refuses when the workspace carries NO tenantId at all', async () => {
+    // THIS is the arm the short-circuit shape breaks: the wrong form
+    // `caller && doc.tenantId && caller !== doc.tenantId` lets a claim-less
+    // workspace doc through because the middle operand is falsy (cf. bfd67ed1).
+    // It asserts the match is REQUIRED, not merely un-contradicted — the
+    // previous test cannot distinguish the two shapes, this one can.
     wsDoc = { id: RECYCLED.workspaceId };
 
     expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
@@ -106,5 +135,27 @@ describe('#3706 — loadRecycledItem is owner-scoped, and must stay that way', (
 
     expect(await loadRecycledItem(RECYCLED.id, '')).toBeNull();
     expect(wsPointReads).toHaveLength(0);
+  });
+
+  /**
+   * THE WIDENING THIS FILE EXISTS TO STOP, asserted on its merits.
+   *
+   * The caller is NOT the workspace creator (their partition read misses), but
+   * the canonical ladder WOULD grant them write access — i.e. a member the
+   * workspace was deliberately shared with. `loadRecycledItem` must still
+   * refuse, because the verbs behind it include an unrecoverable purge.
+   *
+   * FAILS IF someone copies the sibling at `item-crud.ts:595`
+   * (`resolveWorkspaceAccessByOid(...)` + `if (!access) return null`) into
+   * `loadRecycledItem`: that mutation needs no signature change, and the four
+   * tests above cannot see it — the owner fast path keeps the point-read
+   * mechanism intact, so test 1 still passes. This one goes red because the
+   * ladder is mocked to SAY YES and the correct answer is still null.
+   */
+  it('refuses a shared-workspace member the canonical ladder would admit', async () => {
+    wsDoc = null; // not the creator — the caller-partitioned point read misses
+    aclAccess = { role: 'Member', canWrite: true }; // ...but the ladder says yes
+
+    expect(await loadRecycledItem(RECYCLED.id, CALLER)).toBeNull();
   });
 });

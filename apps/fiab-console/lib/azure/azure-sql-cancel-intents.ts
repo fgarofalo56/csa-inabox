@@ -89,11 +89,14 @@ const credential = loomServerCredential;
  * a single replica. Both are false for this estate and one of them is actively
  * forbidden:
  *
- *   - `loom-console` is declared `multiRevision: true` with `minReplicas: 2`
- *     (admin-plane/main.bicep), and ACA REQUIRES `affinity:'none'` in
- *     multiple-revision mode. app-deployments.bicep now asserts that value on
- *     every deploy precisely so a sticky value set out-of-band cannot wedge
- *     blue-green rolls again — so a reader who followed this advice would have
+ *   - `loom-console` ran `multiRevision: true` with `minReplicas: 2` until
+ *     2026-09-20 and runs Single mode with `minReplicas: 2` now
+ *     (admin-plane/main.bicep). The replica count is what makes per-replica
+ *     state wrong, and it did not change. ACA REQUIRES `affinity:'none'` in
+ *     multiple-revision mode, so that REQUIREMENT — not intent — used to be
+ *     what kept sticky out; Single mode lifts it, so app-deployments.bicep now
+ *     asserts `affinity:'none'` for EVERY ingress app instead of only
+ *     multiRevision ones — so a reader who followed this advice would have
  *     it reverted by the next deploy, after breaking the roll.
  *   - `lib/auth/msal.ts` documents the console as deliberately scaled out with
  *     affinity OFF: the MSAL token cache is Cosmos-persisted so a round-robin
@@ -117,11 +120,13 @@ export const liveRequests: Map<string, CancellableRequest> = new Map();
 /**
  * The cross-replica cancel signal.
  *
- * `liveRequests` is per-replica, and `loom-console` runs `multiRevision: true`
- * with `minReplicas: 2`, so a cancel POST routinely lands on a replica that
- * never started the query. Session affinity cannot be the answer — ACA REQUIRES
- * `affinity:'none'` in multiple-revision mode and app-deployments.bicep asserts
- * it on every deploy (#3399).
+ * `liveRequests` is per-replica, and `loom-console` runs `minReplicas: 2`
+ * (it also ran `multiRevision: true` until 2026-09-20), so a cancel POST
+ * routinely lands on a replica that never started the query. Session affinity
+ * cannot be the answer — app-deployments.bicep asserts `affinity:'none'` for
+ * every ingress app (#3399, widened from multiRevision-only on 2026-09-20 when
+ * the console moved to Single mode and ACA's mode requirement stopped being
+ * what enforced it).
  *
  * So the cancel route writes a short-lived INTENT keyed by requestId, and every
  * replica polls for the intents matching the ids IT owns. The replica holding

@@ -245,6 +245,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            if was_state in REOPEN_DISPUTES:",
         "            if was_state in REOPEN_DISPUTES and existing.receipt_kind:",
     ),
+    (
+        ("L30 a TERMINAL item keeps its stale audit reason, so the ledger reads "
+         "`state=closed reason='departed'` and a cold reader cannot tell that "
+         "label from a live one. Pre-existing, and it becomes the COMMON shape "
+         "once recovering an audited item by re-taking its receipt is the "
+         "normal path (#4545) rather than a curiosity"),
+        "ledger.py",
+        "        if state in TERMINAL:\n            item.audit_reason = None\n",
+        "",
+    ),
     # -- the cycle ---------------------------------------------------------
     (
         "T1 the refresh invents a receipt and closes what left GitHub",
@@ -308,6 +318,561 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    guard_refresh(led, live, allow_shrink=args.allow_shrink)",
         "    pass  # guard_refresh(led, live, allow_shrink=args.allow_shrink)",
+    ),
+    # -- #4545: the ledger close must REACH GITHUB -------------------------
+    #
+    # The defect: `tools/drain/` contained no `gh issue close` at all, so a
+    # ledger close was invisible upstream and the next refresh read the
+    # harness's OWN close as a reopen -- demoting the item and VOIDING the
+    # receipt. Measured on #4535, the first item the harness ever closed on its
+    # own evidence; it bounced on the next cycle.
+    #
+    # Per this file's own lesson, the arms that matter are not the ones that
+    # weaken a check. GH2 narrows the POPULATION to one of the two routes, GH3
+    # widens the STATE set so a park is dragged along (#4535 from the other
+    # side), GH4 narrows it to nothing, and GH9 swaps the ORDER of the two
+    # writes -- which is the mutation that reproduces the original defect
+    # exactly, because a ledger-first pair whose second half fails IS #4545.
+    #
+    # ONE MUTANT IN THIS AREA IS NOT IN THIS LIST, and the next person reading
+    # `killed=N of N` needs to know before they trust it. A reviewer moved
+    # `if item.state in TERMINAL: raise` from above the evidence branches to
+    # BELOW the GitHub close -- the terminal refusal firing too late, so a
+    # second `--record-receipt` on an already-closed item reaches GitHub. That
+    # is a DELETE-HERE / INSERT-THERE edit, and the `(name, file, old, new)`
+    # shape cannot express it without an anchor that swallows the whole
+    # function body. Generalising the arm form inside a P0 pre-flight fix is
+    # the worse trade, so it was not generalised.
+    #
+    # What pins it instead: `test_an_already_terminal_item_is_not_re_receipted`
+    # asserts on the READ COUNT -- 2 `gh issue view` at head, 3 under that
+    # mutant, the numbers in the assertion message -- because the CLOSE count
+    # cannot see it (a closer meeting an already-closed issue short-circuits
+    # and issues no close). It was proven RED against the mutant ONCE, BY HAND,
+    # in a sandbox copy, by two people independently. That is a test with a
+    # named discriminator, not a standing arm, and this matrix's totals must
+    # not be read as claiming otherwise.
+    (
+        "GH1 the ledger closes and GitHub never hears (#4545 verbatim)",
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+        '    close_note = "the ledger is the only record"',
+    ),
+    (
+        ("GH2 the close fires on ONE ROUTE only: ci-green items are closed "
+         "upstream and every run-backed item is left open"),
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)"),
+        ("    close_note = (close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         '                  if from_pr else "run-backed items close quietly")'),
+    ),
+    (
+        ("GH3 the state set widens to every terminal state, so a PARK -- which "
+         "is SUPPOSED to stay open on GitHub -- gets closed too (#4535)"),
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = TERMINAL",
+    ),
+    (
+        "GH4 the state set narrows to nothing, so no item ever closes upstream",
+        "ledger.py",
+        "CLOSES_ON_GITHUB = (CLOSED,)",
+        "CLOSES_ON_GITHUB = ()",
+    ),
+    (
+        "GH5 the close's exit code stops being read (the `|| true` shape)",
+        "tick.py",
+        "        if rc != 0:",
+        "        if rc != 0 and False:",
+    ),
+    (
+        ("GH6 rc=0 is trusted instead of reading the state back, so a wrapper "
+         "that did nothing reports a close"),
+        "tick.py",
+        "        after = _read_issue_on_github(repo, number)",
+        '        after = _IssueRead("CLOSED", "")',
+    ),
+    (
+        ("GH7 the already-closed short circuit goes, so a human's hand-closed "
+         "issue is closed again and re-commented on"),
+        "tick.py",
+        "        if before.state == \"CLOSED\":",
+        "        if False:",
+    ),
+    (
+        "GH8 the autonomy contract stops being consulted before the write",
+        "tick.py",
+        '    permitted, why = gates.action_is_permitted("close-on-receipt", policy)',
+        '    permitted, why = True, "assumed"',
+    ),
+    (
+        ("GH9 the ORDER is reversed -- ledger first, GitHub second -- so a "
+         "failed close leaves the item closed here and open there, which is "
+         "#4545 reproduced by the fix for it"),
+        "tick.py",
+        ("    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+        ("    _record_close_in_ledger(\n"
+         '        led, item, number, kind, ref, f"receipt verified by tick: {detail}"\n'
+         "    )\n"
+         "    close_note = close_issue_on_github(\n"
+         "        policy, repo, number, CLOSED, detail, kind, issue_class)\n"
+         "    # EVERY FAILURE FROM HERE ON IS A POST-CLOSE FAILURE"),
+    ),
+    (
+        ("GH10 a lost CAS after a SUCCESSFUL upstream close is reported as "
+         "`RECEIPT NOT RECORDED` -- the words for 'nothing happened', over a "
+         "world where the issue IS closed on GitHub (R7, inside the R7 fix)"),
+        "tick.py",
+        ('            print(f"LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
+        ('            print(f"RECEIPT NOT RECORDED: "\n'
+         '                  f"{type(exc).__name__}: {exc}\\n"'),
+    ),
+    (
+        ("GH11 a ledger failure AFTER the close stops being wrapped, so it "
+         "escapes as a bare ValueError and `main()` prints RECEIPT REFUSED -- "
+         "'your evidence was rejected' -- over a landed GitHub write"),
+        "tick.py",
+        "    except Exception as exc:\n        raise LedgerWriteAfterCloseError(",
+        "    except SystemExit as exc:\n        raise LedgerWriteAfterCloseError(",
+    ),
+    (
+        ("GH14 the close posts NO RECEIPT COMMENT, so a closed issue carries no "
+         "trace of which evidence closed it -- 334 issues closed silently, "
+         "which is the R2 shape the #4535 hand-close avoided by quoting the "
+         "receipt. It SURVIVED 518/518 until the positive assertion existed: "
+         "the only test named for the comment asserted its ABSENCE"),
+        "tick.py",
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         '             "--comment", _receipt_comment(kind, issue_class, detail)]'),
+        ('            ["gh", "issue", "close", str(number), "--repo", repo,\n'
+         "             ]"),
+    ),
+    (
+        ("GH15 the receipt comment goes back to naming neither the KIND nor the "
+         "CLASS and citing deploy-integrity R2 on BOTH routes. That is the text "
+         "that shipped, and on the ci-green route the evidence IS a merge -- so "
+         "it cited 'merged is never done' in support of closing on a merge, on "
+         "up to 334 permanent public artifacts, while policy.json carries "
+         "`report-a-merge-as-a-fix` in its `never` list. The mutation collapses "
+         "the two branches back into the single template, which is the exact "
+         "shape of the defect rather than a proxy for it"),
+        "tick.py",
+        "    head = f\"Drain harness: receipt verified (kind={kind}, class={issue_class}) - {detail}.\"",
+        ("    head = f\"Drain harness: receipt verified - {detail}.\"\n"
+         "    return head + \" Closing this issue on that evidence (deploy-integrity R2).\""),
+    ),
+    (
+        ("GH16 BOTH ROUTES COLLAPSE INTO THE MERGE TEXT -- the other half of the "
+         "GH15 symmetry, and it SURVIVED 519/519. One token: `if kind in "
+         "MERGE_BASED_KINDS:` becomes `if True:`. Under it every RUN-BACKED "
+         "close publishes, permanently and publicly, that its evidence is 'CI "
+         "green at the MERGED sha - a merge, not a deploy', that 'the live "
+         "estate was never checked', and -- on a g1-browser receipt taken from a "
+         "browser run -- that the reader should go obtain a g1-browser receipt "
+         "instead. That is WORSE than the text GH15 models, which at least never "
+         "claimed 'not a deploy' over a deploy observation. Nothing killed it "
+         "because the only route-sensitive assertion on the run-backed test was "
+         "`deploy-integrity R2`, which BOTH templates carry"),
+        "tick.py",
+        "    if kind in MERGE_BASED_KINDS:",
+        "    if True:",
+    ),
+    (
+        ("GH17 `ci-green` IS RECLASSIFIED AS RUN-BACKED, so the merge route "
+         "acquires the estate-observing sentence: 'an observation of something "
+         "that ran, not a merge' rendered over a merge, citing R2 as SATISFIED "
+         "by the one thing R2 forbids. It is the two-declarations hazard written "
+         "out -- merge-ness is stated at MERGE_BASED_KINDS and again at `if kind "
+         "== \"ci-green\":` in record_receipt_from_evidence -- and it moves BOTH "
+         "declarations because moving only the first now hits the round-7 "
+         "fail-closed raise instead, which is the point of that raise. It is "
+         "also the mutation that finally runs value 3 of the ci-green test's "
+         "'FOUR VALUES BREAK THIS' red: GH15 stops at assertion 1, so 3 had "
+         "never been exercised by any shipped arm"),
+        "tick.py",
+        ('RUN_BACKED_KINDS = frozenset({"deploy-run", "estate", "g1-browser"})'),
+        ('RUN_BACKED_KINDS = frozenset({"ci-green", "deploy-run", "estate", "g1-browser"})\n'
+         'MERGE_BASED_KINDS = frozenset()  # rebound HERE, after the original binding'),
+    ),
+    (
+        ("GH18 the merge text DROPS ITS NON-CLAIM ABOUT THE ESTATE, so a "
+         "ci-green close reads as though the live estate were part of the "
+         "evidence -- the implication the sentence exists to refuse. Value 4 of "
+         "the same 'FOUR VALUES BREAK THIS', also never exercised before round 7"),
+        "tick.py",
+        ('            "The live estate was never checked and nothing here claims anything "\n'
+         '            "about it. "\n'),
+        (""),
+    ),
+    (
+        ("GH12 the save arm narrows back to LedgerChangedError, so a NON-CAS "
+         "failure after a landed close -- os.replace raising PermissionError -- "
+         "ESCAPES main() UNCAUGHT while the issue is closed upstream: #4545 "
+         "with extra steps, inside the fix for it. WHAT THE OPERATOR SEES, "
+         "measured as a real process rather than under capsys (which is how an "
+         "earlier revision of this line came to say 'an EMPTY stderr', and it "
+         "was false): exit 1 and ~650 bytes of TRACEBACK naming os.replace and "
+         "saying nothing about the upstream close, against ~520 bytes of the "
+         "intended message unmutated -- byte totals ENVIRONMENT-DEPENDENT (they "
+         "move with sandbox path length and run id; an independent re-measure "
+         "on another sandbox read 647/579), so the load-bearing invariant is "
+         "the SAME EXIT CODE either way, meaning neither "
+         "the status nor the text reports that the two records now disagree"),
+        "tick.py",
+        "        except Exception as exc:  # the WIDTH is the point, see below",
+        "        except LedgerChangedError as exc:",
+    ),
+    (
+        ("GH13 the close-failure headline goes back to claiming the close DID "
+         "NOT COMPLETE, which is false when rc=0 and only the read-back failed "
+         "-- the close landed and the tool cannot say so"),
+        "tick.py",
+        'f"GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+        'f"GITHUB CLOSE DID NOT COMPLETE - NOTHING WRITTEN TO THE LEDGER: {exc}\\n"',
+    ),
+    (
+        ("GH19 THE RUN-BACKED TEXT GOES BACK TO CLAIMING R2 SATISFIED. The "
+         "sentence 'an observation of something that ran, not a merge, which is "
+         "what deploy-integrity R2 (merged is not done) ASKS OF THIS CLASS' "
+         "asserts that the estate was observed carrying this issue's change, "
+         "and nothing in the receipt path establishes it: `_run_evidence` never "
+         "requests `createdAt` and `verify_run_backed_receipt` compares "
+         "`headSha` to nothing. MEASURED rather than argued -- run 33238747458 "
+         "(loom-roll-and-validate, 2026-08-29, headSha 70ca3d1) passes every "
+         "check today, and 147 of the 351 issues open on 2026-09-18 were filed "
+         "AFTER it. The mutation restores the exact shipped sentence, which is "
+         "the defect rather than a proxy for it, on an artifact that is public "
+         "and unrevisable"),
+        "tick.py",
+        ('        "observation of something that ran, not a merge, which is why "\n'
+         '        f"deploy-integrity R2 (merged is not done) makes the {issue_class} class "\n'
+         '        "take a receipt of this shape rather than a CI-green one. "'),
+        ('        "observation of something that ran, not a merge, which is what "\n'
+         '        "deploy-integrity R2 (merged is not done) asks of this class. "'),
+    ),
+    (
+        ("GH20 THE TIME/SHA DISCLOSURE IS DELETED while the softened R2 line "
+         "stays. The one-sided shape this package keeps producing, and the half "
+         "a reader cannot detect: the comment still reads correctly, still "
+         "cites #4489 for the reference binding, and silently stops saying that "
+         "the run is bound to no TIME and no SHA. Told apart from GH19 by "
+         "MEASUREMENT, not by construction: each arm was applied to a sandbox "
+         "copy and all five predicates of the run-backed test evaluated by "
+         "rendering the comment directly, since pytest stops at the first "
+         "failing assert and cannot see this. GH19 falsifies predicates 1+2, "
+         "GH20 falsifies 3+4, and neither touches 5 -- disjoint, so one arm "
+         "cannot pass for the other. GH20 additionally turns "
+         "`test_the_run_backed_disclosure_is_still_true_of_the_code_it_describes` "
+         "red, which is a second independent killer"),
+        "tick.py",
+        ('        "binding is #4489 - and it is bound to no TIME and no SHA either: no "\n'
+         '        "run date is fetched and no head sha is compared, so a run that "\n'
+         '        "PREDATES this issue is accepted exactly as one that postdates it "\n'
+         '        "(#4578). Read this as \'the declared producer ran green\', not as \'the "\n'
+         '        "estate was observed carrying this change\'. "\n'),
+        ('        "binding is #4489. "\n'),
+    ),
+    (
+        ("GH21 the already-closed note reverts to a bare 'left alone', so the "
+         "operator is told a receipt was recorded with no hint that NOTHING WAS "
+         "PUBLISHED. That route issues `gh issue view` and nothing else, and "
+         "`tools/drain/state.json` is untracked, so the receipt's whole "
+         "existence is a local gitignored file -- the state all 7 currently "
+         "ledger-closed items are in. Posting there is #4579; saying so is the "
+         "part that is not deferrable"),
+        "tick.py",
+        ('            return (\n'
+         '                f"#{number} was already closed on GitHub - left alone, so NO "\n'
+         '                "receipt comment was posted: on this route the receipt exists "\n'
+         '                "only in the local ledger, which is untracked (#4579)"\n'
+         '            )'),
+        ('            return f"#{number} was already closed on GitHub - left alone"'),
+    ),
+    # -- round 10: "verified by effect" verified a property of the WORLD ----
+    #
+    # Nine rounds of this change argued that reading the state back beats
+    # trusting rc=0. It does -- and it still cannot tell THIS invocation's
+    # effect from a concurrent writer's. close.go v2.100.0 re-fetches at :112
+    # and returns at :117-120, ABOVE the comment block at :148, so a lane that
+    # loses the race exits 0 having posted nothing while the read-back reads
+    # CLOSED. GH23 is that defect verbatim; GH24 is the two-valued classifier
+    # that would let a future `gh` rewording restore it from outside this
+    # repository; GH22 and GH25 are the two reads the write is justified by.
+    (
+        ("GH22 the verification READ stops pinning `--repo`, so `gh` resolves "
+         "the repository from the working directory. MEASURED AT ROUND 9'S "
+         "HEAD: this exact edit survived 527/527 -- the close argv was pinned "
+         "and neither read was. The pre-read can then short-circuit on a "
+         "FOREIGN repo's closed issue (receipt recorded, nothing closed, "
+         "nothing commented) and the read-back can satisfy the verification "
+         "vacuously: #4545's failure mode restored through the verification "
+         "instead of through the write"),
+        "tick.py",
+        ('        ["gh", "issue", "view", str(number), "--repo", repo,\n'
+         '         "--json", "state,title,url"]'),
+        ('        ["gh", "issue", "view", str(number),\n'
+         '         "--json", "state,title,url"]'),
+    ),
+    (
+        ("GH23 THE NOTE GOES BACK TO KEYING ON THE READ-BACK ALONE, so a close "
+         "performed by a human or by a second lane is reported as this run's "
+         "own -- over an issue where `gh` short-circuited above its comment "
+         "step and published NOTHING. The false sentence then lands in "
+         "`Item.history` permanently. This is the round-9 head, and the whole "
+         "PR exists to stop a close being reported that never reached GitHub"),
+        "tick.py",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
+        "        outcome = CLOSE_PERFORMED",
+    ),
+    (
+        ("GH24 the classifier goes TWO-VALUED -- anything that is not the "
+         "already-closed sentence is assumed to be our close. Fails OPEN by "
+         "construction: a future `gh` that rewords :169, a localised build or "
+         "a wrapper silently restores GH23 from OUTSIDE this repository, where "
+         "nothing in this suite watches. The third arm is the difference "
+         "between failing honest and failing open"),
+        "tick.py",
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        ("        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_PERFORMED"),
+    ),
+    (
+        ("GH25 the read stops establishing the object's TYPE, so a number that "
+         "resolves to a PULL REQUEST is closed as though it were an issue and "
+         "the permanent receipt comment is posted on the PR. `gh issue view` "
+         "answers for PRs (measured live on #4552) and close.go :175-177 routes "
+         "them to `api.PullRequestClose`. Latent while every number comes from "
+         "`gh issue list`, but the read-first is what the write's safety is "
+         "argued from, so a read that cannot say what it read is the argument "
+         "failing rather than a missing nicety"),
+        "tick.py",
+        '    url = str((parsed or {}).get("url") or "")',
+        '    url = "https://github.com/o/r/issues/0"',
+    ),
+    # -- round 11: the classifier read by IDIOM, and the TITLE is in the line --
+    #
+    # close.go interpolates `issue.Title` as the final `%s` of BOTH exit-0
+    # sentences (:118, :169). Round 10's classifier asked whether a phrase
+    # appeared ANYWHERE in stderr, so an issue's own title could forge the
+    # verdict -- measured end to end at f3a2a834460 on a close that was
+    # genuinely performed: 1 comment posted, state CLOSED, and a note saying
+    # neither happened, written permanently into `Item.history`. GH26 is that
+    # defect verbatim; GH29 is the tempting "swap the two ifs", which merely
+    # moves the collision onto the dangerous side. A POSITIONAL read survives
+    # both -- and NOT, as this comment claimed for a round, "because the title
+    # can never start a line". It cannot start a line gh WROTE; it can create
+    # one of its own, which is what GH30-GH32 below are about.
+    (
+        ("GH26 THE CLASSIFIER GOES BACK TO READING BY IDIOM -- a bare substring "
+         "over the whole of stderr, already-closed first. This is round 10's "
+         "head. `issue.Title` is the last field of both sentences, so a close "
+         "this run GENUINELY PERFORMED, on an issue whose title contains `is "
+         "already closed`, is reported as somebody else's with its receipt "
+         "comment denied -- two false statements of fact on the ORDINARY "
+         "SUCCESS PATH, then written into `Item.history`. Latent only because "
+         "no current title collides; the population is 334 issues titled by "
+         "this lane about issue-closing machinery"),
+        "tick.py",
+        ("        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, already, _GH_ALREADY_CLOSED_SUFFIX):\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+        ("        if _GH_ALREADY_CLOSED_SUFFIX in err:\n"
+         "            return CLOSE_FOUND_ALREADY_CLOSED\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "    return CLOSE_OUTCOME_UNKNOWN"),
+    ),
+    (
+        ("GH29 THE SAME IDIOM WITH THE TWO TESTS SWAPPED -- the fix that looks "
+         "like a fix. It cures GH26's direction and creates the worse one: an "
+         "already-closed line whose title contains `Closed issue ` now reports "
+         "a close this run did NOT perform, which is GH23 restored through the "
+         "title field. Told apart from GH26 by which half of "
+         "`test_blocker_an_issues_own_title_cannot_forge_the_close_outcome` "
+         "goes red -- GH26 fails half one, GH29 fails half two -- so neither "
+         "arm can pass for the other"),
+        "tick.py",
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+        ("        body = line.split(\" \", 1)[1] if \" \" in line else line\n"
+         "        if _GH_PERFORMED_PREFIX in err:\n"
+         "            return CLOSE_PERFORMED\n"
+         "        if _sentence_is(body, performed, _GH_PERFORMED_SUFFIX):"),
+    ),
+    (
+        ("GH27 THE UNKNOWN-OUTCOME NOTE DROPS ITS REMEDIATION, leaving the "
+         "operator told only that the tool cannot tell -- from a state it "
+         "deliberately refuses to re-enter, because the ledger write below "
+         "makes the item terminal and the record route refuses a terminal "
+         "item. Honest and unactionable is not R6 satisfied: the note has to "
+         "name the one action (read the comments, post the receipt by hand if "
+         "none begins `Drain harness: receipt verified`)"),
+        "tick.py",
+        ('            "so the receipt comment MAY NOT have been posted. DO THIS: read the "\n'
+         '            f"issue\'s comments (`gh issue view {number} --repo {repo} --comments`) "\n'
+         '            "and, if none begins `Drain harness: receipt verified`, post the "\n'
+         '            "receipt by hand - this tool will not re-enter the path, because the "\n'
+         '            "ledger write below makes the item terminal and the record route "\n'
+         '            "refuses a terminal item (#4579 tracks closing that gap in code)"'),
+        '            "so the receipt comment MAY NOT have been posted"',
+    ),
+    (
+        ("GH28 THE READ STOPS ESTABLISHING WHICH REPOSITORY ANSWERED, so a "
+         "TRANSFERRED issue -- whose old number stays reachable and resolves "
+         "to the NEW repository -- is closed, and permanently commented on, in "
+         "a repository this tool was never asked about. The `--repo` pin that "
+         "arm GH22 protects was argued from exactly this hazard; without the "
+         "comparison it is a hope about `gh` rather than a verified effect, "
+         "and the url that settles it is already parsed two lines up"),
+        "tick.py",
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if answered.casefold() != repo.casefold():"),
+        ("    answered = _object_repo_from_url(url)\n"
+         "    if False:"),
+    ),
+    # -- round 13: the title did not have to START a line. It CREATED one ----
+    #
+    # Round 12 fixed the idiom read and claimed the positional result was
+    # "title-proof by construction … [the title] can never occupy the start of
+    # one [line]". True of a line gh WROTE, and the conclusion does not follow:
+    # `str.splitlines()` honours TEN separators against the one `gh` terminates
+    # its records with, so a title carrying any of the other nine splits that
+    # single-line record into several and hands the classifier a line whose
+    # whole content is operator-supplied. Measured at 4ce05224585: all ten
+    # forge, in BOTH directions, 20 of 20, with a plain-title control green --
+    # and end to end through `_GhSpy` on the raced-close path a U+2028 title
+    # returned `#4547 closed on GitHub` over a run that closed nothing and
+    # posted no comment, written permanently into `Item.history`.
+    #
+    # WHY FIVE ARMS AND NOT ONE. The round-12 error was not a missing character
+    # in a list; it was fixing the trigger instead of the class. An arm per
+    # CONSTRUCT is what makes that visible: the narrow split, the neutraliser,
+    # the neutraliser's breadth, the field that feeds it, and the second read
+    # that covers an edit inside the close window. The review that found this
+    # said it plainly -- `killed=304 of 304` was true and green while the
+    # blocker shipped, because no arm pointed at `splitlines()`, at the icon
+    # drop, or at the length guard. A complete matrix over an incomplete arm
+    # set is the shape this repo keeps paying for.
+    (
+        ("GH30 THE SPLIT WIDENS BACK TO `str.splitlines()` -- round 12's head "
+         "verbatim. Ten separators read back out of a stream joined with one, "
+         "so the nine gh never writes delimit nothing it meant and every one "
+         "is reachable from the TITLE. Reading with a wider rule than the "
+         "writer wrote with is the whole defect; narrowing the trigger "
+         "character is what round 12 did instead"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        "    return err.splitlines()",
+    ),
+    (
+        ("GH38 THE CRLF TERMINATOR STOPS BEING UNDONE -- the OPPOSITE mistake "
+         "to GH30, and the one `splitlines()` was rightly chosen over a bare "
+         "`split(\"\\\\n\")` to avoid in round 12. A `\\\\r` left glued to the end "
+         "of the line fails the already-closed arm's SUFFIX test SILENTLY, so "
+         "every raced close on a CRLF stream classifies `unknown`. Narrowing "
+         "the split is only correct WITH this, which is why the pair is armed "
+         "rather than just the widening "
+         "(`csa_loom_js_regex_dot_does_not_match_cr_so_line_guards_noop_on_crlf`)"),
+        "tick.py",
+        '    return [line.removesuffix("\\r") for line in err.split("\\n")]',
+        '    return err.split("\\n")',
+    ),
+    (
+        ("GH31 THE TITLE NEUTRALISATION IS DELETED from the call site, so LF -- "
+         "gh's OWN terminator, the one separator a narrower split cannot help "
+         "with -- creates a line of pure operator-supplied content again. This "
+         "is the half of the fix that does not depend on how the stream is "
+         "split, and it is the half that costs nothing: the titles arrive on a "
+         "`--json` list the closer was already fetching"),
+        "tick.py",
+        ("        outcome = _close_outcome(\n"
+         "            _without_title_line_breaks(err, before.title, after.title),\n"
+         "            repo, number,\n"
+         "        )"),
+        "        outcome = _close_outcome(err, repo, number)",
+    ),
+    (
+        ("GH32 THE NEUTRALISER IS NARROWED TO ONE CODE POINT -- round 12's "
+         "error committed one layer down, and the reason `_has_line_break` "
+         "asks the splitter rather than transcribing its documentation. A "
+         "hand-written separator list is a probe that can disagree with the "
+         "implementation it describes (assertion-design 'done' #3)"),
+        "tick.py",
+        "        if _has_line_break(title):",
+        '        if "\\u2028" in title:',
+    ),
+    (
+        ("GH33 THE LENGTH GUARD IN `_sentence_is` IS DELETED. Disclosed at its "
+         "site as an EQUIVALENT MUTANT at the two pairs `_close_outcome` "
+         "supplies -- 0 divergent inputs over 200 candidates, positive control "
+         "diverging -- and killable at the PREDICATE'S OWN CONTRACT, which is "
+         "where it is now pinned. The arm exists because round 12 presented it "
+         "as load-bearing with no witness at all; an un-killable construct is "
+         "disclosed, not counted, and a disclosed one still gets an arm"),
+        "tick.py",
+        ("        len(body) >= len(prefix) + len(suffix)\n"
+         "        and body[:len(prefix)].casefold() == prefix.casefold()"),
+        "        body[:len(prefix)].casefold() == prefix.casefold()",
+    ),
+    (
+        ("GH34 GH'S ICON TOKEN STOPS BEING DROPPED, so the marker is read at "
+         "offset 0 and every real line classifies UNKNOWN -- a classifier that "
+         "qualifies every outcome, which is how 'fails honest' gets satisfied "
+         "by saying nothing. No arm pointed at this construct before round 13 "
+         "even though the suite killed it: an arm set that omits a construct "
+         "makes a 100%-killed headline a claim about the arms, not the code"),
+        "tick.py",
+        '        body = line.split(" ", 1)[1] if " " in line else line',
+        "        body = line",
+    ),
+    (
+        ("GH35 REPO AND NUMBER ARE DROPPED FROM THE ALREADY-CLOSED PREFIX, so "
+         "a short-circuit line about SOMEBODY ELSE'S issue answers for ours. "
+         "The positional property claimed both prefixes and only the PERFORMED "
+         "half was asserted, so this survived all 531 tests -- naming a value "
+         "that does not in fact break the assertion, which is "
+         "assertion-design's forbidden case"),
+        "tick.py",
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}{repo}#{number} ("',
+        '    already = f"{_GH_ALREADY_CLOSED_PREFIX}"',
+    ),
+    (
+        ("GH36 THE READ STOPS ASKING FOR THE TITLE, so the neutraliser is "
+         "handed an empty string and neutralises nothing. Killed "
+         "BEHAVIOURALLY, not merely by an argv assertion, because `_GhSpy` "
+         "answers only the fields the argv names -- exactly as `gh` does. A "
+         "spy that returns every field regardless would let this survive on a "
+         "behaviour the real command does not have"),
+        "tick.py",
+        '         "--json", "state,title,url"]',
+        '         "--json", "state,url"]',
+    ),
+    (
+        ("GH37 THE READ-BACK'S TITLE IS DROPPED from the neutralisation set, "
+         "leaving only the pre-close read's -- so a title EDITED inside the "
+         "close window is rendered by gh and neutralised by nobody. Measured "
+         "SURVIVING the suite before its witness existed, which is why the "
+         "second title is pinned by a test with a title-change seam rather "
+         "than argued for in a docstring"),
+        "tick.py",
+        "            _without_title_line_breaks(err, before.title, after.title),",
+        "            _without_title_line_breaks(err, before.title),",
     ),
     # -- the composed caller: the file that actually decides a merge -------
     (
@@ -475,8 +1040,17 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G1 the StatusContext vocabulary is dropped from the INCOMPLETE test",
         "gates.py",
-        "        elif not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES:",
-        "        elif not verdict or status in INCOMPLETE_STATUSES:",
+        # ANCHORED TO THE REQUIRED PATH. `classify_advisory_checks` (#4543)
+        # reuses the same three-way split, so this line now appears TWICE in
+        # `gates.py` -- and `replace(old, new, 1)` takes the first, which would
+        # have silently pointed a required-path arm at the advisory one. The
+        # preceding RED branch is what distinguishes them; A5 is the advisory
+        # twin of this arm.
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or verdict in INCOMPLETE_STATUSES "
+         "or status in INCOMPLETE_STATUSES:"),
+        ('            reasons.append(f"{name}: RED ({verdict})")\n'
+         "        elif not verdict or status in INCOMPLETE_STATUSES:"),
     ),
     (
         "G2 a blocking near-miss stops being pinned to head (stale text blocks forever)",
@@ -525,6 +1099,170 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         "            elif mentions_token:",
         "            elif False:",
+    ),
+    # -- #4543: the ADVISORY population. Every arm here NARROWS the population
+    # back to something smaller than "every check the rollup published", which
+    # is the defect being fixed rather than an invented one: gates 4/4b/5 pass
+    # `required` and ~25 contexts per PR were invisible to the merge decision.
+    # A1 is the exact original; the rest are the neighbouring ways to get the
+    # same blindness, plus the two fail-open edges.
+    (
+        "A1 the advisory arm filters back DOWN to the required contexts (#4543 verbatim)",
+        "gates.py",
+        "        if name in required_names:\n            continue",
+        "        if name not in required_names:\n            continue",
+    ),
+    (
+        "A2 only the first check-run is scanned (the first-N narrowing)",
+        "gates.py",
+        # Anchored at the GROUPING, which is the single point the whole
+        # population passes through -- both "which run is newest" and "was an
+        # older run of this name red" read it, so narrowing here narrows both.
+        "    groups = _group_by_name(checks)",
+        "    groups = _group_by_name(checks[:1])",
+    ),
+    (
+        "A3 a duplicated context is keyed LAST-IN-LIST instead of by max start time",
+        "gates.py",
+        ("        newest = max(stamps)\n"
+         "        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) "
+         "if s == newest])"),
+        "        out[name] = runs[-1]",
+    ),
+    (
+        ("A4 an unreadable start time stops falling back to worst-wins, so an "
+         "undated red is discarded as superseded"),
+        "gates.py",
+        # BEHAVIOURAL, not a crash. Deleting the fallback outright would make
+        # `max(stamps)` compare None to None and die with a TypeError -- and a
+        # mutant killed by a TypeError proves only that the tests run Python
+        # (the note on G4 is about the same trap). This substitutes the OTHER
+        # plausible rule instead, so the arm is a wrong ANSWER rather than an
+        # exception.
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = _worst(runs)",
+        "        if any(stamp is None for stamp in stamps):\n            out[name] = runs[-1]",
+    ),
+    (
+        "A5 an IN-PROGRESS advisory check reads as RED again (the cry-wolf defect)",
+        "gates.py",
+        # Disambiguated by the line BELOW it: `classify_checks` opens with the
+        # same `if verdict in RED_CONCLUSIONS:` test, and `replace(.., 1)`
+        # takes the first -- the G1 collision one function over.
+        ("        if verdict in RED_CONCLUSIONS:\n"
+         '            red.append(f"{name} ({verdict})")'),
+        ("        if verdict in RED_CONCLUSIONS or _is_incomplete(check):\n"
+         '            red.append(f"{name} ({verdict})")'),
+    ),
+    (
+        "A6 the empty-rollup guard falls OPEN, so a clean answer over zero checks is a pass",
+        "gates.py",
+        "    if not checks:\n        return False, (",
+        "    if False:\n        return False, (",
+    ),
+    (
+        "A7 the advisory arm stops blocking in the composed caller (report-only)",
+        "merge_gate.py",
+        "    ok, why = gates.advisory_verdict(",
+        "    ok = True\n    _, why = gates.advisory_verdict(",
+    ),
+    (
+        ("A8 the policy flag is read with a permissive default, so deleting the "
+         "authority's key leaves the gate silently on"),
+        "merge_gate.py",
+        'policy["merge_gate"]["advisory_red_is_a_no_go"]',
+        'policy["merge_gate"].get("advisory_red_is_a_no_go", True)',
+    ),
+    (
+        ("A9 a re-run in flight over a completed RED collapses back to ADV-WAIT, so "
+         "the gate's OWN remedy clears the gate's own block before the re-run answers"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        "            if False:",
+    ),
+    (
+        ("A9b the SAME site NARROWED rather than disabled -- A9 turns it off entirely, "
+         "which any FAILURE-only test kills, so a narrowing that KEEPS FAILURE was "
+         "invisible to this registry. An independent reviewer showed "
+         "`(\"FAILURE\", \"ERROR\")` survived the whole suite at rc=0; the five other "
+         "members of RED_CONCLUSIONS silently fell through to ADV-WAIT and the gate "
+         "cleared its own block. A total-disable arm does not witness a partial one"),
+        "gates.py",
+        "            if last_verdict in RED_CONCLUSIONS:",
+        '            if last_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A9c a run that MEASURED NOTHING again discharges an earlier red -- the THIRD "
+         "form of the self-clearing block. Once a re-run CONCLUDES SKIPPED it stops "
+         "being incomplete, so newest-wins drops it into `clean` and the red vanishes. "
+         "Reachable by `rerun-ci`, which is in `permitted_unattended`"),
+        "gates.py",
+        "        elif verdict in MEASURED_NOTHING:",
+        "        elif False:",
+    ),
+    (
+        ("A9d the ADV-RERUN branch counts a SKIPPED as an answer again -- the FOURTH "
+         "form, and round 4 CREATED it by fixing only the sibling branch. "
+         "`FAILURE, SKIPPED` blocks but `FAILURE, SKIPPED, IN_PROGRESS` clears, so "
+         "dispatching the gate's own remedy discharges the block the moment it STARTS. "
+         "The mutant is written INLINE rather than calling the old helper, because "
+         "round 6 deleted that helper -- a mutant naming a deleted function raises "
+         "NameError, which scores NOT-EVALUATED, not KILLED, and would have quietly "
+         "retired this arm"),
+        "gates.py",
+        "            last = _newest_informative_concluded(groups[name])",
+        ('            _concl = [r for r in groups[name] if not _is_incomplete(r)]\n'
+         '            last = _newest_from_groups({"": _concl})[""] if _concl else None'),
+    ),
+    (
+        ("A9e MEASURED_NOTHING narrowed to SKIPPED alone, so a NEUTRAL re-run "
+         "discharges a red. Survived the whole suite before a LITERAL tuple pinned "
+         "the set -- a loop derived from the frozenset cannot witness the frozenset"),
+        "gates.py",
+        'MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})',
+        'MEASURED_NOTHING = frozenset({"SKIPPED"})',
+    ),
+    (
+        ("A9f the supersession site's RED_CONCLUSIONS read narrowed to two members -- "
+         "the FOURTH read of that frozenset, and the third time this PR's own subject "
+         "recurred one line below its own fix. CANCELLED is the member that actually "
+         "fires here in production"),
+        "gates.py",
+        "            if prior_verdict in RED_CONCLUSIONS:",
+        '            if prior_verdict in ("FAILURE", "ERROR"):',
+    ),
+    (
+        ("A10 the worst-wins fallback returns the FIRST run instead of the worst -- "
+         "found by an independent reviewer, who showed it SURVIVED all 521 tests "
+         "because both fixtures claiming to pin worst-wins put the red first"),
+        "gates.py",
+        "    chosen = runs[0]\n    for run in runs[1:]:",
+        "    return runs[0]\n    for run in runs[1:]:",
+    ),
+    (
+        ("A11 the informative filter keys on ANY run of the name having concluded RED, "
+         "so a check that went red, WAS FIXED and is being re-run again holds the "
+         "merge -- the mirror image of the hole the bucket was added to close, and it "
+         "SHIPPED in the fix for that hole. RE-ANCHORED in round 6: this arm used to "
+         "sit inside `_newest_concluded`, which round 5 orphaned when both callers "
+         "moved to `_newest_informative_concluded`. An arm over a function the gate "
+         "no longer calls prints KILLED against dead code -- a blind arm inside the "
+         "one instrument this package offers as evidence its suite is not blind. "
+         "Found by an independent reviewer who applied it and got byte-identical gate "
+         "output across 26 constructed rollup shapes"),
+        "gates.py",
+        "        if not _is_incomplete(run)\n        and _outcome(run)[0] not in MEASURED_NOTHING",
+        "        if _outcome(run)[0] in RED_CONCLUSIONS",
+    ),
+    (
+        ("A12 the rerun reason picks by LIST POSITION again, so the same three runs "
+         "at one head name CANCELLED or FAILURE depending on the order the API "
+         "returned them - a gate claiming a conclusion it never read (R7). "
+         "RE-ANCHORED in round 6 onto `_newest_informative_concluded`'s return, for "
+         "the same reason as A11: this sat inside `_newest_concluded`, which round 5 "
+         "orphaned and round 6 deleted, so it would have scored against dead code"),
+        "gates.py",
+        '    return _newest_from_groups({"": informative})[""]',
+        "    return informative[0]",
     ),
     (
         "T10 the guard floor is keyed to the OPEN set, so it goes quiet in the end-game",
@@ -1717,10 +2455,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
          "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "        declared_at=declared_at,\n"
          "    )\n    if not ran:"),
         ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
          "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "        declared_at=declared_at,\n"
          "    )\n    if False:"),
     ),
     (
@@ -1774,11 +2514,11 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
-         "            infra_ere=infra_ere,\n"
+         "            infra_ere=infra_ere, declared_at=declared_at,\n"
          "        )\n        if not did_work:"),
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
-         "            infra_ere=infra_ere,\n"
+         "            infra_ere=infra_ere, declared_at=declared_at,\n"
          "        )\n        if False:"),
     ),
     (
@@ -1793,15 +2533,15 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4c an UNDECLARED context stops failing closed, so adding a required "
          "context silently removes it from the receipt"),
         "gates.py",
-        "    if name not in declared:\n        return False, (",
-        "    if name not in declared:\n        return True, (",
+        "    if not candidates:\n        return False, (\n            f\"no substantive step is DECLARED",
+        "    if not candidates:\n        return True, (\n            f\"no substantive step is DECLARED",
     ),
     (
         ("CB4d the declared step is matched but its SKIPPED state is ignored - "
          "presence of the step, rather than its execution, decides"),
         "gates.py",
-        "        if len(skipped) == len(matches):\n            hollow.append(wanted)",
-        "        if False:\n            hollow.append(wanted)",
+        "            if len(skipped) == len(matches):\n                hollow.append(wanted)",
+        "            if False:\n                hollow.append(wanted)",
     ),
     (
         ("CB4i only the FIRST step matching a declared substring decides, so a "
@@ -1831,15 +2571,126 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4e a STALE declaration (step absent from the job) passes instead of "
          "failing closed, so a renamed step silently stops being checked"),
         "gates.py",
-        "    if missing:\n        return False, (",
-        "    if missing:\n        return True, (",
+        "        if missing:\n            return False, \"missing\", missing",
+        "        if False:\n            return False, \"missing\", missing",
+    ),
+    # -- the declaration resolved AS OF the measured sha (#4676) ------------
+    #
+    # AS1 is the arm the issue asked for: revert the resolution to HEAD. AS2
+    # and AS3 are the ones that matter more, because they NARROW THE POPULATION
+    # rather than weaken a check -- the lesson of the N* arms, and the shape an
+    # author fixing their own defect does not think to write. AS2 resolves only
+    # `substantive_steps` and leaves `alternatives` and `scope_paths` on HEAD's
+    # clock; AS3 leaves the producer reading HEAD's blob for every sha, so the
+    # consumer is perfect and is fed one answer forever.
+    (
+        ("AS1 the declaration is resolved at HEAD again, so any step rename "
+         "retroactively voids every older PR's receipt (#4676)"),
+        "gates.py",
+        '    if as_of is None:\n        return policy, DECL_HEAD, ""',
+        '    if True:\n        return policy, DECL_HEAD, ""',
+    ),
+    (
+        ("AS2 only `substantive_steps` is resolved as-of; `alternatives` and "
+         "`scope_paths` stay on HEAD's clock, so routes 2 and 3 ask a "
+         "pre-rename job about a post-rename step"),
+        "gates.py",
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    receipts["ci_green_rule"] = as_of.rule'),
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    _narrowed = dict(receipts.get("ci_green_rule", {}))\n'
+         '    _narrowed["substantive_steps"] = as_of.rule.get("substantive_steps", {})\n'
+         '    receipts["ci_green_rule"] = _narrowed'),
+    ),
+    (
+        ("AS3 the PRODUCER reads HEAD's policy blob for every sha, so the "
+         "as-of resolution is perfect and is handed one answer forever - the "
+         "168/168-KILLED-about-the-pure-function shape"),
+        "merge_gate.py",
+        '    rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])',
+        '    rc, out, err = sh(["git", "show", f"HEAD:{POLICY_TRACKED_PATH}"])',
+    ),
+    (
+        ("AS4 the other clock is reached on ANY refusal, not only on ABSENCE, "
+         "so a job that SKIPPED the step its sha's declaration names is "
+         "re-judged against HEAD's and a hollow check passes"),
+        "gates.py",
+        '    if kind == "missing" and len(candidates) > 1:',
+        "    if len(candidates) > 1:",
+    ),
+    (
+        ("AS5 the second clock's KIND is discarded again, so a step that is "
+         "PRESENT and SKIPPED at HEAD is reported as ABSENT - an R7 lie, and "
+         "one-sentence-for-two-states inside the fix for one-sentence-for-"
+         "two-states"),
+        "gates.py",
+        "        ok2, other_kind, other_payload = verdict(other_rule)",
+        "        ok2, _discarded_kind, other_payload = verdict(other_rule)",
+    ),
+    (
+        ("AS6 a declaration that PREDATES `substantive_steps` is told to fetch "
+         "a sha that is already present and readable - the wrong remedy for "
+         "every merge older than 2026-09-15"),
+        "gates.py",
+        # NEWLINE-ANCHORED so the indentation is part of the needle. There are
+        # now TWO `if reason == DECL_PREDATES:` sites -- the refusal and
+        # `provenance_note` -- and the bare form matches inside the more deeply
+        # indented one as a substring.
+        "\n        if reason == DECL_PREDATES:",
+        "\n        if False:",
+    ),
+    (
+        ("AS9 a pass decided on an UNVERIFIED or PREDATES clock prints no "
+         "provenance at all, so a shallow clone silently degrades to pre-PR "
+         "behaviour while every pass still reads as verified"),
+        "gates.py",
+        "        if which == DECL_HEAD_UNVERIFIED:\n            reason =",
+        "        if False:\n            reason =",
+    ),
+    (
+        ("AS10 the hollow payload is a finished SENTENCE again, so the "
+         "second-clock refusal wraps it as if it were a list and prints the "
+         "trailing clause twice"),
+        "gates.py",
+        '            return False, "hollow", hollow\n',
+        ('            return False, "hollow", (\n'
+         '                f"its declared substantive step(s) {hollow} were SKIPPED - '
+         'the check "\n'
+         '                "concluded green having not done the thing it is required '
+         'for"\n'
+         '            )\n'),
+    ),
+    (
+        ("AS7 HEAD's declaration is substituted UNDISCLOSED when the sha's "
+         "declaration carried no row for the context - the row is newer than "
+         "the sha, and the pass says nothing about it"),
+        "gates.py",
+        "            head_which = DECL_HEAD_ROW_NEWER",
+        "            head_which = DECL_HEAD",
+    ),
+    (
+        ("AS8 the receipt call is RE-SPLIT into two hand-maintained argument "
+         "lists, so `tick` can once again record a receipt "
+         "`--ci-green-receipt` would not print"),
+        "tick.py",
+        "        receipt = merge_gate.receipt_from_evidence(data, policy)",
+        ("        receipt = gates.ci_green_receipt(\n"
+         "            data[\"evidence\"],\n"
+         "            merged_total_count=data[\"merged_total_count\"],\n"
+         "            merged_changed_files=data[\"changed_files\"],\n"
+         "            merged_branch=data[\"branch\"],\n"
+         "            merged_sha=data[\"merged\"],\n"
+         "            trees_identical=data[\"trees_identical\"],\n"
+         "            policy=policy,\n"
+         "            infra_ere=merge_gate.resolve_infra_ere(data[\"merged\"]),\n"
+         "        )"),
     ),
     (
         ("CB4f the ALL rule accepts any number of skipped steps, so guardrails "
          "and Repo Hygiene stop being checked at all"),
         "gates.py",
-        "        skipped = [s for s in work if not ran(s)]\n        if skipped:",
-        "        skipped = [s for s in work if not ran(s)]\n        if False:",
+        "            skipped = [s for s in work if not ran(s)]\n            if skipped:",
+        "            skipped = [s for s in work if not ran(s)]\n            if False:",
     ),
     (
         ("CB4g the policy contract walks only the first level again, so a "
@@ -2311,6 +3162,223 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        led.save(if_unchanged=not args.bootstrap)",
         "        led.save(if_unchanged=True)",
     ),
+    # -- #4585: gate 1's SECOND arm, the path-intersection relaxation ------
+    #
+    # AN EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so every
+    # arm here is aimed at making the query return empty for a reason that is
+    # not "the delta is inert". That is the shape the issue named as the trap
+    # and the one a green run cannot distinguish from a correct answer.
+    (
+        ("BD1 the population is re-derived FROM THE SCOPES, so a caller that "
+         "silently drops the one context it could not scope buys a clean "
+         "intersection over the remainder. `required` is a separate argument "
+         "precisely so the loop cannot be its own witness"),
+        "gates.py",
+        "    unscoped = sorted(set(required) - set(by_name))",
+        "    required = [s.name for s in scopes]\n    unscoped = []",
+    ),
+    (
+        ("BD2 a required context whose producing workflow declares NO push "
+         "path filter is SKIPPED instead of refusing - it reads the whole "
+         "tree, and skipping it is how five of this repo's seventeen required "
+         "contexts would stop being consulted at all"),
+        "gates.py",
+        "        if scope.paths is None and scope.paths_ignore is None:",
+        ("        if scope.paths is None and scope.paths_ignore is None:\n"
+         "            continue\n"
+         "        if False:"),
+    ),
+    (
+        ("BD3 the intersection is hard-wired EMPTY - the blind query the "
+         "positive control exists for. Every refusal that depends on a file "
+         "actually matching disappears, and the printed reason is identical"),
+        "gates.py",
+        "            hits = [f for f in delta_files if filter_admits(scope, f)]",
+        "            hits = []",
+    ),
+    (
+        ("BD4 `paths-ignore` loses its negation, so the ignored paths become "
+         "the ONLY ones that block - polarity inverted, which reads as a "
+         "working filter on any delta that happens to miss both sets"),
+        "gates.py",
+        "        return not _every_pattern_matched(scope.paths_ignore, path)",
+        "        return _every_pattern_matched(scope.paths_ignore, path)",
+    ),
+    (
+        ("BD5 an UNREADABLE delta collapses into a measured EMPTY one, so a "
+         "`git diff` that failed reads as 'nothing changed' - the "
+         "unanswered-question-as-a-pass shape this package names most often"),
+        "gates.py",
+        "    if delta_files is None:",
+        "    if not delta_files:",
+    ),
+    (
+        ("BD6 an unresolved scope borrows the no-filter sentence, so a producer "
+         "that could not be TRACED is reported as one that reads everything. "
+         "Same verdict, wrong evidence - and the two have opposite remedies"),
+        "gates.py",
+        "        if scope.unreadable:\n            return False, (",
+        "        if False:\n            return False, (",
+    ),
+    (
+        ("BD7 the composed caller records the second arm UNCONDITIONALLY, so "
+         "every stale base passes gate 1. The decision function is untouched "
+         "and every gates.py test still passes - the caller-side blind spot "
+         "this file was created for"),
+        "merge_gate.py",
+        "        ok = inert",
+        "        ok = True",
+    ),
+    (
+        ("BD8 the second arm is allowed to rescue a PR aimed at a branch that "
+         "is NOT main. An intersection over main's delta says nothing about "
+         "where that PR merges"),
+        "merge_gate.py",
+        '            and pr["baseRefName"] == "main"',
+        "            and True",
+    ),
+    (
+        ("BD9 the policy key is read with a `.get` default equal to the shipped "
+         "value, so DELETING it from the authority is unobservable - measured "
+         "twice already in this package"),
+        "merge_gate.py",
+        '            and policy["merge_gate"]["stale_base_may_pass_on_an_inert_delta"]',
+        ('            and policy["merge_gate"].get('
+         '"stale_base_may_pass_on_an_inert_delta", True)'),
+    ),
+    (
+        ("BD10 the scope is read at ONE sha, so a workflow whose own path "
+         "filter NARROWED inside the base delta is judged by the narrower one "
+         "- and a narrower filter excuses more. Two clocks, the shape "
+         "`_top_level_dirs_agree` exists for"),
+        "merge_gate.py",
+        "        if at_base != at_main:",
+        "        if False:",
+    ),
+    (
+        ("BD11 only the origin/main read is checked for failure, so a workflow "
+         "unreadable at the BASE sha silently resolves to main's filter"),
+        "merge_gate.py",
+        "        if at_base is None or at_main is None:",
+        "        if at_main is None:",
+    ),
+    (
+        ("BD12 an untraceable check-suite falls back to SOME workflow's filter "
+         "rather than refusing, so a context is scoped by a producer that is "
+         "not its own - a wrong filter reads as an empty intersection"),
+        "merge_gate.py",
+        "        path = path_by_suite.get(suite) if suite is not None else None",
+        ("        path = (path_by_suite.get(suite)\n"
+         "                or next(iter(path_by_suite.values()), None))"),
+    ),
+    (
+        ("BD13 the pattern loop SHORT-CIRCUITS again, so an unrepresentable "
+         "pattern sitting AFTER a matching one is never evaluated - under "
+         "`paths-ignore` that skips a `!` re-include and calls the delta inert"),
+        "gates.py",
+        "    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419",
+        "    return any(glob_matches(pattern, path) for pattern in patterns)",
+    ),
+    (
+        ("BD14 `--no-renames` comes off the delta query, so git's default "
+         "rename detection emits ONLY THE DESTINATION path - a file moved OUT "
+         "of a context's scope then reads as inert while the thing that "
+         "context depends on has left main. Round-1 blocker, reproduced "
+         "end-to-end with a plain delete as the control"),
+        "merge_gate.py",
+        ('    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",\n'
+         "                       base_sha, origin_main_sha])"),
+        ('    rc, out, err = sh(["git", "diff", "--name-only",\n'
+         "                       base_sha, origin_main_sha])"),
+    ),
+    (
+        ("BD18 `core.quotePath=false` stops being injected, so git's DEFAULT "
+         "quoting returns a non-ASCII path C-quoted and octal-escaped. No "
+         "literal path comparison recognises it: the base delta reads as "
+         "inert, and `push_event_runs` reads as 'no push event', which "
+         "EXCUSES. Round-5 blocker - round 4 fixed one call site and left the "
+         "excusing sibling blind; round 6 moved this into `git_argv` so the "
+         "two `timeout=` callers are covered too"),
+        "gates.py",
+        ('    if args and args[0] == "git":\n'
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
+        ('    if False:\n'
+         '        return [args[0], "-c", "core.quotePath=false", *args[1:]]\n'
+         "    return args"),
+    ),
+    (
+        ("BD15 an EMPTY `paths: []` stops being refused, so a workflow "
+         "declaring one matches NOTHING and its context excuses every delta - "
+         "the fourth ContextScope state, which sails past the no-filter branch "
+         "because `paths is None` is False"),
+        "gates.py",
+        "        if scope.paths == ():",
+        "        if False:",
+    ),
+    (
+        ("BD15B the OTHER empty spelling stops being refused. It is a separate "
+         "arm because round 2 shipped ONE branch for both and gave them one "
+         "(inverted) sentence; a reviewer's own arm narrowed the shared branch "
+         "to half and was killed, which is what this pins permanently"),
+        "gates.py",
+        "        if scope.paths_ignore == ():",
+        "        if False:",
+    ),
+    (
+        ("BD16 the GO-path message loses its own limit, so the string printed "
+         "BESIDE AN ALLOWED MERGE reads as a claim about what the required "
+         "contexts READ - the retracted claim re-entering the permanent record "
+         "through the squash, which is the one place it does real damage"),
+        "gates.py",
+        ('        + ". NOT a claim that no required context READS those files: the "\n'
+         '          "filters bound what the trunk RE-RUNS, and the superset precondition "\n'
+         '          "is unestablished - see gates.base_delta_is_inert."'),
+        "",
+    ),
+    (
+        ("BD17 the gate-1 LABEL goes back to asserting what the contexts READ. "
+         "It prints on every stale-base run and is the first thing an operator "
+         "sees, and no message-body assertion covers it"),
+        "merge_gate.py",
+        ('    record("1 base == origin/main (or a delta no required workflow\'s push "\n'
+         '           "filter admits)", ok, why)'),
+        ('    record("1 base == origin/main (or a delta no required context reads)",\n'
+         "           ok, why)"),
+    ),
+    (
+        ("PR1 the Item.pr WRITER is removed, so a bound lane records nothing and "
+         "the item is reaped as 'lane never returned' - the #4489 defect exactly, "
+         "and the one that cost 46 strandings and duplicate work on #4495/#4619"),
+        "tick.py",
+        "    item.pr = pr\n",
+        "",
+    ),
+    (
+        ("PR2 the bind stops MOVING THE STATE, so the PR is recorded but the item "
+         "stays schedulable and the next cycle hands it to a second lane. "
+         "Recording without the transition repairs the gate's corroboration and "
+         "leaves the pay-for-it-twice defect exactly as it was"),
+        "tick.py",
+        "        led.transition(number, IN_REVIEW, why=note)",
+        "        pass",
+    ),
+    (
+        ("PR3 the bind stops checking the PR NAMES the item, so Item.pr becomes an "
+         "integer the caller typed - no stronger than the author's own claim, "
+         "which is the weakness #4489 says this binding exists to remove"),
+        "tick.py",
+        "        _pr_references_item(repo, pr, number)",
+        "        pass",
+    ),
+    (
+        ("PR4 the lost-update refusal becomes a plain save, reintroducing the "
+         "unlocked read-modify-write two reviewers blocked on the merge_gate "
+         "attempt: the loser's transitions do not merge, they vanish"),
+        "tick.py",
+        "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
+        "    led.save()\n",
+    ),
 ]
 
 
@@ -2439,6 +3507,35 @@ EXPECTED_SANDBOX_SKIPS = (
     "test_ci_green_declared.py::test_the_infra_ere_fixture_still_matches_the_deriver",
     "test_ci_green_declared.py::test_the_required_context_snapshot_is_current",
     "test_mutate_gates.py::test_the_population_counter_reads_the_summary_not_the_listing",
+    # #4543. Reads `.github/workflows/build-fiab-images-acr-tasks.yml` to pin
+    # the invariant gate 4c's scope sentence rests on (`push:` restricted to
+    # `branches: [main]`, so the lane never attaches to a PR head). The sandbox
+    # copies only `tools/drain`, so that file is absent and the test skips --
+    # DECLARED here rather than left to make the skip audit fail, and it kills
+    # no arm, which is exactly what this tuple exists to say out loud.
+    "test_gates.py::test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds",
+    # #4585. Both read real workflow files to prove gate 1's path-intersection
+    # arm is pointed at something real (and that the five unfiltered required
+    # contexts policy.json discloses are still unfiltered). The sandbox copies
+    # only `tools/drain`, so `_repo_root()` is None and they skip. DECLARED,
+    # and said out loud: neither kills an arm. The arms for
+    # `base_delta_is_inert` are killed by the synthetic-fixture tests beside
+    # them, which need no checkout.
+    "test_gates.py::test_positive_control_the_intersection_query_can_return_non_empty",
+    "test_gates.py::test_positive_control_the_real_required_topology_is_measured_not_assumed",
+    # #4676. Both read real git history -- the two commits of the vitest step
+    # rename -- to keep the transcribed fixture constants honest against the
+    # repo. The sandbox copies only `tools/drain`, so there is no repository to
+    # read and they skip. DECLARED, and said out loud: NEITHER KILLS AN ARM.
+    #
+    # That is not a shrug, it is why
+    # `test_the_producer_asks_git_for_the_sha_and_for_no_other_ref` exists. The first draft of #4676 had the producer
+    # guarded ONLY by these two, so arm AS3 -- the producer reading `HEAD:`'s
+    # blob for every sha -- would have SURVIVED the matrix while the real-git
+    # test sat green in the repo. The argv-intercepting test needs no checkout
+    # and is what actually kills AS3 here.
+    "test_ci_green_as_of.py::test_the_producer_reads_the_declaration_at_the_sha_not_off_disk",
+    "test_ci_green_as_of.py::test_the_rename_fixture_matches_what_policy_json_actually_carried",
 )
 
 
@@ -3143,4 +4240,22 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # NO ARGUMENTS, AND SAYING SO IS CHEAPER THAN THE SURPRISE. An independent
+    # reviewer typed `mutate_gates.py --list`, which is not a flag, and got a
+    # FULL MATRIX -- 361 arms, 66 python processes -- because argv was ignored.
+    # They had to kill it by PID (never by name pattern, which would have hit
+    # other lanes on this box). A matrix takes hours and writes nothing until
+    # the preamble finishes, so an accidental launch reads as a hang.
+    if sys.argv[1:]:
+        print(
+            "mutate_gates.py takes NO arguments and always runs the FULL matrix "
+            "({} arms, one full suite execution each -- hours, not minutes).\n"
+            "You passed: {}\n"
+            "There is no --list and no arm filter. To inspect the arms, import "
+            "the module and read `ARMS`; to run a subset, set `mutate_gates.ARMS` "
+            "to a filtered list before calling `main()`.".format(
+                len(ARMS), " ".join(sys.argv[1:])),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     raise SystemExit(main())

@@ -115,6 +115,112 @@ look. That demotion has a legal escape — close the issue and the decline stand
 A park has none: closing a blocked item's issue is how a backlog lies about
 itself (`deploy-integrity.md` R2).
 
+**A ledger close now REACHES GitHub, which is the precondition that branch
+always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
+all, so an item the harness closed on its own evidence stayed open upstream, the
+next refresh read that as a reopen, and the receipt recorded minutes earlier was
+**voided**. Measured on #4535 — the first item the harness ever closed itself —
+which bounced to `needs-audit` on the very next cycle, so `drained()` was
+unreachable for anything the drain closed rather than inherited.
+
+`record_receipt_from_evidence` closes the issue **before** it writes the ledger,
+and the order is not arbitrary. The two writes fail independently:
+
+| ordering | if the second write fails |
+|---|---|
+| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, holding **no** receipt (nothing was written) — the upstream evidence is untouched, so `--record-receipt` re-measures it and succeeds |
+| ledger, then GitHub | item `closed` here, open there → **#4545 verbatim**: false reopen, receipt destroyed next cycle |
+
+Only `CLOSES_ON_GITHUB` — `closed`, and nothing else — gets a close. A park is
+blocked, not done. `declined` is deliberately out too, although it is *in*
+`REOPEN_DISPUTES`: there is no unattended decline path, and its disposal carries
+a `--reason not-planned` resting on a judgement no program made. The close is
+idempotent (an already-closed issue is read first and left alone — which is how
+#4535's hand-closed workaround is met), is gated on `close-on-receipt` in
+`permitted_unattended`, and is verified **by reading the state back**, not by
+`gh`'s exit code — which establishes that the issue *is* closed, but not by
+whom; see the paragraph below. A close that cannot be observed raises
+`IssueCloseFailedError`, nothing is written, and the item stays non-terminal.
+
+**Reading the state back is not enough on its own, and the note says so.**
+A read-back establishes a property of the *world* — the issue is closed — not an
+effect of *this* invocation. If a human or a second lane closes the issue in the
+window between the pre-read and the close, `gh` exits 0 having posted **nothing**
+(cli/cli v2.100.0 `close.go` re-fetches at `:112` and returns at `:117-120`,
+above the comment block at `:148`), and the read-back sees CLOSED because
+somebody else made it so. So the returned note is keyed on `gh`'s own stderr
+sentence for which of the two things it did — three outcomes, and the third is
+`unknown`:
+
+| what `gh` said | what the note reports |
+|---|---|
+| `Closed issue …` (`close.go:169`) | `#N closed on GitHub` — unqualified; the receipt comment was posted |
+| `… is already closed` (`close.go:118`) | this run did **not** close it, and **no** receipt comment was posted (#4579) |
+| neither sentence | the issue **is** closed, and this run cannot tell which of the two happened, so the comment **may not** have been posted |
+
+The third exists so that a future `gh` rewording fails **honest** rather than
+open: keying only on the already-closed sentence would let a changed string fall
+through to "I closed it", which is the false claim this whole section exists to
+prevent.
+
+**Each failure says which half of the pair moved.** Three outcomes, three
+messages, because the operator's next action differs:
+
+| what failed | what it prints | the world |
+|---|---|---|
+| anything before the close | `RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER` | both records untouched |
+| the close itself | `GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says. It claims neither direction: a read-back that 502s means the close **landed** and cannot be observed, and `gh issue close` also posts the comment, so even a non-zero exit does not establish that nothing happened |
+| the ledger write, after the close | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`, with the exception TYPE | issue settled upstream, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
+
+The third is not hypothetical: a lost CAS against another lane is the realistic
+failure, because the drain runs four. It used to print `RECEIPT NOT RECORDED` —
+the wording for "nothing happened" — and a ledger refusal after the same close
+used to print `RECEIPT REFUSED`, the wording for "your evidence was rejected".
+Both were false in the half that matters, which is the R7 defect inside the R7
+fix. Everything after the close is now wrapped in `LedgerWriteAfterCloseError`,
+which is also what makes "nothing was written" true in the first row: a bare
+refusal can only escape from *before* the close. That claim covers the call and
+**not** `main()`'s save step, which is why the save arm is bound to `Exception`
+and not to `LedgerChangedError`: with the narrow bound, `os.replace` raising
+`PermissionError` escaped `main()` uncaught while the issue was closed
+upstream — the silent failure this whole split exists to prevent, one layer
+down. **Correction (round 7):** this paragraph, and five other sites, used to
+say the escape left an **empty stderr**. It does not. `tick.py` ends in
+`raise SystemExit(main())`, so the exception reaches the interpreter and prints
+a traceback; the emptiness was an artifact of measuring through pytest's
+`capsys`. Measured as a real process against a sandbox copy carrying arm GH12:
+exit 1 and **~650 bytes of traceback** naming `os.replace`, against **~520 bytes**
+of the intended message unmutated. Those totals are **environment-dependent** —
+they move with sandbox path length and run id, and an independent reviewer
+re-measuring on a different sandbox got 647 / 579 — so read them as orders of
+magnitude, not constants. What is invariant is **exit 1 either way**, which is
+the whole point: what the width actually buys is the
+difference between those two texts — under the narrow bound the operator gets a
+file-rename traceback that never mentions the upstream close, at the *same* exit
+code, so neither the status nor the message says the two records disagree. The
+width is safe to claim because the save is a temp file plus an `os.replace`:
+either the replace happened and nothing after it can raise, or the file is
+untouched.
+
+The third row says "settled", not "the GitHub write LANDED", because the closer
+may have found the issue **already closed** and left it alone. The note it
+quotes says which.
+
+**On that already-closed route nothing is published at all**, and the note says
+so rather than leaving the operator to infer it. That route issues `gh issue
+view` and no other command, so no receipt comment is posted — and
+`tools/drain/state.json` is untracked, which leaves the receipt existing solely
+in a local gitignored file. It is not a corner: all 7 items the live ledger
+currently holds as `closed` are in exactly that state, and it is the route
+`close_issue_on_github` was written for (#4535 was hand-closed). The
+short-circuit conflates *the harness already commented here*, where skipping is
+right, with *a human closed it silently*, where no comment exists and none ever
+will. Posting the receipt there too — read the comments, `gh issue comment` when
+none begins `Drain harness: receipt verified` — is tracked as #4579 and is
+deliberately not done here: it adds two `gh` calls, hence two new failure
+routes, to the one route the whole current population takes, and that route's
+seven-shape failure behaviour was independently measured clean.
+
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
 before any work is done — and `drained: true` is this program's documented exit
@@ -132,6 +238,21 @@ condition. `--status` now refuses outright when no ledger file exists, because
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
+
+**A run-backed receipt is bound to the issue by NOTHING, and the comment it
+posts says so.** `verify_run_backed_receipt` matches the producer workflow,
+`status`, `conclusion` and every declared step — and compares the run to the
+item on no axis at all. `_run_evidence` does not request `createdAt`, and
+`headSha` is read only to be interpolated into the ref. Measured: run
+`33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
+every check today, and **147 of the 351 issues open on 2026-09-18 were filed
+after it**. So the receipt establishes *the declared producer ran green*, not
+*the estate was observed carrying this change* — the comment no longer cites
+deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
+rather than a merge, and it discloses the time and sha gap in terms. Binding it
+is #4578 (fetch the run's date, compare it to the item's, refuse a run that
+predates it); the sha half is bound by neither, and #4489 did not deliver it
+-- that writer records WHICH PR, not which sha.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -181,6 +302,112 @@ is measured at the PR head (where it ran) through `check_suite_id`, and the
 rename case is resolved by **workflow identity** at the merged sha. An alias
 table would be one conditional `name:` expression away from being wrong,
 silently.
+
+**Nor is it keyed to a STEP's spelling at HEAD (#4676).** `policy.json`
+describes the workflow *as it is at HEAD*, so judging a merged PR's job against
+it asks a run from last week whether it executed a step created yesterday. It
+did not, and the refusal read *"the declaration is stale"* — pointing the reader
+at the one edit that would make the declaration wrong for every merge **after**
+the rename. Measured: PR #4593 merged 2026-09-20T01:24:35Z; `8d3dd9cbb` (#4657)
+renamed `vitest (node 20)`'s substantive step on 2026-09-21; the receipt for
+#4593 became unobtainable, in the receipt class that closes most of the ledger.
+
+The fix is the same shape as the one above, and for the same reason it is **not**
+an alias table: the declaration is **versioned in the same repo as the workflow
+it describes**, so the repo already records what it said on the day any given run
+happened. `merge_gate.resolve_declaration_as_of` reads
+`git show <merged-sha>:tools/drain/policy.json` and injects
+`receipts.ci_green_rule` as a `gates.DeclarationAsOf`, exactly as `push_trigger`
+and `infra_ere` are injected — `gates.py` runs no subprocess. **The code is
+HEAD's; the declaration is the sha's.** Every predicate stays today's, because
+every hole reviewers found in rounds 5–16 is fixed at HEAD and must apply to
+every measurement; only the *description of the workflow* moves with the sha.
+
+**A rename is not atomic, so there are two clocks.** The workflow and the
+declaration describing it are two files, and #4657 moved them 3h13m apart —
+`8d3dd9cbb` (`fiab-console-ci.yml`, 2026-09-21 21:25) and `356290aa9`
+(`policy.json`, 2026-09-22 00:38) — with **three merges in between** (#4652,
+#4654, #4658). Resolving strictly as-of refuses all three: the declaration at
+their sha names a step their job does not carry. So the sha's declaration is
+tried first and, **only when the step it names is ABSENT ENTIRELY**, HEAD's is
+tried; the receipt prints which one decided. Absence is the rename signature. A
+declared step that is PRESENT and **skipped** is a hollow check, never falls
+through, and still fails — otherwise a rename would launder exactly the defect
+this predicate exists for.
+
+**Five** refusal states, kept distinct because their remedies are opposite:
+
+| what happened | what the receipt says | remedy |
+|---|---|---|
+| neither clock's declaration describes the job | *"…and so is every other declaration this repo carries for it"* | re-read the declaration off a green run |
+| the sha's clock is ABSENT but HEAD's names a step the job carries **skipped** | *"HEAD's declaration names a DIFFERENT step, which this job DOES carry, and it does not account for the context either: its declared substantive step(s) […] were SKIPPED…"* | fix the check, not the declaration |
+| the declaration at the sha could not be READ | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| the declaration at the sha PREDATES the key | *"…carries no `receipts.ci_green_rule` AT ALL — the key did not exist yet … There is nothing to fetch"* | nothing to fetch; HEAD's is the only declaration there has ever been |
+| no as-of resolution was attempted at all | today's sentence, unchanged | none; this is a direct unit call |
+
+The second row is the one this file got wrong twice. First the code discarded
+the second clock's *kind*, so a step that was PRESENT and SKIPPED at HEAD was
+reported as absent — stating as fact something it had not established
+(`deploy-integrity.md` R7), in the branch written to end exactly that. Then the
+fix for it wrapped a finished sentence as if it were a list and printed the
+trailing clause twice, while the test's three substring assertions were all
+satisfied by the garbled string. The test now pins the **whole sentence** and
+that each clause occurs exactly once. The fourth row is the same class:
+`substantive_steps` arrives in `6e29f1012` (2026-09-15, #4491), so every merge
+older than that resolves to "no rule", and telling the reader to `git fetch` a
+sha they already have is a wrong remedy for what is, on a backlog of
+pre-2026-09-15 merges, the common case.
+
+**A pass says which clock decided it, and whether that clock was ever READ.**
+Five ways it can differ from "HEAD's current declaration, verified against the
+sha": a rename (*"which HEAD has since changed to …"*), the lag window
+(*"reached because the declaration as of … named …, which this job does not
+carry"*), a row **newer than the sha** (*"policy.json at the measured sha
+carried NO ROW for this context"*, reachable for the two rows added in
+`0c2c4c974` on 2026-09-18), an **unreadable** sha (*"NOT VERIFIED against the
+measured sha … could NOT be read"*), and one that **predates the key** (*"NOT
+VERIFIED … policy.json carried no `receipts.ci_green_rule` there"*). None is
+folded into the others; a silent substitution is the thing this whole mechanism
+is against.
+
+The last two of those five were **silent until a reviewer probed them**: one
+fixture through four resolution states returned one byte-identical sentence.
+Both matter for what can CLOSE. `actions/checkout` is depth 1 by default, so on
+a shallow clone every sha is unreadable, the feature degrades to pre-PR
+behaviour, and every pass still read as verified; and every merge older than
+2026-09-15 predates the key, which is the **common** case for this backlog. The
+refusal side said "could NOT be read"; the acceptance side — the side that
+closes things — said nothing. It does now.
+
+**Routes 2 and 3 are deliberately single-clocked.** Route 1's fallthrough is
+safe only because it is reachable on `missing` alone — a name absent from the
+job entirely. `scope_untouched_at_merge` and `alternative_accounted_for` refuse
+for reasons about the merged *file list* and the detector, where "try the other
+declaration" would let a scope refusal under one clock be overridden by an
+acceptance under the other — the #3783 laundering shape. The cost is that a
+lag-window job whose primary is skipped under HEAD's spelling and whose declared
+alternative ran is refused; that is fail-closed, it is unrealised on all three
+real lag-window merges, and `test_routes_2_and_3_are_deliberately_single_clocked`
+pins it so changing it has to be deliberate.
+
+**What this does NOT establish: a rename is indistinguishable from a
+CORRECTION.** If a declaration row was ever *wrong* at sha S — naming a step
+that was not the check — and has since been corrected at HEAD, a merge at S is
+now judged by the wrong declaration, and the correction stops applying
+retroactively. Measured across all six versions of `substantive_steps` since it
+was introduced: **two row additions (`0c2c4c974`) and one rename (`356290aa9`),
+zero corrections.** The risk is real and currently unrealised. It matters
+because the two are textually identical — a row whose value changed — so no
+amount of reading the diff can tell them apart; only the intent behind the
+commit can, and the receipt cannot read intent.
+
+**Also not established: the PREDATES path has no live receipt.** It is covered
+by a unit test and by mutation arm AS6, and it is the path whose acceptance
+side was silent until it was fixed — but no `--ci-green-receipt` has been taken
+against a merge older than 2026-09-15. Nor has anyone enumerated whether any
+open backlog item would close on a receipt passing ONLY through an unverified
+clock; that needs `--ci-green-receipt` over every ci-green-eligible item's
+merge, it has not been run, and the population is **not** asserted to be empty.
 
 **A green conclusion is not evidence the check did its WORK**, and fixing that
 nearly made the receipt unobtainable for the only class it closes. `policy.json`
@@ -321,9 +548,12 @@ concludes green having captured nothing.
 
 **What it does not establish.** That the evidence is *about* the item. Nothing
 stops a green roll being recorded against a second deploy-path item it never
-touched; the operator supplies that pairing, and the harness cannot check it
-until `Item.pr` has a writer (#4489). A refused receipt writes nothing — the
-ledger is byte-identical afterwards, verified by digest.
+touched; the operator supplies that pairing. `Item.pr` now records which PR a
+lane opened for an item (`tick.py --bind-pr`, #4489), but the `--from-run`
+path does not consult it, so that pairing is still unchecked. A refused receipt writes nothing — the
+ledger is byte-identical afterwards, verified by digest, **and no GitHub write
+happens either**, because the close runs only after every refusal has been
+passed.
 
 `receipt_class` still has no production writer, so the `human-only` class is
 reachable only by hand — and `operator` is deliberately **absent** from

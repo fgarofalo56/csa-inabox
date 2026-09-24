@@ -359,9 +359,14 @@ const pools: Map<string, sql.ConnectionPool> = new Map();
 // routinely lands on a replica that never started the query. This module used to
 // tell the reader to set `ingress.stickySessions.affinity: 'sticky'` or run a
 // single replica. Both are wrong for this estate and one is forbidden:
-// `loom-console` is declared `multiRevision: true` with `minReplicas: 2`
-// (admin-plane/main.bicep), ACA REQUIRES `affinity:'none'` in multiple-revision
-// mode, and app-deployments.bicep asserts that value on every deploy — so a
+// `loom-console` ran `multiRevision: true` with `minReplicas: 2` until
+// 2026-09-20 and runs Single mode with `minReplicas: 2` now
+// (admin-plane/main.bicep). THE REPLICA COUNT IS WHAT MAKES PER-REPLICA STATE
+// WRONG, and it did not change. What changed is WHY affinity is forbidden:
+// ACA REQUIRES `affinity:'none'` in multiple-revision mode, so that
+// requirement — not intent — used to be what kept sticky out. Single mode
+// lifts it, so app-deployments.bicep now asserts `affinity:'none'` for EVERY
+// ingress app rather than only multiRevision ones — so a
 // reader who followed the old advice would have it reverted by the next deploy,
 // after breaking the roll. `lib/auth/msal.ts` documents the same intent from the
 // other side: the console is deliberately scaled out with affinity OFF because

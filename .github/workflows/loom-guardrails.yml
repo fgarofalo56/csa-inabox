@@ -916,6 +916,31 @@ jobs:
       - name: 'codeql-action-pins (init/autobuild/analyze must run one release)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-codeql-action-pins.mjs
+      # Dependabot has two independent mechanisms and they are easy to conflate:
+      # security ALERTS come from the dependency graph and fire with no
+      # dependabot.yml entry at all, while version-update PRs fire ONLY for a
+      # listed ecosystem/directory. apps/loom-directlake had the first and not
+      # the second, so its thrift advisory (#3982, alert #94) could be
+      # reported but never remedied — and the remedy is an upstream delta-rs
+      # release, which is exactly what an update lane exists to notice.
+      # That release arrived (deltalake-core 1.0.0, 2026-09-21) and the advisory
+      # was cleared by PR #4681 on 2026-09-23 — the mechanism described above
+      # is the one that paid out, so this guard stays.
+      - name: 'cargo-dependabot-coverage (every Rust crate has a version-update lane)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-cargo-dependabot-coverage.mjs
+      # A catch-all dependabot group placed ABOVE a named one silently swallows
+      # it: GitHub raises no error, the file stays valid, and the named group
+      # stops existing in practice. `codeql-action` (three actions that must run
+      # the same release), `arrow-stack` and `azure-sdk` each carry a stated
+      # correctness reason, and nothing else in this repo reads dependabot.yml —
+      # so without this check the loss is invisible. Runs its own self-test
+      # first, because a guard that has never gone red has not been shown to work.
+      - name: 'dependabot-group-order (no catch-all shadows a named group)'
+        if: ${{ !cancelled() }}
+        run: |
+          python scripts/ci/check_dependabot_group_order.py --self-test
+          python scripts/ci/check_dependabot_group_order.py
       # A module that reaches INTO the lake account (role assignment, or an
       # `existing` reference inside loomDlzRg) must gate on loomStorageGrantable,
       # not on !empty(loomStorageAccount). #3196 split binding from granting but

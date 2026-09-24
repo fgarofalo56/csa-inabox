@@ -40,10 +40,19 @@ REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 POLICY_PATH = os.path.join(HERE, "policy.json")
 
 
+#: Re-exported so call sites and the AST guard resolve it by bare name.
+#: Defined in `gates` because `tick` shares it.
+git_argv = gates.git_argv
+
+#: Decoding kwargs for every subprocess this module runs. A locale decode
+#: turns raw UTF-8 output into mojibake that matches nothing.
+TEXT_UTF8 = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def sh(args: list[str]) -> tuple[int, str, str]:
     """Run in the repo root, never discarding stderr (deploy-integrity R7)."""
     run = subprocess.run(
-        args, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=REPO_ROOT
+        git_argv(args), capture_output=True, cwd=REPO_ROOT, **TEXT_UTF8,
     )
     return run.returncode, run.stdout, run.stderr
 
@@ -139,8 +148,8 @@ def ledger_candidates(state_path: str | None = None,
     found = [os.path.join(HERE, "state.json")]
     try:
         common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, cwd=REPO_ROOT, timeout=20, check=False,
+            git_argv(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]),
+            capture_output=True, cwd=REPO_ROOT, timeout=20, check=False, **TEXT_UTF8,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"WARNING: cannot ask git for the primary checkout ({exc}) - "
@@ -235,14 +244,26 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
     record disagrees with the declaration -- which is the one thing on a PR that
     was not typed by its author.
 
-    **INERT TODAY, AND SAID SO RATHER THAN IMPLIED.** `Item.pr` has no writer:
-    0 of 299 live items carry one, so this returns `[]` for every real input.
-    It is kept, not deleted, because the check is right and the missing half is
-    a writer in `tick.py` -- which owns the ledger and is its single writer by
-    design. The previous round wrote the binding from HERE instead, and both
-    reviewers reproduced a lost update on the drain's only durable record. A
-    merge gate does not get to mutate the thing it measures. Tracked in #4489;
-    until then this is a declared-inert control, not a working one.
+    `tick.py --bind-pr ITEM --pr N` writes `Item.pr` (#4489), so this reaches
+    its real branch whenever a lane has reported its PR. It is still SILENT on items with no binding, and that is deliberate
+    rather than a gap: an unbound item is one no lane reported, which is not
+    evidence of a conflict.
+
+    The writer lives in `tick.py`, not here, and the reason is worth keeping.
+    A previous round wrote the binding from THIS file, and both reviewers
+    reproduced a lost update on the drain's only durable record -- `Ledger.save()`
+    serialises the whole document from memory, so the loser's transitions do not
+    merge, they vanish. A merge gate does not get to mutate the thing it
+    measures. `tick.py` is the single writer by design and saves through a CAS
+    that REFUSES a concurrent write rather than overwriting it.
+
+    Coverage, stated precisely because the first version of this paragraph was
+    vaguer than the code: `test_poached_closes_refuses_a_bound_item` drives the
+    REAL writer and runs this function through `run_gates` to gate 6, so the
+    consumer IS pinned end to end. What is NOT pinned is the separate
+    `--allow-close` pre-check in `main()`, which calls this function directly
+    and has no test driving it. The refusals and the binding itself are pinned
+    by `__tests__/test_bind_pr.py` and by mutation arms PR1-PR4 (all KILLED).
     """
     if not closing or pr is None:
         return []
@@ -274,8 +295,8 @@ def poached_closes(closing: list[int], policy: dict, state_path: str | None = No
 # Locking a merge gate was the wrong answer to the wrong question. `tick.py`
 # owns the ledger and is the single writer by design; the binding belongs there,
 # written when a lane opens a PR for an item, not inferred by the gate from what
-# the PR says about itself. `poached_closes` stays as a READ and is DECLARED
-# INERT until that writer exists -- see its docstring. Tracked in #4489.
+# the PR says about itself. That writer is `tick.py --bind-pr` (#4489);
+# `poached_closes` stays a READ and reads what it writes -- see its docstring.
 
 
 def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
@@ -329,14 +350,19 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     Without one of those, a declared close is treated like a mention: it may
     escalate, it may not explain.
 
-    `Item.pr` HAS NO WRITER, so the mid-flight test carries all of the weight
-    today and the binding arm is unreachable. A previous round wrote the binding
+    `Item.pr` is written by `tick.py --bind-pr` (#4489), so the binding arm is
+    reachable and the mid-flight test does not carry all of the weight. Read the next paragraph before relying on that, because the two arms
+    are not equivalent: a binding BYPASSES the state test, so a TERMINAL item
+    bound to this PR still corroborates. That is deliberate (a binding the
+    harness wrote outranks a state it inferred) but it is not what "in flight"
+    implies, and this docstring previously told an auditor the arm could not
+    fire at all.
+
+    The writer lives in `tick.py`, not here. A previous round wrote the binding
     from `main()` and this docstring said so; that write is DELETED, because
     from a worktree it rewrote the primary checkout's ledger unlocked and both
-    reviewers reproduced a lost update. Nothing accrues. The writer belongs in
-    `tick.py`, which owns the ledger -- #4489. Said here because a reader
-    auditing whether this corroboration is safe was previously told it rests on
-    an accrual that does not exist.
+    reviewers reproduced a lost update. `tick.py` owns the ledger and saves
+    through a CAS that refuses a concurrent write.
 
     When several items resolve, the STRONGEST wins -- the same conjunction
     `reduce_verdicts` uses. That is the `hit` branch's job: a PR touching a
@@ -393,9 +419,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
     # WORD IT FROM THE ARM THAT MATCHED. "is work the harness has in flight" is
     # false of an item corroborated by its BINDING, which bypasses the state
     # test -- a `closed` item bound to this PR corroborates, and the docstring
-    # above says a terminal item is finished. Unreachable while `Item.pr` has no
-    # writer; it arms the moment #4489 lands one, which is when a latent wrong
-    # sentence becomes a live one.
+    # above says a terminal item is finished. `tick.py --bind-pr` writes
+    # `Item.pr` (#4489), so this arm fires, and nothing clears the
+    # binding when the item goes terminal (`transition()` clears only
+    # `audit_reason`). A bound-then-parked item therefore corroborates a
+    # declared close. Deliberate, and stated here rather than left for an
+    # auditor to discover, because the previous wording said it could not
+    # happen.
     bound_here = [n for n in corroborated if led.items[n].pr == pr]
     if corroborated:
         # The STRONGEST, not the lowest-numbered. `corroborated[0]` reported
@@ -415,10 +445,11 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
 
     stale = [n for n in closing if n in led.items]
     if stale:
-        # The binding clause ONLY when there is a binding. `Item.pr` has no
-        # writer, so "bound to PR None" was what this said about all 299 items
-        # -- a fact asserted about a system that has no bindings, the same shape
-        # as the "was taken under None" message repaired in `ledger.py`.
+        # The binding clause ONLY when there is a binding. Before #4489 landed a
+        # writer, "bound to PR None" was what this said about all 299 items -- a
+        # fact asserted about a system that had no bindings, the same shape as
+        # the "was taken under None" message repaired in `ledger.py`. Bindings
+        # exist now, but most items still carry none, so the guard stays.
         item = led.items[stale[0]]
         return None, (
             f"#{stale} is declared closed but the ledger has it in "
@@ -451,9 +482,13 @@ def ledger_stream(closing: list[int], mentioned: list[int], policy: dict,
 def required_contexts(repo: str) -> list[str]:
     """The contexts branch protection will actually BLOCK on.
 
-    Measured: only 15 of ~35 published contexts are required. Treating all of
+    Measured 2026-09-20: 17 of ~38 published contexts are required. Both
+    numbers DRIFT -- the required set is whatever branch protection says at
+    read time (it was 15 when this docstring was written), and the published
+    total varies per PR with which advisory lanes trigger. Treating all of
     them as blocking stalls on checks that cannot block; treating none as
-    blocking merges over a red required one.
+    blocking merges over a red required one. Read the live set rather than
+    this sentence, which is context for the design, not a constant.
     """
     rc, out, err = sh(
         ["gh", "api", f"repos/{repo}/branches/main/protection",
@@ -514,6 +549,199 @@ def refresh_required_contexts(repo: str) -> int:
     return 0
 
 
+def base_delta_files(base_sha: str, origin_main_sha: str) -> list[str] | None:
+    """The files `origin/main` gained since the fork point. None = unreadable.
+
+    TWO-ARG `git diff`, i.e. the two-dot form: `base_sha` is already the
+    MERGE-BASE of origin/main and the head, so this is exactly what main gained
+    since the fork point. The three-dot form would be the same set here and
+    silently different if `base_sha` ever stopped being a merge-base, so the
+    explicit two-arg form says which one is meant.
+
+    `--no-renames` IS LOAD-BEARING AND WAS MISSING FOR A ROUND. Rename
+    detection is ON by default (`diff.renames`), and a detected rename emits
+    ONLY THE DESTINATION path. So a file moving OUT of a context's scope --
+    `git mv tools/drain/helper.py docs/helper.txt` -- produced a delta of
+    `docs/helper.txt` alone, which no required workflow's push filter admits,
+    and the gate
+    answered INERT while the file that context depends on had left main.
+    Reproduced end to end by a reviewer, with a plain delete as the control
+    (which correctly refused), so the finding was a blind spot in the flag and
+    not in the query. With `--no-renames` the same commits emit BOTH paths and
+    the source path refuses.
+
+    NEVER discards stderr (R7): an unreadable diff returns None, which
+    `gates.base_delta_is_inert` refuses, and says why on stderr.
+    """
+    rc, out, err = sh(["git", "diff", "--name-only", "--no-renames",
+                       base_sha, origin_main_sha])
+    if rc != 0:
+        print(f"WARNING: cannot read the base..origin/main delta (rc={rc}): "
+              f"{err[:200]} - gate 1 will refuse rather than assume", file=sys.stderr)
+        return None
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def base_update_facts(head: str) -> tuple[list[str], str | None, str]:
+    """Resolve, from LOCAL git, the three facts the re-pin decision needs.
+
+    Returns `(parents, automerge_tree, head_tree)` for
+    `gates.verdict_transfers_across_base_update`, which is pure and cannot run
+    a subprocess itself. Every failure resolves to a value that function
+    REFUSES -- `[]`, `None`, `""` -- so an unreadable repository can only ever
+    lose a transfer, never fabricate one.
+
+    THE OBJECT MUST BE PRESENT LOCALLY. A PR head that was never fetched is not
+    an error to route around: `git rev-parse` fails, `head_tree` comes back
+    empty, and the decision refuses. The caller fetches `pull/N/head` first --
+    measured on #4648, whose head was absent and turned gate 1 into "cannot
+    resolve base or origin/main sha", a blindness that READS exactly like a
+    stale base.
+
+    NEVER discards stderr (R7): a failure says why, and says it as a failure
+    rather than as an empty result.
+    """
+    rc, out, err = sh(["git", "rev-list", "--parents", "-n", "1", head])
+    if rc != 0 or not out.strip():
+        print(f"WARNING: cannot read parents of {head[:12]} (rc={rc}): "
+              f"{err[:200]} - the re-pin will refuse", file=sys.stderr)
+        return [], None, ""
+    # `rev-list --parents -n1` prints "<commit> <parent>..." on one line.
+    parts = out.split()
+    parents = parts[1:]
+
+    rc, out, err = sh(["git", "rev-parse", f"{head}^{{tree}}"])
+    head_tree = out.strip() if rc == 0 else ""
+    if not head_tree:
+        print(f"WARNING: cannot resolve the tree of {head[:12]}: {err[:200]}",
+              file=sys.stderr)
+
+    automerge_tree: str | None = None
+    if len(parents) == 2:
+        # `merge-tree --write-tree` exits NON-ZERO on conflict and writes no
+        # usable tree. That is not an error to report -- it is the answer
+        # "this was not a clean auto-merge", which the decision refuses with a
+        # message distinct from "the trees differ".
+        rc, out, err = sh(["git", "merge-tree", "--write-tree",
+                           parents[0], parents[1]])
+        if rc == 0 and out.strip():
+            automerge_tree = out.strip().splitlines()[0].strip()
+    return parents, automerge_tree, head_tree
+
+
+def derive_context_scopes(
+    repo: str, head: str, base_sha: str, origin_main_sha: str, required: list[str]
+) -> list[gates.ContextScope]:
+    """#4585. The path filter each REQUIRED context's producer declares, DERIVED.
+
+    NOTHING HERE MAPS A CONTEXT TO A PRODUCER BY SPELLING -- the same rule
+    `collect_ci_green_evidence` states and for the same reason. The producer is
+    traced at the PR HEAD through `check_suite_id`, which is 1:1 with an Actions
+    workflow run, and the run carries the workflow's `path`. A name table would
+    be one conditional `name:` expression away from being wrong, silently, and
+    an alias table that resolved a context to the WRONG workflow would hand
+    `base_delta_is_inert` a filter belonging to something else -- which reads as
+    an empty intersection, which lets a merge through.
+
+    THE FILTER IS READ AT BOTH SHAS AND A DISAGREEMENT REFUSES. The scope is
+    read out of the workflow file, and the workflow file is one of the things
+    the base delta can have changed. Reading it only at `origin_main_sha` would
+    evaluate the PR's evidence against a filter that did not exist when the
+    evidence was produced; reading it only at `base_sha` would ignore a filter
+    that has since NARROWED. Either way the narrower of the two excuses more, so
+    rather than picking one, a difference is an unanswered question. This is the
+    same shape as `_top_level_dirs_agree`, which exists because a deriver read
+    from one clock while the thing it corroborated came from another.
+
+    Every failure path produces a `ContextScope` carrying `unreadable`, never an
+    empty pattern tuple: an empty tuple matches nothing, and "matches nothing"
+    is the answer that lets the merge through.
+    """
+    head_checks, _total = _flat_check_runs(repo, head)
+    # LAST-WINS ON A DUPLICATE NAME, DISCLOSED RATHER THAN CLAIMED CLEAN.
+    # A check-run name is not unique by construction: a re-run, or two
+    # workflows publishing the same display name, would give one context two
+    # check-suites and this dict would silently keep whichever came last --
+    # binding the context to another workflow's filter, which reads as an
+    # empty intersection. Measured at the head this was written against: ZERO
+    # duplicate names. It is also the pre-existing shape used by
+    # `collect_ci_green_evidence` (`suite_of_head_check`), so it is inherited
+    # here rather than introduced, and fixing it belongs in both places at
+    # once. Named so a reader does not mistake "no duplicates today" for
+    # "cannot have duplicates".
+    suite_of_check = {
+        (c.get("name") or ""): (c.get("check_suite") or {}).get("id") for c in head_checks
+    }
+    path_by_suite = {
+        r.get("check_suite_id"): r.get("path") for r in _workflow_runs(repo, head)
+    }
+
+    triggers: dict[tuple[str, str], gates.PushTrigger | None] = {}
+
+    def trigger_at(sha: str, path: str) -> gates.PushTrigger | None:
+        key = (sha, path)
+        if key not in triggers:
+            rc, out, err = sh(["git", "show", f"{sha}:{path}"])
+            if rc != 0:
+                print(f"WARNING: cannot read {path} at {sha[:12]} (rc={rc}): "
+                      f"{err[:200]}", file=sys.stderr)
+                triggers[key] = None
+            else:
+                triggers[key] = gates.parse_push_trigger(out)
+        return triggers[key]
+
+    scopes: list[gates.ContextScope] = []
+    for name in required:
+        suite = suite_of_check.get(name)
+        path = path_by_suite.get(suite) if suite is not None else None
+        if not path:
+            scopes.append(gates.ContextScope(
+                name=name,
+                unreadable=(
+                    "no workflow run at the PR head owns the check-suite that "
+                    f"published it (check_suite_id={suite!r}), so its producer "
+                    "cannot be traced and the paths it reads are unknown"
+                ),
+            ))
+            continue
+        at_base = trigger_at(base_sha, path)
+        at_main = trigger_at(origin_main_sha, path)
+        if at_base is None or at_main is None:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path} could not be read or parsed at "
+                    f"{base_sha[:12] if at_base is None else origin_main_sha[:12]}"
+                ),
+            ))
+            continue
+        if at_base != at_main:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path}'s own push trigger CHANGED inside the base delta "
+                    f"({at_base} at {base_sha[:12]} vs {at_main} at "
+                    f"{origin_main_sha[:12]}) - the scope moved under the "
+                    "evidence, so which filter governs is unanswered"
+                ),
+            ))
+            continue
+        if not at_main.present:
+            scopes.append(gates.ContextScope(
+                name=name, workflow_path=path,
+                unreadable=(
+                    f"{path} has no `on.push` trigger at all, so nothing "
+                    "declares which commits landing on main must re-run it"
+                ),
+            ))
+            continue
+        scopes.append(gates.ContextScope(
+            name=name, workflow_path=path,
+            paths=at_main.paths, paths_ignore=at_main.paths_ignore,
+        ))
+    return scopes
+
+
 def collect(repo: str, number: int) -> dict:
     """Everything the gates need, read once."""
     pr = gh_json(
@@ -531,6 +759,39 @@ def collect(repo: str, number: int) -> dict:
     head_date = out.strip() if rc == 0 else ""
     if not head_date:
         print(f"WARNING: could not resolve head commit date: {err[:200]}", file=sys.stderr)
+
+    # --- RE-PIN ACROSS A BASE UPDATE -------------------------------------
+    # Verdict liveness is a TIMESTAMP proxy, so `update-branch` retires every
+    # verdict beneath it even though it authors nothing. Where the head is
+    # provably the auto-merge of its two parents, the bytes the reviewer
+    # measured are still the bytes on offer, so verdicts are pinned to the
+    # PR-SIDE PARENT's date instead of the merge's.
+    #
+    # parents[0] is the PR-side head: `update-branch` merges main INTO the PR
+    # branch, so the branch tip is the first parent. That is an assumption
+    # about GitHub's merge direction, and it is CHECKED rather than trusted --
+    # `verdict_transfers_across_base_update` requires the approved head to be
+    # among the parents, and the date below is read from whichever parent is
+    # named, so a reversed merge yields a refusal and not a wrong pin.
+    repin_ok, repin_why, repin_date = False, "head is not a base update", ""
+    parents, automerge_tree, head_tree = base_update_facts(head)
+    if len(parents) == 2:
+        repin_ok, repin_why = gates.verdict_transfers_across_base_update(
+            parents, parents[0], automerge_tree, head_tree
+        )
+        if repin_ok:
+            rc2, out2, err2 = sh(
+                ["gh", "api", f"repos/{repo}/commits/{parents[0]}",
+                 "--jq", ".commit.committer.date"]
+            )
+            repin_date = out2.strip() if rc2 == 0 else ""
+            if not repin_date:
+                # Refuse rather than fall back to the head date silently: an
+                # unresolvable parent date is an unmeasurable re-pin, and the
+                # strict behaviour is the safe one.
+                repin_ok = False
+                repin_why = (f"head is a pure base update, but the parent's date "
+                             f"could not be resolved ({err2[:120]}) - refusing")
 
     comments = [
         {"id": c.get("id", 0), "body": c.get("body") or "",
@@ -585,17 +846,45 @@ def collect(repo: str, number: int) -> dict:
         f"check-runs on {head[:12]}",
     )
 
+    required = required_contexts(repo)
+
+    # #4585. Only measured when the base is actually stale -- when it is not,
+    # gate 1 passes on `base_is_current` and this costs two paginated API reads
+    # and 2N `git show`s for nothing. `base_delta` stays None (the unreadable
+    # answer) and `context_scopes` stays empty, and BOTH of those refuse in
+    # `gates.base_delta_is_inert`, so skipping the work can only ever make the
+    # gate stricter. That direction is deliberate: a collector that fails open
+    # when it declines to measure is the defect, not the optimisation.
+    base_delta: list[str] | None = None
+    context_scopes: list[gates.ContextScope] = []
+    if base_sha and origin_main_sha and base_sha != origin_main_sha:
+        rc, _, err = sh(["git", "fetch", "--quiet", "origin", origin_main_sha])
+        if rc != 0:
+            print(f"WARNING: git fetch {origin_main_sha[:12]} failed: {err[:200]}",
+                  file=sys.stderr)
+        # TWO-ARG `git diff` and `--no-renames`; see `base_delta_files`, which
+        # is a separate function precisely so a real git repo can be built in a
+        # test and the rename case witnessed without the network.
+        base_delta = base_delta_files(base_sha, origin_main_sha)
+        if base_delta is not None:
+            context_scopes = derive_context_scopes(
+                repo, head, base_sha, origin_main_sha, required
+            )
+
     return {
         "pr": pr,
         "head": head,
         "head_date": head_date,
+        "repin": {"ok": repin_ok, "why": repin_why, "date": repin_date},
         "comments": comments,
         "base_sha": base_sha,
         "origin_main_sha": origin_main_sha,
+        "base_delta": base_delta,
+        "context_scopes": context_scopes,
         "open_issues": open_issues,
         "head_runs": head_runs,
         "changed_files": changed_files,
-        "required": required_contexts(repo),
+        "required": required,
     }
 
 
@@ -836,7 +1125,7 @@ def resolve_infra_ere(merged_sha: str | None = None) -> str | None:
     try:
         out = subprocess.run(
             ["node", "scripts/ci/derive-infra-reading-suites.mjs", "--ere"],
-            capture_output=True, text=True, cwd=REPO_ROOT, timeout=120,
+            capture_output=True, cwd=REPO_ROOT, timeout=120, **TEXT_UTF8,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -892,8 +1181,8 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     def dirs(ref: str) -> set[str] | None:
         try:
             out = subprocess.run(
-                ["git", "ls-tree", "-d", "--name-only", ref],
-                capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
+                git_argv(["git", "ls-tree", "-d", "--name-only", ref]),
+                capture_output=True, cwd=REPO_ROOT, timeout=60, **TEXT_UTF8,
             )
         except (OSError, subprocess.SubprocessError):
             return None
@@ -908,9 +1197,104 @@ def _top_level_dirs_agree(merged_sha: str) -> bool:
     return not (at_merge - today)
 
 
-def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
-    data = collect_ci_green_evidence(repo, number)
-    receipt = gates.ci_green_receipt(
+#: The tracked path the `ci-green` declaration lives at. Read out of the repo at
+#: a SHA, never off disk, which is the whole point of `resolve_declaration_as_of`.
+POLICY_TRACKED_PATH = "tools/drain/policy.json"
+
+
+def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
+    """`receipts.ci_green_rule` as `policy.json` carried it AT `sha` (#4676).
+
+    Resolved HERE and injected, for the same reason `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive every state of this one.
+
+    WHY A GIT READ AND NOT AN ALIAS TABLE. The declaration is a description of
+    the workflow -- "the step that IS the check" per context -- and it is
+    versioned in the same REPO as the workflow it describes, though NOT always
+    in the same commit. So the repo already records what the declaration was on
+    the day a given run happened; nothing has to be transcribed, and there is no
+    second copy to keep in agreement. An alias table would be one rename away
+    from being silently wrong -- the argument `README.md` already makes for
+    context spellings.
+
+    "NOT ALWAYS IN THE SAME COMMIT" IS THE LOAD-BEARING QUALIFIER, and an
+    earlier draft of this docstring omitted it and claimed the opposite as this
+    function's rationale. Measured: `8d3dd9cbb` (#4657, 2026-09-21 21:25)
+    renamed the vitest step in `fiab-console-ci.yml` and touched ONE file;
+    `356290aa9` (#4662, 2026-09-22 00:38) renamed it in `policy.json`. 3h13m
+    apart, three merges in between. If the same-commit claim were true the
+    consumer's `kind == "missing"` fallthrough would be dead code -- and
+    deleting it is arm AS4, the arm whose survival lets a rename launder a
+    hollow job. The false rationale pointed at the one deletion this mechanism
+    exists to prevent, which is why the qualifier is stated rather than
+    implied.
+
+    FAILS TO A NAMED, CLASSIFIED ERROR, NOT TO A SILENT HEAD FALLBACK. Every
+    failure returns `rule=None` with an `error` string AND a `reason` VALUE.
+    FOUR causes, and they do not share a remedy:
+
+    - `DECL_UNREADABLE` -- the object is not in this store. FETCH IT.
+    - `DECL_PREDATES` -- the blob was read and carries no `receipts.ci_green_rule`
+      at all. The key arrives in `6e29f1012` (2026-09-15, #4491), so for any
+      merge older than that there is nothing to resolve and nothing to fetch.
+      An independent reviewer measured the first version of this telling the
+      reader to `git fetch` a sha that was already present and readable -- the
+      same wrong-remedy shape #4676 is about, one state over, and for a backlog
+      closing pre-2026-09-15 merges it is the COMMON case.
+    - `DECL_UNPARSEABLE` -- the blob is not JSON.
+    - `DECL_NO_SHA` -- no sha was supplied at all. A CALLER error rather than a
+      repo state, which is why the consumer words it with `DECL_UNREADABLE`
+      ("could NOT be read") rather than giving it a fifth sentence: there is no
+      sha to fetch or to date. Four causes, three consumer sentences, and the
+      asymmetry is stated rather than left to look like an oversight.
+
+    The reason is a VALUE and not a substring of `error` deliberately: a
+    consumer that discriminated by grepping the message would be a
+    bare-substring signal, which is a measured misclassification shape here.
+    """
+    if not sha:
+        return gates.DeclarationAsOf(
+            sha="", rule=None, reason=gates.DECL_NO_SHA,
+            error="no merged sha was supplied",
+        )
+    rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])
+    if rc != 0:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_UNREADABLE,
+            error=f"git show {sha[:12]}:{POLICY_TRACKED_PATH} exited {rc}: "
+                  f"{(err or '').strip()[:160]}",
+        )
+    try:
+        at_sha = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_UNPARSEABLE,
+            error=f"policy.json at {sha[:12]} does not parse as JSON: {exc}",
+        )
+    rule = (at_sha or {}).get("receipts", {}).get("ci_green_rule")
+    if not isinstance(rule, dict):
+        return gates.DeclarationAsOf(
+            sha=sha, rule=None, reason=gates.DECL_PREDATES,
+            error=f"policy.json at {sha[:12]} carries no receipts.ci_green_rule object "
+                  f"(found {type(rule).__name__})",
+        )
+    return gates.DeclarationAsOf(sha=sha, rule=rule, error="", reason="")
+
+
+def receipt_from_evidence(data: dict, policy: dict) -> gates.CiGreenReceipt:
+    """The ONE place `gates.ci_green_receipt` is called with collected evidence.
+
+    `merge_gate --ci-green-receipt` and `tick.py --record-receipt --from-pr`
+    both take this receipt, and they used to build the eight-keyword call
+    independently. The README's whole claim for the record path is that it
+    "cannot record a receipt `--ci-green-receipt` would not print" -- which two
+    hand-maintained call sites make a hope rather than a property. #4676 added a
+    ninth argument, and adding it to one of two call sites is this package's
+    most-repeated defect ("fixed on one side only"). One call site cannot be
+    half-updated.
+    """
+    return gates.ci_green_receipt(
         data["evidence"],
         merged_total_count=data["merged_total_count"],
         merged_changed_files=data["changed_files"],
@@ -919,7 +1303,13 @@ def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) 
         trees_identical=data["trees_identical"],
         policy=policy,
         infra_ere=resolve_infra_ere(data["merged"]),
+        declared_at=resolve_declaration_as_of(data["merged"]),
     )
+
+
+def print_ci_green_receipt(repo: str, number: int, as_json: bool, policy: dict) -> int:
+    data = collect_ci_green_evidence(repo, number)
+    receipt = receipt_from_evidence(data, policy)
     if as_json:
         print(json.dumps({
             "pr": number,
@@ -1000,21 +1390,71 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
            if mergeable != "MERGEABLE" else ""),
     )
 
-    # 1 -- base == origin/main, exactly.
+    # 1 -- base == origin/main, exactly... OR no required context's producing
+    # workflow declares an on.push path filter that ADMITS the delta between
+    # them (#4585). That is a PROXY for unreachability, not a proof of it:
+    # the filters bound what the trunk RE-RUNS, not what a context READS, and
+    # the superset precondition is unestablished. The earlier wording here
+    # said "provably cannot reach any required context", which is the claim
+    # `gates.base_delta_is_inert` states it cannot establish -- and it
+    # survived two sweeps by being WRAPPED across this comment break, where
+    # no line-anchored grep could see it.
+    #
+    # The strict test runs FIRST and is unchanged. The second arm is only
+    # consulted when the strict one has already failed, and only when it failed
+    # for the STALENESS reason: `base_is_current` also refuses a PR aimed at
+    # another branch and a PR whose shas would not resolve, and neither of those
+    # is a question about a delta. Letting the delta arm answer them would rescue
+    # a PR targeting `release/x` on the strength of an intersection that says
+    # nothing about where it merges -- the one-side-of-a-boundary shape this
+    # package produces most often. Hence the explicit guards rather than a bare
+    # `if not ok`.
     ok, why = gates.base_is_current(
         pr["baseRefName"], data["base_sha"], data["origin_main_sha"]
     )
-    record("1 base == origin/main", ok, why)
+    # SUBSCRIPTED, never `.get`: deleting the key is a loud KeyError rather than
+    # a silent default, the shape `assert_policy_matches_code` was extended for.
+    # Setting it false restores the strict gate exactly.
+    if (not ok
+            and policy["merge_gate"]["stale_base_may_pass_on_an_inert_delta"]
+            and pr["baseRefName"] == "main"
+            and data["base_sha"] and data["origin_main_sha"]):
+        inert, why_inert = gates.base_delta_is_inert(
+            data.get("base_delta"),
+            data.get("context_scopes") or [],
+            data["required"],
+        )
+        ok = inert
+        why = f"{why} | delta {'INERT' if inert else 'NOT inert'}: {why_inert}"
+    # THE LABEL IS PRINTED ON EVERY STALE-BASE RUN, so it carries the same
+    # retraction the docstrings do. It said "or a delta no required context
+    # reads" for two rounds -- asserting exactly what `base_delta_is_inert`
+    # says this gate cannot establish, in the one string an operator actually
+    # sees. A retraction that lands in the prose and not in the program's own
+    # vocabulary has not landed.
+    record("1 base == origin/main (or a delta no required workflow's push "
+           "filter admits)", ok, why)
 
     # 2+3 -- verdicts, reduced by conjunction, pinned to the head they measured.
+    # SUBSCRIPTED, never `.get`: deleting the key is a loud KeyError rather than
+    # a silent fall-back to the strict date, which would look like the re-pin
+    # simply never applying.
+    repin = data["repin"]
+    pin_date = repin["date"] if repin["ok"] else data["head_date"]
     live, near = gates.parse_verdicts(
-        data["comments"], data["head_date"], policy["verdict_parsing"]["token_window_chars"]
+        data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
     )
     ok, why = gates.reduce_verdicts(live, near)
     detail = why + (
         f" | live={[(v.token, v.comment_id) for v in live]}"
         f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
     )
+    if repin["ok"]:
+        # Said out loud on every run it applies to. A verdict counted as live
+        # against a date that is NOT the head's is a material fact about how
+        # this decision was reached, and burying it would make the gate's
+        # output disagree with its own rule.
+        detail += f" | RE-PINNED to parent {repin['date']}: {repin['why']}"
     record("2+3 verdicts (conjunction, pinned to head)", ok, detail)
 
     # The closing scan is computed HERE, above 3b, because 3b needs the issue
@@ -1136,6 +1576,19 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
             f"{shape}. never-created means the push landed in a CONFLICTING window and no "
             "re-run creates them; parked means approve the run. Opposite remedies.",
         )
+
+    # 4c -- THE OTHER ~25 CONTEXTS. Gates 4, 4b and 5 above all pass
+    # `data["required"]`, so the population is narrowed before any predicate
+    # runs and an advisory RED coexists happily with VERDICT: GO -- which is
+    # what shipped a red `main` on 2026-09-17 (#4543, fixture #4540 head
+    # `7dd2fa3e279`: forty check-runs, one red, advisory, GO). `rollup` already
+    # carried it; nothing asked. The policy flag is SUBSCRIPTED, not `.get`,
+    # so deleting the key is a loud KeyError rather than a silent default --
+    # the shape `assert_policy_matches_code` was extended for.
+    ok, why = gates.advisory_verdict(
+        rollup, data["required"], policy["merge_gate"]["advisory_red_is_a_no_go"]
+    )
+    record("4c advisory (non-required) contexts", ok, why)
 
     # 5 -- did a required context measure anything? See the docstring on
     # `required_measured_nothing`: statusCheckRollup publishes NO population, so
@@ -1281,9 +1734,12 @@ def main() -> int:
             return 2
     # ...and REFUSE one the ledger binds to another PR. A receipt of the right
     # kind says the WORK is done; it says nothing about whether THIS PR is the
-    # work. INERT until something writes `Item.pr` -- which is `tick.py`'s job,
-    # not this module's; writing it from here made a merge gate a writer of a
-    # ledger it does not own and lost updates. #4489.
+    # work. `tick.py --bind-pr` writes `Item.pr` (#4489), so this pre-check
+    # fires on a bound item. The writer is `tick.py`'s job and not this
+    # module's -- writing it from here made a merge gate a writer of a ledger it
+    # does not own, and lost updates. NOTE the coverage boundary: gate 6 itself
+    # is exercised end to end by `test_poached_closes_refuses_a_bound_item`,
+    # but THIS `main()` pre-check has no test driving it.
     poached = poached_closes(allow_close, policy, pr=args.pr)
     if poached:
         print(f"refusing --allow-close: {'; '.join(poached)}", file=sys.stderr)

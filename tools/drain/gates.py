@@ -19,6 +19,7 @@ spec and implemented nowhere, and five `policy.json` keys were read by nothing.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass, field
@@ -227,11 +228,13 @@ MARKERS = ("Independent review", "Independent re-review")
 MERGE_GATE_IMPLEMENTED_BY = {
     "mergeable_must_be_known": "merge_gate.run_gates gate 0",
     "base_must_equal_origin_main": "gates.base_is_current",
+    "stale_base_may_pass_on_an_inert_delta": "gates.base_delta_is_inert",
     "reduce_verdicts_by": "gates.reduce_verdicts",
     "verdict_pinned_to_head": "gates.parse_verdicts (postdates)",
     "require_no_red": "gates.classify_checks (RED_CONCLUSIONS)",
     "require_no_incomplete": "gates.classify_checks (INCOMPLETE_STATUSES)",
     "require_no_skipped_required_context": "gates.required_measured_nothing",
+    "advisory_red_is_a_no_go": "gates.advisory_verdict",
     "scan_closing_keywords_in": "gates.merge_is_close_safe",
     "closing_keyword_scan_blocks_an_undeclared_close": "merge_gate.run_gates gate 6",
     "audit_issue_numbers_around_every_merge": "gates.issue_set_audit",
@@ -1291,6 +1294,12 @@ RED_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
      "ERROR"}
 )
+# Concluded, not red, and carrying NO measurement. These are green ON THEIR OWN
+# -- an advisory check that skips on a path filter is the routine case and must
+# never block -- but they cannot DISCHARGE an earlier red run of the same name
+# at the same head, because nothing was measured to discharge it with. A
+# SUCCESS is deliberately absent: that is a re-run that ran and passed.
+MEASURED_NOTHING = frozenset({"SKIPPED", "NEUTRAL"})
 # Not finished. A required context that has not concluded is INCOMPLETE, never a
 # pass. `EXPECTED` is a StatusContext that has been announced and never
 # reported -- the check-run equivalent of never-created.
@@ -1398,6 +1407,472 @@ def _check_rank(check: dict) -> int:
     if verdict == "SKIPPED":
         return 2
     return 1
+
+
+# ---------------------------------------------------------------------------
+# Gate 4c -- the ADVISORY population (#4543)
+# ---------------------------------------------------------------------------
+#
+# Gates 4, 4b and 5 all take `required` and FILTER THE POPULATION BEFORE ANY
+# PREDICATE RUNS. Only 15 of the ~35-40 contexts this repo publishes are
+# required, so ~25 checks per PR were invisible to the program that decides
+# every merge -- and an advisory RED and `VERDICT: GO` were perfectly
+# compatible. Measured on PR #4540, head `7dd2fa3e279`: forty check-runs,
+# exactly ONE red (`brain security graph -- committed artifact matches the
+# tree`, advisory), and the gate printed GO. The merge landed and `main` was
+# red afterwards.
+#
+# This capability EXISTED and was lost. `temp/merge-eligible.py` -- the tool
+# `merge_gate.py` replaced -- had the same blind spot, it was found (#4035) and
+# it was fixed there with exactly this three-way split. The promotion out of
+# `temp/` did not carry it. A gate checking a gate, inheriting its blindness.
+#
+# The population here is `statusCheckRollup`, which already carries every check
+# and needs no second API call. That matters for fail-closed behaviour: if the
+# rollup cannot be read, `collect` raises and nothing is scored -- a site that
+# is never evaluated, not a site that evaluates to GO.
+
+
+@dataclass(frozen=True)
+class AdvisorySplit:
+    """The split, as names -- so a caller can PRINT which is which.
+
+    `red` carries `"name (CONCLUSION)"`; `rerun` carries a sentence; `wait` and
+    `clean` carry bare names. `population` counts the distinct advisory
+    contexts considered and `total_checks` every entry the rollup published,
+    required included. Both counts are reported rather than derived by the
+    caller, because a clean answer over an EMPTY population is the
+    green-over-zero-items shape (#4451) and the reader has to be able to tell
+    the two apart.
+
+    FOUR buckets, not three. `rerun` is the one the predecessor did not have:
+    a name whose NEWEST run has not concluded while an OLDER run at the same
+    head concluded RED. See `classify_advisory_checks` for why it is separate
+    from both `red` and `wait`.
+    """
+
+    red: list[str]
+    rerun: list[str]
+    wait: list[str]
+    clean: list[str]
+    population: int
+    total_checks: int
+
+
+def _started_utc(check: dict) -> _dt.datetime | None:
+    """When this run STARTED, in UTC, or None when that cannot be established.
+
+    FOUR spellings, because the same fact arrives under different names:
+    GraphQL `statusCheckRollup` publishes `startedAt`, the REST check-runs API
+    publishes `started_at`, and a StatusContext has neither -- it carries
+    `createdAt` / `created_at`. A reader that knows one spelling silently
+    treats every other shape as timestamp-less.
+
+    Returns None, deliberately, for anything it cannot parse or that carries no
+    timezone. `newest_by_name` reads None as "fall back to worst-wins for this
+    whole name", which is the conservative branch: an unreadable timestamp must
+    never let a red run be discarded as superseded.
+    """
+    for key in ("startedAt", "started_at", "createdAt", "created_at"):
+        raw = check.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip()
+        # `fromisoformat` did not accept a trailing `Z` until 3.11, and this
+        # package declares >=3.10. Every GitHub timestamp ends in one.
+        if text[-1] in ("Z", "z"):
+            text = text[:-1] + "+00:00"
+        try:
+            when = _dt.datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if when.tzinfo is None:
+            return None
+        return when.astimezone(_dt.timezone.utc)
+    return None
+
+
+def _worst(runs: list[dict]) -> dict:
+    """The worst run in a group, first-wins on a tie (as `worst_by_name` is)."""
+    chosen = runs[0]
+    for run in runs[1:]:
+        if _check_rank(run) > _check_rank(chosen):
+            chosen = run
+    return chosen
+
+
+def _group_by_name(checks) -> dict[str, list[dict]]:
+    """Context name -> every run that published it at this head.
+
+    Split out because TWO questions need the whole group, not just its winner:
+    which run is newest, and whether any OTHER run of that name concluded RED
+    (`classify_advisory_checks`'s `rerun` bucket). Narrowing the population is
+    therefore a single edit here, which is what arm A2 mutates.
+    """
+    groups: dict[str, list[dict]] = {}
+    for check in checks:
+        name = check.get("name") or check.get("context") or ""
+        if not name:
+            continue
+        groups.setdefault(name, []).append(check)
+    return groups
+
+
+def newest_by_name(checks) -> dict[str, dict]:
+    """Context name -> its NEWEST run, by max start time. Not last-in-list.
+
+    A re-run publishes a SECOND check-run under the same name, and list order
+    is the API's, not time's. Taking the last entry is wrong in both
+    directions: a stale red can outrank the green re-run that fixed it, and a
+    stale green can bury a red one. Neither error is visible from the answer.
+
+    Deliberately DIFFERENT from `worst_by_name`, which the required path uses.
+    There, worst-wins is right: a required context that concluded SKIPPED must
+    not hide behind a green twin, and a required gate is allowed to be
+    pessimistic. Here the question is "what does this advisory check say NOW",
+    and a fixed check that still blocks is a gate that strands the drain.
+
+    Two ways this falls back to worst-wins, both fail-closed:
+      * any run in the group has no readable start time -- then the group's
+        order is unknown and the pessimistic answer is the only honest one;
+      * two or more runs TIE at the maximum start time (matrix legs fire
+        together) -- then "newest" does not pick one and the worst of the tied
+        set is taken.
+    """
+    return _newest_from_groups(_group_by_name(checks))
+
+
+def _newest_from_groups(groups: dict[str, list[dict]]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for name, runs in groups.items():
+        stamps = [_started_utc(run) for run in runs]
+        if any(stamp is None for stamp in stamps):
+            out[name] = _worst(runs)
+            continue
+        newest = max(stamps)
+        out[name] = _worst([r for r, s in zip(runs, stamps, strict=True) if s == newest])
+    return out
+
+
+def _is_incomplete(check: dict) -> bool:
+    """Has this run NOT said anything yet? One definition, two callers.
+
+    Written once because the advisory split and `_newest_informative_concluded` must agree
+    exactly: if they drift, a run counts as in-flight for one question and as
+    concluded for the other, and the bucket boundary moves without anyone
+    editing it.
+
+    DISCLOSED GAP, pre-existing and deliberately not papered over: the
+    `status in INCOMPLETE_STATUSES` clause has NO fixture that distinguishes it
+    on this path. Every advisory in-flight fixture also has a falsy `verdict`,
+    so the first clause answers first and deleting the third is invisible to
+    the suite. It is kept because `_outcome`'s docstring records why -- a
+    CheckRun can publish `status: IN_PROGRESS` alongside a stale `conclusion`,
+    and a reader testing only one of the pair scored a PENDING StatusContext
+    green. The same clause exists unfixtured at two OLDER sites
+    (`classify_checks`, `_check_rank`); an independent reviewer measured that
+    and asked for this line rather than a fabricated fixture, and those two
+    sites are deliberately NOT touched here.
+    """
+    verdict, status = _outcome(check)
+    return not verdict or verdict in INCOMPLETE_STATUSES or status in INCOMPLETE_STATUSES
+
+
+def _newest_informative_concluded(runs: list[dict]) -> dict | None:
+    """The newest CONCLUDED run that actually MEASURED something, or None.
+
+    A plain newest-concluded read answers "what did this check last say". This answers the
+    narrower question both callers need: "what did this check last say when it
+    actually RAN". A `SKIPPED` or `NEUTRAL` run said nothing, so it is not an
+    answer to a previous failure.
+
+    WHAT MAKES THIS RETURN None: a group of nothing but skips and in-flight
+    runs. That routes the caller to `clean`/`wait`, which is correct — a check
+    that has never measured anything at this head has no red to carry forward.
+
+    NO `exclude` PARAMETER, and the reason is worth recording. The first version
+    took the newest run and dropped it by IDENTITY, with a docstring claiming
+    that removing by VALUE would drop byte-equal twins and fail OPEN. Two
+    independent reviewers showed that claim was UNKILLABLE: `is not` → `!=` →
+    dropping the filter entirely all left the suite green, and one enumerated
+    all 898 reachable 2- and 3-run groups and found the verdict never differs.
+    It is dead by construction at both call sites — the supersession caller's
+    run is in `MEASURED_NOTHING` and the ADV-RERUN caller's is incomplete, so
+    each is already removed by a filter below. `assertion-design.md` says an
+    un-killable assertion is disclosed or dropped; this one is dropped, because
+    the honest version of it is "this parameter does nothing".
+    """
+    informative = [
+        run for run in runs
+        if not _is_incomplete(run)
+        and _outcome(run)[0] not in MEASURED_NOTHING
+    ]
+    if not informative:
+        return None
+    return _newest_from_groups({"": informative})[""]
+
+
+def classify_advisory_checks(checks: list[dict], required: list[str]) -> AdvisorySplit:
+    """Split every NON-required context: ADV-RED / ADV-RERUN / ADV-WAIT / clean.
+
+    The same split the required path uses, over the population the required
+    path throws away, plus one bucket the predecessor did not have. Both rollup
+    shapes are read via `_outcome`: a StatusContext says ERROR/PENDING where a
+    CheckRun says FAILURE/IN_PROGRESS and has no `status` key at all, so a
+    conclusion-only reader is blind to every context published by the other
+    shape.
+
+    IN-PROGRESS IS NOT RED. That is the recorded mistake from the first time
+    this was built, for `merge-eligible.py`: classifying `in_progress` as red
+    cries wolf on every PR with CI still running, and a control that fires on
+    everything teaches its reader to skim it. The same goes for `queued` and
+    for a StatusContext's `PENDING` -- `INCOMPLETE_STATUSES` is the whole
+    vocabulary of "has not said anything yet", and all of it routes to `wait`.
+
+    SKIPPED IS NOT RED EITHER, on this side. For a REQUIRED context a SKIPPED
+    run is a gate that measured nothing (gate 5), but advisory checks skip
+    routinely and legitimately on path filters -- `Bicep Lint` and `Workflow
+    lane states` were both SKIPPED on the fixture head, on a PR that touched
+    neither. Counting those would make the arm red on essentially every PR.
+
+    ADV-RERUN HOLDS TWO SHAPES, and the bucket's name is older than its
+    contents. Both mean "the last thing this check MEASURED was red, and
+    nothing has measured since":
+
+      1. a re-run is IN FLIGHT and has not answered yet; and
+      2. a re-run has CONCLUDED `SKIPPED` or `NEUTRAL` — it answered, but it
+         measured nothing, so it did not answer THIS.
+
+    Shape 1 closes a SELF-CLEARING BLOCK found by an independent reviewer on
+    the first version of this arm: `newest`-wins alone answered ADV-WAIT, which
+    does not block, so dispatching the gate's OWN remedy (`rerun-ci`) cleared
+    the gate's own block the moment the re-run STARTED. Shape 2 is the same
+    hole one step later, found on round 4 — and round 4's fix for it re-opened
+    shape 1 by changing only the sibling branch. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so this was a live path
+    to merging over a red without a human in it.
+
+    NEWEST INFORMATIVE, not "any run was red" -- see
+    `_newest_informative_concluded`, where an earlier version of this bucket
+    over-blocked a check that had already been fixed and named a run whose
+    conclusion it had never read.
+
+    It is a SEPARATE bucket from `red` on purpose, because the remedy differs
+    and `deploy-integrity.md` R7 applies to a gate's own message: the check has
+    not failed AGAIN, and the red has not been cleared.
+
+    "WAIT FOR IT" IS NOT SAID HERE, AND THE REASON IS THE ROUND-4 BLOCKER. It
+    was the runtime message and it is false for shape 2 — that re-run has
+    already concluded, so waiting can never resolve it. The message now says
+    the red has not been CLEARED and that a re-run must actually MEASURE to
+    clear it, which is true of both shapes. A docstring that still said "wait
+    for it is true" survived one round after the message it described was
+    corrected; closing a finding at the MESSAGE and not at the SPEC is the
+    label-not-site error `assertion-design.md` names.
+
+    Live frequency of the shape: 0 across 52 PR heads (the reviewer's scan), so
+    holding it costs nothing measurable today. It is blocked rather than
+    disclosed because the cost of holding is a few minutes and the cost of the
+    hole is an unattended merge over a red -- and because the drain's own
+    remedy is what creates the shape, which makes it reachable by design rather
+    than by chance.
+    """
+    required_names = set(required)
+    red: list[str] = []
+    rerun: list[str] = []
+    wait: list[str] = []
+    clean: list[str] = []
+    groups = _group_by_name(checks)
+    for name, check in sorted(_newest_from_groups(groups).items()):
+        if name in required_names:
+            continue
+        verdict = _outcome(check)[0]
+        if verdict in RED_CONCLUSIONS:
+            red.append(f"{name} ({verdict})")
+        elif _is_incomplete(check):
+            # `_newest_informative_concluded`, NOT `_newest_concluded` -- the
+            # FOURTH form of the self-clearing block, and round 4 CREATED it by
+            # fixing only the sibling branch below. a plain newest-CONCLUDED read counts a
+            # SKIPPED run as an answer, so:
+            #
+            #     FAILURE@10, SKIPPED@11                  -> NO-GO  (round 4)
+            #     FAILURE@10, SKIPPED@11, IN_PROGRESS@12  -> GO     (this hole)
+            #
+            # i.e. round 4 made `FAILURE, SKIPPED` block, and then dispatching
+            # `rerun-ci` -- the gate's OWN `permitted_unattended` remedy --
+            # cleared it the instant the re-run STARTED. That is round 2's
+            # finding verbatim, re-opened one line above round 4's fix for it.
+            # The two branches ask the same question and must use the same
+            # helper.
+            last = _newest_informative_concluded(groups[name])
+            last_verdict = _outcome(last)[0] if last is not None else ""
+            if last_verdict in RED_CONCLUSIONS:
+                rerun.append(
+                    f"{name} (a re-run is in flight; the newest run that MEASURED "
+                    f"anything at this head was {last_verdict})"
+                )
+            else:
+                wait.append(name)
+        elif verdict in MEASURED_NOTHING:
+            # A RUN THAT MEASURED NOTHING CANNOT DISCHARGE A RED ONE.
+            #
+            # The third form of the self-clearing block, found by an independent
+            # reviewer after the first two were closed. `rerun` above holds the
+            # case where the re-run is still IN FLIGHT -- but once that re-run
+            # CONCLUDES `SKIPPED` or `NEUTRAL` it stops being incomplete, so
+            # newest-wins dropped it straight into `clean` and the red vanished:
+            #
+            #     FAILURE @10:00, SKIPPED @11:00  ->  (True, "no advisory context is red")
+            #
+            # and the same for NEUTRAL. That is reachable by ordinary re-run
+            # semantics -- an `if:` re-evaluating false, or a `needs` upstream
+            # failing or being cancelled, both yield `skipped` -- i.e. by the
+            # gate's OWN remedy, `rerun-ci`, which is in `permitted_unattended`.
+            #
+            # SKIPPED still is not RED (see above: advisory checks skip
+            # routinely on path filters, and counting that would block every
+            # PR). The claim here is narrower and is about SUPERSESSION: a
+            # skip may mean "not applicable", which is fine on its own and is
+            # NOT fine as an answer to a run that already failed at this head.
+            # A SUCCESS deliberately DOES discharge it -- that is a re-run that
+            # measured something and passed.
+            prior = _newest_informative_concluded(groups[name])
+            prior_verdict = _outcome(prior)[0] if prior is not None else ""
+            if prior_verdict in RED_CONCLUSIONS:
+                rerun.append(
+                    f"{name} (superseded by a {verdict} run, which measured nothing; "
+                    f"the newest run that DID measure at this head was {prior_verdict})"
+                )
+            else:
+                clean.append(name)
+        else:
+            clean.append(name)
+    return AdvisorySplit(
+        red=red,
+        rerun=rerun,
+        wait=wait,
+        clean=clean,
+        population=len(red) + len(rerun) + len(wait) + len(clean),
+        total_checks=len(checks),
+    )
+
+
+def advisory_verdict(
+    checks: list[dict], required: list[str], policy_says_no_go: bool
+) -> tuple[bool, str]:
+    """Gate 4c: an advisory RED is a NO-GO. Returns (ok, one legible line).
+
+    BLOCK, not report -- decided on a measurement rather than on taste, and the
+    measurement was taken WITH THIS FUNCTION rather than with a restatement of
+    it. Across 22 PR heads on 2026-09-17 (the 10 then-open PRs plus the 12 most
+    recently merged), TWO would go NO-GO here:
+
+        #4540  brain security graph -- committed artifact matches the tree
+               (FAILURE)  <- the fixture; this is the head that shipped a red
+               main under a VERDICT: GO
+        #4492  in-VNet runner capability probe (CANCELLED)
+               the runner PAT is not reachable from job code (CANCELLED)
+
+    So 2 of 22, ~9%: not "every PR", and blocking does not strand the drain.
+    An earlier draft of this docstring said ONE of 22 -- that number came from
+    remembering the merged half of the population and not re-reading the open
+    half, which is the partial-read-then-confident-claim shape this repo keeps
+    recording. It is corrected here rather than quietly dropped, because the
+    block-vs-report decision rests on it.
+
+    #4492's pair is not a false positive to be carved out: a CANCELLED run
+    measured nothing, neither was re-run, and that PR genuinely should not
+    merge until they are. The remedy is a re-run, which is already in
+    `permitted_unattended`.
+
+    WHAT THIS GATE CANNOT SEE, stated here rather than left to be discovered.
+    The population is the checks attached to the HEAD BEING MEASURED. A lane
+    with no `pull_request` trigger publishes no check-run at a PR head and is
+    therefore invisible to this arm -- by construction, not by omission.
+
+    The named instance is #4547, and the CONDITION MATTERS more than the
+    conclusion: `build-fiab-images-acr-tasks.yml` triggers on
+    `workflow_dispatch`, `workflow_call` AND `push` -- but that push is
+    `branches: [main]` (`:80-82`), and a PR head is never on `main`. THE
+    INVARIANT IS `branches: [main]`, not "there is no push trigger". An earlier
+    version of this comment said the latter, which was false at the time it was
+    written: the reader who checks it finds a `push:` block, concludes the
+    disclosure is stale, and learns nothing about the real condition. A
+    tripwire that names the wrong condition cannot fire -- the thing it told
+    you to watch for has already happened.
+
+    So what would make these reds start blocking here is a `pull_request`
+    trigger being added, or `branches:` being widened past `main`. Corroborated
+    empirically, twice and independently: 0 ACR-lane checks across 22 PR heads
+    (this lane) and across 40 merged heads (the reviewer's scan, whose only
+    Trivy hits were `trivy.yml`'s, on 2 heads, both SUCCESS).
+
+    Two consequences, both deliberate: the known-flaky objection to blocking
+    does not apply, and NO allowlist, exemption or carve-out is built for it --
+    a guard-weakening mechanism is a defect in its own right here; and this
+    gate must not be read as saying anything about main-only or scheduled
+    lanes. A red there is a P0 under `deploy-integrity.md` R1 and needs a
+    different instrument.
+
+    ADV-WAIT does NOT block, and is named in the GO line rather than left as a
+    footnote. Blocking on it would mean waiting for every advisory check on
+    every PR, including the 30-minute ones, and an in-progress or queued check
+    has not said anything yet. The residual risk is stated in the line itself:
+    a check still running can still turn red after this answer.
+
+    `policy_says_no_go` is `policy.json`'s `merge_gate.advisory_red_is_a_no_go`,
+    read by the caller and passed here. It is NOT a switch: setting it false
+    does not relax the arm, it makes the arm refuse to answer, because this
+    gate implements no permissive mode. A key that could turn a control off
+    would be a skip valve; a key that can only take the control out of service
+    is the authority being consulted.
+    """
+    if not policy_says_no_go:
+        return False, (
+            "policy.json declares merge_gate.advisory_red_is_a_no_go=false and this "
+            "gate implements no such mode - it cannot answer, which is NO-GO, not a "
+            "pass. Restore the key to true."
+        )
+    if not checks:
+        return False, (
+            "the rollup published NO checks at all, so this arm measured NOTHING - "
+            "a clean advisory answer over an empty population is the "
+            "green-over-zero-items shape (#4451), not a pass. See gate 4b for which "
+            "of never-created / parked this is."
+        )
+    split = classify_advisory_checks(checks, required)
+    waiting = (
+        f" ADV-WAIT {len(split.wait)} still running ({', '.join(split.wait)}) - NOT "
+        "counted as red, and a check still running can still turn red after this line."
+        if split.wait else ""
+    )
+    if split.red or split.rerun:
+        blocking = [
+            (f"ADV-RED {len(split.red)}: {'; '.join(split.red)}." if split.red else ""),
+            (f"ADV-RERUN {len(split.rerun)}: {'; '.join(split.rerun)} - the red has "
+             "NOT been cleared; a re-run must actually MEASURE to clear it. Do not "
+             "read a re-run's mere existence, or a re-run that skipped, as the red "
+             "being cleared."
+             if split.rerun else ""),
+        ]
+        return False, (
+            " ".join(part for part in blocking if part)
+            + " These are NOT required contexts, so branch protection will merge "
+            "straight over them - which is exactly how #4540 shipped a red main. "
+            "REMEDY: fix the check, or re-run it with `gh run rerun --failed` (both "
+            "`rerun-ci` and `approve-parked-ci-run` are permitted unattended) and "
+            "wait for the new answer. Do NOT merge past it. "
+            f"[{split.population} advisory of {split.total_checks} published; "
+            f"{len(split.clean)} clean]" + waiting
+        )
+    return True, (
+        f"no advisory context is red: {len(split.clean)} clean of {split.population} "
+        f"advisory ({split.total_checks} checks published in total). SCOPE: checks "
+        "ATTACHED TO THIS HEAD only - a lane with no `pull_request` trigger publishes "
+        "nothing here. The ACR image builds (#4547) DO have a push trigger, but it is "
+        "`branches: [main]`, and a PR head is never on main - that branch filter is the "
+        "invariant, not an absent trigger." + waiting
+    )
 
 
 def required_measured_nothing(checks: list[dict], required: list[str]) -> tuple[bool, list[str]]:
@@ -1630,14 +2105,36 @@ def _glob_to_regex(pattern: str) -> str:
 #: absence gets excused. `!` under `paths-ignore:` is worse still: it re-includes
 #: a path, so ignoring it can excuse outright.
 #:
+#: `?` is here for a DIFFERENT reason than the others, and the difference is
+#: the point: it was not unimplemented, it was implemented WRONG. This
+#: translator emitted `[^/]` for it -- one arbitrary character, the fnmatch
+#: reading -- while GitHub documents `?` as "zero or one of the PRECEDING
+#: character". Those disagree on real inputs, and the disagreement excuses in
+#: both of the cases where GitHub admits. Measured on this checkout: 127
+#: workflow files, 40 with an `on.push` trigger, and ZERO push filters contain
+#: `?`, so refusing costs nothing and guessing costs correctness.
+#:
 #: Zero workflows in this repo use any of them today (measured), which is
 #: exactly why refusing is free. A pattern this cannot represent is an
 #: unanswered question, and unanswered questions fail closed here.
-_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|]")
+_UNSUPPORTED_GLOB = re.compile(r"[!\[\]+()@|?]")
 
 
 class UnsupportedPatternError(ValueError):
     """A filter pattern this translator cannot represent faithfully."""
+
+
+def git_argv(args: list[str]) -> list[str]:
+    """Return `args` with `-c core.quotePath=false` inserted after `git`.
+
+    Non-git argv is returned unchanged. Callers must ALSO decode as utf-8;
+    the flag alone is not sufficient.
+
+    Enforced by `test_every_git_invocation_routes_through_the_quoting_injection`.
+    """
+    if args and args[0] == "git":
+        return [args[0], "-c", "core.quotePath=false", *args[1:]]
+    return args
 
 
 def glob_matches(pattern: str, path: str) -> bool:
@@ -1789,6 +2286,159 @@ class ContextEvidence:
 
 
 @dataclass(frozen=True)
+class DeclarationAsOf:
+    """`policy.json`'s `receipts.ci_green_rule` AS IT STOOD at a measured sha.
+
+    THE CODE IS HEAD'S; THE DECLARATION IS THE SHA'S. That split is the whole
+    of this type. `gates.py`'s predicates are today's -- every hole reviewers
+    found in rounds 5-16 is fixed at HEAD and must apply to every measurement.
+    But `receipts.ci_green_rule` is not a predicate, it is a DESCRIPTION of a
+    workflow: "the step that IS the check" for each context. A description of
+    the workflow at HEAD says nothing true about a workflow that ran a week
+    ago, and applying it there is #4676:
+
+        PR #4593 merged 2026-09-20T01:24:35Z. `vitest (node 20)`'s substantive
+        step was renamed from `Run vitest (with istanbul coverage floor)` to
+        `Merge shard reports and enforce the coverage floor` -- in the WORKFLOW
+        by `8d3dd9cbb` (#4657, 2026-09-21 21:25) and in `policy.json` by
+        `356290aa9` (#4662, 2026-09-22 00:38). TWO commits, 3h13m apart, with
+        three merges in between; `git show --stat 8d3dd9cbb` touches one file
+        and it is not `policy.json`. The receipt then asked a 2026-09-20 run
+        whether it had executed a step that would not exist until 2026-09-21,
+        found it absent, and printed "the declaration is stale" -- pointing the
+        reader at the one edit that would make the declaration wrong for
+        today's merges.
+
+        An earlier draft of this paragraph said the two moved "in one commit".
+        That was false, and it was not harmless prose: it is the premise that
+        makes the SECOND CLOCK below look like dead code, and deleting the
+        second clock is arm AS4 -- the arm whose survival lets a rename launder
+        a hollow job. A false rationale points at the one deletion this
+        mechanism exists to prevent.
+
+    THIS IS NOT AN ALIAS TABLE, and the distinction is the reason the README
+    refuses one for context spellings: an alias table is a second copy of the
+    rename, maintained by hand, one rename away from being silently wrong. This
+    carries no names at all. It reads the declaration out of the repo at the sha
+    that is being measured -- the same repo, the same file, the same drift guard
+    (`__tests__/test_ci_green_declared.py`) that enforced its agreement with the
+    workflow AT THAT SHA. The rename is resolved by the repo's own history, as
+    the context case is resolved by workflow identity.
+
+    Resolved by the CALLER and injected, exactly as `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive the resolved case, the drifted case and the
+    unresolvable case. `merge_gate.resolve_declaration_as_of` is the producer.
+
+    Three states, and they are NOT interchangeable:
+
+    - `rule` is a dict  -- the declaration at `sha` was read. It GOVERNS.
+    - `rule is None` with `error` -- the attempt was made and FAILED. HEAD's
+      declaration is used, and any refusal that turns on a missing step says so
+      in different words, because the remedy is to obtain the sha, never to
+      edit `policy.json`.
+    - the whole object is `None` (the default everywhere) -- no as-of
+      resolution was attempted. Today's behaviour, today's message, unchanged;
+      this is what a direct unit call gets.
+    """
+
+    sha: str = ""
+    rule: dict | None = None
+    error: str = ""
+    #: WHY `rule` is None, as a value rather than a substring of `error`. The
+    #: FOUR causes below do not share a remedy, and a consumer that
+    #: discriminated them by grepping `error` would be a bare-substring signal
+    #: -- a measured misclassification shape in this repo. `DECL_PREDATES` in
+    #: particular is NOT fixable by fetching: the key genuinely did not exist at
+    #: that sha. `DECL_NO_SHA` is a caller error rather than a repo state, which
+    #: is why it shares a consumer sentence with `DECL_UNREADABLE` while still
+    #: being its own value -- four causes, three remedies.
+    reason: str = ""
+
+
+#: Why an as-of declaration could not be resolved. Opposite remedies, so they
+#: are values the consumer branches on, never text it matches.
+#:
+#:   DECL_UNREADABLE   the object is not in this store -> FETCH IT
+#:   DECL_PREDATES     the blob was read and carries no `receipts.ci_green_rule`
+#:                     at all. The key was introduced in `6e29f1012` (2026-09-15,
+#:                     #4491), so for every merge older than that there is no
+#:                     declaration to resolve and HEAD's is the only one that has
+#:                     ever described the context. NOTHING TO FETCH -- and for a
+#:                     backlog closing merges from before that date this is the
+#:                     COMMON case, not an edge, which is why it gets its own
+#:                     sentence. An independent reviewer measured the old message
+#:                     telling the reader to fetch a sha that was already present
+#:                     and readable.
+#:   DECL_UNPARSEABLE  the blob is not JSON -> a different question entirely
+#:   DECL_NO_SHA       no sha was supplied
+DECL_UNREADABLE = "unreadable"
+DECL_PREDATES = "predates-the-key"
+DECL_UNPARSEABLE = "unparseable"
+DECL_NO_SHA = "no-sha"
+
+
+#: The provenance of the declaration a refusal or an acceptance was decided on.
+#: Returned by `_declaration_as_of` so a message can name WHICH declaration it
+#: read without re-deriving it, and so the two refusals below cannot be folded
+#: into one sentence again -- which is #4676's actual damage. They have OPPOSITE
+#: remedies: `DECL_HEAD_UNVERIFIED` means go and fetch the sha, `DECL_AS_OF` and
+#: `DECL_HEAD` mean re-read the declaration off a green run.
+DECL_HEAD = "head"
+DECL_AS_OF = "as-of"
+DECL_HEAD_UNVERIFIED = "head-unverified"
+#: HEAD's declaration used because the sha's declaration carried NO ROW for this
+#: context -- the row is NEWER than the sha, which is a different fact from a
+#: rename and from an unreadable declaration. Reachable today: two rows were
+#: added to `substantive_steps` on 2026-09-18 in `0c2c4c974`, so every merge
+#: before that date hits this for those two contexts. It used to be labelled
+#: `DECL_HEAD` and a pass printed no provenance clause at all -- an undisclosed
+#: substitution, against this module's own "NAMED, NOT FOLDED IN" principle.
+DECL_HEAD_ROW_NEWER = "head-row-newer"
+
+
+def _declaration_as_of(
+    policy: dict, as_of: DeclarationAsOf | None
+) -> tuple[dict, str, str]:
+    """The policy whose `ci_green_rule` governs a job measured at `as_of.sha`.
+
+    Returns `(policy_to_use, provenance, sha)`. IDEMPOTENT by construction --
+    substituting the same rule twice yields the same dict -- and that property
+    is load-bearing because there are two resolution sites: `context_did_its_work`
+    resolves for itself (it must be able to name BOTH declarations, so it is
+    given the ORIGINAL policy), and `context_is_accounted_for` resolves once for
+    routes 2 and 3, which need only the governing rule. Two call sites over one
+    question is the shape this package keeps getting wrong; it is safe here only
+    because neither can produce an answer the other would not.
+
+    A SHALLOW COPY, two levels deep, never a mutation: `policy` is the caller's
+    loaded contract and is shared with every other context in the same receipt.
+    Writing into it would make the declaration used for context N+1 depend on
+    the sha resolved for context N -- an order-dependent gate, which is the
+    worst shape a gate can have because it is green on a re-run.
+    """
+    if as_of is None:
+        return policy, DECL_HEAD, ""
+    if not isinstance(as_of.rule, dict):
+        return policy, DECL_HEAD_UNVERIFIED, as_of.sha
+    receipts = dict(policy.get("receipts", {}))
+    receipts["ci_green_rule"] = as_of.rule
+    effective = dict(policy)
+    effective["receipts"] = receipts
+    return effective, DECL_AS_OF, as_of.sha
+
+
+def _declared_steps(name: str, policy: dict):
+    """`substantive_steps[name]` out of whichever policy is in hand."""
+    return (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
+
+
+@dataclass(frozen=True)
 class ContextResult:
     """One required context's standing in the receipt."""
 
@@ -1829,6 +2479,7 @@ def ci_green_receipt(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> CiGreenReceipt:
     """The `ci-green` receipt, as a measurement that can actually be taken.
 
@@ -1853,6 +2504,11 @@ def ci_green_receipt(
     `merged_total_count` guards the whole receipt through `classify_missing`: if
     the merged sha carries ZERO check-runs, nothing ran at all and every
     "absence" above would be excused one by one into a vacuous pass.
+
+    `declared_at` carries `policy.json`'s `receipts.ci_green_rule` AS IT STOOD
+    at the merged sha (#4676). See `DeclarationAsOf`: the predicates are HEAD's,
+    the description of the workflow is the sha's, and without that split a step
+    rename retroactively makes every older PR's receipt unobtainable.
     """
     contexts: list[ContextResult] = []
     reasons: list[str] = []
@@ -1875,6 +2531,7 @@ def ci_green_receipt(
             trees_identical=trees_identical,
             policy=policy,
             infra_ere=infra_ere,
+            declared_at=declared_at,
         )
         contexts.append(result)
         if not result.ok:
@@ -1897,6 +2554,7 @@ def _one_context(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     if item.merged_check is not None:
         verdict, status = _outcome(item.merged_check)
@@ -1945,7 +2603,7 @@ def _one_context(
         # SKIPPED behind a change-detection gate.
         did_work, evidence, route = context_is_accounted_for(
             item.name, item.merged_job, merged_changed_files, policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
         )
         if not did_work:
             return ContextResult(
@@ -1986,7 +2644,7 @@ def _one_context(
         return _renamed_at_merge(
             item, merged_sha=merged_sha,
             merged_changed_files=merged_changed_files, policy=policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
         )
 
     if item.push_trigger is None:
@@ -2036,9 +2694,18 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
+    # THE MERGED SHA'S DECLARATION, ON A JOB THAT RAN AT THE PR HEAD, and that
+    # is sound here for one reason only: this branch is unreachable unless
+    # `trees_identical` (the refusal ~35 lines above). An identical tree means
+    # `tools/drain/policy.json` is byte-identical at both shas, so "the
+    # declaration as of the merged sha" and "as of the PR head" are the same
+    # object. If that guard is ever relaxed, this call needs the HEAD sha's
+    # declaration resolved separately -- it does not inherit correctness from
+    # the merged one.
     ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
         push_trigger=item.push_trigger, infra_ere=infra_ere,
+        declared_at=declared_at,
     )
     if not ran:
         return ContextResult(
@@ -2066,7 +2733,10 @@ def _one_context(
     )
 
 
-def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[bool, str]:
+def context_did_its_work(
+    name: str, job: dict | None, policy: dict,
+    declared_at: DeclarationAsOf | None = None,
+) -> tuple[bool, str]:
     """Did THIS context execute the step that IS the check?
 
     WHICH step, not how many, and the distinction is the whole control.
@@ -2094,13 +2764,62 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     spread across many steps (`guardrails` has 158) rather than concentrated in
     one. A LIST names the steps that must have executed, matched as substrings
     so a step's parenthetical detail can change without breaking the receipt.
+
+    `declared_at` (#4676) resolves WHICH declaration: the one at the sha this
+    job ran at, not the one at HEAD. See `DeclarationAsOf`. This function is
+    handed the ORIGINAL policy and resolves for itself, because it is the only
+    route that must be able to name BOTH declarations -- the sha's, which it
+    judged on, and HEAD's, which the reader is looking at. Passing it the
+    policy `context_is_accounted_for` had already substituted into made
+    `head_declared` read the as-of rule, the two compared equal, and the
+    provenance clause silently vanished from every real receipt while the unit
+    test went on passing. Measured on PR #4593: verdict correct, disclosure
+    absent.
+
+    TWO CLOCKS, IN PRECEDENCE ORDER, AND THE SECOND EXISTS BECAUSE THE RENAME
+    IS NOT ATOMIC. The workflow and the declaration that describes it are two
+    files, and #4657 changed one of them:
+
+        8d3dd9cbb  2026-09-21 21:25  .github/workflows/fiab-console-ci.yml
+        356290aa9  2026-09-22 00:38  tools/drain/policy.json
+
+    For 3h13m `policy.json` named `Run vitest (with istanbul coverage floor)`
+    while the job ran `Merge shard reports and enforce the coverage floor`, and
+    THREE merges landed in that window (#4652, #4654, #4658). Resolving strictly
+    as-of would refuse all three -- #4676 in mirror image, with the same wrong
+    remedy attached. So the declaration at the sha is tried FIRST, and when the
+    step it names is ABSENT ENTIRELY the other clock is tried, and which one
+    decided is printed.
+
+    ONLY ON `missing`, never on `hollow` or `ambiguous`. A declared step that is
+    PRESENT and SKIPPED is the check not doing its work -- the defect this whole
+    predicate exists for -- and falling through to a second declaration there
+    would let a rename launder a hollow job. Absence is the rename signature;
+    a skip is not.
     """
-    declared = (
-        policy.get("receipts", {})
-        .get("ci_green_rule", {})
-        .get("substantive_steps", {})
+    head_declared = _declared_steps(name, policy)
+    effective, provenance, as_of_sha = _declaration_as_of(policy, declared_at)
+    as_of_declared = (
+        _declared_steps(name, effective) if provenance == DECL_AS_OF else None
     )
-    if name not in declared:
+    #: (provenance, rule) in precedence order, deduplicated. A context the
+    #: as-of declaration has no row for falls through to HEAD's by the same
+    #: mechanism as a renamed step -- the row is simply newer than the sha.
+    candidates: list[tuple[str, object]] = []
+    if as_of_declared is not None:
+        candidates.append((DECL_AS_OF, as_of_declared))
+    if head_declared is not None and head_declared != as_of_declared:
+        if provenance == DECL_HEAD_UNVERIFIED:
+            head_which = DECL_HEAD_UNVERIFIED
+        elif provenance == DECL_AS_OF and as_of_declared is None:
+            # The sha's declaration WAS read and simply has no row for this
+            # context: the row is newer than the sha. Labelled distinctly so the
+            # pass discloses it rather than reading as an ordinary HEAD decision.
+            head_which = DECL_HEAD_ROW_NEWER
+        else:
+            head_which = DECL_HEAD
+        candidates.append((head_which, head_declared))
+    if not candidates:
         return False, (
             f"no substantive step is DECLARED for {name!r} in policy.json "
             "(receipts.ci_green_rule.substantive_steps) - an undeclared context "
@@ -2159,84 +2878,269 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     def ran(step: dict) -> bool:
         return step_conclusion(step) != "skipped"
 
-    rule = declared[name]
-    if rule == "ALL":
-        skipped = [s for s in work if not ran(s)]
-        if skipped:
-            names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+    #: ONE DECLARATION OVER THIS JOB. Extracted so the two clocks are evaluated
+    #: by the SAME code -- a second copy of the matching rules, applied to the
+    #: fallback only, is how "fixed on one side only" gets written.
+    #:
+    #: Returns `(ok, kind, payload)`. `kind` is "" on success and otherwise one
+    #: of "all-skipped", "shape", "missing", "ambiguous", "hollow"; only
+    #: "missing" may fall through to the other clock.
+    def verdict(rule):
+        if rule == "ALL":
+            skipped = [s for s in work if not ran(s)]
+            if skipped:
+                names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+                return False, "all-skipped", (
+                    f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
+                    f"are SKIPPED ({names})"
+                )
+            return True, "", f"declared ALL; every one of its {len(work)} work step(s) ran"
+
+        if not isinstance(rule, list) or not rule:
+            return False, "shape", (
+                f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
+                "non-empty list of step names"
+            )
+
+        missing, hollow, ambiguous = [], [], []
+        for wanted in rule:
+            # EVERY matching step, and EVERY one of them must have run. This used
+            # to be `any(ran(s) for s in matches)`, and an independent reviewer's
+            # mutation arm truncated the match list to `[:1]` and SURVIVED: with
+            # `any`, one running step satisfied a declaration no matter how many
+            # others matched and skipped, so narrowing the population was
+            # unobservable. A filter placed INSIDE the predicate beats a contract
+            # written about the predicate -- which is the whole lesson of the `N*`
+            # arms. `all` makes the size of the match set load-bearing, so a
+            # truncation changes an answer and a test can see it.
+            matches = [s for s in work if wanted in str(s.get("name") or "")]
+            if not matches:
+                missing.append(wanted)
+                continue
+            skipped = [s for s in matches if not ran(s)]
+            if len(skipped) == len(matches):
+                hollow.append(wanted)
+            elif skipped:
+                ambiguous.append(
+                    f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
+                    "are SKIPPED"
+                )
+        if missing:
+            return False, "missing", missing
+        if ambiguous:
+            # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched
+            # several steps with a MIXED outcome cannot say which one is the
+            # check, and round 5 answered a hollow primary with an alternative
+            # BEFORE reaching this refusal -- so a two-entry declaration with one
+            # hollow entry and one ambiguous entry returned a pass and this
+            # sentence was never printed. An independent reviewer demonstrated it
+            # synthetically; it was latent only because both rows that declare
+            # alternatives name exactly one primary step.
+            return False, "ambiguous", (
+                "a declaration matched several steps with a MIXED outcome, so which one "
+                f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
+                "the declaration name exactly one step"
+            )
+        if hollow:
+            # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
+            # blocker. Round 5 accepted "a declared alternative ran" as the
+            # context having done its work, inside this function -- which has no
+            # `changed_files` and cannot ask the only question that makes such an
+            # acceptance safe. `context_is_accounted_for` returned on `did` before
+            # the merged file list was ever consulted, so the `hits` refusal (a
+            # change detector that MISSED a change, the #3783 shape `policy.json`
+            # says must never be laundered) became unreachable whenever any
+            # alternative ran. Two reviewers found it independently, on different
+            # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
+            #
+            # So the alternative lives in `alternative_accounted_for`, which asks
+            # the scope question and this one as two halves of a single predicate.
+            # THE BARE LIST, exactly as `missing` returns one. It used to return
+            # a finished SENTENCE here, and the second-clock site wrapped it as
+            # if it were a list -- emitting "the declared step(s) its declared
+            # substantive step(s) [...] were SKIPPED - the check concluded green
+            # ... were SKIPPED", with the trailing clause printed twice. Two
+            # reviewers found it independently. A payload whose SHAPE depends on
+            # the kind is a payload every call site has to remember to special-
+            # case; rendering is `refusal_text`'s job, in one place.
+            return False, "hollow", hollow
+        return True, "", f"executed its declared substantive step(s) {list(rule)}"
+
+    def refusal_text(kind: str, payload) -> str:
+        """Render one refusal payload into a sentence. ONE renderer, both sites."""
+        if kind == "hollow":
+            return (
+                f"its declared substantive step(s) {payload} were SKIPPED - the check "
+                "concluded green having not done the thing it is required for"
+            )
+        if kind == "missing":
+            return f"the declared step(s) {payload} are ABSENT from this job"
+        return str(payload)
+
+    def cap(text: str) -> str:
+        """Capitalise WITHOUT lowercasing the rest -- `str.capitalize()` turns
+        "HEAD's declaration" into "Head's declaration"."""
+        return text[:1].upper() + text[1:]
+
+    def clock(which: str) -> str:
+        """How a message names one of the two declarations.
+
+        `DECL_HEAD` says "HEAD's declaration" whenever an as-of resolution was
+        ATTEMPTED, and the bare "the declaration" only when none was -- because
+        in the two-clock sentences the bare form sat next to "the declaration AS
+        OF the measured sha" and a reader could not tell which was which.
+        """
+        if which == DECL_AS_OF:
+            return f"the declaration AS OF the measured sha {as_of_sha[:12]}"
+        if which in (DECL_HEAD_UNVERIFIED, DECL_HEAD_ROW_NEWER):
+            return "HEAD's declaration"
+        return "HEAD's declaration" if declared_at is not None else "the declaration"
+
+    def provenance_note(which: str, rule) -> str:
+        """The clause that says WHICH declaration decided, whenever that is not
+        HEAD's current one VERIFIED against the measured sha.
+
+        NAMED, NOT FOLDED IN. A pass decided on a declaration HEAD has since
+        changed -- or on HEAD's because the sha's was silent, unreadable, or
+        predates the key -- is a different claim from a pass decided on today's,
+        and a reader counting states should not have to diff
+        `git show <sha>:tools/drain/policy.json` to find out which.
+
+        THE UNVERIFIED CASES WERE SILENT UNTIL AN INDEPENDENT REVIEWER PROBED
+        THEM. One fixture through four resolution states returned ONE byte-
+        identical sentence: as-of UNREADABLE, as-of PREDATES, no as-of at all,
+        and as-of RESOLVED-and-equal. Two of those four are the ground being
+        weaker, and both close things:
+
+        - on a SHALLOW CLONE (`actions/checkout` is depth 1 by default) every
+          sha is unreadable, the whole feature degrades to pre-PR behaviour, and
+          every pass still reads as verified;
+        - every merge older than 2026-09-15 predates `receipts.ci_green_rule`
+          entirely -- which this package calls the COMMON case for its backlog --
+          and closed on a description written afterwards, worded identically to
+          a verified as-of pass.
+
+        The refusal side said "could NOT be read"; the acceptance side, which is
+        the side that CLOSES things, said nothing. That is this package's own
+        failure shape one level down, so it is now said on both sides.
+        """
+        if which == DECL_AS_OF and head_declared != rule:
+            return (f" - {clock(which)}, which HEAD has since changed to "
+                    f"{head_declared!r}")
+        if which == DECL_HEAD_ROW_NEWER:
+            return (f" - HEAD's declaration, used because policy.json at the measured "
+                    f"sha {as_of_sha[:12]} carried NO ROW for this context: the row is "
+                    "NEWER than the sha, which is not a rename")
+        if which == DECL_HEAD_UNVERIFIED:
+            reason = declared_at.reason if declared_at else ""
+            where = (as_of_sha or "?")[:12]
+            if reason == DECL_PREDATES:
+                return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                        f"{where}: policy.json carried no `receipts.ci_green_rule` "
+                        "there, so HEAD's is the only declaration there has ever been")
+            detail = declared_at.error if declared_at else "no reason recorded"
+            return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                    f"{where}: the declaration there could NOT be read ({detail})")
+        return ""
+
+    first_which, first_rule = candidates[0]
+    ok, kind, payload = verdict(first_rule)
+    if ok:
+        return True, payload + provenance_note(first_which, first_rule)
+
+    # THE OTHER CLOCK, ON `missing` ONLY. A rename is not atomic: the workflow
+    # and the declaration describing it are two files, and #4657 moved them 3h13m
+    # apart with three merges in between. A step the sha's declaration names and
+    # the job does not carry is that window; a step the job carries and SKIPPED is
+    # a hollow check, and must never fall through to a second declaration.
+    other_kind, other_payload, other_which = "", None, ""
+    if kind == "missing" and len(candidates) > 1:
+        other_which, other_rule = candidates[1]
+        ok2, other_kind, other_payload = verdict(other_rule)
+        if ok2:
+            return True, (
+                f"{other_payload} - {clock(other_which)}"
+                + (
+                    f", reached because {clock(first_which)} named {list(first_rule)}, "
+                    "which this job does not carry: the workflow and policy.json were "
+                    "renamed in different commits"
+                    if first_which == DECL_AS_OF else ""
+                )
+            )
+
+    if kind != "missing":
+        return False, refusal_text(kind, payload)
+
+    # THE SECOND CLOCK'S OWN DIAGNOSIS, NOT THE FIRST'S SENTENCE REPEATED.
+    #
+    # An independent reviewer executed this branch: with the sha's clock
+    # `missing` and HEAD's clock `hollow`, the code discarded `kind2` and fell
+    # into the refusal below, which asserts "and so is every other declaration
+    # this repo carries for it" -- about a step that is PRESENT in the job and
+    # SKIPPED. That states as fact something the code did not establish
+    # (`deploy-integrity.md` R7) and prescribes "re-read it off a green run" for
+    # a state whose real diagnosis is a hollow check. It is one-sentence-for-
+    # two-states: the exact defect #4676 exists to end, reintroduced in the
+    # branch that ends it.
+    if other_kind and other_kind != "missing":
+        return False, (
+            f"the declared step(s) {payload} are ABSENT from this job - that is "
+            f"{clock(first_which)}. {cap(clock(other_which))} names a DIFFERENT "
+            "step, which this job DOES carry, and it does not account for the "
+            f"context either: {refusal_text(other_kind, other_payload)}. So this is "
+            "not a rename that the other clock resolves"
+        )
+
+    # TWO REFUSALS, NOT ONE SENTENCE, and this is what #4676 cost. Before the
+    # split there was one message -- "the declaration is stale, or this is not the
+    # job it describes; re-read it off a green run" -- and it was printed for a
+    # 2026-09-20 job that had been asked about a step created on 2026-09-21. The
+    # declaration was not stale; it was PERFECTLY current, and the sentence sent
+    # the reader to edit `policy.json`, the single edit that would have made the
+    # declaration wrong for every merge after the rename. The remedies are
+    # opposite, so the sentences have to be.
+    tried = " and ".join(
+        f"{clock(which)} named {list(rule) if isinstance(rule, list) else rule!r}"
+        for which, rule in candidates
+    )
+    if first_which == DECL_HEAD_UNVERIFIED:
+        why_unreadable = declared_at.error if declared_at else "no reason recorded"
+        reason = declared_at.reason if declared_at else ""
+        if reason == DECL_PREDATES:
+            # NOT "fetch the sha". The object is present and readable; the KEY
+            # did not exist yet (`substantive_steps` arrives in `6e29f1012`,
+            # 2026-09-15). Telling a reader to fetch a sha they already have is
+            # the same class of wrong-remedy message #4676 is about, and for a
+            # backlog closing merges older than that date it is the common case.
             return False, (
-                f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
-                f"are SKIPPED ({names})"
+                f"the declared step(s) {payload} are ABSENT from this job, and that "
+                f"declaration is HEAD's: policy.json at the measured sha "
+                f"{(as_of_sha or '?')[:12]} carries no `receipts.ci_green_rule` AT ALL "
+                "- the key did not exist yet, so no declaration ever described this "
+                "job at that sha and HEAD's is the only one there has ever been. "
+                "There is nothing to fetch. Either this is not the job HEAD's "
+                "declaration describes, or that declaration needs re-reading off a "
+                "CURRENT green run - never off a pre-rename one, which would write "
+                "the old spelling back into policy.json and break every merge since"
             )
-        return True, f"declared ALL; every one of its {len(work)} work step(s) ran"
-
-    if not isinstance(rule, list) or not rule:
         return False, (
-            f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
-            "non-empty list of step names"
+            f"the declared step(s) {payload} are ABSENT from this job, and that "
+            f"declaration is HEAD's: the one as of the measured sha "
+            f"{(as_of_sha or '?')[:12]} could NOT be read ({why_unreadable}), so "
+            "whether these steps existed there is UNKNOWN. Obtain that sha (`git "
+            "fetch origin <sha>`) and re-measure - do NOT edit policy.json, whose "
+            "declaration is correct for HEAD"
         )
-
-    missing, hollow, ambiguous = [], [], []
-    for wanted in rule:
-        # EVERY matching step, and EVERY one of them must have run. This used to
-        # be `any(ran(s) for s in matches)`, and an independent reviewer's
-        # mutation arm truncated the match list to `[:1]` and SURVIVED: with
-        # `any`, one running step satisfied a declaration no matter how many
-        # others matched and skipped, so narrowing the population was
-        # unobservable. A filter placed INSIDE the predicate beats a contract
-        # written about the predicate -- which is the whole lesson of the `N*`
-        # arms. `all` makes the size of the match set load-bearing, so a
-        # truncation changes an answer and a test can see it.
-        matches = [s for s in work if wanted in str(s.get("name") or "")]
-        if not matches:
-            missing.append(wanted)
-            continue
-        skipped = [s for s in matches if not ran(s)]
-        if len(skipped) == len(matches):
-            hollow.append(wanted)
-        elif skipped:
-            ambiguous.append(
-                f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
-                "are SKIPPED"
-            )
-    if missing:
+    if first_which == DECL_AS_OF:
         return False, (
-            f"the declared step(s) {missing} are ABSENT from this job - the declaration "
-            "is stale, or this is not the job it describes; re-read it off a green run"
+            f"the declared step(s) {payload} are ABSENT from this job, and so is every "
+            f"other declaration this repo carries for it ({tried}) - so it is stale at "
+            "that sha too, or this is not the job it describes; re-read it off a green run"
         )
-    if ambiguous:
-        # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched several
-        # steps with a MIXED outcome cannot say which one is the check, and
-        # round 5 answered a hollow primary with an alternative BEFORE reaching
-        # this refusal -- so a two-entry declaration with one hollow entry and
-        # one ambiguous entry returned a pass and this sentence was never
-        # printed. An independent reviewer demonstrated it synthetically; it was
-        # latent only because both rows that declare alternatives name exactly
-        # one primary step.
-        return False, (
-            "a declaration matched several steps with a MIXED outcome, so which one "
-            f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
-            "the declaration name exactly one step"
-        )
-    if hollow:
-        # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
-        # blocker. Round 5 accepted "a declared alternative ran" as the context
-        # having done its work, inside this function -- which has no
-        # `changed_files` and cannot ask the only question that makes such an
-        # acceptance safe. `context_is_accounted_for` returned on `did` before
-        # the merged file list was ever consulted, so the `hits` refusal (a
-        # change detector that MISSED a change, the #3783 shape `policy.json`
-        # says must never be laundered) became unreachable whenever any
-        # alternative ran. Two reviewers found it independently, on different
-        # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
-        #
-        # So the alternative lives in `alternative_accounted_for`, which asks
-        # the scope question and this one as two halves of a single predicate.
-        return False, (
-            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
-            "concluded green having not done the thing it is required for"
-        )
-    return True, f"executed its declared substantive step(s) {list(rule)}"
+    return False, (
+        f"the declared step(s) {payload} are ABSENT from this job - the declaration "
+        "is stale, or this is not the job it describes; re-read it off a green run"
+    )
 
 
 #: A `scope_paths` output may declare its scope to BE the producing workflow's
@@ -2277,6 +3181,7 @@ def context_is_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> tuple[bool, str, str]:
     """ONE question -- is this green check accounted for? -- asked in one place.
 
@@ -2424,16 +3329,56 @@ def context_is_accounted_for(
             "individual steps, its scope, or its alternatives say"
         ), ""
 
-    did, evidence = context_did_its_work(name, job, policy)
+    # THE DECLARATION IS SUBSTITUTED ONCE, HERE, FOR ROUTES 2 AND 3 (#4676).
+    #
+    # `substantive_steps`, `alternatives` and `scope_paths` are all descriptions
+    # of the SAME workflow, so all three move together when it is renamed --
+    # swapping only the first would fix route 1 and leave routes 2 and 3 asking
+    # a 2026-09-20 job about a 2026-09-21 step name. That is this file's own
+    # recurring defect ("fixed on one side only"), and arm `AS2` in
+    # `mutate_gates.py` is exactly that narrowing, so a test has to see it.
+    #
+    # ROUTE 1 IS ALSO HANDED THE ORIGINAL POLICY AND THE `DeclarationAsOf`, NOT
+    # THE SUBSTITUTED ONE, and that is not a style choice. It resolves for
+    # itself because it must be able to name BOTH declarations -- the sha's,
+    # which it judged on, and HEAD's, which the reader is looking at. Passing it
+    # `effective` made `head_declared` read the substituted rule, the two
+    # compared equal, and the provenance clause silently vanished from every
+    # real receipt while the unit test -- which called the predicate directly
+    # with HEAD's policy -- went on passing. Measured on PR #4593 before it was
+    # fixed: verdict correct, disclosure absent.
+    #
+    # ROUTES 2 AND 3 GET ONE CLOCK, DELIBERATELY, and an independent reviewer
+    # was right that the asymmetry needed stating rather than leaving to be
+    # rediscovered. Route 1's second clock is safe because it is reachable ONLY
+    # on `missing` -- a step name absent from the job entirely, which is the
+    # rename signature and nothing else. Routes 2 and 3 have no equivalent
+    # restriction: `scope_untouched_at_merge` and `alternative_accounted_for`
+    # refuse for reasons that are about the merged FILE LIST and the detector,
+    # not about a name being absent, so "try the other declaration when the
+    # first refuses" would let a scope refusal under one clock be overridden by
+    # an acceptance under the other. That is a weakening, and it is the shape
+    # `#3783` says must never be laundered.
+    #
+    # The cost is stated too: a lag-window job whose primary is skipped under
+    # HEAD's spelling and whose declared alternative ran is REFUSED here, where
+    # HEAD's declaration alone would have returned ACCOUNTED_ALTERNATIVE. That
+    # is fail-closed, it is not realised on any of the three real lag-window
+    # merges (#4652, #4654, #4658 all pass through route 1's fallthrough), and
+    # `test_routes_2_and_3_are_deliberately_single_clocked` pins it so a future
+    # change to it is a deliberate edit rather than a silent one.
+    effective, _provenance, _as_of_sha = _declaration_as_of(policy, declared_at)
+
+    did, evidence = context_did_its_work(name, job, policy, declared_at=declared_at)
     if did:
         return True, evidence, ACCOUNTED_DID_WORK
     excused, why = scope_untouched_at_merge(
-        name, job, changed_files, policy,
+        name, job, changed_files, effective,
         push_trigger=push_trigger, infra_ere=infra_ere)
     if excused:
         return True, why, ACCOUNTED_SCOPE_SKIP
     alt_ok, alt_why = alternative_accounted_for(
-        name, job, changed_files, policy,
+        name, job, changed_files, effective,
         push_trigger=push_trigger, infra_ere=infra_ere)
     if alt_ok:
         return True, alt_why, ACCOUNTED_ALTERNATIVE
@@ -3434,7 +4379,7 @@ def _is_bookkeeping_step(name: str) -> bool:
 
 def _renamed_at_merge(
     item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict,
-    infra_ere: str | None = None,
+    infra_ere: str | None = None, declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     """The per-event RENAME case, on evidence rather than on a green run.
 
@@ -3510,7 +4455,8 @@ def _renamed_at_merge(
         )
     ran = [
         (j, context_is_accounted_for(
-            item.name, j, merged_changed_files, policy, infra_ere=infra_ere))
+            item.name, j, merged_changed_files, policy, infra_ere=infra_ere,
+            declared_at=declared_at))
         for j in jobs
     ]
     usable = [
@@ -3553,6 +4499,434 @@ def base_is_current(
     if base_sha != origin_main_sha:
         return False, f"base {base_sha[:12]} != origin/{expected_base} {origin_main_sha[:12]}"
     return True, f"base == origin/{expected_base} @ {base_sha[:12]}"
+
+
+@dataclass(frozen=True)
+class ContextScope:
+    """Which paths ONE required context's producing workflow declares it reads.
+
+    `paths` / `paths_ignore` are that workflow's own `on.push` filter, DERIVED
+    from the workflow file by `merge_gate.derive_context_scopes` -- never
+    transcribed into this package. `unreadable` carries the reason the scope
+    could not be established at all, and a scope that carries one can only
+    refuse.
+
+    THE THREE STATES ARE DIFFERENT ANSWERS AND ARE KEPT APART, for the same
+    reason `parse_push_trigger` keeps `None` apart from `present=False`:
+
+        paths=('a/**',)                  a filter: only `a/**` reaches it
+        paths=None, paths_ignore=None    NO filter: it reads EVERYTHING
+        paths=()                         an EMPTY filter: it matches NOTHING
+        unreadable='...'                 the question was not answered
+
+    Collapsing any of the last three into "matches nothing" is the whole defect
+    this guards against -- an empty intersection is the answer that lets a
+    merge through, so a scope that cannot match is indistinguishable from a
+    scope that was never resolved unless they are separate fields. The
+    `paths=()` row is the one that was MISSED for a round: it is not the absent
+    state, it is a real `paths: []` in a workflow file, and because `any([])`
+    is False it excused every delta through the branch that looked like it had
+    already handled it. `base_delta_is_inert` refuses it explicitly.
+    """
+
+    name: str
+    workflow_path: str | None = None
+    paths: tuple[str, ...] | None = None
+    paths_ignore: tuple[str, ...] | None = None
+    unreadable: str | None = None
+
+
+def _every_pattern_matched(patterns: tuple[str, ...], path: str) -> bool:
+    """`any()` over a LIST, so every pattern is evaluated before an answer.
+
+    `_any_match` uses a generator and short-circuits. That is harmless under a
+    positive `paths:` list -- an early match means a HIT, which refuses either
+    way -- and it is the EXCUSING direction under `paths-ignore`: a match on
+    pattern one returns before pattern two is looked at, so an unrepresentable
+    pattern later in the list never raises, and a `!` re-include (which
+    `_UNSUPPORTED_GLOB` exists to refuse, precisely because ignoring it can
+    excuse outright) is silently skipped. The list comprehension forces every
+    `glob_matches` call, so an unsupported pattern ANYWHERE in the list raises.
+    """
+    return any([glob_matches(pattern, path) for pattern in patterns])  # noqa: C419
+
+
+def filter_admits(scope: ContextScope, path: str) -> bool:
+    """Would a push touching `path` have been ADMITTED by this filter?
+
+    NAMED FOR WHAT IT MEASURES. It was `scope_reads` for two rounds, and the
+    name asserted the very thing `base_delta_is_inert`'s docstring says this
+    cannot establish -- that the filter bounds what the context READS. It
+    bounds what the TRUNK RE-RUNS FOR. A retraction that leaves the claim in an
+    identifier is the same defect as one that leaves it in a printed string.
+
+    Raises `UnsupportedPatternError` (via `glob_matches`) rather than guessing,
+    and raises `ValueError` on a scope that has no filter -- callers must have
+    refused before they get here. Both are the fail-closed direction: this
+    function NEVER answers "no" for a reason other than the patterns.
+    """
+    if scope.unreadable:
+        raise ValueError(f"{scope.name}: scope unresolved ({scope.unreadable})")
+    if scope.paths is not None and scope.paths_ignore is not None:
+        raise ValueError(f"{scope.name}: both paths and paths-ignore declared")
+    if scope.paths is not None:
+        return _every_pattern_matched(scope.paths, path)
+    if scope.paths_ignore is not None:
+        # `**` is REFUSED here though it is fine under `paths:`, and the
+        # asymmetry is the whole point. `_glob_to_regex` lets `**/` consume
+        # ZERO segments, so it matches MORE paths than a strict reading. Under
+        # `paths:` matching more ADMITS more, which makes a delta look live --
+        # the refusing direction, and safe. Under `paths-ignore:` the same
+        # permissiveness IGNORES more, which makes the delta look INERT: the
+        # excusing direction, on the arm that decides merges.
+        #
+        # Measured on this checkout: 127 workflow files, 40 with an `on.push`
+        # trigger, and ZERO of them declare `paths-ignore` at all -- so this
+        # refuses nothing that exists today, and costs nothing to keep closed.
+        # NARROW ON PURPOSE: `**/` only, not a bare trailing `**`. The
+        # permissiveness lives in the `**/` production, which may consume ZERO
+        # segments together with its slash; `docs/**` has no such branch and
+        # is read exactly as "everything under docs/", which is why the
+        # everything-except test still passes.
+        for pattern in scope.paths_ignore:
+            if "**/" in pattern:
+                raise UnsupportedPatternError(
+                    f"{pattern} (`**/` under paths-ignore - it may consume "
+                    "zero segments, which is permissive, and permissive under "
+                    "negation excuses an absence rather than refusing it)"
+                )
+        return not _every_pattern_matched(scope.paths_ignore, path)
+    raise ValueError(f"{scope.name}: no path filter at all - it admits every path")
+
+
+#: How many hit files a refusal names before it truncates. The COUNT is always
+#: printed, so truncation cannot make a large intersection look small.
+_HITS_SHOWN = 3
+
+
+def base_delta_is_inert(
+    delta_files: list[str] | None,
+    scopes: list[ContextScope],
+    required: list[str],
+) -> tuple[bool, str]:
+    """#4585. Can the commits in `base..origin/main` affect THIS PR's evidence?
+
+    Gate 1 requires `base == origin/main` because branch protection here is
+    `strict=false`: without it, "all required contexts green" could be a
+    statement about a base that no longer exists. That is correct, and it makes
+    every merge staleness-block every other open PR -- clearing which is a push,
+    which re-pins every live verdict as `predates-head`. Measured 2026-09-18:
+    four rounds of verdicts burned on pushes where no content changed, and one
+    re-run discarded a 42-minute mutation matrix over a base delta of three
+    comment-only Dockerfiles.
+
+    THIS IS A NARROWER PROPERTY THAN GATE 1'S, AND THE EARLIER TEXT HERE SAID
+    THE OPPOSITE. It said "this is not a relaxation of the property, it is the
+    same property measured directly". That was FALSE, both reviewers measured
+    it, and the sentence is recorded here rather than deleted because a
+    docstring asserting a soundness it does not have is the R7 error this
+    package exists to refuse -- and because the chain of reasoning it invites
+    is what the next person acts on.
+
+    Gate 1's property is: THE CI GREEN BEING COUNTED WAS MEASURED AGAINST THE
+    BASE BEING MERGED. What this function measures is: THE TRUNK'S OWN `push`
+    FILTERS WOULD NOT HAVE RE-RUN THIS CONTEXT FOR THESE COMMITS. Those are
+    different questions. `on.push.paths` models WHAT THE TRUNK RE-RUNS FOR, not
+    WHAT A CONTEXT READS, and on this repo they already diverge:
+
+    - `validate.yml` publishes FIVE required contexts while declaring only
+      bicep paths plus `.github/workflows/**`.
+    - `PowerShell Lint` inside it runs
+      `Get-ChildItem -Path . -Filter "*.ps1" -Recurse`, and `Repo Hygiene` runs
+      `find . -type f`. Both read the whole tree.
+    - `Secret Scan` runs `gitleaks detect --config .gitleaks.toml`
+      (`validate.yml:599`), and `.gitleaks.toml` matches none of the filtered
+      contexts' patterns either.
+
+    Fed the real scopes of the 12 filtered contexts -- the counterfactual this
+    arm invites -- this function returns INERT for
+    `deploy/bicep/DLZ/powershellHelper.ps1` and for a 6 MB binary, which
+    `PowerShell Lint` and `Repo Hygiene` demonstrably read. It is harmless
+    TODAY only because the five unfiltered contexts refuse everything, which is
+    a property of the topology and not of this function.
+
+    SO THE `on.push` FILTER IS A PROXY, AND ITS PRECONDITION IS UNESTABLISHED.
+    Relying on it requires, PER CONTEXT, that the workflow's declared push
+    scope be a SUPERSET of what that context actually reads. That has not been
+    shown for any of the 12 filtered contexts; for three of them it is shown
+    FALSE above. Nobody may make this arm fire -- by giving one of the five
+    unfiltered workflows a `paths:` list, or any other route -- without
+    establishing that superset relation for the contexts it would unblock.
+
+    AND THE "MAIN WAS GREEN ANYWAY" ARGUMENT IS WEAKER THAN THIS GATE, which
+    is the other thing the earlier text got wrong. That the trunk accepted
+    these commits without re-running a context is a statement about TRUNK
+    HYGIENE. Gate 1 stands in for `strict=true` on branch protection, and
+    `strict` does not consult path filters AT ALL -- it requires the branch to
+    be up to date, full stop. So "the trunk would not have re-run it" is
+    strictly less than what gate 1 is substituting for, and it is offered here
+    as the reason the refusals are safe, never as a proof that the passes are.
+
+    WHAT MAKES THE ARM SAFE TO SHIP TODAY IS ITS FAIL-CLOSED BEHAVIOUR, not
+    the proxy: every input that is not a measured miss refuses, five of the 17
+    required contexts refuse unconditionally, and so no stale base reaches the
+    GO path at all. `policy.json`'s `ci_green_rule` reads the same filters, and
+    it is worth saying that it is not a precedent for this: it uses them to
+    explain why a context was NEVER CREATED at a sha, which is a fact about
+    GitHub's dispatcher, whereas this would use them to bound what a context
+    READS, which is a fact about the job.
+
+    EVERYTHING THAT IS NOT A MEASURED MISS IS A REFUSAL:
+
+    - a required context with no scope at all (its producer could not be traced)
+    - a producing workflow that could not be read or parsed
+    - a workflow with NO `on.push` path filter -- it reads EVERYTHING
+    - a workflow with an EMPTY one (`paths: []`) -- it matches NOTHING, which
+      would make every delta read inert
+    - a filter pattern `glob_matches` will not represent (`!`, `[...]`, ...)
+    - a delta that could not be read
+    - an empty required set
+
+    `required` is passed SEPARATELY and set-equality is asserted against the
+    scopes. Deriving the population from `scopes` itself would make the loop
+    unable to witness a dropped context: a caller that silently omits the one
+    context whose scope is unresolvable would produce a clean intersection over
+    the remainder, which is the "a loop derived from the thing under test
+    cannot witness it" shape.
+
+    WHAT THIS ARM DOES ON THIS REPO TODAY, measured 2026-09-19 rather than
+    projected, because an arm that cannot fire is the defect this package
+    exists to find:
+
+    - FIVE of the 17 required contexts are produced by workflows whose `push:`
+      carries no `paths:` at all -- `fiab-console-ci.yml` (`next build
+      (node 20)`, `vitest (node 20)`, `brain security graph`),
+      `loom-guardrails.yml` (`guardrails`) and `commit-message-parses.yml`
+      (`changelog parser can read every commit message`). Each reads
+      EVERYTHING, so each refuses, so this arm refuses EVERY stale base today
+      and gate 1 behaves exactly as it did before.
+    - The issue's own worked example does not survive re-measurement either.
+      #4574 -> #4552's delta is three Dockerfiles
+      (`git diff --name-only 0c2c4c97434 e6d28c0892f`), and
+      `apps/fiab-setup-orchestrator/Dockerfile` IS inside `test.yml`'s push
+      paths -- so seven required contexts hit it on the filtered side as well.
+      "That intersection is empty" was a hypothesis; it is false on two
+      independent grounds.
+
+    So this ships as the MECHANISM, and it would start firing if a producing
+    workflow declared a `push` path scope.
+    That is technically available -- `on.push.paths` is a different event from
+    `on.pull_request`, so a required check can keep reporting on every PR while
+    declaring its push scope -- and it is deliberately NOT done here, for two
+    reasons and not one: it changes what runs on main, AND the superset
+    precondition above is unestablished, so declaring a filter would make this
+    arm fire on a proxy that is known to be wrong for at least three contexts.
+    Establish the superset relation per context FIRST. Do not report this arm
+    as having reduced any cost until a real PR has passed on it.
+
+    Returns `(inert, why)`. `why` NAMES the contexts considered on the passing
+    arm -- an empty intersection is only evidence if you can see what it was
+    taken over.
+    """
+    if not required:
+        return False, (
+            "the required-context set is EMPTY, so an empty intersection is "
+            "vacuous - unmeasurable is not a pass"
+        )
+    by_name = {s.name: s for s in scopes}
+    unscoped = sorted(set(required) - set(by_name))
+    if unscoped:
+        return False, (
+            f"{len(unscoped)} required context(s) have no scope at all: "
+            f"{unscoped} - an intersection taken over a subset of the required "
+            "set cannot say anything about the rest"
+        )
+    if delta_files is None:
+        return False, (
+            "the base..origin/main delta could not be read, so nothing was "
+            "intersected - unmeasurable is not a pass"
+        )
+    for name in required:
+        scope = by_name[name]
+        if scope.unreadable:
+            return False, (
+                f"{name!r}: {scope.unreadable} - a scope that could not be "
+                "resolved refuses; it never reads as 'matches nothing'"
+            )
+        if scope.paths is None and scope.paths_ignore is None:
+            return False, (
+                f"{name!r} is produced by {scope.workflow_path} which declares "
+                "NO `on.push` path filter, so it ADMITS EVERY PATH and any "
+                "base delta can reach it"
+            )
+        # AN EMPTY LIST IS NOT THE SAME STATE AS AN ABSENT ONE, and it is the
+        # dangerous one. `paths: []` parses to `()`, `any([])` is False, so
+        # every delta falls outside the filter and the context excuses
+        # everything -- the "matches nothing is the answer that lets a merge
+        # through" shape, arriving through the one branch above that looked
+        # like it had already handled it. `ContextScope`'s own docstring names
+        # three states; this is the fourth, and it was unwatched.
+        #
+        # THE TWO EMPTY SPELLINGS ARE OPPOSITE FACTS AND GET OPPOSITE REASONS.
+        # Round 2 shipped one message for both, saying "matches NOTHING" -- and
+        # for `paths-ignore: []` that is INVERTED: ignoring nothing means the
+        # workflow admits EVERYTHING. Worse, that half was already refused
+        # correctly before the branch existed (every file matched the hit arm),
+        # so a true reason was replaced with a false one. R7, introduced by the
+        # fix for something else, which is why they are split here rather than
+        # sharing a sentence.
+        if scope.paths == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "`paths` list, which ADMITS NOTHING - that is not a scope, it "
+                "is a context that would excuse every delta"
+            )
+        if scope.paths_ignore == ():
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares an EMPTY `on.push` "
+                "`paths-ignore` list, which ignores nothing and therefore "
+                "ADMITS EVERY PATH - any base delta can reach it"
+            )
+        if scope.paths is not None and scope.paths_ignore is not None:
+            return False, (
+                f"{name!r}: {scope.workflow_path} declares BOTH `paths` and "
+                "`paths-ignore` on push - this translator will not guess which "
+                "wins"
+            )
+        try:
+            hits = [f for f in delta_files if filter_admits(scope, f)]
+        except UnsupportedPatternError as exc:
+            return False, (
+                f"{name!r}: {scope.workflow_path} uses filter pattern "
+                f"{str(exc)!r}, which this translator cannot represent "
+                "faithfully - an unanswerable question is not an empty "
+                "intersection"
+            )
+        except ValueError as exc:  # pragma: no cover - the branches above cover it
+            return False, f"{name!r}: {exc}"
+        if hits:
+            return False, (
+                f"{len(hits)} file(s) in the base delta are ADMITTED BY the "
+                f"`on.push` filter of {name!r}'s producer "
+                f"({scope.workflow_path}): {sorted(hits)[:_HITS_SHOWN]} - the "
+                "trunk would have re-run it; take origin/main and re-run"
+            )
+    # THE VOCABULARY ON BOTH PASSING BRANCHES IS THE RETRACTION'S, and round 2
+    # missed that. The prose was corrected to say this measures the trunk's
+    # push filters rather than what a context READS -- while the string printed
+    # BESIDE A MERGE BEING LET THROUGH still said "is read by". A retraction
+    # that leaves the claim in the program's own output puts the false sentence
+    # into the permanent record the moment the gate prints it.
+    if not delta_files:
+        return True, (
+            "the base..origin/main delta lists NO files at all, so no required "
+            f"context's `on.push` filter can admit anything from it - "
+            f"{len(required)} considered: {sorted(required)}"
+        )
+    return True, (
+        f"no file in the base..origin/main delta ({len(delta_files)} file(s)) "
+        f"is admitted by the `on.push` filter of any of the {len(required)} "
+        f"required context(s) {sorted(required)} - delta: "
+        f"{sorted(delta_files)[:_HITS_SHOWN]}"
+        + (f" (+{len(delta_files) - _HITS_SHOWN} more)"
+           if len(delta_files) > _HITS_SHOWN else "")
+        + ". NOT a claim that no required context READS those files: the "
+          "filters bound what the trunk RE-RUNS, and the superset precondition "
+          "is unestablished - see gates.base_delta_is_inert."
+    )
+
+
+def verdict_transfers_across_base_update(
+    head_parents: list[str] | None,
+    approved_head: str,
+    automerge_tree: str | None,
+    head_tree: str,
+) -> tuple[bool, str]:
+    """Does a verdict measured at `approved_head` still describe `head_tree`?
+
+    THE PROBLEM THIS EXISTS FOR. Verdict liveness is a TIMESTAMP proxy
+    (`parse_verdicts`: `when >= head_date`), so ANY new head -- including one
+    that authored not a single line -- retires every verdict beneath it. The
+    only remedy for a stale base is `update-branch`, which creates exactly such
+    a head. Combined with gate 1, which refuses a stale base, and with
+    `base_delta_is_inert`, which refuses EVERY delta on this repo today because
+    five required contexts declare no `on.push` path filter, the result is that
+    each merge invalidates every other open PR and the reviews must be re-run
+    to say the same thing about the same bytes. That is the loop that
+    serializes the queue, and it is a property of the PROXY, not of the diff.
+
+    THE TEST. A base update is a merge commit whose tree is exactly the
+    automatic merge of its two parents. If
+
+        merge-tree --write-tree <approved-head> <base-tip>  ==  <new-head>^{tree}
+
+    then the new head introduces NO content beyond what git computed, so the
+    bytes the reviewer measured are still the bytes on offer. The other parent
+    is the trunk, which arrived through its own merges and reviews. The verdict
+    transfers.
+
+    PURE BY CONSTRUCTION. `gates.py` runs no subprocess, so `automerge_tree`
+    and `head_tree` are resolved by the CALLER and injected -- the same
+    delegation `INFRA_READING_ERE` documents. A test can therefore drive the
+    resolved case, the conflicted case and the unresolvable case without a
+    repository.
+
+    THIS IS NOT A RECENCY TEST AND DOES NOT DISCHARGE ANYTHING. It answers one
+    question -- "is this head the same content?" -- and returns a verdict's
+    eligibility to be re-pinned, nothing more. `reduce_verdicts` remains a
+    CONJUNCTION: transferring an APPROVE never retires a REQUEST-CHANGES, and a
+    blocking verdict transfers by exactly the same rule. Widening this into
+    "the head is fine" would reinstate the recency semantics the package
+    refuses.
+
+    EVERY UNKNOWN REFUSES. An unresolvable tree, a conflicted auto-merge, a
+    head that is not a merge commit, a head whose parents do not include the
+    approved one: each returns False with the reason. A base update that
+    conflicted is not a base update -- somebody resolved it by hand, and a hand
+    resolution is new content that nobody has reviewed.
+    """
+    if not head_tree:
+        return False, "cannot resolve the head tree - unmeasurable, not a pass"
+    if not approved_head:
+        return False, "no approved head to transfer FROM - unmeasurable, not a pass"
+    parents = list(head_parents or [])
+    if len(parents) != 2:
+        # A base update is ALWAYS a two-parent merge. One parent is an ordinary
+        # commit -- somebody authored something, which is the case this must
+        # refuse. Three is an octopus merge, which `merge-tree` two-arg form
+        # cannot model, so it is refused rather than approximated.
+        return False, (
+            f"head has {len(parents)} parent(s), not 2 - only a two-parent "
+            f"merge can be a pure base update"
+        )
+    if approved_head not in parents:
+        # The verdict measured a head that is not an ancestor-by-parenthood of
+        # this one. It may still be reachable, but "reachable" is not the
+        # question: a commit between them could have authored anything.
+        return False, (
+            f"approved head {approved_head[:12]} is not a parent of this head "
+            f"(parents {[p[:12] for p in parents]}) - nothing to transfer"
+        )
+    if not automerge_tree:
+        # Distinct from "the trees differ". `merge-tree` writes no tree when the
+        # merge conflicts, and a conflicted merge that nevertheless produced a
+        # head means a human resolved it -- unreviewed content by definition.
+        return False, (
+            "the auto-merge of the two parents produced no tree (conflict, or "
+            "the caller could not resolve it) - unmeasurable, not a pass"
+        )
+    if automerge_tree != head_tree:
+        return False, (
+            f"head tree {head_tree[:12]} != auto-merge of its parents "
+            f"{automerge_tree[:12]} - this head carries content the merge did "
+            f"not produce, so it was NOT reviewed"
+        )
+    other = [p for p in parents if p != approved_head]
+    return True, (
+        f"head is exactly the auto-merge of {approved_head[:12]} and "
+        f"{(other[0] if other else approved_head)[:12]} (tree {head_tree[:12]}) "
+        f"- no content was authored, so the verdict measured these bytes"
+    )
 
 
 def issue_set_audit(

@@ -217,6 +217,13 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
       }
     }
     storageProfile: {
+      // Offer reverted from `windowsserver2022` (#4658 → this fix): Azure
+      // refuses an imageReference change on an EXISTING VM
+      // (PropertyChangeNotAllowed), so on a VM that edit could never migrate
+      // anything — it only breaks redeploys. Migrating an existing ArcGIS VM
+      // off the .NET-6-bearing offer requires re-creating it before
+      // 2027-01-11; see #4672. VMSS modules keep `windowsserver2022`, where a
+      // model image update IS accepted.
       imageReference: {
         publisher: 'MicrosoftWindowsServer'
         offer: 'WindowsServer'

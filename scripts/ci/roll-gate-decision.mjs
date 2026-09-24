@@ -76,6 +76,62 @@
 export const VITEST_CHECK_NAME = 'vitest (node 20)';
 
 /**
+ * The shard check-runs, which is where the suite ACTUALLY EXECUTES (#4679).
+ *
+ * WHY THIS EXISTS. `8d3dd9cbb` (#4657, 2026-09-21) split the suite across four
+ * runners. `vitest (node 20)` kept its name — it is a REQUIRED context and this
+ * gate reads it — but it stopped being the job that runs the suite: its
+ * substantive steps are now `Download shard blobs` and `Merge shard reports and
+ * enforce the coverage floor`. Measured at 2018829ce, run 35801391361
+ * (re-measured 2026-09-23 off the jobs API):
+ *
+ *     vitest — detect changes |  14s      vitest shard 3/4 | 720s
+ *     vitest shard 1/4        | 462s      vitest shard 4/4 | 636s
+ *     vitest shard 2/4        | 664s      vitest (node 20) |  98s
+ *
+ * 2482 seconds of execution, all green — and the duration floor below, applied
+ * to the 98s MERGE job, refused the roll. It went on refusing every
+ * console-touching commit for two days while the estate stayed pinned at
+ * build-marker sha=03f1ace17, stamp=20260921T230332Z. The floor was not
+ * wrong; it was pointed at the wrong job.
+ *
+ * ON THE DRIFT COUNT, because getting it wrong here would be this rule's own
+ * defect: an earlier draft of this comment said "15 commits behind", which was
+ * never true. 15 is what `git rev-list --count 03f1ace17..HEAD` returns in a
+ * checkout whose local HEAD trails origin — staleness measured against the
+ * CHECKED-OUT HEAD instead of the remote, inside a fix for a staleness gate.
+ * Measured server-side with the compare API: 03f1ace17 was 16 behind this
+ * branch's base 4ff1e1fcc, and 17 behind main at 2026-09-23T20:20Z. The number
+ * only means something with its ref AND its timestamp, so quote both or quote
+ * neither — `git rev-list --count <sha>..origin/main`, never `..HEAD`.
+ *
+ * So the gate now adjudicates the jobs that do the work. The DENOMINATOR is
+ * read out of the name rather than assumed to be 4, so re-sharding to 8 or 16
+ * needs no edit here.
+ */
+export const VITEST_SHARD_NAME_RE = /^vitest shard (\d+)\/(\d+)$/;
+
+/**
+ * Prefix shared by the expanded shard names AND by the unexpanded placeholder
+ * GitHub emits when the whole matrix is skipped.
+ *
+ * MEASURED, not assumed (2026-09-23). On a console-untouched commit,
+ * `vitest-shard`'s `if: needs.vitest-detect.outputs.console == 'true'` is false
+ * and GitHub records the matrix as ONE check-run carrying the literal,
+ * unexpanded expression:
+ *
+ *   356290aa9  vitest shard ${{ matrix.shard }}/4 | completed | skipped |  0s
+ *              vitest (node 20)                   | completed | success | 78s
+ *   a1acc9c29  vitest shard ${{ matrix.shard }}/4 | completed | skipped |  0s
+ *              vitest (node 20)                   | completed | success | 13s
+ *
+ * That name does NOT match VITEST_SHARD_NAME_RE, so it must be recognised
+ * separately — otherwise a skipped matrix reads as "this SHA predates sharding"
+ * and gets adjudicated under the wrong topology.
+ */
+export const VITEST_SHARD_NAME_PREFIX = 'vitest shard ';
+
+/**
  * Wall-clock floor, in seconds, below which a `success` on a console-touching
  * commit is NOT evidence that the suite ran (#2632).
  *
@@ -102,8 +158,113 @@ export const VITEST_CHECK_NAME = 'vitest (node 20)';
  * run on a future, smaller suite. If the suite ever legitimately drops under
  * two minutes, change this WITH the measurement that justifies it — do not
  * widen it to make a red gate green.
+ *
+ * WHAT IT IS APPLIED TO, AFTER SHARDING (#4679). PER SHARD. Every shard job
+ * must clear this floor on its own.
+ *
+ * NOT to the SUM, and the first version of this fix got that wrong in a way
+ * that re-opened #2631. A shard job's wall time is `setup + execution`, and the
+ * setup term is paid N times. Measured on run 35801391361 (jobs API, steps
+ * array), the NON-vitest steps per shard were:
+ *
+ *     shard 1/4  28s      shard 3/4  32s
+ *     shard 2/4  34s      shard 4/4  32s     -> 126s
+ *
+ * 126s already exceeds 120s. So under a sum rule, four shards that checked out,
+ * installed dependencies and executed ZERO TESTS would have PASSED this gate:
+ * the effective floor on executed test time was 120 - 126 = -6s. That is #2631
+ * rebuilt by the change meant to preserve the guard against it. At N=8 the
+ * setup term is ~250s and the rule would be pure decoration. The earlier
+ * comment here claimed summing "restores the quantity the 120s was measured
+ * against" and is "independent of N"; both halves were false, and the wrong
+ * comment is how the next author would have re-introduced it.
+ *
+ * Per shard the separation is real, and is the same shape #2632 measured.
+ * These are POPULATION figures, not the cited run's: 139 successful
+ * `vitest shard i/N` jobs drawn from 121 fiab-console-ci runs in the
+ * post-sharding window (2026-09-21 .. 2026-09-23), 35 of which produced shard
+ * jobs. An earlier draft of this comment published 34s / 462s, which were both
+ * from run 35801391361 alone and both FLATTERED the margin — the
+ * sample-reported-as-population error, in the comment whose whole job is to
+ * stop the next author lowering the floor.
+ *
+ *     slowest setup-only cost observed   39s   (run 35914400167, shard 1/4;
+ *                                               max non-vitest step total —
+ *                                               what a shard that executes
+ *                                               NOTHING costs)
+ *     fastest REAL shard observed       443s   (run 35753707196, shard 2/4;
+ *                                               exec 402s + setup 36s)
+ *
+ * 120s sits 3.08x above the slowest setup-only cost and 3.69x below the
+ * fastest real shard. Nothing in the population lands in the 39s..443s gap.
+ * Same constant, nothing widened, nothing subtracted.
+ *
+ * THIS RULE IS N-SENSITIVE, and the arithmetic must be done on the MINIMUM
+ * because that is what the rule adjudicates — an earlier draft computed with
+ * the MEAN and therefore overstated the headroom. Shards are not balanced:
+ * over 34 complete runs the worst observed `fastest-shard-exec / mean-exec`
+ * ratio is 0.674 (run 35753707196: 402s against a 596s mean). Projecting the
+ * measured 2345s of total execution with that ratio and 39s of setup:
+ *
+ *     N=4    min shard 434s   3.62x   passes
+ *     N=8    min shard 237s   1.97x   passes
+ *     N=16   min shard 138s   1.15x   passes, but the margin is thin
+ *     N=19   min shard 122s   1.02x   passes by two seconds
+ *     N=20   min shard 118s   0.98x   REFUSES A HEALTHY RUN
+ *
+ * So **N=20 is where this floor starts refusing healthy runs**, not some
+ * distant hypothetical. That is not left to prose: the COUPLING GUARD in
+ * `__tests__/roll-gate-decision.test.mjs` reads the live matrix width out of
+ * fiab-console-ci.yml and recomputes this projection, and goes RED on the PR
+ * that widens the matrix past the safety factor — while there is still
+ * headroom, so the re-derivation happens BEFORE a healthy run is refused.
+ * If it fires: re-derive this constant from a fresh measurement of both
+ * populations. Do not lower it to make a red gate green, and do not subtract
+ * an estimated setup cost — a magic constant carved out of a guard is how the
+ * guard stops watching.
  */
 export const VITEST_MIN_PLAUSIBLE_SECONDS = 120;
+
+/**
+ * The measurements the per-shard floor is calibrated on, exported so the
+ * COUPLING GUARD can recompute the N-sensitivity projection instead of
+ * transcribing it (`assertion-design.md` §3: lift the numbers from the source,
+ * never copy them into the probe).
+ *
+ * Every field is a measurement, not an estimate. Re-derive with
+ * `temp/4679/pop.mjs`-style aggregation over the jobs API if the topology or
+ * the suite changes materially — and update `population` when you do, because
+ * a figure without its population is the defect this block exists to correct.
+ */
+export const VITEST_SHARD_CALIBRATION = Object.freeze({
+  population:
+    '139 successful `vitest shard i/N` jobs from 121 fiab-console-ci runs (35 with shards), 2026-09-21..2026-09-23',
+  /** Max non-vitest step total on any shard: what a shard that runs NOTHING costs. */
+  slowestSetupOnlySeconds: 39,
+  /** Min wall time of any shard that genuinely executed tests. */
+  fastestRealShardSeconds: 443,
+  /** Sum of the `Run vitest shard i/N` steps on run 35801391361. */
+  totalExecSeconds: 2345,
+  /** Worst observed fastest-shard-exec / mean-exec over 34 complete runs. */
+  worstFastestToMeanExecRatio: 0.674,
+  /**
+   * The guard trips while headroom REMAINS, not when the floor already
+   * refuses. 1.25 puts the tripwire at N=16 (true margin 1.15x) while the
+   * break is at N=20 — so the re-derivation is forced one widening early.
+   */
+  guardSafetyFactor: 1.25,
+});
+
+/**
+ * Worst-case wall time of the SLOWEST-to-be-adjudicated shard — i.e. the
+ * fastest one — for a matrix of width `n`, from the calibration above.
+ *
+ * Computed from the MINIMUM, not the mean: the rule adjudicates every shard
+ * individually, so the mean overstates the headroom by the imbalance factor.
+ */
+export function projectedMinShardSeconds(n, cal = VITEST_SHARD_CALIBRATION) {
+  return (cal.totalExecSeconds / n) * cal.worstFastestToMeanExecRatio + cal.slowestSetupOnlySeconds;
+}
 
 /**
  * Paths whose change obliges the vitest job to actually run. MUST stay in sync
@@ -165,26 +326,211 @@ export function consoleTouchedFromCommit(commit) {
 }
 
 /**
- * Is a GREEN verdict admissible as proof the suite ran? Returns null when it
- * is, or a refusal when it is not.
+ * Group a SHA's check-runs into the vitest shard topology they describe.
  *
- * The only way a fast green is admissible is when we have POSITIVELY
+ * Three topologies, and the difference between them is the whole of #4679:
+ *
+ *   'sharded'        one or more `vitest shard i/N` runs exist — the suite runs
+ *                    THERE, and `vitest (node 20)` merely merges their blobs.
+ *   'matrix-skipped' only the unexpanded `vitest shard ${{ matrix.shard }}/4`
+ *                    placeholder exists, conclusion `skipped` — fiab-console-ci's
+ *                    change detector said the console was untouched, so NO shard
+ *                    ran.
+ *   'unsharded'      no shard check-run of any shape — the pre-#4657 topology,
+ *                    where `vitest (node 20)` IS the job that runs the suite.
+ *
+ * Latest attempt wins per shard name, matching how the merge job is selected:
+ * a commit can be re-run, and an old attempt must not outvote a new one.
+ *
+ * @param {Array} checkRuns  projected check-runs (see {@link projectCheckRun}).
+ * @returns {{topology:'sharded'|'matrix-skipped'|'unsharded', shards:Array, placeholders:Array}}
+ */
+export function collectShardRuns(checkRuns = []) {
+  const byName = new Map();
+  const placeholders = [];
+  for (const r of checkRuns || []) {
+    const name = String(r?.name ?? '');
+    if (!name.startsWith(VITEST_SHARD_NAME_PREFIX)) continue;
+    if (!VITEST_SHARD_NAME_RE.test(name)) {
+      // The unexpanded-matrix placeholder, or a shard naming scheme this gate
+      // does not recognise. Either way it is NOT an executed shard.
+      placeholders.push(r);
+      continue;
+    }
+    const prev = byName.get(name);
+    if (!prev || String(r.started_at || '') >= String(prev.started_at || '')) byName.set(name, r);
+  }
+  const shards = [...byName.values()]
+    .map((run) => {
+      const m = VITEST_SHARD_NAME_RE.exec(String(run.name));
+      return { index: Number(m[1]), total: Number(m[2]), run, seconds: checkRunSeconds(run) };
+    })
+    .sort((a, b) => a.index - b.index);
+
+  if (shards.length > 0) return { topology: 'sharded', shards, placeholders };
+  if (placeholders.length > 0) return { topology: 'matrix-skipped', shards, placeholders };
+  return { topology: 'unsharded', shards: [], placeholders: [] };
+}
+
+/**
+ * Why a fast green is not admissible on THIS commit, in words. Shared so the
+ * shard messages and the unsharded message cannot drift apart.
+ */
+function whyGreenNeedsProof(consoleTouched) {
+  return consoleTouched === true
+    ? 'this commit DOES change apps/fiab-console, so the suite had to run'
+    : 'it could not be established that this commit leaves apps/fiab-console untouched';
+}
+
+/**
+ * Adjudicate the SHARD jobs. Returns `null` when they vouch for the suite
+ * having executed, or a verdict when they do not.
+ *
+ * Every branch below names the value that would fire it — the refusals are the
+ * point of this function, not a by-product of it.
+ */
+function shardVerdict({ shards, placeholders }, { consoleTouched, where, checkRunsComplete }) {
+  const why = whyGreenNeedsProof(consoleTouched);
+
+  // NO SHARD EXECUTED. Fires on: a single `skipped` placeholder (measured on
+  // 356290aa9 and a1acc9c29) while the commit does touch the console — i.e.
+  // exactly the #2631 change-detector defect, now visible as a topology fact
+  // rather than inferred from a wall time.
+  if (shards.length === 0) {
+    const p = placeholders[0] || {};
+    return {
+      decision: 'refuse',
+      reason: `the vitest shard matrix was SKIPPED ${where} — GitHub recorded it as ${placeholders.length} unexpanded check-run(s) named '${p.name}' (conclusion '${p.conclusion ?? 'null'}'), which is what fiab-console-ci produces when its change detector concluded the console was untouched — and ${why}. NO shard executed, so '${VITEST_CHECK_NAME}' had nothing to merge and its green says nothing about the suite. A green check that never ran is not verification (#2631/#2632).`,
+    };
+  }
+
+  const pending = shards.filter((s) => s.run.status !== 'completed');
+  if (pending.length > 0) {
+    return {
+      decision: 'wait',
+      reason: `'${pending[0].run.name}' is ${pending[0].run.status} ${where} (${pending.length} of ${shards.length} observed shards still running)`,
+    };
+  }
+
+  // The denominator is read from the names, never assumed. Disagreement means
+  // two different shard topologies are mixed on one SHA and we cannot say how
+  // many shards a complete run has.
+  const totals = [...new Set(shards.map((s) => s.total))];
+  if (totals.length !== 1 || !Number.isInteger(totals[0]) || totals[0] < 1) {
+    return {
+      decision: 'refuse',
+      reason: `the shard check-runs ${where} disagree about how many shards a complete run has (${shards
+        .map((s) => s.run.name)
+        .join(', ')}). This gate cannot establish that the whole suite ran, and an unknown is never a pass.`,
+    };
+  }
+  const total = totals[0];
+  const missing = [];
+  for (let i = 1; i <= total; i += 1) if (!shards.some((s) => s.index === i)) missing.push(`${i}/${total}`);
+  if (missing.length > 0) {
+    // A truncated read is an UNKNOWN, not an absence — the same distinction the
+    // top of classifyVitestGate makes for the merge job itself.
+    if (!checkRunsComplete) {
+      return {
+        decision: 'wait',
+        reason: `could not read the complete check-run list ${where} — shard(s) ${missing.join(
+          ', ',
+        )} may be present but unread (paging). Treating as unknown, not absent.`,
+      };
+    }
+    return {
+      decision: 'refuse',
+      reason: `shard(s) ${missing.join(', ')} produced no check-run ${where}, so ${
+        missing.length
+      } of ${total} of the suite has no witness — and ${why}. '${VITEST_CHECK_NAME}' merges whatever blobs arrived; a shard that never started leaves no failing job to notice it.`,
+    };
+  }
+
+  const bad = shards.filter((s) => s.run.conclusion !== 'success');
+  if (bad.length > 0) {
+    return {
+      decision: 'refuse',
+      reason: `${bad.length} of ${total} vitest shard jobs did not conclude success ${where} (${bad
+        .map((s) => `'${s.run.name}' → '${s.run.conclusion ?? 'null'}'`)
+        .join(', ')}). The suite did not run to completion.`,
+    };
+  }
+
+  const unmeasurable = shards.filter((s) => s.seconds === null);
+  if (unmeasurable.length > 0) {
+    return {
+      decision: 'refuse',
+      reason: `the wall time of ${unmeasurable.length} of ${total} vitest shard jobs ${where} could not be measured (${unmeasurable
+        .map((s) => `'${s.run.name}'`)
+        .join(
+          ', ',
+        )}), so it cannot be established that the suite executed — and ${why}. This is UNKNOWN, not verified.`,
+    };
+  }
+
+  // THE FLOOR, PER SHARD (#4679). A shard whose wall time is under the floor
+  // did not execute tests: setup alone costs 28-34s (measured), and the
+  // fastest shard that genuinely ran the suite took 462s.
+  //
+  // Summing here instead would be the defect this arm exists to prevent —
+  // N x setup (126s at N=4) already clears 120s, so four setup-only shards
+  // would pass. See the VITEST_MIN_PLAUSIBLE_SECONDS comment.
+  const tooFast = shards.filter((s) => s.seconds < VITEST_MIN_PLAUSIBLE_SECONDS);
+  if (tooFast.length > 0) {
+    return {
+      decision: 'refuse',
+      reason: `${tooFast.length} of ${total} vitest shard jobs ${where} concluded success under the ${VITEST_MIN_PLAUSIBLE_SECONDS}s floor for a shard that actually executed tests (${tooFast
+        .map((s) => `${s.run.name}=${s.seconds}s`)
+        .join(
+          ', ',
+        )}) — and ${why}. Setup alone costs 28-34s on a shard that runs nothing, while the fastest shard observed to really execute took 462s; a shard under this floor reported green without running tests. A green check that never ran is not verification (#2631/#2632).`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Is a GREEN verdict on the merge job admissible as proof the suite ran?
+ * Returns null when it is, or a verdict (refuse/wait) when it is not.
+ *
+ * The only way a fast green is admissible ON ITS OWN is when we have POSITIVELY
  * established that the console was untouched — that is fiab-console-ci's
  * documented path-filtered behaviour (it reports the check green rather than
  * skipping it, so bicep-only commits stay rollable). Not knowing is not the
- * same as knowing it was untouched, so unknown refuses.
+ * same as knowing it was untouched, so unknown does not take that exit.
+ *
+ * Otherwise the evidence depends on the TOPOLOGY, and #4679 is what happens
+ * when a gate assumes one: post-#4657 the merge job's own wall time is ~98s by
+ * design and says nothing either way, so the shards are adjudicated instead.
  */
-function inadmissibleGreen({ seconds, consoleTouched, where }) {
-  if (seconds !== null && seconds >= VITEST_MIN_PLAUSIBLE_SECONDS) return null;
+function admitGreen({ checkRuns, seconds, consoleTouched, where, checkRunsComplete = true }) {
+  // Path-filtered green — unchanged, and checked FIRST so that a skipped shard
+  // matrix on a genuinely console-untouched commit stays rollable.
   if (consoleTouched === false) return null;
+
+  const topology = collectShardRuns(checkRuns);
+
+  if (topology.topology === 'unsharded' && !checkRunsComplete) {
+    return {
+      decision: 'wait',
+      reason: `could not read the complete check-run list ${where} — shard check-runs may be present but unread (paging), and the topology decides what counts as evidence. Treating as unknown, not absent.`,
+    };
+  }
+  if (topology.topology !== 'unsharded') {
+    return shardVerdict(topology, { consoleTouched, where, checkRunsComplete });
+  }
+
+  // PRE-SHARDING TOPOLOGY: `vitest (node 20)` IS the job that runs the suite,
+  // so its own wall time is the evidence (#2632). Unchanged behaviour — this is
+  // what keeps a roll of a SHA older than #4657 adjudicable.
+  if (seconds !== null && seconds >= VITEST_MIN_PLAUSIBLE_SECONDS) return null;
   const observed = seconds === null ? 'an unmeasurable wall time' : `${seconds}s`;
-  const why =
-    consoleTouched === true
-      ? 'this commit DOES change apps/fiab-console, so the suite had to run'
-      : 'it could not be established that this commit leaves apps/fiab-console untouched';
   return {
     decision: 'refuse',
-    reason: `'${VITEST_CHECK_NAME}' ${where} concluded success in ${observed} — under the ${VITEST_MIN_PLAUSIBLE_SECONDS}s floor for a run that actually executed (real runs measured 294–1036s; a change-detector skip is 8–14s), and ${why}. A green check that never ran is not verification (#2631/#2632). Re-run fiab-console-ci for this commit and roll again.`,
+    reason: `'${VITEST_CHECK_NAME}' ${where} concluded success in ${observed} — under the ${VITEST_MIN_PLAUSIBLE_SECONDS}s floor for a run that actually executed (real runs measured 294–1036s; a change-detector skip is 8–14s), and ${whyGreenNeedsProof(
+      consoleTouched,
+    )}. A green check that never ran is not verification (#2631/#2632). NOTE ON WHICH JOB THIS MEASURED: no check-run matching ${VITEST_SHARD_NAME_RE} exists for this SHA, so this was adjudicated as the PRE-SHARDING topology, in which '${VITEST_CHECK_NAME}' is itself the job that runs the suite. If the suite has since been re-sharded under job names this gate does not recognise, then the job being measured is NOT the job that runs the suite and THIS GATE is what needs fixing, not CI (#4679). Otherwise: re-run fiab-console-ci for this commit and roll again.`,
   };
 }
 
@@ -200,7 +546,10 @@ function inadmissibleGreen({ seconds, consoleTouched, where }) {
  *   each `{ status, conclusion }`. This is what distinguishes "the check has
  *   not been created YET" from "the check is never coming".
  * @param {object?}  input.mainVerification  Only consulted when the check was
- *   CANCELLED: `{ compareStatus, behindBy, mainConclusion, mainSeconds }`.
+ *   CANCELLED: `{ compareStatus, behindBy, mainConclusion, mainSeconds,
+ *   mainCheckRuns }`. `mainCheckRuns` is main's FULL projected check-run list —
+ *   needed because main is sharded too, so its `vitest (node 20)` wall time is
+ *   not the evidence (#4679).
  * @param {boolean} [input.checkRunsComplete=true]  False when the check-run
  *   list could not be read in full (paging incomplete / API error). An absent
  *   check in a TRUNCATED list is not evidence of absence.
@@ -278,14 +627,34 @@ export function classifyVitestGate({
     // A conclusion says the job REPORTED green. It does not say the job RAN.
     // #2632: 108 merged console PRs carried a `success` produced in 8–14s by a
     // change detector that skipped every heavy step.
+    // #4679: and since #4657 this job does not run the suite at all — the
+    // shards do, so admitGreen picks its evidence from the topology.
     const seconds = checkRunSeconds(latest);
-    const bad = inadmissibleGreen({ seconds, consoleTouched, where: 'for this SHA' });
+    const bad = admitGreen({
+      checkRuns,
+      seconds,
+      consoleTouched,
+      where: 'for this SHA',
+      checkRunsComplete,
+    });
     if (bad) return bad;
+    const shardNote =
+      consoleTouched === false
+        ? ' (console untouched — path-filtered green)'
+        : (() => {
+            const t = collectShardRuns(checkRuns);
+            if (t.topology !== 'sharded') return '';
+            const fastest = Math.min(...t.shards.map((s) => s.seconds ?? 0));
+            // The FASTEST shard is named, not the total: the floor is
+            // per-shard, so the total would advertise a quantity this gate
+            // does not adjudicate (#4679).
+            return ` over ${t.shards.length} shard job(s), the fastest ${fastest}s (floor ${VITEST_MIN_PLAUSIBLE_SECONDS}s each)`;
+          })();
     return {
       decision: 'pass',
       reason: `'${VITEST_CHECK_NAME}' concluded success${
         seconds === null ? '' : ` in ${seconds}s`
-      }${consoleTouched === false ? ' (console untouched — path-filtered green)' : ''}`,
+      }${shardNote}`,
     };
   }
 
@@ -306,10 +675,20 @@ export function classifyVitestGate({
       // verdict is only sound if main's run actually executed: if main's own
       // tip commit was path-filtered, its 10s green verified nothing, least of
       // all a console-touching ancestor.
-      const bad = inadmissibleGreen({
+      //
+      // #4679 — this site had the SAME defect as the primary path and had to be
+      // fixed AT THE SITE, not by its label: main is sharded too, so main's
+      // `vitest (node 20)` is ~98s by design and `mainSeconds` alone would have
+      // refused every borrow. `mainCheckRuns` carries main's shard jobs so the
+      // topology decides here as well.
+      const bad = admitGreen({
+        checkRuns: mainVerification.mainCheckRuns ?? [],
         seconds: mainSeconds,
         consoleTouched,
         where: "on main (borrowed as this commit's verification)",
+        // fetchMainVerification returns null rather than a partial list, so a
+        // list that reaches here is complete by construction.
+        checkRunsComplete: mainVerification.mainCheckRunsComplete !== false,
       });
       if (bad) return bad;
       return {

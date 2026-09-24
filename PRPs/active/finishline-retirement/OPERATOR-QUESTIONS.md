@@ -1,5 +1,30 @@
 # FINISHLINE operator queue — 19 questions, re-measured 2026-09-17
 
+> **Some of these have since been answered. The answers are in `DECISIONS.md`,
+> beside this file.** Decided there: **OP-3** *(Commercial half only — see
+> below)*, **OP-7**, **OP-8**, **OP-9 item 2**, **OP-14**, and **OP-19(b)**.
+> **OP-15** dissolved on measurement — its premise was false and its row must not
+> be acted on. **OP-19(a)** is already done on the estate, out of band — its row
+> must not be acted on either.
+>
+> **Still carrying something live — and this includes NARROWED rows, not just
+> LIVE ones:** **OP-3's Gov half** (the decision covers Commercial only; OP-3
+> asks for Commercial *and* Gov from a fresh subscription, and per
+> `cloud-parity.md` a Commercial receipt proves nothing about Gov — no Gov
+> clean-subscription run is scheduled, decided, or blocked on anything tracked),
+> **OP-5**, **OP-9 items 1/3/5/7**, **OP-11**, **OP-13**, **OP-19(a)**'s IaC gap,
+> and the *"Remaining decision"* on each of **OP-2**, **OP-4**, **OP-16** and
+> **OP-6**. A NARROWED verdict means part of the question answered itself, not
+> that the row is finished. **OP-4**'s remainder is the same class as OP-14's — a
+> cost-material opt-in owing a gate-registry entry (**#4612**).
+>
+> Read `DECISIONS.md` § "Provenance" before relying on any of it: none of those
+> decisions has an artifact a reader can follow, because on this repository an
+> operator statement and an agent statement are indistinguishable by author.
+>
+> The question text below is left as it was asked. A decision is only legible
+> beside the question it answers.
+
 The FINISHLINE harness (`.harness/`) carried an `operator_queue` of **19
 decisions**. None has been answered since **2026-08-06**. The harness is being
 retired (`Refs #4495`); this page exists so the queue is answerable in one pass
@@ -16,7 +41,7 @@ Verdicts used below:
 |---|---|
 | **OBSOLETE** | the thing the question was about has happened, or its premise is gone. No decision needed. Evidence given per row. |
 | **NARROWED** | part of the question answered itself; a smaller decision remains. |
-| **LIVE** | still stands as asked. |
+| **LIVE** | still stands as asked — as first measured, not a claim about today. See the note at the top of this page. |
 
 Counts: **5 OBSOLETE · 4 NARROWED · 10 LIVE.**
 
@@ -277,6 +302,11 @@ happened, and there is a new obstacle the question predates: the six most recent
 `schedule` — are **all `failure`**, already tracked as **#4448**. An attended
 dispatch into a red lane is unlikely to produce the receipt.
 
+*(No longer true at head: the next scheduled run, 2026-09-18T10:52:38Z, returned
+`success`. One green after six reds is a recovery, not a record — #4448 is still
+OPEN — but the lane is not currently red. The #3056 re-check the watch-list asks
+for below has also been done; its answer is in `DECISIONS.md` § "OP-13".)*
+
 The watch-list in the original ask is still worth carrying verbatim into
 whenever the window opens:
 
@@ -294,6 +324,14 @@ Two parts, and they diverge.
 
 ### OP-15 · task `D2` · Tag Contributor on the ACR
 
+**This question dissolved on measurement. Do not act on it — see
+`DECISIONS.md` § "OP-15".** Both halves of the premise below are false: the
+deploy identity already holds Owner at the tenant-root management group, so it
+does not lack `Microsoft.Resources/tags/write`; and the lease tags are erased by
+every subscription-scope apply regardless, so the grant would not make leases
+race-free. Issue 4563 tracks the real problem. The question text is kept below
+because the answer is only legible beside what was asked.
+
 The deploy identity lacks `Microsoft.Resources/tags/write` on the Commercial ACR
 (name in `.harness/archive/2026-08-08/config.json`, `estate.commercial.acr`), so
 #2603 firewall leases run in legacy-fallback
@@ -305,29 +343,39 @@ perform, so closing the issue did not perform it. Context that raises the
 stakes rather than lowering them: **#4285 is OPEN** — *"ACR firewall lease: ~13
 Commercial claimants on one per-registry mutex, none serialized, with a 25-min
 wait budget below the builder's 36-min median hold."* Unleased fallback under
-that much contention is the #3676 shape.
+that much contention is the #3676 shape. That contention is real and is not
+dissolved; what dissolved is the idea that a role grant addresses it.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
 > **ANSWERED 2026-09-17 — approved, and re-measured at head. Decision recorded in
-> `DECISIONS.md` (this directory); evidence in
+> `DECISIONS.md` (this directory) § "OP-19 (a)" and § "OP-19 (b)"; evidence in
 > `docs/fiab/deployment/functions-to-aca-jobs.md` §8.**
 >
-> **(a) is already true.** All three definitions on the two hosts are disabled
-> (`AzureWebJobs.<fn>.Disabled=true` *and* `isDisabled: true`), done out of band
-> with nothing in the repo recording it. Neither host has had a bicep declaration
-> since #2556, so no bicep change could have disabled them — it was an estate
-> action, and the estate already took it.
-> `scripts/csa-loom/check-retired-function-timers.sh` now guards a re-enable.
+> **(a) is already done — do not perform it.** All three function definitions
+> are disabled on the live estate, measured 2026-09-17 and re-measured
+> 2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
+> with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
+> setting**: neither host has had a bicep declaration since #2556, so no bicep
+> change could have done it, and nothing in IaC re-asserts it.
+> `scripts/csa-loom/check-retired-function-timers.sh` (run weekly by the
+> `op19-retired-timers` job in `loom-drift-check.yml`) is what would notice a
+> re-enable.
 >
 > **(b) re-measured ZERO on a wider window with a live control** —
 > `FunctionExecutionCount` 2026-08-17→2026-09-17 (P1D, Total) = 0 for all seven,
 > 31/31 explicit datapoints, against a control of 73. Three apps are unblocked
 > for the operator to delete, two are KEPT (still the intended runtime, no
 > replacement), two are deferred (superseded, but their removal is a Console +
-> orchestrator change). The `full-app-deploy-commercial.yml` reference to
-> `func-cpeval-*` — which had been failing since the Function was retired — is
-> repointed at the live ACA job.
+> orchestrator change).
+>
+> **Carried by #4564, which is OPEN and UNMERGED** — so the
+> `full-app-deploy-commercial.yml` reference to `func-cpeval-*`, which has been
+> failing since the Function was retired, is repointed at the live ACA job **on
+> that branch only**. Merged is not deployed (`deploy-integrity.md` R2); nothing
+> here is live until that PR lands and the estate rolls.
 >
 > **The text below is the original ask, left unedited.**
 
@@ -349,7 +397,11 @@ that `func-secexp`/`func-cpeval` *"DO hold enabled timers."* Function Apps are
 still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`,
 `monitor-ops-agent.bicep`, `scc-labels-function.bicep`), and
 `full-app-deploy-commercial.yml:1259` still looks up `func-cpeval-*` at deploy
-time. Nothing has disabled the duplicate timers.
+time. Nothing has disabled the duplicate timers. *(That last sentence was true
+when written and is **false at head** — the timers are disabled, out of band; see
+the note at the top of this row. Everything before it still holds, and the bicep
+sentences being accurate is exactly why the state is fragile: nothing in IaC
+asserts the disable, so nothing would notice it being undone.)*
 
 ---
 

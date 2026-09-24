@@ -675,6 +675,63 @@ def test_a_declined_item_seen_open_is_still_disputed(tmp_path):
     assert led.items[2].audit_reason == led_mod.AUDIT_REOPENED
 
 
+def test_a_terminal_transition_clears_a_stale_audit_reason(tmp_path):
+    """A CLOSED ITEM IS NOT ALSO A DEPARTED ONE (round 9 nit, pre-existing).
+
+    `audit_reason` is a SCALAR set on the way IN to `needs-audit`, and the only
+    thing that cleared it was `upsert`'s departure rescue -- the path where the
+    item turns up open on GitHub again. Recovering the OTHER way, which is what
+    the drain now does routinely (re-take the receipt on an audited item and
+    close it), left the item reading `state=closed reason='departed'`. A cold
+    reader of the ledger sees a closed item still labelled as having vanished,
+    and there is no way to tell that label apart from a live one.
+
+    Both audit reasons are exercised, because the reopen route and the
+    departure route write the field at different sites and a fix at one of them
+    is the one-sided shape this package keeps producing.
+
+    WHAT MAKES THIS FAIL: deleting the `if state in TERMINAL:` clear in
+    `transition`, which is arm L30 -- the item reaches `closed` with
+    `audit_reason` still set. The POSITIVE PAIR is the third block: a
+    NON-terminal transition must NOT clear the field, or "clear it always" would
+    satisfy the two negatives while destroying the departure rescue's own
+    premise (`was_state == NEEDS_AUDIT and audit_reason == AUDIT_DEPARTED`).
+    """
+    led = _led(tmp_path)
+
+    # departed -> re-receipted -> closed
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.items[1].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(1, NEEDS_AUDIT, "vanished from the live set")
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED, "re-taken after the audit")
+    assert led.items[1].state == CLOSED
+    assert led.items[1].audit_reason is None, (
+        "a closed item still reads as departed - the value that breaks this is "
+        "the terminal clear removed from `transition`"
+    )
+
+    # reopened -> declined
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.items[2].audit_reason = led_mod.AUDIT_REOPENED
+    led.transition(2, NEEDS_AUDIT, "open on GitHub again")
+    led.transition(2, DECLINED, "operator 2026-09-18: superseded")
+    assert led.items[2].state == DECLINED
+    assert led.items[2].audit_reason is None, (
+        "a declined item still reads as reopened"
+    )
+
+    # THE POSITIVE PAIR. A non-terminal transition leaves the reason alone; the
+    # departure rescue in `upsert` reads it AFTER exactly such a move.
+    led.upsert(3, "z", "W6-ci", lane="lane:ci", size=1)
+    led.items[3].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(3, NEEDS_AUDIT, "vanished from the live set")
+    assert led.items[3].audit_reason == led_mod.AUDIT_DEPARTED, (
+        "clearing on EVERY transition would break the departure rescue, whose "
+        "whole premise is reading this field on a `needs-audit` item"
+    )
+
+
 def test_negative_control_a_receipt_is_stamped_with_the_class_it_was_taken_under(
     tmp_path,
 ):

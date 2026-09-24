@@ -4,23 +4,36 @@
  *   DELETE /api/onelake/[itemId]
  *     body (optional JSON): {
  *       itemType?: string,                       // one of ONELAKE_TYPES; inferred when omitted
- *       adlsHints?: [{ container, path }]         // explicit ADLS folders to soft-delete
+ *       adlsHints?: [{ container, path }]         // narrows the derived folder set
  *     }
  *
  * Soft-delete = Cosmos state._recycled stamp + best-effort ADLS Gen2 (HNS) blob
  * soft-delete of the item's folders. The item then appears in the Recycle bin
  * (GET /api/onelake/recycle) and is recoverable until its retention window
- * elapses. When no adlsHints are supplied the route derives them from the item's
- * OneLake security roles (their container + concrete folder paths) — the same
- * folders the item's data-access is scoped to.
+ * elapses.
+ *
+ * WHAT THE FOLDER SET IS, EXACTLY. It is derived from the item's OneLake
+ * security roles: each role's `container`, plus each of its `paths` entries
+ * that normalises to a non-empty container-relative directory. That is the
+ * ROLES' view of where the item's data sits — it is NOT an independently
+ * verified list of folders the item exclusively owns. `role.container` is one
+ * of the tenant-wide `KNOWN_CONTAINERS` (adls-client.ts), and `role.paths`
+ * entries are validated upstream by `isValidRolePath`, which is a PREFIX test
+ * (`*`, `/Tables…` or `/Files…`) and nothing more.
+ *
+ * `adlsHints` in the body is a narrowing FILTER over that derived set, never an
+ * independent list: an entry that is not a member of the derived set is dropped
+ * (see resolveAdlsHints). So the set acted on is always a subset of the derived
+ * set, whatever the body says.
  *
  * Azure-native only; Cosmos is the source of truth, ADLS soft-delete is the
  * recoverable backing. No Fabric/Power BI dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { ONELAKE_TYPES, isOneLakeType } from '@/lib/catalog/onelake-types';
 import { softDeleteOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { listRoles } from '@/lib/azure/onelake-security-client';
 import { trimSlashes } from '@/lib/util/trim';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -37,8 +50,12 @@ function normPath(raw: string): string {
 
 /**
  * Best-effort: discover the ADLS folders an item occupies from its OneLake
- * security roles. Skips wildcard/root paths so a soft-delete never targets a
- * whole medallion container. Returns a de-duplicated container+path list.
+ * security roles. A role path that normalises to '' — `'*'`, `''`, or a bare
+ * `'/'` — is skipped, so a role granting the whole container does not become a
+ * container-root target. That is the ONLY path shape this filters: `role.paths`
+ * entries are validated upstream by `isValidRolePath`, which is a PREFIX test,
+ * so this function neither resolves nor rejects traversal segments — it reports
+ * what the roles say. Returns a de-duplicated container+path list.
  */
 async function deriveAdlsHints(itemId: string): Promise<Array<{ container: string; path: string }>> {
   try {
@@ -50,7 +67,7 @@ async function deriveAdlsHints(itemId: string): Promise<Array<{ container: strin
       if (!container) continue;
       for (const raw of role.paths || []) {
         const path = normPath(raw);
-        if (!path) continue; // never soft-delete the container root
+        if (!path) continue; // a whole-container grant must not become a root target
         const key = `${container}::${path}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -61,6 +78,62 @@ async function deriveAdlsHints(itemId: string): Promise<Array<{ container: strin
   } catch {
     return [];
   }
+}
+
+/**
+ * Canonical key for a container + path pair, normalised with the same normPath()
+ * deriveAdlsHints() applies to a role path — so a supplied `/Tables/orders/` and
+ * a derived `Tables/orders` in the same container compare equal.
+ */
+function hintKey(container: string, path: string): string {
+  return `${container}::${normPath(path)}`;
+}
+
+/**
+ * Resolve which ADLS folders this soft-delete may touch.
+ *
+ * `derived` is the set deriveAdlsHints() built from the item's OneLake security
+ * roles. `supplied` is the optional `adlsHints` array off the request body, and
+ * it may only NARROW that set: every supplied entry is looked up in the derived
+ * set by normalised container + path and dropped when it is not a member, so
+ * the resolved set is always a SUBSET of the derived set. The pair carried
+ * forward is the DERIVED one, never the caller's string, so a
+ * differently-spelled-but-equal hint cannot change the path handed to the ADLS
+ * call.
+ *
+ * That subset property is all this establishes, and it is by construction: the
+ * only values pushed below come out of `allowed`, which is built from `derived`
+ * alone. Whether the derived set is itself a good description of the item's
+ * storage is the roles' business, not this function's — see the module header.
+ *
+ * With no supplied array, an empty one, or no usable entries in it, the result
+ * is the plain derived set / empty — the behaviour the OneLake page relies on,
+ * since it sends `itemType` only.
+ */
+function resolveAdlsHints(
+  derived: Array<{ container: string; path: string }>,
+  supplied: unknown,
+): Array<{ container: string; path: string }> {
+  if (!Array.isArray(supplied) || supplied.length === 0) return derived;
+  const allowed = new Map(derived.map((h) => [hintKey(h.container, h.path), h]));
+  const out: Array<{ container: string; path: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of supplied as Array<{ container?: unknown; path?: unknown }>) {
+    // EQUIVALENT MUTANT, disclosed per assertion-design.md §5: rejecting a
+    // non-string here vs coercing it (`String(raw?.container ?? '')`) is not
+    // observable. A coerced `123` becomes '123', which is not a key of
+    // `allowed` — built only from derived pairs — so it is dropped one line
+    // later either way. No input distinguishes the two, and no test claims to.
+    const container = typeof raw?.container === 'string' ? raw.container : '';
+    const path = typeof raw?.path === 'string' ? raw.path : '';
+    if (!container || !path) continue;
+    const key = hintKey(container, path);
+    const match = allowed.get(key);
+    if (!match || seen.has(key)) continue;
+    seen.add(key);
+    out.push(match);
+  }
+  return out;
 }
 
 export const DELETE = withSession<{ itemId: string }>(async (req: NextRequest, { session: s, params }) => {
@@ -90,20 +163,31 @@ export const DELETE = withSession<{ itemId: string }>(async (req: NextRequest, {
     if (!isOneLakeType(found.itemType)) {
       return NextResponse.json({ ok: false, error: 'not a OneLake catalog item' }, { status: 400 });
     }
-    // Tenant gate on the inferred item before acting.
-    const ws = await workspacesContainer();
-    try {
-      const { resource } = await ws.item(found.workspaceId, s.claims.oid).read<any>();
-      if (!resource || resource.tenantId !== s.claims.oid) {
-        return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
-      }
-    } catch { return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 }); }
+    // Workspace gate on the INFERRED item before acting: the canonical ladder
+    // (owner OR tenant admin OR a write-scoped ACL member). No `allowReadRoles`
+    // — DELETE mutates.
+    //
+    // This branch used to run an owner-only partition point read. Removing it
+    // admits nobody new, measured on the same request: `softDeleteOwnedItem`
+    // calls `loadOwnedItem` a few lines below, which resolves through
+    // `accessOptsFor` → `ambientAccessOptsFor` and so already carries the
+    // tenant-admin and group inputs; and `multiUserAclEnabled()` defaults ON
+    // (workspace-access.ts). A caller this point read refused could therefore
+    // perform the identical soft-delete today simply by putting `itemType` in
+    // the body, which skips this branch entirely. The point read was strictly
+    // narrower than the check that actually binds, on one of two paths only.
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId: found.workspaceId,
+      itemId,
+      itemType: found.itemType,
+      notFound: 'item not found',
+    });
+    if (denied) return denied;
     itemType = found.itemType;
   }
 
-  const adlsHints = Array.isArray(body.adlsHints) && body.adlsHints.length
-    ? body.adlsHints.filter((h) => h?.container && h?.path)
-    : await deriveAdlsHints(itemId);
+  // Only the DERIVED set is actionable; a body `adlsHints` array narrows it.
+  const adlsHints = resolveAdlsHints(await deriveAdlsHints(itemId), body.adlsHints);
 
   const deletedBy = s.claims.upn || s.claims.email || s.claims.oid;
   const recycled = await softDeleteOwnedItem(itemId, itemType, s.claims.oid, deletedBy, adlsHints);

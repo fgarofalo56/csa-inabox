@@ -4227,12 +4227,40 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         external: true
         healthPath: '/api/health'
         tier: 'console'
-        // BR-BLUEGREEN — the Console runs in MULTIPLE-revision mode so
-        // console-bluegreen-roll.yml can land a new image at 0% traffic,
-        // health-gate it, then shift 0->100 with the prior revision as an
-        // instant rollback. Only the Console opts in; every other app stays
-        // Single. See docs/fiab/deployment/bluegreen-rolls.md.
-        multiRevision: true
+        // BR-BLUEGREEN WAS REVERSED HERE (2026-09-20). The Console ran in
+        // MULTIPLE-revision mode from #2064 so console-bluegreen-roll.yml could
+        // land a new image at 0% traffic, health-gate it, then shift 0->100 with
+        // the prior revision as an instant rollback. That lane HAS NEVER
+        // SUCCEEDED: 4 runs, 4 failures, every one at its FIRST step with
+        // ContainerAppInvalidIngressStickySessionRevisionMode, and none since
+        // 2026-07-31. deploy-fiab-commercial.yml says so in as many words —
+        // "The day that lane works" — which is a conditional, not a statement
+        // that it does.
+        //
+        // WHAT IT COST TO KEEP THE OPTION OPEN. `az containerapp update --image`
+        // in Multiple mode CREATES a revision and deactivates nothing, and the
+        // roll's rollback re-updates the image rather than reactivating, so a
+        // FAILED roll added two. Nothing anywhere retired them. Measured
+        // 2026-09-20: 251 active revisions holding 484 replicas at minReplicas=2
+        // apiece, ALL Unhealthy. New revisions provisioned cleanly —
+        // provisioningState=Provisioned, provisioningError=null — and then got
+        // ZERO replicas against a floor of 2. PLACEMENT was failing, not
+        // provisioning, and ACA reports no error for that, so the estate simply
+        // sat 11 commits behind for two days while each roll attempt added more.
+        // Confirmed causal by intervention: starved revisions took replicas the
+        // moment older ones were deactivated.
+        //
+        // Single mode retires the predecessor on every roll, so the leak cannot
+        // reopen. It costs nothing that worked: rollback re-updates the image
+        // and never reactivates a revision, so it does not need Multiple.
+        //
+        // AFFINITY IS STILL FORBIDDEN, and now on purpose rather than by
+        // accident. ACA *requires* affinity:'none' in Multiple mode, so that
+        // requirement — not intent — was what kept sticky sessions out. Single
+        // mode lifts the requirement, so app-deployments.bicep now asserts
+        // affinity:'none' for every ingress app instead of only multiRevision
+        // ones. Do NOT "fix" SQL query-cancel with sticky sessions (#3400); the
+        // fix is a cross-replica cancel signal.
         minReplicas: 2
         maxReplicas: 6
         // Console-runtime telemetry opt-out (loomConsoleTelemetryEnabled, default
