@@ -7,12 +7,26 @@
  * `state.storageAccount` names the account a lakehouse is bound to. Other code
  * derives a security-relevant SCOPE from both — `resolveLakehouseAbfss`
  * (`lib/azure/lakehouse-abfss.ts`) is the reader exercised here. Four routes
- * wrote `state` WHOLESALE from a request body with no schema validation:
+ * wrote `state` WHOLESALE from a request body with no schema validation. Each
+ * needs TWO halves, and the table says which of them each writer carries,
+ * because an earlier revision had the ASSERT on all four and the CARRY on only
+ * two — which left the omission bypass open on the first row, the route that
+ * serves `lakehouse`:
  *
- *   PATCH  /api/items/[type]/[id]          → via assertNoServerOwnedStateChange
- *   PATCH  /api/cosmos-items/[type]/[id]   → new call site
- *   POST   /api/cosmos-items/[type]        → new call site (create)
- *   updateOwnedItem()                      → via assertNoServerOwnedStateChange
+ *   route                                  assert (a CHANGE)  carry (an OMISSION)
+ *   PATCH  /api/items/[type]/[id]          yes, via           yes, own call site
+ *                                          assertNoServerOwnedStateChange
+ *   PATCH  /api/cosmos-items/[type]/[id]   yes, own call site yes, own call site
+ *   POST   /api/cosmos-items/[type]        yes, own call site n/a — CREATE has no
+ *                                                             prior value to rebase
+ *   updateOwnedItem()                      yes, via           yes, in the helper
+ *                                          assertNoServerOwnedStateChange
+ *
+ * The two PATCH routes each build and write their OWN `next` document rather
+ * than calling `updateOwnedItem`, so the helper-level carry does not reach
+ * either of them and each needs a call site of its own. Both have a dedicated
+ * omission arm below for exactly that reason — a helper-level spec cannot
+ * witness a missing route-level call.
  *
  * WHAT EACH ASSERTION IS PINNED TO, and the value that makes it FAIL — the bar
  * `.claude/rules/assertion-design.md` sets. These specs assert the MECHANISM,
@@ -129,6 +143,7 @@ import {
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import { PATCH as COSMOS_ITEM_PATCH } from '@/app/api/cosmos-items/[type]/[id]/route';
 import { POST as COSMOS_ITEM_CREATE } from '@/app/api/cosmos-items/[type]/route';
+import { PATCH as GENERIC_ITEM_PATCH } from '@/app/api/items/[type]/[id]/route';
 
 /** What the lakehouse provisioner recorded. `lakehouse.ts:831-835` is the shape. */
 const SERVER_SCOPE = {
@@ -354,6 +369,69 @@ describe('#4619 — PATCH /api/cosmos-items/[type]/[id] refuses it too', () => {
     expect(replaced).toHaveLength(0);
     // The stored document is untouched.
     expect(DOCS.get(dkey(LH_ID, WS)).state.secretRef).toBeUndefined();
+  });
+});
+
+describe('#4619 — PATCH /api/items/[type]/[id] refuses it AND carries it', () => {
+  it('answers 400 server_owned_state AND writes NOTHING', async () => {
+    // The POSITIVE CONTROL for the arm below: it proves this route reaches the
+    // guard at all, so a passing carry arm cannot be explained by the request
+    // never arriving (a 404 from the auth mocks, a params shape mismatch).
+    //
+    // FAILS IF `assertNoServerOwnedStateChange` comes off this route: status
+    // becomes 200 and `replaced` becomes 1 carrying REWRITTEN_SCOPE.
+    const res = await GENERIC_ITEM_PATCH(
+      patchReq({ state: { ...lakehouseDoc().state, provisioning: structuredClone(REWRITTEN_SCOPE) } }),
+      patchCtx,
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('server_owned_state');
+
+    expect(replaced).toHaveLength(0);
+    expect(DOCS.get(dkey(LH_ID, WS)).state.provisioning).toEqual(SERVER_SCOPE);
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
+  });
+
+  it('CARRIES the receipt AND the account forward when the body omits them, on THIS route', async () => {
+    // THE BLOCKER THIS ARM EXISTS FOR. `lakehouse` has no `[id]/route.ts` of its
+    // own, so `PATCH /api/items/lakehouse/<id>` lands HERE — and this route
+    // builds and writes its own `next` instead of calling `updateOwnedItem`, so
+    // the helper-level carry does NOT reach it. A revision of this PR wired the
+    // ASSERT into all four wholesale writers and the CARRY into only two,
+    // leaving this route with the assert alone; review measured the gap at head
+    // `e57be98c` and nothing in the suite witnessed it, which is why this arm is
+    // here rather than relying on the helper-level or cosmos-twin spec.
+    //
+    // The body below is the traced payload: it drops BOTH guarded keys (the
+    // assert permits omission) and supplies, in the SAME request, the
+    // `ownedContainers` that `resolveLakehouseAbfss`'s deterministic branch 3
+    // would then steer on.
+    //
+    // FAILS IF `carryServerDerivedScope` comes off this route: `replaced[0].state`
+    // then carries NEITHER key — `provisioning` is `undefined` rather than
+    // SERVER_SCOPE and `storageAccount` is `undefined` rather than 'dlzacct' —
+    // because the wholesale replace drops what the body left out. The two stored
+    // -document assertions are the ones that go red, and they do so independently
+    // of environment: no `LOOM_*_URL` is set here, so after the mutation the
+    // reader returns `null` rather than a bronze root, which is why the
+    // mechanism is asserted first and the reader second.
+    const res = await GENERIC_ITEM_PATCH(
+      patchReq({ state: { ownedContainers: ['bronze'], notes: 'edited' } }),
+      patchCtx,
+    );
+    expect(res.status).toBe(200);
+    expect(replaced).toHaveLength(1);
+    // The edit LANDED — this is the paired positive, so the arm cannot be
+    // satisfied by the route refusing the whole request.
+    expect(replaced[0].state.notes).toBe('edited');
+    expect(replaced[0].state.ownedContainers).toEqual(['bronze']);
+    // ... and BOTH omitted server-derived keys survived the wholesale replace.
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
+    expect(replaced[0].state.storageAccount).toBe('dlzacct');
+    // The stored document agrees, and the reader still derives from the receipt
+    // rather than from the container this very request supplied.
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.container).toBe('gold');
   });
 });
 

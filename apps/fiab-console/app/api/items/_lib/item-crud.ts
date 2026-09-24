@@ -187,10 +187,24 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * WHAT THESE ARE. `state.provisioning` is the receipt the provisioning engine
  * stamps AFTER it has created or attached an item's backing Azure object;
  * `state.storageAccount` names the account a lakehouse is bound to when its lake
- * lives outside the DLZ. Neither is user data. Both are records of work the
- * SERVER did, and both are then read as a SCOPE — the bounds a later request's
- * caller-supplied path, database, job or account is narrowed against. Measured
- * readers on this tree:
+ * lives outside the DLZ. Both are read as a SCOPE — the bounds a later request's
+ * caller-supplied path, database, job or account is narrowed against.
+ *
+ * THEY ARE NOT THE SAME KIND OF THING, and an earlier version of this comment
+ * said they were ("Neither is user data. Both are records of work the SERVER
+ * did."). That is true of `provisioning` and FALSE of `storageAccount`: measured
+ * across `apps/fiab-console` (excluding `copilot-corpus`), every top-level
+ * `state.storageAccount` site is a READ and NO server path writes it, so it is
+ * not a record of work the server did — it is a binding supplied at CREATE that
+ * the server then grants against. The rule covers it because of what READS it,
+ * not because of what wrote it. Consequence, disclosed rather than discovered
+ * later: with no server writer and no client writer, `state.storageAccount` is
+ * now settable only through `createOwnedItem` and is neither changeable nor
+ * clearable through any of the four generic writers. Re-binding an existing
+ * lakehouse to a different account therefore has no supported path today; that
+ * is tracked on #4619 and is the cost of closing the grant-moving write.
+ *
+ * Measured readers on this tree:
  *
  *   state.provisioning.secondaryIds.{adlsRoot,container,rootPath}
  *        → lib/azure/lakehouse-abfss.ts  resolveLakehouseAbfss()
@@ -232,9 +246,17 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * the resolver-side precedence fix outright: ONE request could edit
  * `state.database` and drop `state.provisioning`, leaving no receipt to
  * prefer. {@link carryServerDerivedScope} now rebases those keys onto whatever
- * the item already carries, at both writers. Assert first, carry second: an
- * attempted CHANGE stays a 400 rather than becoming a silent substitution,
- * which `adx-item-scope.ts` forbids in as many words.
+ * the item already carries, at ALL THREE UPDATE WRITERS: `items/[type]/[id]`
+ * PATCH, `cosmos-items/[type]/[id]` PATCH, and {@link updateOwnedItem}. An
+ * earlier version of this sentence said "at both writers" and was wired into
+ * only two of them, which left the bypass open on `items/[type]/[id]` — the
+ * route that serves `lakehouse`, whose resolver is the one exercised by the
+ * spec. Review measured that at head `e57be98c`; the third call site closes it.
+ * The fourth writer, `cosmos-items/[type]` POST, is a CREATE: there is no prior
+ * value to rebase onto, so it asserts and does not carry, by construction.
+ * Assert first, carry second at each of the three: an attempted CHANGE stays a
+ * 400 rather than becoming a silent substitution, which `adx-item-scope.ts`
+ * forbids in as many words.
  *
  * WHAT THAT DOES NOT CLOSE, measured and open: an item with NO successful
  * receipt resolves to whatever it declares, at every reader, because there is
@@ -289,6 +311,31 @@ function hasOwnStateKey(o: unknown, k: string): o is Record<string, unknown> {
 }
 
 /**
+ * Why the refusal text is PER KEY. One shared sentence used to tell every
+ * caller that the key it sent "is the provisioning receipt for this item's
+ * backing Azure object ... so it can only be written by the provisioning path
+ * that produces it." That is true of `provisioning` and FALSE of
+ * `storageAccount`, which is a bare account name with NO producing path at all.
+ * Measured across `apps/fiab-console` (excluding `copilot-corpus`): every
+ * top-level `state.storageAccount` site is a READ — `api/storage/_lib/authorize.ts:120`,
+ * `api/lakehouse/references/paths/route.ts:71`, `lib/azure/lakehouse-abfss.ts:130`,
+ * `lib/azure/purview-autoonboard.ts:182-183` — and no provisioner or auto-bind
+ * path assigns it. `deploy-integrity.md` R7: an error must not state as fact
+ * something the code did not establish, so the two keys say different things.
+ */
+const SCOPE_REFUSAL_REASON: Record<string, string> = {
+  provisioning:
+    'It is the provisioning receipt for this item\'s backing Azure object, which later requests '
+    + 'narrow a caller-supplied path, database, job or account against, so it can only be written '
+    + 'by the provisioning path that produces it (a direct items.item().replace(), not this route).',
+  storageAccount:
+    'It names the storage account this item\'s lake is bound to, and it is the coordinate '
+    + 'api/storage/_lib/authorize.ts grants against, so a request that moves it moves a grant. '
+    + 'No server path writes it today — it is settable only at CREATE, and this route will '
+    + 'neither change nor clear it. Changing the binding of an existing item is tracked on #4619.',
+};
+
+/**
  * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
  * a TOP-LEVEL {@link SERVER_DERIVED_SCOPE_KEYS} value. Pass `undefined` as
  * `currentState` on a CREATE, where there is no prior value and so any supplied
@@ -297,15 +344,13 @@ function hasOwnStateKey(o: unknown, k: string): o is Record<string, unknown> {
 export function assertNoServerDerivedScopeChange(nextState: unknown, currentState: unknown): void {
   if (!nextState || typeof nextState !== 'object' || Array.isArray(nextState)) return;
   for (const key of SERVER_DERIVED_SCOPE_KEYS) {
-    if (!hasOwnStateKey(nextState, key)) continue; // omission — allowed, fail-safe
+    if (!hasOwnStateKey(nextState, key)) continue; // omission — allowed, and carried forward
     const incoming = stableStringify(nextState[key]);
     if (hasOwnStateKey(currentState, key) && stableStringify(currentState[key]) === incoming) continue;
     throw new ServerOwnedStateError(
       key,
-      `"state.${key}" is recorded by Loom, not by the client: this request would change it. ` +
-        'It is the provisioning receipt for this item\'s backing Azure object, which later requests ' +
-        'narrow a caller-supplied path, database, job or account against, so it can only be ' +
-        'written by the provisioning path that produces it.',
+      `"state.${key}" is recorded by Loom, not by the client: this request would change it. `
+        + (SCOPE_REFUSAL_REASON[key] ?? ''),
     );
   }
 }
@@ -315,14 +360,28 @@ export function assertNoServerDerivedScopeChange(nextState: unknown, currentStat
  * onto the value the TARGET item already carries (removed when it carries none),
  * so a cross-item state copy satisfies {@link assertNoServerDerivedScopeChange}.
  *
- * Exists for exactly one caller: `deployment-pipelines/loom/_lib/promote.ts`
- * builds its patch from the SOURCE item's state and applies it to a DIFFERENT,
- * already-existing TARGET item. Without this the source's provisioning receipt
- * would be written over the target's own — which is both the change this rule
- * refuses AND wrong on the merits, since a receipt describes the resource the
- * SOURCE is backed by. `lib/workspace/item-definition.ts:116` already drops
- * `provisioning` when it exports a PORTABLE definition, for the same reason; a
- * promotion is that export followed by an import.
+ * FOUR CALL SITES, two different jobs. An earlier version of this docblock said
+ * "exists for exactly one caller", which stopped being true once the omission
+ * bypass was closed:
+ *
+ *   1. THE OMISSION REBASE, at each of the three UPDATE writers that replace
+ *      `state` wholesale — `items/[type]/[id]` PATCH, `cosmos-items/[type]/[id]`
+ *      PATCH, and {@link updateOwnedItem}. A body that merely LEAVES OUT a
+ *      guarded key would otherwise delete it; here it preserves. `cosmos-items/[type]`
+ *      POST is the fourth wholesale writer and is deliberately absent: it is a
+ *      CREATE, so there is no prior value to rebase onto.
+ *   2. THE CROSS-ITEM COPY, at `deployment-pipelines/loom/_lib/promote.ts`,
+ *      which builds its patch from the SOURCE item's state and applies it to a
+ *      DIFFERENT, already-existing TARGET item. Without this the source's
+ *      provisioning receipt would be written over the target's own — which is
+ *      both the change this rule refuses AND wrong on the merits, since a
+ *      receipt describes the resource the SOURCE is backed by.
+ *      `lib/workspace/item-definition.ts:116` already drops `provisioning` when
+ *      it exports a PORTABLE definition, for the same reason; a promotion is
+ *      that export followed by an import.
+ *
+ * Both jobs are the same operation because the function can only ever produce
+ * the TARGET's own value or remove the key.
  *
  * Deliberately NOT a bypass flag on {@link updateOwnedItem}: a flag would be
  * reachable from every one of its 400+ call sites, whereas rebasing is safe
@@ -343,11 +402,20 @@ export function carryServerDerivedScope<T extends Record<string, unknown>>(
 /**
  * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
  * a {@link SERVER_OWNED_STATE_KEYS} value that `currentState` does not already
- * carry. Omission is permitted (and fail-safe). See the block comment above.
+ * carry. Omission of a SERVER_OWNED key is permitted and is fail-safe — a
+ * dropped `secretRef` orphans a vault secret, it cannot delete one — and those
+ * keys are NOT carried forward.
  *
- * Also runs {@link assertNoServerDerivedScopeChange} (#4619), so both generic
- * enforcement points — the `items/[type]/[id]` PATCH and {@link updateOwnedItem}
- * — pick up the path-scoped rule without a second call site of their own.
+ * Also runs {@link assertNoServerDerivedScopeChange} (#4619), so the
+ * `items/[type]/[id]` PATCH and {@link updateOwnedItem} pick up the path-scoped
+ * rule for free. THAT IS ONLY HALF OF THAT RULE, and an earlier version of this
+ * sentence ("without a second call site of their own") read as if it were the
+ * whole of it. Omission of a SERVER_DERIVED key is fail-safe only because
+ * {@link carryServerDerivedScope} rebases it, and this function does NOT call
+ * that — every writer that replaces `state` wholesale needs its own carry call
+ * site. `items/[type]/[id]` shipped a revision with the assert from here and no
+ * carry, which left the omission bypass open on the route that serves
+ * `lakehouse`.
  */
 export function assertNoServerOwnedStateChange(nextState: unknown, currentState: unknown): void {
   if (!nextState || typeof nextState !== 'object') return;
