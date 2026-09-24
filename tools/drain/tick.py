@@ -1813,10 +1813,15 @@ def record_receipt_from_evidence(
     R2 invariant catches a class that MOVED, not a caller who named the wrong
     one up front.
 
-    `ci-green` is RE-MEASURED here rather than trusted: `merge_gate` collects
-    the evidence and `gates.ci_green_receipt` decides, the same two calls the
-    `--ci-green-receipt` report makes, so this path cannot record a receipt the
-    report would not print. Everything else is run-backed and goes through
+    `ci-green` is RE-MEASURED here rather than trusted, and since #4676 it is
+    literally the SAME CALL the report makes: `merge_gate.collect_ci_green_evidence`
+    then `merge_gate.receipt_from_evidence`, which is the one place
+    `gates.ci_green_receipt` is invoked outside the tests. It used to be "the
+    same two calls" -- two hand-maintained argument lists that happened to
+    agree, so "this path cannot record a receipt the report would not print"
+    was a hope rather than a property. One shared call site makes it the
+    property, and `test_the_receipt_call_has_exactly_one_non_test_site` keeps
+    it at one. Everything else is run-backed and goes through
     `verify_run_backed_receipt`.
 
     This is deliberately NOT "record whatever the operator says". `tick.py`'s
@@ -1865,16 +1870,11 @@ def record_receipt_from_evidence(
 
         _pr_references_item(repo, from_pr, number)
         data = merge_gate.collect_ci_green_evidence(repo, from_pr)
-        receipt = gates.ci_green_receipt(
-            data["evidence"],
-            merged_total_count=data["merged_total_count"],
-            merged_changed_files=data["changed_files"],
-            merged_branch=data["branch"],
-            merged_sha=data["merged"],
-            trees_identical=data["trees_identical"],
-            policy=policy,
-            infra_ere=merge_gate.resolve_infra_ere(data["merged"]),
-        )
+        # THE SAME CALL `--ci-green-receipt` MAKES, not a second copy of it.
+        # The README's claim for this path is that it "cannot record a receipt
+        # `--ci-green-receipt` would not print"; two hand-maintained argument
+        # lists made that a hope. #4676's `declared_at` was the ninth argument.
+        receipt = merge_gate.receipt_from_evidence(data, policy)
         if not receipt.ok:
             raise ReceiptRefusedError(
                 f"ci-green receipt for PR #{from_pr} is {receipt.summary}; "

@@ -2455,10 +2455,12 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
          "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "        declared_at=declared_at,\n"
          "    )\n    if not ran:"),
         ("    ran, evidence, route = context_is_accounted_for(\n"
          "        item.name, item.head_job, merged_changed_files, policy,\n"
          "        push_trigger=item.push_trigger, infra_ere=infra_ere,\n"
+         "        declared_at=declared_at,\n"
          "    )\n    if False:"),
     ),
     (
@@ -2512,11 +2514,11 @@ ARMS: list[tuple[str, str, str, str]] = [
         "gates.py",
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
-         "            infra_ere=infra_ere,\n"
+         "            infra_ere=infra_ere, declared_at=declared_at,\n"
          "        )\n        if not did_work:"),
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
-         "            infra_ere=infra_ere,\n"
+         "            infra_ere=infra_ere, declared_at=declared_at,\n"
          "        )\n        if False:"),
     ),
     (
@@ -2531,15 +2533,15 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4c an UNDECLARED context stops failing closed, so adding a required "
          "context silently removes it from the receipt"),
         "gates.py",
-        "    if name not in declared:\n        return False, (",
-        "    if name not in declared:\n        return True, (",
+        "    if not candidates:\n        return False, (\n            f\"no substantive step is DECLARED",
+        "    if not candidates:\n        return True, (\n            f\"no substantive step is DECLARED",
     ),
     (
         ("CB4d the declared step is matched but its SKIPPED state is ignored - "
          "presence of the step, rather than its execution, decides"),
         "gates.py",
-        "        if len(skipped) == len(matches):\n            hollow.append(wanted)",
-        "        if False:\n            hollow.append(wanted)",
+        "            if len(skipped) == len(matches):\n                hollow.append(wanted)",
+        "            if False:\n                hollow.append(wanted)",
     ),
     (
         ("CB4i only the FIRST step matching a declared substring decides, so a "
@@ -2569,15 +2571,126 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("CB4e a STALE declaration (step absent from the job) passes instead of "
          "failing closed, so a renamed step silently stops being checked"),
         "gates.py",
-        "    if missing:\n        return False, (",
-        "    if missing:\n        return True, (",
+        "        if missing:\n            return False, \"missing\", missing",
+        "        if False:\n            return False, \"missing\", missing",
+    ),
+    # -- the declaration resolved AS OF the measured sha (#4676) ------------
+    #
+    # AS1 is the arm the issue asked for: revert the resolution to HEAD. AS2
+    # and AS3 are the ones that matter more, because they NARROW THE POPULATION
+    # rather than weaken a check -- the lesson of the N* arms, and the shape an
+    # author fixing their own defect does not think to write. AS2 resolves only
+    # `substantive_steps` and leaves `alternatives` and `scope_paths` on HEAD's
+    # clock; AS3 leaves the producer reading HEAD's blob for every sha, so the
+    # consumer is perfect and is fed one answer forever.
+    (
+        ("AS1 the declaration is resolved at HEAD again, so any step rename "
+         "retroactively voids every older PR's receipt (#4676)"),
+        "gates.py",
+        '    if as_of is None:\n        return policy, DECL_HEAD, ""',
+        '    if True:\n        return policy, DECL_HEAD, ""',
+    ),
+    (
+        ("AS2 only `substantive_steps` is resolved as-of; `alternatives` and "
+         "`scope_paths` stay on HEAD's clock, so routes 2 and 3 ask a "
+         "pre-rename job about a post-rename step"),
+        "gates.py",
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    receipts["ci_green_rule"] = as_of.rule'),
+        ('    receipts = dict(policy.get("receipts", {}))\n'
+         '    _narrowed = dict(receipts.get("ci_green_rule", {}))\n'
+         '    _narrowed["substantive_steps"] = as_of.rule.get("substantive_steps", {})\n'
+         '    receipts["ci_green_rule"] = _narrowed'),
+    ),
+    (
+        ("AS3 the PRODUCER reads HEAD's policy blob for every sha, so the "
+         "as-of resolution is perfect and is handed one answer forever - the "
+         "168/168-KILLED-about-the-pure-function shape"),
+        "merge_gate.py",
+        '    rc, out, err = sh(["git", "show", f"{sha}:{POLICY_TRACKED_PATH}"])',
+        '    rc, out, err = sh(["git", "show", f"HEAD:{POLICY_TRACKED_PATH}"])',
+    ),
+    (
+        ("AS4 the other clock is reached on ANY refusal, not only on ABSENCE, "
+         "so a job that SKIPPED the step its sha's declaration names is "
+         "re-judged against HEAD's and a hollow check passes"),
+        "gates.py",
+        '    if kind == "missing" and len(candidates) > 1:',
+        "    if len(candidates) > 1:",
+    ),
+    (
+        ("AS5 the second clock's KIND is discarded again, so a step that is "
+         "PRESENT and SKIPPED at HEAD is reported as ABSENT - an R7 lie, and "
+         "one-sentence-for-two-states inside the fix for one-sentence-for-"
+         "two-states"),
+        "gates.py",
+        "        ok2, other_kind, other_payload = verdict(other_rule)",
+        "        ok2, _discarded_kind, other_payload = verdict(other_rule)",
+    ),
+    (
+        ("AS6 a declaration that PREDATES `substantive_steps` is told to fetch "
+         "a sha that is already present and readable - the wrong remedy for "
+         "every merge older than 2026-09-15"),
+        "gates.py",
+        # NEWLINE-ANCHORED so the indentation is part of the needle. There are
+        # now TWO `if reason == DECL_PREDATES:` sites -- the refusal and
+        # `provenance_note` -- and the bare form matches inside the more deeply
+        # indented one as a substring.
+        "\n        if reason == DECL_PREDATES:",
+        "\n        if False:",
+    ),
+    (
+        ("AS9 a pass decided on an UNVERIFIED or PREDATES clock prints no "
+         "provenance at all, so a shallow clone silently degrades to pre-PR "
+         "behaviour while every pass still reads as verified"),
+        "gates.py",
+        "        if which == DECL_HEAD_UNVERIFIED:\n            reason =",
+        "        if False:\n            reason =",
+    ),
+    (
+        ("AS10 the hollow payload is a finished SENTENCE again, so the "
+         "second-clock refusal wraps it as if it were a list and prints the "
+         "trailing clause twice"),
+        "gates.py",
+        '            return False, "hollow", hollow\n',
+        ('            return False, "hollow", (\n'
+         '                f"its declared substantive step(s) {hollow} were SKIPPED - '
+         'the check "\n'
+         '                "concluded green having not done the thing it is required '
+         'for"\n'
+         '            )\n'),
+    ),
+    (
+        ("AS7 HEAD's declaration is substituted UNDISCLOSED when the sha's "
+         "declaration carried no row for the context - the row is newer than "
+         "the sha, and the pass says nothing about it"),
+        "gates.py",
+        "            head_which = DECL_HEAD_ROW_NEWER",
+        "            head_which = DECL_HEAD",
+    ),
+    (
+        ("AS8 the receipt call is RE-SPLIT into two hand-maintained argument "
+         "lists, so `tick` can once again record a receipt "
+         "`--ci-green-receipt` would not print"),
+        "tick.py",
+        "        receipt = merge_gate.receipt_from_evidence(data, policy)",
+        ("        receipt = gates.ci_green_receipt(\n"
+         "            data[\"evidence\"],\n"
+         "            merged_total_count=data[\"merged_total_count\"],\n"
+         "            merged_changed_files=data[\"changed_files\"],\n"
+         "            merged_branch=data[\"branch\"],\n"
+         "            merged_sha=data[\"merged\"],\n"
+         "            trees_identical=data[\"trees_identical\"],\n"
+         "            policy=policy,\n"
+         "            infra_ere=merge_gate.resolve_infra_ere(data[\"merged\"]),\n"
+         "        )"),
     ),
     (
         ("CB4f the ALL rule accepts any number of skipped steps, so guardrails "
          "and Repo Hygiene stop being checked at all"),
         "gates.py",
-        "        skipped = [s for s in work if not ran(s)]\n        if skipped:",
-        "        skipped = [s for s in work if not ran(s)]\n        if False:",
+        "            skipped = [s for s in work if not ran(s)]\n            if skipped:",
+        "            skipped = [s for s in work if not ran(s)]\n            if False:",
     ),
     (
         ("CB4g the policy contract walks only the first level again, so a "
@@ -3410,6 +3523,19 @@ EXPECTED_SANDBOX_SKIPS = (
     # them, which need no checkout.
     "test_gates.py::test_positive_control_the_intersection_query_can_return_non_empty",
     "test_gates.py::test_positive_control_the_real_required_topology_is_measured_not_assumed",
+    # #4676. Both read real git history -- the two commits of the vitest step
+    # rename -- to keep the transcribed fixture constants honest against the
+    # repo. The sandbox copies only `tools/drain`, so there is no repository to
+    # read and they skip. DECLARED, and said out loud: NEITHER KILLS AN ARM.
+    #
+    # That is not a shrug, it is why
+    # `test_the_producer_asks_git_for_the_sha_and_for_no_other_ref` exists. The first draft of #4676 had the producer
+    # guarded ONLY by these two, so arm AS3 -- the producer reading `HEAD:`'s
+    # blob for every sha -- would have SURVIVED the matrix while the real-git
+    # test sat green in the repo. The argv-intercepting test needs no checkout
+    # and is what actually kills AS3 here.
+    "test_ci_green_as_of.py::test_the_producer_reads_the_declaration_at_the_sha_not_off_disk",
+    "test_ci_green_as_of.py::test_the_rename_fixture_matches_what_policy_json_actually_carried",
 )
 
 
@@ -4114,4 +4240,22 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # NO ARGUMENTS, AND SAYING SO IS CHEAPER THAN THE SURPRISE. An independent
+    # reviewer typed `mutate_gates.py --list`, which is not a flag, and got a
+    # FULL MATRIX -- 361 arms, 66 python processes -- because argv was ignored.
+    # They had to kill it by PID (never by name pattern, which would have hit
+    # other lanes on this box). A matrix takes hours and writes nothing until
+    # the preamble finishes, so an accidental launch reads as a hang.
+    if sys.argv[1:]:
+        print(
+            "mutate_gates.py takes NO arguments and always runs the FULL matrix "
+            "({} arms, one full suite execution each -- hours, not minutes).\n"
+            "You passed: {}\n"
+            "There is no --list and no arm filter. To inspect the arms, import "
+            "the module and read `ARMS`; to run a subset, set `mutate_gates.ARMS` "
+            "to a filtered list before calling `main()`.".format(
+                len(ARMS), " ".join(sys.argv[1:])),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     raise SystemExit(main())
