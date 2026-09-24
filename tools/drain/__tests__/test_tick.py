@@ -303,14 +303,15 @@ def test_a_populated_inventory_cache_shadows_stream_for_entirely(tmp_path):
     """`tick.py` is `streams.get(number) or stream_for(...)`, so for any number
     IN `inventory.json` the classifier is NEVER CALLED. That makes #4694's
     precedence fix INERT on the live path for every cached item, and nothing
-    tested it: the five tests added with that fix all call `stream_for`
-    directly, so a fully green suite says nothing about what a refresh does.
+    tested it: the tests added with that fix all call `stream_for` directly, so
+    a fully green suite says nothing about what a refresh does. This is the
+    only test in the file that reaches the shadowing.
 
     Measured on the operator's box on 2026-09-24: `tools/drain/inventory.json`
     exists (gitignored, 297 entries, highest issue #4473, written 2026-09-11)
     and pins #3965, #4242 and #4408 -- the exact three items the precedence
     fix was written to move -- to `W4-receipts`. The fix only appears to work
-    there because the five NEWLY PINNED items postdate the cache.
+    there because the items newly pinned in #4695 postdate the cache.
 
     WHAT MAKES THIS FAIL: changing `streams.get(number) or stream_for(...)` so
     the classifier wins (then the first block reads `W7-bicep`/`deploy-path`),
@@ -323,8 +324,9 @@ def test_a_populated_inventory_cache_shadows_stream_for_entirely(tmp_path):
 
     This test DESCRIBES the shadowing; it does not endorse it. Dropping or
     regenerating the cache is a deliberate act with a blast radius far wider
-    than this PR (11 items are mis-streamed by cache staleness today,
-    independently of this change), so it is tracked separately.
+    than #4695: the independent consequence review of that PR measured eleven
+    further items whose CLASS changes on a no-cache refresh, independently of
+    the precedence fix -- their figure, not re-derived here. Tracked separately.
     """
     # #3965's live shape: a `lane:bicep` item whose title contains "receipt".
     issue = {
