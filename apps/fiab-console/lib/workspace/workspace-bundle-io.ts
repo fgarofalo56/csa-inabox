@@ -30,6 +30,7 @@ import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem, WorkspaceFolder } from '@/lib/types/workspace';
 import { buildWorkspaceBundle, type LoomWsBundle, type WorkspacePermissionRow } from './workspace-export';
 import { summarizePlan, type ImportPlan, type ImportSummary } from './workspace-import';
+import { carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
 
 /**
  * Read everything the bundle needs from Cosmos and serialize it. All item /
@@ -104,12 +105,43 @@ export async function executeWorkspaceImport(
         if ((e as { code?: number })?.code !== 404) throw e;
       }
       if (!existing) continue; // raced away — nothing to overwrite
+      // #4619 — THE SEVENTH WHOLESALE `state` WRITER, and the one neither the
+      // author's nor the reviewer's key-name sweep could see. This is the
+      // OVERWRITE arm of a bundle import (`POST /api/workspaces/[id]/import`,
+      // and `.../clone`), and `planned.overwrite.state` comes from the UPLOADED
+      // bundle via `workspace-import.ts:244`, which passes it through
+      // `remapStateRefs` — that rewrites item-id references and touches neither
+      // guarded key.
+      //
+      // BOTH HALVES WERE LIVE, and the benign one is the more surprising:
+      //   CHANGE   — the export does NOT strip `state.storageAccount`
+      //              (`workspace-export.ts:186` destructures out `provisioning`
+      //              only, and `SECRET_KEY_RE` does not match it), and a bundle
+      //              is an uploaded file, so an edited one moved the coordinate
+      //              `api/storage/_lib/authorize.ts` grants against.
+      //   OMISSION — the export DOES strip `provisioning`, by design, so the
+      //              ORDINARY Loom-produced bundle carries none. Writing it
+      //              wholesale therefore DELETED the target's receipt on every
+      //              overwrite import. The scrub is a producer-side convention;
+      //              it was never an import-side control.
+      //
+      // CARRY ONLY, no assert — same reasoning as the version-restore route.
+      // An import is a bulk apply of PORTABLE content across many items, so a
+      // refusal would abort the whole plan on a difference the export itself
+      // declares is expected: `workspace-export.ts:18-21` says backend refs are
+      // environment-specific and "imported items re-provision against the target
+      // estate". Carrying enforces exactly that promise — the target keeps its
+      // own backing record — instead of trusting the bundle to honour it.
+      const overwriteState = carryServerDerivedScope(
+        (planned.overwrite.state ?? {}) as Record<string, unknown>,
+        existing.state,
+      );
       const next: WorkspaceItem = {
         ...existing,
         displayName: planned.overwrite.displayName,
         description: planned.overwrite.description,
         folderId: planned.overwrite.folderId,
-        state: planned.overwrite.state,
+        state: overwriteState,
         updatedAt: planned.overwrite.updatedAt,
       };
       const { resource } = await handle.replace<WorkspaceItem>(next);

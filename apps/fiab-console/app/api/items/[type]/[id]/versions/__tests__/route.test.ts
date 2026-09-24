@@ -106,6 +106,41 @@ describe('GET /versions/[versionId]', () => {
 });
 
 describe('POST /versions/[versionId]/restore', () => {
+  // WHAT VALUE MAKES THIS FAIL (`assertion-design.md` "done" #1): any session
+  // value for which `withSession` does not short-circuit. Measured by mutation,
+  // not reasoned — arm `A18` in
+  // `app/api/items/_lib/__tests__/mutation/mutations.mjs` disables the
+  // unauthorized branch in `lib/api/route-toolkit.ts`
+  // (`if (!session) { /* MUTANT */ }`) and this file goes RED with
+  // `expected 500 to be 401`: the handler runs on an undefined session and
+  // throws. The same arm against a pristine worktree of `1154812b`, i.e. without
+  // this test, SURVIVED at rc=0 — so nothing in the tree witnessed this route's
+  // 401 while the commit message asserted it.
+  //
+  // WHAT A18 DOES *NOT* ESTABLISH, disclosed rather than counted
+  // (`assertion-design.md` "done" #5): vitest stops at the FIRST failing
+  // assertion, so A18 reports the status arm and leaves the three "never called"
+  // arms below unreached. They are kept because each names a DIFFERENT failure —
+  // a 401 returned only AFTER the version was read, after the item was written,
+  // or after the restore was re-versioned would each be a real defect that the
+  // status arm alone cannot see — but none of them is witnessed by A18 and none
+  // is counted as if it were.
+  //
+  // The three are PAIRED with a positive assertion (`assertion-design.md`
+  // "done" #4): the `200 writes the old content back` arm below pins that
+  // `replaceMock` and `recordItemVersion` ARE called on the happy path, and that
+  // the written state is the baseline content — which only `getItemVersion` can
+  // supply. So "not called" here is a real absence, not a mock that never works.
+  it('401 when unauthenticated — and the handler body never runs', async () => {
+    getSessionMock.mockReturnValue(null as any);
+    const { POST } = await import('../[versionId]/restore/route');
+    const r = await POST({} as any, ctx({ versionId: 'ver:item-1:a' }));
+    expect(r.status).toBe(401);
+    expect(getItemVersion).not.toHaveBeenCalled();
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(recordItemVersion).not.toHaveBeenCalled();
+  });
+
   it('403 for read-only access', async () => {
     access = { item: liveItem, role: 'ItemViewer', via: 'item-grant', canWrite: false };
     const { POST } = await import('../[versionId]/restore/route');
