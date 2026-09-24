@@ -152,6 +152,32 @@ const ADX_BACKED_ITEM_TYPES = [
  * Resolve the ADX database an item is bound to — the item's OWN declaration,
  * never a request body.
  *
+ * PRECEDENCE: the provisioning RECEIPT outranks the item's declared field.
+ * That order is the fix for #4619 and it used to be the other way round, which
+ * made this the one resolver where a client-writable value beat the server's
+ * own record. `state.database` and `state.databaseName` ARE user-authored —
+ * `state.database` is the graph-model editor's "Target ADX database" field —
+ * so they cannot simply be frozen. But once provisioning has stamped a receipt
+ * for this item, that receipt is what the item is actually backed by, and a
+ * later request body editing the declared field must not move the scope off
+ * it. `synapse-item-scope.ts` already resolved in this order; the two
+ * disagreed, and this one was the permissive side.
+ *
+ * NOT A COMPLETE BOUND, stated rather than implied. Precedence only decides
+ * between values that are BOTH present, so on its own it was defeatable: the
+ * generic writers replace `state` wholesale and the guard permits omission, so
+ * one request could edit the declared field AND drop the receipt, leaving
+ * nothing to prefer. That half is closed at the writers, which now carry the
+ * server-derived keys forward instead of deleting them
+ * (`item-crud.ts` / `cosmos-items/[type]/[id]`).
+ *
+ * What remains OPEN, measured: an item with NO successful receipt resolves to
+ * whatever it declares, because there is no server record to prefer; and a
+ * provisioned item whose receipt carries no `database` and no `resourceId`
+ * falls through to the declared field by the same route. Both need a sink-side
+ * check that a declared name is one the workspace is entitled to — see the note
+ * on {@link workspaceAdxScope}. Neither is closed here.
+ *
  * The key differs per family because the editors persist it differently:
  *   `state.database`      — graph-model (the "Target ADX database" field)
  *   `state.databaseName`  — the kql-database family (what `resolveDatabase` reads)
@@ -162,14 +188,14 @@ const ADX_BACKED_ITEM_TYPES = [
  */
 export function resolveItemDatabase(item: Pick<WorkspaceItem, 'state'> | null | undefined): AdxScopedDatabase {
   const state = (item?.state || {}) as Record<string, unknown>;
-  for (const key of ['database', 'databaseName'] as const) {
-    const v = state[key];
-    if (typeof v === 'string' && v.trim()) return scoped(v.trim());
-  }
   const prov = state.provisioning as Record<string, any> | undefined;
   if (prov && (prov.status === 'created' || prov.status === 'exists')) {
     const provDb = prov.secondaryIds?.database || prov.resourceId;
     if (typeof provDb === 'string' && provDb.trim()) return scoped(provDb.trim());
+  }
+  for (const key of ['database', 'databaseName'] as const) {
+    const v = state[key];
+    if (typeof v === 'string' && v.trim()) return scoped(v.trim());
   }
   return scoped(defaultDatabase());
 }
