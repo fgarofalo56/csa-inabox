@@ -221,6 +221,10 @@ What was missing was any record, so a re-enable would have been silent. Added:
   cannot be read is `UNKNOWN` (verdict refused); a readable definition that
   is not disabled is `ENABLED` (rc 1). `ENABLED` outranks `UNKNOWN` because a
   confirmed live hazard is more actionable than an unmeasured one.
+  A post-write re-read that FAILS is `UNKNOWN` too, not `ENABLED` — it is the
+  same unreadable-definition failure, so it gets the same classification, and
+  the run says the re-read could not be performed rather than ruling out a
+  host-restart lag it never measured (fixed in the 2026-09-21 review round).
   rc 2 is the "could not certify the requested outcome" class and has three
   members: at least one `UNKNOWN` target, a `--apply` write that was DENIED, or
   a boundary that could not be read at all.

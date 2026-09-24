@@ -17,7 +17,10 @@
 //   converges  — isDisabled false then true  -> rc 0, OK        (the lag arm works)
 //   stuck      — isDisabled false forever    -> rc 1, ENABLED   (it FAILS CLOSED)
 //   verify-only— no --apply, isDisabled false-> rc 1, ENABLED   (default path unchanged)
-//   read-fails — show breaks mid-retry       -> rc 1, isDisabled=<unset>, never "disabled"
+//   read-fails — show breaks mid-retry       -> rc 2, UNKNOWN   (it REFUSES a verdict)
+//   mixed      — one breaks, two stay stuck  -> rc 1, and the lag sentence appears
+//                                               on the stuck lines and NOT on the
+//                                               unreadable one
 //
 // Run: node --test scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs
 // CI:  loom-guardrails.yml runs `node --test scripts/ci/__tests__/*.test.mjs`.
@@ -109,7 +112,14 @@ function run(env, shimDir) {
       // the "stuck" and "verify-only" arms below are if anything easier to
       // pass and the "converges" arm is if anything harder. It cannot
       // manufacture the OK verdict the second arm asserts.
-      LOOM_OP19_RETRY_UNIT_SECONDS: '0',
+      //
+      // OVERRIDABLE per arm, because 0 makes the ELAPSED figure unfalsifiable:
+      // at 0 the accumulated `SLEPT` and the old `RETRY_UNIT * 6` constant are
+      // BOTH 0, so no assertion at this value can tell a derived elapsed from a
+      // hard-coded one. The break arm below raises it to 1 for exactly that
+      // reason and arranges for only one target to sleep at all.
+      LOOM_OP19_RETRY_UNIT_SECONDS: env.RETRY_UNIT ?? '0',
+
     },
   });
 }
@@ -362,15 +372,84 @@ test('a CR on the two `-o tsv` reads is stripped, so a DISABLED timer is not rep
   }
 });
 
-test('--apply: a read that BREAKS mid-retry reports <unset>, never "disabled"', () => {
-  // WHAT VALUE MAKES THIS FAIL: keeping the stale SHOWN after a failed read,
-  // which would let an unreadable host present as a measured one.
+test('--apply: a re-read that FAILS mid-retry is UNKNOWN + rc 2, and claims nothing about lag', () => {
+  // THE BLOCKER BOTH 2026-09-21 REVIEWS OF #4564 RAISED. The pre-fix script
+  // broke out of the retry loop on a failed `show`, emptied SHOWN, fell into
+  // the same `!= "true"` branch as a genuine disagreement and emitted LAGNOTE
+  // — asserting an elapsed time that had not passed, that the host had answered
+  // "without agreeing" when it had not answered, and that "this is NOT a
+  // host-restart lag" when a restarting host is precisely what makes that read
+  // fail. deploy-integrity.md R7.
+  //
+  // The arm is ISOLATED on purpose. AZ_SHOW_FAIL_AT=3 with AZ_SHOW_TRUE_FROM=4
+  // makes the shim's global call counter fail the SECOND re-read of target 1
+  // and answer `true` for targets 2 and 3 on their first read, so those two
+  // take the OK path without sleeping. One target sleeps, total wall cost ~3s,
+  // and the tally separates the classifications instead of mixing them.
+  //
+  // WHAT VALUE MAKES EACH ASSERTION FAIL, named per assertion-design.md:
+  //   status 2          <- restoring the unconditional LAGNOTE. The pre-fix
+  //                        script scores this target ENABLED, giving enabled=1
+  //                        and rc 1. This single assertion kills the defect.
+  //   tally unknown=1   <- same mutation; pre-fix it reads `enabled=1 unknown=0`.
+  //   ~3s               <- replacing the accumulated SLEPT with the old
+  //                        `$((RETRY_UNIT * 6))`, which prints ~6s here.
+  //   1 re-read(s)      <- printing the loop variable `${attempt}` (2) instead
+  //                        of the count of re-reads that RETURNED (1).
+  //   no lag sentence   <- any reintroduction of LAGNOTE on this path.
   const dir = makeShimDir();
   try {
-    const r = run({ APPLY: true, AZ_SHOW_TRUE_FROM: '999', AZ_SHOW_FAIL_AT: '2' }, dir);
-    assert.equal(r.status, 1, `expected rc 1.\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
-    assert.match(r.stderr, /isDisabled=<unset>/, 'a failed re-read did not empty the value');
+    const r = run({ APPLY: true, AZ_SHOW_TRUE_FROM: '4', AZ_SHOW_FAIL_AT: '3', RETRY_UNIT: '1' }, dir);
+    assert.equal(r.status, 2, `expected rc 2 (REFUSED a verdict), not rc 1 (confirmed hazard).\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+    // SITE-SCOPED, not file-scoped. A blanket doesNotMatch over the whole
+    // stderr would close this finding at the LABEL: the lag sentence is
+    // CORRECT on a genuinely stuck target and this arm must not forbid it
+    // globally. Pull the one line the finding is about and assert on it.
+    const unknownLine = r.stderr.split('\n').find((l) => /UNKNOWN\s+func-secexp/.test(l));
+    assert.ok(unknownLine, `no UNKNOWN line for the target whose re-read failed.\nstderr:\n${r.stderr}`);
+    assert.doesNotMatch(unknownLine, /NOT a host-restart lag/, 'the unreadable re-read still rules out a lag it did not measure');
+    assert.doesNotMatch(unknownLine, /DOUBLE-EXECUTION HAZARD/, 'an unmeasured target is still reported as a confirmed hazard');
+    // Paired POSITIVE assertions: the two doesNotMatch above are satisfied by
+    // the script printing nothing at all, so pin what it must SAY.
+    assert.match(unknownLine, /COULD NOT BE PERFORMED/, 'the line does not say the re-read could not be performed');
+    assert.match(unknownLine, /1 re-read\(s\) returned a value/, 'the re-read count is not the number that actually returned');
+    assert.match(unknownLine, /~3s were waited/, 'the elapsed figure is not the time actually slept — 1s + 2s');
+    assert.match(r.stdout, /targets=3 ok=2 gone=0 enabled=0 unknown=1 applyfail=0/, 'the tally does not show the failed re-read scored as UNKNOWN');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('--apply: an unreadable target and two stuck ones are scored separately in the same run', () => {
+  // THE PAIRED POSITIVE for the arm above, and the guard against closing that
+  // finding at the label. AZ_SHOW_FAIL_AT=2 fails target 1's first re-read
+  // while targets 2 and 3 run their loops to exhaustion, so ONE run carries
+  // both verdicts. The lag sentence must appear on the stuck lines — deleting
+  // LAGNOTE entirely would satisfy the negative assertion above, and this arm
+  // is what makes that mutation red.
+  //
+  // WHAT VALUE MAKES THIS FAIL:
+  //   status 1        <- ENABLED must still outrank UNKNOWN. Downgrading a
+  //                      confirmed hazard to rc 2 turns this red.
+  //   enabled=2       <- routing the STUCK targets to UNKNOWN too, i.e.
+  //                      over-applying the fix.
+  //   lag on stuck    <- deleting LAGNOTE.
+  const dir = makeShimDir();
+  try {
+    const r = run({ APPLY: true, AZ_SHOW_TRUE_FROM: '999', AZ_SHOW_FAIL_AT: '2' }, dir);
+    assert.equal(r.status, 1, `expected rc 1 — a confirmed hazard outranks an unmeasured one.\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+    assert.match(r.stdout, /targets=3 ok=0 gone=0 enabled=2 unknown=1 applyfail=0/, 'the two stuck targets and the one unreadable target are not scored separately');
+    const unknownLine = r.stderr.split('\n').find((l) => /UNKNOWN\s+func-secexp/.test(l));
+    assert.ok(unknownLine, `no UNKNOWN line for the unreadable target.\nstderr:\n${r.stderr}`);
+    assert.doesNotMatch(unknownLine, /NOT a host-restart lag/, 'the unreadable target still rules out a lag');
+    const stuckLines = r.stderr.split('\n').filter((l) => /ENABLED\s+func-cpeval/.test(l));
+    assert.equal(stuckLines.length, 2, `expected 2 ENABLED lines for the stuck targets, found ${stuckLines.length}`);
+    for (const line of stuckLines) {
+      assert.match(line, /NOT a host-restart lag/, 'a genuinely stuck target lost the lag verdict it had earned');
+      assert.match(line, /re-read 3 more time\(s\)/, 'the stuck target did not report all three re-reads');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

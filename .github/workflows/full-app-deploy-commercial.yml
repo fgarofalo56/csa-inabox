@@ -1506,7 +1506,18 @@ jobs:
           }
           arm_err() {   # the last ARM error, flattened for an annotation
             local e
-            e="$(flatten < arm_err.txt)"
+            # GUARDED, so this function needs no exclusion from the bare-
+            # assignment audit next door. It WAS bare, and was excluded along
+            # with the other wrapper bodies -- but unlike `arm_get`, whose
+            # exclusion is made sound by an assertion pinning that every call
+            # site sits in an `if` condition, this one was excluded with
+            # nothing pinning why it held. The exclusion happened to be true
+            # (all three call sites are `echo "... $(arm_err) ..."`, argument
+            # position, where the status never reaches errexit) and nothing
+            # would have noticed if a caller moved. Guarding the assignment
+            # removes the exclusion instead of documenting it, so the audit
+            # now covers this body like any other line.
+            if ! e="$(flatten < arm_err.txt)"; then e=""; fi
             echo "${e:-<az produced no stderr>}"
           }
 

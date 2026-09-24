@@ -386,25 +386,66 @@ for t in "${TARGETS[@]}"; do
   # that FAILS mid-retry empties SHOWN rather than leaving the stale value, so
   # "unreadable" never presents as "disabled".
   #
+  # A FAILED RE-READ IS NOT A DISAGREEMENT, and this arm used to conflate them.
+  # An earlier revision broke out of the loop on a failed `show`, emptied SHOWN,
+  # fell into the SAME `!= "true"` branch as a genuine disagreement, and emitted
+  # LAGNOTE — which then asserted three things the run had not established:
+  #   1. `~$((RETRY_UNIT * 6))s` elapsed, a constant that is only true when all
+  #      three attempts ran, printed after a single sleep. 6x overstated.
+  #   2. "without agreeing", when the host had not answered at all.
+  #   3. "so this is NOT a host-restart lag", when a host mid-restart is exactly
+  #      the state that makes `function show` fail — so the sentence ruled out
+  #      the hypothesis it was least able to rule out.
+  # That is deploy-integrity.md R7 inside the file whose own header preaches
+  # ABSENCE IS NOT UNREADABILITY, and the consequence was the ROUTING: FIXHINT
+  # stayed "Re-run with --apply", so an operator whose re-read hit a 429 or an
+  # expiring token was told the lag explanation had been tested and rejected and
+  # sent to re-apply. Both independent reviews of #4564 on 2026-09-21 found it.
+  #
+  # So the break path is SEPARATED and scored the way this file scores every
+  # other unreadable definition: UNKNOWN, rc 2, refusing a verdict. It is the
+  # same failure as the pre-loop `function show` above and gets the same
+  # classification; the only difference is that a write happened first, which
+  # the message says. ENABLED-outranks-UNKNOWN is NOT weakened by this — that
+  # precedence is about a CONFIRMED hazard, and nothing here was confirmed. The
+  # lane stays red either way: loom-drift-check.yml emits an `::error::` and
+  # exits non-zero on rc 2 as well as on rc 1.
+  #
+  # ELAPSED AND COUNT ARE ACCUMULATED, not derived from the loop bounds, so a
+  # change to those bounds cannot silently falsify the sentence the way
+  # `RETRY_UNIT * 6` did.
+  #
   # WHAT VALUE MAKES THIS ARM RUN: SHOWN="false" on the first read after a
-  # successful write. WHAT VALUE STILL FAILS THE RUN: SHOWN="false" on all
-  # three. WHAT VALUE SKIPS IT ENTIRELY: WROTE=0 — a verify-only run is scored
-  # exactly as it was, so the default read-only path is unchanged.
+  # successful write. WHAT VALUE STILL FAILS THE RUN AS ENABLED: SHOWN="false"
+  # on all three. WHAT VALUE ROUTES IT TO UNKNOWN INSTEAD: a `function show`
+  # that FAILS mid-retry. WHAT VALUE SKIPS IT ENTIRELY: WROTE=0 — a verify-only
+  # run is scored exactly as it was, so the default read-only path is unchanged.
   if [[ $WROTE -eq 1 && "$VAL" == "true" && "$SHOWN" != "true" ]]; then
+    REREAD_FAILED=0   # did the loop exit because a read FAILED, not disagreed?
+    REREADS=0         # re-reads that actually RETURNED a value
+    SLEPT=0           # seconds actually slept, summed as they are slept
     for attempt in 1 2 3; do
       sleep $((attempt * RETRY_UNIT))
+      SLEPT=$((SLEPT + attempt * RETRY_UNIT))
       if ! SHOWN="$(az functionapp function show -g "$RG" -n "$APP" --subscription "$SUB" \
                       --function-name "$FN" --query isDisabled -o tsv)"; then
         SHOWN=""
+        REREAD_FAILED=1
         break
       fi
+      REREADS=$((REREADS + 1))
       SHOWN="${SHOWN//$'\r'/}"
       if [[ "$SHOWN" == "true" ]]; then
         break
       fi
     done
+    if [[ $REREAD_FAILED -eq 1 ]]; then
+      echo "  UNKNOWN  ${APP}/${FN}: the --apply write SUCCEEDED and ${SETTING} reads true, but the post-write re-read of isDisabled COULD NOT BE PERFORMED — ${REREADS} re-read(s) returned a value and ~${SLEPT}s were waited before a read failed. This run did NOT establish whether the write took effect, and it does NOT rule out a host-restart lag. NOT the same as disabled, and NOT the same as a confirmed hazard." >&2
+      unknown=$((unknown + 1))
+      continue
+    fi
     if [[ "$SHOWN" != "true" ]]; then
-      LAGNOTE=" The --apply write on this run SUCCEEDED and ${SETTING} reads true, and isDisabled was re-read ${attempt} more time(s) over ~$((RETRY_UNIT * 6))s without agreeing — so this is NOT a host-restart lag."
+      LAGNOTE=" The --apply write on this run SUCCEEDED and ${SETTING} reads true, and isDisabled was re-read ${REREADS} more time(s) over ~${SLEPT}s without agreeing — so this is NOT a host-restart lag."
     fi
   fi
 

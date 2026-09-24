@@ -537,7 +537,17 @@ test('reachability: EVERY response-derived sink in the step is defused, not just
     + 'verdictless exit. Either guard the call or guard the assignment.',
   );
   const armGetBody = liveFnBody('arm_get').split('\n').map((s) => s.trim());
-  const wrapperBodies = ['jq_defused', 'arm_err', 'defuse_cmds', 'flatten']
+  // `arm_err` IS NOT IN THIS LIST, and its absence is the point. It used to be,
+  // carrying a bare `e="$(flatten < arm_err.txt)"` behind an exclusion with
+  // nothing pinning why the exclusion held — the same unsound-by-omission shape
+  // this whole file exists to find, and the one `arm_get` above is careful to
+  // avoid by asserting its call sites. Raised on #4564 by the 2026-09-21
+  // consequence review. The assignment was GUARDED rather than pinned, so the
+  // exclusion is gone and `bareAssign` below now audits that body directly.
+  // WHAT VALUE MAKES THIS FAIL: reverting arm_err's assignment to the bare
+  // form. It then appears in `bareAssign` and the deepEqual goes red, which is
+  // what the exclusion used to suppress.
+  const wrapperBodies = ['jq_defused', 'defuse_cmds', 'flatten']
     .flatMap((fn) => liveFnBody(fn).split('\n').map((s) => s.trim()))
     .concat(armGetBody);
   const bareAssign = lines

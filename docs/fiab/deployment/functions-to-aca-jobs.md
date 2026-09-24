@@ -445,9 +445,28 @@ recomputed — so the write's own run could otherwise report its own fix as a
 setting now reads `true` while `isDisabled` does not, the host read is repeated
 up to three times with backoff. It fails closed: a host that never agrees is
 still `ENABLED` (rc 1), carrying a note that the restart-lag explanation was
-tested and rejected. Pinned by
-`scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs`, which drives
-all four arms against a shim `az` and never touches the estate.
+tested and rejected.
+
+**A re-read that FAILS is `UNKNOWN` (rc 2), not `ENABLED`** — the same
+classification the identical failure gets before the loop, because it is the
+same failure. An earlier revision of this arm broke out of the loop on a failed
+`az functionapp function show`, fell into the same branch as a genuine
+disagreement, and emitted the restart-lag note — which asserted an elapsed time
+that had not passed, that the host had answered "without agreeing" when it had
+not answered at all, and that the state was "NOT a host-restart lag" when a
+restarting host is precisely what makes that read fail. It then told the
+operator to re-run `--apply`. Both independent reviews of PR #4564 on
+2026-09-21 found it; it is `deploy-integrity.md` R7 and it is fixed rather than
+quietly dropped. The elapsed seconds and the re-read count in both messages are
+now accumulated as they happen rather than derived from the loop bounds, so a
+change to those bounds cannot falsify the sentence. Note that the weekly CI
+lane cannot reach this arm at all: it runs read-only, and the arm requires a
+successful `--apply` write.
+
+Pinned by `scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs`,
+which drives the five apply-lag polarities — converges, stuck, verify-only,
+read-fails, and a mixed run carrying one unreadable target beside two stuck
+ones — against a shim `az`, and never touches the estate.
 
 **The exit code is a per-RUN verdict, not a per-target label, and `ENABLED`
 outranks `UNKNOWN`.** A run carrying one `ENABLED` and one `UNKNOWN` exits **1**,
