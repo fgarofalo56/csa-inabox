@@ -2346,10 +2346,13 @@ class DeclarationAsOf:
     rule: dict | None = None
     error: str = ""
     #: WHY `rule` is None, as a value rather than a substring of `error`. The
-    #: three causes have three remedies and a consumer that discriminated them
-    #: by grepping `error` would be a bare-substring signal -- a measured
-    #: misclassification shape in this repo. `DECL_PREDATES` in particular is
-    #: NOT fixable by fetching: the key genuinely did not exist at that sha.
+    #: FOUR causes below do not share a remedy, and a consumer that
+    #: discriminated them by grepping `error` would be a bare-substring signal
+    #: -- a measured misclassification shape in this repo. `DECL_PREDATES` in
+    #: particular is NOT fixable by fetching: the key genuinely did not exist at
+    #: that sha. `DECL_NO_SHA` is a caller error rather than a repo state, which
+    #: is why it shares a consumer sentence with `DECL_UNREADABLE` while still
+    #: being its own value -- four causes, three remedies.
     reason: str = ""
 
 

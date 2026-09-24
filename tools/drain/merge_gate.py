@@ -1231,8 +1231,8 @@ def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
     implied.
 
     FAILS TO A NAMED, CLASSIFIED ERROR, NOT TO A SILENT HEAD FALLBACK. Every
-    failure returns `rule=None` with an `error` string AND a `reason` VALUE, and
-    the three causes have three different remedies:
+    failure returns `rule=None` with an `error` string AND a `reason` VALUE.
+    FOUR causes, and they do not share a remedy:
 
     - `DECL_UNREADABLE` -- the object is not in this store. FETCH IT.
     - `DECL_PREDATES` -- the blob was read and carries no `receipts.ci_green_rule`
@@ -1243,6 +1243,11 @@ def resolve_declaration_as_of(sha: str | None) -> gates.DeclarationAsOf:
       same wrong-remedy shape #4676 is about, one state over, and for a backlog
       closing pre-2026-09-15 merges it is the COMMON case.
     - `DECL_UNPARSEABLE` -- the blob is not JSON.
+    - `DECL_NO_SHA` -- no sha was supplied at all. A CALLER error rather than a
+      repo state, which is why the consumer words it with `DECL_UNREADABLE`
+      ("could NOT be read") rather than giving it a fifth sentence: there is no
+      sha to fetch or to date. Four causes, three consumer sentences, and the
+      asymmetry is stated rather than left to look like an oversight.
 
     The reason is a VALUE and not a substring of `error` deliberately: a
     consumer that discriminated by grepping the message would be a

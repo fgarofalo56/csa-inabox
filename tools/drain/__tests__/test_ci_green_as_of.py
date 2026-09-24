@@ -180,10 +180,28 @@ def test_a_merge_from_before_a_step_rename_and_one_from_after_both_measure():
 
     # AFTER the rename: the as-of declaration IS HEAD's, and nothing changes --
     # including the wording, which must not annotate every modern PR's receipt.
+    #
+    # THE SHA IS `POLICY_RENAME_COMMIT`, AND IT IS THE CONSTANT RATHER THAN A
+    # LITERAL, for a reason worth more than the one-word diff. This line used to
+    # read `sha="8d3dd9cbb7a7"` -- the first 12 characters of the real
+    # WORKFLOW-rename commit -- paired with HEAD's post-rename rule. `8d3dd9cbb`
+    # declared `['Run vitest (with istanbul coverage floor)']`, so the fixture
+    # asserted by CONSTRUCTION that the workflow-rename sha already carried the
+    # post-rename declaration: the same false one-commit premise four prose
+    # sites carried, expressed as DATA.
+    #
+    # THAT IS WHY THREE INDEPENDENT TEXT SWEEPS MISSED IT -- mine for the class,
+    # and two reviewers', one of them nine patterns wide. A claim expressed as a
+    # fixture VALUE is invisible to every grep for the claim's words. The
+    # module already defines `POLICY_RENAME_COMMIT` and
+    # `test_the_rename_fixture_matches_what_policy_json_actually_carried` checks
+    # it against real history -- but that guard watches the CONSTANTS, so an
+    # inline literal bypasses it silently. If a constant exists for a sha, use
+    # it; that is what makes the claim guardable at all.
     ok_after, ev_after = gates.context_did_its_work(
         "vitest (node 20)", after_job, POLICY,
         declared_at=gates.DeclarationAsOf(
-            sha="8d3dd9cbb7a7", rule=POLICY["receipts"]["ci_green_rule"]),
+            sha=POLICY_RENAME_COMMIT, rule=POLICY["receipts"]["ci_green_rule"]),
     )
     assert ok_after, ev_after
     assert STEP_AFTER_RENAME in ev_after
