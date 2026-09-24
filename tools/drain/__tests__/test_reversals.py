@@ -1596,6 +1596,18 @@ def test_no_published_surface_asserts_a_close_that_never_happened(state):
     `CLOSES_ON_GITHUB` -- which its own comment says a future decline path
     would do -- retires this parameter automatically instead of leaving a stale
     assertion asserting the opposite of the code.
+
+    WHAT THIS DOES NOT SCAN, disclosed so a clean run is not over-read: it
+    reads the POSTED BODIES only, not `README.md`, `policy.json` or this
+    package's docstrings. All three of those now carry the retracted sentence
+    as a QUOTATION -- "what this paragraph deliberately no longer says is ..."
+    -- and a scan that cannot tell a quotation from an assertion would either
+    red on the retraction or need a heuristic nobody could trust. Classified by
+    hand this round: 5 hits of the close-claim across `tick.py`, `README.md`
+    and `policy.json`, of which 4 are retraction quotations and 1 is the
+    published NEGATION ("is NOT a dispute about a claim some close rested on").
+    Zero live assertions. That is a hand check, not an instrument, and it is
+    named here rather than left implied.
     """
     body = tick._reversal_comment(state, "why", "OPEN")
     if state not in CLOSES_ON_GITHUB:
