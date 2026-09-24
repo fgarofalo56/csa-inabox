@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -132,6 +133,7 @@ def _live(numbers, labels=("lane:ci", "sp:1")):
 def _stub_gh(
     monkeypatch, *, issue_state="OPEN", view_rc=0, comment_rc=0, comment_err="",
     comment_url=None, readback_rc=0, corrupt=None,
+    view_err="could not resolve host: github.com",
 ):
     """Record every argv `tick.sh` is handed and answer all three sub-commands.
 
@@ -146,6 +148,15 @@ def _stub_gh(
     fixture that returned a constant could not distinguish "compares the bodies"
     from "rejects one known string".
 
+    `view_err` IS A PARAMETER AND WAS NOT, and that omission is why a real crash
+    shipped past a test written to cover it. The failed-read stderr was
+    hard-coded to `"could not resolve host: github.com"` -- BRACE-FREE -- while
+    the refusal it feeds was built by `.format()` over an f-string chain. Ask
+    what result that instrument could not have produced: exactly the one it was
+    written to catch. With `HTTP 502: {"message":"Bad gateway"}` the refusal
+    raised `KeyError: '"message"'` instead, and the `ReversalRefusedError` was
+    never constructed at all. A `{` in `gh`'s stderr is the value that breaks it.
+
     Each knob is SEPARATE (`view_rc`, `comment_rc`, `readback_rc`) so a test can
     fail exactly the call its name claims. Collapsing them is how a test comes to
     exercise a different branch than the one it is written about -- the
@@ -158,7 +169,7 @@ def _stub_gh(
         calls.append(list(args))
         if args[:3] == ["gh", "issue", "view"]:
             if view_rc != 0:
-                return view_rc, "", "could not resolve host: github.com"
+                return view_rc, "", view_err
             asked = args[args.index("--repo") + 1]
             return 0, json.dumps({
                 "state": issue_state,
@@ -598,31 +609,64 @@ def test_a_reversal_refuses_an_item_in_the_wrong_state(monkeypatch, tmp_path, st
     assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == state
 
 
-def test_undecline_refuses_a_parked_item_and_names_the_other_verb(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("held", "typed"), [(PARKED, DECLINED), (DECLINED, PARKED)],
+    ids=["parked-item-typed-undecline", "declined-item-typed-unpark"],
+)
+def test_the_wrong_state_refusal_names_the_right_verb_for_the_right_state(
+    monkeypatch, tmp_path, held, typed
 ):
-    """The mirror, and the message is the deliverable.
+    """The mirror, and the MESSAGE is the deliverable -- in BOTH directions.
 
     WHAT MAKES THIS FAIL: let either verb reverse either state. The two carry
     DIFFERENT justifications -- an unpark says a blocker lifted, an undecline says
     a judgement was withdrawn -- so absorbing the wrong one would publish the
     wrong story verbatim on a public issue.
 
-    WHAT MAKES THE SECOND ASSERTION FAIL: refuse without naming `--unpark`. The
-    operator who typed the wrong verb needs the right one, not a diagnosis.
+    WHAT MAKES THE ATTRIBUTION ASSERTION FAIL, and this is the half that shipped
+    broken: hard-code `declined` as the noun. `_reverse` computed the other FLAG
+    correctly and then named the other STATE from a constant, so `--undecline`
+    on a PARKED item said *"A declined item is reversed by --unpark"* -- whose
+    second clause contradicts its own first, and hands an operator who typed the
+    wrong verb an inverted contract (R7). The predecessor of this test asserted
+    only `"--unpark" in str(exc)` and PASSED with the false attribution: a bare
+    membership check cannot see which noun the flag was attached to, which is
+    the shape this PR rejected one function over and then committed here.
+
+    Both the state and the flag are read from `tick.REVERSAL_FLAGS` rather than
+    transcribed (assertion-design #3), so the probe cannot disagree with the
+    implementation, and the `held`/`typed` pair makes each direction assert the
+    sentence the OTHER direction would also satisfy -- a hard-coded noun passes
+    one parameter and reds the other.
     """
     led = _led(tmp_path)
     _stub_gh(monkeypatch)
-    tick.park_item(led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "no runner", "op")
+    if held == PARKED:
+        tick.park_item(led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "no runner", "op")
+    else:
+        tick.decline_item(
+            led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "op decided: bot-filed")
     calls, _ = _stub_gh(monkeypatch)
+    verb = {PARKED: tick.unpark_item, DECLINED: tick.undecline_item}[typed]
 
-    exc = _refusal(lambda: tick.undecline_item(
+    exc = _refusal(lambda: verb(
         led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "operator: reversed",
     ))
 
     assert calls == []
-    assert "--unpark" in str(exc), "name the verb that WOULD have worked"
-    assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == PARKED
+    assert isinstance(exc, tick.ReversalRefusedError)
+    assert f"is {held}, not {typed}" in str(exc), "diagnose the mismatch"
+    assert f"A {held} item is reversed by {tick.REVERSAL_FLAGS[held]}" in str(exc), (
+        f"the operator typed {tick.REVERSAL_FLAGS[typed]} at a {held} item and "
+        f"needs {tick.REVERSAL_FLAGS[held]} attributed to {held} -- naming the "
+        "right flag beside the wrong state is an inverted contract, and a bare "
+        "membership check on the flag passes straight through it"
+    )
+    assert f"A {typed} item is reversed by {tick.REVERSAL_FLAGS[held]}" not in str(exc), (
+        "the exact false sentence that shipped: the other state's noun wearing "
+        "this state's verb"
+    )
+    assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == held
 
 
 def test_a_reversal_refuses_a_closed_issue(monkeypatch, tmp_path):
@@ -659,24 +703,65 @@ def test_a_reversal_refuses_a_closed_issue(monkeypatch, tmp_path):
     assert led.items[STRANDED_BY_A_CLEARED_BLOCKER].state == PARKED
 
 
-def test_a_reversal_refuses_when_the_issue_state_cannot_be_read(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "view_err",
+    [
+        "could not resolve host: github.com",
+        'HTTP 502: {"message":"Bad gateway"}',
+        "HTTP 500: {}",
+        "gh: {unexpected",
+    ],
+    ids=["brace-free", "json-body", "empty-braces", "unbalanced-brace"],
+)
+def test_a_reversal_refuses_when_the_issue_state_cannot_be_read(
+    monkeypatch, tmp_path, view_err
+):
     """WHAT MAKES THIS FAIL: treat an unreadable issue as open.
 
     The verb REFUSES a closed issue, so it cannot proceed on an unread one
     either -- "I could not reach GitHub" is not "it is open" (R7, the roll that
     reported "the tag does not exist" over a permission denial).
+
+    WHAT MAKES THE BRACE-BEARING PARAMETERS FAIL, and they are the reason this
+    test is parametrised at all: build the refusal with `.format()` over an
+    f-string chain. Python concatenates adjacent literals BEFORE the method
+    call, so `.format()` then runs over the already-interpolated `{exc}` --
+    which carries `gh`'s stderr verbatim. Measured end-to-end through
+    `unpark_item`: `KeyError: '"message"'` on the json-body parameter,
+    `IndexError: Replacement index 1 out of range` on empty-braces, and
+    `ValueError` on the unbalanced one. In every case the `ReversalRefusedError`
+    is NEVER CONSTRUCTED, so `isinstance` reds -- and in production `main()`'s
+    reversal branch, which catches only the four reversal exceptions, lets the
+    bare builtin escape as a traceback.
+
+    THE BRACE-FREE PARAMETER IS THE POSITIVE CONTROL and is not redundant: it is
+    the exact string this stub hard-coded before, and it passes against the
+    defect. Keeping it beside the others is what makes the pair say "the
+    fixture reaches the rule" rather than "the rule is gone".
     """
     led = _led(tmp_path)
     _stub_gh(monkeypatch)
     tick.park_item(led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "no runner", "op")
-    calls, posted = _stub_gh(monkeypatch, view_rc=1)
+    calls, posted = _stub_gh(monkeypatch, view_rc=1, view_err=view_err)
 
     exc = _refusal(lambda: tick.unpark_item(
         led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "operator: runner is up",
     ))
 
-    assert isinstance(exc, tick.ReversalRefusedError)
+    assert isinstance(exc, tick.ReversalRefusedError), (
+        f"a {type(exc).__name__} escaped instead of the refusal; main() catches "
+        "only the four reversal exceptions, so this reaches the operator as a "
+        f"traceback. stderr was {view_err!r}"
+    )
     assert "UNKNOWN" in str(exc)
+    assert view_err in str(exc), (
+        "the refusal must carry gh's own stderr verbatim - a message that drops "
+        "what actually went wrong is the R7 shape this file keeps finding"
+    )
+    assert f"the item is still {PARKED}." in str(exc), (
+        "the tail is the segment `.format()` used to mangle; assert it RENDERED "
+        "rather than merely that something was raised"
+    )
     assert posted == []
     assert _verbs(calls) == [("issue", "view")], (
         f"the failed read is the ONLY call; ran {calls}"
@@ -979,6 +1064,335 @@ def test_a_reversal_records_no_receipt_and_reopens_the_receipt_path(
     )
 
 
+def _published_surfaces() -> dict[str, str]:
+    """Every string this package puts in front of a reader, rendered.
+
+    FOUR POSTED BODIES AND THE TWO HELP LINES, because a surface is not a file
+    -- it is every SITE within it. The round that introduced the defect below
+    swept the two disposition bodies and missed that `build_parser()` carries
+    the same sentence to anyone who types `--help`.
+    """
+    parser = tick.build_parser()
+    helps = {
+        f"--help[{flag}]": next(
+            a.help for a in parser._actions if f"--{flag}" in a.option_strings
+        )
+        for flag in ("unpark", "undecline")
+    }
+    return {
+        f"disposition[{PARKED}]": tick._disposition_comment(
+            PARKED, [("EVIDENCE", "x")], "OPEN"),
+        f"disposition[{DECLINED}]": tick._disposition_comment(
+            DECLINED, [("EVIDENCE", "x")], "OPEN"),
+        f"reversal[{PARKED}]": tick._reversal_comment(PARKED, "why", "OPEN"),
+        f"reversal[{DECLINED}]": tick._reversal_comment(DECLINED, "why", "OPEN"),
+        **helps,
+    }
+
+
+def test_no_published_surface_claims_a_verb_is_the_only_route_out_of_a_state_the_refresh_demotes():
+    """MUTATION ARM UP11. THE CLASS, not the sentence that was caught.
+
+    WHAT SHIPPED, and it was introduced by the fix for three sentences of
+    exactly this kind. The decline body ended *"An explicit verb is the only
+    route out of a terminal state"* -- two paragraphs after the SAME body said
+    *"while this issue is OPEN, the next refresh demotes the ledger item to
+    `needs-audit`"*. Measured: `declined` IS in `REOPEN_DISPUTES`,
+    `needs-audit` is NOT in `TERMINAL`, and one `upsert` over an open issue
+    moves it. So the refresh is a second route out, the body supplies its own
+    counterexample, and it republished verbatim on every decline.
+
+    WHAT MAKES THIS FAIL: write "only route out of <X>" anywhere in any
+    published surface where `<X>` is not a terminal state the refresh leaves
+    alone. The generic "a terminal state" reds because `a` is not a state at
+    all; `declined` reds because it is in `REOPEN_DISPUTES`; deleting the claim
+    from the park body reds the positive control below, which is what stops
+    this being satisfiable by saying nothing.
+
+    THE PATTERN IS LIFTED, NOT TRANSCRIBED in the sense that matters: the states
+    it is checked against come from `ledger`'s own constants at runtime, so
+    adding a state to `REOPEN_DISPUTES` re-aims this test automatically. The
+    scan is CASE-INSENSITIVE, which the first version of the probe was not --
+    it scored the park body clean because that body spells it "the ONLY route
+    out", a needle narrower than the string it meant to find.
+    """
+    claim = re.compile(r"only route out of\s+(\S+)", re.IGNORECASE)
+    scoped_to: dict[str, list[str]] = {}
+    for name, body in _published_surfaces().items():
+        for found in claim.finditer(body):
+            state = found.group(1).strip("`.,;:-")
+            scoped_to.setdefault(name, []).append(state)
+            assert state in TERMINAL, (
+                f"{name} claims to be the only route out of {state!r}, which is "
+                f"not a terminal state at all. The states are {TERMINAL}; "
+                '"a terminal state" as the object of that phrase is the '
+                "universal claim that was false for the sibling state"
+            )
+            assert state not in REOPEN_DISPUTES, (
+                f"{name} claims to be the only route out of {state!r}, but "
+                f"{state!r} is in REOPEN_DISPUTES -- one refresh over an open "
+                f"issue demotes it to {NEEDS_AUDIT}, which is not terminal, so "
+                "the refresh is a second route and the claim is false"
+            )
+
+    assert scoped_to.get(f"disposition[{PARKED}]") == [PARKED], (
+        "THE POSITIVE HALF, so this test is not satisfied by deleting every "
+        "claim. The park body must still make the claim AND scope it to "
+        f"{PARKED!r} -- parks are the one state the refresh and --reap both "
+        f"leave alone, so it is true there and nowhere else. Got "
+        f"{scoped_to.get(f'disposition[{PARKED}]')!r}"
+    )
+    assert f"disposition[{DECLINED}]" not in scoped_to, (
+        "the decline body must make no such claim at all: a decline seen open "
+        "is demoted by the very next refresh"
+    )
+
+
+def test_the_decline_body_names_the_undecline_window_and_both_refusals():
+    """MUTATION ARM UP12. The instruction must not promise a route that refuses.
+
+    MEASURED, with a positive control in the same run (see
+    `test_undecline_is_refused_in_both_branches_the_decline_body_names`): the
+    decline body told the reader to close the issue with `--reason not-planned`
+    to make the decline stand, and ALSO to run `--undecline` to reverse it --
+    and doing the first permanently forecloses the second (closed-issue guard),
+    while not doing it defers the item to the next refresh's demotion (state
+    guard). On the live ledger at the time, all four declined items had CLOSED
+    issues, so the verb had ZERO reachable targets.
+
+    Each guard is right on its own; the published instruction is what created
+    the pincer. So the body must name the WINDOW and both refusals rather than
+    the verb alone.
+
+    WHAT MAKES THIS FAIL: go back to a bare "to reverse this decline, run
+    --undecline" with no window. Each assertion below names a specific fact the
+    reader needs in order not to be sent at a refusal.
+    """
+    body = tick._disposition_comment(DECLINED, [("EVIDENCE", "x")], "OPEN")
+
+    assert f"{tick.REVERSAL_FLAGS[DECLINED]} <n>" in body, (
+        "the runnable form is still there - naming the window must not cost the "
+        "instruction"
+    )
+    assert "STILL OPEN AND THE LEDGER STILL `declined`" in body, "name the window"
+    assert f"`{NEEDS_AUDIT}`" in body, (
+        f"name the refresh branch by its state: once demoted the item is in "
+        f"the audit queue and {NEEDS_AUDIT} is not terminal"
+    )
+    assert "nothing to reverse" in body, (
+        "and say what that means for the verb - it refuses a demoted item, and "
+        "should, so the reader must not be sent at it"
+    )
+    assert "Re-open the issue first" in body, (
+        "name the prerequisite on the branch this body itself tells the reader "
+        "to take - closing the issue is the documented disposal"
+    )
+    assert "`departed`" in body, (
+        "say WHY loosening the closed-issue guard would not help: the next "
+        "refresh demotes the re-queued item again, so it buys one cycle"
+    )
+
+
+def test_undecline_is_refused_in_both_branches_the_decline_body_names(
+    monkeypatch, tmp_path
+):
+    """THE MEASUREMENT behind the body above, run rather than asserted in prose.
+
+    WHAT MAKES THIS FAIL: loosen either guard. Both refusals are deliberate and
+    this test is the record that they compose into a narrow window -- which is
+    the fact the published body is now required to state.
+
+    THE THIRD LEG IS THE POSITIVE CONTROL and it is not decoration: without it
+    the first two are satisfied by a verb that refuses everything, which is the
+    absence-only shape `assertion-design.md` #4 forbids.
+    """
+    def _declined(numbers=(BOT_FILED_SELF_RESOLVED,)):
+        led = _led(tmp_path, numbers=numbers)
+        _stub_gh(monkeypatch)
+        tick.decline_item(
+            led, POLICY, REPO, numbers[0], "op decided: bot-filed, self-resolved")
+        return led
+
+    # (1) the issue CLOSED -- the disposal the body itself names.
+    led = _declined()
+    _stub_gh(monkeypatch, issue_state="CLOSED")
+    exc = _refusal(lambda: tick.undecline_item(
+        led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: withdrawn"))
+    assert "CLOSED on GitHub" in str(exc)
+
+    # (2) the issue OPEN, one refresh later -- demoted, so nothing to reverse.
+    led = _declined()
+    led.upsert(BOT_FILED_SELF_RESOLVED, "issue", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[BOT_FILED_SELF_RESOLVED].state == NEEDS_AUDIT, (
+        "the premise: one refresh over an open issue demotes a decline"
+    )
+    _stub_gh(monkeypatch)
+    exc = _refusal(lambda: tick.undecline_item(
+        led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: withdrawn"))
+    assert f"is {NEEDS_AUDIT}, not {DECLINED}" in str(exc)
+
+    # (3) THE WINDOW ITSELF -- open, not yet refreshed. The verb WORKS.
+    led = _declined()
+    _stub_gh(monkeypatch)
+    tick.undecline_item(led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: withdrawn")
+    assert led.items[BOT_FILED_SELF_RESOLVED].state == READY, (
+        "the window is real; a verb that refused here would be dead code"
+    )
+
+    # (4) THE PREREQUISITE THE BODY NAMES. Closing the issue is the disposal a
+    # decline's own comment describes, and the body tells a reader who wants to
+    # withdraw the judgement to RE-OPEN it first. That instruction has to work,
+    # or it is the pincer again one step further along: the ledger state is
+    # untouched by a GitHub close, so a re-opened issue puts the item back in
+    # the window. Measured here rather than asserted in the prose.
+    led = _declined()
+    _stub_gh(monkeypatch, issue_state="CLOSED")
+    _refusal(lambda: tick.undecline_item(
+        led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: withdrawn"))
+    assert led.items[BOT_FILED_SELF_RESOLVED].state == DECLINED, (
+        "the refused attempt left the ledger where it was, which is what makes "
+        "the re-open instruction runnable at all"
+    )
+    _stub_gh(monkeypatch, issue_state="OPEN")   # the operator re-opened it
+    tick.undecline_item(led, POLICY, REPO, BOT_FILED_SELF_RESOLVED, "operator: withdrawn")
+    assert led.items[BOT_FILED_SELF_RESOLVED].state == READY, (
+        "re-open then reverse is the route the published body promises; if this "
+        "reds, the decline body is sending readers at a dead end again"
+    )
+
+
+def test_a_receipt_survives_a_reversal_and_the_body_says_so(monkeypatch, tmp_path):
+    """MUTATION ARM UP13. The decision, pinned so it cannot drift back silently.
+
+    A receipt survives a park: nothing on either disposition path voids one, and
+    `record_receipt_from_evidence` refuses a terminal item, so any receipt a
+    terminal item holds was taken while it was still in the queue. After a
+    reversal it is STILL attached and `Ledger.receipt_ok()` -- which
+    `merge_gate.ledger_receipt_ready` calls -- is True.
+
+    `upsert`'s REOPEN branch voids on an identical-looking shape, so the
+    asymmetry is a DECISION and is recorded as one: a reopen disputes the very
+    claim the receipt closed on, a reversal disputes the DISPOSITION and says
+    nothing about evidence. Voiding would destroy a valid run reference that can
+    age out of retention, to make one sentence simpler.
+
+    WHAT MAKES THIS FAIL: void the receipt in `_reverse` (the first assertion),
+    or leave the published body saying only "closing it still requires the
+    normal receipt path", which reads as "it comes back owing one" (the second).
+    """
+    led = _led(tmp_path)
+    item = led.items[STRANDED_BY_A_CLEARED_BLOCKER]
+    item.receipt_kind = POLICY["receipts"][item.effective_receipt_class]
+    item.receipt_ref = "run-36037056251"
+    item.receipt_taken_under = item.effective_receipt_class
+    _stub_gh(monkeypatch)
+    tick.park_item(led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "no runner", "op")
+    assert led.receipt_ok(item)[0], "the precondition: a terminal item CAN hold one"
+
+    _stub_gh(monkeypatch)
+    out = tick.unpark_item(
+        led, POLICY, REPO, STRANDED_BY_A_CLEARED_BLOCKER, "operator: runner is up")
+
+    assert item.state == READY
+    assert (item.receipt_kind, item.receipt_ref, item.receipt_taken_under) == (
+        POLICY["receipts"][item.effective_receipt_class],
+        "run-36037056251",
+        item.effective_receipt_class,
+    ), "all three fields survive, not merely the kind"
+    assert led.receipt_ok(item)[0], (
+        "so merge_gate.ledger_receipt_ready is satisfied on the way back in"
+    )
+    assert "NONE IS VOIDED" in tick._reversal_comment(PARKED, "why", "OPEN"), (
+        "the published body must SAY the receipt is kept - otherwise 'closing "
+        "still requires the normal receipt path' reads as 'it comes back owing "
+        "one', which is false in exactly this case"
+    )
+    assert "NONE WAS VOIDED" in out, "and so must what the operator sees on stdout"
+
+
+@pytest.mark.parametrize("state", [PARKED, DECLINED], ids=[PARKED, DECLINED])
+def test_the_reversal_body_quotes_only_what_its_own_disposition_actually_says(state):
+    """MUTATION ARM UP14. The shared-template hazard, one function over.
+
+    `_disposition_comment`'s docstring argues at length that the park and
+    decline bodies are written out in full rather than assembled from a shared
+    template, because a shared template is how two receipt routes came to say
+    the same wrong thing. `_reversal_comment` then used one anyway: both halves
+    said *"The `<state>` comment above this one says the harness will not
+    re-select this item on its own."*
+
+    Measured: NEITHER disposition body contains that sentence. This PR rewrote
+    the park's to "until somebody runs it", and the decline's never said
+    anything of the kind -- so on an `--undecline` the correction attributed to
+    the comment above it a sentence that is not there, on the unrevisable
+    surface this function exists to keep honest.
+
+    THE ATTRIBUTION MUST HOLD FOR A COMMENT POSTED BEFORE THIS VERB EXISTED,
+    which is the second round of the same defect and was caught by reading the
+    live artifact rather than the source. A round-2 draft said *"the `parked`
+    comment above this one ... says the harness will not re-select this item
+    until somebody runs `--unpark`"* -- and #2958's actual park comment, live on
+    GitHub, reads *"TO UNPARK IT: resolve the blocker and say so here. The park
+    is terminal, so the harness will not re-select this item on its own."* It
+    names no verb, because none existed. So the repair for a false attribution
+    asserted a new false attribution about the ONE item this whole PR is for.
+    Both corrections now name both vintages.
+
+    WHAT MAKES THIS FAIL: collapse the two corrections back into one, or quote
+    a sentence the sibling body does not carry. The assertion is not "these
+    strings differ" -- it is that each reversal body's quoted fragment is
+    FOUND IN its own disposition body, which is a claim only the real pair can
+    satisfy.
+
+    WHICH ASSERTIONS HERE ACTUALLY HAVE KILL POWER, disclosed rather than
+    counted (assertion-design #5), because the measurement disagreed with the
+    intent. Under UP14 `shipped not in reversal` reds on BOTH parameters and is
+    the load-bearing one; `anchor in reversal` reds on `[declined]` only (the
+    shared paragraph happens to contain the park's anchor). The remaining three
+    -- the "which comment" clause, `anchor in mine` and `anchor not in theirs`
+    -- are REGRESSION GUARDS: no arm in the matrix removes the anchor from
+    either disposition body, so nothing shows them failing and they must not be
+    counted as coverage. They are kept because they are the assertions that
+    would catch a FUTURE edit to a disposition body silently invalidating the
+    correction that quotes it, which is the exact drift this test exists for.
+    """
+    reversal = tick._reversal_comment(state, "why", "OPEN")
+    other = DECLINED if state == PARKED else PARKED
+    mine = tick._disposition_comment(state, [("EVIDENCE", "x")], "OPEN")
+    theirs = tick._disposition_comment(other, [("EVIDENCE", "x")], "OPEN")
+
+    shipped = (
+        f"The `{state}` comment above this one says the harness will not "
+        "re-select this item on its own."
+    )
+    assert shipped not in reversal, (
+        f"that exact attribution shipped in BOTH halves and neither disposition "
+        f"body contains the sentence it attributes. Measured: "
+        f"{'will not re-select this item on its own' in mine=}"
+    )
+    assert f"The `{state}` comment above this one" in reversal, (
+        "it must still say WHICH comment it corrects"
+    )
+
+    # The anchor each correction leans on, and the whole point is that it is
+    # FOUND IN its own disposition and ABSENT from the sibling's. One shared
+    # paragraph cannot satisfy both parameters, which is what makes this red
+    # under UP14 rather than merely differ from it.
+    anchor = {
+        PARKED: "will not re-select this item",
+        DECLINED: "will not do",
+    }[state]
+    assert anchor in reversal, f"the {state} correction must lean on {anchor!r}"
+    assert anchor in mine, (
+        f"and {anchor!r} must actually be IN the {state} disposition body - this "
+        "is the assertion the shipped version could not have passed"
+    )
+    assert anchor not in theirs, (
+        f"{anchor!r} is absent from the {other} body, which is exactly why one "
+        "shared correction paragraph could not be true for both"
+    )
+
+
 @pytest.mark.parametrize(
     ("state", "other"), [(PARKED, DECLINED), (DECLINED, PARKED)], ids=[PARKED, DECLINED]
 )
@@ -995,7 +1409,10 @@ def test_the_disposition_body_names_the_verb_that_reverses_it(state, other):
 
     The decline half is the mirror, and its own stale claim was *"a demoted
     decline has a legal way out and a park has none"* -- false the moment
-    `--unpark` exists.
+    `--unpark` exists. ARM UP11 is that mirror and reverts the whole decline
+    block to exactly that pre-#4699 text, so the `[declined]` parameter here is
+    RUN against the defect rather than merely written for it -- which it was
+    not in the first round, and the reviewers said so.
 
     WHAT MAKES THIS FAIL: remove the verb name from either body, or name the
     WRONG one. The flag is read from `tick.REVERSAL_FLAGS` rather than

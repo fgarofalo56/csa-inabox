@@ -112,8 +112,10 @@ anything genuinely blocked. `declined` is *in* that tuple by decision, not by
 inheritance: "will not do" leaves nothing to track, so its disposal is `gh issue
 close --reason not-planned`, and an item still open after a decline wants a
 look. That demotion has a legal escape — close the issue and the decline stands.
-A park has none: closing a blocked item's issue is how a backlog lies about
-itself (`deploy-integrity.md` R2).
+A park is never demoted at all, so it needs none: closing a blocked item's issue
+is how a backlog lies about itself (`deploy-integrity.md` R2). Neither state is
+a dead end any more — `--unpark` and `--undecline` are the explicit way out
+(#4699), documented below.
 
 **A ledger close now REACHES GitHub, which is the precondition that branch
 always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
@@ -589,7 +591,41 @@ this affects as non-terminal rather than silently closable.
 python tools/drain/tick.py --park <ITEM> --blocker '<what blocks it>' --owner '<who clears it>'
 # will not do, on a recorded decision.
 python tools/drain/tick.py --decline <ITEM> --decision '<who decided, on what grounds>'
+# and the way BACK OUT of each (#4699). Refused, writing and posting NOTHING,
+# without --reason.
+python tools/drain/tick.py --unpark <ITEM> --reason '<why the blocker no longer holds>'
+python tools/drain/tick.py --undecline <ITEM> --reason '<who reversed it, on what grounds>'
 ```
+
+**A reversal is not symmetric with its disposition, and the asymmetry is
+measured rather than stylistic.** `--unpark` is available for as long as the
+park's issue stays open — which is a park's expected condition, since a park is
+never demoted by the refresh and the harness never closes a park's issue — so
+that verb is the only route out of `parked`, a claim about `parked` and *not*
+about terminal states in general. (It is refused on a closed issue like any
+reversal; a human closing a blocked item's issue is the case that wants a
+look.) `--undecline` has a window. A declined item whose issue is still OPEN is
+demoted to `needs-audit` by the next refresh (`REOPEN_DISPUTES` includes
+`declined`), and `needs-audit` is non-terminal, so there is then nothing to
+reverse — the item is in the audit queue already and the verb refuses it. A
+declined item whose issue has been CLOSED (the disposal a decline's own comment
+names) is refused too: re-open the issue first. Loosening that second guard
+would not buy a route — a reversal over a closed issue returns the item to
+`ready` and the very next `refresh_from_github` finds it absent from the open
+set, flags it `departed` and demotes it again.
+
+**A reversal records no receipt and voids none.** A receipt survives a park or
+a decline, so an item that held a valid one comes back still holding it and may
+already satisfy R2. That is deliberately unlike `upsert`'s reopen branch, which
+*does* void: a reopen disputes the very claim the receipt closed on, while a
+reversal disputes the disposition and says nothing about evidence taken while
+the item was still in the queue.
+
+**Both reversals are gated on the autonomy contract** as `unpark-item` and
+`undecline-item`, listed separately from `park-item`/`decline-item` on purpose:
+if an unpark rode on the authority to park, revoking that authority would
+silently strand every already-parked item — #4699's own ratchet, reintroduced
+by its fix.
 
 **Until #4677 these two states were unreachable by any program.** `Ledger` has
 defined five states since it was written and `drained()` — this program's

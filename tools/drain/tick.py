@@ -848,10 +848,14 @@ def _disposition_comment(
             "there is no state meaning 'park resolved'.\n\n"
             "TO UNPARK IT: resolve the blocker, then run "
             "`tick.py --unpark <n> --reason '<why the blocker no longer holds>'`. "
-            "That verb is the ONLY route out of a terminal state - a refresh and "
+            "That verb is the ONLY route out of `parked` - a refresh and "
             "`--reap` both leave a parked item alone, deliberately - and it posts "
             "its reason here, so this comment is corrected on the public record "
-            "rather than only in the ledger (#4699). The harness will not "
+            "rather than only in the ledger (#4699). THAT CLAIM IS ABOUT `parked` "
+            "AND NOT ABOUT TERMINAL STATES IN GENERAL: a DECLINE seen open is "
+            "demoted to `needs-audit` by the next refresh, which is a second way "
+            "out of a terminal state, and the decline's own comment says so. "
+            "Neither body generalises over the other. The harness will not "
             "re-select this item until somebody runs it.\n\n"
             f"{tail}"
         )
@@ -871,14 +875,34 @@ def _disposition_comment(
         "what makes the decline stand;\n"
         "- if this issue is CLOSED, the decline stands as recorded and nothing "
         "disputes it (`declined | departed -> expected -> survives`). There is "
-        "nothing left to do.\n\n"
+        "nothing left to do unless the JUDGEMENT itself is withdrawn, which is "
+        "the last bullet below.\n\n"
         "That asymmetry is why `declined` and `parked` are treated differently "
         "by the REFRESH: a decline seen open is demoted and has a legal way out "
         "of that demotion, and a park is never demoted in the first place. "
-        "NEITHER IS A DEAD END. To reverse this decline, run "
-        "`tick.py --undecline <n> --reason '<who reversed it, on what grounds>'` "
-        "(a park's mirror is `--unpark`, #4699). An explicit verb is the only "
-        "route out of a terminal state, and it posts its reason here.\n\n"
+        "NEITHER IS A DEAD END, and for a decline the route back depends on "
+        "which of the two cells above you are standing in - the verb is not the "
+        "answer in all of them:\n"
+        "- THIS ISSUE STILL OPEN AND THE LEDGER STILL `declined`, which is the "
+        "window between this comment and the next refresh: run "
+        "`tick.py --undecline <n> --reason '<who reversed it, on what grounds>'`. "
+        "It posts its reason here, the way this comment did;\n"
+        "- ALREADY DEMOTED to `needs-audit` by a refresh: there is nothing to "
+        "reverse. `needs-audit` is NOT a terminal state - the item is in the "
+        "audit queue already, which is the whole point of the demotion - and "
+        "the verb refuses it and says so;\n"
+        "- THIS ISSUE CLOSED, the disposal named above: the decline stands on "
+        "the record and the verb REFUSES it. Re-open the issue first if the "
+        "judgement is genuinely withdrawn, then reverse it. That refusal is "
+        "not a ratchet and loosening it would not help: a reversal over a "
+        "closed issue returns the item to `ready`, and the very next refresh "
+        "finds it absent from the open set, flags it `departed` and demotes it "
+        "again - measured. It would buy one cycle, not a route.\n\n"
+        "A park's mirror is `--unpark` (#4699), and it has no such window: a "
+        "park is never demoted, and the harness never closes a park's issue, "
+        "so that verb stays available for as long as the issue stays open - "
+        "which is a park's expected condition. It is refused on a closed "
+        "issue too, for the same reason this one is.\n\n"
         f"{tail}"
     )
 
@@ -1295,31 +1319,83 @@ def _reversal_comment(from_state: str, reason: str, issue_state: str) -> str:
     park's blocker was published verbatim, and a reversal that summarised or
     truncated its own justification would leave the two halves of one public
     record held to different standards.
+
+    THE "WHAT THIS CORRECTS" PARAGRAPH IS PER-STATE, and it did not start that
+    way. Both halves used to say *"The `<state>` comment above this one says the
+    harness will not re-select this item on its own"* -- and measured against
+    the rendered bodies, NEITHER disposition contains that sentence. This PR
+    rewrote the park's to *"until somebody runs it"*, and the decline's never
+    said anything of the kind, so on an `--undecline` the correction attributed
+    to the comment above it a sentence that is not there (R7, on the
+    unrevisable surface this function exists to keep honest). That is the
+    shared-template hazard `_disposition_comment`'s own docstring warns about,
+    committed one function over. The two corrections are now written out in
+    full, and each quotes only what its own disposition actually says.
+
+    THE RECEIPT PARAGRAPH RECORDS A DECISION, not an inherited default. A
+    receipt SURVIVES a reversal: nothing on the park or decline path voids one,
+    and after the reversal `receipt_kind`/`receipt_ref`/`receipt_taken_under`
+    are still attached, so `Ledger.receipt_ok()` -- which
+    `merge_gate.ledger_receipt_ready` calls -- is True. `upsert`'s REOPEN
+    branch VOIDS the receipt on an identical-looking shape, so the asymmetry
+    needs a reason rather than silence, and the reason is what each event
+    disputes: a reopen disputes the very claim the receipt closed on, while a
+    reversal disputes the DISPOSITION and says nothing about evidence taken
+    while the item was still non-terminal. Voiding here would destroy valid
+    evidence -- a receipt names a run id that can age out of retention -- to
+    make one sentence simpler. The receipt is KEPT, and the body now says so
+    instead of leaving "closing it still requires the normal receipt path" to
+    be read as "it comes back owing one".
     """
     head = REVERSAL_HEADS[from_state]
+    if from_state == PARKED:
+        corrects = (
+            "WHAT THIS CORRECTS. The `parked` comment above this one records a "
+            "BLOCKER and tells the reader the harness will not re-select this "
+            "item. A park posted from #4699 onward names `--unpark` as the way "
+            "to change that; one posted BEFORE it said there was no way at all "
+            "-- *\"the park is terminal, so the harness will not re-select "
+            "this item on its own\"* -- and correcting THOSE on the public "
+            "record is why this comment exists at all."
+        )
+    else:
+        corrects = (
+            "WHAT THIS CORRECTS. The `declined` comment above this one records "
+            "a judgement that this work would not be done -- its own head "
+            "reads *\"will not do\"*. That judgement is withdrawn, on the "
+            "reason above. A decline posted from #4699 onward names the "
+            "`--undecline` window; one posted before it named no verb, because "
+            "none existed."
+        )
     return (
         f"{head}\n\n"
         f"PRIOR STATE: {from_state}\n"
         f"REASON FOR THE REVERSAL: {reason}\n\n"
-        f"WHAT THIS CORRECTS. The `{from_state}` comment above this one says the "
-        "harness will not re-select this item on its own. That is no longer true: "
-        "the item returns to `ready` in the drain ledger and the next cycle may "
-        "select it. This comment exists so the public record does not keep "
-        f"asserting a state that has been reversed - `state.json` is gitignored, "
-        "so a reversal recorded only there would leave the wrong sentence "
-        "standing where the next reader is looking.\n\n"
+        f"{corrects} The item returns to `ready` in the drain ledger and the "
+        "next cycle may select it. This comment exists so the public record "
+        "does not keep asserting a state that has been reversed - `state.json` "
+        "is gitignored, so a reversal recorded only there would leave the "
+        "wrong sentence standing where the next reader is looking.\n\n"
         f"{STATE_READ_DISCLOSURE} {issue_state}. A reversal REFUSES a closed "
         "issue: an item whose issue was closed while it sat terminal has had "
-        "something else happen to it, and returning it to the queue would paper "
-        "over whatever that was.\n\n"
+        "something happen to it that this verb did not observe. For a DECLINE "
+        "that close may be the `--reason not-planned` disposal its own comment "
+        "names, rather than anything anomalous - which is why the route back "
+        "from there is to re-open the issue first and then reverse it, not to "
+        "loosen the guard.\n\n"
         "WHAT THIS DOES NOT ESTABLISH: nothing here adjudicates the reason above. "
         "The harness records a reversal supplied by a lane or an operator; it "
         "does not verify that the blocker actually lifted or that the decision "
-        "was wrong. NO RECEIPT IS RECORDED BY THIS - the item is back in the "
-        "queue and closing it still requires the normal receipt path "
-        "(deploy-integrity R2). This comment is posted BEFORE the ledger write, "
-        f"so if that write did not land the item is still {from_state} and a "
-        "re-run posts this again."
+        "was wrong. NO RECEIPT IS RECORDED BY THIS, AND NONE IS VOIDED: a "
+        "reversal disputes the DISPOSITION, not evidence taken while the item "
+        f"was still in the queue, so an item that held a valid receipt before it "
+        f"was {from_state} still holds it and may already satisfy R2. That is "
+        "deliberately UNLIKE a reopen, which voids the receipt because a reopen "
+        "disputes the very claim that receipt closed on. Closing this item "
+        "still requires the normal receipt path (deploy-integrity R2) - one it "
+        "may or may not already hold. This comment is posted BEFORE the ledger "
+        f"write, so if that write did not land the item is still {from_state} "
+        "and a re-run posts this again."
     )
 
 
@@ -1538,12 +1614,23 @@ def _reverse(
     # recur elsewhere in this file as the module grows.
     wrong_state = item.state != from_state
     if wrong_state:
-        other = REVERSAL_FLAGS[DECLINED if from_state == PARKED else PARKED]
+        # BOTH HALVES ARE DERIVED FROM `other_state`, and the second one was
+        # HARD-CODED to `DECLINED` until a reviewer read the message in the
+        # direction nobody runs. Measured, verbatim from running code:
+        # `--undecline` on a PARKED item said *"#N is parked, not declined --
+        # --undecline reverses a declined and nothing else. A DECLINED item is
+        # reversed by --unpark"* -- whose second clause contradicts its own
+        # first, and hands an operator who typed the wrong verb an inverted
+        # contract (R7, in a user-facing refusal). The covering test asserted
+        # only `"--unpark" in str(exc)` and passed with the false attribution:
+        # the bare-membership shape this PR rejected one function over.
+        other_state = DECLINED if from_state == PARKED else PARKED
+        other = REVERSAL_FLAGS[other_state]
         raise ReversalRefusedError(
             f"#{number} is {item.state}, not {from_state} - "
             f"{REVERSAL_FLAGS[from_state]} reverses a {from_state} and nothing "
-            f"else. A {DECLINED} item is reversed by {other}; a non-terminal item "
-            "needs no reversal at all. Nothing was written or posted."
+            f"else. A {other_state} item is reversed by {other}; a non-terminal "
+            "item needs no reversal at all. Nothing was written or posted."
         )
     # THE AUTHORITY BAR, BEFORE ANY GITHUB CALL, so an unpermitted reversal costs
     # zero reads as well as zero writes -- the property `_dispose` buys the same
@@ -1572,11 +1659,28 @@ def _reverse(
     try:
         seen = _read_issue_on_github(repo, number)
     except IssueCloseFailedError as exc:
+        # EVERY SEGMENT HERE IS AN f-STRING, AND THE LAST ONE IS LOAD-BEARING.
+        # **DO NOT REWRITE THE TAIL AS `"...{}.".format(from_state)`.** Python
+        # concatenates adjacent literals BEFORE any method call, so a `.format()`
+        # on the tail runs over the WHOLE already-interpolated chain -- including
+        # `{exc}`, which carries `gh`'s stderr verbatim. Measured end-to-end
+        # through `unpark_item` at the head this comment was written on: with
+        # stderr `HTTP 502: {"message":"Bad gateway"}` it raised
+        # `KeyError: '"message"'`, and with `HTTP 500: {}` it raised
+        # `IndexError: Replacement index 1 out of range`. In both cases the
+        # `ReversalRefusedError` was NEVER CONSTRUCTED, so the sentence promising
+        # that nothing was posted and nothing was written never printed -- and
+        # `main()`'s reversal branch catches only the four reversal exceptions,
+        # so the bare builtin escaped to the interpreter as a traceback. The
+        # value that breaks it is a single `{` anywhere in the upstream stderr,
+        # which is why `test_a_reversal_refuses_when_the_issue_state_cannot_be_read`
+        # is parametrised over brace-bearing stderrs rather than the one
+        # brace-free string the stub used to hard-code.
         raise ReversalRefusedError(
             f"#{number}: could not read the issue's state, so whether it is open "
             f"is UNKNOWN - not 'open' ({exc}). A reversal refuses a CLOSED issue, "
             "so it cannot proceed on an unread one either. Nothing was posted and "
-            "nothing was written; the item is still {}.".format(from_state)
+            f"nothing was written; the item is still {from_state}."
         ) from exc
     if seen.state != "OPEN":
         raise ReversalRefusedError(
@@ -1624,7 +1728,8 @@ def _reverse(
         ) from exc
     return (
         f"#{number}: reversed from {from_state} ({note}); state {from_state} -> "
-        f"{item.state}. NO RECEIPT WAS RECORDED - closing it still needs one."
+        f"{item.state}. NO RECEIPT WAS RECORDED AND NONE WAS VOIDED - closing "
+        "still needs one, which this item may or may not already hold."
     )
 
 
@@ -3046,13 +3151,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--unpark", type=int, metavar="ITEM",
         help="reverse a PARK and return the item to ready (needs --reason). The "
-             "ONLY route out of a terminal state: a refresh and --reap both leave "
-             "a parked item alone, deliberately (#4535). Records NO receipt",
+             "ONLY route out of `parked` -- a refresh and --reap both leave a "
+             "parked item alone, deliberately (#4535). NOT a claim about "
+             "terminal states in general: a DECLINE is demoted to needs-audit "
+             "by the next refresh. Records no receipt and voids none",
     )
     parser.add_argument(
         "--undecline", type=int, metavar="ITEM",
         help="reverse a DECLINE and return the item to ready (needs --reason). "
-             "Records NO receipt; closing it still needs one",
+             "Only while the issue is OPEN and the ledger still says declined: "
+             "a refresh demotes it to needs-audit (nothing left to reverse) and "
+             "a closed issue is refused (re-open it first). Records no receipt "
+             "and voids none; closing still needs one",
     )
     parser.add_argument(
         "--reason", metavar="TEXT",

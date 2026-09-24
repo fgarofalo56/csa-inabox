@@ -3590,13 +3590,177 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         ('            "TO UNPARK IT: resolve the blocker, then run "\n'
          '            "`tick.py --unpark <n> --reason \'<why the blocker no longer holds>\'`. "\n'
-         '            "That verb is the ONLY route out of a terminal state - a refresh and "\n'
+         '            "That verb is the ONLY route out of `parked` - a refresh and "\n'
          '            "`--reap` both leave a parked item alone, deliberately - and it posts "\n'
          '            "its reason here, so this comment is corrected on the public record "\n'
-         '            "rather than only in the ledger (#4699). The harness will not "\n'
+         '            "rather than only in the ledger (#4699). THAT CLAIM IS ABOUT `parked` "\n'
+         '            "AND NOT ABOUT TERMINAL STATES IN GENERAL: a DECLINE seen open is "\n'
+         '            "demoted to `needs-audit` by the next refresh, which is a second way "\n'
+         '            "out of a terminal state, and the decline\'s own comment says so. "\n'
+         '            "Neither body generalises over the other. The harness will not "\n'
          '            "re-select this item until somebody runs it.\\n\\n"\n'),
         ('            "TO UNPARK IT: resolve the blocker and say so here. The park is "\n'
          '            "terminal, so the harness will not re-select this item on its own.\\n\\n"\n'),
+    ),
+    (
+        ("UP11 the DECLINE COMMENT BODY goes back to the sentence the reviewers "
+         "caught: a bare 'to reverse this decline, run --undecline' closed by "
+         "'An explicit verb is the ONLY route out of a terminal state'. That "
+         "claim is FALSE for the one state whose comment carried it -- "
+         "`declined` is in `REOPEN_DISPUTES`, `needs-audit` is not in "
+         "`TERMINAL`, and one `upsert` over an open issue moves it -- and the "
+         "SAME body says so three lines up. It was introduced by the fix for "
+         "three sentences of exactly this kind, which is why the test it reds "
+         "checks the CLASS (every 'only route out of X' across all four posted "
+         "bodies AND both --help lines) rather than the sentence that was "
+         "caught. THIS IS UP10'S MIRROR, and its absence was a real gap: UP10 "
+         "mutates the park branch and reds `...[parked]` alone, so the "
+         "`[declined]` parameter had no arm at all and its kill power was "
+         "asserted rather than shown.\n"
+         "         THE NEEDLE IS THE WHOLE BLOCK AND THE REPLACEMENT IS THE "
+         "REAL PRE-#4699 TEXT, both measured rather than reasoned about. The "
+         "first version of this arm replaced only the block's FIRST THREE LINES "
+         "-- and Python concatenates adjacent string literals, so the three "
+         "cell bullets and the `--unpark` paragraph survived, the mutant body "
+         "still named the window AND `--undecline <n>`, and the arm scored "
+         "KILLED on the class test alone while saying NOTHING about the kill "
+         "power of the two other tests it claims to cover. Killed for one of "
+         "three reasons is a weak mutation wearing a green verdict, which is "
+         "arm M3's lesson and UP10's, twice over in one file"),
+        "tick.py",
+        ('        "That asymmetry is why `declined` and `parked` are treated differently "\n'
+         '        "by the REFRESH: a decline seen open is demoted and has a legal way out "\n'
+         '        "of that demotion, and a park is never demoted in the first place. "\n'
+         '        "NEITHER IS A DEAD END, and for a decline the route back depends on "\n'
+         '        "which of the two cells above you are standing in - the verb is not the "\n'
+         '        "answer in all of them:\\n"\n'
+         '        "- THIS ISSUE STILL OPEN AND THE LEDGER STILL `declined`, which is the "\n'
+         '        "window between this comment and the next refresh: run "\n'
+         '        "`tick.py --undecline <n> --reason \'<who reversed it, on what grounds>\'`. "\n'
+         '        "It posts its reason here, the way this comment did;\\n"\n'
+         '        "- ALREADY DEMOTED to `needs-audit` by a refresh: there is nothing to "\n'
+         '        "reverse. `needs-audit` is NOT a terminal state - the item is in the "\n'
+         '        "audit queue already, which is the whole point of the demotion - and "\n'
+         '        "the verb refuses it and says so;\\n"\n'
+         '        "- THIS ISSUE CLOSED, the disposal named above: the decline stands on "\n'
+         '        "the record and the verb REFUSES it. Re-open the issue first if the "\n'
+         '        "judgement is genuinely withdrawn, then reverse it. That refusal is "\n'
+         '        "not a ratchet and loosening it would not help: a reversal over a "\n'
+         '        "closed issue returns the item to `ready`, and the very next refresh "\n'
+         '        "finds it absent from the open set, flags it `departed` and demotes it "\n'
+         '        "again - measured. It would buy one cycle, not a route.\\n\\n"\n'
+         '        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "That escape is the whole reason `declined` and `parked` are treated "\n'
+         '        "differently: a demoted decline has a legal way out and a park has none.\\n\\n"\n'),
+    ),
+    (
+        ("UP12 the unreadable-issue refusal goes back to `.format()` over an "
+         "f-string chain. Adjacent literals concatenate BEFORE the method call, "
+         "so `.format()` runs over the already-interpolated `{exc}` -- which "
+         "carries `gh`'s stderr verbatim. Measured end to end through "
+         "`unpark_item`: stderr `HTTP 502: {\"message\":\"Bad gateway\"}` raises "
+         "`KeyError: '\"message\"'` and `HTTP 500: {}` raises `IndexError`, the "
+         "`ReversalRefusedError` is NEVER CONSTRUCTED, and `main()`'s reversal "
+         "branch catches only the four reversal exceptions so the builtin "
+         "escapes as a traceback. The covering test could not witness it: the "
+         "stub's failed-read stderr was hard-coded BRACE-FREE, which is the "
+         "'what result could this instrument not have produced' shape exactly"),
+        "tick.py",
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            f"nothing was written; the item is still {from_state}."\n'),
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            "nothing was written; the item is still {}.".format(from_state)\n'),
+    ),
+    (
+        ("UP13 `_reverse` VOIDS the receipt on the way back to `ready`, the "
+         "obvious symmetry with `upsert`'s reopen branch -- and the wrong one. "
+         "A reopen disputes the very claim the receipt closed on; a reversal "
+         "disputes the DISPOSITION and says nothing about evidence taken while "
+         "the item was still in the queue. `record_receipt_from_evidence` "
+         "refuses a terminal item, so any receipt a terminal item holds was "
+         "taken validly before it got there, and voiding destroys a run id that "
+         "can age out of retention. This arm exists because the choice was "
+         "INHERITED rather than made: nothing pinned it in either direction"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        ("        item.blocker, item.owner = None, None\n"
+         "        item.receipt_kind = None\n"
+         "        item.receipt_ref = None\n"
+         "        item.receipt_taken_under = None\n"),
+    ),
+    (
+        ("UP14 `_reversal_comment`'s per-state correction collapses back into "
+         "ONE shared paragraph -- the exact text that shipped, in both halves: "
+         "*\"The `<state>` comment above this one says the harness will not "
+         "re-select this item on its own.\"* Measured: NEITHER disposition body "
+         "contains that sentence. The park's was rewritten to 'until somebody "
+         "runs it' by this very PR and the decline's never said anything of the "
+         "kind, so an `--undecline` attributed to the comment above it a "
+         "sentence that is not there -- R7 on an unrevisable surface, inside "
+         "the function whose whole job is correcting exactly that. It is the "
+         "shared-template hazard `_disposition_comment`'s own docstring argues "
+         "against, committed one function over.\n"
+         "         IT MUTATES THE JOIN, NOT THE DISPATCH, and that is a "
+         "correction. The first version prepended the shared paragraph and "
+         "neutered the `if` -- which left the `else` branch free to reassign "
+         "`corrects`, so BOTH states received the DECLINE text and only the "
+         "`[parked]` parameter went red. An arm that reds one half of a "
+         "parametrised pair it claims to cover is reporting on the half it "
+         "reached. Assigning AFTER the branch overwrites whatever either arm "
+         "computed, so both parameters now red"),
+        "tick.py",
+        ('    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+        ('    corrects = (\n'
+         '        f"WHAT THIS CORRECTS. The `{from_state}` comment above this one says "\n'
+         '        "the harness will not re-select this item on its own."\n'
+         '    )\n'
+         '    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+    ),
+    (
+        ("UP15 the DECLINE body's closing paragraph goes back to the sentence "
+         "the round-1 reviewers caught VERBATIM: *\"An explicit verb is the "
+         "only route out of a terminal state\"*. This is NOT a duplicate of "
+         "UP11. UP11 reverts the whole block to the genuine PRE-#4699 text, "
+         "which carries no such claim at all -- so it reds the window test and "
+         "the verb-naming test and says nothing about the class test's DECLINE "
+         "half. This arm reinstates the false universal on its own, which is "
+         "the only mutation that exercises "
+         "`test_no_published_surface_...` from the decline side. Two arms "
+         "because the two defects are different: one body said nothing, the "
+         "other said something false"),
+        "tick.py",
+        ('        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "An explicit verb is the only route out of a terminal state, and it "\n'
+         '        "posts its reason here.\\n\\n"\n'),
+    ),
+    (
+        ("UP16 the `--unpark` HELP LINE goes back to 'the ONLY route out of a "
+         "terminal state'. The help text is a PUBLISHED SURFACE too -- anyone "
+         "who types `--help` reads it -- and the round-1 sweep of this claim "
+         "swept the two posted bodies and missed it, because a surface is not "
+         "a file, it is every SITE within it. This arm exists to prove that "
+         "`_published_surfaces()` genuinely reads `build_parser()` rather than "
+         "listing it: without a mutation on the help side, the two `--help` "
+         "entries in that helper are an unwitnessed claim, and a scan that "
+         "silently covered four surfaces instead of six would report exactly "
+         "the same clean result"),
+        "tick.py",
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of `parked` -- a refresh and --reap both leave a "\n'),
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of a terminal state -- a refresh and --reap both leave a "\n'),
     ),
 ]
 
