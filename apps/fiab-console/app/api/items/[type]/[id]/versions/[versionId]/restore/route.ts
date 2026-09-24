@@ -17,6 +17,7 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { getItemVersion, recordItemVersion } from '@/lib/versions/item-version-store';
+import { carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiOk, apiError, apiUnauthorized, apiForbidden, apiNotFound, apiServerError } from '@/lib/api/respond';
 
@@ -39,12 +40,44 @@ export async function POST(
     if (!version) return apiNotFound('Version not found');
 
     const live = access.item;
+    // #4619 — THE SIXTH WHOLESALE `state` WRITER. The snapshot's state is
+    // written WHOLESALE below, so before this a restore moved BOTH server-derived
+    // keys to whatever the chosen version carried — including, on the live
+    // estate, versions recorded through the UNGUARDED generic PATCH before this
+    // change deploys. That is a laundering path: the guard refuses the direct
+    // write, and "restore a version I saved earlier" would have put it back.
+    //
+    // CARRY ONLY — NO ASSERT, and that is deliberate. The caller is not
+    // SUPPLYING state here, they are SELECTING a stored snapshot, so a receipt
+    // that differs from live is the NORMAL case rather than an attack, and
+    // asserting would turn an ordinary restore into a 400 whenever the item had
+    // been re-provisioned since. Operator decision (2026-09-24), asked as a
+    // semantics question and answered "carry the live values forward" over
+    // "snapshot wins".
+    //
+    // Right on the merits, not only safe: a provisioning receipt describes the
+    // LIVE Azure object, and that object does not roll back when a Loom item
+    // version is restored. Writing an old receipt would make the record claim a
+    // backing resource the item may no longer have. `item-definition.ts:116`
+    // already drops `provisioning` from a portable definition for the same
+    // reason, and `promote.ts` rebases rather than copies.
+    //
+    // THE COST, disclosed rather than discovered later: an operator who wants to
+    // roll back a BINDING will find that restore no longer does it, and there is
+    // no other supported path for `state.storageAccount` on an existing item
+    // (see the `SERVER_DERIVED_SCOPE_KEYS` block in `item-crud.ts`). That is a
+    // real affordance loss. It is the accepted trade because a restore that
+    // silently re-points a grant coordinate is worse. Tracked on #4619.
+    const restoredState = carryServerDerivedScope(
+      (version.content?.state ?? live.state ?? {}) as Record<string, unknown>,
+      live.state,
+    );
     // Write the version's content back onto the live item as a fresh save.
     const next: WorkspaceItem = {
       ...live,
       displayName: version.content?.displayName?.trim() || live.displayName,
       description: version.content?.description?.trim() || undefined,
-      state: version.content?.state ?? live.state,
+      state: restoredState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();

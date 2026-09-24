@@ -197,12 +197,57 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * `state.storageAccount` site is a READ and NO server path writes it, so it is
  * not a record of work the server did — it is a binding supplied at CREATE that
  * the server then grants against. The rule covers it because of what READS it,
- * not because of what wrote it. Consequence, disclosed rather than discovered
- * later: with no server writer and no client writer, `state.storageAccount` is
- * now settable only through `createOwnedItem` and is neither changeable nor
- * clearable through any of the four generic writers. Re-binding an existing
- * lakehouse to a different account therefore has no supported path today; that
- * is tracked on #4619 and is the cost of closing the grant-moving write.
+ * not because of what wrote it.
+ *
+ * THAT MEASUREMENT WAS A KEY-NAME GREP, AND IT MISSED THREE WRITERS. Named
+ * here because the instrument matters more than the result: a WHOLESALE writer
+ * never mentions the key — that is this rule's entire premise — so "every
+ * `state.storageAccount` site is a READ" could not have produced a hit on the
+ * writers that matter. It found four, and only because those four read the key
+ * by name. The correct instrument is a SHAPE enumeration: every site that
+ * writes a whole item document, classified by whether its `state` is
+ * caller-derived or server-computed. Run at `18b4a063` over 206 shape-matched
+ * `replace<WorkspaceItem>` / `items.create` sites, that yields SEVEN wholesale
+ * writers of caller-derived state, not four:
+ *
+ *   1. `items/[type]/[id]` PATCH                    assert + carry
+ *   2. `cosmos-items/[type]/[id]` PATCH             assert + carry
+ *   3. `cosmos-items/[type]` POST                   assert only (CREATE)
+ *   4. {@link updateOwnedItem}                      assert + carry
+ *   5. `items/[type]/[id]/definition` PUT           assert + carry  (PAT-reachable)
+ *   6. `items/[type]/[id]/versions/[id]/restore`    carry only
+ *   7. workspace bundle import, OVERWRITE arm       carry only
+ *
+ * 6 and 7 carry without asserting on purpose: neither caller SUPPLIES state so
+ * much as SELECTS it (a stored snapshot; a bulk bundle apply), so a refusal
+ * would break the feature on a difference that is normal rather than hostile.
+ * Each says so at its own site. Everything else that writes `state` is either a
+ * narrow server-computed merge (`{ ...item.state, oneField }`) or a CREATE.
+ *
+ * WHAT THIS BOUND IS, EXACTLY. An earlier version of this comment said
+ * `state.storageAccount` was "neither changeable nor clearable through any
+ * generic writer" and that re-binding "has no supported path today". BOTH WERE
+ * FALSE when written: writers 5, 6 and 7 were unguarded, and 5 is published in
+ * `lib/openapi/spec.ts` as `updateItemDefinition`, so a `loom_pat_` token could
+ * change the key on a GET/PUT round trip and clear it by omitting it. The bound
+ * now holds across all seven, and is stated as a bound over an ENUMERATED set
+ * rather than over "any generic writer" — the phrase that made an unmeasured
+ * claim sound like a measured one. {@link createOwnedItem} is still exempt.
+ *
+ * THE COST OF THAT BOUND, disclosed rather than discovered later: with no
+ * server writer and now no client writer, `state.storageAccount` is settable
+ * only through {@link createOwnedItem}. Re-binding an existing lakehouse to a
+ * different account has no supported path today, and version-restore — the
+ * intuitive affordance for rolling one back — deliberately no longer does it.
+ * That is a real affordance loss, accepted because a write that silently
+ * re-points a grant coordinate is worse. Tracked on #4619.
+ *
+ * ALSO UNDISCLOSED UNTIL NOW, and narrow: a save that round-trips a STALE
+ * receipt is refused with a 400 rather than merged. That happens when an editor
+ * loaded `state` before a re-provision (`apps/[id]/install`, `learn/notebook-import`)
+ * stamped a new receipt underneath it. It fails CLOSED and a reload fixes it,
+ * but the message does not currently say "reload the item" — see the per-key
+ * reason strings below.
  *
  * Measured readers on this tree:
  *
@@ -246,17 +291,19 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  * the resolver-side precedence fix outright: ONE request could edit
  * `state.database` and drop `state.provisioning`, leaving no receipt to
  * prefer. {@link carryServerDerivedScope} now rebases those keys onto whatever
- * the item already carries, at ALL THREE UPDATE WRITERS: `items/[type]/[id]`
- * PATCH, `cosmos-items/[type]/[id]` PATCH, and {@link updateOwnedItem}. An
- * earlier version of this sentence said "at both writers" and was wired into
- * only two of them, which left the bypass open on `items/[type]/[id]` — the
- * route that serves `lakehouse`, whose resolver is the one exercised by the
- * spec. Review measured that at head `e57be98c`; the third call site closes it.
- * The fourth writer, `cosmos-items/[type]` POST, is a CREATE: there is no prior
- * value to rebase onto, so it asserts and does not carry, by construction.
- * Assert first, carry second at each of the three: an attempted CHANGE stays a
- * 400 rather than becoming a silent substitution, which `adx-item-scope.ts`
- * forbids in as many words.
+ * the item already carries, at ALL SIX UPDATE WRITERS enumerated above. This
+ * sentence has been wrong twice, in the same direction both times, and the
+ * count is the tell: it said "at both writers" while wired into two of three,
+ * then "at all three" while three more writers existed that no key-name grep
+ * could see. Each time the missing writer was a route that builds and writes
+ * its OWN document instead of calling {@link updateOwnedItem}, so the
+ * helper-level carry never reached it. That is the shape to look for, and it is
+ * why the list above is an enumeration rather than a number.
+ * `cosmos-items/[type]` POST is the seventh wholesale writer and is a CREATE:
+ * there is no prior value to rebase onto, so it asserts and does not carry, by
+ * construction. Assert first, carry second wherever both apply: an attempted
+ * CHANGE stays a 400 rather than becoming a silent substitution, which
+ * `adx-item-scope.ts` forbids in as many words.
  *
  * WHAT THAT DOES NOT CLOSE, measured and open: an item with NO successful
  * receipt resolves to whatever it declares, at every reader, because there is
@@ -294,7 +341,20 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
  *     `KNOWN_CONTAINERS` by `isKnownContainer`. That is FALSE at
  *     `api/lakehouse/references/paths/route.ts:72-76`, where a non-empty
  *     `state.ownedContainers` REPLACES `KNOWN_CONTAINERS` as the allowlist
- *     rather than being checked against it. OPEN.
+ *     rather than being checked against it. OPEN — deliberately not added to
+ *     the list above, because it has ZERO production writers (every tracked
+ *     site is a read, a type field, a comment or a fixture), so listing it
+ *     would freeze a key nobody writes, and because it is a declaration rather
+ *     than a server record. The remedy is sink-side: intersect with
+ *     `KNOWN_CONTAINERS` at that route the way `lakehouse-abfss.ts:64-67`
+ *     already does. Not done here, and the reason is weaker than it first
+ *     looks and is stated at its true strength: that route also serves
+ *     EXTERNAL-ACCOUNT reference lakehouses (`account = state.storageAccount`),
+ *     where a container outside `KNOWN_CONTAINERS` could legitimately exist and
+ *     would start returning 404 — but by the same census that found no writers,
+ *     NOTHING ON THIS TREE PRODUCES that configuration. So the risk is to a
+ *     hand-built or externally-created item, not to any shipped flow, and the
+ *     honest summary is "unmeasured against real data", not "known to break".
  *
  * All three are tracked; none is closed by this rule, and this comment is the
  * place that says so rather than implying coverage by omission.
@@ -327,12 +387,32 @@ const SCOPE_REFUSAL_REASON: Record<string, string> = {
   provisioning:
     'It is the provisioning receipt for this item\'s backing Azure object, which later requests '
     + 'narrow a caller-supplied path, database, job or account against, so it can only be written '
-    + 'by the provisioning path that produces it (a direct items.item().replace(), not this route).',
+    + 'by the provisioning path that produces it (a direct items.item().replace(), not this route). '
+    + 'If you were editing this item while it was being provisioned, reload it and reapply your '
+    + 'change — your copy of the receipt is stale, and this refusal is what stops the stale one '
+    + 'being written back.',
   storageAccount:
     'It names the storage account this item\'s lake is bound to, and it is the coordinate '
     + 'api/storage/_lib/authorize.ts grants against, so a request that moves it moves a grant. '
-    + 'No server path writes it today — it is settable only at CREATE, and this route will '
-    + 'neither change nor clear it. Changing the binding of an existing item is tracked on #4619.',
+    + 'No server path writes it, so on an EXISTING item it is fixed at whatever CREATE set: this '
+    + 'request can neither change nor clear it. Re-binding an existing item is tracked on #4619.',
+};
+
+/** The subset of {@link SCOPE_REFUSAL_REASON} wording that only makes sense on an
+ *  UPDATE. On a CREATE there is no prior value, so nothing is being "changed" or
+ *  "cleared" — the request is INTRODUCING a value it is not allowed to set. The
+ *  shared string used to be served verbatim on `cosmos-items/[type]` POST, where
+ *  "this request can neither change nor clear it" describes nothing that is
+ *  happening (`deploy-integrity.md` R7). */
+const SCOPE_REFUSAL_ON_CREATE: Record<string, string> = {
+  provisioning:
+    'It is the provisioning receipt for this item\'s backing Azure object, and it is stamped by '
+    + 'the provisioning engine AFTER the backing object exists — so a create cannot supply one. '
+    + 'Create the item without it; the receipt appears when provisioning completes.',
+  storageAccount:
+    'It names the storage account this item\'s lake is bound to, and it is the coordinate '
+    + 'api/storage/_lib/authorize.ts grants against. A create may set it only through the '
+    + 'item-creation path that owns that binding, not by supplying it in this body.',
 };
 
 /**
@@ -343,14 +423,21 @@ const SCOPE_REFUSAL_REASON: Record<string, string> = {
  */
 export function assertNoServerDerivedScopeChange(nextState: unknown, currentState: unknown): void {
   if (!nextState || typeof nextState !== 'object' || Array.isArray(nextState)) return;
+  // A CREATE passes `undefined` — there is no prior document at all, which is
+  // what selects the create-shaped wording below. An UPDATE whose item merely
+  // lacks the key still gets the update wording, because there a value IS being
+  // introduced onto something that exists.
+  const isCreate = currentState === undefined;
   for (const key of SERVER_DERIVED_SCOPE_KEYS) {
     if (!hasOwnStateKey(nextState, key)) continue; // omission — allowed, and carried forward
     const incoming = stableStringify(nextState[key]);
     if (hasOwnStateKey(currentState, key) && stableStringify(currentState[key]) === incoming) continue;
+    const reason = (isCreate ? SCOPE_REFUSAL_ON_CREATE : SCOPE_REFUSAL_REASON)[key] ?? '';
     throw new ServerOwnedStateError(
       key,
-      `"state.${key}" is recorded by Loom, not by the client: this request would change it. `
-        + (SCOPE_REFUSAL_REASON[key] ?? ''),
+      isCreate
+        ? `"state.${key}" is recorded by Loom, not by the client: this request would set it. ${reason}`
+        : `"state.${key}" is recorded by Loom, not by the client: this request would change it. ${reason}`,
     );
   }
 }
@@ -360,16 +447,21 @@ export function assertNoServerDerivedScopeChange(nextState: unknown, currentStat
  * onto the value the TARGET item already carries (removed when it carries none),
  * so a cross-item state copy satisfies {@link assertNoServerDerivedScopeChange}.
  *
- * FOUR CALL SITES, two different jobs. An earlier version of this docblock said
- * "exists for exactly one caller", which stopped being true once the omission
- * bypass was closed:
+ * SEVEN CALL SITES, two different jobs. Earlier versions of this docblock said
+ * "exists for exactly one caller" and then "FOUR CALL SITES"; both were
+ * overtaken, the second by a shape enumeration that found three wholesale
+ * writers a key-name grep could not see:
  *
- *   1. THE OMISSION REBASE, at each of the three UPDATE writers that replace
- *      `state` wholesale — `items/[type]/[id]` PATCH, `cosmos-items/[type]/[id]`
- *      PATCH, and {@link updateOwnedItem}. A body that merely LEAVES OUT a
- *      guarded key would otherwise delete it; here it preserves. `cosmos-items/[type]`
- *      POST is the fourth wholesale writer and is deliberately absent: it is a
- *      CREATE, so there is no prior value to rebase onto.
+ *   1. THE OMISSION REBASE, at every UPDATE writer that replaces `state`
+ *      wholesale — `items/[type]/[id]` PATCH, `cosmos-items/[type]/[id]` PATCH,
+ *      {@link updateOwnedItem}, `items/[type]/[id]/definition` PUT,
+ *      `items/[type]/[id]/versions/[versionId]/restore`, and the OVERWRITE arm
+ *      of the workspace bundle import. A body that merely LEAVES OUT a guarded
+ *      key would otherwise delete it; here it preserves. The last two carry
+ *      WITHOUT an assert, because their callers select stored state rather than
+ *      supplying it — see those sites. `cosmos-items/[type]` POST is the
+ *      remaining wholesale writer and is deliberately absent: it is a CREATE,
+ *      so there is no prior value to rebase onto.
  *   2. THE CROSS-ITEM COPY, at `deployment-pipelines/loom/_lib/promote.ts`,
  *      which builds its patch from the SOURCE item's state and applies it to a
  *      DIFFERENT, already-existing TARGET item. Without this the source's

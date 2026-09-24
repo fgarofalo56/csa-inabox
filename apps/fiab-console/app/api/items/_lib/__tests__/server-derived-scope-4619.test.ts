@@ -102,6 +102,10 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
     items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
   })),
   auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
+  foldersContainer: vi.fn(async () => ({
+    items: { create: vi.fn(async () => ({})), query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
+    item: () => ({ read: async () => ({ resource: undefined }) }),
+  })),
   // Mocked so the best-effort version snapshot and webhook fan-out on the ALLOW
   // cases stay silent. Both are caught and logged either way, but an unmocked
   // export prints an error per PASSING test — noise a REAL failure could then
@@ -132,6 +136,18 @@ vi.mock('@/lib/azure/loom-search', () => ({
   deleteLoomDoc: vi.fn(async () => undefined),
   docForItem: vi.fn(() => ({})),
 }));
+vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: vi.fn(async () => undefined) }));
+
+/** The snapshot the version-restore arm restores FROM. Set per-test. */
+let VERSION_DOC: any = null;
+vi.mock('@/lib/versions/item-version-store', () => ({
+  // `recordItemVersion` is best-effort at every call site; a no-op keeps the
+  // ALLOW cases quiet without changing what any assertion below observes.
+  recordItemVersion: vi.fn(async () => undefined),
+  getItemVersion: vi.fn(async () => VERSION_DOC),
+  listItemVersions: vi.fn(async () => []),
+  contentOf: vi.fn((it: any) => ({ displayName: it.displayName, description: it.description, state: it.state })),
+}));
 
 import {
   updateOwnedItem,
@@ -144,6 +160,10 @@ import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import { PATCH as COSMOS_ITEM_PATCH } from '@/app/api/cosmos-items/[type]/[id]/route';
 import { POST as COSMOS_ITEM_CREATE } from '@/app/api/cosmos-items/[type]/route';
 import { PATCH as GENERIC_ITEM_PATCH } from '@/app/api/items/[type]/[id]/route';
+import { PUT as DEFINITION_PUT } from '@/app/api/items/[type]/[id]/definition/route';
+import { POST as VERSION_RESTORE } from '@/app/api/items/[type]/[id]/versions/[versionId]/restore/route';
+import { computeDefinitionEtag, buildItemDefinition } from '@/lib/workspace/item-definition';
+import { executeWorkspaceImport } from '@/lib/workspace/workspace-bundle-io';
 
 /** What the lakehouse provisioner recorded. `lakehouse.ts:831-835` is the shape. */
 const SERVER_SCOPE = {
@@ -435,6 +455,178 @@ describe('#4619 — PATCH /api/items/[type]/[id] refuses it AND carries it', () 
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// WRITERS 5, 6 and 7 — the three a KEY-NAME GREP could not see.
+//
+// The clearance that missed them was "every top-level `state.storageAccount`
+// site is a READ". A wholesale writer never names the key, which is this whole
+// rule's premise, so that instrument could only ever have found the writers
+// that read the key by name — and it found exactly those four. A SHAPE
+// enumeration (every site writing a whole item document, classified by whether
+// its `state` is caller-derived) finds seven.
+// ───────────────────────────────────────────────────────────────────────────
+describe('#4619 — WRITER 5: PUT /api/items/[type]/[id]/definition', () => {
+  // The ETag is LIFTED from the implementation rather than transcribed, per
+  // `assertion-design.md` #3: a hand-written tag that stopped matching would
+  // turn every arm below into a 412 and a silent NOT-RUN.
+  const defCtx = { params: Promise.resolve({ type: 'lakehouse', id: LH_ID }) };
+  function defReq(body: unknown, etag: string) {
+    return {
+      json: async () => body,
+      headers: { get: (h: string) => (h.toLowerCase() === 'if-match' ? etag : null) },
+    } as any;
+  }
+
+  it('REFUSES a changed state.storageAccount — the PAT-reachable escalation', async () => {
+    // This route is published in `lib/openapi/spec.ts` as `updateItemDefinition`,
+    // so it is reachable with a `loom_pat_` token, and `state` is written
+    // WHOLESALE. `applyItemDefinition` hand-pins `provisioning` (:199) but pins
+    // NOTHING for `storageAccount`, and `reattachScrubbed` restores only
+    // `SECRET_KEY_RE` keys — which match `accountkey`/`account_key` but NOT
+    // `storageAccount`. So the GET exported it verbatim and the PUT took it
+    // verbatim, into the coordinate `api/storage/_lib/authorize.ts:114-131`
+    // grants against.
+    //
+    // FAILS IF the assert comes off this route: status becomes 200, `replaced`
+    // becomes 1, and the stored `storageAccount` becomes 'victimacct'.
+    // NOTE ON THE FIXTURE, because the first draft of this arm COULD NOT FAIL:
+    // `buildItemDefinition` returns a WRAPPER — `{ definition, scrubbedPaths,
+    // provisioningExcluded, etag }` — and the portable state lives at
+    // `.definition.state`, not `.state`. `extractDefinition` (route.ts:204-209)
+    // unwraps `body.definition` FIRST, so posting the wrapper with a mutated
+    // top-level `.state` sent the route the PRISTINE definition and returned
+    // 200. The fixture never reached the rule. Build from `.definition`.
+    const live = DOCS.get(dkey(LH_ID, WS));
+    const def: any = buildItemDefinition(live).definition;
+    def.state = { ...def.state, storageAccount: 'victimacct' };
+
+    const res = await DEFINITION_PUT(defReq(def, computeDefinitionEtag(live)), defCtx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('server_owned_state');
+
+    expect(replaced).toHaveLength(0);
+    expect(DOCS.get(dkey(LH_ID, WS)).state.storageAccount).toBe('dlzacct');
+  });
+
+  it('CARRIES both keys forward when the definition omits them', async () => {
+    // WHICH MECHANISM PINS WHICH — they are different here, and counting both
+    // as evidence for this PR would overstate it:
+    //   `provisioning`   — survives via `applyItemDefinition:199`, which
+    //                      PRE-DATES this PR. Asserted so a future edit to that
+    //                      hand-pin is caught, and DISCLOSED as not this
+    //                      change's doing (`assertion-design.md` #5).
+    //   `storageAccount` — survives ONLY via `carryServerDerivedScope` added
+    //                      here. This is the arm that witnesses writer 5.
+    //
+    // FAILS IF the carry comes off this route: `replaced[0].state.storageAccount`
+    // is `undefined` instead of 'dlzacct', because the wholesale replace drops
+    // what the body left out. `provisioning` would still survive — which is
+    // exactly why the two are named separately.
+    const live = DOCS.get(dkey(LH_ID, WS));
+    const etag = computeDefinitionEtag(live);
+    const res = await DEFINITION_PUT(
+      defReq({ schemaVersion: 1, state: { notes: 'edited via definition' } }, etag),
+      defCtx,
+    );
+    expect(res.status).toBe(200);
+    expect(replaced).toHaveLength(1);
+    // The edit LANDED — the paired positive, so this cannot pass by refusing.
+    expect(replaced[0].state.notes).toBe('edited via definition');
+    expect(replaced[0].state.storageAccount).toBe('dlzacct'); // ← the carry
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE); // ← the hand-pin
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
+  });
+});
+
+describe('#4619 — WRITER 6: POST .../versions/[versionId]/restore', () => {
+  const restoreCtx = {
+    params: Promise.resolve({ type: 'lakehouse', id: LH_ID, versionId: 'v-1' }),
+  };
+
+  it('restores CONTENT but keeps the LIVE backing record, not the snapshot\'s', async () => {
+    // CARRY ONLY, no assert — the caller SELECTS a stored snapshot rather than
+    // supplying state, so a receipt that differs from live is normal and a 400
+    // would break the feature. Operator decision (2026-09-24): "carry the live
+    // values forward" over "snapshot wins".
+    //
+    // This is also the laundering path the carry closes: a version recorded
+    // through the UNGUARDED generic PATCH, before this change deploys, can hold
+    // a forged receipt — and "restore a version I saved earlier" would have put
+    // it back past a guard that refuses the direct write.
+    //
+    // FAILS IF the carry comes off this route: `replaced[0].state.provisioning`
+    // becomes REWRITTEN_SCOPE and `.storageAccount` becomes 'victimacct' —
+    // the snapshot's values — and the resolver then reports the bronze root.
+    VERSION_DOC = {
+      id: 'v-1',
+      content: {
+        displayName: 'Sales LH',
+        description: undefined,
+        state: {
+          notes: 'the snapshot content',
+          provisioning: structuredClone(REWRITTEN_SCOPE),
+          storageAccount: 'victimacct',
+        },
+      },
+    };
+
+    const res = await VERSION_RESTORE({} as any, restoreCtx);
+    expect(res.status).toBe(200);
+    expect(replaced).toHaveLength(1);
+    // The CONTENT restored — the paired positive. Without this the arm would be
+    // satisfied by a restore that silently did nothing at all.
+    expect(replaced[0].state.notes).toBe('the snapshot content');
+    // ... and the LIVE backing record won, on both keys.
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
+    expect(replaced[0].state.storageAccount).toBe('dlzacct');
+    expect((await resolveLakehouseAbfss(LH_ID, WS))?.abfss).toBe(SERVER_SCOPE.secondaryIds.adlsRoot);
+  });
+});
+
+describe('#4619 — WRITER 7: workspace bundle import, OVERWRITE arm', () => {
+  it('keeps the TARGET backing record when a bundle overwrites an existing item', async () => {
+    // BOTH halves were live here, and the benign-looking one is the surprise:
+    // `workspace-export.ts:186` strips `provisioning` from every bundle BY
+    // DESIGN, so the ORDINARY Loom-produced bundle carries none — and writing
+    // it wholesale therefore DELETED the target's receipt on every overwrite
+    // import. It does NOT strip `storageAccount`, and a bundle is an uploaded
+    // file, so an edited one moved the grant coordinate. The fixture below is
+    // that exact shape: no `provisioning` (as the export produces) and a
+    // rewritten `storageAccount` (as an edit produces).
+    //
+    // FAILS IF the carry comes off: `replaced[0].state.provisioning` is
+    // `undefined` (deleted) and `.storageAccount` is 'victimacct'.
+    const plan: any = {
+      strategy: 'overwrite',
+      foldersToCreate: [],
+      foldersReused: 0,
+      idMap: {},
+      refsRemapped: 0,
+      items: [{
+        action: 'overwrite',
+        sourceId: 'src-1',
+        existingId: LH_ID,
+        overwrite: {
+          displayName: 'Sales LH',
+          description: undefined,
+          folderId: null,
+          state: { notes: 'from the bundle', storageAccount: 'victimacct' },
+          updatedAt: '2026-09-24T00:00:00.000Z',
+        },
+      }],
+    };
+
+    const summary = await executeWorkspaceImport(plan, { id: WS, tenantId: TENANT } as any);
+    expect(summary.overwritten).toBe(1);
+    expect(replaced).toHaveLength(1);
+    // The bundle's CONTENT landed — paired positive.
+    expect(replaced[0].state.notes).toBe('from the bundle');
+    // ... and the target kept its own backing record, on both keys.
+    expect(replaced[0].state.provisioning).toEqual(SERVER_SCOPE);
+    expect(replaced[0].state.storageAccount).toBe('dlzacct');
+  });
+});
+
 describe('#4619 — POST /api/cosmos-items/[type] refuses it at CREATE', () => {
   it('answers 400 and creates NOTHING', async () => {
     // Covering create is load-bearing: a rule that bound only the UPDATE paths
@@ -576,13 +768,28 @@ describe('#4619 — carryServerDerivedScope rebases a cross-item copy, and promo
     const { readFileSync } = await import('node:fs');
     const path = new URL(
       '../../../deployment-pipelines/loom/_lib/promote.ts', import.meta.url);
-    const src = readFileSync(path, 'utf8');
+    const raw = readFileSync(path, 'utf8');
 
     // Floor first: a read that returned nothing would make the match below
     // vacuous, so prove the file was actually opened.
-    expect(src.length).toBeGreaterThan(2000);
-    expect(src).toContain('updateOwnedItem(');
+    expect(raw.length).toBeGreaterThan(2000);
+    expect(raw).toContain('updateOwnedItem(');
 
+    // STRIP COMMENTS BEFORE MATCHING — recurrence class #4467. A raw-source
+    // guard is satisfied by a COMMENT, and this file's comments discuss the
+    // exact shape both patterns below look for, so the positive arm could be
+    // met by prose and the negative arm could go FALSE-RED the moment someone
+    // writes `state: promotedState` in an explanation of what was fixed.
+    const stripComments = (s: string) =>
+      s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+    // The stripper is PROVEN, not trusted: a control whose only occurrence is
+    // inside a comment must not survive it, and one in real code must.
+    expect(stripComments('// state: promotedState\nconst x = 1;')).not.toMatch(/state:\s*promotedState\b/);
+    expect(stripComments('/* state: promotedState */\nconst x = 1;')).not.toMatch(/state:\s*promotedState\b/);
+    expect(stripComments('const o = { state: promotedState };')).toMatch(/state:\s*promotedState\b/);
+
+    const src = stripComments(raw);
     expect(src).toMatch(/state:\s*carryServerDerivedScope\(/);
     expect(src).not.toMatch(/state:\s*promotedState\b/);
   });
