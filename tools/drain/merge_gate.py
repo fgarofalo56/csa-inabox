@@ -970,11 +970,22 @@ def _jobs_by_name(repo: str, run_ids) -> dict[str, dict]:
 
 
 def _siblings_of(job: dict | None, by_name: dict[str, dict]) -> tuple[dict, ...]:
-    """Every job from the SAME workflow run as `job`.
+    """The jobs of `job`'s run, AS SEEN THROUGH THE NAME-KEYED MAP.
 
     #4701 needs a cross-job lookup: a context's declared change detector can
     live in a sibling job, which is where `Detect console changes` has been
     since #4682 sharded vitest.
+
+    **This is NOT every job of the run.** `by_name` is keyed by job NAME, so
+    duplicates have already collapsed before this filter runs -- measured at
+    #4713's merged sha, 57 jobs carry only 55 distinct names (`evaluate`
+    appears 3 times). One representative survives per name, chosen by
+    `_jobs_by_name`'s worst-first rule. The name is stated in the signature
+    because an earlier docstring called this "every job from the SAME workflow
+    run", which is false and would make `_declared_gate_ran`'s ambiguity
+    refusal look unreachable from here. It IS unreachable from here; it is
+    reachable from the rename branch, which passes an undeduped
+    `_jobs_of_run` result.
 
     Grouped by `run_id` rather than by workflow path on purpose. The run is the
     unit that actually executed together; two runs of the same path at the same

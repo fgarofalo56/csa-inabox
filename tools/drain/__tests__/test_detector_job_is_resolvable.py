@@ -7,7 +7,7 @@ different strings, and on 2026-09-25 they differed for the only row that
 declares the field:
 
     policy.json   detector_job = 'vitest-detect'          <- the YAML key
-    jobs API      name         = 'vitest - detect changes' <- what the consumer sees
+    jobs API      name         = 'vitest — detect changes' <- what the consumer sees (U+2014)
 
 The existing test passes, correctly, against the source where the declaration
 IS right. No input to it can turn it red on that mismatch. That is the
@@ -41,11 +41,21 @@ def _workflow_root() -> pathlib.Path | None:
 
     `test_ci_green_declared.py` already carries this helper and a comment
     explaining exactly that failure. This is the same walk, deliberately keyed
-    on `.github/workflows` ALONE and NOT on `scripts/ci`: the two-marker form
-    returns None in the sandbox, which would SKIP these arms precisely where
-    the mutants live, and a guard that skips there scores every arm KILLED
-    regardless of the mutation. That tautology is one this package has been
-    burned by twice.
+    on `.github/workflows` ALONE and NOT on `scripts/ci`.
+
+    WHY, CORRECTED: an earlier revision of this docstring said the two-marker
+    form would SKIP these arms in the sandbox. It would not -- this module
+    contains no `pytest.skip`, so a `None` root makes the arms assert RED, and
+    the mutation harness would refuse to score again on a dead control, exactly
+    as it did on `parents[3]`. A reviewer measured that by deleting `.github`
+    from a sandbox copy. Same remedy, different mechanism, and the mechanism is
+    the part a future reader needs.
+
+    The tautology the two-marker form guards against elsewhere is real and is
+    not this: `_repo_root` keeps `scripts/ci` so that tests shelling out to
+    `node` and `gh api` skip in the sandbox rather than firing a network
+    request on every arm. These arms read two files and call two pure
+    functions, so they have nothing to skip for.
     """
     for candidate in _HERE.parents:
         if (candidate / ".github" / "workflows").is_dir():
@@ -91,13 +101,22 @@ def _workflow_for(row: dict) -> str | None:
 
 
 def test_the_declaration_is_resolvable_in_the_consumer_namespace():
-    """Every declared `detector_job` maps to a job the jobs API could report.
+    """Every declared `detector_job` maps to the `name:` its workflow declares.
 
     WHAT VALUE WOULD MAKE THIS FAIL: a `detector_job` naming a key that is not
     in its workflow's `jobs:` block -- which is what a rename or a job split
     produces, and is the state #4701 was filed for. It ALSO fails if
     `_detector_display_name` is reduced to the identity function, because the
     assertion below pins the mapped name against the file's own `name:`.
+
+    SCOPE, STATED BECAUSE AN EARLIER NAME OVERCLAIMED IT. This arm does not
+    consult the jobs API. It compares what `gates` parses out of the workflow
+    against what this test re-parses out of the same text, so a reviewer
+    measured that tampering with a sandbox workflow's `name:` leaves every arm
+    here green -- both sides move together. What it pins is that the mapping
+    agrees with the file, which is the half of #4701's second defect that is
+    checkable offline; that the file agrees with the jobs API is established by
+    the receipt runs in the PR body, not here.
 
     This is deliberately NOT "the key exists in the YAML" -- that is what the
     existing declaration test already checks, in the namespace where the
@@ -222,20 +241,23 @@ def test_two_jobs_with_the_declared_name_is_ambiguous_and_refuses():
     assert len(det) == 1
 
 
-def test_a_detector_job_carrying_no_steps_refuses_disclosed_as_equivalent():
-    """An empty-`steps` detector refuses.
+def test_a_detector_job_carrying_no_steps_refuses_with_its_own_message():
+    """An empty-`steps` detector refuses, and says which of two things happened.
 
-    DISCLOSED, NOT COUNTED: an independent reviewer measured this arm as a
-    genuine EQUIVALENT MUTANT -- neutering `if not dsteps:` leaves the suite
-    green, because a detector with no steps also matches no `gate_step` and the
-    very next branch refuses anyway. The two refusals differ only in wording.
+    WHAT VALUE WOULD MAKE THIS FAIL: neutering `if not dsteps:`. The verdict is
+    unchanged by that mutation -- a detector with no steps also matches no
+    `gate_step`, so the next branch refuses anyway -- but the MESSAGE changes,
+    and this assertion pins the message.
 
-    It is kept because the wordings are not interchangeable to a reader: "found
-    but carries no steps" says the job exists and the jobs API returned nothing
-    for it, while "ABSENT from its declared detector job" says the step is not
-    there. Those send an investigator to different places. Per
-    `assertion-design.md` an un-killable assertion must be labelled as such and
-    must not be counted toward coverage, which is what this docstring does.
+    That distinction is the point rather than a technicality. "found but
+    carries no steps" says the job exists and the jobs API returned nothing for
+    it; "ABSENT from its declared detector job" says the step is not there.
+    Those send an investigator to different places.
+
+    Two earlier revisions of this docstring tried to describe the arm's kill
+    power and got it wrong in opposite directions, each time inside the round
+    fixing the previous one. Both reviewers found it. The description is gone;
+    the assertion is the claim.
     """
     row = {"gate_step": "Detect console changes", "detector_job": "empty"}
     empty = {"name": "empty", "run_id": 1, "steps": []}

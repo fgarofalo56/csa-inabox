@@ -4097,10 +4097,23 @@ def _declared_gate_ran(
     the one-side-of-a-symmetry defect again, inside the round that named it.
 
     `sibling_jobs` and `workflow_text` carry the cross-job case (#4701); see
-    `_detector_steps`. Both default to empty so a caller with no sibling list
-    keeps the historical same-job behaviour for a row with no `detector_job`,
-    and REFUSES for a row that declares one -- never silently searches the
-    wrong job.
+    `_detector_steps`. Both default to empty, and a caller with no sibling list
+    gets the historical same-job behaviour for EVERY row -- including one that
+    declares a `detector_job`.
+
+    THAT IS A FALLBACK, NOT A REFUSAL, and an earlier revision of this very
+    docstring claimed the opposite ("REFUSES for a row that declares one --
+    never silently searches the wrong job"). It was the third site carrying
+    that false claim; the first two were swept by grepping the literal string
+    they shared, which this one does not use. A needle scan cannot find the
+    same claim reworded.
+
+    The fallback can ACCEPT as well as refuse, which is the part worth knowing:
+    `gate_step` is matched as a SUBSTRING, so a step in the GATED job whose
+    name merely contains the declared one will stand in for the declared
+    detector. The same row can therefore reach opposite verdicts depending only
+    on whether its caller threaded siblings. The green-at-merge branch does;
+    the PR-head branch deliberately does not.
     """
     gate_step = str(row.get("gate_step") or "")
     if not gate_step:
