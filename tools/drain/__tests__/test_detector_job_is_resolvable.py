@@ -188,6 +188,63 @@ def test_an_unresolvable_detector_refuses_rather_than_searching_the_gated_job():
     assert "absent-job" in why, why
 
 
+def test_two_jobs_with_the_declared_name_is_ambiguous_and_refuses():
+    """A duplicate detector name must refuse, not let one leg answer for all.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: neutering the `len(matches) > 1` branch to
+    `if False:`. An independent reviewer measured that mutation and found the
+    WHOLE SUITE still green -- the refusal existed with no witness at all, which
+    is the `assertion-design.md` shape this package keeps re-finding.
+
+    It is REACHABLE, which is why it is worth a test rather than a disclosure.
+    The green-at-merge branch builds its sibling list from `_jobs_by_name`,
+    which is keyed by name and so cannot contain a duplicate. The rename branch
+    builds it from `_jobs_of_run`, which is NOT deduped -- so a matrix job whose
+    name does not interpolate (`vitest shard ${{ matrix.shard }}/4` is a real
+    example in this repo) yields several jobs sharing one name, and one leg
+    would otherwise answer for every leg.
+    """
+    row = {"gate_step": "Detect console changes", "detector_job": "dup"}
+    leg_a = {"name": "dup", "run_id": 1, "steps": [
+        {"name": "Detect console changes", "conclusion": "success"}]}
+    leg_b = {"name": "dup", "run_id": 1, "steps": [
+        {"name": "Detect console changes", "conclusion": "skipped"}]}
+    gated = [{"name": "x", "conclusion": "success"}]
+
+    ok, why, _ = gates._declared_gate_ran(row, gated, (leg_a, leg_b), None)
+    assert not ok, "two jobs sharing the declared name must be ambiguous"
+    assert "matches 2 jobs" in why, why
+
+    # POSITIVE CONTROL: one leg alone resolves, so the refusal above is the
+    # DUPLICATE and not something else about the fixture.
+    ok_one, why_one, det = gates._declared_gate_ran(row, gated, (leg_a,), None)
+    assert ok_one, why_one
+    assert len(det) == 1
+
+
+def test_a_detector_job_carrying_no_steps_refuses_disclosed_as_equivalent():
+    """An empty-`steps` detector refuses.
+
+    DISCLOSED, NOT COUNTED: an independent reviewer measured this arm as a
+    genuine EQUIVALENT MUTANT -- neutering `if not dsteps:` leaves the suite
+    green, because a detector with no steps also matches no `gate_step` and the
+    very next branch refuses anyway. The two refusals differ only in wording.
+
+    It is kept because the wordings are not interchangeable to a reader: "found
+    but carries no steps" says the job exists and the jobs API returned nothing
+    for it, while "ABSENT from its declared detector job" says the step is not
+    there. Those send an investigator to different places. Per
+    `assertion-design.md` an un-killable assertion must be labelled as such and
+    must not be counted toward coverage, which is what this docstring does.
+    """
+    row = {"gate_step": "Detect console changes", "detector_job": "empty"}
+    empty = {"name": "empty", "run_id": 1, "steps": []}
+    ok, why, _ = gates._declared_gate_ran(
+        row, [{"name": "x", "conclusion": "success"}], (empty,), None)
+    assert not ok
+    assert "carries no steps" in why, why
+
+
 def test_no_sibling_list_falls_back_to_the_gated_job_deliberately():
     """The counterpart, and it is a DELIBERATE leniency rather than an oversight.
 

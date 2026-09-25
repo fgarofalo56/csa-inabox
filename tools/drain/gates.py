@@ -3080,13 +3080,24 @@ def _one_context(
     # merged sha excuse a skip at the head sha, which is the wrong run answering
     # for the wrong tree.
     #
-    # The consequence is stated rather than hidden: a row that declares a
-    # `detector_job` REFUSES on this branch, with "no sibling job list was read
-    # for this run". That is fail-closed and it is the correct default. Making
-    # it work needs the HEAD run's jobs collected in `merge_gate` and carried on
-    # `ContextEvidence` -- a separate change, and not one #4701's acceptance test
-    # requires, since all three refusals it must clear come through the
-    # green-at-merge branch above.
+    # The consequence is stated rather than hidden, and an earlier revision of
+    # this comment stated it WRONGLY. A row that declares a `detector_job`
+    # does NOT refuse here -- `_detector_steps` falls back to the gated job's
+    # own steps when no sibling list is supplied. What it then emits, measured
+    # live, is:
+    #
+    #   its declared gate step 'Detect console changes' is ABSENT from this
+    #   job - the declaration is stale, or this is not the job it describes
+    #
+    # which is verbatim the message #4701 was filed about, and both causes it
+    # names are false: the declaration is current, and this IS the job it
+    # describes. So this branch is no WORSE than before the fix, and no better.
+    # It is the one place the old misleading sentence survives.
+    #
+    # Making it resolve needs the HEAD run's jobs collected in `merge_gate` and
+    # carried on `ContextEvidence` -- a separate change, and not one #4701's
+    # acceptance test requires, since all three receipts it must clear come
+    # through the green-at-merge branch above.
     ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
         push_trigger=item.push_trigger, infra_ere=infra_ere,

@@ -981,10 +981,14 @@ def _siblings_of(job: dict | None, by_name: dict[str, dict]) -> tuple[dict, ...]
     sha (a `push` and a `schedule`, say) must not lend each other detectors,
     which is the same confusion `select_merged_run` exists to prevent.
 
-    Returns `()` when the job or its `run_id` is unreadable. That is the
-    fail-closed direction: a row declaring a `detector_job` then REFUSES with
-    "no sibling job list was read", rather than silently searching its own job
-    and reporting the declaration stale.
+    Returns `()` when the job or its `run_id` is unreadable. An earlier
+    revision of this docstring claimed that a row declaring a `detector_job`
+    then REFUSES with "no sibling job list was read". **It does not, and that
+    string exists nowhere in the code.** `_detector_steps` falls back to the
+    gated job's own steps, which emits the older, misleading "the declaration
+    is stale" sentence instead. The empty tuple is therefore no-worse, not
+    fail-closed -- stated accurately here because the whole point of #4701 was
+    a message asserting a cause nobody had established.
     """
     if not isinstance(job, dict):
         return ()
