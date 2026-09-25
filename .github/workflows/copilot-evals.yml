@@ -123,6 +123,7 @@ jobs:
 
       - name: Post sticky PR comment with score deltas
         if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v2
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: copilot-evals
