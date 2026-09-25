@@ -42,6 +42,33 @@ name: CI_RUNNER is a well-formed runner label set
 # variable it exists to check: a malformed value would otherwise take the guard
 # down with everything else, which is the failure mode where a control is
 # absent exactly when it is needed.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS GUARD DOES NOT CHECK: THE BOUNDARY
+# ---------------------------------------------------------------------------
+# Everything above judges the variable's SHAPE. It cannot judge its SCOPE,
+# because the variable has none: `vars.CI_RUNNER` is a single repository-wide
+# value with no boundary dimension, and .github/actionlint.yaml declares
+# exactly one self-hosted label — `loom-aca`, the Commercial fleet in the DMLZ
+# subscription's cae-csa-loom-centralus, under the Commercial identity
+# uami-loom-ci. There is no Gov / GCC-High / IL5 fleet.
+#
+# Measured 2026-09-25 at PR #4492's head, by a PyYAML walk that classifies a
+# workflow as boundary-touching only when it TAKES a sovereign action
+# (`az cloud set --name AzureUSGovernment`, a secrets.AZURE_GOV_*/AZURE_GCC_*
+# reference, a .usgovcloudapi endpoint, or a gov-* filename):
+#
+#   converted jobs, all workflows        171
+#   in Gov-touching workflows             54  in 36 files
+#   mentions a boundary token only        13  in  6 files (NOT counted)
+#
+# So a value this guard passes as WELL-FORMED still routes all 54 sovereign
+# jobs onto the Commercial fleet — a GCC-High or IL5 deploy would run its
+# `az cloud set` and its sovereign credentials on a host inside the Commercial
+# hub VNet. That is DECLARED, per cloud-parity.md, not fixed: no value of a
+# single variable can express a correct per-boundary configuration. See the
+# "SOVEREIGN BOUNDARY EXPOSURE" block in
+# platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep.
 
 on:
   pull_request:
@@ -62,6 +89,11 @@ jobs:
     runs-on: ubuntu-latest   # NOT vars.CI_RUNNER — see the header.
     timeout-minutes: 5
     steps:
+      # Needed only for .github/actionlint.yaml, which is the source of the
+      # declared-fleet-label list the narrowing arm checks against. Lifting the
+      # list at run time rather than transcribing it means a typo cannot make
+      # this guard disagree with the config it is enforcing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Validate the variable's shape
         env:
           # Read RAW, never through fromJSON — the point is to judge the text
@@ -111,12 +143,41 @@ jobs:
             echo "::error::CI_RUNNER contains a non-string element; labels must be strings."
             exit 1
           fi
-          # A self-hosted set must NARROW. `["self-hosted"]` alone is the array
-          # form of the same defect the scalar case produces.
+          # A self-hosted set must NARROW, and `length > 1` is NOT enough to
+          # establish that. An independent reviewer on PR #4492 measured
+          # `["self-hosted",""]` passing the old arm: two elements, so the
+          # length test was satisfied, while the set names no fleet at all.
+          # `["self-hosted","x64"]` had the same hole. What the routing actually
+          # needs is a DECLARED fleet label, so that is what is asserted —
+          # lifted from .github/actionlint.yaml at run time, never transcribed.
+          #
+          # WHAT VALUE WOULD MAKE THIS FAIL: ["self-hosted",""],
+          # ["self-hosted","x64"], ["self-hosted"] — all three are red here and
+          # the first two were green before.
           if printf '%s' "$raw" | jq -e 'index("self-hosted")' >/dev/null 2>&1; then
-            if ! printf '%s' "$raw" | jq -e 'length > 1' >/dev/null 2>&1; then
-              echo "::error::CI_RUNNER is [\"self-hosted\"] with no narrowing label. Add the"
-              echo "::error::fleet label, e.g. [\"self-hosted\",\"loom-aca\"]."
+            declared="$(awk '
+              /^self-hosted-runner:/            { in_sh = 1; next }
+              /^[^[:space:]#]/                  { in_sh = 0 }
+              in_sh && /^[[:space:]]+labels:/   { in_l = 1; next }
+              in_sh && in_l && /^[[:space:]]+-[[:space:]]*/ {
+                sub(/^[[:space:]]+-[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; next }
+              in_sh && in_l && /^[[:space:]]+[A-Za-z_]+:/ { in_l = 0 }
+            ' .github/actionlint.yaml | jq -R . | jq -s -c .)"
+            if [ "$(printf '%s' "$declared" | jq -r 'length')" -eq 0 ]; then
+              echo "::error::Could not read any self-hosted label from .github/actionlint.yaml."
+              echo "::error::Not treating that as 'the value is fine': the narrowing check has no"
+              echo "::error::list to check against, so it cannot establish anything (R7)."
+              exit 1
+            fi
+            echo "declared fleet labels: $(printf '%s' "$declared" | jq -c .)"
+            if ! printf '%s' "$raw" | jq -e --argjson d "$declared" \
+                 'map(select(. != "self-hosted" and (. | length) > 0)) | any(. as $l | $d | index($l))' \
+                 >/dev/null 2>&1; then
+              echo "::error::CI_RUNNER names 'self-hosted' but no DECLARED fleet label. Length alone"
+              echo "::error::is not narrowing: [\"self-hosted\",\"\"] and [\"self-hosted\",\"x64\"] are two"
+              echo "::error::elements and still route to ANY self-hosted runner, or to none at all."
+              echo "::error::Use a label declared in .github/actionlint.yaml, e.g."
+              echo "::error::[\"self-hosted\",\"loom-aca\"]."
               exit 1
             fi
           fi

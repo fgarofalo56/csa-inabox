@@ -27,6 +27,64 @@
 // Secret: the GitHub PAT is supplied as a @secure() param value. The Key Vault
 // alternative is refused -- see githubPatKeyVaultSecretUri.
 //
+// ===========================================================================
+// SOVEREIGN BOUNDARY EXPOSURE -- THIS FLEET IS COMMERCIAL-ONLY AND THE SWITCH
+// THAT SELECTS IT CANNOT SAY OTHERWISE
+// ===========================================================================
+//
+// RECORDED, NOT SOLVED. Per cloud-parity.md an unexercised or unsafe boundary
+// is DECLARED rather than implied, and this is the declaration.
+//
+// This job is deployed once, into the Commercial DMLZ subscription's
+// cae-csa-loom-centralus environment, under uami-loom-ci -- a Commercial
+// managed identity in a Commercial tenant, on a VNet peered to the Commercial
+// DLZ. There is no Gov, GCC, GCC-High, IL5 or DoD instance of it.
+//
+// `vars.CI_RUNNER` is a SINGLE repository-wide variable with NO BOUNDARY
+// DIMENSION. Every converted job reads the same value:
+//
+//     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[')
+//                  && vars.CI_RUNNER || '["ubuntu-latest"]') }}
+//
+// and .github/actionlint.yaml declares exactly ONE self-hosted label,
+// `loom-aca`, which is this Commercial fleet. So setting the variable does not
+// route "CI" to "a runner"; it routes EVERY converted job, in every boundary,
+// to THIS Commercial fleet.
+//
+// MEASURED 2026-09-25 at the PR head, by a PyYAML walk over
+// .github/workflows that classifies a workflow as boundary-touching only when
+// it TAKES a sovereign action (`az cloud set --name AzureUSGovernment`, a
+// secrets.AZURE_GOV_*/AZURE_GCC_* reference, a .usgovcloudapi endpoint, or a
+// gov-* filename) -- not merely because it mentions "IL5" somewhere:
+//
+//     converted jobs, all workflows        171
+//     in Gov-touching workflows             54  in 36 files
+//     mentions a boundary token only        13  in  6 files (NOT counted)
+//
+// The 54 include deploy-gov (4), deploy-fiab-gcch (3), deploy-fiab-il5 (2),
+// deploy-fiab-gcc (2), dr-drill (7), loom-roll-and-validate (4),
+// loom-drift-check (3), and the whole gov-provision-* family.
+//
+// WHAT THAT MEANS IF THE VARIABLE IS SET: a GCC-High or IL5 deploy lane would
+// execute its `az cloud set --name AzureUSGovernment` and its sovereign
+// credentials ON A HOST INSIDE THE COMMERCIAL HUB VNET, carrying a Commercial
+// managed identity. That is a boundary-crossing execution context, and no
+// value of CI_RUNNER can avoid it, because the variable cannot express "Gov
+// jobs stay hosted" or "Gov jobs use a Gov fleet". One variable, one answer,
+// every boundary.
+//
+// NO PER-BOUNDARY FIX IS ATTEMPTED HERE, deliberately. It needs either a
+// per-boundary variable (CI_RUNNER_COMMERCIAL / CI_RUNNER_GOV / ...) read by a
+// boundary-aware expression, or a Gov-resident fleet with its own label
+// declared in actionlint.yaml, or an explicit decision that the 54 stay
+// hosted. All three are design changes, none belongs in this PR, and the
+// exposure is recorded so the decision is taken knowingly.
+//
+// UNTIL THEN: `vars.CI_RUNNER` is unset (measured 2026-09-25: 11 repository
+// variables, none named CI_RUNNER), so all 171 jobs -- the 54 included --
+// route to ubuntu-latest and nothing crosses a boundary. Setting it is the
+// act that creates the exposure.
+//
 // ---------------------------------------------------------------------------
 // TODO — wire into platform/fiab/bicep/modules/admin-plane/main.bicep:
 //   Add (do NOT edit main.bicep from this module; a sibling workflow owns it):
@@ -67,7 +125,9 @@ param consoleUamiId string
 
 @description('''uami-loom-ci - the runner's OWN least-privilege identity, and the boundary this module depends on.
 
-MEASURED 2026-09-13, which is why this parameter exists. The runner used to carry `uami-loom-console-centralus`: 53 role assignments including **Contributor at SUBSCRIPTION scope**, **Role Based Access Control Administrator** on this resource group, and **Key Vault Secrets Officer** on kv-loom. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into the job, so ANY job step could assume that identity. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands back this job's own `github-pat` secret - and RBAC Administrator grants exactly the roleAssignments/write that Contributor notActions deny, i.e. self-promotion to Owner. On a PUBLIC repo, where an approved fork PR runs arbitrary code here.
+MEASURED 2026-09-13, which is why this parameter exists. The runner used to carry `uami-loom-console-centralus`: 53 role assignments including **Contributor at SUBSCRIPTION scope**, **Role Based Access Control Administrator** on this resource group, and **Key Vault Secrets Officer** on kv-loom. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into the job, so ANY job step could assume that identity. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands back this job's own `github-pat` secret - and RBAC Administrator grants exactly the roleAssignments/write that Contributor notActions deny, i.e. self-promotion to Owner.
+
+TENSE, because the sentence here previously read "On a PUBLIC repo, where an approved fork PR runs arbitrary code here" in the present tense and that is not true at this head. The repo IS public. What is NOT true today is that PR-authored code reaches this job: `vars.CI_RUNNER` is unset, so every converted job routes to ubuntu-latest. The exposure becomes live WHEN that variable is set, and it is stated in that conditional form so nobody discharges it by re-reading the sentence.
 
 Removing the PAT from the process environment did NOT fix that; it closed the smaller door. Two independent reviewers demonstrated the recovery path separately.
 
@@ -101,13 +161,17 @@ param runnerNamePrefix string = 'loom-aca'
 @description('Pending-run count that maps to one job execution.')
 param targetWorkflowQueueLength int = 1
 
-@description('''Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30), together with the D8 profile ceiling of 3 nodes, to bound fleet cost at roughly a third of an unbounded ceiling. Raise both together if PRs start queueing.
+@description('''Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30) to bound fleet cost. Raise it together with the environment's D8 `maximumCount` if PRs start queueing - the node ceiling, not this number, is what actually bills.
 
-DO NOT RAISE THIS ABOVE 0 UNTIL THE TWO ITEMS BELOW ARE DISCHARGED. This is the switch that admits arbitrary PR-authored code to the VNet, and it is currently the thing holding both open. They are recorded here rather than in a review thread because this parameter is where the decision is actually taken.
+THIS TEXT IS A RECORD, NOT A CONTROL, and it is labelled that way because the previous version read "DO NOT RAISE THIS ABOVE 0 UNTIL THE TWO ITEMS BELOW ARE DISCHARGED" on a parameter whose default is 8. A comment that forbids a value the file itself ships is not enforcing anything - it is the same "a comment is not a control" failure this module's sibling script has a `case` statement to avoid, committed in the paragraph claiming the discipline. Measured 2026-09-25 on the live job `gh-aca-runner` in rg-csa-loom-admin-centralus: `maxExecutions` is 5. So neither 0 nor 8 describes the estate.
+
+WHAT ACTUALLY HOLDS THE FLEET CLOSED is `vars.CI_RUNNER` being unset - measured the same day, 11 repository variables and no CI_RUNNER. Until it is set, no converted job routes here regardless of this parameter. The two preconditions below are conditions on SETTING THAT VARIABLE, not on this number.
 
 1. THE NETWORK AXIS IS UNMEASURED. runnerUamiId closes the IDENTITY axis - what the job CARRIES. It says nothing about where the job SITS, which is what moving 171 jobs here changes. Measured on cae-csa-loom-centralus 2026-09-13: 14 Container Apps carry uami-loom-console-centralus (subscription Contributor, RBAC Administrator, Key Vault Secrets Officer) and 12 of those have INTERNAL ACA ingress, among them loom-trino, loom-duckdb, loom-dbt-runner, loom-transform-runner, loom-udf-runtime and loom-airflow - by design code/SQL execution services. Internal ingress is reachable from any workload in the same environment, including this job. `az containerapp auth show` returned {} on every one sampled; the environment has peerAuthentication.mtls.enabled = false and peerTrafficConfiguration.encryption.enabled = false; no ingress sets clientCertificateMode. nsg-snet-container-platform has ZERO outbound security rules and the subnet has no route table, so nothing transits the AzureFirewallSubnet in the same VNet. No exploit chain was demonstrated - deliberately, since probing production internal services from a review is itself a state change - and none is needed: the claim is only that the privileged identity is one unauthenticated hop away and nothing in this module establishes otherwise. DISCHARGED BY either a per-app measurement that every internal-ingress app enforces its own authn, or a control on the network axis: mTLS or EasyAuth on internal ingress, or a dedicated environment/subnet for the runner with an egress NSG and a UDR through the firewall.
 
-2. AT LEAST ONE FLEET-PINNED LANE IS BROKEN BY THE IDENTITY SWAP. Twelve workflow jobs are pinned unconditionally to [self-hosted, loom-aca]. Of those, loom-brain-scan.yml `commercial` obtains its ARM and Cosmos tokens from DefaultAzureCredential({managedIdentityClientId: LOOM_UAMI_CLIENT_ID}) - the CONSOLE identity - and lib/brain/run/azure/scan-credential.ts refuses the service-principal fallback by design (assertTokenIdentity compares the token appid and throws on mismatch). loom-console-cosmos.bicep grants the deploy SP a data-plane role only when isAzureUSGovernment, on the stated assumption that this runner carries the console UAMI. So on Commercial there is no fallback to fall back to. It FAILS CLOSED and loud - ScanIdentityError propagates and the job exits 1 - which is the good version of this bug and still a broken lane. The mirror applies to Gov: its job is now CI_RUNNER-routed, so switching the variable on moves Gov onto a runner whose identity is uami-loom-ci and makes its Gov-only SP grant unreachable for the same chain-order reason. DISCHARGED BY a deliberate least-privilege grant to uami-loom-ci, recorded at runnerUamiId, for each lane that proves it needs one - NOT by re-attaching the console identity.''')
+2. AT LEAST ONE FLEET-PINNED LANE IS BROKEN BY THE IDENTITY SWAP. Twelve workflow jobs are pinned unconditionally to [self-hosted, loom-aca]. Of those, loom-brain-scan.yml `commercial` obtains its ARM and Cosmos tokens from DefaultAzureCredential({managedIdentityClientId: LOOM_UAMI_CLIENT_ID}) - the CONSOLE identity - and lib/brain/run/azure/scan-credential.ts refuses the service-principal fallback by design (assertTokenIdentity compares the token appid and throws on mismatch). loom-console-cosmos.bicep grants the deploy SP a data-plane role only when isAzureUSGovernment, on the stated assumption that this runner carries the console UAMI. So on Commercial there is no fallback to fall back to. It FAILS CLOSED and loud - ScanIdentityError propagates and the job exits 1 - which is the good version of this bug and still a broken lane. The mirror applies to Gov: its job is now CI_RUNNER-routed, so switching the variable on moves Gov onto a runner whose identity is uami-loom-ci and makes its Gov-only SP grant unreachable for the same chain-order reason. DISCHARGED BY a deliberate least-privilege grant to uami-loom-ci, recorded at runnerUamiId, for each lane that proves it needs one - NOT by re-attaching the console identity.
+
+3. THE VARIABLE CANNOT EXPRESS A PER-BOUNDARY CONFIGURATION. See the SOVEREIGN BOUNDARY EXPOSURE block at the head of this file.''')
 param maxExecutions int = 8
 
 @description('Min executions. 0 = scale-to-zero.')

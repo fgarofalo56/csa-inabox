@@ -6,6 +6,25 @@
 # every one of the seven workflows that target the ACA runner as using an
 # "unknown" label. Declaring it here is the correct fix; baselining seven real
 # workflows to hide a configuration gap is not.
+#
+# THIS LIST IS COMMERCIAL-ONLY, AND THAT IS A DECLARED GAP, NOT AN OVERSIGHT.
+# `loom-aca` is one fleet, deployed once, in the Commercial DMLZ subscription's
+# cae-csa-loom-centralus environment under the Commercial identity
+# uami-loom-ci. There is no Gov / GCC / GCC-High / IL5 / DoD label here because
+# there is no sovereign fleet.
+#
+# It matters because `vars.CI_RUNNER` — the single repo-wide variable that
+# routes `runs-on:` — has NO boundary dimension. Measured 2026-09-25 at PR
+# #4492's head: 171 jobs read that variable, and 54 of them, in 36 files, take
+# a sovereign action (`az cloud set --name AzureUSGovernment`, an
+# AZURE_GOV_*/AZURE_GCC_* secret, a .usgovcloudapi endpoint, or a gov-*
+# filename). Setting the variable routes those 54 onto THIS Commercial fleet.
+#
+# So: adding a label here is not cosmetic. A second entry is the thing that
+# would let a boundary-aware expression exist at all. Full statement of the
+# exposure, with the measurement method:
+# platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep, the
+# "SOVEREIGN BOUNDARY EXPOSURE" block.
 self-hosted-runner:
   labels:
     - loom-aca
