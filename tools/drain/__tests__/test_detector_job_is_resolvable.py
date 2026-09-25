@@ -1,0 +1,175 @@
+"""#4701 arm: the declaration must be checkable in the CONSUMER's namespace.
+
+`test_ci_green_declared.py` validates every `detector_job` against the WORKFLOW
+YAML, where a job KEY is the correct identifier. The consumer -- `gates.py` at
+merge time -- reads the JOBS API, which reports the display `name:`. Those are
+different strings, and on 2026-09-25 they differed for the only row that
+declares the field:
+
+    policy.json   detector_job = 'vitest-detect'          <- the YAML key
+    jobs API      name         = 'vitest - detect changes' <- what the consumer sees
+
+The existing test passes, correctly, against the source where the declaration
+IS right. No input to it can turn it red on that mismatch. That is the
+`assertion-design.md` shape: a control that reads the one namespace where its
+subject is correct cannot witness a defect in the other.
+
+These arms close it by checking the MAPPING rather than the declaration --
+i.e. that `gates._detector_display_name` translates the declared key into
+something the jobs API would actually report.
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tools" / "drain"))
+
+import gates  # noqa: E402
+
+POLICY = json.loads((ROOT / "tools" / "drain" / "policy.json").read_text(encoding="utf-8"))
+SCOPE_ROWS = POLICY["receipts"]["ci_green_rule"]["scope_paths"]
+
+#: Rows that declare a cross-job detector. A row with no `detector_job` resolves
+#: to its own job and is not in this arm's scope.
+CROSS_JOB_ROWS = {
+    name: row for name, row in SCOPE_ROWS.items()
+    if isinstance(row, dict) and row.get("detector_job")
+}
+
+
+def _workflow_text(path: str) -> str | None:
+    p = ROOT / path
+    return p.read_text(encoding="utf-8") if p.is_file() else None
+
+
+def _workflow_for(row: dict) -> str | None:
+    """The workflow file a scope row describes.
+
+    Read from the row's own `workflow` key rather than inferred from its path
+    globs. An earlier draft of this arm guessed it out of the `outputs[].paths`
+    entries, found nothing, and failed loudly -- which was the correct outcome
+    but for the wrong reason, and would have gone quiet the moment any glob
+    happened to name a workflow.
+    """
+    wf = row.get("workflow")
+    return wf if isinstance(wf, str) and wf else None
+
+
+def test_the_declaration_is_resolvable_in_the_consumer_namespace():
+    """Every declared `detector_job` maps to a job the jobs API could report.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: a `detector_job` naming a key that is not
+    in its workflow's `jobs:` block -- which is what a rename or a job split
+    produces, and is the state #4701 was filed for. It ALSO fails if
+    `_detector_display_name` is reduced to the identity function, because the
+    assertion below pins the mapped name against the file's own `name:`.
+
+    This is deliberately NOT "the key exists in the YAML" -- that is what the
+    existing declaration test already checks, in the namespace where the
+    declaration is correct by construction.
+    """
+    assert CROSS_JOB_ROWS, (
+        "no scope row declares a `detector_job`, so this arm witnesses nothing. "
+        "If the field was removed, delete this test rather than leaving it green."
+    )
+    for name, row in CROSS_JOB_ROWS.items():
+        wf = _workflow_for(row)
+        assert wf, f"{name}: no workflow path resolvable from its declared scopes"
+        text = _workflow_text(wf)
+        assert text, f"{name}: {wf} is not readable from the repo root"
+
+        key = row["detector_job"]
+        mapped = gates._detector_display_name(key, text)
+
+        # The key must actually BE a job in that workflow. `_detector_display_name`
+        # returns the key unchanged for an unknown key -- a deliberate
+        # fall-through -- so this is the check that distinguishes "no explicit
+        # name:" from "no such job".
+        assert f"\n  {key}:\n" in text, (
+            f"{name}: declared detector_job {key!r} is not a job key in {wf}. "
+            "The declaration is stale; a lookup against the jobs API will find "
+            "nothing and the receipt will refuse."
+        )
+        # And the mapped value must be what the jobs API would report: the
+        # explicit `name:` when the job sets one, else the key.
+        block = text.split(f"\n  {key}:\n", 1)[1]
+        first = block.split("\n  ", 1)[0]
+        explicit = None
+        for line in first.splitlines():
+            if line.startswith("    name:"):
+                explicit = line.split("name:", 1)[1].strip().strip("'\"")
+                break
+        want = explicit if explicit is not None else key
+        assert mapped == want, (
+            f"{name}: detector_job {key!r} maps to {mapped!r} but {wf} declares "
+            f"name: {want!r}. The consumer searches the jobs API by display "
+            "name, so a wrong mapping finds no job and the receipt refuses."
+        )
+
+
+def test_negative_control_the_mapping_is_not_the_identity_function():
+    """If `_detector_display_name` just returned its input, the arm above would
+    still pass for any job that sets no `name:`. It must be shown to actually
+    translate at least one real row, or it witnesses nothing.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: replacing the function body with
+    `return key`. Measured 2026-09-25: `vitest-detect` -> `vitest - detect
+    changes`, so the identity function is demonstrably wrong here.
+    """
+    translated = []
+    for name, row in CROSS_JOB_ROWS.items():
+        wf = _workflow_for(row)
+        text = _workflow_text(wf) if wf else None
+        if not text:
+            continue
+        key = row["detector_job"]
+        if gates._detector_display_name(key, text) != key:
+            translated.append((name, key))
+    assert translated, (
+        "no declared detector_job translates to a different display name, so "
+        "this suite cannot distinguish the mapping from the identity function. "
+        "That is the exact blindness #4701 records -- if every job legitimately "
+        "sets no `name:`, say so at this site rather than deleting the arm."
+    )
+
+
+def test_an_unresolvable_detector_refuses_rather_than_searching_the_gated_job():
+    """Fail-closed: a supplied sibling list that lacks the named detector is a
+    refusal, never a fall-through to the gated job's own steps.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: changing `_detector_steps` to return
+    `steps` instead of `None` when the sibling lookup misses. That is the
+    difference between "we could not establish why the work was skipped" and
+    silently accepting the wrong job's evidence.
+    """
+    row = {"gate_step": "Detect console changes", "detector_job": "absent-job"}
+    gated = {"name": "vitest (node 20)", "steps": [
+        {"name": "Detect console changes", "conclusion": "success"},
+    ]}
+    # The gated job DOES carry the gate step -- so a fall-through would accept.
+    ok, why, _ = gates._declared_gate_ran(row, gated["steps"], (gated,), None)
+    assert not ok, "a missing detector job must refuse, not fall through"
+    assert "is not among the" in why, why
+    assert "absent-job" in why, why
+
+
+def test_no_sibling_list_falls_back_to_the_gated_job_deliberately():
+    """The counterpart, and it is a DELIBERATE leniency rather than an oversight.
+
+    With no sibling list there is nothing to look in, and the gated job's own
+    steps are the historical answer. If that job carries the declared gate step,
+    the step genuinely ran there and explains the skip.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: making the no-siblings case a refusal. An
+    earlier revision of #4701 did exactly that and broke five existing tests
+    whose fixtures put the detector in the gated job -- the pre-#4682 shape,
+    which was never wrong, only superseded.
+    """
+    row = {"gate_step": "Detect console changes", "detector_job": "vitest-detect"}
+    steps = [{"name": "Detect console changes", "conclusion": "success"}]
+    ok, why, detectors = gates._declared_gate_ran(row, steps, (), None)
+    assert ok, why
+    assert len(detectors) == 1
