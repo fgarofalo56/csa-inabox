@@ -1,23 +1,42 @@
 name: CI_RUNNER is a well-formed runner label set
 
-# The one state of `vars.CI_RUNNER` that FAILS OPEN.
+# 102 workflows route through
+#   runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
 #
-# 102 workflows route through `runs-on: ${{ fromJSON(vars.CI_RUNNER ||
-# '["ubuntu-latest"]') }}`. Measured by an independent reviewer on PR #4492:
+# THE SCALAR FAIL-OPEN IS NOW CLOSED IN THE EXPRESSION ITSELF, and this header
+# used to describe the state before that. The original form was
+# `fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]')`, and an independent reviewer
+# on PR #4492 measured its four states:
 #
 #   unset / empty / malformed JSON  -> fail CLOSED (the job does not start)
 #   a JSON ARRAY                    -> correct
 #   a JSON SCALAR, e.g. "self-hosted"
 #                                   -> `fromJSON` returns a STRING, `runs-on:
 #                                      <string>` is legal YAML, and the job
-#                                      routes to ANY self-hosted runner with no
-#                                      `loom-aca` narrowing.
+#                                      routed to ANY self-hosted runner with no
+#                                      `loom-aca` narrowing.  <- FAILED OPEN
 #
-# There is no way to assert array-ness inside a GitHub expression, so this is
-# DETECTION rather than prevention, and it says so. Today the practical blast
-# radius is nil because exactly one self-hosted fleet is registered on this
-# repo — but that is a fact about the present, not a property of the design,
-# and the moment a second fleet exists a scalar silently misroutes every job.
+# `startsWith` is evaluated on the RAW variable text before anything parses it,
+# so a value that is not bracket-delimited can no longer reach `fromJSON`: it
+# falls back to ubuntu-latest instead of misrouting. The old claim that there
+# is "no way to assert array-ness inside a GitHub expression" was true as
+# stated and beside the point -- we do not need array-ness, only the cheaper
+# necessary condition that a JSON array starts with '['.
+#
+# WHAT THAT COSTS, and why the bracket check below exists. A value that IS a
+# valid JSON array but does not START with '[' -- leading whitespace -- now
+# degrades silently to ubuntu-latest. Fail-safe, but silent, and a fleet the
+# operator believes is live would quietly not be. So this guard asserts the
+# SAME predicate the expression uses. If the two ever disagree, this goes red
+# rather than the estate going quiet.
+#
+# This is therefore prevention AND detection, where it used to be detection
+# alone. It is still not sufficient on its own: `vars.CI_RUNNER` changes OUT OF
+# BAND, on no trigger at all, and on a pull_request this job runs CONCURRENTLY
+# with the jobs it judges. The `schedule` below exists so that drift is bounded
+# by an interval rather than by "whenever someone next opens a PR" -- of the
+# converted workflows, 26 are schedule-triggered and 93 dispatch-triggered, and
+# neither class would otherwise ever run this guard.
 #
 # THIS WORKFLOW PINS `ubuntu-latest` ON PURPOSE. It must not route through the
 # variable it exists to check: a malformed value would otherwise take the guard
@@ -29,6 +48,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Hourly. The variable is written out of band, so this is the only trigger
+    # that bounds how long a bad value can route jobs unobserved.
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
@@ -52,6 +75,25 @@ jobs:
             exit 0
           fi
           echo "CI_RUNNER = $raw"
+
+          # THE SAME PREDICATE THE `runs-on` EXPRESSION USES, asserted here so
+          # the two cannot diverge. The expression tests startsWith(…, '[') on
+          # the RAW text; a value that parses as an array but does not start
+          # with '[' (leading whitespace) would be accepted by every jq check
+          # below and SILENTLY downgraded to ubuntu-latest at routing time.
+          # This arm is what makes that state loud instead of quiet.
+          # What value would make it fail: ' ["self-hosted","loom-aca"]'.
+          case "$raw" in
+            '['*) : ;;
+            *)
+              echo "::error::CI_RUNNER does not START with '['. The runs-on expression tests"
+              echo "::error::startsWith(vars.CI_RUNNER, '[') on the raw text, so this value would"
+              echo "::error::NOT be parsed as a label set — every job would silently fall back to"
+              echo "::error::ubuntu-latest while appearing to be configured for the fleet."
+              echo "::error::Remove any leading whitespace/quoting: [\"self-hosted\",\"loom-aca\"]"
+              exit 1
+              ;;
+          esac
 
           # jq -e exits non-zero when the filter yields false/null.
           if ! printf '%s' "$raw" | jq -e 'type == "array"' >/dev/null 2>&1; then

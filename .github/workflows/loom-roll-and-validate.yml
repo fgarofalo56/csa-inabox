@@ -221,7 +221,7 @@ jobs:
   # instead of hiding it.
   gate:
     name: Should this roll proceed?
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' }}
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
@@ -359,7 +359,7 @@ jobs:
   # does the I/O.
   stranded-check:
     name: Did a skipped roll strand the estate?
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     # Deliberately NOT `needs: gate` — gate is skipped on this path, and a
     # `needs` on a skipped job would skip this one too, which is the silence
     # being fixed.
@@ -393,7 +393,7 @@ jobs:
     # than treating a skipped roll as a shipped one; the pairing is asserted by
     # scripts/ci/__tests__/roll-race.test.mjs.
     name: Roll image + validate live URL
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
     # Published for the `reindex-loom-docs` job at the bottom of this file: the
@@ -2323,7 +2323,7 @@ jobs:
   # Gov console base URL. Stated here rather than left implied.
   reindex-loom-docs:
     name: Reindex loom-docs on the rolled revision
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     needs: roll-and-validate
     # Explicit rather than relying on the implicit `success()` a `needs` job
     # carries, because the state being excluded is easy to get wrong: `result`
