@@ -66,8 +66,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # crate that means `>=0.17.0, <0.18.0`) and a `[patch.crates-io]` replacement
 # must still SATISFY the original requirement. It would have needed a forked,
 # backported 0.17.x. Moot now that parquet 59 has no thrift at all.
-arrow = "59"
-parquet = "59"
+arrow = "60"
+parquet = "60"
 datafusion = "55"
 
 # delta-rs — reads the Delta log off ADLS the same way Direct Lake reads it off
