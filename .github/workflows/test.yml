@@ -638,17 +638,84 @@ jobs:
   # here and the correction is kept, because the next person to raise this
   # number should have to argue with the measurement rather than with a guess.
   #
-  # 45 = ~2.3x the measured 19m23s, i.e. room to ~740 arms at 3.48 s/arm,
-  # against the +34% arm growth that killed the old ceiling in four days.
-  # Deliberately wider than a fitted number because this lane is ADVISORY: an
-  # overrun is a loud red advisory, not a merge freeze, so generosity costs
-  # runner minutes while tightness costs another round of this. It is still NOT
-  # a ceiling to grow into -- every arm still re-runs the whole suite, so the
-  # next raise should be refused in favour of fixing that.
-  drain-mutation-matrix:
-    name: Drain Mutation Matrix (3.10)
+  # ---- THE 45-MINUTE CEILING, AND WHY IT IS NOT RAISED HERE (#4712) -------
+  # The paragraph that used to stand here read:
+  #
+  #   "45 = ~2.3x the measured 19m23s, i.e. room to ~740 arms at 3.48 s/arm
+  #    ... Deliberately wider than a fitted number because this lane is
+  #    ADVISORY: an overrun is a loud red advisory, not a merge freeze"
+  #
+  # ITS PREMISE WAS FALSE, and the correction matters more than the number.
+  # `tools/drain/merge_gate.py` gate 4c calls `gates.advisory_verdict()` with
+  # `tools/drain/policy.json: merge_gate.advisory_red_is_a_no_go`, which is
+  # `true` -- so an advisory RED (and a `timeout-minutes` overrun reports as
+  # CANCELLED, which that gate reads as red) is a NO-GO. Measured: at
+  # 2026-09-25 the drain's own merge gate emitted
+  #     ADV-RED 1: Drain Mutation Matrix (3.10) (CANCELLED) ... Do NOT merge
+  # and PR #4702 sat blocked behind it with two live APPROVEs. An overrun IS a
+  # merge freeze. Leaving the sentence would have left a reasoned justification
+  # resting on a falsified premise, in the block whose own subject is stale
+  # numbers -- so it is named rather than quietly deleted.
+  #
+  # The same paragraph's closing instruction is the one being followed here:
+  # "It is still NOT a ceiling to grow into -- every arm still re-runs the whole
+  # suite, so the next raise should be REFUSED in favour of fixing that."
+  #
+  # WHY SHARDING RATHER THAN A RAISE, arithmetically. 45 was sized at a MEASURED
+  # 3.48 s/arm (330 arms in 19m23s) under the model `arms x (startup + tests)`
+  # that the same block derived. At 413 arms / 878 tests the observed rate is
+  # ~6.5 s/arm: BOTH terms grew, which is what that model predicts. Dividing the
+  # `arms` factor across runners answers it; a higher ceiling answers nothing,
+  # and the growth curve (34m35s -> 40m15s -> 40m26s -> 41m27s -> CANCELLED at
+  # 44m54s, the last of those on a head that added no arms and no tests) says
+  # the next ceiling arrives in days.
+  #
+  # THE KNOB THAT NOW BUYS HEADROOM IS N, AND N SCALES. At 389 arms on this
+  # branch, `--shard i/6` hands each runner 65/65/65/65/65/64 arms; at ~6.5
+  # s/arm that is ~7 min of matrix per shard against a 25-minute wall -- ~3.5x,
+  # i.e. room to ~230 arms per shard, ~1380 in total. When THAT is approached,
+  # raise the shard count, not the timeout: six runners each doing 1/6 of the
+  # work is a topology, where 45 -> 60 minutes was only a delay.
+  #
+  # ---- THE TWO PROPERTIES CARRIED ACROSS FROM #4682's VITEST SPLIT ---------
+  # 1. THE MERGE JOB ADJUDICATES THE SHARDS; IT DOES NOT MERELY CONCLUDE AFTER
+  #    THEM. `loom-roll-and-validate.yml:650` records the cost of getting this
+  #    wrong in terms -- a merge job went green in 98s over shards that had not
+  #    run, and a gate pointed at it froze the estate for two days.
+  # 2. A SHARD THAT DID NOT EXECUTE STAYS DISTINGUISHABLE FROM ONE THAT PASSED.
+  #    `mutate_gates.py` separates SURVIVED / NOT-RUN / NEEDLE-MISCOUNT /
+  #    POPULATION-DRIFT, and that discipline survives the split two ways: each
+  #    shard writes a receipt on EVERY exit path including a refusal (so "I
+  #    refused, here is why" is not silence), and a shard killed by SIGKILL or a
+  #    timeout writes NONE (so silence is refused by the missing-receipt check).
+  #    The adjudicator additionally re-derives the UNION of the shards' arm
+  #    NAMES and compares it to `ARMS` in this checkout, so a truncated or
+  #    partially-dispatched run FAILS rather than reporting a clean subset.
+  drain-mutation-shard:
+    # THE `/6` IN THIS NAME IS LOAD-BEARING, and so is its agreement with both
+    # `strategy.matrix.shard` and the `--shard i/6` below.
+    # `tests/repo/test_drain_mutation_matrix_job.py` parses this block and goes
+    # RED if the three disagree -- the #4679 coupling guard in its drain-shaped
+    # form. A `[1,2,3,4,5,6]` matrix invoking `--shard i/5` would leave one
+    # sixth of the arms unassigned and every individual shard would still be
+    # green; the adjudicator's union check catches it at run time, and that test
+    # catches it on the PR that causes it.
+    name: Drain Mutation Matrix shard ${{ matrix.shard }}/6 (3.10)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # ~3.5x the ~7 min projected above. NOT fitted, for the reason the old
+    # block gave and that still holds now that the advisory is known to block:
+    # tightness costs another round of this, and generosity costs runner
+    # minutes. The difference from before is that the response to approaching
+    # it is to raise the shard count.
+    timeout-minutes: 25
+    strategy:
+      # LOAD-BEARING. A shard that dies must NOT cancel its siblings: the
+      # adjudicator's missing-receipt check is what turns a dead shard into a
+      # loud, NAMED failure, and cancelling the others would replace one honest
+      # refusal with six ambiguous ones.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
@@ -672,9 +739,85 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pyyaml
 
-      - name: Drain mutation matrix (every arm must be KILLED)
+      - name: Drain mutation matrix shard (every assigned arm must be KILLED)
         # NO `if:`. See the block above -- this is the whole point of the job.
-        run: python tools/drain/mutate_gates.py
+        #
+        # The body is the bare command, deliberately: anything wrapped around it
+        # can decide not to run it, or can decide which arms run, without
+        # tripping any `if:`-shaped assertion. The ONLY thing that narrows this
+        # run is `--shard`, and the adjudicator refuses a set of shards whose
+        # union is not `ARMS`.
+        run: python tools/drain/mutate_gates.py --shard ${{ matrix.shard }}/6 --receipt shard-receipt.json
+
+      - name: Upload this shard's receipt
+        # `always()` IS THE ONE CONDITION ALLOWED IN THESE TWO JOBS, and it is
+        # unconditional-by-construction rather than a gate. Without it, a shard
+        # that finds a SURVIVOR exits non-zero, the upload is skipped, and the
+        # adjudicator reports "shard N never ran" -- replacing the true finding
+        # (which arm survived) with a false one. The receipt is written on every
+        # exit path precisely so that it can be uploaded on every exit path.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drain-mutation-receipt-${{ matrix.shard }}
+          path: shard-receipt.json
+          retention-days: 1
+          # A shard that produced no receipt fails HERE as well as in the
+          # adjudicator. Failing at the source names which shard died; the
+          # adjudicator can only report that one is missing.
+          if-no-files-found: error
+
+  # ---- THE ADJUDICATOR ----------------------------------------------------
+  # KEEPS THE JOB KEY AND THE NAME `Drain Mutation Matrix (3.10)`. That name is
+  # what `pr-summary` lists and what gate 4c reads off the check-run list, so
+  # moving it would silently retire the advisory rather than shard it -- the
+  # "control that stops reporting" failure this whole change is about.
+  #
+  # `if: ${{ !cancelled() }}` is NOT a narrowing and is required. By default a
+  # job whose `needs` FAILED is skipped, so a surviving arm would turn this job
+  # from "red, and here is the arm" into "skipped" -- which on a non-required
+  # check is indistinguishable from "nothing to do". `cancelled()` refers to the
+  # RUN, not to a needed job: a shard that overruns `timeout-minutes` concludes
+  # CANCELLED without cancelling the run, this job still executes, and
+  # `--needs-result cancelled` is refused by name.
+  drain-mutation-matrix:
+    name: Drain Mutation Matrix (3.10)
+    needs: drain-mutation-shard
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # This job downloads six small JSON files and evaluates a pure function, so
+    # its own wall time says NOTHING about whether the suite ran -- which is
+    # exactly the #4679 trap. It is not a witness; it is an adjudicator, and the
+    # things it adjudicates are the receipts and `needs.*.result`.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v5
+        with:
+          python-version: '3.10'
+
+      - name: Download every shard receipt
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: drain-mutation-receipt-*
+          path: shard-receipts
+        # NO `merge-multiple: true`. Every shard writes the same filename, so
+        # merging them into one directory would have five of the six receipts
+        # overwrite each other and the adjudicator would refuse with "missing
+        # shards" -- true, but for the wrong reason. Kept in per-artifact
+        # subdirectories; `_load_receipts` globs recursively.
+
+      - name: Adjudicate the shards (the union must be ARMS, every arm KILLED)
+        # THE VERDICT. Reads `needs.drain-mutation-shard.result` -- the matrix
+        # job's AGGREGATE, which is `success` only when all six shards
+        # succeeded -- and passes it in by name so that a cancelled or skipped
+        # shard is refused explicitly rather than inferred from a missing file.
+        # Both layers are kept: the aggregate catches a shard whose artifact
+        # survived from an earlier attempt, and the missing-receipt check
+        # catches a shard that was never scheduled at all.
+        run: python tools/drain/mutate_gates.py --adjudicate shard-receipts --shards 6 --needs-result ${{ needs.drain-mutation-shard.result }}
 
   # ------------------------------------------------------------------
   # FRESH-RESOLVE LEG (story 3063)
@@ -858,7 +1001,7 @@ jobs:
   pr-summary:
     name: PR Summary
     if: github.event_name == 'pull_request' && always()
-    needs: [python-tests, drain-mutation-matrix, app-fresh-resolve, dbt-compile, dbt-integration]
+    needs: [python-tests, drain-mutation-shard, drain-mutation-matrix, app-fresh-resolve, dbt-compile, dbt-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -872,6 +1015,15 @@ jobs:
               // ADVISORY, not required — see the block above the job. It is
               // listed here so a matrix that stops being green is visible on
               // the PR rather than only to someone who opens the run.
+              //
+              // BOTH ROWS, deliberately (#4712). The shards row is the matrix's
+              // AGGREGATE `needs` result; the matrix row is the adjudicator's.
+              // They can disagree, and the disagreement is the finding: shards
+              // `cancelled` with the matrix `failure` is a timeout, whereas
+              // shards `success` with the matrix `failure` is a real surviving
+              // arm. Listing only the adjudicator would collapse the two into
+              // one red and send the reader to the wrong diagnosis.
+              { name: 'Drain Mutation Matrix (shards)', id: 'drain-mutation-shard' },
               { name: 'Drain Mutation Matrix', id: 'drain-mutation-matrix' },
               { name: 'App Fresh-Resolve', id: 'app-fresh-resolve' },
               { name: 'dbt Compile', id: 'dbt-compile' },

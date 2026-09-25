@@ -1445,8 +1445,17 @@ def run_gates(data: dict, policy: dict, allow_close: list[int] | None = None,
         data["comments"], pin_date, policy["verdict_parsing"]["token_window_chars"]
     )
     ok, why = gates.reduce_verdicts(live, near)
+    # THE CARRIER IS NAMED, not just the target (#4704 consequence review).
+    # `reduce_verdicts`' reason says WHICH block was discharged; without
+    # `supersedes` here nothing in the run output says BY WHICH COMMENT, and
+    # nothing durable records it either -- `before-*.json` holds only
+    # pr/head/open_issues and the squash body is untouched. The only permanent
+    # record would be a GitHub comment a reader has to know to go looking for,
+    # which is a poor audit trail for the one act in this gate that makes a
+    # block go away. Empty for every verdict that carries no discharge, so the
+    # ordinary line is unchanged in length.
     detail = why + (
-        f" | live={[(v.token, v.comment_id) for v in live]}"
+        f" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}"
         f" near={[(n.comment_id, n.kind, n.blocks) for n in near]}"
     )
     if repin["ok"]:

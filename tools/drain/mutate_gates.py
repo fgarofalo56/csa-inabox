@@ -28,6 +28,7 @@ matrix is exactly what they looked like:
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -51,8 +52,18 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
+#:
+#: `README.md` JOINED THIS LIST IN #4702 AND HAD TO. `_published_surfaces()`
+#: now reads it, because the README carried the same false-universal claim
+#: class as the posted bodies and no instrument read it. A read of a file the
+#: sandbox does not carry raises `FileNotFoundError` in EVERY arm -- the
+#: tautological-kill shape `COPIED`'s own note records for
+#: `required_contexts.json`, which is how this was caught before it shipped.
+#: Being in SOURCES as well as COPIED is deliberate: it makes the README
+#: mutable (UP20 poisons it, which is the only thing that witnesses the new
+#: read) and puts it inside the untouched-tree digest.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "operating_point.py", "policy.json"]
+           "operating_point.py", "policy.json", "README.md"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -107,7 +118,11 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "M5 reduce by RECENCY instead of conjunction",
         "gates.py",
-        'if any(v.token == "REQUEST-CHANGES" for v in live):',
+        # The condition grew an `and v.comment_id not in discharged` clause
+        # (#4704). The ARM is unchanged in intent -- replace the conjunction
+        # over the whole live set with "whatever landed last" -- but the needle
+        # has to track the line it aims at or it silently SKIPs.
+        'if any(v.token == "REQUEST-CHANGES" and v.comment_id not in discharged for v in live):',
         'if live and live[-1].token == "REQUEST-CHANGES":',
     ),
     (
@@ -163,7 +178,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "N6 CANNOT-ASSESS stops blocking",
         "gates.py",
-        'if any(v.token == "CANNOT-ASSESS" for v in live):',
+        # Same needle drift as M5 -- see the note there (#4704).
+        'if any(v.token == "CANNOT-ASSESS" and v.comment_id not in discharged for v in live):',
         "if False:",
     ),
     (
@@ -254,6 +270,93 @@ ARMS: list[tuple[str, str, str, str]] = [
         "ledger.py",
         "        if state in TERMINAL:\n            item.audit_reason = None\n",
         "",
+    ),
+    # -- #4677: the two terminal states no program could reach --------------
+    #
+    # `ledger.transition()` already refuses a park without both fields and a
+    # decline without a decision (arms L3, L6, L10 above), so deleting a CLI
+    # check changes NO LEDGER OUTCOME -- every one of these three mutants still
+    # ends in a refusal. What it changes is WHEN: `_dispose` posts the
+    # disposition comment before it transitions, so a check deleted here lets a
+    # park or a decline be PUBLISHED on a public issue and then refused, and no
+    # re-run removes the comment.
+    #
+    # That is why the tests that kill these assert `calls == []` rather than
+    # only the exception. An assertion that watched the exception alone would be
+    # satisfied by the ledger's own refusal and would witness nothing -- the
+    # could-not-fail shape `assertion-design.md` is about.
+    (
+        ("DP1 the CLI park check drops the BLOCKER half, so a blocker-less park "
+         "is published on the issue before the ledger refuses it"),
+        "tick.py",
+        "    if not blocker or not blocker.strip():",
+        "    if False:",
+    ),
+    (
+        ("DP2 the CLI park check drops the OWNER half -- a separate arm because "
+         "it is a separate check, and `transition` can only say that ONE of the "
+         "two is missing"),
+        "tick.py",
+        "    if not owner or not owner.strip():",
+        "    if False:",
+    ),
+    (
+        ("DP3 the CLI decline check drops the recorded DECISION, so a decline "
+         "with no reason is published before the ledger refuses it"),
+        "tick.py",
+        "    if not decision or not decision.strip():",
+        "    if False:",
+    ),
+    # -- #4677 round 2: the three findings an independent review raised --------
+    (
+        ("DP4 the park body stops REPORTING the state it read and goes back to "
+         "ASSERTING the issue is open - a claim about a state the code did not "
+         "establish. Reachable on exactly the population the verb serves: "
+         "`_dispose` admits a needs-audit/departed item and the refresh matrix "
+         "carries `parked | departed -> survives parked`, so the ledger "
+         "contemplates a parked item whose issue is CLOSED. Measured "
+         "2026-09-24: of the four items #4677 names, #2958 is OPEN and "
+         "#4534/#4582/#4664 are CLOSED (R7, on an unrevisable artifact). 366 "
+         "arms missed it because NO TEST RENDERED A BODY FOR A DEPARTED ITEM - "
+         "a missing case, not a weak arm"),
+        "tick.py",
+        'f"{observed} The park stands either way, and the two cells of the "',
+        '"THIS ISSUE STAYS OPEN, DELIBERATELY. The two cells of the "',
+    ),
+    (
+        ("DP8 the MIRROR of DP4, on the DECLINE body. A separate arm because "
+         "DP4 mutates only the park branch, so on its own it closes the finding "
+         "by its LABEL rather than at its SITE - the same reason L27 exists "
+         "beside L26. A reviewer built this one by hand and it killed; "
+         "promoting it means the next reader does not have to"),
+        "tick.py",
+        'f"{observed} Unlike a park, the decline\'s fate DOES depend on which "',
+        '"THIS ISSUE IS STILL OPEN. The decline\'s fate depends on which "',
+    ),
+    (
+        ("DP5 the AUTHORITY bar is removed, so two terminal-state capabilities "
+         "run with no entry in policy.json at all - the emergent-behaviour "
+         "shape `action_is_permitted` fails closed to prevent"),
+        "tick.py",
+        "    permitted, permit_note = gates.action_is_permitted(action, policy)",
+        '    permitted, permit_note = True, "not asked"',
+    ),
+    (
+        ("DP6 policy.json REVOKES `park-item` and the verb must stop working. "
+         "This is the arm that proves the authority has a BLAST RADIUS rather "
+         "than being prose - the marker_any_of defect this file records finding "
+         "in itself twice, asked of the new grant"),
+        "policy.json",
+        '    "park-item",\n',
+        "",
+    ),
+    (
+        ("DP7 `--status` stops refusing a write verb passed beside it, so "
+         "`--status --park N ...` prints the counts and exits 0 having parked "
+         "NOTHING - the silent-drop defect through a third door"),
+        "tick.py",
+        "    if args.status and named:",
+        "    if False:",
     ),
     # -- the cycle ---------------------------------------------------------
     (
@@ -1079,8 +1182,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "G5 a QUOTED verdict counts as a decision",
         "gates.py",
-        "            and not _is_quoted(line)",
-        "            and True",
+        "        quoted = _is_quoted(line)",
+        "        quoted = False",
     ),
     (
         "G6 a line that MENTIONS a marker counts as one that announces it",
@@ -1351,8 +1454,8 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         "C2d a one-line <details>...</details> leaves the depth counter open",
         "gates.py",
-        '            if "</details" not in lowered:\n                details += 1',
-        "            details += 1",
+        '                    and f"</{name}" not in lowered\n',
+        "                    and True\n",
     ),
     (
         "C2e a BLOCKING token is only counted in prose, so formatting reduces a block",
@@ -1367,16 +1470,16 @@ ARMS: list[tuple[str, str, str, str]] = [
         "            elif blocking_mention and not cited:",
     ),
     (
-        "C3 a verdict header inside <details> counts as a decision",
+        "C3 a verdict header inside <details> (or any other HTML element) counts as a decision",
         "gates.py",
-        "            and details == 0",
-        "            and True",
+        "            and not html\n",
+        "            and True\n",
     ),
     (
         "C4 a verdict header inside an HTML comment counts as a decision",
         "gates.py",
-        "            not in_comment\n            and details == 0",
-        "            details == 0",
+        "            not in_comment\n            and not html",
+        "            not html",
     ),
     (
         "C5 a cited verdict vanishes without a trace again",
@@ -2203,10 +2306,27 @@ ARMS: list[tuple[str, str, str, str]] = [
         "        if prior_verdict in BLOCKING_TOKENS:",
     ),
     (
-        "B1 #4487 falls through to W4-receipts on its TITLE, demanding an estate receipt",
+        # Anchored on the CALL SITE, not on the `HARNESS` literal. The literal
+        # changes every time a number is pinned, and each such change dragged
+        # this file along with it -- which is how the previous description was
+        # made false. `if number in HARNESS:` occurs exactly once and does not
+        # move when the set does, so the mutation semantics are identical and
+        # the coupling is gone.
+        #
+        # The description deliberately carries NO COUNT and names NO ISSUE. The
+        # version this replaced said "every pinned item falls through to
+        # W4-receipts on its TITLE"; two of the seven it dropped carried
+        # `lane:ci` and fell to W6-ci instead, and the first attempt at THIS
+        # description said "the other seven" and was falsified in the same
+        # round by adding two more pins. A description that counts the set it
+        # mutates rots on the next edit to that set. This one states the RULE
+        # and the WITNESS -- the fixtures that catch the arm pass no labels.
+        ("B1 the harness pin is narrowed to its first four numbers, so an "
+         "UNLABELLED harness item is classified by its TITLE instead and lands "
+         "in W4-receipts, demanding an estate receipt it can never obtain"),
         "build_inventory.py",
-        "HARNESS = {4466, 4467, 4468, 4469, 4485, 4487}",
-        "HARNESS = {4466, 4467, 4468, 4469}",
+        "    if number in HARNESS:",
+        "    if number in {4466, 4467, 4468, 4469}:",
     ),
     (
         "P11 a policy read via a LOCAL ALIAS is invisible to the allow-list scan",
@@ -3379,6 +3499,711 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
         "    led.save()\n",
     ),
+    # -- #4699: the way OUT of a terminal state ----------------------------
+    #
+    # APPENDED AT THE END rather than filed next to the DP arms, deliberately:
+    # `mutate_gates.py` is edited by several lanes at once and an insertion in
+    # the middle of the list conflicts with every one of them. Order carries no
+    # meaning here -- `_run_arms` walks the list and each arm is independent.
+    #
+    # EVERY ANCHOR BELOW IS IN CODE THIS CHANGE ADDED, which is the other half of
+    # the same discipline. The one arm that anchors on a pre-existing line (UP8,
+    # the reaper) uses a line no other arm touches; and the obvious spelling for
+    # UP4's anchor was NOT available, because `permitted, permit_note = ...` is
+    # verbatim arm DP5's needle in `_dispose` -- adding a second copy silently
+    # re-aims DP5 at whichever is higher in the file. Measured:
+    # `test_every_arm_anchor_is_present_and_unique_in_the_current_source` went
+    # red with `DP5 -> 2 matches in tick.py`, which is why `_reverse`'s locals
+    # are named `reversal_permitted` / `reversal_note`.
+    (
+        ("UP1 the reversal's REASON check is removed. STRONGER than DP1-DP3: "
+         "those three still end in a ledger refusal because `transition` has its "
+         "own bar, so deleting them only moves WHEN. `transition(n, READY, why)` "
+         "has NO `why` refusal at all, so this mutant lets a reasonless reversal "
+         "SUCCEED - and the park's blocker was published verbatim, so the public "
+         "record would carry a reversal with no stated grounds"),
+        "tick.py",
+        "    if not reason or not reason.strip():",
+        "    if False:",
+    ),
+    (
+        ("UP2 the STATE GUARD collapses, so `--unpark` reverses a DECLINED item "
+         "(or a live in-flight one on a typo'd number) and records "
+         "'reversed from parked' in the history of an item that was never "
+         "parked - a false line in the only audit trail there is (R7)"),
+        "tick.py",
+        "    wrong_state = item.state != from_state",
+        "    wrong_state = False",
+    ),
+    (
+        ("UP3 the CLOSED-ISSUE refusal is removed. #4699 names this one by "
+         "itself: a terminal item whose issue is closed has had something happen "
+         "the harness did not record, and re-queueing it papers over that"),
+        "tick.py",
+        '    if seen.state != "OPEN":',
+        "    if False:",
+    ),
+    (
+        ("UP4 the AUTHORITY bar is removed, so returning an item to the "
+         "SCHEDULABLE QUEUE happens with no entry in policy.json at all - the "
+         "emergent-behaviour shape `action_is_permitted` fails closed to "
+         "prevent, and the mirror of DP5 one verb later"),
+        "tick.py",
+        "    reversal_permitted, reversal_note = gates.action_is_permitted(action, policy)",
+        '    reversal_permitted, reversal_note = True, "not asked"',
+    ),
+    (
+        ("UP5 policy.json REVOKES `unpark-item` and the verb must stop working. "
+         "The arm that proves the NEW grant has a BLAST RADIUS rather than being "
+         "prose - the marker_any_of defect this file records finding in itself "
+         "twice, asked of the reversal grant the way DP6 asks it of the park"),
+        "policy.json",
+        '    "unpark-item",\n',
+        "",
+    ),
+    (
+        ("UP6 the READ-BACK COMPARISON collapses, so a mojibaked correction is "
+         "accepted and stands permanently on a public issue. `gh` has posted a "
+         "UTF-8 body as cp1252 mojibake AT EXIT 0 in this repo, and a reversal's "
+         "reason is published verbatim, so a correction whose text arrived "
+         "corrupted is worse than none - it reads as authoritative"),
+        "tick.py",
+        '    if landed.replace("\\r\\n", "\\n") != body.replace("\\r\\n", "\\n"):',
+        "    if False:",
+    ),
+    (
+        ("UP7 the STALE BLOCKER survives the reversal, so the ledger reads "
+         "`state=ready blocker='no in-VNet runner exists'` and a cold reader "
+         "cannot tell that from a live blocker on a schedulable item. Worse, "
+         "`transition`'s park bar is only that BOTH fields are truthy, so a "
+         "later `--park` with no `--blocker` would be accepted on the stale one. "
+         "The `L30` audit_reason defect, one field over"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        "",
+    ),
+    (
+        ("UP8 the REAPER is widened past `in-flight` - the obvious "
+         "generalisation - so `--reap` sweeps `parked`, `declined` AND "
+         "`in-review` back to `ready`, silently undoing every disposition and "
+         "every PR binding in one command that prints only a count. The new verb "
+         "must be the ONLY route out of a terminal state; this is the arm that "
+         "asks whether a SECOND one opened"),
+        "tick.py",
+        "        if item.state == IN_FLIGHT:",
+        "        if item.state != READY:",
+    ),
+    (
+        ("UP9 the history stops naming the PRIOR STATE, so the round trip is no "
+         "longer auditable: `state.json` carries a `ready` item with no record "
+         "that it was ever parked, and the public comment is then the only trace "
+         "of a disposition the ledger made"),
+        "tick.py",
+        'f"reversed from {from_state} ({REVERSAL_FLAGS[from_state]}): {reason}",',
+        'f"reversed: {reason}",',
+    ),
+    (
+        ("UP10 the PARK COMMENT BODY goes back to naming no mechanism - "
+         "'resolve the blocker and say so here', which was true when written and "
+         "became false the moment `--unpark` shipped. This is the arm for a "
+         "defect class the rest of the matrix cannot see: the mutant changes a "
+         "string that is PUBLISHED VERBATIM on a public issue and republished on "
+         "every park, so a stale sentence here is R7 on an unrevisable surface "
+         "rather than a stale comment. Its sibling defect - the park body citing "
+         "#2874 (a Gov bicep-drift ITEM) for a rule that is #4535 - is pinned by "
+         "the same test, and the DECLINE branch of the same function already "
+         "cited #4535, so the two adjacent branches disagreed.\n"
+         "         THE WHOLE BLOCK, NOT ITS FIRST LINE, and that is a correction "
+         "measured rather than reasoned. The first version of this arm replaced "
+         "only `\"TO UNPARK IT: resolve the blocker, then run \"` -- and Python "
+         "concatenates adjacent string literals, so the following six lines "
+         "survived and the mutant body STILL contained `--unpark <n>`. It scored "
+         "SURVIVED against a test that was working perfectly: a WEAK MUTATION, "
+         "not a blind suite, and the two are indistinguishable from the verdict "
+         "alone. Same lesson as arm M3 above, in a different syntax"),
+        "tick.py",
+        ('            "TO UNPARK IT: resolve the blocker, then run "\n'
+         '            "`tick.py --unpark <n> --reason \'<why the blocker no longer holds>\'`. "\n'
+         '            "That verb is the ONLY route out of `parked` - a refresh and "\n'
+         '            "`--reap` both leave a parked item alone, deliberately - and it posts "\n'
+         '            "its reason here, so this comment is corrected on the public record "\n'
+         '            "rather than only in the ledger (#4699). THAT CLAIM IS ABOUT `parked` "\n'
+         '            "AND NOT ABOUT TERMINAL STATES IN GENERAL: a DECLINE seen open is "\n'
+         '            "demoted to `needs-audit` by the next refresh, which is a second way "\n'
+         '            "out of a terminal state, and the decline\'s own comment says so. "\n'
+         '            "Neither body generalises over the other. The harness will not "\n'
+         '            "re-select this item until somebody runs it.\\n\\n"\n'),
+        ('            "TO UNPARK IT: resolve the blocker and say so here. The park is "\n'
+         '            "terminal, so the harness will not re-select this item on its own.\\n\\n"\n'),
+    ),
+    (
+        ("UP11 the DECLINE COMMENT BODY goes back to the sentence the reviewers "
+         "caught: a bare 'to reverse this decline, run --undecline' closed by "
+         "'An explicit verb is the ONLY route out of a terminal state'. That "
+         "claim is FALSE for the one state whose comment carried it -- "
+         "`declined` is in `REOPEN_DISPUTES`, `needs-audit` is not in "
+         "`TERMINAL`, and one `upsert` over an open issue moves it -- and the "
+         "SAME body says so three lines up. It was introduced by the fix for "
+         "three sentences of exactly this kind.\n"
+         "         WHAT IT ACTUALLY REDS, CORRECTED, because this description "
+         "used to say 'the test it reds checks the CLASS' and UP15's -- in "
+         "this same file -- states UP11's kill set correctly and differently. "
+         "Measured: UP11 does NOT touch the class test at all. Its replacement "
+         "is the genuine pre-#4699 text, which carries no `only route out of` "
+         "sentence in any form, so the class scan finds nothing to score and "
+         "stays green; what reds is "
+         "`..._names_the_undecline_window_and_both_refusals` and "
+         "`..._names_the_verb_that_reverses_it[declined]`. UP15 is the arm "
+         "that reinstates the false universal and reaches the class test from "
+         "the decline side. An arm's description naming a kill set it does not "
+         "have is the same defect class the arms themselves are about, one "
+         "level up, and a reviewer found it by running UP11 rather than "
+         "reading it.\n"
+         "         WHAT IT STILL IS: UP10'S MIRROR, and its absence was a real "
+         "gap -- UP10 mutates the park branch and reds `...[parked]` alone, so "
+         "the `[declined]` parameter of the verb-naming test had no arm at all "
+         "and its kill power was asserted rather than shown.\n"
+         "         ONE MORE THING ITS REPLACEMENT DEMONSTRATES, and it is a "
+         "limit on the class scan rather than on this arm: that pre-#4699 text "
+         "carries a false universal in a DIFFERENT PHRASING -- 'a demoted "
+         "decline has a legal way out and a park has none' -- which the "
+         "`only route out of <X>` scan cannot see. A sibling test catches it. "
+         "A clean class scan is evidence that ONE phrasing is absent, not that "
+         "the class is.\n"
+         "         THE NEEDLE IS THE WHOLE BLOCK AND THE REPLACEMENT IS THE "
+         "REAL PRE-#4699 TEXT, both measured rather than reasoned about. The "
+         "first version of this arm replaced only the block's FIRST THREE LINES "
+         "-- and Python concatenates adjacent string literals, so the three "
+         "cell bullets and the `--unpark` paragraph survived, the mutant body "
+         "still named the window AND `--undecline <n>`, and the arm scored "
+         "KILLED on the class test alone while saying NOTHING about the kill "
+         "power of the two other tests it claims to cover. Killed for one of "
+         "three reasons is a weak mutation wearing a green verdict, which is "
+         "arm M3's lesson and UP10's, twice over in one file"),
+        "tick.py",
+        ('        "That asymmetry is why `declined` and `parked` are treated differently "\n'
+         '        "by the REFRESH: a decline seen open is demoted and has a legal way out "\n'
+         '        "of that demotion, and a park is never demoted in the first place. "\n'
+         '        "NEITHER IS A DEAD END, and for a decline the route back depends on "\n'
+         '        "which of the two cells above you are standing in - the verb is not the "\n'
+         '        "answer in all of them:\\n"\n'
+         '        "- THIS ISSUE STILL OPEN AND THE LEDGER STILL `declined`, which is the "\n'
+         '        "window between this comment and the next refresh: run "\n'
+         '        "`tick.py --undecline <n> --reason \'<who reversed it, on what grounds>\'`. "\n'
+         '        "It posts its reason here, the way this comment did;\\n"\n'
+         '        "- ALREADY DEMOTED to `needs-audit` by a refresh: there is nothing to "\n'
+         '        "reverse. `needs-audit` is NOT a terminal state - the item is in the "\n'
+         '        "audit queue already, which is the whole point of the demotion - and "\n'
+         '        "the verb refuses it and says so;\\n"\n'
+         '        "- THIS ISSUE CLOSED, the disposal named above: the decline stands on "\n'
+         '        "the record and the verb REFUSES it. Re-open the issue first if the "\n'
+         '        "judgement is genuinely withdrawn, then reverse it. That refusal is "\n'
+         '        "not a ratchet and loosening it would not help: a reversal over a "\n'
+         '        "closed issue returns the item to `ready`, and the very next refresh "\n'
+         '        "finds it absent from the open set, flags it `departed` and demotes it "\n'
+         '        "again - measured. It would buy one cycle, not a route.\\n\\n"\n'
+         '        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "That escape is the whole reason `declined` and `parked` are treated "\n'
+         '        "differently: a demoted decline has a legal way out and a park has none.\\n\\n"\n'),
+    ),
+    (
+        ("UP12 the unreadable-issue refusal goes back to `.format()` over an "
+         "f-string chain. Adjacent literals concatenate BEFORE the method call, "
+         "so `.format()` runs over the already-interpolated `{exc}` -- which "
+         "carries `gh`'s stderr verbatim. Measured end to end through "
+         "`unpark_item`: stderr `HTTP 502: {\"message\":\"Bad gateway\"}` raises "
+         "`KeyError: '\"message\"'` and `HTTP 500: {}` raises `IndexError`, the "
+         "`ReversalRefusedError` is NEVER CONSTRUCTED, and `main()`'s reversal "
+         "branch catches only the four reversal exceptions so the builtin "
+         "escapes as a traceback. The covering test could not witness it: the "
+         "stub's failed-read stderr was hard-coded BRACE-FREE, which is the "
+         "'what result could this instrument not have produced' shape exactly"),
+        "tick.py",
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            f"nothing was written; the item is still {from_state}."\n'),
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            "nothing was written; the item is still {}.".format(from_state)\n'),
+    ),
+    (
+        ("UP13 `_reverse` VOIDS the receipt on the way back to `ready`, the "
+         "obvious symmetry with `upsert`'s reopen branch -- and the wrong one. "
+         "A reopen disputes the very claim the receipt closed on; a reversal "
+         "disputes the DISPOSITION and says nothing about evidence taken while "
+         "the item was still in the queue. `record_receipt_from_evidence` "
+         "refuses a terminal item, so any receipt a terminal item holds was "
+         "taken validly before it got there, and voiding destroys a run id that "
+         "can age out of retention. This arm exists because the choice was "
+         "INHERITED rather than made: nothing pinned it in either direction"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        ("        item.blocker, item.owner = None, None\n"
+         "        item.receipt_kind = None\n"
+         "        item.receipt_ref = None\n"
+         "        item.receipt_taken_under = None\n"),
+    ),
+    (
+        ("UP14 `_reversal_comment`'s per-state correction collapses back into "
+         "ONE shared paragraph -- the exact text that shipped, in both halves: "
+         "*\"The `<state>` comment above this one says the harness will not "
+         "re-select this item on its own.\"* Measured: NEITHER disposition body "
+         "contains that sentence. The park's was rewritten to 'until somebody "
+         "runs it' by this very PR and the decline's never said anything of the "
+         "kind, so an `--undecline` attributed to the comment above it a "
+         "sentence that is not there -- R7 on an unrevisable surface, inside "
+         "the function whose whole job is correcting exactly that. It is the "
+         "shared-template hazard `_disposition_comment`'s own docstring argues "
+         "against, committed one function over.\n"
+         "         IT MUTATES THE JOIN, NOT THE DISPATCH, and that is a "
+         "correction. The first version prepended the shared paragraph and "
+         "neutered the `if` -- which left the `else` branch free to reassign "
+         "`corrects`, so BOTH states received the DECLINE text and only the "
+         "`[parked]` parameter went red. An arm that reds one half of a "
+         "parametrised pair it claims to cover is reporting on the half it "
+         "reached. Assigning AFTER the branch overwrites whatever either arm "
+         "computed, so both parameters now red"),
+        "tick.py",
+        ('    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+        ('    corrects = (\n'
+         '        f"WHAT THIS CORRECTS. The `{from_state}` comment above this one says "\n'
+         '        "the harness will not re-select this item on its own."\n'
+         '    )\n'
+         '    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+    ),
+    (
+        ("UP15 the DECLINE body's closing paragraph goes back to the sentence "
+         "the round-1 reviewers caught VERBATIM: *\"An explicit verb is the "
+         "only route out of a terminal state\"*. This is NOT a duplicate of "
+         "UP11. UP11 reverts the whole block to the genuine PRE-#4699 text, "
+         "which carries no such claim at all -- so it reds the window test and "
+         "the verb-naming test and says nothing about the class test's DECLINE "
+         "half. This arm reinstates the false universal on its own, which is "
+         "the only mutation that exercises "
+         "`test_no_published_surface_...` from the decline side. Two arms "
+         "because the two defects are different: one body said nothing, the "
+         "other said something false"),
+        "tick.py",
+        ('        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "An explicit verb is the only route out of a terminal state, and it "\n'
+         '        "posts its reason here.\\n\\n"\n'),
+    ),
+    (
+        ("UP16 the `--unpark` HELP LINE goes back to 'the ONLY route out of a "
+         "terminal state'. The help text is a PUBLISHED SURFACE too -- anyone "
+         "who types `--help` reads it -- and the round-1 sweep of this claim "
+         "swept the two posted bodies and missed it, because a surface is not "
+         "a file, it is every SITE within it.\n"
+         "         WHAT THIS ARM PROVES, NARROWED, because the claim it "
+         "carried was the strongest sentence in the section and was false. It "
+         "proves `_published_surfaces()` RENDERS THE `--unpark` HELP LINE. It "
+         "does NOT prove that helper enumerates `build_parser()`: when it was "
+         "written the helper iterated a literal `(\"unpark\", \"undecline\")` "
+         "tuple -- 2 of 18 flags -- and this arm poisons a flag that tuple "
+         "already names, so nothing in it varies the listing. A reviewer "
+         "demonstrated the gap at runtime with nothing mutated: RED on "
+         "`--unpark`, GREEN on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. UP19 is the arm that witnesses the enumeration; this one "
+         "keeps its own narrower witness"),
+        "tick.py",
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of `parked` -- a refresh and --reap both leave a "\n'),
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of a terminal state -- a refresh and --reap both leave a "\n'),
+    ),
+    (
+        ("UP17 the RECEIPT PARAGRAPH of the reversal body goes back to the "
+         "state-blind text that shipped at round 2, false clause and all: "
+         "*\"NONE IS VOIDED ... that is deliberately UNLIKE a reopen, which "
+         "voids the receipt because a reopen disputes the very claim that "
+         "receipt closed on\"*. `CLOSES_ON_GITHUB` is `(closed,)`, so a "
+         "DECLINE never shuts its issue -- for the state that sentence was "
+         "published on, nothing ever closed and the clause presupposes an "
+         "event that cannot have happened. THE THIRD INSTANCE of the "
+         "published-universal-falsified-by-the-sibling-state class on this "
+         "branch, committed inside the justification for the fix for the "
+         "second, and invisible to the round-2 class scan because that scan "
+         "reads `only route out of <X>` and this is a different phrasing.\n"
+         "         IT MUTATES THE INTERPOLATION, NOT THE BRANCH, so the "
+         "`if/else` above still computes `receipts` and the arm is not "
+         "confusable with UP18: this one restores the FALSE CLOSE CLAIM, "
+         "UP18 restores the STATE-BLINDNESS without it. Expected reds: "
+         "`..._asserts_a_close_that_never_happened[declined]` (the clause) and "
+         "`[parked]` (the strong claim goes missing), "
+         "`..._a_receipt_survives_a_reversal_and_the_body_says_so`, and "
+         "`..._two_routes_out_of_a_reopen_disputed_state_disagree...` on its "
+         "published half"),
+        "tick.py",
+        '        f"was wrong. {receipts}Closing this item "\n',
+        ('        "was wrong. NO RECEIPT IS RECORDED BY THIS, AND NONE IS VOIDED: a "\n'
+         '        "reversal disputes the DISPOSITION, not evidence taken while the item "\n'
+         '        "was still in the queue, so an item that held a valid receipt still "\n'
+         '        "holds it and may already satisfy R2. That is deliberately UNLIKE a "\n'
+         '        "reopen, which voids the receipt because a reopen disputes the very "\n'
+         '        "claim that receipt closed on. Closing this item "\n'),
+    ),
+    (
+        ("UP18 the receipt paragraph's PER-STATE BRANCH is neutered, so both "
+         "states receive the PARK text -- which is TRUE of `parked` and FALSE "
+         "of `declined`. No false close claim is reinstated; this arm isolates "
+         "the STATE-BLINDNESS on its own, which is the defect underneath both "
+         "of the two the round-2 fix already repaired: one body's true claim "
+         "republished verbatim on its sibling.\n"
+         "         WHY IT IS NOT A DUPLICATE OF UP17. UP17 restores a claim "
+         "that is false everywhere (nothing was ever closed, for either "
+         "state); this restores a claim that is TRUE for `parked` and false "
+         "only for `declined`, which is the shape a reviewer cannot catch by "
+         "reading one body. It reds `..._asserts_a_close_that_never_happened` "
+         "on `[declined]` only, at `strong not in body`, and leaves `[parked]` "
+         "GREEN -- an arm that reds both parameters would be reporting on "
+         "something other than the sibling-state asymmetry.\n"
+         "         THE BRANCH IS FALSIFIED RATHER THAN DELETED so the `else` "
+         "body stays exactly as shipped and the mutation is one token wide: an "
+         "arm that rewrites both branches is testing its own replacement text"),
+        "tick.py",
+        "    if from_state in REOPEN_DISPUTES:\n",
+        "    if False:  # UP18: both states now get the PARK (strong) text\n",
+    ),
+    (
+        ("UP19 the `--park` HELP LINE gains 'the only route out of a terminal "
+         "state'. THIS IS THE ARM UP16 WAS SAID TO BE and is not. "
+         "`_published_surfaces()` used to iterate a literal "
+         "`(\"unpark\", \"undecline\")` tuple while the PR describing it "
+         "claimed a sweep BY CLASS -- 2 of `build_parser()`'s 18 flags. A "
+         "reviewer wrapped `build_parser` at runtime, mutated nothing on disk, "
+         "and showed the scan RED on `--unpark` and GREEN with the identical "
+         "false universal on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. A hand-maintained list cannot see its own gaps -- the "
+         "exact argument this package makes for enumerating the parser in "
+         "`test_every_value_flag_the_parser_knows_is_refused_without_its_verb`, "
+         "applied there and not here UNTIL THIS ARM FORCED IT. The sibling's "
+         "positive control on its own enumeration followed a round later, and "
+         "is now at the comprehension in `_published_surfaces()`.\n"
+         "         `--park` IS THE RIGHT TARGET because no list named it and "
+         "no other test reads its help text, so a surviving mutant here means "
+         "the enumeration is gone and nothing else would say so. Reds "
+         "`test_no_published_surface_claims_a_verb_is_the_only_route_out_of_a_"
+         "state_the_refresh_demotes` at the `in TERMINAL` clause, because "
+         "`a` is not a state"),
+        "tick.py",
+        '        help="record this item as PARKED - genuinely blocked (needs --blocker AND "\n',
+        ('        help="record this item as PARKED - the only route out of a terminal "\n'
+         '             "state. Genuinely blocked (needs --blocker AND "\n'),
+    ),
+    (
+        ("UP20 the README's `--unpark` paragraph swaps its correctly-scoped "
+         "claim for the false universal. `README.md` carries the same claim "
+         "class as the posted bodies -- the round-2 sweep fixed its text and "
+         "left NO instrument reading it, so the next edit that reintroduced "
+         "the sentence would ship green. It is now a surface "
+         "`_published_surfaces()` renders, and this is what witnesses that: "
+         "without it the README read is an unwitnessed claim and a helper that "
+         "silently dropped the file would report the same clean result.\n"
+         "         THE README JOINED `SOURCES` AND `COPIED` FOR THIS, and the "
+         "second was mandatory rather than incidental: a test reading a file "
+         "the sandbox does not carry raises `FileNotFoundError` on EVERY arm, "
+         "which scores 200+ tautological kills -- the shape `COPIED`'s own "
+         "note records for `required_contexts.json`. Caught before it shipped "
+         "by reading that note.\n"
+         "         NOT A `.py` FILE, deliberately. `policy.json` was already "
+         "in SOURCES, so prose-and-data mutation is an established shape here "
+         "and the digest handles bytes rather than syntax"),
+        "README.md",
+        "that verb is the only route out of `parked`, a claim about `parked` and *not*\n",
+        "that verb is the only route out of a terminal state, a claim about `parked` and *not*\n",
+    ),
+    (
+        ("UP21 the reversal stdout's `voided_elsewhere` clause is DELETED, so "
+         "the `declined` and `parked` outputs become byte-identical. THIS ARM "
+         "SURVIVED when it was first run by a reviewer -- 792 passed with the "
+         "whole branch replaced by `\"\"`. It was the one branching published "
+         "text in its round with neither an arm nor an assertion behind it: "
+         "the only stdout assertion in the file pins `THIS VERB VOIDED NONE`, "
+         "which is the SHARED prefix, so nothing could tell the two states "
+         "apart.\n"
+         "         THE DELETION IS THE RIGHT MUTATION rather than making the "
+         "clause unconditional, because deletion is the shape that actually "
+         "survived; the unconditional shape is covered by the OTHER half of "
+         "the same test's pair, which asserts the clause is ABSENT from the "
+         "`parked` output -- on that state the sentence would be false, since "
+         "`parked` is not in REOPEN_DISPUTES and has no second route to have "
+         "voided anything. Reds "
+         "`test_the_reversal_stdout_names_the_other_route_only_where_there_"
+         "is_one` on the `declined` assertion"),
+        "tick.py",
+        ('    voided_elsewhere = (\n'
+         '        f" The next refresh over this open issue WOULD have voided it "\n'
+         '        f"(`{from_state}` is in REOPEN_DISPUTES); this verb does not."\n'
+         '        if from_state in REOPEN_DISPUTES\n'
+         '        else ""\n'
+         '    )\n'),
+        '    voided_elsewhere = ""  # UP21: the per-state clause is gone\n',
+    ),
+    (
+        ("UP22 the NAMED HOLD is deleted from `_reverse`, so a held item "
+         "reverses. This is the arm for the whole interlock: with the call "
+         "gone, `--unpark 2874` walks the three-verb happy path, the item "
+         "reaches `ready` and becomes selectable -- and a green COMMERCIAL "
+         "roll is then one `--record-receipt` away from being published as "
+         "the verification of a GCC-HIGH item, which is the failure R2 "
+         "exists to prevent. The mutation is a DELETION rather than a "
+         "weakening because deletion is what an actor lifting a hold would "
+         "actually do, and because the call site is one line: anything "
+         "subtler would be testing the helper rather than its wiring.\n"
+         "         WHAT IT COULD NOT HAVE PRODUCED: a green run. Both the "
+         "`calls == []` assertion (the hold sits ABOVE the GitHub read) and "
+         "the state assertion fail on the mutant, so a SURVIVED here would "
+         "mean the tests never reach the hold at all. Reds "
+         "`test_a_reversal_refuses_a_held_item_before_any_github_call` on "
+         "both parameters and "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "    _refuse_if_held(number, from_state)\n",
+        "    # UP22: the named hold is gone\n",
+    ),
+    (
+        ("UP23 the hold's key NORMALISATION is replaced by a bare membership "
+         "test, which is the permissive version a reviewer would write. It "
+         "lifts a hold SILENTLY on three separate edits -- `{'#2874': ...}`, "
+         "`{'2874 ': ...}` and a key that is not an issue number at all -- "
+         "because a string key never equals an int `number`, so the lookup "
+         "matches nothing and the function returns as though nothing were "
+         "held. A hold an actor can switch off with a transcription slip is "
+         "not a control, and the silence is the whole defect: the shipped "
+         "code REFUSES on an unreadable key rather than skipping it, because "
+         "an unreadable hold set is not an empty one (R7).\n"
+         "         THE MUTANT STILL HOLDS THE INT KEYS, deliberately: a "
+         "mutation that lifted every hold would also red the two arms above "
+         "and could not distinguish 'the normalisation is gone' from 'the "
+         "hold is gone'. Reds "
+         "`test_the_hold_cannot_be_lifted_by_editing_one_field` on the three "
+         "string-key parameters and leaves the two blank-reason ones green, "
+         "which is the discriminating split"),
+        "tick.py",
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[int(str(key).strip().lstrip("#").strip())] = why\n'),
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[key] = why  # UP23: no normalisation\n'),
+    ),
+    (
+        ("UP24 `REVERSAL_HOLDS` is EMPTIED, which is the edit an actor lifting "
+         "a hold without authority would make, and the arm that proves the "
+         "test module's autouse `_holds_lifted` fixture is not an OFF SWITCH. "
+         "That fixture patches the map empty for every test in the file -- it "
+         "has to, because the happy-path fixture number IS #2958 -- so without "
+         "an arm aimed at the SHIPPED constant, deleting both entries would "
+         "leave the whole suite green. Note the second-order blindness this "
+         "kills as well: `test_a_reversal_refuses_a_held_item_before_any_"
+         "github_call` is parametrised over `sorted(SHIPPED_HOLDS)`, so an "
+         "empty map does not RED it, it collects ZERO cases and the test "
+         "silently stops existing. The set-equality assertion in "
+         "`test_the_shipped_holds_still_name_both_items` is what turns that "
+         "disappearance into a failure, which is why it asserts the SET and "
+         "not a count.\n"
+         "         WHEN #4709 LANDS this arm is deleted with the entries; it "
+         "is not a permanent claim that a hold must exist. Reds "
+         "`test_the_shipped_holds_still_name_both_items` and errors "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "REVERSAL_HOLDS = {\n",
+        "REVERSAL_HOLDS = {}\n_UP24_LIFTED = {\n",
+    ),
+    # -- verdict SUPERSESSION (#4704, measured on PR #4693) ------------------
+    # The discharge that had to exist, and the seven ways it fails OPEN. Every
+    # needle below is in `gates.py`, which no other lane is editing this round;
+    # the two that had to change in place are M5 and N6, whose anchored
+    # condition grew a `discharged` clause -- see the notes at those arms.
+    (
+        ("SS1 the parsed supersession ids are DROPPED at the parse site, so the "
+         "feature is inert and #4693's shape strands again - the exact state "
+         "before #4704, which is the one a revert would land back in"),
+        "gates.py",
+        "                            supersedes=sup_ids, malformed_supersessions=sup_bad))",
+        "                            supersedes=(), malformed_supersessions=sup_bad))",
+    ),
+    (
+        ("SS2 the id MATCH is dropped: any supersession discharges EVERY live "
+         "block, so a reviewer who addressed one finding silently clears a "
+         "second reviewer's unrelated one"),
+        "gates.py",
+        ("    discharged = {\n"
+         "        target\n"
+         "        for v in live\n"
+         "        if v.token not in BLOCKING_TOKENS\n"
+         "        for target in v.supersedes\n"
+         "    }\n"),
+        ("    discharged = {\n"
+         "        v.comment_id\n"
+         "        for v in live\n"
+         "        if v.token in BLOCKING_TOKENS\n"
+         "        if any(w.supersedes for w in live)\n"
+         "    }\n"),
+    ),
+    (
+        ("SS3 the refusal is COMPUTED and then not consulted - the reporting-to-"
+         "nobody shape N7 records one level up. A supersession naming a missing "
+         "id, a near-miss, or nothing at all becomes a silent no-op"),
+        "gates.py",
+        "    if refusal:\n        return False, refusal\n",
+        "    if False:\n        return False, refusal\n",
+    ),
+    (
+        ("SS4 the SUPERSEDED verdict's token is not checked, so an APPROVE can "
+         "be superseded - which both legitimises a meaningless discharge and "
+         "lets a supersession delete the very approval the gate requires"),
+        "gates.py",
+        "            elif by_id[target].token not in BLOCKING_TOKENS:",
+        "            elif False:",
+    ),
+    (
+        ("SS5 supersession lines are read off RAW lines instead of prose, so a "
+         "quoted / fenced / collapsed `SUPERSEDES` from a relayed previous "
+         "round discharges a live block - formatting granting what it may only "
+         "ever refuse"),
+        "gates.py",
+        "    for line, prose in classify_lines(body):",
+        "    for line, prose in ((ln, True) for ln in body.splitlines()):",
+    ),
+    (
+        ("SS6 the line remainder is MINED FOR DIGITS again rather than required "
+         "to be ids only - `SUPERSEDES the round-3 finding` then discharges "
+         "whichever verdict happens to be comment 3. Caught by this feature's "
+         "own test on its first run"),
+        "gates.py",
+        ("        rest = bare[len(SUPERSESSION_MARKER):].replace(\",\", \" \").replace(\"#\", \" \")\n"
+         "        parts = rest.split()\n"
+         "        if parts and all(p.isascii() and p.isdigit() for p in parts):\n"
+         "            ids.extend(int(p) for p in parts)\n"),
+        ("        found = re.findall(r\"\\d+\", bare[len(SUPERSESSION_MARKER):])\n"
+         "        if found:\n"
+         "            ids.extend(int(n) for n in found)\n"),
+    ),
+    (
+        ("SS7 the supersession is narrowed to the TOKEN WINDOW, so whether a "
+         "discharge works becomes a function of how long the reviewer's header "
+         "happened to be - a silent no-op with no diagnosis"),
+        "gates.py",
+        "        sup_ids, sup_bad = _supersessions(body)",
+        "        sup_ids, sup_bad = _supersessions(head)",
+    ),
+    (
+        ("SS8 a SUPERSEDES line on a comment that announces no verdict goes back "
+         "to producing no near-miss at all, so an author who believes they "
+         "cleared a block meets no contradiction anywhere in the output"),
+        "gates.py",
+        "            elif sup_ids or sup_bad:",
+        "            elif False:",
+    ),
+    # -- round 2: the discharge is the FIRST place the prose flag GRANTS ------
+    # Before #4704 `classify_lines` only ever fed two report-only callers, so a
+    # missed idiom under-reported a near-miss. `_supersessions` turned the same
+    # flag into a grant, and a reviewer measured six HTML idioms, a blockquote's
+    # lazy continuation and a mid-line comment open all discharging a live block
+    # they never addressed. Each arm below removes one of those closures.
+    (
+        ("SS9 the HTML rule goes back to the ENUMERATION it replaced - only "
+         "`<details>` - so a SUPERSEDES inside <pre>, <blockquote>, <code>, "
+         "<samp>, <kbd> or <q> discharges a live block while GitHub renders it "
+         "quoted or literal. The measured round-2 blocker, restored"),
+        "gates.py",
+        ('_HTML_OPEN = re.compile(r"^<([A-Za-z][A-Za-z0-9-]*)(?=[\\s/>])")\n'
+         '_HTML_CLOSE = re.compile(r"^</([A-Za-z][A-Za-z0-9-]*)\\s*>")\n'),
+        ('_HTML_OPEN = re.compile(r"^<(details)(?=[\\s/>])")\n'
+         '_HTML_CLOSE = re.compile(r"^</(details)\\s*>")\n'),
+    ),
+    (
+        ("SS10 lazy blockquote continuation stops being tracked, so the line "
+         "AFTER a `>` line - pure ASCII, the commonest relay shape of all - "
+         "reads as prose and discharges, while GitHub renders it inside the "
+         "blockquote"),
+        "gates.py",
+        "        lazy = quoted_para and indent < 4 and _continues_paragraph(bare)",
+        "        lazy = False",
+    ),
+    (
+        ("SS11 the `isascii` half of the id test is dropped, which fails BOTH "
+         "ways: `SUPERSEDES <U+00B2>` raises ValueError out of parse_verdicts "
+         "at two unguarded call sites, and `SUPERSEDES <U+0661>` is silently "
+         "HONOURED as id 1"),
+        "gates.py",
+        "        if parts and all(p.isascii() and p.isdigit() for p in parts):",
+        "        if parts and all(p.isdigit() for p in parts):",
+    ),
+    (
+        ("SS12 lines are split with `str.splitlines()` again, which breaks on "
+         "eight characters GitHub does not treat as line endings - so a "
+         "separator MANUFACTURES an unquoted prose line out of the middle of a "
+         "quoted or indented one"),
+        "gates.py",
+        '    return text.replace("\\r\\n", "\\n").replace("\\r", "\\n").split("\\n")',
+        "    return text.splitlines()",
+    ),
+    (
+        ("SS13 an HTML comment is only noticed when it opens at the START of a "
+         "line, so `see below <!--` hides a SUPERSEDES that still discharges - "
+         "a grant that is INVISIBLE in the rendered comment, which is worse "
+         "than a cited one"),
+        "gates.py",
+        '        opens_comment = "<!--" in bare and "-->" not in bare.rsplit("<!--", 1)[1]',
+        '        opens_comment = bare.startswith("<!--") and "-->" not in bare',
+    ),
+    (
+        ("SS14 the VOID-element exemption is dropped, so a `<br>` or a badge "
+         "`<img>` in an ordinary review body latches every line below it as "
+         "non-prose and a legitimate discharge silently stops working"),
+        "gates.py",
+        "            if (name not in VOID_HTML\n",
+        "            if (name not in frozenset()\n",
+    ),
+    (
+        ("SS15 every line after a quoted one is swept into the blockquote, "
+         "not just paragraph continuation - so a heading or a list item that "
+         "genuinely INTERRUPTS the quote is misreported as cited"),
+        "gates.py",
+        "    if not bare or bare[:1] in \"#=\":\n        return False",
+        "    if True:\n        return True",
+    ),
+    (
+        ("SS16 a closing HTML tag stops popping the element stack, so the "
+         "`</details>` that ends a collapsed previous round never ends it - "
+         "every discharge written below ANY collapsed block silently stops "
+         "working, which is the no-op this closure exists to avoid causing"),
+        "gates.py",
+        "            if name in html:\n                while html and html.pop() != name:\n",
+        "            if False:\n                while html and html.pop() != name:\n",
+    ),
+    (
+        ("SS17 the printed verdict tuple drops `supersedes` again, so the run "
+         "says WHICH block was discharged and never BY WHICH COMMENT - and "
+         "nothing else durable records it, since before-*.json holds only "
+         "pr/head/open_issues and the squash body is untouched"),
+        "merge_gate.py",
+        "        f\" | live={[(v.token, v.comment_id, v.supersedes) for v in live]}\"",
+        "        f\" | live={[(v.token, v.comment_id) for v in live]}\"",
+    ),
+    (
+        ("SS18 a SELF-CLOSING tag opens a region. Load-bearing only for a "
+         "NON-void tag such as `<div/>`: a `<br/>` fixture is caught by "
+         "VOID_HTML as well and SURVIVED this arm on a green suite, which is "
+         "the fixture-not-arm defect SS5 recorded one round earlier"),
+        "gates.py",
+        '                    and not bare.endswith("/>")):',
+        "                    and True):",
+    ),
 ]
 
 
@@ -3563,6 +4388,23 @@ def _clean_env() -> dict[str, str]:
     return env
 
 
+#: HOW EVERY PYTEST SUBPROCESS HERE IS DECODED, and it is not `text=True` alone.
+#:
+#: `text=True` decodes with the PLATFORM encoding -- cp1252 on the Windows hosts
+#: this runs on -- so one non-ASCII byte anywhere in pytest's output raises
+#: `UnicodeDecodeError` inside `subprocess`'s reader THREAD. The exception is
+#: reported against `threading`, `proc.stdout` comes back as `None`, and the
+#: matrix dies mid-arm with a traceback that names neither the arm nor the
+#: cause. Measured 2026-09-24 on arm SS11, whose fixture values are non-ASCII
+#: digits by construction -- the first test in this repo whose FAILURE output
+#: could not be decoded.
+#:
+#: CI runs under a UTF-8 locale and would never have reproduced it, so the only
+#: place this bites is the local run a reviewer does. No arm covers it: `main()`
+#: is called by nothing, exactly as this module's own dispatch note records.
+_DECODE = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def _collected(tests_dir: Path, cwd: Path) -> int | None:
     """How many tests pytest COLLECTS in a tree. None when it cannot say.
 
@@ -3582,7 +4424,7 @@ def _collected(tests_dir: Path, cwd: Path) -> int | None:
     out = subprocess.run(
         [sys.executable, "-m", "pytest", str(tests_dir), "--collect-only", "-q",
          "-o", "addopts=", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, cwd=cwd, env=_clean_env(),
+        capture_output=True, **_DECODE, cwd=cwd, env=_clean_env(),
     )
     if out.returncode != 0:
         return None
@@ -3630,7 +4472,7 @@ def _skipped_nodeids(sandbox: Path, cmd: list[str]) -> tuple[set[str], int] | No
     than appending to it.
     """
     verbose = [a for a in cmd if a not in ("-q", "--quiet")] + ["-v", "--no-header"]
-    out = subprocess.run(verbose, capture_output=True, text=True, cwd=sandbox,
+    out = subprocess.run(verbose, capture_output=True, **_DECODE, cwd=sandbox,
                          env=_clean_env())
     if out.returncode != 0:
         return None
@@ -3945,8 +4787,444 @@ def _exit_args(
     }
 
 
-def main() -> int:
+# --------------------------------------------------------------------------- #
+# SHARDING (#4712) -- the matrix outgrew a single runner, and a raise would not
+# have fixed it.
+#
+# The single job died against `timeout-minutes: 45` at 44m54s and reported
+# CANCELLED. That comment in `.github/workflows/test.yml` argued 45 was safe on
+# the grounds that "this lane is ADVISORY: an overrun is a loud red advisory,
+# not a merge freeze". THE PREMISE WAS FALSE at the time it was measured:
+# `merge_gate.py` gate 4c calls `gates.advisory_verdict` with
+# `policy.json:merge_gate.advisory_red_is_a_no_go`, which is `true`, so an
+# advisory CANCELLED is a NO-GO and PR #4702 sat blocked behind it with two
+# live APPROVEs. The comment is corrected in that file; this note records why
+# the remedy is here rather than there.
+#
+# The arithmetic also picks sharding over a raise. 45 was sized at a MEASURED
+# 3.48 s/arm (330 arms / 19m23s) under the model `arms x (startup + tests)`.
+# At 413 arms / 878 tests the observed rate is ~6.5 s/arm -- BOTH terms grew,
+# which is what that model predicts and what a ceiling cannot answer. Sharding
+# divides the `arms` factor across runners; raising the ceiling divides
+# nothing, and the growth curve (34m35s -> 40m15s -> 40m26s -> 41m27s ->
+# cancelled) says the next ceiling arrives in days.
+#
+# WHAT SHARDING MUST NOT COST. `_exit_code` already refuses a run that did not
+# evaluate every arm, and that refusal is what makes a green matrix mean
+# something. Split across N runners, the same question has to be asked about
+# the N runs TOGETHER -- otherwise five green shards and one that never started
+# read as a clean matrix, which is the `steps=0` shape this repo refuses
+# everywhere else. `adjudicate` below is that question, and it is a pure
+# function for the same reason `_score`, `_exit_code` and `_preamble_verdict`
+# are: a decision inside `main()` is a decision no test can reach.
+# --------------------------------------------------------------------------- #
+
+#: Version tag on every shard receipt. A receipt whose schema this adjudicator
+#: does not recognise is REFUSED, never skipped: an unreadable shard and a
+#: passing shard must not be the same thing, which is the whole discipline the
+#: split has to preserve (`SURVIVED` / `NOT-RUN` / `NEEDLE-MISCOUNT` /
+#: `POPULATION-DRIFT` are separate outcomes precisely so that they cannot be
+#: folded into one another).
+RECEIPT_SCHEMA = "drain-mutation-shard/1"
+
+
+def _multiset_difference(left: list[str], right: list[str]) -> list[str]:
+    """``left`` minus ``right``, counting REPEATS -- not a set difference.
+
+    `collections.Counter` would do this in one line; it is written out so the
+    import block at the top of this file stays untouched while PR #4702 has an
+    open edit there. The behaviour that matters is the multiset part: with a
+    set difference, a partition that assigned one arm TWICE and another ZERO
+    times would report `missing=[]` and `duplicated=[]` and the caller would
+    print "the union is not the matrix" with nothing named.
+    """
+    remaining: dict[str, int] = {}
+    for item in right:
+        remaining[item] = remaining.get(item, 0) + 1
+    out = []
+    for item in left:
+        if remaining.get(item, 0) > 0:
+            remaining[item] -= 1
+        else:
+            out.append(item)
+    return sorted(out)
+
+
+def parse_shard(spec: str, population: int) -> tuple[int, int]:
+    """``"i/N"`` -> ``(i, N)``, refusing every shape that would narrow the run.
+
+    Raises ``ValueError`` with the reason. Each refusal has an input:
+
+    ``"3"`` / ``"3/"`` / ``"a/b"``   malformed -- would otherwise be a silent
+                                     default to the whole matrix on one runner,
+                                     i.e. the timeout this change exists to fix.
+    ``"0/6"`` / ``"7/6"``            out of range -- `arms[i-1::N]` is happy to
+                                     take `arms[-1::6]` and `arms[6::6]`, which
+                                     return a WRONG non-empty slice and an EMPTY
+                                     one respectively. Both look like a run.
+    ``"1/0"``                        `arms[0::0]` raises `ValueError: slice step
+                                     cannot be zero` deep in the loop; refuse it
+                                     here, where the message can say why.
+    ``"1/500"`` at 389 arms          more shards than arms, so some shard is
+                                     assigned NOTHING. An empty shard exits 0
+                                     under `_exit_code`'s own empty-matrix
+                                     refusal -- but only if it RUNS; refusing at
+                                     parse keeps the topology honest rather than
+                                     relying on a downstream refusal to notice.
+    """
+    match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", spec)
+    if not match:
+        raise ValueError(
+            f"--shard takes 'i/N' (e.g. '2/6'); got {spec!r}. There is no "
+            "default: a malformed spec must not fall through to the whole "
+            "matrix on one runner, which is the 45-minute wall this exists to "
+            "get under."
+        )
+    index, count = int(match.group(1)), int(match.group(2))
+    if count < 1:
+        raise ValueError(f"--shard denominator must be >= 1; got {count}")
+    if not 1 <= index <= count:
+        raise ValueError(
+            f"--shard index {index} is outside 1..{count}. Python would accept "
+            f"the slice and return the wrong arms (or none) without erroring."
+        )
+    if count > population:
+        raise ValueError(
+            f"--shard asks for {count} shards over {population} arms, so at "
+            "least one shard would be assigned nothing. A shard that scores "
+            "zero arms is not evidence about anything."
+        )
+    return index, count
+
+
+def shard_of(
+    arms: list[tuple[str, str, str, str]], *, index: int, count: int
+) -> list[tuple[str, str, str, str]]:
+    """The arms this shard owns: a TOTAL, DISJOINT partition of ``arms``.
+
+    Round-robin (``arms[index-1::count]``) rather than contiguous blocks, and
+    the reason is measurable rather than aesthetic: arm cost is dominated by
+    interpreter and plugin startup (the 3.48 s/arm measurement that sized the
+    old ceiling), but the residual varies with how much of the suite a mutation
+    reddens early. Arms are grouped by THEME in the list -- long runs of
+    `gates.py` needles, then `tick.py`, then `policy.json` -- so contiguous
+    blocks would hand one runner a whole correlated cluster. Striping mixes
+    them.
+
+    TOTALITY AND DISJOINTNESS ARE THE LOAD-BEARING PROPERTIES, not balance. For
+    any `count >= 1` the slices `arms[0::count] .. arms[count-1::count]`
+    partition `arms` exactly: index `k` lands in shard `k % count` and in no
+    other. `adjudicate` does not TRUST that -- it re-derives the union from the
+    receipts and compares it to `ARMS` by name -- but it is why the union can
+    be expected to hold in the first place.
+    """
+    if count < 1:
+        raise ValueError(f"count must be >= 1; got {count}")
+    if not 1 <= index <= count:
+        raise ValueError(f"index {index} is outside 1..{count}")
+    return arms[index - 1 :: count]
+
+
+def adjudicate(
+    *,
+    receipts: list[dict],
+    arm_names: list[str],
+    count: int,
+    needs_result: str,
+) -> tuple[int, str]:
+    """Do N shard receipts together establish what one unsharded run did?
+
+    Returns ``(exit_code, reason)``. Ordered most-fundamental first, the way
+    `_preamble_verdict` and `_exit_code` are, because each later question is
+    meaningless if an earlier one fails.
+
+    THIS ADJUDICATES THE SHARDS; IT DOES NOT MERELY CONCLUDE AFTER THEM.
+    `loom-roll-and-validate.yml:650` records what the difference costs: after
+    #4657 sharded vitest, the merge job went green in 98s over shards that had
+    not run, and the estate stayed frozen for two days on a gate pointed at the
+    wrong job. A merge job whose own work is cheap is fine; a merge job that
+    reads only its own work is a green light over nothing.
+
+    THE ARM-TOTAL ASSERTION IS THE NAME-SET IDENTITY, and that is deliberate.
+    The obvious check is `sum(assigned) == len(ARMS)`. Given the per-receipt
+    check that `assigned == len(assigned_names)`, that sum is ARITHMETICALLY
+    IMPLIED by comparing the concatenated names against `ARMS` -- so adding it
+    as a separate refusal would be an EQUIVALENT MUTANT, the exact defect
+    `_exit_code`'s docstring records measuring and removing one arm for. The
+    name-set comparison is strictly STRONGER: it also refuses a partition that
+    double-assigns one arm and drops another, which any count-based check
+    passes. The total is PRINTED in the success line so the receipt is legible,
+    but it is not a second decision.
+
+    Each refusal and the value that breaks it:
+
+    1. ``needs_result`` -- ``"cancelled"``, ``"failure"``, ``"skipped"``. A
+       shard that hit `timeout-minutes` concludes CANCELLED, and GitHub will
+       still run this job (`if: !cancelled()` guards only a cancelled RUN). A
+       shard that was never scheduled concludes SKIPPED. Neither is a pass, and
+       neither leaves anything else for this function to notice if the shard's
+       artifact happens to survive from a previous attempt.
+    2. empty ``arm_names`` -- `ARMS[:0]`, i.e. green over nothing.
+    3. ``count < 1``.
+    4. missing / extra / duplicate shard indices -- DROP one receipt, which is
+       what a shard that never started leaves behind (no artifact to download).
+    5. a receipt's ``schema`` -- any other string; an unreadable receipt must
+       not read as a passing one.
+    6. a receipt's ``population`` disagreeing with `len(ARMS)` here -- a
+       receipt produced against a different tree, or one whose `ARMS` was
+       truncated between shard and merge.
+    7. a receipt's ``shard_count`` disagreeing with ``count`` -- a matrix
+       whose `[1,2,3,4,5,6]` and whose `--shard i/6` fell out of step, which is
+       the #4679 coupling failure in its drain-shaped form.
+    8. the concatenated ``assigned_names`` not equalling ``arm_names`` as a
+       multiset -- a partition that drops, duplicates or swaps an arm.
+    9. ``assigned != len(assigned_names)``, or the four buckets not summing to
+       ``assigned`` -- a shard reporting fewer arms than it was handed, which
+       is `_exit_code`'s own partition refusal asked per shard.
+    10. ``before != after`` on any shard -- an arm wrote outside its sandbox.
+    11. ``killed != assigned`` on any shard -- a SURVIVOR, the thing the whole
+        matrix exists to find.
+    12. a non-zero ``exit_code`` on a shard whose counts are otherwise clean --
+        the catch-all. If `_exit_code` learns a refusal this function does not
+        mirror, that shard refuses and this one would otherwise pass it. This
+        is NOT an equivalent mutant of 9/10/11: the input that breaks it is a
+        receipt with `exit_code: 2` (a preamble refusal -- red control, skip
+        drift, population drift) whose four buckets are all zero and whose
+        digests match, which every check above admits.
+    """
+    if needs_result != "success":
+        return 1, (
+            f"the shard jobs concluded {needs_result!r}, not 'success'. A "
+            "CANCELLED shard (a `timeout-minutes` overrun) and a SKIPPED shard "
+            "(never scheduled) both measured nothing; neither may be counted "
+            "as a pass."
+        )
+    if not arm_names:
+        return 1, (
+            "the matrix is EMPTY, and an empty matrix cannot be evidence about "
+            "anything"
+        )
+    if count < 1:
+        return 1, f"a matrix of {count} shards cannot have run anything"
+
+    seen: dict[int, dict] = {}
+    for receipt in receipts:
+        index = receipt.get("shard_index")
+        if not isinstance(index, int):
+            return 1, (
+                f"a receipt carries shard_index={index!r}, which is not an "
+                "integer, so it cannot be attributed to a shard"
+            )
+        if index in seen:
+            return 1, (
+                f"two receipts claim shard {index}. One of them is from a "
+                "different run, and neither can be trusted to describe this one."
+            )
+        seen[index] = receipt
+    expected = set(range(1, count + 1))
+    if set(seen) != expected:
+        missing = sorted(expected - set(seen))
+        extra = sorted(set(seen) - expected)
+        return 1, (
+            f"expected receipts for shards {sorted(expected)}, got "
+            f"{sorted(seen)} (missing={missing} unexpected={extra}). A shard "
+            "that never ran uploads nothing, so a MISSING receipt is exactly "
+            "what a NOT-RUN shard looks like -- it is refused here rather than "
+            "silently reducing the population."
+        )
+
+    assigned_total = 0
+    collected: list[str] = []
+    for index in sorted(seen):
+        receipt = seen[index]
+        schema = receipt.get("schema")
+        if schema != RECEIPT_SCHEMA:
+            return 1, (
+                f"shard {index}'s receipt declares schema {schema!r}, expected "
+                f"{RECEIPT_SCHEMA!r}. An unreadable receipt is not a passing one."
+            )
+        population = receipt.get("population")
+        if population != len(arm_names):
+            return 1, (
+                f"shard {index} ran against a matrix of {population!r} arms; "
+                f"this checkout declares {len(arm_names)}. The shards and the "
+                "adjudicator are not looking at the same ARMS."
+            )
+        if receipt.get("shard_count") != count:
+            return 1, (
+                f"shard {index} ran as {receipt.get('shard_index')!r}/"
+                f"{receipt.get('shard_count')!r} but this job adjudicates "
+                f"{count} shards. The matrix axis and the --shard denominator "
+                "have fallen out of step, so some arms were assigned to a "
+                "shard that does not exist."
+            )
+        names = receipt.get("assigned_names")
+        if not isinstance(names, list):
+            return 1, (
+                f"shard {index}'s receipt carries assigned_names={names!r}, "
+                "so what it covered cannot be established"
+            )
+        assigned = receipt.get("assigned")
+        if assigned != len(names):
+            return 1, (
+                f"shard {index} claims {assigned!r} arms but names {len(names)}. "
+                "A shard that reports a different number than it lists did not "
+                "run what it says it ran."
+            )
+        buckets = tuple(receipt.get(k) for k in ("killed", "survived", "skipped", "errored"))
+        if any(not isinstance(b, int) for b in buckets):
+            return 1, f"shard {index}'s outcome buckets are {buckets!r}, not four integers"
+        scored = sum(buckets)  # type: ignore[arg-type]
+        if scored != assigned:
+            return 1, (
+                f"shard {index} scored {scored} arms but was assigned "
+                f"{assigned}. A run that did not evaluate every arm it was "
+                "handed is not a run, whatever its buckets say."
+            )
+        if receipt.get("before") != receipt.get("after"):
+            return 1, (
+                f"shard {index} reports the TRACKED TREE CHANGED during its run "
+                "- an arm wrote outside its sandbox, so no result from that "
+                "shard can be trusted"
+            )
+        killed, survived, skipped, errored = buckets  # type: ignore[misc]
+        if killed != assigned:
+            return 1, (
+                f"shard {index}: not every arm died: killed={killed} of "
+                f"{assigned} (survived={survived} skipped={skipped} "
+                f"errored={errored})"
+            )
+        if receipt.get("exit_code") != 0:
+            return 1, (
+                f"shard {index} exited {receipt.get('exit_code')!r} with clean "
+                "counts, so it refused for a reason this adjudicator does not "
+                f"mirror: {receipt.get('reason')!r}"
+            )
+        assigned_total += assigned
+        collected.extend(str(n) for n in names)
+
+    want = sorted(arm_names)
+    got = sorted(collected)
+    if got != want:
+        missing = _multiset_difference(want, got)
+        duplicated = _multiset_difference(got, want)
+        return 1, (
+            f"the shards together covered {len(got)} arms, and this checkout "
+            f"declares {len(want)}. Unrun: {missing[:10]}"
+            f"{' ...' if len(missing) > 10 else ''}. Double-assigned or "
+            f"unrecognised: {duplicated[:10]}{' ...' if len(duplicated) > 10 else ''}. "
+            "The union of the shards is not the matrix."
+        )
+    return 0, (
+        f"all {assigned_total} arms KILLED across {count} shards, every arm in "
+        f"ARMS covered exactly once, tracked tree untouched on every shard"
+    )
+
+
+def _load_receipts(directory: Path) -> tuple[list[dict], str]:
+    """Every ``*.json`` under ``directory``, or ``([], why)``.
+
+    A directory that does not exist, or holds no JSON, is NOT an empty list of
+    receipts -- it is an unanswered question, and `adjudicate` would read an
+    empty list as "no shard indices", which is refused for the right reason but
+    with the wrong diagnosis. Reported separately so the message names the real
+    fault.
+    """
+    if not directory.is_dir():
+        return [], f"{directory} is not a directory, so no shard receipt could be read"
+    files = sorted(directory.rglob("*.json"))
+    if not files:
+        return [], (
+            f"{directory} holds no *.json receipt. Every shard uploads one even "
+            "when it FAILS, so an empty directory means no shard job reached its "
+            "upload step at all."
+        )
+    out = []
+    for path in files:
+        try:
+            out.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            return [], f"{path.name} is not readable JSON ({exc}); refusing to adjudicate around it"
+    return out, ""
+
+
+def build_receipt(
+    *,
+    index: int,
+    count: int,
+    arms: list[tuple[str, str, str, str]],
+    population: int,
+    counts: tuple[int, int, int, int],
+    before: str,
+    after: str,
+    exit_code: int,
+    reason: str,
+) -> dict:
+    """What one shard hands the adjudicator, built where a test can reach it.
+
+    TAKES THE ARMS AND THE COUNTS-AS-A-TUPLE for the reason `_exit_args`
+    records and measured: there is no longer a place to pass `killed` where
+    `assigned` belongs, because `assigned` is derived here from the same list
+    the dispatch consumed. Round 19 measured all four of those wiring mutations
+    SURVIVING when the equivalent expressions lived in `main()`.
+
+    `assigned_names` is the load-bearing field and the expensive-looking one.
+    It is what lets `adjudicate` re-derive the union rather than trust that the
+    partition was total -- a count cannot tell "shard 3 ran 65 arms" from
+    "shard 3 ran shard 4's 65 arms", and a partition bug that swaps them is
+    invisible to every count-based check.
+    """
+    killed, survived, skipped, errored = counts
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "shard_index": index,
+        "shard_count": count,
+        "population": population,
+        "assigned": len(arms),
+        "assigned_names": [arm[0] for arm in arms],
+        "killed": killed,
+        "survived": survived,
+        "skipped": skipped,
+        "errored": errored,
+        "before": before,
+        "after": after,
+        "exit_code": exit_code,
+        "reason": reason,
+    }
+
+
+def main(*, index: int = 1, count: int = 1, receipt: Path | None = None) -> int:
+    arms = shard_of(ARMS, index=index, count=count)
+    if count > 1:
+        print(f"SHARD     {index}/{count}: {len(arms)} of {len(ARMS)} arms")
     before = digest_tree(HERE)
+
+    # WRITES A FILE AND RETURNS ITS ARGUMENT. Deliberately the only thing in
+    # this closure: `main()` is called by nothing but `__main__`, so a DECISION
+    # placed here would be one no test can reach -- the failure this file's
+    # round 16 and round 19 were both spent repairing. The decision it serialises
+    # (`build_receipt`) and the decision that reads it (`adjudicate`) are both
+    # module-level and both tested.
+    #
+    # A receipt is written on EVERY return, including the preamble refusals,
+    # because "this shard refused, here is why" and "this shard never ran" must
+    # not be the same observation. It is NOT written on SIGKILL or on a
+    # `timeout-minutes` cancellation -- and that is correct: the missing receipt
+    # is then exactly what the adjudicator refuses on.
+    def _done(code: int, why: str, counts: tuple[int, int, int, int], after: str) -> int:
+        if receipt is not None:
+            receipt.write_text(
+                json.dumps(
+                    build_receipt(
+                        index=index, count=count, arms=arms, population=len(ARMS),
+                        counts=counts, before=before, after=after,
+                        exit_code=code, reason=why,
+                    ),
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return code
 
     # The sandbox lives OUTSIDE the repo. A SIGKILL mid-arm therefore cannot
     # leave a weakened gate in a checkout that four lanes share -- the worst
@@ -3983,14 +5261,16 @@ def main() -> int:
             print("no scope_paths row names a workflow - the drift guard would "
                   "skip in the sandbox and score every arm KILLED regardless of "
                   "the mutation", file=sys.stderr)
-            return 1
+            return _done(1, "no scope_paths row names a workflow",
+                         (0, 0, 0, 0), digest_tree(HERE))
         for rel in sorted(wanted):
             src = ROOT / rel
             if not src.is_file():
                 print(f"policy.json names {rel}, which does not exist - refusing "
                       "to run a matrix whose drift guard cannot read it",
                       file=sys.stderr)
-                return 1
+                return _done(1, f"policy.json names {rel}, which does not exist",
+                             (0, 0, 0, 0), digest_tree(HERE))
             shutil.copy2(src, wf_dir / Path(rel).name)
         # NORMALIZE TO LF before matching. `newline=""` preserves whatever the
         # working tree has, `core.autocrlf=true` is set on this machine and no
@@ -4054,7 +5334,7 @@ def main() -> int:
 
         # CONTROL FIRST. If the unmutated suite is not green in the sandbox,
         # every red below is noise and the run proves nothing.
-        control = subprocess.run(cmd, capture_output=True, text=True, cwd=sandbox,
+        control = subprocess.run(cmd, capture_output=True, **_DECODE, cwd=sandbox,
                                  env=_clean_env())
         tail = (control.stdout.strip().splitlines() or [""])[-1]
         print(f"CONTROL rc={control.returncode}  {tail[:70]}")
@@ -4117,7 +5397,7 @@ def main() -> int:
         # trusting rather than measuring.
         with_meta = subprocess.run(
             [c for c in cmd if c not in ("--deselect", deselect)],
-            capture_output=True, text=True, cwd=sandbox, env=_clean_env(),
+            capture_output=True, **_DECODE, cwd=sandbox, env=_clean_env(),
         )
         selected_with = _passed_count(with_meta.stdout)
         selected_without = _passed_count(control.stdout)
@@ -4190,7 +5470,7 @@ def main() -> int:
                 print(with_meta.stdout[-2000:])
             elif selected_with != selected_without + 1:
                 print(f"the deselect nodeid is: {deselect}")
-            return 2
+            return _done(2, why, (0, 0, 0, 0), digest_tree(HERE))
 
         # THE ONLY SIDE EFFECTS IN THE ARM LOOP, isolated so the loop itself is
         # testable. Write the mutant, run the suite, put the file back --
@@ -4199,13 +5479,13 @@ def main() -> int:
         def _run(filename: str, mutated: str) -> tuple[int, str]:
             _write_lf(sandbox / filename, mutated)
             try:
-                proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      cwd=sandbox, env=_clean_env())
+                proc = subprocess.run(cmd, capture_output=True,
+                                      **_DECODE, cwd=sandbox, env=_clean_env())
             finally:
                 _write_lf(sandbox / filename, originals[filename])
             return proc.returncode, proc.stdout
 
-        killed, survived, skipped, errored = _run_arms(ARMS, originals, _run)
+        killed, survived, skipped, errored = _run_arms(arms, originals, _run)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -4213,7 +5493,8 @@ def main() -> int:
     print()
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
-          f"of {len(ARMS)} arms")
+          f"of {len(arms)} arms"
+          + (f" (shard {index}/{count} of {len(ARMS)})" if count > 1 else ""))
     # WHAT IS STILL UNOBSERVED HERE, restated because round 19 changed it and a
     # reviewer corrected my summary of what it changed.
     #
@@ -4232,30 +5513,105 @@ def main() -> int:
     # reason, so this is disclosure rather than an open defect.
     code, why = _exit_code(**_exit_args(
         counts=(killed, survived, skipped, errored),
-        arms=ARMS, before=before, after=after,
+        arms=arms, before=before, after=after,
     ))
     if code != 0:
         print(f"REFUSING -- {why}")
+    return _done(code, why, (killed, survived, skipped, errored), after)
+
+
+def _adjudicate_cli(args: list[str]) -> int:
+    """`--adjudicate DIR --shards N --needs-result R` -> the merge job's verdict.
+
+    I/O only. Every decision is in `adjudicate`, which is pure and tested; this
+    reads the receipts, prints, and returns. The population it compares against
+    is `ARMS` IN THIS CHECKOUT, imported here rather than taken from a receipt
+    -- a run that trusted a receipt's own count for the total would be asking
+    the shards whether the shards were complete.
+    """
+    parser = argparse.ArgumentParser(prog="mutate_gates.py --adjudicate", add_help=False)
+    parser.add_argument("--adjudicate", required=True, type=Path, metavar="DIR")
+    parser.add_argument("--shards", required=True, type=int)
+    parser.add_argument(
+        "--needs-result", required=True,
+        help="the shard job's aggregate `needs.<job>.result`. REQUIRED, with no "
+             "default: a default of 'success' would make the one check that "
+             "distinguishes a cancelled shard from a passing one impossible to "
+             "fail by omission.",
+    )
+    parsed = parser.parse_args(args)
+
+    receipts, why = _load_receipts(parsed.adjudicate)
+    if why:
+        print(f"REFUSING -- {why}", file=sys.stderr)
+        return 1
+    for receipt in sorted(receipts, key=lambda r: r.get("shard_index") or 0):
+        print(f"  shard {receipt.get('shard_index')}/{receipt.get('shard_count')}  "
+              f"assigned={receipt.get('assigned')} killed={receipt.get('killed')} "
+              f"survived={receipt.get('survived')} skipped={receipt.get('skipped')} "
+              f"errored={receipt.get('errored')} rc={receipt.get('exit_code')}")
+    code, verdict = adjudicate(
+        receipts=receipts,
+        arm_names=[arm[0] for arm in ARMS],
+        count=parsed.shards,
+        needs_result=parsed.needs_result,
+    )
+    print(f"{'REFUSING -- ' if code else ''}{verdict}", file=sys.stderr if code else sys.stdout)
     return code
 
 
 if __name__ == "__main__":
-    # NO ARGUMENTS, AND SAYING SO IS CHEAPER THAN THE SURPRISE. An independent
-    # reviewer typed `mutate_gates.py --list`, which is not a flag, and got a
-    # FULL MATRIX -- 361 arms, 66 python processes -- because argv was ignored.
-    # They had to kill it by PID (never by name pattern, which would have hit
-    # other lanes on this box). A matrix takes hours and writes nothing until
-    # the preamble finishes, so an accidental launch reads as a hang.
-    if sys.argv[1:]:
-        print(
-            "mutate_gates.py takes NO arguments and always runs the FULL matrix "
-            "({} arms, one full suite execution each -- hours, not minutes).\n"
-            "You passed: {}\n"
-            "There is no --list and no arm filter. To inspect the arms, import "
-            "the module and read `ARMS`; to run a subset, set `mutate_gates.ARMS` "
-            "to a filtered list before calling `main()`.".format(
-                len(ARMS), " ".join(sys.argv[1:])),
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    raise SystemExit(main())
+    # THE NO-ARGUMENTS REFUSAL IS GONE, AND THE SURPRISE IT EXISTED FOR IS NOT.
+    # An independent reviewer once typed `mutate_gates.py --list`, which is not
+    # a flag, and got a FULL MATRIX -- because argv was ignored. They had to
+    # kill it by PID (never by name pattern, which would have hit other lanes on
+    # this box). `argparse` now refuses an unknown flag with exit 2, which is
+    # strictly better than the hand-rolled message: `--list` is rejected rather
+    # than described.
+    #
+    # THE DEFAULT IS STILL THE WHOLE MATRIX ON ONE RUNNER (`--shard 1/1`), so
+    # `python tools/drain/mutate_gates.py` with no arguments does exactly what
+    # it did before. That is deliberate: every local invocation, every runbook
+    # and `tools/drain/README.md` keep working, and the sharding is a CI
+    # topology rather than a new way to run this by hand.
+    _parser = argparse.ArgumentParser(
+        prog="mutate_gates.py",
+        description=("Run the drain mutation matrix. With no arguments this is "
+                     "the FULL matrix, one full suite execution per arm -- "
+                     "tens of minutes, not seconds."),
+    )
+    _parser.add_argument(
+        "--shard", metavar="i/N", default="1/1",
+        help="run only shard i of N (round-robin over ARMS). Default 1/1 = "
+             "everything. The N shards partition ARMS exactly; the merge job's "
+             "--adjudicate mode refuses a set of receipts whose union is not "
+             "ARMS, so a wrong N cannot silently narrow the matrix.",
+    )
+    _parser.add_argument(
+        "--receipt", metavar="PATH", type=Path, default=None,
+        help="write this shard's machine-readable outcome here, on EVERY exit "
+             "path including a refusal. Its absence is how the merge job tells "
+             "a shard that never ran from one that passed.",
+    )
+    _parser.add_argument(
+        "--adjudicate", metavar="DIR", type=Path, default=None,
+        help="MERGE-JOB MODE: read every *.json receipt under DIR and decide "
+             "whether the shards together establish what one unsharded run "
+             "would have. Requires --shards and --needs-result.",
+    )
+    _parser.add_argument("--shards", type=int, default=None,
+                         help="with --adjudicate: how many shards must have reported.")
+    _parser.add_argument("--needs-result", default=None,
+                         help="with --adjudicate: the shard job's `needs.<job>.result`.")
+
+    if "--adjudicate" in sys.argv[1:]:
+        raise SystemExit(_adjudicate_cli(sys.argv[1:]))
+    _args = _parser.parse_args()
+    for _flag in ("shards", "needs_result"):
+        if getattr(_args, _flag) is not None:
+            _parser.error(f"--{_flag.replace('_', '-')} is only meaningful with --adjudicate")
+    try:
+        _index, _count = parse_shard(_args.shard, len(ARMS))
+    except ValueError as _exc:
+        _parser.error(str(_exc))
+    raise SystemExit(main(index=_index, count=_count, receipt=_args.receipt))
