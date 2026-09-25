@@ -45,7 +45,7 @@ concurrency:
 jobs:
   license-scan:
     name: license gate + THIRD-PARTY-NOTICES
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     steps:
       - name: Checkout

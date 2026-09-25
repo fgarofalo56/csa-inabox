@@ -8,15 +8,24 @@
 // WHY: the runner executes inside the console's VNet-integrated Container Apps
 // environment (peered to the DLZ), so CI build/roll/UAT can reach PE-only Azure
 // resources (lake, Purview, ADF, Synapse, the private ACR/KV) that a cloud
-// GitHub runner cannot. It reuses the CONSOLE UAMI for ACR pull + az login, so
-// CI authenticates as the same identity the console runs as.
+// GitHub runner cannot.
+//
+// IT DOES NOT REUSE THE CONSOLE UAMI. That sentence was here until 2026-09-25
+// and had been false since the identity swap on 2026-09-13: the job now carries
+// uami-loom-ci (AcrPull only) and nothing else. Anything that relied on CI
+// authenticating as the console identity -- a `az login --identity`, a
+// ManagedIdentityCredential keyed to LOOM_UAMI_CLIENT_ID -- no longer works on
+// this fleet and needs its own least-privilege grant, recorded at runnerUamiId.
 //
 // Azure-native only (Container Apps Jobs + KEDA `github-runner` scaler). No
-// Microsoft Fabric / Power BI dependency. Does NOT reduce Anthropic API spend —
-// it only moves GitHub Actions COMPUTE in-VNet and to scale-to-zero ACA.
+// Microsoft Fabric / Power BI dependency. Does NOT reduce Anthropic API spend --
+// it only moves GitHub Actions COMPUTE in-VNet and to scale-to-zero ACA. It does
+// not reduce a GitHub bill either: this repo is PUBLIC, so hosted standard
+// runners were already free and unmetered, and this is a cost INCREASE taken
+// deliberately for in-VNet reachability.
 //
-// Secret: the GitHub PAT is supplied either as a @secure() param value or as a
-// Key Vault secret URI (resolved by the console UAMI). It is NEVER hardcoded.
+// Secret: the GitHub PAT is supplied as a @secure() param value. The Key Vault
+// alternative is refused -- see githubPatKeyVaultSecretUri.
 //
 // ---------------------------------------------------------------------------
 // TODO — wire into platform/fiab/bicep/modules/admin-plane/main.bicep:
@@ -32,9 +41,9 @@
 //         runnerImage: '${registry.outputs.loginServer}/gh-aca-runner:latest'
 //         ghOwner: 'fgarofalo56'
 //         ghRepo: 'csa-inabox'
-//         // Pass the PAT from a pipeline @secure() var OR a KV secret URI:
+//         // Pass the PAT from a pipeline @secure() var. The Key Vault URI
+//         // parameter is refused at validation time; see its description.
 //         githubPatSecretValue: githubRunnerPat            // @secure() top-level param
-//         // githubPatKeyVaultSecretUri: '${kv.outputs.uri}secrets/gh-actions-pat'
 //         complianceTags: complianceTags
 //       }
 //     }
@@ -51,7 +60,9 @@ param location string
 @description('Container Apps managed-environment (CAE) resource id — the console VNet-integrated env.')
 param environmentId string
 
-@description('DEPRECATED for this module - kept only so an existing caller does not break. The runner MUST NOT carry the console identity; see runnerUamiId. Referenced now only by githubPatKeyVaultSecretUri, which resolves the PAT at DEPLOY time, outside any job.')
+@description('''UNUSED, and deliberately so - kept only so an existing caller does not break. The runner MUST NOT carry the console identity; see runnerUamiId.
+
+It used to be referenced by the githubPatKeyVaultSecretUri branch below, on the reasoning that a Key Vault-backed ACA secret is resolved by the PLATFORM at deploy time and therefore "never reaches a job". The first half of that is true and the second half does not follow, which is why that branch is now disabled - see githubPatKeyVaultSecretUri.''')
 param consoleUamiId string
 
 @description('''uami-loom-ci - the runner's OWN least-privilege identity, and the boundary this module depends on.
@@ -90,7 +101,13 @@ param runnerNamePrefix string = 'loom-aca'
 @description('Pending-run count that maps to one job execution.')
 param targetWorkflowQueueLength int = 1
 
-@description('Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30), together with the D8 profile ceiling of 3 nodes, to bound fleet cost at roughly a third of an unbounded ceiling. Raise both together if PRs start queueing.')
+@description('''Max concurrent job executions. Operator decision 2026-09-13: capped at 8 (not 30), together with the D8 profile ceiling of 3 nodes, to bound fleet cost at roughly a third of an unbounded ceiling. Raise both together if PRs start queueing.
+
+DO NOT RAISE THIS ABOVE 0 UNTIL THE TWO ITEMS BELOW ARE DISCHARGED. This is the switch that admits arbitrary PR-authored code to the VNet, and it is currently the thing holding both open. They are recorded here rather than in a review thread because this parameter is where the decision is actually taken.
+
+1. THE NETWORK AXIS IS UNMEASURED. runnerUamiId closes the IDENTITY axis - what the job CARRIES. It says nothing about where the job SITS, which is what moving 171 jobs here changes. Measured on cae-csa-loom-centralus 2026-09-13: 14 Container Apps carry uami-loom-console-centralus (subscription Contributor, RBAC Administrator, Key Vault Secrets Officer) and 12 of those have INTERNAL ACA ingress, among them loom-trino, loom-duckdb, loom-dbt-runner, loom-transform-runner, loom-udf-runtime and loom-airflow - by design code/SQL execution services. Internal ingress is reachable from any workload in the same environment, including this job. `az containerapp auth show` returned {} on every one sampled; the environment has peerAuthentication.mtls.enabled = false and peerTrafficConfiguration.encryption.enabled = false; no ingress sets clientCertificateMode. nsg-snet-container-platform has ZERO outbound security rules and the subnet has no route table, so nothing transits the AzureFirewallSubnet in the same VNet. No exploit chain was demonstrated - deliberately, since probing production internal services from a review is itself a state change - and none is needed: the claim is only that the privileged identity is one unauthenticated hop away and nothing in this module establishes otherwise. DISCHARGED BY either a per-app measurement that every internal-ingress app enforces its own authn, or a control on the network axis: mTLS or EasyAuth on internal ingress, or a dedicated environment/subnet for the runner with an egress NSG and a UDR through the firewall.
+
+2. AT LEAST ONE FLEET-PINNED LANE IS BROKEN BY THE IDENTITY SWAP. Twelve workflow jobs are pinned unconditionally to [self-hosted, loom-aca]. Of those, loom-brain-scan.yml `commercial` obtains its ARM and Cosmos tokens from DefaultAzureCredential({managedIdentityClientId: LOOM_UAMI_CLIENT_ID}) - the CONSOLE identity - and lib/brain/run/azure/scan-credential.ts refuses the service-principal fallback by design (assertTokenIdentity compares the token appid and throws on mismatch). loom-console-cosmos.bicep grants the deploy SP a data-plane role only when isAzureUSGovernment, on the stated assumption that this runner carries the console UAMI. So on Commercial there is no fallback to fall back to. It FAILS CLOSED and loud - ScanIdentityError propagates and the job exits 1 - which is the good version of this bug and still a broken lane. The mirror applies to Gov: its job is now CI_RUNNER-routed, so switching the variable on moves Gov onto a runner whose identity is uami-loom-ci and makes its Gov-only SP grant unreachable for the same chain-order reason. DISCHARGED BY a deliberate least-privilege grant to uami-loom-ci, recorded at runnerUamiId, for each lane that proves it needs one - NOT by re-attaching the console identity.''')
 param maxExecutions int = 8
 
 @description('Min executions. 0 = scale-to-zero.')
@@ -116,32 +133,33 @@ param workloadProfileName string = 'D8'
 @secure()
 param githubPatSecretValue string = ''
 
-@description('Key Vault secret URI holding the GitHub PAT (resolved by consoleUamiId). Takes precedence over githubPatSecretValue when set.')
+@description('''DISABLED - must be empty. A Key Vault-backed PAT cannot be made safer than the literal one on THIS resource, so the option is refused at validation time rather than left as a path that looks available and cannot deploy.
+
+WHY IT IS REFUSED, and it is a mechanism question, not a preference. Microsoft Learn, "Manage secrets in Azure Container Apps": to reference a secret from Key Vault "you must first enable managed identity in your container app and grant the identity access to the Key Vault secrets", and its troubleshooting table gives "Identity not found - the specified managed identity does not exist OR IS NOT ASSIGNED to the container app". The CLI example passes the same id to BOTH `--user-assigned` and `identityref:`. So the resolving identity must be assigned to this job.
+
+This module previously named consoleUamiId as the resolving identity while assigning only runnerUamiId, so the branch could not deploy at all. The obvious repair - assign consoleUamiId too - is worse than the defect: Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into the job, so EVERY assigned identity is reachable from arbitrary job code, which is the escalation runnerUamiId exists to close. Resolving with runnerUamiId instead is no better: it would need Key Vault read on the PAT secret, and job code holding that identity could then fetch the PAT straight out of Key Vault, defeating the `exec env -u GITHUB_PAT` scrub in entrypoint.sh.
+
+Supply the PAT via githubPatSecretValue, which is the path provision-gh-runner.sh actually uses. Re-enabling this needs a resolving identity that job code CANNOT assume - an environment-scoped identity, or a separate Container Apps environment for the runner - and that is a design change, not a parameter change.''')
+@allowed([
+  ''
+])
 param githubPatKeyVaultSecretUri string = ''
 
 @description('Compliance/cost tags.')
 param complianceTags object = {}
 
-// Either a literal @secure() secret OR a Key Vault-backed secret (UAMI-resolved).
-var patSecret = empty(githubPatKeyVaultSecretUri)
-  ? [
-      {
-        name: 'github-pat'
-        value: githubPatSecretValue
-      }
-    ]
-  : [
-      {
-        name: 'github-pat'
-        keyVaultUrl: githubPatKeyVaultSecretUri
-        // DELIBERATELY the console identity, and the ONLY remaining use of it
-        // here. A Key Vault-backed ACA secret is resolved by the PLATFORM at
-        // deploy/update time, not by job code, so this grant never reaches a
-        // job. The runner identity must NOT hold Key Vault access: that is
-        // precisely the capability that made the old arrangement escalatable.
-        identity: consoleUamiId
-      }
-    ]
+// The PAT is supplied as a literal @secure() value. The Key Vault-backed
+// alternative is refused at validation time by githubPatKeyVaultSecretUri's
+// @allowed([''])  -- read that parameter's description for the mechanism.
+// There is deliberately no second arm here: an arm naming an identity this
+// resource does not carry is a path that cannot deploy, which is what the
+// previous version of this file shipped.
+var patSecret = [
+  {
+    name: 'github-pat'
+    value: githubPatSecretValue
+  }
+]
 
 // Pinned to the same Container Apps api-version the runtime deploy client +
 // sibling ACA modules use (mcp-catalog-app.bicep) — bicep/runtime sync.
@@ -247,3 +265,21 @@ output jobId string = runnerJob.id
 
 @description('The runner Job name.')
 output jobName string = runnerJob.name
+
+// The two outputs below exist so the identity boundary this module depends on
+// is INSPECTABLE from a deployment's outputs rather than only readable in
+// source. They also keep consoleUamiId and githubPatKeyVaultSecretUri
+// referenced: both are deliberately retained and deliberately not wired into
+// the resource, and a bare `no-unused-params` warning does not say which of
+// those two things is true.
+
+@description('The identity actually attached to this Job. Assert this is uami-loom-ci, not the console identity: every assigned identity is reachable from job code via IDENTITY_ENDPOINT.')
+output attachedIdentityId string = runnerUamiId
+
+@description('Records that the console identity was SUPPLIED but NOT attached, and that the Key Vault PAT path is refused. Both are load-bearing negatives, so they are emitted rather than left silent.')
+output patSourceDisposition object = {
+  patSource: 'literal @secure() param (githubPatSecretValue)'
+  keyVaultUriSupplied: !empty(githubPatKeyVaultSecretUri)
+  consoleUamiSupplied: !empty(consoleUamiId)
+  consoleUamiAttached: false
+}

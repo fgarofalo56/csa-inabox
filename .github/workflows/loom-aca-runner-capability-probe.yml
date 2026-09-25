@@ -27,12 +27,31 @@ name: loom-aca runner capability probe
 # than no probe. Each probe captures its own rc explicitly rather than
 # discarding it, so a non-zero result is PRINTED, not swallowed.
 #
-# Trigger: push to a chore/runner-probe** branch, or manual dispatch.
+# WHY THERE IS NO `push:` TRIGGER, AND NO `|| ubuntu-latest` FALLBACK.
+#
+# Both were considered and both are wrong here, for the same reason: this probe
+# is a measurement OF THE FLEET. Routing it to a hosted runner when the fleet is
+# down would not degrade the measurement, it would INVERT it -- the job would
+# report which tools `ubuntu-latest` carries and what `ubuntu-latest` can reach,
+# under a name that claims to describe the in-VNet runner. A control that
+# silently changes its subject is worse than one that does not run.
+#
+# It used to fire on `push: chore/runner-probe**`. With the fleet scaled to
+# zero that produced the worst available shape: the job QUEUED, sat for the full
+# 24h expiry, and then reported CANCELLED -- indistinguishable from a human
+# cancel, blocking the advisory arm of the merge gate on every head, and
+# measuring nothing on any of them. `timeout-minutes` does not help: it starts
+# counting when a job STARTS, so it cannot bound queue time. The repo's token
+# cannot preflight fleet availability either -- listing self-hosted runners
+# needs `administration: read`, which is not one of the scopes a workflow
+# `permissions:` block can grant.
+#
+# So it is DISPATCH-ONLY. Run it deliberately, against the head you intend to
+# claim a receipt for, when the fleet is up. A verdict is pinned to the sha it
+# measured; a probe that never ran is not a weaker receipt, it is no receipt,
+# and the previous arrangement made those two look the same.
 
 on:
-  push:
-    branches:
-      - 'chore/runner-probe**'
   workflow_dispatch:
 
 permissions:

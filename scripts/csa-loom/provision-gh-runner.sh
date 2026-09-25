@@ -133,6 +133,20 @@ REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-9600}"           # 160 min > the longest job
 CPU="${CPU:-4.0}"                                    # matches ubuntu-latest
 MEMORY="${MEMORY:-16.0Gi}"                           # matches ubuntu-latest
 
+# LOAD-BEARING, and its absence was a real defect: without it `job create` lands
+# on the environment's default profile, and the Consumption profile's per-replica
+# ceiling is 4 vCPU / 8 GiB (Microsoft Learn, "Workload profiles overview"). The
+# 16 GiB above is OUTSIDE that range, so a from-scratch run of this script asked
+# for a replica the profile it landed on could not schedule. The bicep has
+# declared D8 all along (gh-runner-job.bicep workloadProfileName); this script
+# did not, which is exactly the bicep/script divergence the note above warns
+# about, committed in the file carrying the warning.
+#
+# Verified against the installed CLI rather than assumed: --workload-profile-name
+# is accepted by BOTH `az containerapp job create` AND `az containerapp job
+# update`, so it belongs in TUNABLE_ARGS and a re-run re-asserts it.
+WORKLOAD_PROFILE_NAME="${WORKLOAD_PROFILE_NAME:-D8}"
+
 # Runner image build pins (passed through to the Dockerfile ARGs).
 RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"
 RUNNER_SHA256="${RUNNER_SHA256:-}"   # optional override; Dockerfile has a pinned default
@@ -262,6 +276,7 @@ TUNABLE_ARGS=(
   --image "$RUNNER_IMAGE"
   --cpu "$CPU"
   --memory "$MEMORY"
+  --workload-profile-name "$WORKLOAD_PROFILE_NAME"
   --replica-timeout "$REPLICA_TIMEOUT"
   --replica-retry-limit 1
   --replica-completion-count 1
@@ -302,13 +317,147 @@ ENV_PAIRS=(
 #     create -> environment + trigger + registry + identity + secret + env
 #     update -> tunables + scale rule + --set-env-vars, with the PAT refreshed
 #               first via `job secret set` (handles PAT rotation on a re-run).
-if az containerapp job show "${ID_ARGS[@]}" -o none 2>/dev/null; then
-  echo "[provision-gh-runner] job exists -> update (refresh secret + tunables)"
+#
+#   WHAT THAT MEANT, AND WHY THERE IS NOW A RECONCILE STEP. Because `update`
+#   takes no identity flag, RUNNER_UAMI_ID was referenced ONLY on the create
+#   branch. `gh-aca-runner` already exists, so every real run of this script
+#   takes the UPDATE branch, where the variable is never read. The refusal
+#   guard near the top therefore inspected a variable while the resource kept
+#   whatever identity it already had: a job still carrying the console identity
+#   survived every re-run, and the script printed "deployed" and exited 0. A
+#   guard that reads an input the resource never consults cannot fail on the
+#   condition it exists for.
+#
+#   `az containerapp job identity assign|remove|show` DOES exist (verified
+#   against the installed CLI, not assumed), so the update path can reconcile
+#   the identity even though `update` cannot. It is followed by a READ-BACK
+#   that fails closed on BOTH paths -- see assert_identity_is_exactly_runner.
+
+# Lowercase an ARM resource id for comparison. Case varies between what a
+# caller supplies and what ARM returns (resourceGroups/resourcegroups), so a
+# literal string compare produces false mismatches.
+_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Read back the identities ACTUALLY attached, and refuse to continue unless the
+# set is exactly { RUNNER_UAMI_ID }.
+#
+# WHAT VALUE WOULD MAKE THIS FAIL: any job carrying a second identity, or a
+# different one -- the console identity being the case this exists for -- and
+# also the empty set, which is what a silently-failed identity assign leaves
+# behind. It is NOT satisfiable by the script's own inputs: it compares against
+# what ARM returns, not against RUNNER_UAMI_ID's spelling.
+assert_identity_is_exactly_runner() {
+  local attached rc want got n
+  attached=$(az containerapp job show "${ID_ARGS[@]}" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR")
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not READ BACK the job's identity (az exit $rc)." >&2
+    echo "  This is not 'the identity is wrong' -- it is 'I could not establish what it is'," >&2
+    echo "  and the two must not be reported as the same thing. az stderr follows." >&2
+    cat "$IDENT_ERR" >&2
+    exit 1
+  fi
+
+  n=$(printf '%s\n' "$attached" | grep -c '[^[:space:]]')
+  want=$(_lc "$RUNNER_UAMI_ID")
+
+  if [[ "$n" -ne 1 ]]; then
+    echo "[provision-gh-runner][FATAL] the job carries $n user-assigned identities; it must carry exactly 1." >&2
+    echo "  Attached:" >&2
+    printf '    %s\n' $attached >&2
+    echo "  Every attached identity is reachable from arbitrary job code via" >&2
+    echo "  IDENTITY_ENDPOINT/IDENTITY_HEADER, so a second one is a second blast radius." >&2
+    exit 1
+  fi
+
+  got=$(_lc "$attached")
+  if [[ "$got" != "$want" ]]; then
+    echo "[provision-gh-runner][FATAL] the job carries the WRONG identity." >&2
+    echo "  attached: $attached" >&2
+    echo "  required: $RUNNER_UAMI_ID" >&2
+    case "$got" in
+      *uami-loom-console*)
+        echo "  That is the CONSOLE identity: Contributor at SUBSCRIPTION scope and RBAC" >&2
+        echo "  Administrator on the admin RG, assumable by any job step. This is the exact" >&2
+        echo "  exposure removed on 2026-09-13. Do not raise maxExecutions above 0 until it" >&2
+        echo "  is detached." >&2
+        ;;
+    esac
+    exit 1
+  fi
+
+  echo "[provision-gh-runner] identity verified: exactly one, $attached"
+}
+
+# Bring an EXISTING job's identity back to exactly RUNNER_UAMI_ID. Safe to
+# re-run: assign is idempotent, and remove is only called for identities that
+# are actually attached and are not the one we want.
+reconcile_identity() {
+  local attached rc id
+  attached=$(az containerapp job show "${ID_ARGS[@]}" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR")
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not read the job's current identity (az exit $rc)." >&2
+    cat "$IDENT_ERR" >&2
+    exit 1
+  fi
+
+  echo "[provision-gh-runner] reconciling identity to $RUNNER_UAMI_ID"
+  az containerapp job identity assign "${ID_ARGS[@]}" \
+    --user-assigned "$RUNNER_UAMI_ID" -o none
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not assign $RUNNER_UAMI_ID (az exit $rc)." >&2
+    exit 1
+  fi
+
+  for id in $attached; do
+    if [[ "$(_lc "$id")" != "$(_lc "$RUNNER_UAMI_ID")" ]]; then
+      echo "[provision-gh-runner] detaching non-runner identity: $id"
+      az containerapp job identity remove "${ID_ARGS[@]}" --user-assigned "$id" -o none
+      rc=$?
+      if [[ $rc -ne 0 ]]; then
+        echo "[provision-gh-runner][FATAL] could not detach $id (az exit $rc). Refusing to" >&2
+        echo "  report success while a privileged identity is still attached." >&2
+        exit 1
+      fi
+    fi
+  done
+}
+
+# `job show` is used here as an EXISTENCE test, so its failure mode matters: a
+# discarded stderr would turn "I could not reach ARM" into "the job does not
+# exist", send the run down the create branch, and report whatever that did.
+# Capture instead, and only treat a genuine not-found as not-found (R7).
+SHOW_ERR="$(mktemp)"
+IDENT_ERR="$(mktemp)"
+trap 'rm -f "$SHOW_ERR" "$IDENT_ERR"' EXIT
+
+az containerapp job show "${ID_ARGS[@]}" -o none 2>"$SHOW_ERR"
+show_rc=$?
+
+if [[ $show_rc -eq 0 ]]; then
+  job_exists=1
+elif grep -qiE 'was not found|ResourceNotFound|could not be found' "$SHOW_ERR"; then
+  job_exists=0
+else
+  echo "[provision-gh-runner][FATAL] could not determine whether '$JOB_NAME' exists (az exit $show_rc)." >&2
+  echo "  Not treating this as 'not found': creating over an existing job, or failing to" >&2
+  echo "  update one that is really there, are both worse than stopping here." >&2
+  cat "$SHOW_ERR" >&2
+  exit 1
+fi
+
+if [[ $job_exists -eq 1 ]]; then
+  echo "[provision-gh-runner] job exists -> update (refresh secret + tunables + identity)"
   az containerapp job secret set "${ID_ARGS[@]}" \
     --secrets "github-pat=${GITHUB_PAT}" -o none
   az containerapp job update "${ID_ARGS[@]}" \
     "${TUNABLE_ARGS[@]}" \
     --set-env-vars "${ENV_PAIRS[@]}" -o none
+  reconcile_identity
 else
   echo "[provision-gh-runner] job not found -> create"
   az containerapp job create "${ID_ARGS[@]}" \
@@ -322,6 +471,10 @@ else
     --mi-user-assigned "$RUNNER_UAMI_ID" \
     -o none
 fi
+
+# BOTH paths, always. The create branch is not exempt: --mi-user-assigned can
+# succeed partially, and "the flag was passed" is not "the resource carries it".
+assert_identity_is_exactly_runner
 
 unset GITHUB_PAT
 

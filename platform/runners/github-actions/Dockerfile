@@ -164,9 +164,16 @@ RUN set -euo pipefail; \
 # workflows to install into $HOME -- is the same fix written a hundred times and
 # would diverge from the hosted runner the moment anyone adds a step.
 #
-# This is not a privilege escalation worth worrying about: the job's own code
-# already runs as `runner` inside an EPHEMERAL container that is destroyed after
-# one job, so root inside it reaches nothing `runner` could not already reach.
+# This is not a privilege escalation worth worrying about -- but NOT for the
+# reason this comment used to give. It said "the job's own code already runs as
+# `runner`". It does not: this image never sets `USER runner`, the last two
+# USER instructions are both `root`, and RUNNER_ALLOW_RUNASROOT=1 is set below.
+# JOB CODE RUNS AS ROOT. The conclusion survives -- the container is EPHEMERAL
+# and destroyed after one job, and job code already has full control of it --
+# but the premise was false in the reassuring direction, and one consequence is
+# load-bearing: /proc/1/environ is root-readable ONLY, so under the ACTUAL uid
+# it IS readable, which is exactly why the secret-hygiene probe checks it and
+# why the remedy had to be `exec env -u` rather than `unset`.
 # The real boundary is the container and the fork-PR approval policy, not this.
 RUN set -euo pipefail; \
     useradd -m -d /home/runner -s /bin/bash runner; \
@@ -199,11 +206,30 @@ RUN set -euo pipefail; \
 # ---------------------------------------------------------------------------
 # Playwright layer (UAT) — browsers + OS deps baked into the runner image so
 # `loom-ui-verify` / Playwright specs run without a per-job `npx playwright
-# install` (the in-VNet runner's egress is firewall-restricted, so the runtime
-# CDN download fails). Adds ~600MB. Pinned to the repo's @playwright/test.
+# install`. Adds ~600MB. Pinned to the repo's @playwright/test.
+#
+# THE STATED REASON USED TO BE "the in-VNet runner's egress is
+# firewall-restricted, so the runtime CDN download fails". That is FALSE and was
+# measured so on 2026-09-13: `nsg-snet-container-platform` carries ZERO outbound
+# security rules (only the defaults AllowVnetOutBound 65000 and
+# AllowInternetOutBound 65001), the subnet has NO route table so nothing
+# transits the AzureFirewallSubnet in the same VNet, and the capability probe
+# reached github.com, registry.npmjs.org, nodejs.org, pypi.org,
+# files.pythonhosted.org, packages.microsoft.com, mcr.microsoft.com and
+# proxy.golang.org with HTTP 200 from inside the fleet. Whatever made a runtime
+# download fail when this layer was added, it was not an egress restriction, and
+# a security argument resting on a false premise does not survive the next
+# reader.
+#
+# BAKING THE BROWSERS IN IS STILL RIGHT, on the honest reasons: ~600MB pulled
+# per job is wall-clock and egress cost on every UAT run, and an image-time pin
+# is reproducible where a job-time CDN fetch is not.
+#
 # PLAYWRIGHT_BROWSERS_PATH puts the browsers in a shared, world-readable path —
-# installing as root without it lands them under /root/.cache where the
-# non-root `runner` user cannot see them at job time.
+# installing as root without it lands them under /root/.cache where a non-root
+# user could not see them at job time. (Job code in fact runs as root here; the
+# shared path is kept because it does not depend on that, and because the
+# uid this image runs as should not be a thing a later reader has to know.)
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -euo pipefail; \
@@ -295,12 +321,27 @@ USER root
 # the hosted runner permanently, and the next person to add a `sudo` step
 # breaks CI with a confusing error.
 #
-# WHY THIS IS AN ACCEPTABLE POSTURE, stated rather than assumed: the job's code
-# already has full control of this container as `runner`, the replica is
-# EPHEMERAL (one job, then destroyed), and the security boundary is the
-# container plus the fork-PR approval policy -- tightened to
-# `all_external_contributors` as part of this migration -- not the in-container
-# uid. Root here reaches nothing `runner` could not already reach.
+# WHY THIS IS AN ACCEPTABLE POSTURE, stated rather than assumed -- and restated
+# 2026-09-25 because the previous version was wrong in the reassuring direction.
+# It said "the job's code already has full control of this container as
+# `runner` … Root here reaches nothing `runner` could not already reach", which
+# presupposes job code runs as `runner`. It does not: this image never sets
+# `USER runner`, and RUNNER_ALLOW_RUNASROOT=1 below is exactly the admission
+# that it runs as root.
+#
+# The posture is acceptable on the reasons that are actually true: job code has
+# full control of this container WHATEVER uid it holds, the replica is EPHEMERAL
+# (one job, then destroyed), and the security boundary is the container plus the
+# fork-PR approval policy -- tightened to `all_external_contributors` as part of
+# this migration -- not the in-container uid. A reviewer put the same point
+# independently: RUNNER_ALLOW_RUNASROOT "barely moves the blast radius -- job
+# code already ran as the same uid as the runner".
+#
+# The difference the old wording hid is narrow and real: /proc/1/environ is
+# root-readable ONLY. Under the claimed uid a leaked PID-1 environment would be
+# unreadable from job code; under the ACTUAL uid it is readable. That is the
+# path the secret-hygiene probe checks second, and the reason the PAT remedy
+# had to replace the process image (`exec env -u`) rather than `unset`.
 #
 # The runner agent refuses to run as root unless this is set, and that refusal
 # exists for the bare-metal case it does not apply to here.
