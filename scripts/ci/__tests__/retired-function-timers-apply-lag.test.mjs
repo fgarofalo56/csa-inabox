@@ -18,6 +18,9 @@
 //   stuck      — isDisabled false forever    -> rc 1, ENABLED   (it FAILS CLOSED)
 //   verify-only— no --apply, isDisabled false-> rc 1, ENABLED   (default path unchanged)
 //   read-fails — show breaks mid-retry       -> rc 2, UNKNOWN   (it REFUSES a verdict)
+//   last-seen  — one re-read returns EMPTY,  -> rc 2, and the refusal reports
+//                then the next one breaks       the host's LAST answer, not the
+//                                               one it superseded
 //   mixed      — one breaks, two stay stuck  -> rc 1, and the lag sentence appears
 //                                               on the stuck lines and NOT on the
 //                                               unreadable one
@@ -64,6 +67,12 @@ case "\$*" in
       n=\$(( \$(cat "\$AZ_STATE" 2>/dev/null || echo 0) + 1 ))
       echo "\$n" > "\$AZ_STATE"
       if [ "\${AZ_SHOW_FAIL_AT:-0}" = "\$n" ]; then echo "shim: show failed" >&2; exit 1; fi
+      # AZ_SHOW_EMPTY_AT models an az that SUCCEEDS and prints nothing on the
+      # nth read — a real shape for '-o tsv' over a query that resolves null.
+      # It is the only fixture in this file where a SUCCEEDING re-read carries a
+      # value different from the pre-loop read, which is what the script's
+      # in-loop LAST_SEEN update exists for.
+      if [ "\${AZ_SHOW_EMPTY_AT:-0}" = "\$n" ]; then emit ""; exit 0; fi
       if [ "\$n" -ge "\${AZ_SHOW_TRUE_FROM:-999}" ]; then emit "true"; else emit "false"; fi
       exit 0 ;;
   *"functionapp show"*)
@@ -102,6 +111,7 @@ function run(env, shimDir) {
       AZ_STATE: state,
       AZ_SHOW_TRUE_FROM: env.AZ_SHOW_TRUE_FROM ?? '999',
       AZ_SHOW_FAIL_AT: env.AZ_SHOW_FAIL_AT ?? '0',
+      AZ_SHOW_EMPTY_AT: env.AZ_SHOW_EMPTY_AT ?? '0',
       AZ_SETTING_VALUE: env.AZ_SETTING_VALUE ?? 'true',
       AZ_SET_RC: env.AZ_SET_RC ?? '0',
       AZ_CR: env.AZ_CR ?? '0',
@@ -396,9 +406,14 @@ test('--apply: a re-read that FAILS mid-retry is UNKNOWN + rc 2, and claims noth
   //                        `$((RETRY_UNIT * 6))`, which prints ~6s here.
   //   1 re-read(s)     <- printing the loop variable `${attempt}` (2) instead
   //                        of the count of re-reads that RETURNED (1).
-  //   isDisabled=false <- dropping LAST_SEEN. The line then reports how MANY
-  //                        re-reads returned without ever saying WHICH value,
-  //                        which is R6-poor even while R7-honest.
+  //   isDisabled=false <- dropping LAST_SEEN ENTIRELY, seed and all. The line
+  //                        then reports how MANY re-reads returned without ever
+  //                        saying WHICH value, which is R6-poor even while
+  //                        R7-honest. IT DOES NOT KILL the in-loop update on
+  //                        its own: in THIS fixture the seed and the one
+  //                        returned re-read are both `false`, so no-op'ing the
+  //                        in-loop assignment leaves this arm green. The
+  //                        AZ_SHOW_EMPTY_AT arm below is the one that kills it.
   //   NEXT:            <- deleting the remediation. R7 is satisfied by saying
   //                        nothing; R6 is not.
   //   no lag sentence  <- any reintroduction of LAGNOTE on this path.
@@ -431,6 +446,73 @@ test('--apply: a re-read that FAILS mid-retry is UNKNOWN + rc 2, and claims noth
     assert.match(unknownLine, /NEXT: the write already landed/, 'the refusal gives no next action, which satisfies R7 by saying nothing and drops R6');
     assert.match(unknownLine, /Microsoft\.Web\/sites\/functions\/read/, 'the persistent-failure branch does not name the read action it would need');
     assert.match(r.stdout, /targets=3 ok=2 gone=0 enabled=0 unknown=1 applyfail=0/, 'the tally does not show the failed re-read scored as UNKNOWN');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--apply: the UNKNOWN line reports what the host LAST returned, not the value it superseded', () => {
+  // THE FIXTURE THE SUITE DID NOT HAVE. `check-retired-function-timers.sh`
+  // seeds LAST_SEEN from the pre-loop read and updates it after every re-read
+  // that returns. Both feed the same sentence, so every other arm in this file
+  // reads them as one: in the AZ_SHOW_TRUE_FROM=4 / AZ_SHOW_FAIL_AT=3 fixture
+  // above, the seed and the one returned re-read are BOTH `false`, and
+  // replacing the in-loop update with a no-op left this suite 13/13 GREEN at
+  // afc5d291834e. An uncovered line counted as covered — `assertion-design.md`
+  // "done" #2.
+  //
+  // WHAT VALUE MAKES THIS FAIL: deleting (or no-op'ing) the in-loop
+  // `LAST_SEEN="$SHOWN"`. The reported value then falls back to the pre-loop
+  // seed `false` and the assertion below, which demands `<unset>`, goes red.
+  // Proven by mutation on a sandbox copy, never on the tracked tree.
+  //
+  // WHY `<unset>` IS THE CORRECT ANSWER HERE, not a quirk of the fixture: the
+  // sentence says "the last value the host actually returned". AZ_SHOW_EMPTY_AT
+  // makes the host's last actual answer an EMPTY one, which the script renders
+  // `<unset>`. Reporting `false` would publish a value the host had already
+  // superseded as though it were its latest word — the same class of claim as
+  // the R7 finding this whole arm exists to close.
+  //
+  // CALL BUDGET, since the shim's counter is GLOBAL across targets:
+  //   n=1  target 1, pre-loop read            -> `false` (enters the lag loop)
+  //   n=2  target 1, re-read 1                -> EMPTY   (REREADS=1, LAST_SEEN="")
+  //   n=3  target 1, re-read 2                -> FAILS   (REREAD_FAILED=1)
+  //   n=4,5 targets 2 and 3, pre-loop reads   -> `true`  (OK, no sleeping)
+  // Identical in shape to the arm above, so the wall cost is the same ~3s and
+  // only one target sleeps.
+  const dir = makeShimDir();
+  try {
+    const r = run(
+      { APPLY: true, AZ_SHOW_TRUE_FROM: '4', AZ_SHOW_EMPTY_AT: '2', AZ_SHOW_FAIL_AT: '3', RETRY_UNIT: '1' },
+      dir,
+    );
+    assert.equal(r.status, 2, `expected rc 2 (REFUSED a verdict).\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+    const unknownLine = r.stderr.split('\n').find((l) => /UNKNOWN\s+func-secexp/.test(l));
+    assert.ok(unknownLine, `no UNKNOWN line for the target whose re-read failed.\nstderr:\n${r.stderr}`);
+    // THE KILL. `<unset>` is reachable only through the in-loop update.
+    assert.match(unknownLine, /last value the host actually returned was isDisabled=<unset>/, (
+      'the line reports the pre-loop value, not the one the host last actually '
+      + `returned — the in-loop LAST_SEEN update is not doing its job:\n${unknownLine}`
+    ));
+    assert.doesNotMatch(unknownLine, /returned was isDisabled=false/, (
+      'a value the host had already superseded was published as its last word'
+    ));
+    // Paired positives, so the assertions above are not satisfiable by the
+    // script printing nothing or by taking a different arm entirely.
+    assert.match(unknownLine, /COULD NOT BE PERFORMED/, 'this is not the failed-re-read arm at all');
+    assert.match(unknownLine, /1 re-read\(s\) returned a value/, 'the empty re-read was not counted as having returned');
+    // R7, the round-14 S2 correction: the line may claim the ORDERING against
+    // the write, which the script establishes, and must NOT claim the ordering
+    // against the RESTART, which it cannot.
+    // WHAT VALUE MAKES THIS FAIL: restoring "which predates the restart".
+    assert.doesNotMatch(unknownLine, /predates the restart/, (
+      'the line asserts the read landed before the restart — a fact this script '
+      + 'holds no timestamp or uptime read to establish, and which the very next '
+      + 'sentence says it did not establish (deploy-integrity.md R7)'
+    ));
+    assert.match(unknownLine, /read AFTER the write/, 'the line no longer states the ordering it CAN establish');
+    assert.match(unknownLine, /does NOT rule out a host-restart lag/, 'the refusal to decide the lag was dropped');
+    assert.match(r.stdout, /targets=3 ok=2 gone=0 enabled=0 unknown=1 applyfail=0/, 'the empty-then-failed re-read was not scored as UNKNOWN');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

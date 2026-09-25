@@ -99,15 +99,34 @@
 # stale the moment this header is edited — it did, mid-fix).
 #
 # RE-MEASURED 2026-09-18 after the corroborating `show` landed, and AGAIN after
-# review found this audit had gone false in the same commit that wrote it. An
-# earlier revision said 5 and 8; it said so correctly WHEN WRITTEN and then the
-# file grew. Worse, the revision that updated it to 8/11 also lifted a
-# substitution OUT of argument position into a bare assignment and went on
-# describing it as argument-position — a false row in the very audit offered as
-# this change's receipt. A bare count in a header is a claim with no owner, so
-# the population is enumerated below BY GUARD SHAPE and the count derived from
-# it. Check the ROW SET, not the number, and re-run the scoped measurement
-# rather than a raw grep (raw returns 17 and 13 because it counts this prose).
+# review found this audit had gone false in the same commit that wrote it. The
+# earlier revisions' counts were correct WHEN WRITTEN and then the file grew.
+# Worse, the revision that updated them also lifted a substitution OUT of
+# argument position into a bare assignment and went on describing it as
+# argument-position — a false row in the very audit offered as this change's
+# receipt. A bare count in a header is a claim with no owner, so the population
+# is enumerated below BY GUARD SHAPE and the count derived from it. Check the
+# ROW SET, not the number, and re-run the scoped measurement rather than a raw
+# grep: a raw grep counts this prose as well as the code, so it answers a
+# different question and its answer is not comparable to the rows below.
+#
+# NO RAW FIGURE IS QUOTED IN THAT SENTENCE ANY MORE, and the deletion is the fix
+# rather than an omission. It used to carry a pair of raw counts, to show how far
+# wrong a raw grep goes. They were ALREADY stale at the commit that wrote them
+# and had drifted further by the time review measured them — a stale number
+# inside the sentence warning about stale numbers. A figure that goes false on
+# every edit of the prose around it is not repaired by re-measuring it once, so
+# it is deleted and the enumerated rows below are the receipt.
+#
+# THE ROWS BELOW WERE ALL RE-MEASURED AT afc5d291834e, by name rather than only
+# the one review reported: command substitutions in executable code and each of
+# their three guard shapes, bare `VAR="$(cmd)"` assignments, `az` outside a
+# substitution, bare `az` at line start, arithmetic expansions, and
+# `[[ … ]] && APPLY=1`. Each held. The commit that writes this paragraph adds
+# comment lines and rewords one message string, and changes no executable
+# expansion, so the populations counted below are the same at this commit as at
+# afc5d291834e — re-derive against each row's SET rather than against this
+# sentence, and if you add a row, this sentence is wrong until you re-measure.
 #
 #   8 command substitutions in executable code, in three shapes:
 #
@@ -142,8 +161,18 @@
 #   to make, and it is the one that went false without anyone noticing.
 #
 #   1 `az` command outside a substitution
-#       `appsettings set`, guarded by `&& ! az` in an `if` condition
-#                                     <- WAS BARE; this is the other half
+#       `appsettings set`, guarded by standing AS THE CONDITION of an
+#       `if az … ; then WROTE=1; else …; fi` split
+#                                     <- WAS BARE; this is the other half.
+#       NAMED BY THE SHAPE IT ACTUALLY HAS. Every revision of this row up to
+#       #4564 round 14 called it `&& ! az` in an `if` condition, which is the
+#       shape it CARRIED and the shape the comment at the write site explicitly
+#       records replacing — so the audit contradicted the comment at its own
+#       write site. Raised as N2 in round 13, carried unanswered through
+#       round 14, and corrected here rather than quietly dropped. Either form
+#       is guarded and either is one invocation, so the COUNT was right
+#       throughout; it is the row's DESCRIPTION that was false, which is the
+#       same defect class as a false count and is why it is fixed at the site.
 #   0 bare `az` at line start (`grep -cE '^[[:space:]]*az '` == 0)
 #   ARITHMETIC EXPANSIONS `$((…))` — ENUMERATED BY TARGET, never counted.
 #       This was the ONE row in this audit that was a bare number with no row
@@ -243,6 +272,18 @@ fi
 echo "boundary=$CLOUD subscription=$SUB rg=$RG mode=$([[ $APPLY -eq 1 ]] && echo apply || echo verify)"
 
 # app|function|expected-setting-name
+#
+# PINNED BY FULL HOST NAME, SUFFIX INCLUDED, and that is a scope limit worth
+# stating rather than a defect to fix. The corroboration design above
+# distinguishes "deleted" from "invisible to me"; it does NOT distinguish
+# "deleted" from "present under a different name". A host of the same role
+# carrying a different suffix in this RG is not a target at all — it is absent
+# from the listing, the corroborating `show` 404s on the name asked for, and the
+# run scores GONE and prints RETIRED at rc 0 while that host runs its timer.
+# Unreachable in practice because SUB and RG are pinned to the one estate these
+# three names belong to, so this file measures a KNOWN estate and is not a
+# discovery tool: point it at another estate and it answers about names that
+# were never there. Raised as N2 in PR #4564 round 14 as a note, not a finding.
 TARGETS=(
   "func-secexp-k6mvh5sm6z7do|secretExpiryMonitor"
   "func-cpeval-k6mvh5sm6z7do|copilotEvaluatorTimer"
@@ -437,6 +478,17 @@ for t in "${TARGETS[@]}"; do
   # expiring token was told the lag explanation had been tested and rejected and
   # sent to re-apply. Both independent reviews of #4564 on 2026-09-21 found it.
   #
+  # AND THE FIX FOR THAT R7 VIOLATION COMMITTED A SMALLER ONE, corrected here.
+  # The replacement UNKNOWN line reported the retained observation as a value
+  # "which predates the restart" — and this script holds no restart timestamp
+  # and no host-uptime read. It knows only that the write returned 0 and that a
+  # later read answered. WHETHER that read landed before the host finished
+  # restarting is exactly what this arm exists to refuse to decide, and the next
+  # sentence of the same message says so, so the two contradicted each other:
+  # had the value provably predated the restart, the run WOULD have established
+  # the lag. What the script can establish is the ORDERING against the write,
+  # which is all the line now claims.
+  #
   # So the break path is SEPARATED and scored the way this file scores every
   # other unreadable definition: UNKNOWN, rc 2, refusing a verdict. It is the
   # same failure as the pre-loop `function show` above and gets the same
@@ -464,6 +516,22 @@ for t in "${TARGETS[@]}"; do
                         # UNKNOWN that throws away the observation it DID make
                         # is R6-poor even when it is R7-honest: "1 re-read
                         # returned a value" never says WHICH value.
+    # THE PRE-LOOP SEED ABOVE IS WITNESSED; THE IN-LOOP UPDATE FURTHER DOWN WAS
+    # NOT, and both are read by the same message, so the obvious arm cannot tell
+    # them apart. In the AZ_SHOW_TRUE_FROM=4 / AZ_SHOW_FAIL_AT=3 fixture the
+    # seeded value and the one value a re-read returned are BOTH `false`, so
+    # replacing the in-loop assignment with a no-op left the suite 13/13 green
+    # at afc5d291834e — an unwitnessed line counted as covered.
+    # `assertion-design.md` item 5 disclosure would be the wrong remedy here:
+    # the line is not an equivalent mutant, only an uncovered one, so it gets a
+    # fixture instead. WHAT VALUE KILLS THE IN-LOOP UPDATE: a re-read that
+    # SUCCEEDS carrying a value different from the seed — an `az` exiting 0 and
+    # printing nothing, so the host's own last answer is empty where the
+    # pre-loop read said `false`. With the update the line reports
+    # `isDisabled=<unset>`, which is what the host last actually returned;
+    # without it, `isDisabled=false`, a superseded value published as the last
+    # one returned. Witnessed by the AZ_SHOW_EMPTY_AT arm in
+    # scripts/ci/__tests__/retired-function-timers-apply-lag.test.mjs.
     for attempt in 1 2 3; do
       sleep $((attempt * RETRY_UNIT))
       SLEPT=$((SLEPT + attempt * RETRY_UNIT))
@@ -481,7 +549,7 @@ for t in "${TARGETS[@]}"; do
       fi
     done
     if [[ $REREAD_FAILED -eq 1 ]]; then
-      echo "  UNKNOWN  ${APP}/${FN}: the --apply write SUCCEEDED and ${SETTING} reads true, but the post-write re-read of isDisabled COULD NOT BE PERFORMED — ${REREADS} re-read(s) returned a value and ~${SLEPT}s were waited before a read failed. The last value the host actually returned was isDisabled=${LAST_SEEN:-<unset>}, which predates the restart and may be stale. This run did NOT establish whether the write took effect, and it does NOT rule out a host-restart lag. NEXT: the write already landed, so re-run this script WITHOUT --apply in a minute or two — a plain verify settles it and changes nothing. If the re-read keeps failing, the fault is in the READ, not the write: a 429/5xx is transient and a re-run clears it, while a persistent failure means the identity lacks Microsoft.Web/sites/functions/read on /subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Web/sites/${APP}." >&2
+      echo "  UNKNOWN  ${APP}/${FN}: the --apply write SUCCEEDED and ${SETTING} reads true, but the post-write re-read of isDisabled COULD NOT BE PERFORMED — ${REREADS} re-read(s) returned a value and ~${SLEPT}s were waited before a read failed. The last value the host actually returned was isDisabled=${LAST_SEEN:-<unset>}; it was read AFTER the write, but this run did not establish whether the host had finished restarting by then, so it may be stale. This run did NOT establish whether the write took effect, and it does NOT rule out a host-restart lag. NEXT: the write already landed, so re-run this script WITHOUT --apply in a minute or two — a plain verify settles it and changes nothing. If the re-read keeps failing, the fault is in the READ, not the write: a 429/5xx is transient and a re-run clears it, while a persistent failure means the identity lacks Microsoft.Web/sites/functions/read on /subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.Web/sites/${APP}." >&2
       unknown=$((unknown + 1))
       continue
     fi
