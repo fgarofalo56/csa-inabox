@@ -495,7 +495,7 @@ jobs:
         # `always()` so the artifact survives a red verdict — the enumeration is
         # the deliverable, and it is most valuable on exactly the run that fails.
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: gov-adx-sku-probe-${{ github.run_id }}
           path: ${{ runner.temp }}/adx-probe/
