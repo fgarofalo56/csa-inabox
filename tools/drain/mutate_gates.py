@@ -28,6 +28,7 @@ matrix is exactly what they looked like:
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -4786,8 +4787,444 @@ def _exit_args(
     }
 
 
-def main() -> int:
+# --------------------------------------------------------------------------- #
+# SHARDING (#4712) -- the matrix outgrew a single runner, and a raise would not
+# have fixed it.
+#
+# The single job died against `timeout-minutes: 45` at 44m54s and reported
+# CANCELLED. That comment in `.github/workflows/test.yml` argued 45 was safe on
+# the grounds that "this lane is ADVISORY: an overrun is a loud red advisory,
+# not a merge freeze". THE PREMISE WAS FALSE at the time it was measured:
+# `merge_gate.py` gate 4c calls `gates.advisory_verdict` with
+# `policy.json:merge_gate.advisory_red_is_a_no_go`, which is `true`, so an
+# advisory CANCELLED is a NO-GO and PR #4702 sat blocked behind it with two
+# live APPROVEs. The comment is corrected in that file; this note records why
+# the remedy is here rather than there.
+#
+# The arithmetic also picks sharding over a raise. 45 was sized at a MEASURED
+# 3.48 s/arm (330 arms / 19m23s) under the model `arms x (startup + tests)`.
+# At 413 arms / 878 tests the observed rate is ~6.5 s/arm -- BOTH terms grew,
+# which is what that model predicts and what a ceiling cannot answer. Sharding
+# divides the `arms` factor across runners; raising the ceiling divides
+# nothing, and the growth curve (34m35s -> 40m15s -> 40m26s -> 41m27s ->
+# cancelled) says the next ceiling arrives in days.
+#
+# WHAT SHARDING MUST NOT COST. `_exit_code` already refuses a run that did not
+# evaluate every arm, and that refusal is what makes a green matrix mean
+# something. Split across N runners, the same question has to be asked about
+# the N runs TOGETHER -- otherwise five green shards and one that never started
+# read as a clean matrix, which is the `steps=0` shape this repo refuses
+# everywhere else. `adjudicate` below is that question, and it is a pure
+# function for the same reason `_score`, `_exit_code` and `_preamble_verdict`
+# are: a decision inside `main()` is a decision no test can reach.
+# --------------------------------------------------------------------------- #
+
+#: Version tag on every shard receipt. A receipt whose schema this adjudicator
+#: does not recognise is REFUSED, never skipped: an unreadable shard and a
+#: passing shard must not be the same thing, which is the whole discipline the
+#: split has to preserve (`SURVIVED` / `NOT-RUN` / `NEEDLE-MISCOUNT` /
+#: `POPULATION-DRIFT` are separate outcomes precisely so that they cannot be
+#: folded into one another).
+RECEIPT_SCHEMA = "drain-mutation-shard/1"
+
+
+def _multiset_difference(left: list[str], right: list[str]) -> list[str]:
+    """``left`` minus ``right``, counting REPEATS -- not a set difference.
+
+    `collections.Counter` would do this in one line; it is written out so the
+    import block at the top of this file stays untouched while PR #4702 has an
+    open edit there. The behaviour that matters is the multiset part: with a
+    set difference, a partition that assigned one arm TWICE and another ZERO
+    times would report `missing=[]` and `duplicated=[]` and the caller would
+    print "the union is not the matrix" with nothing named.
+    """
+    remaining: dict[str, int] = {}
+    for item in right:
+        remaining[item] = remaining.get(item, 0) + 1
+    out = []
+    for item in left:
+        if remaining.get(item, 0) > 0:
+            remaining[item] -= 1
+        else:
+            out.append(item)
+    return sorted(out)
+
+
+def parse_shard(spec: str, population: int) -> tuple[int, int]:
+    """``"i/N"`` -> ``(i, N)``, refusing every shape that would narrow the run.
+
+    Raises ``ValueError`` with the reason. Each refusal has an input:
+
+    ``"3"`` / ``"3/"`` / ``"a/b"``   malformed -- would otherwise be a silent
+                                     default to the whole matrix on one runner,
+                                     i.e. the timeout this change exists to fix.
+    ``"0/6"`` / ``"7/6"``            out of range -- `arms[i-1::N]` is happy to
+                                     take `arms[-1::6]` and `arms[6::6]`, which
+                                     return a WRONG non-empty slice and an EMPTY
+                                     one respectively. Both look like a run.
+    ``"1/0"``                        `arms[0::0]` raises `ValueError: slice step
+                                     cannot be zero` deep in the loop; refuse it
+                                     here, where the message can say why.
+    ``"1/500"`` at 389 arms          more shards than arms, so some shard is
+                                     assigned NOTHING. An empty shard exits 0
+                                     under `_exit_code`'s own empty-matrix
+                                     refusal -- but only if it RUNS; refusing at
+                                     parse keeps the topology honest rather than
+                                     relying on a downstream refusal to notice.
+    """
+    match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", spec)
+    if not match:
+        raise ValueError(
+            f"--shard takes 'i/N' (e.g. '2/6'); got {spec!r}. There is no "
+            "default: a malformed spec must not fall through to the whole "
+            "matrix on one runner, which is the 45-minute wall this exists to "
+            "get under."
+        )
+    index, count = int(match.group(1)), int(match.group(2))
+    if count < 1:
+        raise ValueError(f"--shard denominator must be >= 1; got {count}")
+    if not 1 <= index <= count:
+        raise ValueError(
+            f"--shard index {index} is outside 1..{count}. Python would accept "
+            f"the slice and return the wrong arms (or none) without erroring."
+        )
+    if count > population:
+        raise ValueError(
+            f"--shard asks for {count} shards over {population} arms, so at "
+            "least one shard would be assigned nothing. A shard that scores "
+            "zero arms is not evidence about anything."
+        )
+    return index, count
+
+
+def shard_of(
+    arms: list[tuple[str, str, str, str]], *, index: int, count: int
+) -> list[tuple[str, str, str, str]]:
+    """The arms this shard owns: a TOTAL, DISJOINT partition of ``arms``.
+
+    Round-robin (``arms[index-1::count]``) rather than contiguous blocks, and
+    the reason is measurable rather than aesthetic: arm cost is dominated by
+    interpreter and plugin startup (the 3.48 s/arm measurement that sized the
+    old ceiling), but the residual varies with how much of the suite a mutation
+    reddens early. Arms are grouped by THEME in the list -- long runs of
+    `gates.py` needles, then `tick.py`, then `policy.json` -- so contiguous
+    blocks would hand one runner a whole correlated cluster. Striping mixes
+    them.
+
+    TOTALITY AND DISJOINTNESS ARE THE LOAD-BEARING PROPERTIES, not balance. For
+    any `count >= 1` the slices `arms[0::count] .. arms[count-1::count]`
+    partition `arms` exactly: index `k` lands in shard `k % count` and in no
+    other. `adjudicate` does not TRUST that -- it re-derives the union from the
+    receipts and compares it to `ARMS` by name -- but it is why the union can
+    be expected to hold in the first place.
+    """
+    if count < 1:
+        raise ValueError(f"count must be >= 1; got {count}")
+    if not 1 <= index <= count:
+        raise ValueError(f"index {index} is outside 1..{count}")
+    return arms[index - 1 :: count]
+
+
+def adjudicate(
+    *,
+    receipts: list[dict],
+    arm_names: list[str],
+    count: int,
+    needs_result: str,
+) -> tuple[int, str]:
+    """Do N shard receipts together establish what one unsharded run did?
+
+    Returns ``(exit_code, reason)``. Ordered most-fundamental first, the way
+    `_preamble_verdict` and `_exit_code` are, because each later question is
+    meaningless if an earlier one fails.
+
+    THIS ADJUDICATES THE SHARDS; IT DOES NOT MERELY CONCLUDE AFTER THEM.
+    `loom-roll-and-validate.yml:650` records what the difference costs: after
+    #4657 sharded vitest, the merge job went green in 98s over shards that had
+    not run, and the estate stayed frozen for two days on a gate pointed at the
+    wrong job. A merge job whose own work is cheap is fine; a merge job that
+    reads only its own work is a green light over nothing.
+
+    THE ARM-TOTAL ASSERTION IS THE NAME-SET IDENTITY, and that is deliberate.
+    The obvious check is `sum(assigned) == len(ARMS)`. Given the per-receipt
+    check that `assigned == len(assigned_names)`, that sum is ARITHMETICALLY
+    IMPLIED by comparing the concatenated names against `ARMS` -- so adding it
+    as a separate refusal would be an EQUIVALENT MUTANT, the exact defect
+    `_exit_code`'s docstring records measuring and removing one arm for. The
+    name-set comparison is strictly STRONGER: it also refuses a partition that
+    double-assigns one arm and drops another, which any count-based check
+    passes. The total is PRINTED in the success line so the receipt is legible,
+    but it is not a second decision.
+
+    Each refusal and the value that breaks it:
+
+    1. ``needs_result`` -- ``"cancelled"``, ``"failure"``, ``"skipped"``. A
+       shard that hit `timeout-minutes` concludes CANCELLED, and GitHub will
+       still run this job (`if: !cancelled()` guards only a cancelled RUN). A
+       shard that was never scheduled concludes SKIPPED. Neither is a pass, and
+       neither leaves anything else for this function to notice if the shard's
+       artifact happens to survive from a previous attempt.
+    2. empty ``arm_names`` -- `ARMS[:0]`, i.e. green over nothing.
+    3. ``count < 1``.
+    4. missing / extra / duplicate shard indices -- DROP one receipt, which is
+       what a shard that never started leaves behind (no artifact to download).
+    5. a receipt's ``schema`` -- any other string; an unreadable receipt must
+       not read as a passing one.
+    6. a receipt's ``population`` disagreeing with `len(ARMS)` here -- a
+       receipt produced against a different tree, or one whose `ARMS` was
+       truncated between shard and merge.
+    7. a receipt's ``shard_count`` disagreeing with ``count`` -- a matrix
+       whose `[1,2,3,4,5,6]` and whose `--shard i/6` fell out of step, which is
+       the #4679 coupling failure in its drain-shaped form.
+    8. the concatenated ``assigned_names`` not equalling ``arm_names`` as a
+       multiset -- a partition that drops, duplicates or swaps an arm.
+    9. ``assigned != len(assigned_names)``, or the four buckets not summing to
+       ``assigned`` -- a shard reporting fewer arms than it was handed, which
+       is `_exit_code`'s own partition refusal asked per shard.
+    10. ``before != after`` on any shard -- an arm wrote outside its sandbox.
+    11. ``killed != assigned`` on any shard -- a SURVIVOR, the thing the whole
+        matrix exists to find.
+    12. a non-zero ``exit_code`` on a shard whose counts are otherwise clean --
+        the catch-all. If `_exit_code` learns a refusal this function does not
+        mirror, that shard refuses and this one would otherwise pass it. This
+        is NOT an equivalent mutant of 9/10/11: the input that breaks it is a
+        receipt with `exit_code: 2` (a preamble refusal -- red control, skip
+        drift, population drift) whose four buckets are all zero and whose
+        digests match, which every check above admits.
+    """
+    if needs_result != "success":
+        return 1, (
+            f"the shard jobs concluded {needs_result!r}, not 'success'. A "
+            "CANCELLED shard (a `timeout-minutes` overrun) and a SKIPPED shard "
+            "(never scheduled) both measured nothing; neither may be counted "
+            "as a pass."
+        )
+    if not arm_names:
+        return 1, (
+            "the matrix is EMPTY, and an empty matrix cannot be evidence about "
+            "anything"
+        )
+    if count < 1:
+        return 1, f"a matrix of {count} shards cannot have run anything"
+
+    seen: dict[int, dict] = {}
+    for receipt in receipts:
+        index = receipt.get("shard_index")
+        if not isinstance(index, int):
+            return 1, (
+                f"a receipt carries shard_index={index!r}, which is not an "
+                "integer, so it cannot be attributed to a shard"
+            )
+        if index in seen:
+            return 1, (
+                f"two receipts claim shard {index}. One of them is from a "
+                "different run, and neither can be trusted to describe this one."
+            )
+        seen[index] = receipt
+    expected = set(range(1, count + 1))
+    if set(seen) != expected:
+        missing = sorted(expected - set(seen))
+        extra = sorted(set(seen) - expected)
+        return 1, (
+            f"expected receipts for shards {sorted(expected)}, got "
+            f"{sorted(seen)} (missing={missing} unexpected={extra}). A shard "
+            "that never ran uploads nothing, so a MISSING receipt is exactly "
+            "what a NOT-RUN shard looks like -- it is refused here rather than "
+            "silently reducing the population."
+        )
+
+    assigned_total = 0
+    collected: list[str] = []
+    for index in sorted(seen):
+        receipt = seen[index]
+        schema = receipt.get("schema")
+        if schema != RECEIPT_SCHEMA:
+            return 1, (
+                f"shard {index}'s receipt declares schema {schema!r}, expected "
+                f"{RECEIPT_SCHEMA!r}. An unreadable receipt is not a passing one."
+            )
+        population = receipt.get("population")
+        if population != len(arm_names):
+            return 1, (
+                f"shard {index} ran against a matrix of {population!r} arms; "
+                f"this checkout declares {len(arm_names)}. The shards and the "
+                "adjudicator are not looking at the same ARMS."
+            )
+        if receipt.get("shard_count") != count:
+            return 1, (
+                f"shard {index} ran as {receipt.get('shard_index')!r}/"
+                f"{receipt.get('shard_count')!r} but this job adjudicates "
+                f"{count} shards. The matrix axis and the --shard denominator "
+                "have fallen out of step, so some arms were assigned to a "
+                "shard that does not exist."
+            )
+        names = receipt.get("assigned_names")
+        if not isinstance(names, list):
+            return 1, (
+                f"shard {index}'s receipt carries assigned_names={names!r}, "
+                "so what it covered cannot be established"
+            )
+        assigned = receipt.get("assigned")
+        if assigned != len(names):
+            return 1, (
+                f"shard {index} claims {assigned!r} arms but names {len(names)}. "
+                "A shard that reports a different number than it lists did not "
+                "run what it says it ran."
+            )
+        buckets = tuple(receipt.get(k) for k in ("killed", "survived", "skipped", "errored"))
+        if any(not isinstance(b, int) for b in buckets):
+            return 1, f"shard {index}'s outcome buckets are {buckets!r}, not four integers"
+        scored = sum(buckets)  # type: ignore[arg-type]
+        if scored != assigned:
+            return 1, (
+                f"shard {index} scored {scored} arms but was assigned "
+                f"{assigned}. A run that did not evaluate every arm it was "
+                "handed is not a run, whatever its buckets say."
+            )
+        if receipt.get("before") != receipt.get("after"):
+            return 1, (
+                f"shard {index} reports the TRACKED TREE CHANGED during its run "
+                "- an arm wrote outside its sandbox, so no result from that "
+                "shard can be trusted"
+            )
+        killed, survived, skipped, errored = buckets  # type: ignore[misc]
+        if killed != assigned:
+            return 1, (
+                f"shard {index}: not every arm died: killed={killed} of "
+                f"{assigned} (survived={survived} skipped={skipped} "
+                f"errored={errored})"
+            )
+        if receipt.get("exit_code") != 0:
+            return 1, (
+                f"shard {index} exited {receipt.get('exit_code')!r} with clean "
+                "counts, so it refused for a reason this adjudicator does not "
+                f"mirror: {receipt.get('reason')!r}"
+            )
+        assigned_total += assigned
+        collected.extend(str(n) for n in names)
+
+    want = sorted(arm_names)
+    got = sorted(collected)
+    if got != want:
+        missing = _multiset_difference(want, got)
+        duplicated = _multiset_difference(got, want)
+        return 1, (
+            f"the shards together covered {len(got)} arms, and this checkout "
+            f"declares {len(want)}. Unrun: {missing[:10]}"
+            f"{' ...' if len(missing) > 10 else ''}. Double-assigned or "
+            f"unrecognised: {duplicated[:10]}{' ...' if len(duplicated) > 10 else ''}. "
+            "The union of the shards is not the matrix."
+        )
+    return 0, (
+        f"all {assigned_total} arms KILLED across {count} shards, every arm in "
+        f"ARMS covered exactly once, tracked tree untouched on every shard"
+    )
+
+
+def _load_receipts(directory: Path) -> tuple[list[dict], str]:
+    """Every ``*.json`` under ``directory``, or ``([], why)``.
+
+    A directory that does not exist, or holds no JSON, is NOT an empty list of
+    receipts -- it is an unanswered question, and `adjudicate` would read an
+    empty list as "no shard indices", which is refused for the right reason but
+    with the wrong diagnosis. Reported separately so the message names the real
+    fault.
+    """
+    if not directory.is_dir():
+        return [], f"{directory} is not a directory, so no shard receipt could be read"
+    files = sorted(directory.rglob("*.json"))
+    if not files:
+        return [], (
+            f"{directory} holds no *.json receipt. Every shard uploads one even "
+            "when it FAILS, so an empty directory means no shard job reached its "
+            "upload step at all."
+        )
+    out = []
+    for path in files:
+        try:
+            out.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            return [], f"{path.name} is not readable JSON ({exc}); refusing to adjudicate around it"
+    return out, ""
+
+
+def build_receipt(
+    *,
+    index: int,
+    count: int,
+    arms: list[tuple[str, str, str, str]],
+    population: int,
+    counts: tuple[int, int, int, int],
+    before: str,
+    after: str,
+    exit_code: int,
+    reason: str,
+) -> dict:
+    """What one shard hands the adjudicator, built where a test can reach it.
+
+    TAKES THE ARMS AND THE COUNTS-AS-A-TUPLE for the reason `_exit_args`
+    records and measured: there is no longer a place to pass `killed` where
+    `assigned` belongs, because `assigned` is derived here from the same list
+    the dispatch consumed. Round 19 measured all four of those wiring mutations
+    SURVIVING when the equivalent expressions lived in `main()`.
+
+    `assigned_names` is the load-bearing field and the expensive-looking one.
+    It is what lets `adjudicate` re-derive the union rather than trust that the
+    partition was total -- a count cannot tell "shard 3 ran 65 arms" from
+    "shard 3 ran shard 4's 65 arms", and a partition bug that swaps them is
+    invisible to every count-based check.
+    """
+    killed, survived, skipped, errored = counts
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "shard_index": index,
+        "shard_count": count,
+        "population": population,
+        "assigned": len(arms),
+        "assigned_names": [arm[0] for arm in arms],
+        "killed": killed,
+        "survived": survived,
+        "skipped": skipped,
+        "errored": errored,
+        "before": before,
+        "after": after,
+        "exit_code": exit_code,
+        "reason": reason,
+    }
+
+
+def main(*, index: int = 1, count: int = 1, receipt: Path | None = None) -> int:
+    arms = shard_of(ARMS, index=index, count=count)
+    if count > 1:
+        print(f"SHARD     {index}/{count}: {len(arms)} of {len(ARMS)} arms")
     before = digest_tree(HERE)
+
+    # WRITES A FILE AND RETURNS ITS ARGUMENT. Deliberately the only thing in
+    # this closure: `main()` is called by nothing but `__main__`, so a DECISION
+    # placed here would be one no test can reach -- the failure this file's
+    # round 16 and round 19 were both spent repairing. The decision it serialises
+    # (`build_receipt`) and the decision that reads it (`adjudicate`) are both
+    # module-level and both tested.
+    #
+    # A receipt is written on EVERY return, including the preamble refusals,
+    # because "this shard refused, here is why" and "this shard never ran" must
+    # not be the same observation. It is NOT written on SIGKILL or on a
+    # `timeout-minutes` cancellation -- and that is correct: the missing receipt
+    # is then exactly what the adjudicator refuses on.
+    def _done(code: int, why: str, counts: tuple[int, int, int, int], after: str) -> int:
+        if receipt is not None:
+            receipt.write_text(
+                json.dumps(
+                    build_receipt(
+                        index=index, count=count, arms=arms, population=len(ARMS),
+                        counts=counts, before=before, after=after,
+                        exit_code=code, reason=why,
+                    ),
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return code
 
     # The sandbox lives OUTSIDE the repo. A SIGKILL mid-arm therefore cannot
     # leave a weakened gate in a checkout that four lanes share -- the worst
@@ -4824,14 +5261,16 @@ def main() -> int:
             print("no scope_paths row names a workflow - the drift guard would "
                   "skip in the sandbox and score every arm KILLED regardless of "
                   "the mutation", file=sys.stderr)
-            return 1
+            return _done(1, "no scope_paths row names a workflow",
+                         (0, 0, 0, 0), digest_tree(HERE))
         for rel in sorted(wanted):
             src = ROOT / rel
             if not src.is_file():
                 print(f"policy.json names {rel}, which does not exist - refusing "
                       "to run a matrix whose drift guard cannot read it",
                       file=sys.stderr)
-                return 1
+                return _done(1, f"policy.json names {rel}, which does not exist",
+                             (0, 0, 0, 0), digest_tree(HERE))
             shutil.copy2(src, wf_dir / Path(rel).name)
         # NORMALIZE TO LF before matching. `newline=""` preserves whatever the
         # working tree has, `core.autocrlf=true` is set on this machine and no
@@ -5031,7 +5470,7 @@ def main() -> int:
                 print(with_meta.stdout[-2000:])
             elif selected_with != selected_without + 1:
                 print(f"the deselect nodeid is: {deselect}")
-            return 2
+            return _done(2, why, (0, 0, 0, 0), digest_tree(HERE))
 
         # THE ONLY SIDE EFFECTS IN THE ARM LOOP, isolated so the loop itself is
         # testable. Write the mutant, run the suite, put the file back --
@@ -5046,7 +5485,7 @@ def main() -> int:
                 _write_lf(sandbox / filename, originals[filename])
             return proc.returncode, proc.stdout
 
-        killed, survived, skipped, errored = _run_arms(ARMS, originals, _run)
+        killed, survived, skipped, errored = _run_arms(arms, originals, _run)
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 
@@ -5054,7 +5493,8 @@ def main() -> int:
     print()
     print(f"tracked tree untouched: {before == after}")
     print(f"killed={killed} survived={survived} skipped={skipped} errored={errored} "
-          f"of {len(ARMS)} arms")
+          f"of {len(arms)} arms"
+          + (f" (shard {index}/{count} of {len(ARMS)})" if count > 1 else ""))
     # WHAT IS STILL UNOBSERVED HERE, restated because round 19 changed it and a
     # reviewer corrected my summary of what it changed.
     #
@@ -5073,30 +5513,105 @@ def main() -> int:
     # reason, so this is disclosure rather than an open defect.
     code, why = _exit_code(**_exit_args(
         counts=(killed, survived, skipped, errored),
-        arms=ARMS, before=before, after=after,
+        arms=arms, before=before, after=after,
     ))
     if code != 0:
         print(f"REFUSING -- {why}")
+    return _done(code, why, (killed, survived, skipped, errored), after)
+
+
+def _adjudicate_cli(args: list[str]) -> int:
+    """`--adjudicate DIR --shards N --needs-result R` -> the merge job's verdict.
+
+    I/O only. Every decision is in `adjudicate`, which is pure and tested; this
+    reads the receipts, prints, and returns. The population it compares against
+    is `ARMS` IN THIS CHECKOUT, imported here rather than taken from a receipt
+    -- a run that trusted a receipt's own count for the total would be asking
+    the shards whether the shards were complete.
+    """
+    parser = argparse.ArgumentParser(prog="mutate_gates.py --adjudicate", add_help=False)
+    parser.add_argument("--adjudicate", required=True, type=Path, metavar="DIR")
+    parser.add_argument("--shards", required=True, type=int)
+    parser.add_argument(
+        "--needs-result", required=True,
+        help="the shard job's aggregate `needs.<job>.result`. REQUIRED, with no "
+             "default: a default of 'success' would make the one check that "
+             "distinguishes a cancelled shard from a passing one impossible to "
+             "fail by omission.",
+    )
+    parsed = parser.parse_args(args)
+
+    receipts, why = _load_receipts(parsed.adjudicate)
+    if why:
+        print(f"REFUSING -- {why}", file=sys.stderr)
+        return 1
+    for receipt in sorted(receipts, key=lambda r: r.get("shard_index") or 0):
+        print(f"  shard {receipt.get('shard_index')}/{receipt.get('shard_count')}  "
+              f"assigned={receipt.get('assigned')} killed={receipt.get('killed')} "
+              f"survived={receipt.get('survived')} skipped={receipt.get('skipped')} "
+              f"errored={receipt.get('errored')} rc={receipt.get('exit_code')}")
+    code, verdict = adjudicate(
+        receipts=receipts,
+        arm_names=[arm[0] for arm in ARMS],
+        count=parsed.shards,
+        needs_result=parsed.needs_result,
+    )
+    print(f"{'REFUSING -- ' if code else ''}{verdict}", file=sys.stderr if code else sys.stdout)
     return code
 
 
 if __name__ == "__main__":
-    # NO ARGUMENTS, AND SAYING SO IS CHEAPER THAN THE SURPRISE. An independent
-    # reviewer typed `mutate_gates.py --list`, which is not a flag, and got a
-    # FULL MATRIX -- 361 arms, 66 python processes -- because argv was ignored.
-    # They had to kill it by PID (never by name pattern, which would have hit
-    # other lanes on this box). A matrix takes hours and writes nothing until
-    # the preamble finishes, so an accidental launch reads as a hang.
-    if sys.argv[1:]:
-        print(
-            "mutate_gates.py takes NO arguments and always runs the FULL matrix "
-            "({} arms, one full suite execution each -- hours, not minutes).\n"
-            "You passed: {}\n"
-            "There is no --list and no arm filter. To inspect the arms, import "
-            "the module and read `ARMS`; to run a subset, set `mutate_gates.ARMS` "
-            "to a filtered list before calling `main()`.".format(
-                len(ARMS), " ".join(sys.argv[1:])),
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    raise SystemExit(main())
+    # THE NO-ARGUMENTS REFUSAL IS GONE, AND THE SURPRISE IT EXISTED FOR IS NOT.
+    # An independent reviewer once typed `mutate_gates.py --list`, which is not
+    # a flag, and got a FULL MATRIX -- because argv was ignored. They had to
+    # kill it by PID (never by name pattern, which would have hit other lanes on
+    # this box). `argparse` now refuses an unknown flag with exit 2, which is
+    # strictly better than the hand-rolled message: `--list` is rejected rather
+    # than described.
+    #
+    # THE DEFAULT IS STILL THE WHOLE MATRIX ON ONE RUNNER (`--shard 1/1`), so
+    # `python tools/drain/mutate_gates.py` with no arguments does exactly what
+    # it did before. That is deliberate: every local invocation, every runbook
+    # and `tools/drain/README.md` keep working, and the sharding is a CI
+    # topology rather than a new way to run this by hand.
+    _parser = argparse.ArgumentParser(
+        prog="mutate_gates.py",
+        description=("Run the drain mutation matrix. With no arguments this is "
+                     "the FULL matrix, one full suite execution per arm -- "
+                     "tens of minutes, not seconds."),
+    )
+    _parser.add_argument(
+        "--shard", metavar="i/N", default="1/1",
+        help="run only shard i of N (round-robin over ARMS). Default 1/1 = "
+             "everything. The N shards partition ARMS exactly; the merge job's "
+             "--adjudicate mode refuses a set of receipts whose union is not "
+             "ARMS, so a wrong N cannot silently narrow the matrix.",
+    )
+    _parser.add_argument(
+        "--receipt", metavar="PATH", type=Path, default=None,
+        help="write this shard's machine-readable outcome here, on EVERY exit "
+             "path including a refusal. Its absence is how the merge job tells "
+             "a shard that never ran from one that passed.",
+    )
+    _parser.add_argument(
+        "--adjudicate", metavar="DIR", type=Path, default=None,
+        help="MERGE-JOB MODE: read every *.json receipt under DIR and decide "
+             "whether the shards together establish what one unsharded run "
+             "would have. Requires --shards and --needs-result.",
+    )
+    _parser.add_argument("--shards", type=int, default=None,
+                         help="with --adjudicate: how many shards must have reported.")
+    _parser.add_argument("--needs-result", default=None,
+                         help="with --adjudicate: the shard job's `needs.<job>.result`.")
+
+    if "--adjudicate" in sys.argv[1:]:
+        raise SystemExit(_adjudicate_cli(sys.argv[1:]))
+    _args = _parser.parse_args()
+    for _flag in ("shards", "needs_result"):
+        if getattr(_args, _flag) is not None:
+            _parser.error(f"--{_flag.replace('_', '-')} is only meaningful with --adjudicate")
+    try:
+        _index, _count = parse_shard(_args.shard, len(ARMS))
+    except ValueError as _exc:
+        _parser.error(str(_exc))
+    raise SystemExit(main(index=_index, count=_count, receipt=_args.receipt))
