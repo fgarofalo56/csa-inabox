@@ -38,7 +38,8 @@ tick.py                              ledger (state.json)
                                           `needs-audit`, NEVER to `closed`
   3 REAP       --reap                 ->  return stranded in-flight lanes to ready
   4 SELECT     next lane set          ->  stream order, file-disjoint, WIP-capped
-  5 EMIT       briefs + this runbook  ->  self-contained, regenerated every cycle
+  5 EMIT       per-lane briefs        ->  self-contained, regenerated every cycle
+                                          (KICKOFF.md is NOT: it is hand-kept)
 
   agents run the briefs -> results go back into the ledger -> tick.py again
 ```
@@ -99,8 +100,128 @@ A park with no owner is indistinguishable from forgetting — that is how an ite
 leaves the queue without leaving the backlog.
 
 `needs-audit` is the fifth state and is **non-terminal**: an item that left
-GitHub with no receipt, or a terminal item seen open again (someone reopened it,
-which is how a false close gets disputed). `drained()` is false while any exist.
+GitHub with no receipt, or a `closed`/`declined` item seen open again (someone
+reopened it, which is how a false close gets disputed). `drained()` is false
+while any exist.
+
+**A park is SUPPOSED to stay open on GitHub, and the refresh leaves it alone.**
+The reopen branch keys on `REOPEN_DISPUTES` — `closed` and `declined` — not on
+`TERMINAL`. It used to key on all three, so every refresh demoted every park to
+`needs-audit` (#2874 lasted 13 seconds) and `drained()` was unreachable for
+anything genuinely blocked. `declined` is *in* that tuple by decision, not by
+inheritance: "will not do" leaves nothing to track, so its disposal is `gh issue
+close --reason not-planned`, and an item still open after a decline wants a
+look. That demotion has a legal escape — close the issue and the decline stands.
+A park is never demoted at all, so it needs none: closing a blocked item's issue
+is how a backlog lies about itself (`deploy-integrity.md` R2). Neither state is
+a dead end any more — `--unpark` and `--undecline` are the explicit way out
+(#4699), documented below.
+
+**A ledger close now REACHES GitHub, which is the precondition that branch
+always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
+all, so an item the harness closed on its own evidence stayed open upstream, the
+next refresh read that as a reopen, and the receipt recorded minutes earlier was
+**voided**. Measured on #4535 — the first item the harness ever closed itself —
+which bounced to `needs-audit` on the very next cycle, so `drained()` was
+unreachable for anything the drain closed rather than inherited.
+
+`record_receipt_from_evidence` closes the issue **before** it writes the ledger,
+and the order is not arbitrary. The two writes fail independently:
+
+| ordering | if the second write fails |
+|---|---|
+| **GitHub, then ledger** (what runs) | issue closed upstream, item still non-terminal here → next refresh flags it `departed` → `needs-audit`, loudly, holding **no** receipt (nothing was written) — the upstream evidence is untouched, so `--record-receipt` re-measures it and succeeds |
+| ledger, then GitHub | item `closed` here, open there → **#4545 verbatim**: false reopen, receipt destroyed next cycle |
+
+Only `CLOSES_ON_GITHUB` — `closed`, and nothing else — gets a close. A park is
+blocked, not done. `declined` is deliberately out too, although it is *in*
+`REOPEN_DISPUTES`: there is no unattended decline path, and its disposal carries
+a `--reason not-planned` resting on a judgement no program made. The close is
+idempotent (an already-closed issue is read first and left alone — which is how
+#4535's hand-closed workaround is met), is gated on `close-on-receipt` in
+`permitted_unattended`, and is verified **by reading the state back**, not by
+`gh`'s exit code — which establishes that the issue *is* closed, but not by
+whom; see the paragraph below. A close that cannot be observed raises
+`IssueCloseFailedError`, nothing is written, and the item stays non-terminal.
+
+**Reading the state back is not enough on its own, and the note says so.**
+A read-back establishes a property of the *world* — the issue is closed — not an
+effect of *this* invocation. If a human or a second lane closes the issue in the
+window between the pre-read and the close, `gh` exits 0 having posted **nothing**
+(cli/cli v2.100.0 `close.go` re-fetches at `:112` and returns at `:117-120`,
+above the comment block at `:148`), and the read-back sees CLOSED because
+somebody else made it so. So the returned note is keyed on `gh`'s own stderr
+sentence for which of the two things it did — three outcomes, and the third is
+`unknown`:
+
+| what `gh` said | what the note reports |
+|---|---|
+| `Closed issue …` (`close.go:169`) | `#N closed on GitHub` — unqualified; the receipt comment was posted |
+| `… is already closed` (`close.go:118`) | this run did **not** close it, and **no** receipt comment was posted (#4579) |
+| neither sentence | the issue **is** closed, and this run cannot tell which of the two happened, so the comment **may not** have been posted |
+
+The third exists so that a future `gh` rewording fails **honest** rather than
+open: keying only on the already-closed sentence would let a changed string fall
+through to "I closed it", which is the false claim this whole section exists to
+prevent.
+
+**Each failure says which half of the pair moved.** Three outcomes, three
+messages, because the operator's next action differs:
+
+| what failed | what it prints | the world |
+|---|---|---|
+| anything before the close | `RECEIPT REFUSED - NOTHING WRITTEN, ON GITHUB OR IN THE LEDGER` | both records untouched |
+| the close itself | `GITHUB CLOSE NOT CONFIRMED - NOTHING WRITTEN TO THE LEDGER` | ledger untouched; the upstream state is whatever the message says. It claims neither direction: a read-back that 502s means the close **landed** and cannot be observed, and `gh issue close` also posts the comment, so even a non-zero exit does not establish that nothing happened |
+| the ledger write, after the close | `LEDGER NOT WRITTEN - THE ISSUE IS CLOSED UPSTREAM`, with the exception TYPE | issue settled upstream, ledger untouched, nothing saved — **re-run the same command**, the closer short-circuits on the already-closed issue |
+
+The third is not hypothetical: a lost CAS against another lane is the realistic
+failure, because the drain runs four. It used to print `RECEIPT NOT RECORDED` —
+the wording for "nothing happened" — and a ledger refusal after the same close
+used to print `RECEIPT REFUSED`, the wording for "your evidence was rejected".
+Both were false in the half that matters, which is the R7 defect inside the R7
+fix. Everything after the close is now wrapped in `LedgerWriteAfterCloseError`,
+which is also what makes "nothing was written" true in the first row: a bare
+refusal can only escape from *before* the close. That claim covers the call and
+**not** `main()`'s save step, which is why the save arm is bound to `Exception`
+and not to `LedgerChangedError`: with the narrow bound, `os.replace` raising
+`PermissionError` escaped `main()` uncaught while the issue was closed
+upstream — the silent failure this whole split exists to prevent, one layer
+down. **Correction (round 7):** this paragraph, and five other sites, used to
+say the escape left an **empty stderr**. It does not. `tick.py` ends in
+`raise SystemExit(main())`, so the exception reaches the interpreter and prints
+a traceback; the emptiness was an artifact of measuring through pytest's
+`capsys`. Measured as a real process against a sandbox copy carrying arm GH12:
+exit 1 and **~650 bytes of traceback** naming `os.replace`, against **~520 bytes**
+of the intended message unmutated. Those totals are **environment-dependent** —
+they move with sandbox path length and run id, and an independent reviewer
+re-measuring on a different sandbox got 647 / 579 — so read them as orders of
+magnitude, not constants. What is invariant is **exit 1 either way**, which is
+the whole point: what the width actually buys is the
+difference between those two texts — under the narrow bound the operator gets a
+file-rename traceback that never mentions the upstream close, at the *same* exit
+code, so neither the status nor the message says the two records disagree. The
+width is safe to claim because the save is a temp file plus an `os.replace`:
+either the replace happened and nothing after it can raise, or the file is
+untouched.
+
+The third row says "settled", not "the GitHub write LANDED", because the closer
+may have found the issue **already closed** and left it alone. The note it
+quotes says which.
+
+**On that already-closed route nothing is published at all**, and the note says
+so rather than leaving the operator to infer it. That route issues `gh issue
+view` and no other command, so no receipt comment is posted — and
+`tools/drain/state.json` is untracked, which leaves the receipt existing solely
+in a local gitignored file. It is not a corner: all 7 items the live ledger
+currently holds as `closed` are in exactly that state, and it is the route
+`close_issue_on_github` was written for (#4535 was hand-closed). The
+short-circuit conflates *the harness already commented here*, where skipping is
+right, with *a human closed it silently*, where no comment exists and none ever
+will. Posting the receipt there too — read the comments, `gh issue comment` when
+none begins `Drain harness: receipt verified` — is tracked as #4579 and is
+deliberately not done here: it adds two `gh` calls, hence two new failure
+routes, to the one route the whole current population takes, and that route's
+seven-shape failure behaviour was independently measured clean.
 
 **An empty ledger is NOT drained.** `all([])` is `True`, so without an emptiness
 clause a fresh clone or a deleted scratch file reports the whole backlog drained
@@ -114,11 +235,26 @@ condition. `--status` now refuses outright when no ledger file exists, because
 
 | kind | closes | how it is obtained |
 |---|---|---|
-| `ci-green` | guard/test-only | every required context green at the merged sha, and none of them SKIPPED |
+| `ci-green` | guard/test-only | every required context that **can** run at the merged sha is green and is accounted for by one of three routes — it **executed its declared substantive step**; or it skipped that step and executed a declared **alternative**, the other half of a job gated on more than one output, with the merged files outside the *primary's* scope; or it skipped that step, ran **nothing at all**, and the merged files are outside **every** scope the job gates work on. Every context that cannot run there is **named**, with its reason and its PR-head result over an identical tree. `python tools/drain/merge_gate.py --ci-green-receipt <PR>` |
 | `deploy-run` | deploy-path | a run whose deploy job **executed steps** against a live subscription |
 | `estate` | estate behaviour | live `build-marker.txt` carries the merged sha, plus the asserted behaviour |
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
+
+**A run-backed receipt is bound to the issue by NOTHING, and the comment it
+posts says so.** `verify_run_backed_receipt` matches the producer workflow,
+`status`, `conclusion` and every declared step — and compares the run to the
+item on no axis at all. `_run_evidence` does not request `createdAt`, and
+`headSha` is read only to be interpolated into the ref. Measured: run
+`33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
+every check today, and **147 of the 351 issues open on 2026-09-18 were filed
+after it**. So the receipt establishes *the declared producer ran green*, not
+*the estate was observed carrying this change* — the comment no longer cites
+deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
+rather than a merge, and it discloses the time and sha gap in terms. Binding it
+is #4578 (fetch the run's date, compare it to the item's, refuse a run that
+predates it); the sha half is bound by neither, and #4489 did not deliver it
+-- that writer records WHICH PR, not which sha.
 
 **The G1 trap, recorded because it already happened.** An assertion advertised
 as "requires a real answer" was satisfied by `Error: HTTP 500`, because the pane
@@ -126,6 +262,240 @@ fills its streaming placeholder with the error text on any non-ok response. The
 corrected assertion keyed on `copilot-agent-badge`, a testid set *only* by an SSE
 `agent` step — unreachable from an error path. **Every `g1-browser` receipt must
 name why its assertion cannot be satisfied by a failure.**
+
+**`ci-green` was redefined because the first attempt to take it failed (#4487).**
+The original text said *every required context green **at the merged sha***. That
+measurement is **unobtainable for most PRs in this repo**, and nobody noticed
+until the receipt was taken for the first time — on the harness's own merge,
+`a02cd41e6d42`:
+
+```
+15 required contexts (branch protection)
+10 green at the merged sha
+ 5 absent at the merged sha
+ 0 RED
+```
+
+None of the five is a failure or a flake. Four (`Python Lint`, `PowerShell
+Lint`, `Secret Scan`, `Repo Hygiene`) come from `validate.yml`, whose `push:`
+trigger is **path-filtered** to bicep/deploy/workflow paths that merge did not
+touch — so they are NEVER-CREATED there, not pending and not failing. The fifth
+is a **rename**: `commit-message-parses.yml` gives its job a conditional
+`name:`, so on `push` it publishes `changelog parser can read what landed on
+main` while branch protection requires the `pull_request` spelling. It ran, and
+it was green.
+
+A definition the topology cannot satisfy leaves two outcomes: every
+guard/test-only issue is unclosable, or somebody quietly accepts 10-of-15 as
+"green" and the receipt stops meaning what it says. The second is the failure
+mode this whole toolchain exists to prevent.
+
+So the receipt now reads: **every required context that CAN run at the merged
+sha is green; every one that cannot is NAMED, with the reason it could not and
+its result on the PR head over an IDENTICAL TREE.** The load-bearing word is
+*named* — an absence is excused only when the harness can say why, from
+evidence, and every branch that cannot say why **fails closed**: an untraceable
+producer, an unreadable `on.push`, a workflow that *should* have run and did
+not, a merged sha carrying zero check-runs at all, an empty required set, and a
+deferral to a head whose tree differs from the merged tree.
+
+Nothing in it is keyed to a context's **spelling**. The producer of each context
+is measured at the PR head (where it ran) through `check_suite_id`, and the
+rename case is resolved by **workflow identity** at the merged sha. An alias
+table would be one conditional `name:` expression away from being wrong,
+silently.
+
+**Nor is it keyed to a STEP's spelling at HEAD (#4676).** `policy.json`
+describes the workflow *as it is at HEAD*, so judging a merged PR's job against
+it asks a run from last week whether it executed a step created yesterday. It
+did not, and the refusal read *"the declaration is stale"* — pointing the reader
+at the one edit that would make the declaration wrong for every merge **after**
+the rename. Measured: PR #4593 merged 2026-09-20T01:24:35Z; `8d3dd9cbb` (#4657)
+renamed `vitest (node 20)`'s substantive step on 2026-09-21; the receipt for
+#4593 became unobtainable, in the receipt class that closes most of the ledger.
+
+The fix is the same shape as the one above, and for the same reason it is **not**
+an alias table: the declaration is **versioned in the same repo as the workflow
+it describes**, so the repo already records what it said on the day any given run
+happened. `merge_gate.resolve_declaration_as_of` reads
+`git show <merged-sha>:tools/drain/policy.json` and injects
+`receipts.ci_green_rule` as a `gates.DeclarationAsOf`, exactly as `push_trigger`
+and `infra_ere` are injected — `gates.py` runs no subprocess. **The code is
+HEAD's; the declaration is the sha's.** Every predicate stays today's, because
+every hole reviewers found in rounds 5–16 is fixed at HEAD and must apply to
+every measurement; only the *description of the workflow* moves with the sha.
+
+**A rename is not atomic, so there are two clocks.** The workflow and the
+declaration describing it are two files, and #4657 moved them 3h13m apart —
+`8d3dd9cbb` (`fiab-console-ci.yml`, 2026-09-21 21:25) and `356290aa9`
+(`policy.json`, 2026-09-22 00:38) — with **three merges in between** (#4652,
+#4654, #4658). Resolving strictly as-of refuses all three: the declaration at
+their sha names a step their job does not carry. So the sha's declaration is
+tried first and, **only when the step it names is ABSENT ENTIRELY**, HEAD's is
+tried; the receipt prints which one decided. Absence is the rename signature. A
+declared step that is PRESENT and **skipped** is a hollow check, never falls
+through, and still fails — otherwise a rename would launder exactly the defect
+this predicate exists for.
+
+**Five** refusal states, kept distinct because their remedies are opposite:
+
+| what happened | what the receipt says | remedy |
+|---|---|---|
+| neither clock's declaration describes the job | *"…and so is every other declaration this repo carries for it"* | re-read the declaration off a green run |
+| the sha's clock is ABSENT but HEAD's names a step the job carries **skipped** | *"HEAD's declaration names a DIFFERENT step, which this job DOES carry, and it does not account for the context either: its declared substantive step(s) […] were SKIPPED…"* | fix the check, not the declaration |
+| the declaration at the sha could not be READ | *"…could NOT be read (…), so whether these steps existed there is UNKNOWN"* | fetch the sha — **do not** edit `policy.json` |
+| the declaration at the sha PREDATES the key | *"…carries no `receipts.ci_green_rule` AT ALL — the key did not exist yet … There is nothing to fetch"* | nothing to fetch; HEAD's is the only declaration there has ever been |
+| no as-of resolution was attempted at all | today's sentence, unchanged | none; this is a direct unit call |
+
+The second row is the one this file got wrong twice. First the code discarded
+the second clock's *kind*, so a step that was PRESENT and SKIPPED at HEAD was
+reported as absent — stating as fact something it had not established
+(`deploy-integrity.md` R7), in the branch written to end exactly that. Then the
+fix for it wrapped a finished sentence as if it were a list and printed the
+trailing clause twice, while the test's three substring assertions were all
+satisfied by the garbled string. The test now pins the **whole sentence** and
+that each clause occurs exactly once. The fourth row is the same class:
+`substantive_steps` arrives in `6e29f1012` (2026-09-15, #4491), so every merge
+older than that resolves to "no rule", and telling the reader to `git fetch` a
+sha they already have is a wrong remedy for what is, on a backlog of
+pre-2026-09-15 merges, the common case.
+
+**A pass says which clock decided it, and whether that clock was ever READ.**
+Five ways it can differ from "HEAD's current declaration, verified against the
+sha": a rename (*"which HEAD has since changed to …"*), the lag window
+(*"reached because the declaration as of … named …, which this job does not
+carry"*), a row **newer than the sha** (*"policy.json at the measured sha
+carried NO ROW for this context"*, reachable for the two rows added in
+`0c2c4c974` on 2026-09-18), an **unreadable** sha (*"NOT VERIFIED against the
+measured sha … could NOT be read"*), and one that **predates the key** (*"NOT
+VERIFIED … policy.json carried no `receipts.ci_green_rule` there"*). None is
+folded into the others; a silent substitution is the thing this whole mechanism
+is against.
+
+The last two of those five were **silent until a reviewer probed them**: one
+fixture through four resolution states returned one byte-identical sentence.
+Both matter for what can CLOSE. `actions/checkout` is depth 1 by default, so on
+a shallow clone every sha is unreadable, the feature degrades to pre-PR
+behaviour, and every pass still read as verified; and every merge older than
+2026-09-15 predates the key, which is the **common** case for this backlog. The
+refusal side said "could NOT be read"; the acceptance side — the side that
+closes things — said nothing. It does now.
+
+**Routes 2 and 3 are deliberately single-clocked.** Route 1's fallthrough is
+safe only because it is reachable on `missing` alone — a name absent from the
+job entirely. `scope_untouched_at_merge` and `alternative_accounted_for` refuse
+for reasons about the merged *file list* and the detector, where "try the other
+declaration" would let a scope refusal under one clock be overridden by an
+acceptance under the other — the #3783 laundering shape. The cost is that a
+lag-window job whose primary is skipped under HEAD's spelling and whose declared
+alternative ran is refused; that is fail-closed, it is unrealised on all three
+real lag-window merges, and `test_routes_2_and_3_are_deliberately_single_clocked`
+pins it so changing it has to be deliberate.
+
+**What this does NOT establish: a rename is indistinguishable from a
+CORRECTION.** If a declaration row was ever *wrong* at sha S — naming a step
+that was not the check — and has since been corrected at HEAD, a merge at S is
+now judged by the wrong declaration, and the correction stops applying
+retroactively. Measured across all six versions of `substantive_steps` since it
+was introduced: **two row additions (`0c2c4c974`) and one rename (`356290aa9`),
+zero corrections.** The risk is real and currently unrealised. It matters
+because the two are textually identical — a row whose value changed — so no
+amount of reading the diff can tell them apart; only the intent behind the
+commit can, and the receipt cannot read intent.
+
+**Also not established: the PREDATES path has no live receipt.** It is covered
+by a unit test and by mutation arm AS6, and it is the path whose acceptance
+side was silent until it was fixed — but no `--ci-green-receipt` has been taken
+against a merge older than 2026-09-15. Nor has anyone enumerated whether any
+open backlog item would close on a receipt passing ONLY through an unverified
+clock; that needs `--ci-green-receipt` over every ci-green-eligible item's
+merge, it has not been run, and the population is **not** asserted to be empty.
+
+**A green conclusion is not evidence the check did its WORK**, and fixing that
+nearly made the receipt unobtainable for the only class it closes. `policy.json`
+declares, per context, the step that IS the check
+(`receipts.ci_green_rule.substantive_steps`), and a context concluding SUCCESS
+with that step `skipped` fails. Correct — and it took the receipt to **0 of 2**
+on the population it serves, because `next build (node 20)` and
+`vitest (node 20)` gate their work behind an **in-job change detector**, and a
+guard/test-only PR by construction does not touch `apps/fiab-console`. Both
+drain merges in the window, #4483 and #4488, returned NOT GREEN for exactly
+those two.
+
+That is this file's own thesis one branch along, so the answer is the same
+measurement rather than an exception: `receipts.ci_green_rule.scope_paths`
+declares each such context's **scope**, read off the producing workflow's own
+detector, and the skip is excused only when the merged commit's changed files —
+the same list the on-push detector computes for itself — fall outside **every**
+output that detector drives. The state is reported as
+`scope-untouched-at-merge`, never folded into `green-at-merge`. Every
+unanswered question fails closed: no declared row, a gate step that is absent
+or did not succeed, a declared step that concluded anything other than
+`skipped`, an empty changed-file list, a delegated scope that will not resolve.
+
+**Round 6 found the sentence that used to sit here false.** It read: *a scope
+that **matches** a merged file is a FAILURE, loudly — that is a detector that
+missed a change (#3783).* That holds only of a job that then did **nothing**.
+`vitest (node 20)`'s one detector drives two outputs, and a drain PR touching
+`tools/` matches the `infra` one — so the job skips `Run vitest` and runs `Run
+vitest (infra-reading suites only)` instead. There, a matching scope is exactly
+*why* the other half ran; refusing it as a missed change indicts the detector
+for working. The corroboration and the acceptance are therefore two halves of
+one predicate, asking two different questions:
+
+- the **excuse** (`scope-untouched-at-merge`) asks every output the detector
+  drives, and demands the job ran **nothing**. A work step that ran — success
+  or failure — is refused in those words: a job that did work is not a job with
+  nothing to do.
+- the **alternative** (`alternative-work-at-merge`) applies only when the job
+  ran the *other half* of its own declared work. It requires the gate step to
+  have succeeded, the primary step to be cleanly skipped, a declared
+  `alternatives` step to have succeeded, and the merged files to fall outside
+  the scope of **every output whose work did not run** — never outside every
+  output, which an alternative that ran matches by construction.
+
+Round 8 moved that last clause. It used to read "the **primary's** output only",
+which is selection by *identity*, and identity and outcome are the same set only
+while a row has exactly two outputs. With a third — declared correctly, gating a
+step that skipped, with a merged file inside its scope — the excuse branch
+refused the job and the alternative branch accepted it, because that output
+gated neither the primary nor the alternative and so was never asked. Selection
+is by outcome for that reason.
+
+The #3783 defect is refused by whichever branch can see it: a job whose detector
+matched a merged file, where the work that output gates did not run, is granted
+neither route. Read that as the general form — an earlier draft said "and which
+then ran no work **at all**", and that qualifier was the hole.
+
+**An output nobody declared is never asked**, so the receipt is only as honest
+as `policy.json`'s `outputs` list is complete. That completeness is enforced in
+two places rather than asserted: the drift guard walks *workflow → declared* as
+well as declared → workflow, failing when a job gates work on an output no row
+names; and mutation arms R17/R18 delete a declared output and must be killed.
+Both reviewers in round 8 found this missing, by different methods, and round 6
+had already shipped the same defect once.
+
+The difference between a `on.push.paths` filter and a shell-step filter is where
+GitHub lets you write a filter, not how much the merge was checked. Treating the
+first as structural and the second as hollow was the asymmetry.
+
+**It is not only the console.** Measured on #4401, a console-only merge:
+`Python Tests (3.10|3.11|3.12)` hit the same wall — `test.yml` is path-filtered
+out at the merged sha, and its PR-head job skipped `Run pytest with coverage`
+behind *its* in-job detector. Same family, one workflow over. Those three rows
+declare their scope as the string `"on.push.paths"` rather than a copy of it,
+because `test.yml`'s detector does not carry a path list at all: it delegates to
+`scripts/ci/python_trigger_scope.py`, which parses `on.push.paths` **out of
+`test.yml`**, and that file's own comment says *"ONE list … READ OUT OF THIS
+FILE — not a second copy of it that has to be kept in agreement by review."*
+Copying those fifteen globs into `policy.json` would build exactly the second
+copy it refuses to have. So the row points at the trigger this receipt already
+parses, and `test_the_declared_scope_matches_the_workflows_own_change_detector`
+asserts the delegation itself rather than a list.
+
+```bash
+python tools/drain/merge_gate.py --ci-green-receipt <PR>   # GREEN / NOT GREEN, per context
+```
 
 **What `ci-green` does NOT prove, stated rather than implied.**
 `statusCheckRollup` publishes no per-check population — its entries carry
@@ -136,13 +506,61 @@ detects a required context that concluded SKIPPED, and says so in those words.
 Detecting green-over-nothing needs a population source this API does not have,
 and is an owed capability, not a claim.
 
-**How a receipt actually gets recorded, and the gap in it.** `record_receipt()`
-and `transition(CLOSED)` have **no production caller**. `tick.py` writes only
-what a refresh writes; `merge_gate.py` only *reads*, through `receipt_ok()`.
-Recording a receipt today is a hand edit to `state.json` — which is gitignored —
-or a call from a lane's own script. Nothing in this file used to say that, and
-it is the operational gap behind the whole "a stale ledger evaluates against a
-weaker class" family: the write path is outside the instrumented code.
+**And a `scope-untouched-at-merge` says nothing about coverage.** It says a
+context's declared scope excluded every merged file — which is true, and is
+*also* true when the repo has no required context covering what the PR changed
+at all. Measured over the 12 most recent merges: the `apps/loom-vscode` and
+`apps/loom-mcp` dependency bumps score **5** scope-untouched contexts each,
+because none of the fifteen required contexts builds those packages. That is a
+gap in the required set, not in the receipt, and the receipt is not the place to
+fix it — but a reader counting states should know which of the two they are
+looking at.
+
+**How a receipt actually gets recorded.** There is now one instrumented way:
+
+```bash
+# guard-or-test-only -> ci-green, RE-MEASURED from the merged PR
+python tools/drain/tick.py --record-receipt <ITEM> --from-pr <PR>
+# ui-surface / estate-behaviour / deploy-path -> verified against the run
+python tools/drain/tick.py --record-receipt <ITEM> --from-run <RUN_ID>
+```
+
+It lives in `tick.py` because `tick.py` owns the ledger. #4489 blocked the same
+write in `merge_gate` twice: once because the worktree fallback resolves
+`state.json` from the **primary checkout**, so a lane running the gate from its
+own worktree rewrote a ledger it does not own; and once because it was an
+unlocked read-modify-write on the only durable record with up to four lanes
+live, where `Ledger.save()` serialises the whole document from memory and the
+loser's transitions simply vanish.
+
+**It verifies rather than accepts.** The KIND is derived from the item's class
+and is never a flag — a `--kind` option would let a `ui-surface` item close on a
+`ci-green`, and the R2 invariant cannot catch that, because R2 compares the
+class a receipt was *taken under* against the class at the decision and a caller
+who names the wrong kind up front is consistent with itself. `ci-green` is
+re-measured by `gates.ci_green_receipt` at record time, so this path cannot
+record a receipt `--ci-green-receipt` would not print. Run-backed kinds must
+match the workflow named in `policy.receipt_producers`, must have *concluded*
+success (status and conclusion checked separately, so an in-progress run is
+refused as unfinished rather than as failed), and — where
+`policy.receipt_required_steps` names one — that step must itself have concluded
+success. That last check is `receipts.g1_assertion_rule` in code: a
+`loom-ui-verify` run with a blank `target_route` **skips the capture step** and
+concludes green having captured nothing.
+
+**What it does not establish.** That the evidence is *about* the item. Nothing
+stops a green roll being recorded against a second deploy-path item it never
+touched; the operator supplies that pairing. `Item.pr` now records which PR a
+lane opened for an item (`tick.py --bind-pr`, #4489), but the `--from-run`
+path does not consult it, so that pairing is still unchecked. A refused receipt writes nothing — the
+ledger is byte-identical afterwards, verified by digest, **and no GitHub write
+happens either**, because the close runs only after every refusal has been
+passed.
+
+`receipt_class` still has no production writer, so the `human-only` class is
+reachable only by hand — and `operator` is deliberately **absent** from
+`receipt_producers`, because a human-only receipt a program can record is not
+human-only.
 
 That is also why the R2 check is an **invariant**, not an event observer.
 `record_receipt` stamps the class the receipt was taken under, and
@@ -152,10 +570,6 @@ two routes `upsert` structurally cannot see, since `RECEIPT_CLASS_BY_STREAM` and
 `LANE_RECEIPT_CLASS` are module constants rather than fields. A reviewer closed
 a `ui-surface` item on a `ci-green` that had been refused moments earlier, by
 editing one line of a map.
-
-`receipt_class` likewise has no production writer, so the `human-only` class is
-currently reachable only by hand. Stated here rather than implied, because by
-this package's own standard an unreachable path is prose.
 
 **If you hand-edit a receipt, set `receipt_taken_under` too.** A ledger written
 before that field existed — or a hand edit that sets `receipt_kind` and
@@ -167,6 +581,248 @@ receipt gate" wearing a migration's clothes. Re-take the receipt (or set the
 field by hand to the item's `effective_receipt_class`). Nothing is stuck today —
 the live ledger holds zero receipts — and `tick.py --status` will show any item
 this affects as non-terminal rather than silently closable.
+
+---
+
+## Parking and declining — the other two terminal states
+
+```bash
+# genuinely blocked. Refused, writing and posting NOTHING, without BOTH.
+python tools/drain/tick.py --park <ITEM> --blocker '<what blocks it>' --owner '<who clears it>'
+# will not do, on a recorded decision.
+python tools/drain/tick.py --decline <ITEM> --decision '<who decided, on what grounds>'
+# and the way BACK OUT of each (#4699). Refused, writing and posting NOTHING,
+# without --reason.
+python tools/drain/tick.py --unpark <ITEM> --reason '<why the blocker no longer holds>'
+python tools/drain/tick.py --undecline <ITEM> --reason '<who reversed it, on what grounds>'
+```
+
+**A reversal is not symmetric with its disposition, and the asymmetry is
+measured rather than stylistic.** `--unpark` is available for as long as the
+park's issue stays open — which is a park's expected condition, since a park is
+never demoted by the refresh and the harness never closes a park's issue — so
+that verb is the only route out of `parked`, a claim about `parked` and *not*
+about terminal states in general. (It is refused on a closed issue like any
+reversal; a human closing a blocked item's issue is the case that wants a
+look.) `--undecline` has a window. A declined item whose issue is still OPEN is
+demoted to `needs-audit` by the next refresh (`REOPEN_DISPUTES` includes
+`declined`), and `needs-audit` is non-terminal, so there is then nothing to
+reverse — the item is in the audit queue already and the verb refuses it. A
+declined item whose issue has been CLOSED (the disposal a decline's own comment
+names) is refused too: re-open the issue first. Loosening that second guard
+would not buy a route — a reversal over a closed issue returns the item to
+`ready` and the very next `refresh_from_github` finds it absent from the open
+set, flags it `departed` and demotes it again.
+
+**A reversal records no receipt, and voids none on the route it takes — but on
+the decline side that is not the only route, and the other one voids.** A
+receipt survives a park or a decline, so an item that held a valid one comes
+back still holding it and may already satisfy R2. `parked` is not in
+`REOPEN_DISPUTES`, so no other route leaves that state at all — the refresh and
+`--reap` both leave a park alone. `declined` **is**, and the two routes out of
+it disagree: do nothing for one cycle and the next `refresh_from_github` over
+the still-open issue demotes the item to `needs-audit` *and voids the receipt*;
+type `--undecline` and it stays. Measured from one start state, `tmp_path`
+ledger, issue OPEN:
+
+| route out of `declined` | state | receipt | `receipt_ok()` |
+|---|---|---|---|
+| one refresh (do nothing) | `needs-audit` | voided | `False` |
+| `--undecline` | `ready` | kept | `True` |
+| *control:* park + one refresh | `parked` | kept | `True` |
+
+**One void is not a route out at all, and both bodies say so.** If a refresh
+sees an item's *receipt class* change — a lane label moving `lane:bicep` to
+`lane:console`, say — `upsert` voids the receipt and the item does not leave
+its state. Measured: a `parked` item holding `deploy-run`, one refresh with the
+lane relabelled, and the receipt is `None` with the item still `parked`. That
+is state-independent, so the disclosure is shared between the park and decline
+bodies deliberately — shared text is the defect when the two states differ and
+the right answer when they do not. The mechanism is `ledger.py`'s and
+pre-existing; this PR does not widen it and does not fix it. Tracked as
+**#4710**.
+
+The reason to keep is that a reversal disputes the **disposition**, not
+evidence taken while the item was still in the queue — and voiding here would
+be a *new* asymmetry rather than the removal of one, since `reap_stranded` and
+`upsert`'s departed-rescue both reach `ready` without voiding anything. What
+this paragraph deliberately no longer says is that a reopen *"disputes the very
+claim the receipt closed on"*: `CLOSES_ON_GITHUB` is `(closed,)`, a decline
+never shuts its issue, so for the state that sentence was published on nothing
+ever closed. The refresh's void fires on the issue being OPEN, which for a
+decline is its ordinary condition rather than a signal; reconciling the two
+belongs to `ledger.py` and is not settled by #4699.
+
+**No tool path produces a receipted park or decline.** `Ledger.record_receipt`
+is the only writer of `receipt_kind` and its only non-test caller pairs it with
+`transition(closed)` under a rollback. Census of the live ledger at blob `a8ec1fc5`: 416 items, 11
+hold a receipt, all 11 `closed`, 0 parked or declined. The population above is
+empty *by construction*; a hand-edited `state.json` — which this README
+documents — reaches it, and nothing in the tool does.
+
+**Two consequences of a reversal that nothing couples, noted rather than
+gated.** First: an item that comes back to `ready` holding a receipt is
+simultaneously selectable by `select_cycle()` and acceptable to
+`merge_gate.ledger_receipt_ready`, so it can be picked up for work and closed
+without work in the same tick. Latent, population zero (above), and
+pre-existing — `reap_stranded` reaches the same shape. Second: **#2874 and
+#2958 are the same shape, and the hazard is the OPPOSITE of the one an earlier
+draft of this paragraph published.** Both are `parked`, both
+`W1-deploy`/`lane:bicep`, both class `deploy-path` with required kind
+`deploy-run`.
+
+This paragraph used to say that *"neither has a producing run"* and that
+unparking either *"returns a selectable item whose receipt is unreachable until
+the receipt-class question lands (#4703)"*. **Both halves are RETRACTED. They
+are false, and false in the unsafe direction.** Measured on a copy of the live
+ledger at blob `a8ec1fc5`, driving the real `record_receipt_from_evidence` with
+the GitHub close replaced by a sentinel — so reaching the sentinel means every
+guard before it passed:
+
+| #2874 | evidence offered | outcome |
+|---|---|---|
+| `parked` (today) | green `loom-roll-and-validate` run `36053481220` | REFUSED at the TERMINAL guard |
+| after `--unpark` | the same run | **every guard passes** — would record `deploy-run` |
+| after `--unpark` | `loom-ui-verify` run `36037056251` | REFUSED: wrong workflow |
+| after `--unpark` | failed roll `35921787674` | REFUSED: concluded `failure` |
+
+#2958 passes the same chain on the same run. So the receipt is **reachable**,
+and what it would record is unbound twice over. `--from-run` carries no issue
+reference, which `record_receipt_from_evidence`'s own docstring says: nothing
+stops a green roll being recorded against a deploy-path item it never touched.
+And `receipt_producers` has **no boundary dimension at all** — three kinds,
+three workflow names, and zero occurrences of `gov`, `gcch`, `gcc`, `il5`,
+`boundary`, `commercial` or `cloud` anywhere in that map including its own note
+— while #2874 is **GCC-High** and `loom-roll-and-validate` says of itself that
+it is *"hard-wired to the Commercial estate … there is no Gov branch here to
+scope"*. A green Commercial roll would be accepted as the receipt for a
+GCC-High drift item. **That is #4709** — not #4703, which asks which *class* an
+item resolves to rather than what a class's *producer* is scoped to.
+
+**The terminal guard is presently the only thing preventing this, and this PR
+ships the verb that lifts it.** Unreachable *blocks* and asserts nothing;
+reachable-and-unbound *closes* the item and publishes a verification claim,
+which is the failure `deploy-integrity.md` R2 exists to prevent. So the order
+matters: the receipt question wants settling **before** either live unpark, not
+after.
+
+**So the hold is CODE, not this paragraph.** `tick.REVERSAL_HOLDS` names #2874
+and #2958 with the reason each is held and the issue that lifts it, and
+`tick._refuse_if_held` refuses a reversal of either — on `--unpark` and
+`--undecline` alike, before any `gh` call. The earlier draft of this section
+recorded the constraint as an operator intention and left the README as the only
+thing holding it. That does not survive its own argument: this PR adds
+`unpark-item` to `permitted_unattended`, where `dispatch-roll` and
+`close-on-receipt` already sit, so the whole chain — unpark, dispatch a
+Commercial roll, record it, close the issue with a public "verified" comment —
+is reachable by a lane with no human in it, and **nothing on that path reads
+this file**. A constraint whose violation publishes a false verification claim
+has to be a property.
+
+The hold is keyed on the ISSUE NUMBER and on nothing else, because the number is
+the one thing about an item a lane cannot move — `blocker`, `lane`,
+`receipt_class` and the title are all writable from inside a lane or movable by
+a label change, and this package measured a lane label moving an item's receipt
+class. An entry whose reason is blanked still holds: the hold is the entry, not
+its text. A key that cannot be read as an issue number refuses *every* reversal
+rather than being skipped, because an unreadable hold set is not an empty one.
+An empty map holds nothing, and is the expected end state.
+
+**It is an interlock, not the fix.** A hold names items; the repair is a
+boundary dimension in `receipt_producers`, and that is **#4709**. The two are
+not interchangeable: #2958 is *Commercial*, so a boundary-aware producer map
+would accept its roll — its exposure is the other half of the same gap, an
+unbound `--from-run` against an item that actually owes an `/admin/readiness`
+receipt for DuckLake and RisingWave. A boundary guard alone would cover one of
+the two items. There is also no boundary field on `Item` to read; #2874's
+GCC-High-ness is knowable only from its title text and its `drift-gov` label,
+and deriving that is #4709's design work. Delete both entries when it lands.
+None of this is a reason to withhold the verb, and none of it is a claim that
+the verb itself is unsafe.
+
+**A reversible park should be made more readily — and the public churn is
+real.** The bars did not move: a park still needs a blocker and an owner, a
+reversal still needs a reason, and neither verb is reachable from
+`refresh_from_github`, `reap_stranded` or `select_cycle`, so the harness cannot
+oscillate on its own. What changed is the cost of being wrong: permanent
+removal from the drain becomes N permanent public comments. #2958 already
+carries 13 comments, four of them the 2026-09-24 park and its corrections
+inside a 3.5-hour window; an `--unpark` makes it five. So a park is cheaper to
+*reverse* and no cheaper to *justify*, and the thread pays the difference. The
+failure on #2958 was not parking too readily — it was a blocker carried forward
+and published as a fact without re-measuring at head. Reversibility removes the
+reason to hesitate over the park; it does not touch the reason to measure
+first.
+
+**Both reversals are gated on the autonomy contract** as `unpark-item` and
+`undecline-item`, listed separately from `park-item`/`decline-item` on purpose:
+if an unpark rode on the authority to park, revoking that authority would
+silently strand every already-parked item — #4699's own ratchet, reintroduced
+by its fix.
+
+**Until #4677 these two states were unreachable by any program.** `Ledger` has
+defined five states since it was written and `drained()` — this program's
+documented exit condition — is true only when every item is `closed`, `parked`
+or `declined`; `tick.py` could reach exactly one of the three. Both bars were
+enforced in `ledger.transition()` and neither was reachable from a command line,
+so a lane that correctly concluded *"blocked on X, owned by Y"* had nowhere to
+put that conclusion and the item went back to `ready` on the next reap to be
+redone by the next lane — #4675's failure, one state over. A 380-item backlog
+does not close entirely on receipts, so the exit condition was unattainable by
+construction.
+
+**Neither closes the GitHub issue, and that is the design rather than an
+omission.** `CLOSES_ON_GITHUB` is `closed` and nothing else. A park is blocked,
+not done — closing its issue is how a backlog lies about itself (R2, #4535) — and
+a decline's disposal is `gh issue close --reason not-planned`, a different close
+with a different reason resting on a judgement no program made.
+
+**Both are gated on the autonomy contract**, as `park-item` and `decline-item` in
+`permitted_unattended` — not on the general `comment` permission they first rode
+in on. `action_is_permitted()` fails closed precisely so a capability arrives by a
+deliberate edit to `policy.json` rather than as emergent behaviour, and two new
+*terminal-state* verbs are exactly that kind of capability. Separate actions, not
+one `dispose-item`: matching is EXACT and revoking one must not revoke the other.
+
+**Both post the reason as an issue comment**, because `state.json` is gitignored:
+a disposition recorded only there exists nowhere the next reader will look.
+
+**The body reports the issue state it READ; it never asserts one.** `_dispose`
+reads the issue immediately before posting, using the same
+`_read_issue_on_github` the close path uses, and the comment says what that read
+saw — framed as an observation at a moment, because the issue can close a second
+later. The first version asserted *"THIS ISSUE STAYS OPEN, DELIBERATELY"*
+unconditionally, which is false on a departed item: `_dispose` admits a
+`needs-audit` item and the refresh matrix carries `parked | departed -> survives
+parked`, so the ledger explicitly contemplates a parked item whose issue is
+closed. Measured on the four items #4677 names — #2958 OPEN, #4534/#4582/#4664
+**CLOSED**. An unreadable state REFUSES rather than guessing (R7: unreadable is
+not "open"), publishing nothing.
+
+**The comment goes first, the ledger write second**, and that ordering is argued
+rather than inherited from `--record-receipt` (whose reason is #4545 and does not
+carry here, since neither state is closed upstream). If the ledger write fails,
+the issue carries a true statement and the item is still in the queue, so a
+re-run costs one duplicate comment. The other ordering makes the item terminal
+with no public trace — and `_dispose` refuses a terminal item, so no re-run ever
+repairs it. Silent-and-unrepairable versus loud-and-duplicated.
+
+**The CLI checks duplicate the ledger's bars on purpose.** Delete them and a
+missing blocker is still refused — by `transition`, *after* the comment has been
+published. So what they buy is that the refusal is **silent upstream**, and the
+tests that pin them assert zero `gh` calls rather than only the exception, which
+the ledger's own refusal would satisfy while witnessing nothing. Mutation arms
+DP1/DP2/DP3.
+
+**A park survives the refresh; a decline does not, and the asymmetry is the
+point.** `REOPEN_DISPUTES` is `closed`/`declined`. An open issue is a park's
+expected condition and disputes nothing; an open issue after a decline means the
+decline never reached GitHub or someone is contesting it, and both want a look.
+The park has no escape from a demotion and the decline does — close the issue by
+hand and it stands — which is why one is in that tuple and the other is not. The
+decline's comment names that escape at the artifact the reader is standing on.
+
+Deciding *which* items are parks or declines is triage, not this verb.
 
 ---
 
@@ -331,9 +987,18 @@ nothing. The briefs restated the gates as prose, so at run time GO/NO-GO was
 still an agent's judgement. An unconsulted policy key is prose, not a control.
 
 ```bash
-python -m pytest tools/drain/__tests__ -q    # 300 tests across every module
-python tools/drain/mutate_gates.py           # 155 arms, must be 155 KILLED
+python -m pytest tools/drain/__tests__ -q    # every test across every module
+python tools/drain/mutate_gates.py           # every arm must be KILLED
 ```
+
+Neither total is written down here on purpose. Both move — the arm count went
+155 → 205 → 209 → 213 → 247 across #4487 and #4491 — and a number in prose that
+nothing enforces goes stale silently, which is the same defect this package
+exists to refuse. (That series itself stopped at 213 for five rounds while the
+count kept climbing, which is the defect demonstrating itself inside the
+sentence describing it.) Each command prints its own total and **fails closed**:
+`mutate_gates.py` exits non-zero on any survivor, skip, error, or a sandbox
+whose file set changed under it.
 
 If the mutation run reports a **survivor**, the suite has a blind spot and the
 gate is not trustworthy — fix that before trusting a merge. Two caveats learned
@@ -348,6 +1013,17 @@ the hard way:
   comment, scan only the last commit, scan only the first line, exempt fenced
   code, take a `startswith` fast path. A filter placed INSIDE the predicate beats
   a contract written about the predicate. Those are arms `N*`.
+- **The same lesson, ignored one round later.** The author of the declared-step
+  rule wrote arms that weakened its *checks*; the reviewer wrote six that
+  narrowed its *populations* — `matches[:1]`, `work[:50]`, one reason per
+  receipt, one run per job join, a fallback to the PR-head job — and **all six
+  survived**. Having recorded the lesson above is not the same as applying it.
+  Those are arms `CB4h`–`CB4k`, `CB14`, `P13`.
+- **A kill that does not depend on the arm is not a kill.** The sandbox is a
+  copy in a temp dir, so a test that reads a repo file it does not copy raises
+  in *every* arm and scores every one KILLED. Three did, briefly. `COPIED` is
+  the fix for a package file; a test that needs the wider tree skips when the
+  tree is not reachable.
 
 The harness mutates a **copy in a temp dir outside the repo**. It used to write
 the mutation into the tracked `gates.py` and restore it in a `finally` — which
@@ -419,8 +1095,9 @@ answer is triage, not a bigger WIP cap.
 | `merge_gate.py` | **the caller** — runs them all against a live PR, prints GO/NO-GO |
 | `tick.py` | one cycle |
 | `build_inventory.py` | regenerates the workstream inventory; refuses a lossy partition |
-| `mutate_gates.py` | 155 mutation arms against a sandbox copy; must be 155 KILLED |
+| `mutate_gates.py` | mutation arms against a sandbox copy; every arm must be KILLED |
+| `required_contexts.json` | snapshot of `main`'s required contexts, so the declaration check can assert SET equality offline (`merge_gate.py --refresh-required-contexts`) |
 | `state.json` | the ledger itself (gitignored — per-run state, not a control) |
-| `__tests__/` | 300 tests; a negative control for every decision function |
+| `__tests__/` | a negative control for every decision function |
 
 Spec and the measured inventory: `PRPs/active/zero-backlog/`.

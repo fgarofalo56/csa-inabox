@@ -607,7 +607,78 @@ export function formatAnnotation(level, message) {
   const safe = redactedLine(message);
   // One line, GitHub-annotation form. Newlines are escaped so a multi-line
   // remediation still renders as ONE annotation rather than being truncated.
-  return `::${level}::${safe.replace(/\r?\n/g, '%0A')}\n`;
+  //
+  // CR -> `%0D` AND LF -> `%0A`, RATHER THAN `\r?\n`, AND THAT IS THE MORE
+  // SEVERE HALF. The old alternation did not match a LONE CR, so a bare CR
+  // inside `message` reached the runner unescaped. The runner reads our stdout
+  // with `StreamReader.ReadLine()` (`src/Runner.Sdk/ProcessInvoker.cs:513` —
+  // the path matters, there are two files of that name and the
+  // `src/Runner.Common` one is 329 lines long), which terminates a line
+  // on CR, LF *and* CRLF — so that CR genuinely SPLIT our one annotation into
+  // two physical lines, and `ActionCommandManager.cs:70` parses every line it is
+  // handed. The text after the CR was therefore parsed as a workflow command
+  // this script did not write. Escaping all three forms closes that.
+  //
+  // `%` IS ESCAPED FIRST, AND THAT ORDER IS LOAD-BEARING IN BOTH DIRECTIONS.
+  // `unescapeData` (`ActionCommand.cs:111`) decodes `%0D` -> CR, `%0A` -> LF and
+  // `%25` -> `%`, with **`%25` LAST** — so an encoder is injective only if it
+  // escapes `%` FIRST. Escape it AFTER the newline substitution and it
+  // re-escapes its own escape (`%0A` -> `%250A`), breaking every real newline.
+  // Escape it not at all and the three literal characters `%0A` arriving inside
+  // `message` survive to the runner and are decoded into a real newline.
+  //
+  // What that second case IS, precisely — because an earlier draft of this
+  // comment overstated it: the decode runs INSIDE the parse, on an ALREADY
+  // DELIMITED line, and `ExecutionContext.cs:855` writes the decoded text to the
+  // log without it ever re-entering `TryProcessCommand`. A decoded `%0A` thus
+  // yields ONE annotation whose body contains caller-chosen text that READS as a
+  // second `::error::` line: log forgery (CWE-117) in a public log, NOT a second
+  // parsed command. The lone CR above forges a command; this forges the log.
+  //
+  // Both matter here because `message` is composed from ARM deployment error
+  // text, which on a brownfield deploy carries caller-supplied resource names
+  // and parameter values — remote-influenced input, public log. Both orderings
+  // are pinned, by DIFFERENT witnesses: an exact-equality assertion on the
+  // formatted line kills the escape-`%`-last mutant, and only a fixture whose
+  // INPUT contains the literal characters `%0A` kills the no-escape-at-all
+  // mutant — that mutant emits a byte-identical line for every input the first
+  // assertion uses.
+  //
+  // CR -> `%0D` AND LF -> `%0A`, SEPARATELY, because THE ESCAPE claims to be
+  // INJECTIVE and the previous form was not.
+  //
+  // "THE ESCAPE", NOT "THIS FUNCTION" — round 4 review, and the distinction is
+  // not pedantry. `formatAnnotation` is `encode ∘ redactedLine`, and `redact()`
+  // maps distinct inputs onto shared tokens on purpose — a matched GUID becomes
+  // `<guid>`, and one inside a `/subscriptions/` or `/tenant(s)/` path becomes
+  // `<redacted>` — so the FUNCTION is many-to-one and provably not injective:
+  //
+  //   formatAnnotation('error','1111…-…-1111') === "::error::<guid>\n"
+  //   formatAnnotation('error','2222…-…-2222') === "::error::<guid>\n"
+  //
+  // What must be injective — and what the security property actually needs — is
+  // the ESCAPE stage, over whatever `redactedLine` emits. Redaction losing
+  // information is the point; the escape losing information is the defect.
+  // Rounds 2 and 3 were each blocked for shipping a claim measurement
+  // contradicted, so stating this one loosely would have been the third.
+  //
+  // `\r\n|\r|\n` -> `'%0A'` collapsed
+  // THREE distinct inputs onto one output: "a\nb", "a\rb" and "a\r\nb" all
+  // produced `::error::a%0Ab`, so the runner's own inverse could not reconstruct
+  // which had been sent. Review measured it — 2 of 10 round-trip fixtures failed
+  // to reconstruct, both CR-bearing — and the test that was supposed to pin
+  // injectivity instead ENFORCED the loss, because it built its expected value
+  // by applying this function's own lossy map to the input. An oracle derived
+  // from the mutant cannot witness the mutant: substituting this correct mapping
+  // turned that suite RED with `actual` showing a perfect round-trip.
+  //
+  // This pair is the runner's own canonical mapping (`ActionCommand.cs:20-22`
+  // `_escapeDataMappings`), which is what `unescapeData` inverts, so CRLF now
+  // round-trips as `%0D%0A`. It is exactly as safe: `%0D` contains no raw CR,
+  // so nothing a terminator could do survives into the runner's line splitter.
+  // Safety was never the gap — the false claim of injectivity was.
+  const escaped = safe.split('%').join('%25');
+  return `::${level}::${escaped.replace(/\r/g, '%0D').replace(/\n/g, '%0A')}\n`;
 }
 
 /**

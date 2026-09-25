@@ -99,22 +99,65 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // this only enables revisions to accumulate so a bad roll never becomes
       // an instant outage. See docs/fiab/deployment/bluegreen-rolls.md.
       activeRevisionsMode: (contains(app, 'multiRevision') && app.multiRevision) ? 'Multiple' : 'Single'
-      // MULTIPLE-REVISION MODE REQUIRES affinity:'none' — ACA enforces this, and
-      // until #3399 nothing in this template said so. `multiRevision: true` has
-      // been declared for loom-console since #2064 (2026-07-14), but ingress
-      // stickySessions appeared NOWHERE in platform/fiab/bicep, so when affinity
-      // was 'sticky' out-of-band ACA rejected EVERY attempt to switch the mode
-      // with ContainerAppInvalidIngressStickySessionRevisionMode — and no deploy
-      // could clear it, because the template neither set nor unset the value it
-      // was conflicting with. console-bluegreen-roll.yml failed 4 of 4 runs on
-      // exactly that, and has still never succeeded.
+      // AFFINITY IS ASSERTED FOR EVERY INGRESS APP, and the scoping changed on
+      // 2026-09-20 for a reason worth stating rather than silently widening.
       //
-      // Asserting it HERE makes the pairing self-healing: whatever affinity is
-      // live, the next deploy renders the one value its revision mode permits.
+      // The history: ACA REQUIRES affinity:'none' in multiple-revision mode.
+      // Until #3399 nothing in this template said so, and `multiRevision: true`
+      // had been declared for loom-console since #2064 while ingress
+      // stickySessions appeared NOWHERE in platform/fiab/bicep — so when
+      // affinity was 'sticky' out-of-band ACA rejected EVERY attempt to switch
+      // the mode with ContainerAppInvalidIngressStickySessionRevisionMode, and
+      // no deploy could clear it because the template neither set nor unset the
+      // value it was conflicting with. console-bluegreen-roll.yml failed 4 of 4
+      // runs on exactly that and has still never succeeded.
       //
-      // Scoped to multiRevision apps on purpose — a Single-mode app keeps the
-      // property absent, byte-identical to before. Absent already means 'none'
-      // to ACA, so this is a no-op for behaviour and a guarantee for the mode.
+      // #3399 asserted the value, but SCOPED IT TO multiRevision APPS, on the
+      // reasoning that a Single-mode app keeps the property absent and "absent
+      // already means 'none' to ACA". That reasoning is sound for BEHAVIOUR and
+      // wrong for ENFORCEMENT, and the difference only became visible when
+      // loom-console moved to Single mode: the console was the only
+      // multiRevision app, so scoping the assertion to multiRevision meant the
+      // assertion left the template with it. What had been keeping sticky
+      // sessions out was ACA's MODE REQUIREMENT, not this template's intent —
+      // and Single mode lifts that requirement. An out-of-band 'sticky' would
+      // then persist, unopposed, on the one app whose comments spend twenty
+      // lines explaining why sticky is the wrong fix.
+      //
+      // So it is now unconditional. This is believed to be behaviourally inert
+      // for the apps that were already Single, but state that precisely,
+      // because it is REASONED AND MEASURED, NOT DOCUMENTED: ACA's affinity
+      // enum is exactly {none, sticky}; 28 of the 29 ingress apps LIVE IN THE
+      // RESOURCE GROUP reported `stickySessions: null` AS OF 2026-09-20,
+      // BEFORE this change deployed; and a binary enum whose absent state is
+      // not one value behaves as the other. EXPECT THAT NUMBER TO FALL: the
+      // five non-console apps in `apps[]` (loom-mcp, loom-mcp-bridge,
+      // loom-activator, loom-mirroring, loom-direct-lake-shim) all read null
+      // today and are inside the 28, so the next infra deploy renders
+      // affinity:'none' on them and the count becomes 23 of 29. This
+      // measurement supports a change whose purpose is to falsify it; that is
+      // intended, not drift.
+      // Two independent reviews tried and neither could cite a Microsoft doc
+      // stating the default. If you find one, cite it here.
+      // NOT claimed: that those apps issue no affinity cookie. A draft of this
+      // comment said so and nothing established it -- 25 of the 28 were
+      // internal-only as of 2026-09-20 and the one reachable external probe
+      // failed on TLS. An unestablished clause inside the comment whose whole
+      // purpose is separating measured from assumed is the defect it warns
+      // about.
+      // ARM returns the key PRESENT-AND-NULL rather than normalising it, so
+      // "absent" is the accurate word for the template, not for the payload.
+      //
+      // QUOTE THE POPULATION WITH THE NUMBER, because these are two different
+      // sets and an earlier draft of this comment conflated them. The 28/29
+      // above is the LIVE RESOURCE GROUP, which also holds ingress apps this
+      // module does not govern (maf.bicep, wrangler.bicep,
+      // transform-runner-aca.bicep, prpt-renderer.bicep, redis-oss-aca.bicep).
+      // What THIS module renders is `apps[]` from admin-plane/main.bicep:
+      // SIX entries carry `ingressPort`, so six apps gain the rendered
+      // `stickySessions.affinity:'none'` where one had it before. That diff IS
+      // the enforcement, and it is why the compiled artifact was regenerated
+      // in the same change.
       //
       // Do NOT "fix" a scaled-out feature by flipping this to 'sticky': that is
       // what breaks blue-green, and lib/auth/msal.ts documents the console as
@@ -122,17 +165,16 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
       // Cosmos-persisted precisely so a round-robin request finds a warm cache).
       // The one caller that wants affinity is SQL query-cancel — see #3400; its
       // fix is a cross-replica cancel signal, not affinity.
-      ingress: contains(app, 'ingressPort') ? union({
+      ingress: contains(app, 'ingressPort') ? {
         external: contains(app, 'external') ? app.external : false
         targetPort: app.ingressPort
         transport: 'http'
         allowInsecure: false
         traffic: [{ latestRevision: true, weight: 100 }]
-      }, (contains(app, 'multiRevision') && app.multiRevision) ? {
         stickySessions: {
           affinity: 'none'
         }
-      } : {}) : null
+      } : null
       registries: [
         {
           server: acrLoginServer

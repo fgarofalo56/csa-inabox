@@ -22,6 +22,7 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -71,11 +72,15 @@ def test_the_gate_set_is_exactly_what_the_spec_names():
     assert set(gates.MERGE_GATE_IMPLEMENTED_BY) == {
         "mergeable_must_be_known",
         "base_must_equal_origin_main",
+        # #4585. Gate 1's SECOND arm. It does not replace the key above -- both
+        # are listed because both are live, and the strict one still runs first.
+        "stale_base_may_pass_on_an_inert_delta",
         "reduce_verdicts_by",
         "verdict_pinned_to_head",
         "require_no_red",
         "require_no_incomplete",
         "require_no_skipped_required_context",
+        "advisory_red_is_a_no_go",
         "scan_closing_keywords_in",
         "closing_keyword_scan_blocks_an_undeclared_close",
         "audit_issue_numbers_around_every_merge",
@@ -104,6 +109,82 @@ def test_negative_control_a_new_key_anywhere_in_the_file_is_caught():
     assert "wip.max_agents_per_lane" in gates.policy_keys_without_implementation(fake)
     fake2 = {**POLICY, "brand_new_section": {"a": 1}}
     assert "brand_new_section.a" in gates.policy_keys_without_implementation(fake2)
+
+
+def test_negative_control_an_unread_key_three_levels_deep_is_caught():
+    """Arm P13, and the round-4 blocker.
+
+    This function was fixed once at TWO levels, after an independent reviewer
+    planted `receipts.totally_unread_rule` and watched the suite stay green. The
+    SAME reviewer then planted it one level further down -- on the very PR that
+    made `receipts.ci_green_rule` a nested dict, so three-deep became the most
+    likely place for a new key -- and it was invisible again. Fixing one depth
+    and leaving the next is the one-side-of-a-symmetry defect this package keeps
+    producing, so the walk is now unbounded rather than incremented, and this
+    asserts it at the depth the fix was measured at AND one past it.
+    """
+    fake = copy.deepcopy(POLICY)
+    fake["receipts"]["ci_green_rule"]["totally_unread_rule"] = "planted"
+    missing = gates.policy_keys_without_implementation(fake)
+    assert "receipts.ci_green_rule.totally_unread_rule" in missing
+    with pytest.raises(ValueError, match="no implementation"):
+        gates.assert_policy_matches_code(fake)
+
+    deeper = copy.deepcopy(POLICY)
+    deeper["receipts"]["ci_green_rule"]["a_new_nested_rule"] = {"unread": "planted"}
+    assert (
+        "receipts.ci_green_rule.a_new_nested_rule.unread"
+        in gates.policy_keys_without_implementation(deeper)
+    )
+
+
+def test_the_walk_stops_only_where_another_instrument_takes_over():
+    """`DATA_NOT_NAMESPACE` is the walk's one exemption, and an exemption with
+    no stated replacement is an off switch.
+
+    Each entry must say which instrument checks its rows, and each must name a
+    key the authority actually has -- otherwise the stop is over nothing and
+    reads as coverage.
+    """
+    for dotted, why in gates.DATA_NOT_NAMESPACE.items():
+        node = POLICY
+        for part in dotted.split("."):
+            assert isinstance(node, dict), dotted
+            assert part in node, dotted
+            node = node[part]
+        assert isinstance(node, dict), f"{dotted} is not a table"
+        assert node, f"{dotted} stops the walk over nothing"
+        assert "__tests__" in why, (
+            f"{dotted} does not name the instrument that checks its rows"
+        )
+        assert dotted in gates.OTHER_IMPLEMENTED_BY, (
+            f"{dotted} is a leaf to the walk, so it must itself be declared"
+        )
+
+
+def test_negative_control_a_three_deep_control_cannot_be_moved_onto_the_allow_list():
+    """Arm P14, the third walker.
+
+    `_documentation_keys_that_are_actually_read` partitioned on the FIRST dot
+    and looked the remainder up as one sub-key, so for a three-level entry it
+    searched the sources for the literal `"ci_green_rule.substantive_steps"` and
+    could never match. That is a false negative in the direction that matters: a
+    three-deep control moved onto the prose allow-list while a function still
+    read it -- the allow-list becoming an off switch, at the depth this PR just
+    created.
+    """
+    original_map = dict(gates.OTHER_IMPLEMENTED_BY)
+    original_doc = set(gates.OPERATOR_DOCUMENTATION)
+    gates.OTHER_IMPLEMENTED_BY.pop("receipts.ci_green_rule.substantive_steps")
+    gates.OPERATOR_DOCUMENTATION.add("receipts.ci_green_rule.substantive_steps")
+    try:
+        with pytest.raises(ValueError, match="READ by the code"):
+            gates.assert_policy_matches_code(POLICY)
+    finally:
+        gates.OTHER_IMPLEMENTED_BY.clear()
+        gates.OTHER_IMPLEMENTED_BY.update(original_map)
+        gates.OPERATOR_DOCUMENTATION.clear()
+        gates.OPERATOR_DOCUMENTATION.update(original_doc)
 
 
 def test_negative_control_the_allow_list_cannot_silence_a_real_control():

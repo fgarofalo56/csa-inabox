@@ -13,6 +13,7 @@ string `"merged"` -- the one thing R2 says is never a receipt.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -34,6 +35,62 @@ DECLINED = "declined"
 
 TERMINAL = (CLOSED, PARKED, DECLINED)
 ALL_STATES = (READY, IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT, NEEDS_AUDIT, *TERMINAL)
+
+# WHICH TERMINAL STATES A REOPEN ACTUALLY DISPUTES. Not all of them, and the
+# difference is the whole of #4535: `upsert` keyed the reopen branch on TERMINAL
+# wholesale, so an item seen OPEN on GitHub was demoted to `needs-audit` no
+# matter what being-open MEANT for its state.
+#
+# - `closed` -- a reopen disputes the receipt that closed it. The item is
+#   supposed to be closed on GitHub; open again is new information.
+# - `declined` -- IN, and this is a DECISION, not an inheritance from the tuple
+#   it used to sit in. "Will not do" leaves nothing to track, so the disposal is
+#   `gh issue close --reason not-planned`; an open issue after a decline means
+#   either the decline never reached GitHub or someone is disputing it, and both
+#   want a look. The mirror risk is real -- decline without closing and the item
+#   is demoted every refresh, which is the defect being fixed here -- but that
+#   demotion has an ESCAPE the park does not: close the issue and the decline
+#   stands. Closing a park's issue is refused by the program (#4535 "Not
+#   proposed"), because an open, blocked, tracked problem reported as closed is
+#   the R2 failure. One state has a legal way out; the other does not.
+# - `parked` -- OUT. A park is blocked, not done, and its issue is SUPPOSED to
+#   stay open: that is what a named blocker + owner means, and `tick.py`'s
+#   overlap guard already documents it ("Parking does not close an issue on
+#   GitHub"). Open is a park's expected condition, so it is not evidence of
+#   anything and must not be demoted -- #2874 was parked and demoted 13 seconds
+#   later, and since `needs-audit` is non-terminal, `drained()` was unreachable
+#   for anything that must be parked.
+REOPEN_DISPUTES = (CLOSED, DECLINED)
+
+# WHICH TERMINAL STATES THE HARNESS CLOSES ON GITHUB ITSELF. This is the
+# PRECONDITION `REOPEN_DISPUTES` assumes and never established (#4545): the
+# ledger close never reached GitHub, so the next `refresh_from_github` saw a
+# `closed` item open upstream, read the harness's OWN close as a reopen,
+# demoted it to `needs-audit` and VOIDED the receipt. Measured on #4535 -- the
+# first item the harness ever closed on its own evidence -- which bounced on
+# the cycle after it was recorded. Every self-closed item un-closed itself, so
+# `drained()`, this program's exit condition, was unreachable.
+#
+# It is NOT the same tuple as `REOPEN_DISPUTES` and must not be collapsed into
+# it. That one asks "does being open again DISPUTE this state?"; this one asks
+# "should this state have made the issue not-open in the first place?".
+# `declined` is the item that separates them:
+#
+# - `closed` -- IN. The ledger says done; GitHub must agree, or the backlog
+#   lies about itself in the direction R2 exists to prevent.
+# - `parked` -- OUT, and this is the constraint #4535 was about. A park is
+#   blocked, not done, and its issue is SUPPOSED to stay open. Closing it would
+#   re-create the exact lie that issue refused, from the other side.
+# - `declined` -- OUT, although it IS in `REOPEN_DISPUTES`. There is no
+#   unattended decline path to hang a close on: `transition(DECLINED)` demands
+#   a recorded decision naming WHO decided, and the disposal that state's own
+#   comment describes is `gh issue close --reason not-planned` -- a different
+#   close, with a different reason, resting on a judgement no program made. A
+#   harness that auto-closed declines would be inventing that judgement. When a
+#   decline path exists it adds itself here deliberately, the way this line was
+#   added; until then a decline's demotion has the escape that comment names
+#   (close the issue by hand and the decline stands) and a park has none.
+CLOSES_ON_GITHUB = (CLOSED,)
 
 # Why an item is in `needs-audit`. The two have OPPOSITE resolutions when the
 # issue turns up open again, so collapsing them made the state one-way.
@@ -146,6 +203,15 @@ class Item:
         return RECEIPT_CLASS_BY_STREAM.get(self.stream, DEFAULT_RECEIPT_CLASS)
 
 
+class LedgerChangedError(RuntimeError):
+    """The ledger changed under a transaction that was about to overwrite it.
+
+    Raised only by `save(if_unchanged=True)`. It means a lost update was caught,
+    not that anything is corrupt: nothing has been written, and re-running the
+    command against the current ledger is the whole remedy.
+    """
+
+
 class Ledger:
     """Load / mutate / atomically save the drain state.
 
@@ -161,14 +227,21 @@ class Ledger:
         self.notes: list[str] = []
         self.receipts = receipts or {}
         self.loaded_from_disk = False
+        #: sha256 of the bytes `load()` read, or None when nothing was read.
+        #: `save(if_unchanged=True)` compares it to refuse a LOST UPDATE.
+        self.loaded_digest: str | None = None
 
     # -- persistence --------------------------------------------------------
 
     def load(self) -> Ledger:
         if not os.path.exists(self.path):
             return self
-        with open(self.path, encoding="utf-8") as handle:
-            raw = json.load(handle)
+        with open(self.path, "rb") as handle:
+            data = handle.read()
+        # THE DOCUMENT THIS TRANSACTION READ, kept so `save(if_unchanged=True)`
+        # can tell a lost update from an ordinary write. See `_on_disk_digest`.
+        self.loaded_digest = hashlib.sha256(data).hexdigest()
+        raw = json.loads(data.decode("utf-8"))
         if raw.get("schema") != SCHEMA:
             raise SystemExit(
                 f"ledger schema {raw.get('schema')} != {SCHEMA} - migrate deliberately"
@@ -181,12 +254,42 @@ class Ledger:
         self.loaded_from_disk = True
         return self
 
-    def save(self) -> None:
+    def _on_disk_digest(self) -> str | None:
+        if not os.path.exists(self.path):
+            return None
+        with open(self.path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def save(self, if_unchanged: bool = False) -> None:
         """Write atomically.
 
         A half-written ledger is worse than none: the next cycle would read a
         truncated plan as the whole plan. Write to a temp file in the same
         directory and replace, so a reader sees the old file or the new one.
+
+        `if_unchanged=True` ALSO refuses a LOST UPDATE, which atomicity does not
+        address and which an independent reviewer reproduced here. The file
+        write is atomic; the DOCUMENT is not. `save()` serialises the whole
+        ledger from memory, so two transactions that overlap do not conflict --
+        the second simply writes a document that never contained the first one's
+        change. Measured: A and B both load, B closes #2002 and saves, A closes
+        #2001 and saves, and #2002 is `ready` again with its receipt and its
+        history line gone. Silent, and it un-closes a RECEIPTED item, so the
+        next tick re-selects work that was already done.
+
+        This DETECTS rather than PREVENTS, deliberately. A lock file was the
+        other option and is rejected: this repo has already lost hours to a
+        stale `index.lock` that "looks exactly like a contended one", and a
+        crashed lane holding a lock would wedge the drain. Refusing is safe
+        here because the record path is one short transaction -- the caller
+        re-runs it and wins the next round.
+
+        RESIDUAL WINDOW, disclosed rather than implied: the compare and the
+        `os.replace` are not one atomic step, so two writers can still interleave
+        inside that gap. It is microseconds against the seconds-long
+        load-verify-save window it closes, and it converts a silent revert into
+        a loud refusal. The complete fix is single-writer discipline or a real
+        lock, which is #4489.
         """
         payload = {
             "schema": SCHEMA,
@@ -196,15 +299,45 @@ class Ledger:
             "counts": self.counts(),
             "items": [asdict(i) for i in sorted(self.items.values(), key=lambda x: x.number)],
         }
+        if if_unchanged:
+            current = self._on_disk_digest()
+            if current != self.loaded_digest:
+                raise LedgerChangedError(
+                    f"refusing to save {self.path}: it changed since this transaction "
+                    "read it, so writing would DISCARD the other writer's change rather "
+                    "than conflict with it (the whole document is serialised from "
+                    "memory). Nothing was written. Re-run the command - it reads the "
+                    "current ledger and will succeed unless it races again."
+                )
         directory = os.path.dirname(self.path) or "."
         os.makedirs(directory, exist_ok=True)
+        # SERIALISE ONCE, TO BYTES, and hash THOSE. The first version re-read
+        # the file to refresh the digest after replacing it, which opened a
+        # second window nobody had named: a writer landing between `os.replace`
+        # and that re-read leaves this ledger holding SOMEONE ELSE'S digest, and
+        # the next guarded save then sails straight through the comparison it
+        # was supposed to fail. Found by a reviewer who demonstrated the
+        # interleave rather than asserting it.
+        #
+        # Hashing the payload removes the window entirely: this is exactly what
+        # was written, so no read-back can disagree with it.
+        #
+        # WRITTEN AS BYTES, not text, and that is load-bearing for the digest
+        # rather than a style choice. `open(..., "w")` translates `\n` to
+        # `\r\n` on Windows, so a hash of the in-memory string would not match
+        # a hash of the file `load()` reads back -- every guarded save would
+        # refuse itself on its own write.
+        blob = json.dumps(payload, indent=1).encode("utf-8")
         fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
         os.close(fd)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=1)
+        with open(tmp, "wb") as handle:
+            handle.write(blob)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self.path)
+        # This transaction is now the document on disk, so a caller that saves
+        # twice does not refuse itself on its own previous write.
+        self.loaded_digest = hashlib.sha256(blob).hexdigest()
 
     # -- mutation -----------------------------------------------------------
 
@@ -225,10 +358,14 @@ class Ledger:
         claims. Everything else keeps the None-skip, so a partial refresh cannot
         erase progress.
 
-        An item that is TERMINAL and is seen open on GitHub again has been
-        REOPENED. That is how a false close gets disputed, so it must re-enter
-        the queue: it lands in `needs-audit`, never silently back in `ready`
+        An item in one of the `REOPEN_DISPUTES` states -- `closed` or `declined`
+        -- seen open on GitHub again has been REOPENED. That is how a false close
+        gets disputed, so it must re-enter the queue: it lands in `needs-audit`,
+        never silently back in `ready`
         (whatever closed it may still be true) and never left terminal.
+
+        A `parked` item seen open on GitHub is in its EXPECTED state -- it is
+        blocked, not done -- and is left alone, silently. See `REOPEN_DISPUTES`.
         """
         existing = self.items.get(number)
         if existing:
@@ -321,7 +458,10 @@ class Ledger:
                 if was_state in (IN_FLIGHT, IN_REVIEW, AWAITING_RECEIPT):
                     existing.audit_reason = AUDIT_RECLASSIFIED
                     existing.state = NEEDS_AUDIT
-            if was_state in TERMINAL:
+            # `REOPEN_DISPUTES`, NOT `TERMINAL`: a `parked` item is terminal here
+            # and OPEN there, by design, so being open disputes nothing. See the
+            # constant for why `declined` is in and `parked` is out (#4535).
+            if was_state in REOPEN_DISPUTES:
                 existing.state = NEEDS_AUDIT
                 existing.audit_reason = AUDIT_REOPENED
                 existing.history.append(
@@ -337,13 +477,20 @@ class Ledger:
                 # True, so `--allow-close` re-closed on the very evidence being
                 # disputed, with no new work. The kind check is satisfied
                 # trivially here; there is nothing left to re-take.
+                #
+                # The message names `was_state` rather than saying "closed": a
+                # `declined` item can hold a receipt too (nothing voids one on
+                # decline), and a history line reading "this item was closed on
+                # it" about an item that was declined asserts something the code
+                # did not establish (R7). A `parked` item never reaches here at
+                # all -- see `REOPEN_DISPUTES`.
                 receipt_is_the_thing_in_dispute = bool(existing.receipt_kind)
                 if receipt_is_the_thing_in_dispute:
                     existing.history.append(
                         f"{_now()} receipt {existing.receipt_kind!r} "
-                        f"({existing.receipt_ref}) VOID - this item was closed on it "
-                        "and is open again, so that receipt is the thing in dispute. "
-                        "Re-take it (R2)"
+                        f"({existing.receipt_ref}) VOID - this item reached "
+                        f"{was_state} holding it and is open again, so that receipt "
+                        "is the thing in dispute. Re-take it (R2)"
                     )
                     existing.receipt_kind = None
                     existing.receipt_ref = None
@@ -402,6 +549,21 @@ class Ledger:
             )
 
         item.state = state
+        # A TERMINAL ITEM CARRIES NO AUDIT REASON. `audit_reason` is a scalar
+        # set on the way IN to `needs-audit` and cleared only by the departure
+        # rescue in `upsert`, so recovering an audited item the other way --
+        # re-record its receipt, reach `closed` -- left it reading
+        # `state=closed reason='departed'`: a cold reader sees a closed item
+        # still labelled as having vanished. Pre-existing, and this change makes
+        # the recover-from-`needs-audit` path the NORMAL one, so the stale label
+        # becomes the common shape rather than a curiosity. Nothing reads
+        # `audit_reason` on a terminal item -- `refresh_from_github` skips
+        # `TERMINAL` outright and `upsert`'s rescue `elif` requires
+        # `was_state == NEEDS_AUDIT` -- and a later reopen rewrites it to
+        # `reopened` before anything can read it, so clearing is safe as well as
+        # honest.
+        if state in TERMINAL:
+            item.audit_reason = None
         item.history.append(f"{_now()} -> {state}" + (f" ({why})" if why else ""))
         return item
 

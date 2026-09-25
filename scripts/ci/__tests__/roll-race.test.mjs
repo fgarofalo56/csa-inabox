@@ -5328,6 +5328,19 @@ function runComplianceTags({ before = {}, oobAdd = null, oobDrop = '', tagsJson 
 }
 
 const FW_LEASE = { loomAcrFwOwner: 'gha:owner/repo:777:1', loomAcrFwExpiresEpoch: '9999999999' };
+// COUNTERFACTUAL SINCE #4448, AND SAID SO HERE RATHER THAN LEFT TO BE
+// DISCOVERED. The estate image-write mutex no longer lives on the registry —
+// it moved to the registry's subscription, because every apply PUTs the
+// registry. Measured on the live Commercial estate 2026-09-17: that registry
+// carries four tags, all `loomAcrFw*`, zero `loomEstateImg*`.
+//
+// The `loomEstateImg` fixtures below therefore PLANT a before-state that no
+// lane produces any more. They still prove the guard arm in
+// apply-acr-compliance-tags.sh WORKS (it goes red when the key is dropped), and
+// they are the positive control that keeps the arm honest if the carrier is
+// ever moved back. They do NOT establish that a real run can reach that state,
+// and the arm is disclosed at its own site as residual rather than counted as
+// coverage. `FW_LEASE` is the live one: that mutex is still on the registry.
 const IMG_LEASE = { loomEstateImgOwner: 'gha:owner/repo:888:1', loomEstateImgExpiresEpoch: '9999999999' };
 
 test('COMPLIANCE TAGS: a Merge that preserves BOTH leases passes, and the compliance keys really land', { skip: shellSkip }, () => {
@@ -5358,9 +5371,13 @@ test('COMPLIANCE TAGS: a lease key that APPEARS across the merge is NOT a clobbe
   // TAKING the lease while this step runs. That is the mutex working, and
   // failing a deploy lane for it is a false red on the healthy case.
   //
-  // The window is real rather than theoretical for `loomEstateImg*`: the roll
-  // lane acquires whenever `build-fiab-images-acr-tasks` completes, which is not
-  // coordinated with when the deploy lane's compliance step runs.
+  // The window is real rather than theoretical, but for `loomAcrFw*` — the
+  // firewall lease, which IS still on this registry and is taken by
+  // `build-fiab-images-acr-tasks` at a time not coordinated with when the
+  // deploy lane's compliance step runs. An earlier revision of this comment
+  // made that claim about `loomEstateImg*`; since #4448 that mutex is not on
+  // this resource, so for THAT prefix the appearance window is closed and this
+  // half of the fixture is the residual arm's control, not a live scenario.
   const r = runComplianceTags({ before: FW_LEASE, oobAdd: IMG_LEASE });
   assert.equal(r.rc, 0, `a lease being TAKEN during the merge window must not fail the step, got ${r.rc}. Output:\n${r.out}`);
   assert.doesNotMatch(r.out, /REMOVED lease key/);
@@ -5487,22 +5504,38 @@ test('WIRING: the acquire step can actually RUN on both writers — its `if:` is
     'the roll lane acquire step grew an `if:` — every path through that job writes a Container App image, so any gate is a path that writes unleased');
 });
 
+/**
+ * The unknown-policy a lane DECLARES in its own `env:` mapping.
+ *
+ * LIFTED FROM THE WORKFLOW, NEVER TRANSCRIBED (assertion-design.md "done" #3),
+ * because transcribing it is exactly what went wrong once already: round 2 of
+ * this PR shipped six probes titled "roll lane REFUSES a malformed registry
+ * id", driven through a `leaseEnv()` that hard-codes `refuse`, while the roll
+ * lane declares `degrade` — and on `degrade` that same input exits 0 and the
+ * roll writes its image unleased. The probes were named for a lane and pinned a
+ * policy that lane does not have: the fixture never reached the behaviour it
+ * claimed to cover. The probes below read this value instead, so a lane that
+ * changes its tie-break changes what they assert.
+ *
+ * The regex reads the `env:` MAPPING, not the step's prose. It used to scan
+ * the whole segment, and a comment in that segment quoting
+ * `LEASE_UNKNOWN_POLICY: degrade` matched first and won — a guard whose
+ * subject a comment can impersonate is a guard reading the wrong thing.
+ */
+const unknownPolicyOf = (wf) => {
+  const yaml = readNorm(wf);
+  const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
+  const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
+  const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  return /^ {10}LEASE_UNKNOWN_POLICY: (\S+)$/m.exec(code)?.[1] ?? '';
+};
+
 test('WIRING: each lane declares its OWN unknown-policy, and they are the opposite tie-breaks', () => {
   // The asymmetry is deliberate and is each lane's existing policy: a nightly
   // reconcile that skips a night costs a night; a roll blocked by an ARM tag
   // read is a security fix that does not ship.
-  // The regex reads the `env:` MAPPING, not the step's prose. It used to scan
-  // the whole segment, and a comment in that segment quoting
-  // `LEASE_UNKNOWN_POLICY: degrade` matched first and won — a guard whose
-  // subject a comment can impersonate is a guard reading the wrong thing.
-  const envOf = (yaml) => {
-    const at = yaml.indexOf(`      - name: ${LEASE_ACQUIRE_STEP}`);
-    const seg = yaml.slice(at, yaml.indexOf('\n        run:', at));
-    const code = seg.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    return /^ {10}LEASE_UNKNOWN_POLICY: (\S+)$/m.exec(code)?.[1] ?? '';
-  };
-  assert.equal(envOf(readNorm(DEPLOY_WORKFLOW)), 'refuse');
-  assert.equal(envOf(readNorm(ROLL_WORKFLOW)), 'degrade');
+  assert.equal(unknownPolicyOf(DEPLOY_WORKFLOW), 'refuse');
+  assert.equal(unknownPolicyOf(ROLL_WORKFLOW), 'degrade');
 });
 
 test('WIRING: the deploy takes the lease BEFORE the re-pin, and the roll BEFORE the image write', () => {
@@ -5586,26 +5619,259 @@ test('WIRING: $GITHUB_OUTPUT keys are appended exactly ONCE per lease step', () 
     const body = runBodyOf(readNorm(wf), LEASE_ACQUIRE_STEP);
     assert.ok(/>>\s*"\$GITHUB_OUTPUT"/.test(body),
       `${wf}: the lease step never appends to $GITHUB_OUTPUT at all. Every consumer of steps.img_lease.outputs.* — including the release step's if: — would read empty.`);
-    for (const key of ['held', 'claimed', 'acr_id']) {
+    for (const key of ['held', 'claimed', 'carrier_id']) {
       const n = body.split('\n').filter((l) => new RegExp(`echo\\s+"${key}=`).test(l)).length;
       assert.equal(n, 1, `${wf}: the lease step emits the ${key} output ${n} time(s), not once. Two writes of one key leave the result to undocumented runner precedence.`);
     }
   }
 });
 
-test('PRECONDITION: registry.bicep must NOT declare tags on the ACR, or this mutex evaporates', () => {
-  // An ARM resource PUT replaces a resource's top-level `tags`, which is how the
-  // firewall lease was erased mid-apply on 2026-08-17. #3681 removed `tags:`
-  // from the ACR for exactly that reason, and this lease is stored in the same
-  // place. That is a PRECONDITION of the mutex, not a coincidence: if it comes
-  // back, this guard goes red instead of the lease silently arbitrating nothing.
+// #4448 — THE PRECONDITION THIS REPLACES WATCHED NOTHING, AND IT IS WORTH
+// SAYING WHY AT THE SITE RATHER THAN DELETING IT QUIETLY.
+//
+// It asserted that registry.bicep declares no `tags:` on the ACR, on the #3681
+// premise that a resource whose template body declares no tags KEEPS the tags
+// it has across an apply. The assertion passed. The mutex evaporated anyway,
+// on every single apply, because the premise is false: an ARM PUT writes the
+// tag dictionary the body hands it, and a body that hands it none writes none.
+//
+// MEASURED 2026-09-17 against the live Commercial estate, and the second row is
+// the positive control that makes the first row mean something:
+//
+//   acrloomk6mvh5sm6z7do       declared WITHOUT `tags:`  -> four loomAcrFw*
+//     values, every one of them written back AFTER the apply by the next lane
+//     to take the firewall lease, and ZERO compliance tags.
+//   pe-acrloomk6mvh5sm6z7do    declared WITH `tags: complianceTags`, same
+//     module, same apply                                 -> all five.
+//
+// Six consecutive scheduled deploys (2026-09-12 .. 2026-09-17) died on the
+// release step reporting that erasure, and every report was TRUE. So the old
+// guard is not tightened here — it is replaced by one aimed at the thing that
+// actually decides whether the mutex survives: WHICH RESOURCE CARRIES IT.
+test('the image-write lease is carried by a resource the apply does NOT PUT (#4448)', () => {
+  for (const [label, file] of [['deploy-fiab-commercial', DEPLOY_WORKFLOW], ['loom-roll-and-validate', ROLL_WORKFLOW]]) {
+    const body = runBodyOf(readNorm(file), LEASE_ACQUIRE_STEP);
+
+    // WHAT BREAKS THIS: restoring `CARRIER_ID="$ACR_ID"`, or pointing either
+    // `az tag` verb back at `$ACR_ID`. Both are the exact regression that cost
+    // six nights, and both leave every other assertion in this file green.
+    assert.match(body, /CARRIER_ID="\/subscriptions\/\$\{CARRIER_SUB\}"/,
+      `${label}: the lease carrier is no longer derived as a subscription id. The registry cannot carry this `
+      + 'mutex: every apply PUTs it and an ARM PUT writes the tag dictionary the template body hands it (#4448).');
+
+    for (const verb of ['az tag list', 'az tag update']) {
+      // INVOCATIONS ONLY. The step also NAMES these commands inside remediation
+      // strings; matching those would score a message as a call site and the
+      // assertion would pass on a step that never runs either verb.
+      const calls = body.split('\n').map((l) => l.trim()).filter((l) => l.startsWith(verb + ' '));
+      assert.ok(calls.length > 0, `${label}: the lease step makes no \`${verb}\` call at all`);
+      for (const call of calls) {
+        assert.ok(!/--resource-id "\$ACR_ID"/.test(call),
+          `${label}: \`${verb}\` still addresses the REGISTRY (${call}). The registry's tags are erased by `
+          + 'every apply, so a lease stored there cannot span the apply it exists to arbitrate.');
+        assert.match(call, /--resource-id "\$CARRIER_ID"/,
+          `${label}: \`${verb}\` does not address the lease carrier (${call}).`);
+      }
+    }
+
+    // The carrier FOLLOWS the registry rather than being handed in, so no lane
+    // can arbitrate against a different estate by passing a stale parameter.
+    assert.match(body, /CARRIER_SUB="\$\(printf '%s' "\$ACR_ID" \| cut -d\/ -f3\)"/,
+      `${label}: the carrier is no longer derived from the registry's own resource id.`);
+
+    // SHAPE-MATCHED, not cut-and-hoped. `cut -d/ -f3` prints the WHOLE line when
+    // the delimiter is absent (`printf 'garbage' | cut -d/ -f3` -> `garbage`), so
+    // the derive must be guarded by a prefix match or a malformed id silently
+    // becomes `/subscriptions/garbage`. The executed probe below is what proves
+    // the refusal; this pins the mechanism that makes it possible.
+    assert.match(body, /case "\$ACR_ID" in\s*\n\s*\/subscriptions\/\*\/resourceGroups\/\*\/providers\/Microsoft\.ContainerRegistry\/registries\/\*\)/,
+      `${label}: the carrier derive is no longer guarded by a registry-shape match, so a malformed id would `
+      + 'yield a plausible-looking subscription id nobody checked.');
+
+    // An id that is not `/subscriptions/<sub>/...` must REFUSE, not tag
+    // whatever `/subscriptions/` alone resolves to.
+    assert.match(body, /\[ -z "\$CARRIER_ID" \]/,
+      `${label}: an unresolvable carrier no longer refuses. Without this the step would write the lease to an `
+      + 'id it never established, and report a mutex it does not have.');
+  }
+});
+
+// EXECUTED, because the previous revision of this guarantee was a SENTENCE.
+// It claimed a malformed id "yields an EMPTY carrier and is refused"; measured,
+// `printf 'garbage' | cut -d/ -f3` prints `garbage`, so the carrier was
+// `/subscriptions/garbage` and the step took a lease against a subscription
+// nobody had checked. A comment is not a guard. This drives the real step body
+// with a malformed `az acr show` answer and reads what it actually did.
+//
+// AND EXECUTED AT BOTH POLICIES, because round 2 of this PR got the SECOND half
+// of that lesson wrong. Its six probes were titled "<lane> lane REFUSES a
+// malformed registry id" and driven through `leaseEnv()`, which hard-codes
+// `LEASE_UNKNOWN_POLICY: refuse`. The roll lane declares `degrade`
+// (`loom-roll-and-validate.yml`, and `unknownPolicyOf` above lifts it). So the
+// probes named for the roll lane exercised a policy the roll lane does not run,
+// and the roll lane's REAL behaviour on this input — exit 0, proceed, write the
+// image unleased — had no assertion at all. That is the canonical
+// `assertion-design.md` shape: the fixture never reaches the rule it claims to
+// pin, and it reads as coverage.
+//
+// The two policies have DIFFERENT correct outcomes and BOTH are asserted:
+//
+//   refuse   -> exit != 0. The lane stops; no Container App image is written.
+//   degrade  -> exit 0 + `::warning::… PROCEEDING UNLEASED`. The lane CONTINUES
+//               and writes its image with no mutex. On the roll lane the very
+//               next step is `Roll Container App to new image` — the WIRING
+//               test above pins them adjacent — so exit 0 here IS the image
+//               write happening unleased.
+//
+// THE `degrade` OUTCOME IS A DELIBERATE CHOICE, NOT AN OVERSIGHT, and it is
+// asserted here so the next reader sees it was chosen. A malformed carrier id
+// on the roll lane lets the roll proceed unleased, and that is KEPT rather than
+// tightened, for three reasons in order of weight:
+//
+//   1. It is not a new behaviour for "the carrier could not be located". A
+//      FAILED `az acr show` (`IDRC -ne 0`) already sets READ_ERR, already
+//      decides `unknown`, and already proceeds under `degrade`. Refusing only
+//      the MALFORMED spelling would make the lane's tie-break depend on WHICH
+//      way the carrier lookup broke, which is an asymmetry with no payoff.
+//   2. The tie-break is the roll lane's declared policy, argued at length in
+//      its own step header: a roll blocked by an ARM tag read is a security fix
+//      that does not ship. This is the emergency image path and the nightly
+//      apply is the lane that is red.
+//   3. The unleased write is neither silent nor unbacked. `PROCEEDING
+//      UNLEASED` names it in the run log, `held` and `claimed` are both false,
+//      `carrier_id` is empty, and the post-apply estate gate (#4318) plus its
+//      auto-heal (#3799) detect and re-roll an overwritten image.
+//
+// Tightening it to a refusal would newly BLOCK the roll lane on a code path
+// that none of the six red nights involved — trading a measured failure for an
+// unmeasured one, in a P0 deploy fix. If that trade is ever reconsidered, it is
+// a behaviour change and belongs in its own PR with its own receipt.
+const MALFORMED_ACR_IDS = [
+  // Each shape breaks a DIFFERENT link in the derive: `cut` returns the whole
+  // line when the delimiter is absent; the second has the delimiter but the
+  // wrong provider; the third matches the glob and leaves field 3 EMPTY, so the
+  // `-n` test is the only thing left to catch it.
+  ['no delimiter at all', 'garbage'],
+  ['a plausible id for the wrong provider', '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/sa'],
+  ['the right shape with an EMPTY subscription segment', '//resourceGroups/rg/providers/Microsoft.ContainerRegistry/registries/acrtest'],
+];
+
+for (const [label, wf] of [['deploy', DEPLOY_WORKFLOW], ['roll', ROLL_WORKFLOW]]) {
+  const declared = unknownPolicyOf(wf);
+  for (const [shape, acrId] of MALFORMED_ACR_IDS) {
+    for (const policy of ['refuse', 'degrade']) {
+      const live = policy === declared ? ' [THIS LANE DECLARES IT]' : '';
+      test(`SHELL: ${label} lane, malformed registry id (${shape}), unknown-policy=${policy}${live}`, { skip: shellSkip }, () => {
+        const r = runStep(LEASE_ACQUIRE_STEP, {
+          workflow: wf,
+          env: { ...leaseEnv({ LEASE_UNKNOWN_POLICY: policy }), AZ_ACR_ID: acrId },
+          leaseTags: { properties: { tags: {} } },
+        });
+
+        // ── TRUE ON BOTH POLICIES ────────────────────────────────────────────
+        // The `case` shape-match refuses to DERIVE, so no carrier is resolved
+        // and nothing is written, whatever the lane then decides to do about it.
+        //
+        // WHAT BREAKS THESE THREE: delete the `case` shape-match and derive
+        // unconditionally. The step then resolves `/subscriptions/garbage`,
+        // writes its claim tags there, and reports held=true and a non-empty
+        // carrier_id. Run against that mutation in a sandbox copy: RED.
+        assert.deepEqual(r.tags, {},
+          `${label}/${policy}: the run WROTE lease tags against a carrier it could not resolve. A claim left on an `
+          + 'unchecked subscription strands the mutex there for a full TTL and arbitrates nothing.');
+        assert.match(r.outFile, /(^|\n)held=false(\n|$)/,
+          `${label}/${policy}: reported held=true on a carrier it never established.`);
+        assert.match(r.outFile, /(^|\n)claimed=false(\n|$)/,
+          `${label}/${policy}: reported claimed=true though no \`az tag update\` was ever issued — the release step's `
+          + '`if:` reads this, so a false claimed sends it to clear a lease that does not exist.');
+        assert.match(r.outFile, /(^|\n)carrier_id=(\n|$)/,
+          `${label}/${policy}: emitted a NON-EMPTY carrier_id for an id the shape-match rejected. The release step `
+          + 'addresses `az tag` at exactly this value.');
+
+        // ANCHORED ON TEXT THE FIXTURE CANNOT SUPPLY (round-2 finding F3). The
+        // previous anchor was the literal `Microsoft.ContainerRegistry/registries`,
+        // which shape #3's own id ENDS WITH — the step echoes `returned
+        // '${ACR_ID}'` into the message, so that probe matched its own input and
+        // could not fail. Measured by the reviewer: deleting the whole shape
+        // sentence from READ_ERR turned shapes #1 and #2 red and left #3 GREEN.
+        //
+        // `<sub>` and `<rg>` are placeholders. No ARM id contains them, so this
+        // can only be satisfied by the refusal's own prose. It also sits INSIDE
+        // the sentence that mutation deletes, which is what gives it kill power.
+        //
+        // POSITION MEASURED, not assumed: reconcile-policy.mjs truncates the
+        // read error at `String(readError).slice(0, 400)`, and this anchor ends
+        // at index 235/309/304 for the three fixtures — 91 to 165 characters of
+        // headroom. `shape is REFUSED here`, one clause later, ends at 377 on
+        // the longest fixture: 23 characters from being truncated away, which
+        // would read as the guard breaking rather than as the message growing.
+        // If READ_ERR ever does outgrow the slice, move the shape sentence
+        // EARLIER in the message; do not weaken this anchor.
+        assert.match(r.out, /\/subscriptions\/<sub>\/resourceGroups\/<rg>\//,
+          `${label}/${policy}: the refusal does not state the shape it required, so an operator reading it cannot `
+          + 'tell a malformed id from an ARM outage (deploy-integrity R6).');
+
+        if (policy === 'refuse') {
+          assert.notEqual(r.status, 0,
+            `${label}/refuse: the step accepted '${acrId}' as a lease carrier and exited 0. Under \`refuse\` this `
+            + 'lane must not continue to write a Container App image on an unestablished mutex.');
+          // PAIRED (assertion-design.md "done" #4): the `doesNotMatch` below is
+          // satisfied by deleting the whole log line, so the positive above it
+          // pins that the refusal still says what it is.
+          assert.match(r.out, /REFUSING:/,
+            `${label}/refuse: exited non-zero without the REFUSING line, so the log does not say the lane stopped `
+            + 'on the mutex rather than on something else.');
+          assert.doesNotMatch(r.out, /PROCEEDING UNLEASED/,
+            `${label}/refuse: emitted the degrade warning under \`refuse\` — the two policies are the opposite `
+            + 'tie-break and must not both fire.');
+        } else {
+          // THE ROLL LANE'S PRODUCTION PATH. This is the arm round 2 was missing
+          // entirely, and the outcome it asserts is chosen (see the block
+          // comment above), not inherited.
+          //
+          // WHAT BREAKS THIS: making the malformed-carrier case refuse under
+          // `degrade` too — i.e. exiting non-zero from the DRC=4 branch, or
+          // routing READ_ERR to `refuse` regardless of policy. Either turns this
+          // red, which is the point: that change would be a behaviour change to
+          // the emergency roll path and must not land silently.
+          assert.equal(r.status, 0,
+            `${label}/degrade: the step exited ${r.status} under \`degrade\`. This lane's declared tie-break is that `
+            + 'an unreadable/unresolvable mutex must not block an emergency roll; a non-zero exit here DROPS the roll '
+            + 'at that SHA. If this refusal is intended, it is a behaviour change to the emergency image path and '
+            + 'needs its own PR, not a quiet edit.');
+          assert.match(r.out, /PROCEEDING UNLEASED/,
+            `${label}/degrade: proceeded WITHOUT saying so. An unleased image write that is not announced in the run `
+            + 'log is the whole failure mode this lease exists to make visible.');
+          assert.doesNotMatch(r.out, /REFUSING:/,
+            `${label}/degrade: emitted the refuse line while exiting 0, so the log and the exit code disagree about `
+            + 'what this run did (deploy-integrity R7).');
+        }
+      });
+    }
+  }
+}
+
+test('registry.bicep still declares no `tags:` on the ACR — but that is NOT what protects the lease', () => {
+  // KEPT, DEMOTED, AND LABELLED (assertion-design.md "done" #5). Re-adding
+  // `tags:` to the ACR would resume clobbering the `loomAcrFw*` firewall mutex
+  // mid-apply, which is the #3676/#3681 outage and is still a real regression
+  // worth catching. What it does NOT do — and what its previous wording
+  // claimed — is keep the image-write lease alive across an apply. Nothing
+  // stored on the ACR survives an apply, `tags:` or no `tags:`; the test above
+  // is the one that pins the property this mutex depends on.
   const bicep = readNorm(join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'modules', 'admin-plane', 'registry.bicep'));
   const at = bicep.indexOf("resource acr 'Microsoft.ContainerRegistry/registries@");
-  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this precondition before trusting the lease');
+  assert.ok(at !== -1, 'the ACR resource was renamed — re-point this guard');
   const decl = bicep.slice(at, bicep.indexOf('\n}\n', at));
   assert.doesNotMatch(decl, /^ {2}tags:/m,
-    'registry.bicep declares `tags:` on the ACR again. An ARM PUT replaces a resource\'s tags, so every apply '
-    + 'would erase the estate image-write lease mid-apply and both writers would proceed (#3681 / #3676).');
+    'registry.bicep declares `tags:` on the ACR again. An ARM PUT writes the tag dictionary the body hands it, so '
+    + 'this would stamp complianceTags over the `loomAcrFw*` firewall lease mid-apply and deny an in-flight '
+    + '`az acr build` push (#3676 / #3681).');
+  // PAIRED POSITIVE (assertion-design.md "done" #4): a `doesNotMatch` alone is
+  // satisfied by deleting the resource. This pins that it still exists and is
+  // still the resource the guard read.
+  assert.match(decl, /^ {2}name: acrName$/m,
+    'the ACR declaration no longer names acrName — the absence assertion above may be reading an empty slice.');
 });
 
 // ---------------------------------------------------------------------------
@@ -5644,8 +5910,8 @@ const leaseEnv = (over = {}) => ({
  * narrows LEASE_STATE to: 'held' when the read-back confirmed this run,
  * 'claimed' when only the claim WRITE landed.
  */
-const leaseReleaseEnv = (acrId, state = 'held') => ({
-  ...LEASE_GH, LEASE_ACR_ID: acrId, LEASE_STATE: state, DEPLOY_SUB: '',
+const leaseReleaseEnv = (carrierId, state = 'held') => ({
+  ...LEASE_GH, LEASE_CARRIER_ID: carrierId, LEASE_STATE: state, DEPLOY_SUB: '',
 });
 
 test('SHELL: the deploy lane TAKES the lease on a free registry and records itself in the tags', { skip: shellSkip }, () => {
@@ -5655,7 +5921,12 @@ test('SHELL: the deploy lane TAKES the lease on a free registry and records itse
   });
   assert.equal(r.status, 0, r.out);
   assert.match(r.outFile, /held=true/);
-  assert.match(r.outFile, /acr_id=.+ContainerRegistry/);
+  // A SUBSCRIPTION id, not a registry id (#4448). Breaking value: restore
+  // `echo "carrier_id=$ACR_ID"` in the step and this goes red, because the
+  // stub's registry id carries `/providers/Microsoft.ContainerRegistry/`.
+  assert.match(r.outFile, /carrier_id=\/subscriptions\/[^/\s]+\s/);
+  assert.doesNotMatch(r.outFile, /carrier_id=\S*ContainerRegistry/,
+    'the lease carrier is the registry again — every apply PUTs it and erases the mutex (#4448)');
   assert.equal(r.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'gha:owner/repo:4242:1');
   assert.ok(Number(r.tags[ESTATE_IMAGE_LEASE_TAGS.expires]) > Math.floor(Date.now() / 1000),
     'the lease was written without a future expiry, so it is stale the instant it is taken');
@@ -5747,10 +6018,10 @@ test('SHELL: acquire then release round-trips — the holder clears the lease it
   try {
     const acq = runStep(LEASE_ACQUIRE_STEP, { ctx, env: leaseEnv(), leaseTags: { properties: { tags: {} } } });
     assert.equal(acq.status, 0, acq.out);
-    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
-    assert.notEqual(acrId, '');
+    const carrierId = /carrier_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(carrierId, '');
 
-    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId) });
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(carrierId) });
     assert.equal(rel.status, 0, rel.out);
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
       'the release did not free the mutex, so the other lane stays blocked until the TTL');
@@ -5763,7 +6034,7 @@ test('SHELL: acquire then release round-trips — the holder clears the lease it
 
 test('SHELL: releasing a lease that was ERASED under this run goes RED, and does not pretend', { skip: shellSkip }, () => {
   const r = runStep(LEASE_RELEASE_STEP, {
-    env: leaseReleaseEnv('acr-resource-id'),
+    env: leaseReleaseEnv('/subscriptions/sub-under-test'),
     leaseTags: { properties: { tags: {} } },
   });
   assert.equal(r.status, 1, r.out);
@@ -5835,16 +6106,16 @@ test('SHELL: the stranded claim is CLEARED by the release step, so the other wri
     });
     assert.equal(acq.status, 1, acq.out);
     assert.match(acq.outFile, /claimed=true/);
-    const acrId = /acr_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
-    assert.notEqual(acrId, '');
+    const carrierId = /carrier_id=(\S+)/.exec(acq.outFile)?.[1] ?? '';
+    assert.notEqual(carrierId, '');
 
     // This is the step the workflow's `if:` now reaches on claimed=true. The
     // tag store is the SAME document the acquire left behind (shared ctx), so
     // "was the mutex actually freed" is answerable rather than assumed.
-    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(acrId, 'claimed') });
+    const rel = runStep(LEASE_RELEASE_STEP, { ctx, env: leaseReleaseEnv(carrierId, 'claimed') });
     assert.equal(rel.status, 0, rel.out);
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.owner], 'none',
-      'the claim is still in the registry: every write on the other lane now queues behind a run that has already exited');
+      'the claim is still in the lease carrier: every write on the other lane now queues behind a run that has already exited');
     assert.equal(rel.tags[ESTATE_IMAGE_LEASE_TAGS.expires], '0');
     assert.match(rel.out, /never CONFIRMED/,
       'R7: it cleared the tags, but it may not report that it held the mutex');
@@ -5858,7 +6129,7 @@ test('SHELL: a CLAIMED run that lost the race does NOT clear the winner tags', {
   // on to write `owner=none` over a LIVE holder — the erasure this mutex exists
   // to make impossible, performed by the release path itself.
   const r = runStep(LEASE_RELEASE_STEP, {
-    env: leaseReleaseEnv('acr-resource-id', 'claimed'),
+    env: leaseReleaseEnv('/subscriptions/sub-under-test', 'claimed'),
     leaseTags: {
       properties: {
         tags: {

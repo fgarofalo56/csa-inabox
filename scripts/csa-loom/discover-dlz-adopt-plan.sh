@@ -35,15 +35,22 @@
 # Emits `{}` — never a partial or malformed document — when nothing is found.
 #
 # Usage:
-#   discover-dlz-adopt-plan.sh --dlz-subscription <id> --dlz-rg <name> [--admin-subscription <id>]
+#   discover-dlz-adopt-plan.sh --dlz-subscription <id> --dlz-rg <name> \
+#                              [--admin-subscription <id>] [--admin-rg <name>]
+#
+# The admin coordinates are OPTIONAL and are used only as a FALLBACK for the two
+# deploy-planner services that can legitimately sit outside the landing zone —
+# see the `#4665` block near the bottom. Supplying them never changes a lookup
+# the DLZ already answered.
 set -euo pipefail
 
-DLZ_SUB=""; DLZ_RG=""; ADMIN_SUB=""
+DLZ_SUB=""; DLZ_RG=""; ADMIN_SUB=""; ADMIN_RG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dlz-subscription) DLZ_SUB="${2:-}"; shift 2 ;;
     --dlz-rg)           DLZ_RG="${2:-}"; shift 2 ;;
     --admin-subscription) ADMIN_SUB="${2:-}"; shift 2 ;;
+    --admin-rg)         ADMIN_RG="${2:-}"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -128,24 +135,127 @@ ADF="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Mi
 SB="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.ServiceBus/namespaces --query "[0].name" -o tsv)"
 BATCH="$(q resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.Batch/batchAccounts --query "[0].name" -o tsv)"
 
+# Where each adopted service was FOUND. Defaults to the DLZ for every lookup
+# above; the #4665 fallback below overrides only the two it actually resolves.
+SB_RG="$DLZ_RG";    SB_SUB="$DLZ_SUB"
+BATCH_RG="$DLZ_RG"; BATCH_SUB="$DLZ_SUB"
+
+# ── ADMIN-RG FALLBACK for Service Bus + Batch (#4665) ────────────────────────
+#
+# WHY. The two lookups above read the DLZ resource group, which is where a
+# landing-zone deploy puts these. But deploy-planner/service-bus.bicep and
+# deploy-planner/batch.bicep are ORDINARY resource-group-scoped modules: nothing
+# stops an operator deploying them straight at the admin RG, and on the
+# Commercial estate somebody did — `loom-servicebus-1784162471` and
+# `loom-batch-1784162511`, both Succeeded 2026-07-16, both into
+# rg-csa-loom-admin-centralus. Measured 2026-09-22: that estate owns
+# `sb-loom-k6mvh5sm6z7do` (queue `loom-queue`, exactly what service-bus.bicep:56
+# creates) and `batchloomk6mvh5sm6z7do`, while the DLZ resource group in the
+# OTHER subscription holds neither — so discovery looked only where they were
+# not, the plan omitted both keys, and LOOM_SERVICEBUS_NAMESPACE /
+# LOOM_BATCH_ACCOUNT rendered '' with svc-servicebus and svc-batch honest-gating
+# on an estate that owned both resources. Same shape as the #3327 lake and the
+# #3317 entries above: the resource exists, the binding does not.
+#
+# This does NOT widen the other five lookups. The lake, Event Hubs, Synapse,
+# Databricks and ADF belong to a landing zone by construction, and adopting an
+# admin-RG namesake for any of them would bind the console to the wrong tier.
+#
+# PRECEDENCE: the DLZ always wins. This only fills a key the DLZ left empty.
+#
+# WHAT IT STILL DOES NOT COVER, stated rather than implied: this block sits after
+# the DLZ-coordinate and RG-readability guards above, so it runs only when a DLZ
+# resource group was resolved and read. An estate with NO landing zone at all
+# never reaches here — and could not anyway, because all four deploy workflows
+# call this script only inside `if [ -n "$DLZ_SUB" ] && [ -n "$DLZ_RG" ]`.
+# Admin-RG-only resources on a landing-zone-less estate are therefore still
+# unadopted. That is a real hole, deliberately left: closing it means relaxing a
+# gate that also guards the fail-closed lake-binding backstop (#3701), which is
+# a bigger change than the defect being fixed here warrants.
+if [ -n "$ADMIN_SUB" ] && [ -n "$ADMIN_RG" ]; then
+  # Unlike q(), this separates UNREADABLE from ABSENT. A subscription the deploy
+  # identity cannot read must not render as "the estate does not have one" —
+  # that is the unknown-as-negative shape this file's header refuses, and the
+  # reason the lake has a fail-closed backstop in the calling workflow.
+  admin_names() { # admin_names <resource-type> → names on stdout, rc 1 if unreadable
+    local err out rc=0
+    err="$(mktemp)"
+    out="$(az resource list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" \
+             --resource-type "$1" --query "[].name" -o tsv 2>"$err")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "::warning::[discover-dlz-adopt] could NOT read $1 in admin RG '$ADMIN_RG' — that is UNKNOWN, not 'absent'. Skipping the admin-RG fallback for it; the DLZ answer (empty) stands. az stderr:" >&2
+      sed 's/^/  /' "$err" >&2 || true
+      rm -f "$err"
+      return 1
+    fi
+    rm -f "$err"
+    printf '%s' "$out" | tr -d '\r' | sed '/^[[:space:]]*$/d'
+  }
+
+  # Exactly one candidate, or nothing. Picking `[0]` out of several would bind
+  # the console to whichever namespace ARM happened to list first, which is a
+  # coin flip dressed as a measurement.
+  admin_pick() { # admin_pick <key> <candidates…> → the single name, or ''
+    local key="$1"; shift
+    local n; n="$(printf '%s\n' "$@" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+    if [ "$n" -eq 1 ]; then printf '%s' "$1"; return 0; fi
+    if [ "$n" -gt 1 ]; then
+      echo "::warning::[discover-dlz-adopt] admin RG '$ADMIN_RG' holds $n candidates for '$key' ($*) and the DLZ held none, so there is no unambiguous resource to adopt. Adopting NONE rather than guessing — set LOOM_ADOPT_JSON explicitly to name the intended one (an explicit plan always wins over discovery)." >&2
+    fi
+    return 0
+  }
+
+  if [ -z "$SB" ]; then
+    if SB_CAND="$(admin_names Microsoft.ServiceBus/namespaces)"; then
+      # admin-plane/aas.bicep ALSO creates a Service Bus namespace in this very
+      # resource group — the direct-lake-shim's, named `sb-loom-dlshim-<region>`
+      # (admin-plane/main.bicep:2223). It carries the shim's own queue and is not
+      # what the svc-servicebus navigator binds, so it is excluded by name before
+      # the count is taken. This is the ONE place a name is used, and it is used
+      # to EXCLUDE a known sibling, never to construct the thing being adopted.
+      SB_CAND="$(printf '%s\n' "$SB_CAND" | grep -v '^sb-loom-dlshim-' || true)"
+      # shellcheck disable=SC2086 # deliberate word-split: one candidate per line
+      SB_PICK="$(admin_pick servicebus $SB_CAND)"
+      if [ -n "$SB_PICK" ]; then
+        SB="$SB_PICK"; SB_RG="$ADMIN_RG"; SB_SUB="$ADMIN_SUB"
+        echo "[discover-dlz-adopt] servicebus not in the DLZ RG — adopting '$SB' from the admin RG '$ADMIN_RG'" >&2
+      fi
+    fi
+  fi
+
+  if [ -z "$BATCH" ]; then
+    if BATCH_CAND="$(admin_names Microsoft.Batch/batchAccounts)"; then
+      # No exclusion needed: deploy-planner/batch.bicep is the ONLY declaration
+      # of Microsoft.Batch/batchAccounts in the tree, so any account here is one
+      # of ours. The exactly-one rule still applies.
+      # shellcheck disable=SC2086 # deliberate word-split: one candidate per line
+      BATCH_PICK="$(admin_pick batch $BATCH_CAND)"
+      if [ -n "$BATCH_PICK" ]; then
+        BATCH="$BATCH_PICK"; BATCH_RG="$ADMIN_RG"; BATCH_SUB="$ADMIN_SUB"
+        echo "[discover-dlz-adopt] batch not in the DLZ RG — adopting '$BATCH' from the admin RG '$ADMIN_RG'" >&2
+      fi
+    fi
+  fi
+fi
+
 entries=""
-add() { # add <key> <name> [extraJson]
+add() { # add <key> <name> <rg> <sub> [extraJson]
   [ -n "${2:-}" ] || return 0
-  local extra="${3:-}"
+  local extra="${5:-}"
   local one
   one="$(printf '"%s":{"mode":"adopt","target":{"name":"%s","rg":"%s","sub":"%s"}%s}' \
-        "$1" "$2" "$DLZ_RG" "$DLZ_SUB" "${extra:+,\"extra\":$extra}")"
+        "$1" "$2" "$3" "$4" "${extra:+,\"extra\":$extra}")"
   entries="${entries:+$entries,}$one"
-  echo "[discover-dlz-adopt] adopt $1 = $2" >&2
+  echo "[discover-dlz-adopt] adopt $1 = $2 (rg=$3)" >&2
 }
 
-add "storage-adls" "$SA"
-add "eventhubs"    "$EH"
-add "synapse"      "$SYN"
-add "databricks"   "$DBX_N" "${DBX_H:+{\"hostname\":\"$DBX_H\"}}"
-add "adf"          "$ADF"
-add "servicebus"   "$SB"
-add "batch"        "$BATCH"
+add "storage-adls" "$SA"    "$DLZ_RG"    "$DLZ_SUB"
+add "eventhubs"    "$EH"    "$DLZ_RG"    "$DLZ_SUB"
+add "synapse"      "$SYN"   "$DLZ_RG"    "$DLZ_SUB"
+add "databricks"   "$DBX_N" "$DLZ_RG"    "$DLZ_SUB" "${DBX_H:+{\"hostname\":\"$DBX_H\"}}"
+add "adf"          "$ADF"   "$DLZ_RG"    "$DLZ_SUB"
+add "servicebus"   "$SB"    "$SB_RG"     "$SB_SUB"
+add "batch"        "$BATCH" "$BATCH_RG"  "$BATCH_SUB"
 
 if [ -z "$entries" ]; then
   echo "[discover-dlz-adopt] DLZ RG exists but held none of the adoptable services — empty plan" >&2

@@ -6,7 +6,7 @@ import { auditLogContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { recordItemOpen } from '@/lib/items/record-open';
-import { assertNoServerOwnedStateChange, ServerOwnedStateError } from '@/app/api/items/_lib/item-crud';
+import { assertNoServerOwnedStateChange, carryServerDerivedScope, ServerOwnedStateError } from '@/app/api/items/_lib/item-crud';
 import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
@@ -204,11 +204,30 @@ export const PATCH = withSession<{ type: string; id: string }>(async (
       if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
       throw e;
     }
+    // #4619 — the assert permits OMISSION, and `state` is replaced WHOLESALE
+    // below, so a body that merely LEAVES OUT a server-derived key DELETES it.
+    // That is the bypass, and this route is where it mattered most: `lakehouse`
+    // has no `[id]/route.ts` of its own, so `PATCH /api/items/lakehouse/<id>`
+    // lands HERE, and `resolveLakehouseAbfss` is the reader that derives a path
+    // scope from the keys a wholesale replace would drop. ONE request could edit
+    // `state.ownedContainers` AND drop `state.provisioning` + `state.storageAccount`,
+    // leaving the resolver's branches 1/2/2b with nothing and falling it through
+    // to a container the same request supplied.
+    //
+    // Assert FIRST (an attempted CHANGE stays a 400, never a silent
+    // substitution), carry SECOND (an OMISSION preserves instead of deleting).
+    // The sibling at `cosmos-items/[type]/[id]` carries in the same order; this
+    // route builds and writes its own `next` rather than going through
+    // `updateOwnedItem`, so the helper-level carry does NOT reach it and the
+    // call has to be here. Review measured that gap at head `e57be98c`.
+    const carriedState = nextState && typeof nextState === 'object'
+      ? carryServerDerivedScope(nextState as Record<string, unknown>, item.state)
+      : nextState;
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
       description: 'description' in body ? (body.description?.trim() || undefined) : item.description,
-      state: nextState,
+      state: carriedState,
       updatedAt: new Date().toISOString(),
     };
     const items = await itemsContainer();

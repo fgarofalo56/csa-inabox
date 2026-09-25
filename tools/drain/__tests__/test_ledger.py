@@ -530,6 +530,208 @@ def test_negative_control_a_reopen_voids_the_receipt_that_closed_it(tmp_path):
     assert led.transition(1, CLOSED).state == CLOSED
 
 
+# ---------------------------------------------------------------------------
+# #4535 -- a PARK is supposed to stay open on GitHub, so being open disputes
+# nothing. These four tests are the other side of the reopen boundary above:
+# the fix must not be bought by weakening the `closed` case, so every one of
+# them asserts both halves.
+# ---------------------------------------------------------------------------
+
+
+def _parked(led, number=2874, stream="W1-deploy"):
+    """A legal park: the refusal needs a named blocker AND owner."""
+    item = led.upsert(number, "bicep drift, GCC-High", stream, lane="lane:bicep", size=3)
+    item.blocker = "no GCC tenant to authenticate against"
+    item.owner = "operator"
+    led.transition(number, PARKED, "re-measured at head: run 35171642605")
+    return item
+
+
+def test_a_park_survives_the_refresh_that_sees_its_issue_still_open(tmp_path):
+    """#2874 was parked and demoted to `needs-audit` THIRTEEN SECONDS later, by
+    the next refresh, because the reopen branch keyed on TERMINAL wholesale.
+
+    WHAT MAKES THIS FAIL: put `PARKED` back into `REOPEN_DISPUTES` (i.e. revert
+    it to `TERMINAL`) and the second `upsert` -- which is exactly what a refresh
+    does for an issue that is open on GitHub -- moves the item to `needs-audit`
+    with `audit_reason == 'reopened'`. Kills L26.
+
+    The `closed` half is asserted in the SAME test so the park cannot be rescued
+    by simply deleting the branch: an arm that does that has to survive both."""
+    led = _led(tmp_path)
+    _parked(led)
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+
+    assert led.items[2874].state == PARKED, (
+        "a parked item is BLOCKED, not done - its GitHub issue is supposed to be "
+        "open, so being open is not evidence of anything"
+    )
+    assert led.items[2874].audit_reason is None
+    # Paired positive: the branch still fires for the state it was written for.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+
+
+def test_drained_is_true_over_a_park_whose_issue_is_still_open(tmp_path):
+    """THE EXIT CONDITION, which had no test -- which is why this shipped.
+
+    PRP S1 and policy.json both define done as "every issue closed | parked |
+    declined". With the demotion in place `parked` was not a state the ledger
+    could HOLD across a refresh, so `drained()` -- `tick.py`'s documented stop
+    signal -- was unreachable for any item that must be parked.
+
+    WHAT MAKES THIS FAIL: the same `REOPEN_DISPUTES = TERMINAL` revert. The item
+    lands in `needs-audit`, which is non-terminal by design, and `drained()`
+    returns False. It also fails if `drained()` is widened to count
+    `needs-audit`, which is the wrong fix in the other direction -- so the
+    second half pins that a genuine audit still blocks the exit."""
+    led = _led(tmp_path)
+    _parked(led)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.drained() is True
+    assert led.items[2874] not in led.remaining()
+
+    # ...and a real `needs-audit` still blocks it. Without this the first
+    # assertion is satisfied by a `drained()` that counts everything.
+    led.upsert(4491, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(4491, NEEDS_AUDIT, "departed")
+    assert led.drained() is False
+
+
+def test_negative_control_a_park_never_reaches_the_receipt_void(tmp_path):
+    """A park holds no receipt-in-dispute, and the void must not fire for it.
+
+    `record_receipt` refuses a terminal item, so the only way a parked item
+    holds one is to have taken it BEFORE the park -- which is the realistic
+    shape: a lane takes a `deploy-path` receipt, the deploy is then blocked, and
+    the item parks holding it.
+
+    WHAT MAKES THIS FAIL: reverting `REOPEN_DISPUTES` to `TERMINAL` runs the
+    void over the park and clears `receipt_kind`, so the first assertion goes
+    red. The second and third pair it with a positive: the void still fires on
+    the `closed` route, and its history line names the state the item actually
+    reached rather than claiming it was closed (R7)."""
+    led = _led(tmp_path)
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    led.record_receipt(2874, "deploy-run", "run/35171642605")
+    led.items[2874].blocker = "no GCC tenant"
+    led.items[2874].owner = "operator"
+    led.transition(2874, PARKED, "blocked on a tenant that does not exist")
+
+    led.upsert(2874, "bicep drift, GCC-High", "W1-deploy", lane="lane:bicep", size=3)
+    assert led.items[2874].receipt_kind == "deploy-run"
+    assert not any("VOID" in h for h in led.items[2874].history)
+
+    # Paired positive, on the route the void is FOR.
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached closed" in h for h in led.items[1].history)
+
+
+def test_a_declined_item_seen_open_is_still_disputed(tmp_path):
+    """THE DECISION, pinned rather than inherited. `declined` stays in the
+    dispute set: "will not do" leaves nothing to track, so the disposal is
+    closing the issue as not-planned, and one still open after a decline means
+    the decline never reached GitHub or someone is disputing it.
+
+    WHAT MAKES THIS FAIL: narrowing `REOPEN_DISPUTES` to `(CLOSED,)` leaves the
+    declined item `declined` and `audit_reason` None. Kills L27.
+
+    The second item carries NO receipt, which is the ORDINARY shape of a decline
+    -- `transition(DECLINED)` requires none. It is here because a filter placed
+    inside the predicate (`... and existing.receipt_kind`) would pass every
+    other reopen test in this file, all of which happen to record one: that arm
+    is L29, and this fixture is what kills it.
+
+    The last assertion is the R7 half: a declined item that held a receipt gets
+    a history line naming `declined`, not one asserting it "was closed on it" --
+    a claim the code cannot establish for this route. Kills L28."""
+    led = _led(tmp_path)
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, DECLINED, "operator 2026-09-17: superseded")
+
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.transition(2, DECLINED, "operator 2026-09-17: superseded, no receipt taken")
+
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    assert led.items[1].state == NEEDS_AUDIT
+    assert led.items[1].audit_reason == led_mod.AUDIT_REOPENED
+    assert led.items[1].receipt_kind is None
+    assert any("VOID" in h and "reached declined" in h for h in led.items[1].history)
+    assert led.items[2].state == NEEDS_AUDIT, (
+        "a decline holds no receipt, so a dispute route gated on holding one "
+        "would never fire for the state it was written for"
+    )
+    assert led.items[2].audit_reason == led_mod.AUDIT_REOPENED
+
+
+def test_a_terminal_transition_clears_a_stale_audit_reason(tmp_path):
+    """A CLOSED ITEM IS NOT ALSO A DEPARTED ONE (round 9 nit, pre-existing).
+
+    `audit_reason` is a SCALAR set on the way IN to `needs-audit`, and the only
+    thing that cleared it was `upsert`'s departure rescue -- the path where the
+    item turns up open on GitHub again. Recovering the OTHER way, which is what
+    the drain now does routinely (re-take the receipt on an audited item and
+    close it), left the item reading `state=closed reason='departed'`. A cold
+    reader of the ledger sees a closed item still labelled as having vanished,
+    and there is no way to tell that label apart from a live one.
+
+    Both audit reasons are exercised, because the reopen route and the
+    departure route write the field at different sites and a fix at one of them
+    is the one-sided shape this package keeps producing.
+
+    WHAT MAKES THIS FAIL: deleting the `if state in TERMINAL:` clear in
+    `transition`, which is arm L30 -- the item reaches `closed` with
+    `audit_reason` still set. The POSITIVE PAIR is the third block: a
+    NON-terminal transition must NOT clear the field, or "clear it always" would
+    satisfy the two negatives while destroying the departure rescue's own
+    premise (`was_state == NEEDS_AUDIT and audit_reason == AUDIT_DEPARTED`).
+    """
+    led = _led(tmp_path)
+
+    # departed -> re-receipted -> closed
+    led.upsert(1, "x", "W6-ci", lane="lane:ci", size=1)
+    led.items[1].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(1, NEEDS_AUDIT, "vanished from the live set")
+    led.record_receipt(1, "ci-green", "run/1")
+    led.transition(1, CLOSED, "re-taken after the audit")
+    assert led.items[1].state == CLOSED
+    assert led.items[1].audit_reason is None, (
+        "a closed item still reads as departed - the value that breaks this is "
+        "the terminal clear removed from `transition`"
+    )
+
+    # reopened -> declined
+    led.upsert(2, "y", "W6-ci", lane="lane:ci", size=1)
+    led.items[2].audit_reason = led_mod.AUDIT_REOPENED
+    led.transition(2, NEEDS_AUDIT, "open on GitHub again")
+    led.transition(2, DECLINED, "operator 2026-09-18: superseded")
+    assert led.items[2].state == DECLINED
+    assert led.items[2].audit_reason is None, (
+        "a declined item still reads as reopened"
+    )
+
+    # THE POSITIVE PAIR. A non-terminal transition leaves the reason alone; the
+    # departure rescue in `upsert` reads it AFTER exactly such a move.
+    led.upsert(3, "z", "W6-ci", lane="lane:ci", size=1)
+    led.items[3].audit_reason = led_mod.AUDIT_DEPARTED
+    led.transition(3, NEEDS_AUDIT, "vanished from the live set")
+    assert led.items[3].audit_reason == led_mod.AUDIT_DEPARTED, (
+        "clearing on EVERY transition would break the departure rescue, whose "
+        "whole premise is reading this field on a `needs-audit` item"
+    )
+
+
 def test_negative_control_a_receipt_is_stamped_with_the_class_it_was_taken_under(
     tmp_path,
 ):
@@ -765,3 +967,161 @@ def test_counts_cover_every_state(tmp_path):
     assert counts["total"] == 1
     assert counts[READY] == 1
     assert counts[DECLINED] == 0
+
+
+# -- LOST UPDATES ------------------------------------------------------------
+#
+# `save()` is atomic at the FILE level and was never atomic at the DOCUMENT
+# level. It serialises the whole ledger from memory, so two transactions that
+# overlap do not conflict -- the second writes a document that never contained
+# the first one's change. Reproduced by an independent reviewer against the new
+# receipt write path, and reproduced again here before the guard was written.
+
+
+def _seed_two(tmp_path):
+    led = Ledger(str(tmp_path / "state.json"), receipts=RECEIPTS)
+    led.upsert(990001, "item A", "W6-ci", lane="lane:ci", size=1)
+    led.upsert(990002, "item B", "W6-ci", lane="lane:ci", size=1)
+    led.save()
+    return str(tmp_path / "state.json")
+
+
+def test_positive_control_an_uncontended_guarded_save_still_works(tmp_path):
+    """THE CONTROL. Every test below asserts a refusal, and a guard that refused
+    unconditionally would satisfy all of them while making the ledger
+    unwritable. This pins that the ordinary path is unaffected."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.record_receipt(990001, "ci-green", "green at sha")
+    led.transition(990001, CLOSED, "closed")
+    led.save(if_unchanged=True)
+    assert Ledger(path, receipts=RECEIPTS).load().items[990001].state == CLOSED
+
+
+def test_blocker_a_stale_writer_cannot_discard_a_concurrent_close(tmp_path):
+    """THE LOST UPDATE, measured before the guard existed: B closed #990002 and
+    saved; A, holding a document loaded before that, saved its own unrelated
+    change; #990002 came back `ready` with its receipt and history line GONE.
+
+    Silent, and it un-closes a RECEIPTED item -- so the next tick re-selects
+    work that was already finished and verified.
+
+    Would pass (no exception) if the digest comparison were removed; that is
+    arm RW10.
+    """
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+
+    b.record_receipt(990002, "ci-green", "green at sha B")
+    b.transition(990002, CLOSED, "B closed it")
+    b.save(if_unchanged=True)
+
+    a.notes.append("A's unrelated edit")
+    with pytest.raises(led_mod.LedgerChangedError, match="changed since this transaction"):
+        a.save(if_unchanged=True)
+
+    final = Ledger(path, receipts=RECEIPTS).load()
+    assert final.items[990002].state == CLOSED, "B's verified close was discarded"
+    assert final.items[990002].receipt_kind == "ci-green"
+
+
+def test_a_refused_save_writes_nothing_at_all(tmp_path):
+    """A refusal must not leave a partial document. Compared by DIGEST rather
+    than by re-reading fields, so a change anywhere in the file is caught."""
+    import hashlib
+
+    path = _seed_two(tmp_path)
+    a = Ledger(path, receipts=RECEIPTS).load()
+    b = Ledger(path, receipts=RECEIPTS).load()
+    b.notes.append("b was here")
+    b.save(if_unchanged=True)
+
+    with open(path, "rb") as handle:
+        before = hashlib.sha256(handle.read()).hexdigest()
+    a.notes.append("stale")
+    with pytest.raises(led_mod.LedgerChangedError):
+        a.save(if_unchanged=True)
+    with open(path, "rb") as handle:
+        assert hashlib.sha256(handle.read()).hexdigest() == before
+
+
+def test_the_same_transaction_can_save_twice(tmp_path):
+    """The digest is refreshed after a successful write, or a caller that saves
+    twice would refuse itself on its OWN previous save -- which would make the
+    guard unusable for any multi-step operation."""
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+    led.notes.append("first")
+    led.save(if_unchanged=True)
+    led.notes.append("second")
+    led.save(if_unchanged=True)
+    assert "second" in Ledger(path, receipts=RECEIPTS).load().notes
+
+
+def test_a_guarded_save_does_not_read_the_file_back_after_writing(monkeypatch, tmp_path):
+    """THE POST-WRITE WINDOW, armed by COUNTING rather than by racing.
+
+    `save()` used to refresh its digest by RE-READING the file after
+    `os.replace`. A writer landing in that gap leaves this ledger holding
+    someone else's digest, and the next guarded save then sails through the
+    comparison it was supposed to fail. Fixed by hashing the payload that was
+    written.
+
+    NO SEQUENTIAL TEST CAN KILL THAT MUTATION. The two implementations differ
+    only inside a microseconds-wide gap between `os.replace` and the re-read, so
+    any test that drives them in order sees identical results -- a reviewer
+    spent a round establishing exactly that, and corrected themselves twice
+    doing it.
+
+    What IS deterministic is the OBSERVABLE the fix changes: a guarded save
+    reads the file once, for the comparison, and never again. Under the mutation
+    it reads twice. Counting the reads pins the property without needing to win
+    a race.
+
+    This asserts on a call count, which is closer to the implementation than
+    most tests here. That is deliberate and disclosed: the alternative is
+    leaving a correct fix silently green, so that a future editor restoring the
+    re-read gets no signal at all.
+    """
+    path = _seed_two(tmp_path)
+    led = Ledger(path, receipts=RECEIPTS).load()
+
+    reads = []
+    real = Ledger._on_disk_digest
+
+    def counting(self):
+        reads.append(1)
+        return real(self)
+
+    monkeypatch.setattr(Ledger, "_on_disk_digest", counting)
+    led.notes.append("one guarded save")
+    led.save(if_unchanged=True)
+
+    assert len(reads) == 1, (
+        f"a guarded save read the ledger back {len(reads)} times; the second read "
+        "is the post-write refresh, and a writer in that gap leaves this "
+        "transaction holding someone else's digest"
+    )
+
+
+def test_an_unguarded_save_replaces_whatever_is_there(tmp_path):
+    """`if_unchanged=False` is the unguarded write `--bootstrap` needs: it
+    replaces the document outright rather than reconciling with it.
+
+    IT NO LONGER CLAIMS TO MIRROR `main()`. The previous version transcribed
+    `fresh.save(if_unchanged=fresh.loaded_from_disk)` with the comment "exactly
+    what tick.main() does" -- and that stopped being true the moment `main()`
+    switched to `not args.bootstrap`, so the test went on agreeing with a copy
+    of an expression that no longer existed. A reviewer found it at its second
+    site after the same defect produced the round-4 blocker at its first.
+
+    Whether `main()` passes the right flag is `main()`'s test to make, and it is
+    made by driving `main()` -- see `test_bootstrap_still_reseeds_over_an_
+    existing_ledger` in test_tick.py.
+    """
+    path = _seed_two(tmp_path)
+    fresh = Ledger(path, receipts=RECEIPTS)  # no .load()
+    fresh.upsert(3001, "seeded", "W6-ci", lane="lane:ci", size=1)
+    fresh.save(if_unchanged=False)
+    assert 3001 in Ledger(path, receipts=RECEIPTS).load().items
