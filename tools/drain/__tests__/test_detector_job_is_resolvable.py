@@ -24,12 +24,41 @@ import json
 import pathlib
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "tools" / "drain"))
+_HERE = pathlib.Path(__file__).resolve()
+sys.path.insert(0, str(_HERE.parents[1]))
 
 import gates  # noqa: E402
 
-POLICY = json.loads((ROOT / "tools" / "drain" / "policy.json").read_text(encoding="utf-8"))
+
+def _workflow_root() -> pathlib.Path | None:
+    """The tree holding `.github/workflows`, in the repo OR in the sandbox.
+
+    Walks UP looking for the marker rather than counting `parents[n]`. An
+    earlier revision of this file used `parents[3]`, which resolved to `/` when
+    the mutation runner copied the package to a temp dir -- the control run
+    died on `FileNotFoundError: /tools/drain/policy.json` and the harness
+    correctly refused to score anything ("REFUSING -- control is not green").
+
+    `test_ci_green_declared.py` already carries this helper and a comment
+    explaining exactly that failure. This is the same walk, deliberately keyed
+    on `.github/workflows` ALONE and NOT on `scripts/ci`: the two-marker form
+    returns None in the sandbox, which would SKIP these arms precisely where
+    the mutants live, and a guard that skips there scores every arm KILLED
+    regardless of the mutation. That tautology is one this package has been
+    burned by twice.
+    """
+    for candidate in _HERE.parents:
+        if (candidate / ".github" / "workflows").is_dir():
+            return candidate
+    return None
+
+
+#: `policy.json` sits beside `gates.py`, so it is resolved from the imported
+#: module rather than from a path walk -- it travels with the package into the
+#: sandbox, and asking the module where it lives cannot disagree with the
+#: module the test is exercising.
+POLICY_PATH = pathlib.Path(gates.__file__).resolve().parent / "policy.json"
+POLICY = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 SCOPE_ROWS = POLICY["receipts"]["ci_green_rule"]["scope_paths"]
 
 #: Rows that declare a cross-job detector. A row with no `detector_job` resolves
@@ -41,7 +70,10 @@ CROSS_JOB_ROWS = {
 
 
 def _workflow_text(path: str) -> str | None:
-    p = ROOT / path
+    root = _workflow_root()
+    if root is None:
+        return None
+    p = root / path
     return p.read_text(encoding="utf-8") if p.is_file() else None
 
 
