@@ -82,8 +82,14 @@ RUNNER_IMAGE="${ACR}/${IMAGE_REPO}:${IMAGE_TAG}"
 # the admin RG, Key Vault Secrets Officer on kv-loom, Reader at the management
 # group. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands
 # back this job's own github-pat secret - and RBAC Administrator grants exactly
-# the roleAssignments/write that Contributor's notActions deny. On a PUBLIC
-# repo, where an approved fork PR runs arbitrary code here.
+# the roleAssignments/write that Contributor's notActions deny.
+#
+# TENSE: this used to end "On a PUBLIC repo, where an approved fork PR runs
+# arbitrary code here", in the present tense, and that is not true today. The
+# repo IS public; what is not true is that PR code reaches this job, because
+# vars.CI_RUNNER is unset (measured 2026-09-25: 11 repository variables, none
+# named CI_RUNNER) and every converted job routes to ubuntu-latest. The
+# exposure is real WHEN that variable is set.
 #
 # uami-loom-ci holds ONE assignment: AcrPull on the Loom ACR. Add a grant only
 # when a specific job PROVES it needs one.
@@ -133,7 +139,7 @@ GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"   # GH Enterprise: se
 # fleet that no longer existed.
 SCALE_LABELS="${SCALE_LABELS:-loom-aca}"             # only count runs requesting these labels
 TARGET_QUEUE_LEN="${TARGET_QUEUE_LEN:-1}"            # 1 pending run -> 1 execution
-MAX_EXECUTIONS="${MAX_EXECUTIONS:-8}"                # operator cap, with a 3-node D8 ceiling
+MAX_EXECUTIONS="${MAX_EXECUTIONS:-8}"                # operator cap on concurrent executions
 MIN_EXECUTIONS="${MIN_EXECUTIONS:-0}"                # scale-to-zero
 POLLING_INTERVAL="${POLLING_INTERVAL:-30}"
 REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-9600}"           # 160 min > the longest job cap (150)
@@ -231,36 +237,67 @@ fi
 echo ""
 echo "[provision-gh-runner] 1/3 Acquiring the ACR firewall lease (opens the registry)..."
 bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
+LEASE_HELD=1
 
-# Release the lease and VERIFY the registry re-locked. RETURNS 0 or 1; it never
-# exits. #4827: this used to end in `exit "$rc"` and was also called inline at
-# step 2, where `rc` was the preceding echo's 0 -- so the script exited 0 right
-# there, a failed build reported success, and step 3 never ran on a good one.
+# Temp files the later steps create. Declared HERE, empty, because the single
+# EXIT trap installed below is live from this point on and must be able to run
+# before they exist.
+SHOW_ERR=""
+IDENT_ERR=""
+
+# Release the lease if we still hold it. RETURNS a verdict; it does NOT exit.
+#
+# IT USED TO EXIT, AND THAT IS WHY THIS FUNCTION IS SHAPED THIS WAY. Step 2
+# calls it directly, so `exit "$rc"` there terminated the whole script at the
+# end of Step 2 — with `$?` taken from the preceding `echo`, i.e. 0. Measured on
+# real bash, not reasoned about: Step 3 never ran, so `reconcile_identity` and
+# `assert_identity_is_exactly_runner` were unreachable; the EXIT trap then fired
+# `release_acr_lease` a SECOND time; and a failed `az acr build` exited 0
+# instead of `$build_rc`, which is a deploy path reporting success having
+# produced nothing. That is the same "the guard is on a code path the
+# provisioner does not take" defect this file's Step 3 comment was written to
+# close, committed in the fix for it.
+#
+# Idempotent via LEASE_HELD, so the eager Step 2 call and the EXIT trap cannot
+# double-release.
 release_acr_lease() {
+  [[ "$LEASE_HELD" -eq 1 ]] || return 0
   # C24 (#3088): NO `|| true`. `release` VERIFIES the registry reads back
   # publicNetworkAccess=Disabled + defaultAction=Deny; discarding that verdict
   # is a script exiting 0 over a publicly reachable registry.
   if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
+    # Do not leave it armed for the trap to retry: one verified-failed re-lock
+    # is the verdict, and a retry would report the same failure twice while
+    # changing nothing.
+    LEASE_HELD=0
     echo "[provision-gh-runner] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
     return 1
   fi
+  LEASE_HELD=0
   return 0
 }
 
-# The FAILURE path only: anything that ends the script before step 2's explicit
-# release (a FATAL, a failed command under set -e, a signal) still re-locks.
-# It keeps the status the script was already exiting with, and turns a failed
-# release into a non-zero exit: a bare non-zero command in an EXIT trap does NOT
-# change the script's status (measured in deploy-loom-uat-job.sh).
-release_acr_lease_on_exit() {
-  local rc=$?
-  if ! release_acr_lease; then
-    if [[ $rc -ne 0 ]]; then exit "$rc"; fi
-    exit 1
-  fi
+# THE SINGLE EXIT TRAP. Traps are not additive: a later `trap ... EXIT` REPLACES
+# this one rather than adding to it, which is what a second `trap 'rm -f ...'
+# EXIT` further down used to do. Every EXIT-time obligation belongs here.
+#
+# Preserves the status the script was already exiting with, so a clean re-lock
+# never masks a failed build (see deploy-loom-uat-job.sh for the measurement: a
+# bare non-zero command in an EXIT trap does NOT set the script's status).
+on_exit() {
+  local rc=$? f
+  # Belt-and-braces: under the current linear flow Step 2 has always released
+  # by the time we get here, so this arm is an EQUIVALENT MUTANT on that path —
+  # disclosed rather than counted as coverage (assertion-design.md "done" #5).
+  # It is live for an exit BEFORE Step 2, which is what a SIGINT during the
+  # multi-minute `az acr build` produces.
+  if ! release_acr_lease; then rc=1; fi
+  for f in "$SHOW_ERR" "$IDENT_ERR"; do
+    [[ -n "$f" ]] && rm -f "$f"
+  done
   exit "$rc"
 }
-trap release_acr_lease_on_exit EXIT
+trap on_exit EXIT
 
 echo "[provision-gh-runner] Building ${IMAGE_REPO}:${IMAGE_TAG} via ACR Tasks..."
 BUILD_ARG_FLAGS=()
@@ -283,10 +320,12 @@ build_rc=0
 
 # ---------------------------------------------------------------------------
 # Step 2 — Release the ACR firewall lease (ALWAYS, even on build failure).
-#   Released eagerly so the registry isn't held open through Step 3. The helper
-#   RETURNS, so the build's status below is still reachable; the EXIT trap is
-#   cleared only after a VERIFIED release. If the release cannot be verified the
-#   trap stays set, so the exit re-attempts it once more before the script fails.
+#   Released eagerly so the registry isn't held open through Step 3; the EXIT
+#   trap makes this idempotent.
+#
+#   The `if !` matters: release_acr_lease RETURNS its verdict and the decision
+#   to stop is taken HERE. When it exited on its own, that exit ended the
+#   script at the end of Step 2 and Step 3 never ran.
 # ---------------------------------------------------------------------------
 echo ""
 echo "[provision-gh-runner] 2/3 Releasing the ACR firewall lease..."
@@ -294,7 +333,6 @@ if ! release_acr_lease; then
   echo "[provision-gh-runner][FATAL] step 2/3: the ACR firewall lease release could not verify $ACR_NAME re-locked (build rc=$build_rc). Job not deployed." >&2
   exit 1
 fi
-trap - EXIT
 
 if [[ $build_rc -ne 0 ]]; then
   echo "[provision-gh-runner][FATAL] step 1/3: az acr build of ${IMAGE_REPO}:${IMAGE_TAG} exited $build_rc. The registry was re-locked; step 3 (create/update job '$JOB_NAME') was NOT run. The build's own log is in ACR Tasks: az acr task list-runs -r $ACR_NAME --subscription $SUB -o table" >&2
@@ -395,9 +433,12 @@ _lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # what ARM returns, not against RUNNER_UAMI_ID's spelling.
 assert_identity_is_exactly_runner() {
   local attached rc want got n
+  # `|| rc=$?` rather than a bare call + `rc=$?`: under `set -e` the bare form
+  # kills the script on failure, so the "could not READ BACK" arm below could
+  # never execute — the could-not-fail shape this file keeps finding.
+  rc=0
   attached=$(az containerapp job show "${ID_ARGS[@]}" \
-    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR")
-  rc=$?
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR") || rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "[provision-gh-runner][FATAL] could not READ BACK the job's identity (az exit $rc)." >&2
     echo "  This is not 'the identity is wrong' -- it is 'I could not establish what it is'," >&2
@@ -442,9 +483,11 @@ assert_identity_is_exactly_runner() {
 # are actually attached and are not the one we want.
 reconcile_identity() {
   local attached rc id
+  # Same `|| rc=$?` shape as the read-back, and for the same reason: `set -e`
+  # would otherwise make every error arm in this function unreachable.
+  rc=0
   attached=$(az containerapp job show "${ID_ARGS[@]}" \
-    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR")
-  rc=$?
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR") || rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "[provision-gh-runner][FATAL] could not read the job's current identity (az exit $rc)." >&2
     cat "$IDENT_ERR" >&2
@@ -452,9 +495,9 @@ reconcile_identity() {
   fi
 
   echo "[provision-gh-runner] reconciling identity to $RUNNER_UAMI_ID"
+  rc=0
   az containerapp job identity assign "${ID_ARGS[@]}" \
-    --user-assigned "$RUNNER_UAMI_ID" -o none
-  rc=$?
+    --user-assigned "$RUNNER_UAMI_ID" -o none || rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "[provision-gh-runner][FATAL] could not assign $RUNNER_UAMI_ID (az exit $rc)." >&2
     exit 1
@@ -463,8 +506,8 @@ reconcile_identity() {
   for id in $attached; do
     if [[ "$(_lc "$id")" != "$(_lc "$RUNNER_UAMI_ID")" ]]; then
       echo "[provision-gh-runner] detaching non-runner identity: $id"
-      az containerapp job identity remove "${ID_ARGS[@]}" --user-assigned "$id" -o none
-      rc=$?
+      rc=0
+      az containerapp job identity remove "${ID_ARGS[@]}" --user-assigned "$id" -o none || rc=$?
       if [[ $rc -ne 0 ]]; then
         echo "[provision-gh-runner][FATAL] could not detach $id (az exit $rc). Refusing to" >&2
         echo "  report success while a privileged identity is still attached." >&2
@@ -478,12 +521,19 @@ reconcile_identity() {
 # discarded stderr would turn "I could not reach ARM" into "the job does not
 # exist", send the run down the create branch, and report whatever that did.
 # Capture instead, and only treat a genuine not-found as not-found (R7).
+#
+# NO `trap ... EXIT` HERE. These files are cleaned by on_exit, which was
+# installed once at Step 1. A second `trap 'rm -f ...' EXIT` at this point
+# REPLACED the lease trap rather than adding to it — traps are not additive —
+# and once Step 3 became reachable that would have been a live lease leak.
 SHOW_ERR="$(mktemp)"
 IDENT_ERR="$(mktemp)"
-trap 'rm -f "$SHOW_ERR" "$IDENT_ERR"' EXIT
 
-az containerapp job show "${ID_ARGS[@]}" -o none 2>"$SHOW_ERR"
-show_rc=$?
+# `|| show_rc=$?` is load-bearing under `set -e`: a bare `az ...` followed by
+# `show_rc=$?` would terminate the script on the very failure the branches
+# below exist to classify, so the "could not determine" arm could never run.
+show_rc=0
+az containerapp job show "${ID_ARGS[@]}" -o none 2>"$SHOW_ERR" || show_rc=$?
 
 if [[ $show_rc -eq 0 ]]; then
   job_exists=1
