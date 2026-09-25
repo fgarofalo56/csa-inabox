@@ -1302,18 +1302,44 @@ REVERSAL_FLAGS = {PARKED: "--unpark", DECLINED: "--undecline"}
 #: capabilities one field over. The README still carries the reasoning. This
 #: carries the refusal.
 #:
-#: WHY HERE AND NOT IN `policy.json`, which is where a reviewer proposed it and
-#: is the better home once it can have one: `gates.policy_keys_without_implementation`
-#: requires every non-`_` policy leaf to be DECLARED in a `gates.py` mapping, so
-#: a `reversal_holds` map there needs a `gates.py` edit this PR does not own.
-#: Measured, not assumed -- a dict with numeric keys reports
+#: WHY HERE AND NOT IN `policy.json`, WHICH IS WHERE EVERY OTHER AUTHORITY IN
+#: THIS PACKAGE LIVES. Two reviewers have now proposed moving it, on the
+#: reasonable argument that `policy.json` is where an operator vetoes an
+#: authority. **The argument does not transfer, and the reason is POLARITY.**
+#:
+#: `policy.json`'s authorities are ALLOWLISTS. `gates.action_is_permitted`
+#: (`gates.py:5375-5382`) reads them with `.get(key, default)`:
+#:
+#:     if action in policy.get("never", []):                 # missing -> no match
+#:     stop = policy.get("stop_and_ask", {})                 # missing -> no match
+#:     if action in policy.get("permitted_unattended", []):  # missing -> NO MATCH
+#:     return False, "not in permitted_unattended - fails closed..."
+#:
+#: A missing key yields no match, no match yields DENY, and the file is safe
+#: BECAUSE absence is refusal. A HOLD SET IS A DENYLIST AND INVERTS EVERY LINE
+#: OF THAT. `policy.get("reversal_holds", {})` over a missing key, a non-object
+#: value or an unreadable file yields `{}`, the item is not found, and the
+#: reversal PROCEEDS. The identical idiom that makes a permission fail closed
+#: makes a hold fail OPEN -- into the chain above: unpark, Commercial roll,
+#: record, public "verified" close, unattended, with nobody present to notice
+#: that a key went missing. A denylist in a data file needs three extra branches
+#: (missing key, non-object, unreadable) each deciding correctly; a module
+#: constant cannot get any of them wrong because it cannot be in any of those
+#: states. That is not a preference, it is the whole safety property.
+#:
+#: SO THE PROSE GOES TO `policy.json` AND THE REFUSAL STAYS HERE.
+#: `policy.json`'s `_reversal_holds` names both items, both reasons, the
+#: measurement and the issue that lifts them, so an operator looking in the
+#: authority file finds the hold and can veto it by deleting the entries here.
+#: What they cannot do is silently disable it by dropping a key.
+#: `ledger.CLOSES_ON_GITHUB` is the same shape and the precedent.
+#:
+#: A `reversal_holds` map in `policy.json` would ALSO need a row per item in
+#: `gates.OTHER_IMPLEMENTED_BY`, since `policy_keys_without_implementation`
+#: walks every non-`_` leaf -- measured: a dict with numeric keys reports
 #: `['reversal_holds.2874', 'reversal_holds.2958']` missing and reds six
-#: `test_policy.py` tests. The constant is also strictly harder to fail open: a
-#: JSON map can be missing, can be a non-object, and can be an unreadable file,
-#: and each of those is a branch that has to decide correctly. A module constant
-#: has none of them. `ledger.CLOSES_ON_GITHUB` is the same shape and the
-#: precedent -- a policy-bearing constant beside the code that enforces it, with
-#: `policy.json` carrying the prose (`_reversal_holds`).
+#: `test_policy.py` tests. That is a cost, not the reason; the polarity above is
+#: the reason, and it does not expire when the mapping becomes editable.
 #:
 #: KEYED ON THE ISSUE NUMBER, which is the one thing about an item a lane cannot
 #: move. `blocker`, `lane`, `receipt_class`, `audit_reason` and the title are all
