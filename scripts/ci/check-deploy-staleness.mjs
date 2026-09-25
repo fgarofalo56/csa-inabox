@@ -1070,6 +1070,16 @@ export const WATCHED = [
       //       simply had no way to declare it.
       'scripts/ci/deploy-image-roles.mjs',
       'scripts/ci/resolve-image-preflight-refs.mjs',
+      // #4586 — the post-deploy eval re-baseline. This lane used to carry it as
+      // a 633-line inline `run:` block; that block is why GitHub refused to LOAD
+      // the whole workflow, so it was extracted verbatim to this script and the
+      // step now calls it. The extraction moved a deploy source OUT of a watched
+      // path and into an unwatched one — check-deploy-paths-coverage flagged it
+      // on the very next run, which is the hole that check working. NOT
+      // CI_PLUMBING: the script STARTS a Container App job execution against the
+      // live estate and re-baselines the Copilot quality corpus, so editing it
+      // plainly changes what this lane does to the deployment.
+      'scripts/csa-loom/start-copilot-evaluator-rebaseline.sh',
     ],
     maxDays: 21,
   },
