@@ -140,6 +140,41 @@ describe('resolveItemDatabase', () => {
     })).toBe('c');
   });
 
+  it('prefers the PROVISIONING RECEIPT over a client-writable declared field (#4619)', () => {
+    // THE PRECEDENCE ARM, and the one the three asserts above cannot make:
+    // each of those supplies exactly ONE source, so they pin that each source
+    // is read, not which wins when both are present. Until this, `state
+    // .database` beat the receipt — the one resolver where a client-writable
+    // value outranked the server's own record, while `synapse-item-scope.ts`
+    // resolved the other way.
+    //
+    // WHAT WOULD MAKE THIS FAIL: moving the top-level loop back above the
+    // provisioning branch in `resolveItemDatabase`, which is exactly the
+    // pre-fix order.
+    expect(resolveItemDatabase({
+      state: {
+        database: 'VICTIM_DB',
+        provisioning: { status: 'created', secondaryIds: { database: 'own-db' } },
+      },
+    })).toBe('own-db');
+    expect(resolveItemDatabase({
+      state: {
+        databaseName: 'VICTIM_DB',
+        provisioning: { status: 'exists', resourceId: 'own-db' },
+      },
+    })).toBe('own-db');
+    // PAIRED POSITIVE, so the above cannot be satisfied by ignoring the
+    // declared field entirely: with NO successful receipt the declaration is
+    // still what the item is bound to.
+    expect(resolveItemDatabase({ state: { database: 'declared' } })).toBe('declared');
+    expect(resolveItemDatabase({
+      state: {
+        database: 'declared',
+        provisioning: { status: 'failed', secondaryIds: { database: 'own-db' } },
+      },
+    })).toBe('declared');
+  });
+
   it('falls back to the env default only when the item declares nothing', () => {
     expect(resolveItemDatabase({ state: {} })).toBe('loomdb-default');
     expect(resolveItemDatabase(null)).toBe('loomdb-default');

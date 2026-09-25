@@ -2943,3 +2943,705 @@ def test_the_transfer_is_direction_agnostic_about_which_parent_is_approved():
     """
     ok, why = gates.verdict_transfers_across_base_update([B, A], A, T_MERGE, T_MERGE)
     assert ok, why
+
+
+# ---------------------------------------------------------------------------
+# Supersession -- the ONE explicit discharge (#4704, measured on PR #4693)
+# ---------------------------------------------------------------------------
+#
+# The configuration that stranded #4693: the finding was NOT IN THE DIFF (a
+# squash body the coordinator authors at merge time), so nothing could be
+# pushed to void the block; the coordinator fixed it; the same reviewer
+# re-adjudicated at the UNCHANGED head and approved. `[RC, APPROVE, APPROVE]`,
+# all live, all pinned to one sha, NO-GO forever.
+#
+# Every fixture below goes through `parse_verdicts` on REAL COMMENT TEXT rather
+# than constructing `Verdict(supersedes=(1,))` by hand. A test that sets the
+# field directly cannot witness `_supersessions` at all -- it would pass with
+# the marker parser deleted, which is the "could not fail" shape
+# `assertion-design.md` is about.
+
+#: LIFTED from the source, never transcribed. A typo here would otherwise make
+#: the probe agree with itself while disagreeing with the parser.
+SUP = gates.SUPERSESSION_MARKER
+
+LATER = "2026-09-11T11:00:00Z"
+
+
+def _review(cid, token, supersedes=None, pad="", wrap=None):
+    """A real review comment, optionally carrying a supersession line.
+
+    `wrap` CITES the supersession instead of stating it, in each of the idioms
+    `classify_lines` enumerates.
+    """
+    body = f"## Independent re-review - {token}\n\n{pad}Head `abc`."
+    if supersedes is not None:
+        line = f"{SUP} {supersedes}"
+        block = {
+            None: line,
+            "quote": f"> {line}",
+            "fence": f"```\n{line}\n```",
+            "indent": f"    {line}",
+            "details": f"<details>\n{line}\n</details>",
+            "comment": f"<!--\n{line}\n-->",
+        }[wrap]
+        body += f"\n\n{block}\n"
+    return _c(cid, body, LATER)
+
+
+def _reduce(comments):
+    live, near = gates.parse_verdicts(comments, HEAD)
+    return gates.reduce_verdicts(live, near)
+
+
+def test_an_approve_that_names_the_block_discharges_it():
+    """#4693's shape exactly, and the only thing this feature adds.
+
+    Breaks if: the `SUPERSEDES` line is not parsed at all (the state before
+    #4704 -- this returns NO-GO "live REQUEST-CHANGES"), or if the id is read
+    but not matched against the blocking verdict's comment id.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert ok, why
+    assert SUP in why, f"the discharge must be said out loud: {why}"
+    assert "1" in why, f"the discharge must NAME what it cleared: {why}"
+
+
+def test_negative_control_an_approve_with_no_supersession_still_blocks():
+    """THE PROPERTY BEING PRESERVED, and the arm most likely to be lost.
+
+    Conjunction, not recency: a later APPROVE that names nothing discharges
+    nothing. This is the same input as the test above minus the marker line.
+
+    Breaks if: the discharge is loosened to "any later APPROVE clears any
+    earlier block" -- i.e. if the id match is dropped, this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_discharging_one_block_does_not_discharge_another():
+    """`[RC(1), RC(3), APPROVE(2) SUPERSEDES 1]` -> still NO-GO.
+
+    Breaks if: the discharge is computed as "a supersession is present, so
+    clear the blocks" rather than as a set of NAMED ids -- then block 3, which
+    nobody addressed, vanishes and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+    assert "[1]" in why, f"the partial discharge is still reported: {why}"
+
+
+def test_a_supersession_may_name_several_blocks_on_one_line():
+    """Both ids, one line. Pairs with the test above: that one pins that an
+    UNNAMED block survives, this one pins that a NAMED one does not have to
+    survive just because it was listed second.
+
+    Breaks if: only the first integer on the line is read -- then block 3 is
+    undischarged and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1 3"),
+    ])
+    assert ok, why
+
+
+def test_negative_control_a_supersession_naming_a_missing_id_is_refused():
+    """REFUSED, not ignored -- failing open here would be the whole defect.
+
+    The fixture carries NO block, deliberately: with one, the reduction is
+    NO-GO either way and the assertion would have no kill power. Alone, an
+    implementation that skips an unrecognised id returns GO.
+
+    Breaks if: `discharged` is built by set union without checking that each id
+    is present -- then this returns GO on an APPROVE that discharged nothing.
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="999")])
+    assert not ok
+    assert SUP in why, why
+    assert "999" in why, f"the refusal must name the unresolvable id: {why}"
+
+
+def test_negative_control_a_supersession_naming_an_approve_is_refused():
+    """An id that IS a verdict but is NOT a block.
+
+    Breaks if: the target's token is never inspected -- then this returns GO,
+    and the same hole lets a supersession delete the only live APPROVE.
+    """
+    ok, why = _reduce([
+        _review(1, "APPROVE"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "not a block" in why, why
+
+
+def test_negative_control_a_supersession_naming_a_near_miss_is_refused_not_ignored():
+    """A blocking NEAR-MISS is not a verdict, so it cannot be superseded.
+
+    PINS THE REASON, NOT THE VERDICT, and says so: the reduction is NO-GO
+    either way here (the near-miss blocks on its own), so `not ok` alone has no
+    kill power for this arm. What distinguishes refusal from silence is WHICH
+    reason is reported.
+
+    Breaks if: an id that is not in the live verdict set is skipped -- then the
+    reported reason is "unparseable review at head", the broken supersession is
+    invisible, and it stays invisible until the round where it is the only
+    thing between the PR and a merge.
+    """
+    ok, why = _reduce([
+        _c(1, "## Independent re-review - CHANGES REQUIRED\n\nHead `abc`.", LATER),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert why.startswith(SUP), f"the refusal must outrank the near-miss: {why}"
+
+
+def test_negative_control_a_block_cannot_discharge_a_block():
+    """Mutual annihilation: `[RC(1) SUPERSEDES 2, RC(2) SUPERSEDES 1, APPROVE(3)]`.
+
+    Two blocks cancel each other and no reviewer ever withdrew either.
+
+    Breaks if: any live verdict may carry an honoured supersession, rather than
+    only a non-blocking one -- then both blocks are discharged, the APPROVE
+    satisfies the last condition, and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES", supersedes="2"),
+        _review(2, "REQUEST-CHANGES", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "cannot discharge a block" in why, why
+
+
+def test_negative_control_a_supersession_cannot_name_itself():
+    """PINS THE REASON, NOT THE VERDICT, and says so: the block at 1 is
+    undischarged either way, so this is NO-GO with or without the self-check.
+
+    Breaks if: the `target == v.comment_id` arm is removed -- the reported
+    reason becomes "live REQUEST-CHANGES", and self-discharge becomes a legal
+    no-op that reads as an act.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="2"),
+    ])
+    assert not ok
+    assert "names ITSELF" in why
+
+
+@pytest.mark.parametrize("wrap", ["fence", "indent", "details", "comment", "quote"])
+def test_negative_control_a_cited_supersession_discharges_nothing(wrap):
+    """Formatting may refuse to GRANT, and a discharge IS a grant.
+
+    A `SUPERSEDES` line that is quoted, fenced, indented, collapsed or
+    HTML-commented is a CITATION of a previous round -- relaying a verdict
+    inside a fence is how this program moves them around -- not an act.
+
+    Breaks if: `_supersessions` iterates raw lines instead of `classify_lines`
+    prose -- then a cited line discharges a live block and this returns GO.
+
+    WHICH ARMS ACTUALLY KILL, disclosed rather than counted (assertion-design
+    §5): `fence`, `indent`, `details` and `comment` each kill that mutation,
+    because `line.strip()` leaves those lines starting with the marker. `quote`
+    does NOT -- `.strip()` never removes the `>`, so `startswith(SUP)` is False
+    either way and the arm survives it. It is kept as a second, independent
+    guard on the idiom that produced the original bypass, and it is NOT counted
+    as coverage of the `classify_lines` call. Measured: the first version of
+    this test used `quote` alone and the raw-lines mutant SURVIVED the suite.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1", wrap=wrap),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_a_supersedes_line_with_no_id_is_refused():
+    """`SUPERSEDES the round-3 finding` names nothing addressable.
+
+    THIS FIXTURE IS DELIBERATELY DIGIT-BEARING. Its first run caught the
+    parser mining `3` out of "round-3" under a bare `\\d+` scan, so an English
+    sentence discharged whichever verdict happened to be comment 3. The
+    remainder of the line must be ids and separators ONLY.
+
+    No block in the fixture, for the same reason as the missing-id test: with
+    one, both implementations return NO-GO and the arm is blind.
+
+    Breaks if: a non-id remainder is mined for digits (the reason becomes
+    "names 3, which is not a live verdict"), or is dropped rather than recorded
+    as malformed (this returns GO while its author believes they discharged
+    something).
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="the round-3 finding")])
+    assert not ok
+    assert SUP in why, why
+    assert "no comment id" in why, why
+
+
+def test_a_supersession_tolerates_the_hash_and_comma_separators():
+    """`SUPERSEDES #1, 3` is the shape a human actually types. Pairs with the
+    test above: that one pins what is REFUSED, this one pins that the refusal
+    did not swallow the ordinary spelling.
+
+    Breaks if: `#` or `,` is not normalised to a separator -- the line becomes
+    malformed and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="#1, 3"),
+    ])
+    assert ok, why
+
+
+def test_a_supersession_below_the_token_window_still_registers():
+    """DELIBERATE, and asserted so a later narrowing is a decision, not a drift.
+
+    `token_window_chars` bounds where a verdict may be ANNOUNCED, because
+    announcing is the forgeable direction. The supersession is read off a
+    comment that has already announced a live verdict under that strict rule,
+    so bounding it too would only make a legitimate discharge silently
+    ineffective as a function of header length.
+
+    The fixture asserts its own arithmetic rather than trusting the pad: the
+    marker must genuinely start past the window.
+
+    Breaks if: `_supersessions` is narrowed to `body[:window]` -- then the
+    block is undischarged and this returns NO-GO.
+    """
+    comment = _review(2, "APPROVE", supersedes="1", pad="filler. " * 40)
+    window = gates.load_policy(
+        os.path.join(os.path.dirname(__file__), "..", "policy.json")
+    )["verdict_parsing"]["token_window_chars"]
+    assert comment["body"].index(SUP) > window, (
+        "the pad must push the marker PAST the window, or this test witnesses "
+        f"nothing: index={comment['body'].index(SUP)} window={window}"
+    )
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), comment])
+    assert ok, why
+
+
+def test_a_supersession_on_a_comment_that_announces_no_verdict_is_reported():
+    """It discharges nothing -- the safe direction -- which is exactly why it
+    must not be silent. None of the other near-miss branches fire for a comment
+    whose only unusual feature is this line.
+
+    Breaks if: the branch is removed -- `near` comes back empty for comment 5
+    and the author's belief that a block was cleared meets no contradiction.
+    """
+    live, near = gates.parse_verdicts(
+        [_c(5, f"Fixed the squash body.\n\n{SUP} 1\n", LATER)], HEAD
+    )
+    assert live == []
+    assert [n.comment_id for n in near] == [5]
+    assert SUP in near[0].reason
+    assert not near[0].blocks, "an unannounced supersession is not a block"
+
+
+# ---------------------------------------------------------------------------
+# ROUND 2: the discharge is the FIRST place the prose flag GRANTS anything.
+#
+# Before #4704, `classify_lines` fed two report-only callers -- `_cited_marker_
+# lines` and `out_of_window` -- so a missed idiom merely UNDER-REPORTED a near
+# miss. `_supersessions` turned the same flag into a grant, which changes the
+# consequence of a gap from "a citation is logged" to "a citation discharges a
+# block nobody withdrew". An independent review measured `<pre>`, `<blockquote>`
+# and `<code>` all doing exactly that; probing the class rather than the three
+# tags found `<samp>`, `<kbd>`, `<q>`, a mid-line `<!--`, and -- with no HTML at
+# all -- the lazy continuation of an ordinary Markdown blockquote.
+#
+# WHERE THE "RENDERS QUOTED OR LITERAL" CLAIM COMES FROM: GitHub's own renderer,
+# `POST /markdown` with mode=gfm, on 2026-09-24. Not from reading CommonMark --
+# which would have been wrong twice, because GitHub SANITISES `<script>`,
+# `<style>` and `<textarea>` (their content renders as ordinary visible prose)
+# while CommonMark makes them the most literal block type there is.
+
+
+def _carrier(block, cid=2, token="APPROVE", target=1):
+    """An announcing verdict whose SUPERSEDES line sits inside `block`.
+
+    `block` carries a `{line}` placeholder so each fixture shows the wrapper and
+    nothing else. The marker itself is always LIFTED from the source (`SUP`),
+    never transcribed, so a rename cannot make these probes agree with
+    themselves while disagreeing with the parser.
+    """
+    body = (f"## Independent re-review - {token}\n\nHead `abc`.\n\n"
+            + block.format(line=f"{SUP} {target}") + "\n")
+    return _c(cid, body, LATER)
+
+
+#: Measured against GitHub's renderer. The first eight put the marker inside a
+#: quoting or literal container; the last three render it VISIBLY and are
+#: refused anyway -- see the test docstring.
+HTML_CITATIONS = {
+    "pre": "<pre>\n{line}\n</pre>",
+    "blockquote": "<blockquote>\n{line}\n</blockquote>",
+    "code": "<code>\n{line}\n</code>",
+    "samp": "<samp>\n{line}\n</samp>",
+    "kbd": "<kbd>\n{line}\n</kbd>",
+    "q": "<q>\n{line}\n</q>",
+    "pre-with-attrs": '<pre lang="text">\n{line}\n</pre>',
+    "PRE-uppercase": "<PRE>\n{line}\n</PRE>",
+    "div": "<div>\n{line}\n</div>",
+    "table-cell": "<table>\n<tr><td>\n{line}\n</td></tr>\n</table>",
+    "unknown-tag": "<mytag>\n{line}\n</mytag>",
+}
+
+
+@pytest.mark.parametrize("wrapper", sorted(HTML_CITATIONS))
+def test_negative_control_a_supersession_inside_an_html_block_discharges_nothing(wrapper):
+    """THE ROUND-2 BLOCKER, and the class it belongs to rather than its members.
+
+    `classify_lines` knew `<details>` and nothing else, so each of these read as
+    prose and performed a REAL discharge of a live block. Measured, all eleven,
+    before the fix: `GO=True | SUPERSEDES discharged [1]`.
+
+    Breaks if: the HTML rule is narrowed back to an enumeration (arm SS9 spells
+    exactly that -- `_HTML_OPEN`/`_HTML_CLOSE` matching only `details`), or if
+    the `not html` term leaves the prose expression (arm C3).
+
+    OVER-STRICT ON PURPOSE, AND SAID OUT LOUD: `div`, `table-cell` and
+    `unknown-tag` render their content VISIBLY on GitHub -- they are not
+    citations, and refusing to grant inside them is stricter than the rendered
+    artifact requires. They are pinned here because over-strict is the safe
+    direction for a GRANT (a refusal is a visible NO-GO the author can fix; a
+    grant is a block nobody withdrew), and pinning makes a later loosening a
+    decision rather than a drift.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier(HTML_CITATIONS[wrapper])])
+    assert not ok, f"{wrapper}: a cited supersession GRANTED a discharge -- {why}"
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_after_a_closed_html_block_still_discharges():
+    """THE POSITIVE HALF of the rule above, and the regression it could cause.
+
+    This program collapses superseded reviews in `<details>` constantly. If an
+    element opened and never closed -- or closed and never popped -- every line
+    below it would be non-prose for the rest of the body, and a legitimate
+    discharge would stop working as a silent function of markup above it. That
+    silent no-op is the failure this module keeps filing, so the close path is
+    pinned as hard as the open path.
+
+    Breaks if: `_HTML_CLOSE` stops popping the element stack (arm SS16) -- the
+    `</details>` is ignored, the marker below reads as collapsed, and this
+    returns NO-GO with no explanation of why the discharge did nothing.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("<details>\n<summary>round 2</summary>\ncited\n</details>\n\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+@pytest.mark.parametrize("void", ["<br>", "<hr>", '<img src="badge.svg">', "<div/>"])
+def test_a_supersession_after_a_void_html_element_still_discharges(void):
+    """A void or self-closing element has no content, so it OPENS NOTHING.
+
+    Without the exemptions, one `<br>` or one badge `<img>` at the start of a
+    line latches the rest of the comment as non-prose. Review bodies in this
+    repo carry both.
+
+    Breaks if: `VOID_HTML` is emptied (arm SS14) or the self-closing test is
+    dropped (arm SS18).
+
+    WHICH PARAM KILLS WHICH, disclosed rather than counted (assertion-design
+    §5), and MEASURED -- the first version of this param set could not witness
+    SS18 at all and the arm SURVIVED a green suite, which is the same
+    fixture-not-arm defect SS5 recorded one round earlier:
+
+      * SS14 is killed by `<br>`, `<hr>` and `<img …>`, and by none of them
+        alone would SS18 die -- with `VOID_HTML` empty the `/>` test still
+        catches every XHTML-spelled VOID tag, so `<br/>` witnesses neither
+        branch and was replaced;
+      * SS18 is killed only by `<div/>`, a self-closing NON-void tag, which is
+        the sole input for which `endswith("/>")` is load-bearing.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier(void + "\n{line}")])
+    assert ok, why
+
+
+def test_negative_control_a_lazily_continued_supersession_discharges_nothing():
+    """NO HTML, NO EXOTIC INPUT -- the line after a `>` line, in plain ASCII.
+
+    CommonMark lets a blockquote paragraph run onto the next line without a
+    `>`, so this renders ENTIRELY inside the quote (measured, GitHub's
+    renderer):
+
+        > the previous round said
+        SUPERSEDES 1
+
+    `_is_quoted` is a per-line test and called line 2 prose. Of every shape
+    probed this round it is the most likely accident: paste a quoted block from
+    an earlier round and forget the `>` on its last line.
+
+    Breaks if: `lazy` is dropped from the prose expression (arm SS10) -- the
+    quoted citation discharges the live block and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("> the previous round said\n{line}"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_after_a_blockquote_and_a_blank_line_still_discharges():
+    """THE POSITIVE HALF of lazy continuation, and the over-broad rule it rules out.
+
+    A blank line ends the quote, so this marker is genuinely the author's own
+    words and must still grant. Without this, "non-prose after any quoted line"
+    would pass the negative control above while silently killing every discharge
+    written below a quotation -- and quoting the finding you are discharging is
+    the natural way to write one.
+
+    Breaks if: `lazy` is widened to `quoted_para` alone, i.e. the blank-line
+    reset or `_continues_paragraph` is removed -- this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("> the finding I am withdrawing\n\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+def test_lazy_continuation_does_not_swallow_a_line_that_starts_a_new_block():
+    """Reads `classify_lines` directly, because the consequence is a REPORT.
+
+    A heading or a list item after a quoted line interrupts the quote; calling
+    them cited would misreport a near-miss rather than misgrant a discharge, so
+    no `reduce_verdicts` fixture can witness it. Asserted on the flag itself.
+
+    Breaks if: `_continues_paragraph` returns True for everything (arm SS15) --
+    the heading and the bullet below are reported as prose=False.
+    """
+    flags = dict(gates.classify_lines(
+        "> cited round 2\n"
+        "## Independent review - APPROVE\n"
+        "> cited again\n"
+        "- a list item\n"
+        "> cited a third time\n"
+        "ordinary continuation text\n"
+    ))
+    assert flags["## Independent review - APPROVE"] is True
+    assert flags["- a list item"] is True
+    assert flags["ordinary continuation text"] is False, (
+        "plain paragraph text after a quote IS lazy continuation -- if this "
+        "flips True the negative control above is witnessing nothing"
+    )
+
+
+def test_negative_control_a_supersession_in_a_mid_line_html_comment_discharges_nothing():
+    """`see below <!--` hides everything after it, and renders NOTHING.
+
+    Measured against GitHub's renderer: the marker is absent from the rendered
+    output entirely. An invisible grant is worse than a cited one -- a reader
+    auditing the thread cannot even see the act they are being asked to trust.
+    The comment scan is therefore not anchored to the start of the line, unlike
+    the element scan (see `classify_lines` for why those two differ).
+
+    Breaks if: `opens_comment` goes back to `bare.startswith("<!--")` (arm SS13)
+    -- this returns GO on a discharge nobody can read.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("see below <!--\n{line}\n-->"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_below_a_balanced_inline_comment_still_discharges():
+    """THE POSITIVE HALF of the unanchored comment scan.
+
+    `a <!-- note --> here` opens nothing -- it is closed on its own line. A
+    scan that merely asked `"<!--" in bare` would latch here and silently kill
+    every discharge below any inline comment.
+
+    Breaks if: the `rsplit`/`-->` test is reduced to a containment check --
+    this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("a <!-- note --> here\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+#: The eight characters `str.splitlines()` breaks on and CommonMark does not.
+#: Built from CODE POINTS, never pasted, so an editor or a transport that
+#: normalises one into the plain space it is pretending not to be cannot make
+#: the fixture agree with itself while witnessing nothing.
+OVER_SPLIT = {
+    "U+000B vertical tab": chr(0x0B),
+    "U+000C form feed": chr(0x0C),
+    "U+001C file separator": chr(0x1C),
+    "U+001D group separator": chr(0x1D),
+    "U+001E record separator": chr(0x1E),
+    "U+0085 next line": chr(0x85),
+    "U+2028 line separator": chr(0x2028),
+    "U+2029 paragraph separator": chr(0x2029),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OVER_SPLIT))
+def test_negative_control_an_over_split_separator_cannot_manufacture_a_prose_line(name):
+    """`str.splitlines()` breaks on eight characters GitHub does not.
+
+    Each one therefore MANUFACTURES a line: `"    relayed<SEP>SUPERSEDES 1"` is
+    one indented code line on GitHub (measured: it renders inside
+    `<pre><code>`) and two lines to `splitlines()`, the second of them at
+    indent zero and, before this, prose.
+
+    The fixture is deliberately INDENTED rather than quoted. A quoted fixture
+    would be killed by lazy continuation as well, so it could not say which
+    closure was doing the work -- an arm invisible to its own fixture is the
+    SS5 lesson this feature is already carrying.
+
+    Breaks if: `_lines` goes back to `text.splitlines()` (arm SS12) -- the
+    separator splits, the second line reads as prose and this returns GO.
+    """
+    sep = OVER_SPLIT[name]
+    assert len(f"x{sep}y".splitlines()) == 2, (
+        f"{name} is not a splitlines() boundary, so this fixture witnesses "
+        "nothing -- the arm would survive it"
+    )
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("    relayed output" + sep + "{line}"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r", "\r\n"])
+def test_a_real_line_ending_after_indented_code_still_discharges(ending):
+    """THE POSITIVE HALF: `\\n`, `\\r` and `\\r\\n` ARE CommonMark line endings.
+
+    An indented code block ends at the first non-indented line, so a marker
+    below one is the author's own words and must grant. This is what stops the
+    fix above from degenerating into "anything after an indented line is code".
+
+    Breaks if: `_lines` splits on `"\\n"` alone -- a lone `\\r` stops being a
+    line ending, `    relayed output\\rSUPERSEDES 1` becomes one indented line,
+    and the `\\r` case here returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("    relayed output" + ending + "{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+#: Every one satisfies `str.isdigit()`. Three are accepted by `int()` and three
+#: are not, and that split is the whole point -- see the test. Code points, not
+#: pasted glyphs, for the same reason as `OVER_SPLIT`.
+NON_ASCII_DIGITS = {
+    "U+00B2 superscript two": chr(0xB2),
+    "U+2081 subscript one": chr(0x2081),
+    "U+2460 circled one": chr(0x2460),
+    "U+0661 arabic-indic one": chr(0x661),
+    "U+FF11 fullwidth one": chr(0xFF11),
+    "U+0967 devanagari one": chr(0x967),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NON_ASCII_DIGITS))
+def test_a_non_ascii_digit_is_refused_and_never_raises(name):
+    """ONE ROOT CAUSE, TWO OPPOSITE FAILURES, and the quiet one is the worse.
+
+    `str.isdigit()` is True for digits in every script and for superscripts;
+    `int()` accepts only the decimal ones. Measured before the fix:
+
+      * `SUPERSEDES <U+00B2>`, `<U+2081>` and `<U+2460>` raised `ValueError`
+        straight out of `parse_verdicts`, and BOTH call sites are unguarded --
+        `merge_gate.py:1444` and `gates.py:907` -- so one character in a
+        comment body took the merge gate down with a traceback;
+      * `SUPERSEDES <U+0661>`, `<U+FF11>` and `<U+0967>` were silently
+        HONOURED as id 1 and DISCHARGED the live block. `GO=True`.
+
+    A test covering only the crash leaves the discharge half unwitnessed, which
+    is why this is parametrised across both groups: three of these six return
+    GO under the defect and three raise, and the assertions below fail on
+    either.
+
+    Breaks if: `p.isascii()` is dropped from the id test (arm SS11) -- the
+    decimal three return GO, and the other three raise before `_reduce` returns
+    at all.
+    """
+    digit = NON_ASCII_DIGITS[name]
+    assert digit.isdigit(), f"{name} must satisfy isdigit() or the id test never sees it"
+    assert not digit.isascii(), (
+        f"{name} must be NON-ascii, or `isascii()` is not what refuses it and "
+        "this fixture witnesses nothing"
+    )
+    comments = [_review(1, "REQUEST-CHANGES"), _carrier("{line}", target=digit)]
+    live, near = gates.parse_verdicts(comments, HEAD)   # must not raise
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok, f"{name} was HONOURED as a comment id -- {why}"
+    assert SUP in why, why
+    assert "no comment id" in why, why
+
+
+def test_an_ascii_digit_still_discharges_beside_the_refusal_above():
+    """The positive control for the id test: tightening it did not swallow the
+    one spelling that was ever legitimate.
+
+    Breaks if: the id test is tightened past ASCII decimals and a plain `1` is
+    rejected -- this returns NO-GO.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier("{line}")])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+def test_disclosed_gap_a_mid_line_html_opener_still_grants():
+    """A KNOWN HOLE, PINNED SO CLOSING IT IS A DECISION -- not an endorsement.
+
+    `_HTML_OPEN` is anchored to the start of the line, so `relaying <pre>`
+    followed by a pasted marker still reads as prose and still discharges, even
+    though GitHub renders it inside the `<pre>`.
+
+    Un-anchoring it was MEASURED, not argued. Run through this very classifier
+    over the 50 verdict comments on ten recent PRs, a mid-line scan newly
+    demotes a prose line in 28 of 50 bodies raw, and in 6 of 50 (12%) even
+    after inline code spans are stripped -- because reviewers here quote shell
+    output full of `<file>`, `<path>`, `<sha>` and `<title>`. That trades one
+    input shape nobody writes for a silent non-grant in one verdict body in
+    eight, and a silent no-op is the failure this module keeps filing.
+
+    Breaks if: `_HTML_OPEN` loses its `^` anchor. When it does, DELETE this
+    test rather than adjust it, and record the new latch measurement -- its
+    only job is to make that change deliberate.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("relaying <pre>\n{line}\n</pre>"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
