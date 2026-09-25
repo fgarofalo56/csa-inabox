@@ -1019,8 +1019,13 @@ def _workflow_text(merged: str, path: str, cache: dict[str, str | None]) -> str 
     only consumer maps a job KEY to its display `name:` (#4701), and with no
     text it falls back to the key, which is exactly what GitHub reports for a
     job that sets no `name:`. A failed read therefore degrades to the
-    historical behaviour, never to a wrong match -- and an unresolvable
-    detector refuses rather than searching the wrong job.
+    historical behaviour, never to a wrong match.
+
+    It does NOT follow that an unresolvable detector refuses -- an earlier
+    revision of this sentence said so, and this docstring's own subject is the
+    no-text path, which is where it is least true. A detector missing from a
+    SUPPLIED sibling list refuses; with no sibling list there is no refusal at
+    all, only the fallback to the gated job. See `_detector_steps`.
 
     Caches the FAILURE too. `None` is a real answer here, so `path in cache` is
     the membership test and `cache.get(path)` alone would silently re-shell on

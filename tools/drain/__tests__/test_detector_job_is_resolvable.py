@@ -167,8 +167,9 @@ def test_negative_control_the_mapping_is_not_the_identity_function():
     translate at least one real row, or it witnesses nothing.
 
     WHAT VALUE WOULD MAKE THIS FAIL: replacing the function body with
-    `return key`. Measured 2026-09-25: `vitest-detect` -> `vitest - detect
-    changes`, so the identity function is demonstrably wrong here.
+    `return key`. Measured 2026-09-25: `vitest-detect` maps to
+    `vitest — detect changes` (U+2014), so the identity function is
+    demonstrably wrong here.
     """
     translated = []
     for name, row in CROSS_JOB_ROWS.items():

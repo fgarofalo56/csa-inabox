@@ -2650,8 +2650,9 @@ class ContextEvidence:
     #: Needed only to map a declared `detector_job` KEY to the display `name:`
     #: the jobs API reports (#4701). Optional by construction: with no text the
     #: key is used as the name, which is what GitHub does for a job that sets
-    #: no `name:`, and an unresolvable detector REFUSES rather than falls
-    #: through to the wrong job.
+    #: no `name:`. A detector that cannot be found among a SUPPLIED sibling
+    #: list refuses; with no sibling list at all there is no refusal, only the
+    #: fallback to the gated job -- see `_detector_steps`.
     workflow_text: str | None = None
 
 
@@ -3956,9 +3957,9 @@ def _detector_steps(
     2. THE FIELD HOLDS A YAML KEY; THE JOBS API REPORTS A DISPLAY NAME. Measured
        2026-09-25: `policy.json` says `detector_job: "vitest-detect"`, which is
        the key at `.github/workflows/fiab-console-ci.yml:310`, while that job's
-       `name:` is `vitest - detect changes` and the jobs API reports only the
-       name. So a lookup keyed on the declared string finds nothing, and fixing
-       (1) alone would have swapped one red for another.
+       `name:` is `vitest — detect changes` (U+2014) and the jobs API reports
+       only the name. So a lookup keyed on the declared string finds nothing,
+       and fixing (1) alone would have swapped one red for another.
 
        Nothing caught this because `test_ci_green_declared.py` resolves the key
        against the WORKFLOW YAML, where it is correct. The validating control
@@ -3974,10 +3975,16 @@ def _detector_steps(
     an unexpanded expression), while the key is the stable identifier and is
     what the existing declaration test already validates.
 
-    EVERY unanswered question fails closed. A declared detector we cannot
-    resolve is not an excuse to accept a skip -- it is a reason to refuse, and
-    the message must distinguish "absent from this run" from "stale
-    declaration", because those have opposite remedies.
+    EVERY unanswered question ABOUT A SUPPLIED SIBLING LIST fails closed: a
+    declared detector we cannot find among the jobs we were given is not an
+    excuse to accept a skip, and the message distinguishes "absent from this
+    run" from "stale declaration" because those have opposite remedies.
+
+    WITH NO SIBLING LIST THERE IS NO REFUSAL AT ALL -- see the fallback in the
+    body. An earlier revision of this paragraph said "EVERY unanswered question
+    fails closed" without that qualifier, which was the strongest of four sites
+    asserting a refusal this function does not perform, and it sat in the
+    summary of the very function whose body contradicts it ten lines down.
     """
     declared = str(row.get("detector_job") or "")
     if not declared:
@@ -3990,18 +3997,30 @@ def _detector_steps(
         #
         # This is deliberately NOT a refusal, and an earlier revision of this
         # change had it as one. Refusing here buys nothing and discards a
-        # correct answer: if the gated job DOES carry the declared gate step,
-        # that step ran in that job and genuinely explains the skip -- the
-        # declaration merely names where the detector usually lives. Five
-        # existing tests encode exactly that shape and were right to.
+        # correct answer: if the gated job carries a step whose name CONTAINS
+        # the declared gate step, that step ran in that job and plausibly
+        # explains the skip -- the declaration merely names where the detector
+        # usually lives. Five existing tests encode exactly that shape and were
+        # right to.
+        #
+        # STATED AS "CONTAINS" AND "PLAUSIBLY" DELIBERATELY. The match is a
+        # SUBSTRING, so this branch can ACCEPT on a step that is not the
+        # declared detector at all -- the docstring above says so, and an
+        # earlier revision of this comment said "DOES carry the declared gate
+        # step", which asserts an identity the code never checks.
         #
         # The failure #4701 is about is narrower: the detector is in a sibling,
         # the gate searched the gated job, found nothing, and reported the
-        # DECLARATION stale. That case is unchanged by this fallback -- with no
-        # sibling list the search still finds nothing and still refuses, which
-        # is no worse than before. What the fallback must never do is let a
-        # SUPPLIED sibling list be ignored, and it cannot: the branch below
-        # runs whenever one exists.
+        # DECLARATION stale. For `vitest (node 20)` today that case is
+        # unchanged by this fallback -- no step in the gated job contains
+        # `Detect console changes`, so the search still finds nothing and still
+        # refuses, no worse than before. That is a fact about this row's
+        # workflow, NOT a property of the fallback: a row whose gated job
+        # happened to contain a matching substring would be accepted here and
+        # refused where siblings are threaded.
+        #
+        # What the fallback must never do is let a SUPPLIED sibling list be
+        # ignored, and it cannot: the branch below runs whenever one exists.
         return steps, "this job", ""
 
     wanted = _detector_display_name(declared, workflow_text)
