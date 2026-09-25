@@ -1,6 +1,9 @@
-// Pins the ONE property `full-app-deploy-commercial.yml`'s eval-re-baseline
-// step depends on for its injection defence: text that came out of an ARM
-// RESPONSE cannot BEGIN (or contain) a GitHub Actions workflow command.
+// Pins the ONE property the eval-re-baseline script depends on for its
+// injection defence: text that came out of an ARM RESPONSE cannot BEGIN (or
+// contain) a GitHub Actions workflow command. That script is
+// `scripts/csa-loom/start-copilot-evaluator-rebaseline.sh`, invoked by
+// `full-app-deploy-commercial.yml`'s post-deploy-evals job; it was an inline
+// `run:` block in that workflow until #4586 extracted it (see SCRIPT below).
 //
 // WHY THIS FILE EXISTS. PR #4564 round 5 shipped a mitigation that mitigated
 // nothing — `sed 's/^::/  ::/'`, indenting a leading `::` by two spaces — on
@@ -87,11 +90,24 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const WF = resolve(REPO, '.github/workflows/full-app-deploy-commercial.yml');
+// #4586 MOVED THE SUBJECT. This step's 633-line script used to be an inline
+// `run:` block in full-app-deploy-commercial.yml; a `run:` script carrying
+// `${{ }}` above ~20,944 UTF-8 bytes makes GitHub refuse to LOAD the whole
+// workflow, so it was extracted verbatim to the file below and the step now
+// calls it. Every function this file lifts — flatten, defuse_cmds, jq_defused,
+// arm_get, arm_err — moved with it, byte for byte.
+//
+// THIS IS WHY THE PATH IS NOT COSMETIC: these arms lift their subject out of
+// the live source rather than transcribing it, so pointing them at the file
+// that no longer holds the script does not make them pass over a defect — it
+// makes `liveFnBody()` throw and this suite go RED, which is exactly what CI
+// did on the extraction commit. Keep this pointed at wherever the script
+// actually lives.
+const SCRIPT = resolve(REPO, 'scripts/csa-loom/start-copilot-evaluator-rebaseline.sh');
 
 // `\r` is stripped FIRST: a JS regex `.` does not match `\r`, so every
 // line-anchored read below would silently no-op on a CRLF checkout.
-const SRC = readFileSync(WF, 'utf8').replace(/\r/g, '');
+const SRC = readFileSync(SCRIPT, 'utf8').replace(/\r/g, '');
 
 /**
  * The runner's decision, modelled from the source cited above.
@@ -175,7 +191,7 @@ function liveSed() {
  */
 function liveFnBody(name) {
   const m = SRC.match(new RegExp(`\\n[ \\t]*${name}\\(\\)[ \\t]*\\{[^\\n]*\\n([\\s\\S]*?)\\n[ \\t]*\\}\\n`));
-  assert.ok(m, `${name}() is not defined in full-app-deploy-commercial.yml — nothing here measured the live mitigation.`);
+  assert.ok(m, `${name}() is not defined in ${SCRIPT} — nothing here measured the live mitigation.`);
   return m[1];
 }
 
@@ -198,27 +214,29 @@ function runLiveFn(name, input) {
 
 let _step;
 /**
- * The eval-re-baseline step's `run:` block, as EXECUTABLE lines — comments and
- * blanks dropped, because a `##[` inside a comment is not a sink and counting
- * one would be the "a guard matching raw source is satisfied by a comment"
- * defect (#4467), inverted.
+ * The eval-re-baseline script's EXECUTABLE lines — comments and blanks
+ * dropped, because a `##[` inside a comment is not a sink and counting one
+ * would be the "a guard matching raw source is satisfied by a comment" defect
+ * (#4467), inverted.
+ *
+ * Before #4586 this had to find the step inside the workflow YAML and stop at
+ * the next key; the script is now a file of its own, so its body is the whole
+ * file. The `set -euo pipefail` sentinel replaces the old `- name:` sentinel
+ * for the same reason the old one existed: if the subject is ever gutted or
+ * this path goes stale, these arms must FAIL rather than measure an empty set
+ * and report every sink defused.
  */
 function stepLines() {
   if (_step) return _step;
   const all = SRC.split('\n');
-  const start = all.findIndex((l) => /^\s*- name: Start a corpus re-baseline/.test(l));
-  assert.ok(start >= 0, 'the eval-re-baseline step is gone from full-app-deploy-commercial.yml');
-  let end = all.length;
-  for (let i = start + 1; i < all.length; i++) {
-    if (/^ {1,6}\S/.test(all[i])) {
-      end = i;
-      break;
-    }
-  }
-  const body = all.slice(start, end);
-  _step = body
-    .map((l, i) => ({ n: start + i + 1, t: l.trim() }))
+  assert.ok(
+    all.some((l) => /^set -euo pipefail$/.test(l)),
+    'scripts/csa-loom/start-copilot-evaluator-rebaseline.sh does not look like the eval-re-baseline script — nothing here measured a live sink.'
+  );
+  _step = all
+    .map((l, i) => ({ n: i + 1, t: l.trim() }))
     .filter((r) => r.t.length > 0 && !r.t.startsWith('#'));
+  assert.ok(_step.length > 100, `only ${_step.length} executable lines — the script did not load`);
   return _step;
 }
 

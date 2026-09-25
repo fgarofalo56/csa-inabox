@@ -496,8 +496,8 @@ jobs:
           # `message.TrimStart()` THEN `StartsWith("::")`. Hence a
           # NON-whitespace prefix, plus breaking the unanchored `##[` form
           # (ActionCommand.cs:132). Same shape as `defuse_cmds` in
-          # full-app-deploy-commercial.yml; both are pinned by
-          # scripts/ci/__tests__/workflow-command-injection.test.mjs.
+          # scripts/csa-loom/start-copilot-evaluator-rebaseline.sh; both are
+          # pinned by scripts/ci/__tests__/workflow-command-injection.test.mjs.
           #
           # THE `\r` EXPRESSION IS LOAD-BEARING AND MUST STAY FIRST. The runner
           # reads output with `StreamReader.ReadLine()` (ProcessInvoker.cs:511)
@@ -513,7 +513,9 @@ jobs:
           # by the thing it detects. CR is rewritten to the literal `%0D` (the
           # runner's own escape, ActionCommand.cs:12) rather than deleted, so
           # nothing is joined or truncated. Full rationale at the `defuse_cmds`
-          # definition in full-app-deploy-commercial.yml.
+          # definition in
+          # scripts/csa-loom/start-copilot-evaluator-rebaseline.sh, which #4586
+          # extracted out of full-app-deploy-commercial.yml.
           #
           # rc is read out of PIPESTATUS, not `$?`: after a pipeline `$?` is
           # the LAST stage's status, which here is tee's and is always 0.
