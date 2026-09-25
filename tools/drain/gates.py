@@ -2642,6 +2642,18 @@ class ContextEvidence:
     #: conclusion is not evidence the check did its work.
     merged_job: dict | None = None
     push_trigger: PushTrigger | None = None
+    #: The workflow file's TEXT at the merged sha. Read by `merge_gate` from
+    #: `git show <merged>:<workflow_path>` -- the same read it already performs
+    #: to parse push triggers, just no longer discarded on the branch where a
+    #: merged run exists.
+    #:
+    #: Needed only to map a declared `detector_job` KEY to the display `name:`
+    #: the jobs API reports (#4701). Optional by construction: with no text the
+    #: key is used as the name, which is what GitHub does for a job that sets
+    #: no `name:`. A detector that cannot be found among a SUPPLIED sibling
+    #: list refuses; with no sibling list at all there is no refusal, only the
+    #: fallback to the gated job -- see `_detector_steps`.
+    workflow_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2963,6 +2975,8 @@ def _one_context(
         did_work, evidence, route = context_is_accounted_for(
             item.name, item.merged_job, merged_changed_files, policy,
             infra_ere=infra_ere, declared_at=declared_at,
+            sibling_jobs=item.merged_workflow_jobs,
+            workflow_text=item.workflow_text,
         )
         if not did_work:
             return ContextResult(
@@ -3061,6 +3075,30 @@ def _one_context(
     # object. If that guard is ever relaxed, this call needs the HEAD sha's
     # declaration resolved separately -- it does not inherit correctness from
     # the merged one.
+    # NO `sibling_jobs` HERE, DELIBERATELY. This branch judges the PR-HEAD job,
+    # and `merged_workflow_jobs` is the MERGED run's job list -- a different run
+    # of the same workflow. Handing it over would let a detector that ran at the
+    # merged sha excuse a skip at the head sha, which is the wrong run answering
+    # for the wrong tree.
+    #
+    # The consequence is stated rather than hidden, and an earlier revision of
+    # this comment stated it WRONGLY. A row that declares a `detector_job`
+    # does NOT refuse here -- `_detector_steps` falls back to the gated job's
+    # own steps when no sibling list is supplied. What it then emits, measured
+    # live, is:
+    #
+    #   its declared gate step 'Detect console changes' is ABSENT from this
+    #   job - the declaration is stale, or this is not the job it describes
+    #
+    # which is verbatim the message #4701 was filed about, and both causes it
+    # names are false: the declaration is current, and this IS the job it
+    # describes. So this branch is no WORSE than before the fix, and no better.
+    # It is the one place the old misleading sentence survives.
+    #
+    # Making it resolve needs the HEAD run's jobs collected in `merge_gate` and
+    # carried on `ContextEvidence` -- a separate change, and not one #4701's
+    # acceptance test requires, since all three receipts it must clear come
+    # through the green-at-merge branch above.
     ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
         push_trigger=item.push_trigger, infra_ere=infra_ere,
@@ -3541,6 +3579,8 @@ def context_is_accounted_for(
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
     declared_at: DeclarationAsOf | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str, str]:
     """ONE question -- is this green check accounted for? -- asked in one place.
 
@@ -3733,12 +3773,14 @@ def context_is_accounted_for(
         return True, evidence, ACCOUNTED_DID_WORK
     excused, why = scope_untouched_at_merge(
         name, job, changed_files, effective,
-        push_trigger=push_trigger, infra_ere=infra_ere)
+        push_trigger=push_trigger, infra_ere=infra_ere,
+        sibling_jobs=sibling_jobs, workflow_text=workflow_text)
     if excused:
         return True, why, ACCOUNTED_SCOPE_SKIP
     alt_ok, alt_why = alternative_accounted_for(
         name, job, changed_files, effective,
-        push_trigger=push_trigger, infra_ere=infra_ere)
+        push_trigger=push_trigger, infra_ere=infra_ere,
+        sibling_jobs=sibling_jobs, workflow_text=workflow_text)
     if alt_ok:
         return True, alt_why, ACCOUNTED_ALTERNATIVE
     return False, (
@@ -3751,6 +3793,8 @@ def scope_untouched_at_merge(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str]:
     """Was the substantive step skipped because this context's SCOPE did not change?
 
@@ -3807,7 +3851,8 @@ def scope_untouched_at_merge(
         return False, "no job record was read for it, so its skip cannot be explained"
     steps = [s for s in job["steps"] if isinstance(s, dict)]
 
-    gate_ok, gate_why, detectors = _declared_gate_ran(row, steps)
+    gate_ok, gate_why, detectors = _declared_gate_ran(
+        row, steps, sibling_jobs, workflow_text)
     if not gate_ok:
         return False, gate_why
 
@@ -3884,8 +3929,172 @@ def _scope_row(name: str, policy: dict) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
+def _detector_steps(
+    row: dict, steps: list[dict], sibling_jobs: tuple[dict, ...],
+    workflow_text: str | None,
+) -> tuple[list[dict] | None, str, str]:
+    """Resolve the steps the declared `gate_step` should be looked for in.
+
+    Returns `(steps, where, why)`. `steps is None` means REFUSED and `why`
+    says what could not be established.
+
+    WITHOUT a `detector_job` the answer is the gated job's own steps, which is
+    what this module did for every row until #4701. That same-job path is
+    exercised by four of the five real rows (`next build (node 20)` and the
+    three `Python Tests (3.n)`) and is the free regression control for this
+    change: if it stops working, the change is wrong regardless of what the
+    cross-job path does.
+
+    WITH a `detector_job` there are TWO defects to get past, and #4701 as filed
+    named only the first:
+
+    1. NOBODY READ THE FIELD. `_declared_gate_ran` took `(row, steps)` and
+       searched the GATED job. Since #4682 sharded vitest, `Detect console
+       changes` has lived in a sibling job, so the search could not find it and
+       the refusal read "its declared gate step is ABSENT from this job - the
+       declaration is stale". The declaration was not stale; it was unread.
+
+    2. THE FIELD HOLDS A YAML KEY; THE JOBS API REPORTS A DISPLAY NAME. Measured
+       2026-09-25: `policy.json` says `detector_job: "vitest-detect"`, which is
+       the key at `.github/workflows/fiab-console-ci.yml:310`, while that job's
+       `name:` is `vitest — detect changes` (U+2014) and the jobs API reports
+       only the name. So a lookup keyed on the declared string finds nothing,
+       and fixing (1) alone would have swapped one red for another.
+
+       Nothing caught this because `test_ci_green_declared.py` resolves the key
+       against the WORKFLOW YAML, where it is correct. The validating control
+       reads the one source where the declaration is right; the consumer reads
+       the source where it is wrong. No input to that test can turn it red on
+       this, which is the `assertion-design.md` shape exactly.
+
+    So the key is mapped to its display name by reading the workflow at the
+    merged sha -- the same text `merge_gate` already reads for push triggers --
+    and the display name is what the sibling list is searched for. The key stays
+    in `policy.json` deliberately: display names are unstable by design (a
+    sibling in this very file is named `vitest shard ${{ matrix.shard }}/4`,
+    an unexpanded expression), while the key is the stable identifier and is
+    what the existing declaration test already validates.
+
+    EVERY unanswered question ABOUT A SUPPLIED SIBLING LIST fails closed: a
+    declared detector we cannot find among the jobs we were given is not an
+    excuse to accept a skip, and the message distinguishes "absent from this
+    run" from "stale declaration" because those have opposite remedies.
+
+    WITH NO SIBLING LIST THERE IS NO REFUSAL AT ALL -- see the fallback in the
+    body. An earlier revision of this paragraph said "EVERY unanswered question
+    fails closed" without that qualifier, which was the strongest of four sites
+    asserting a refusal this function does not perform, and it sat in the
+    summary of the very function whose body contradicts it ten lines down.
+    """
+    declared = str(row.get("detector_job") or "")
+    if not declared:
+        return steps, "this job", ""
+
+    siblings = [j for j in sibling_jobs if isinstance(j, dict)]
+    if not siblings:
+        # NO SIBLING LIST -> fall back to the gated job's own steps, which is
+        # what every caller did before #4701.
+        #
+        # This is deliberately NOT a refusal, and an earlier revision of this
+        # change had it as one. Refusing here buys nothing and discards a
+        # correct answer: if the gated job carries a step whose name CONTAINS
+        # the declared gate step, that step ran in that job and plausibly
+        # explains the skip -- the declaration merely names where the detector
+        # usually lives. Five existing tests encode exactly that shape and were
+        # right to.
+        #
+        # STATED AS "CONTAINS" AND "PLAUSIBLY" DELIBERATELY. The match is a
+        # SUBSTRING, so this branch can ACCEPT on a step that is not the
+        # declared detector at all -- the docstring above says so, and an
+        # earlier revision of this comment said "DOES carry the declared gate
+        # step", which asserts an identity the code never checks.
+        #
+        # The failure #4701 is about is narrower: the detector is in a sibling,
+        # the gate searched the gated job, found nothing, and reported the
+        # DECLARATION stale. For `vitest (node 20)` today that case is
+        # unchanged by this fallback -- no step in the gated job contains
+        # `Detect console changes`, so the search still finds nothing and still
+        # refuses, no worse than before. That is a fact about this row's
+        # workflow, NOT a property of the fallback: a row whose gated job
+        # happened to contain a matching substring would be accepted here and
+        # refused where siblings are threaded.
+        #
+        # What the fallback must never do is let a SUPPLIED sibling list be
+        # ignored, and it cannot: the branch below runs whenever one exists.
+        return steps, "this job", ""
+
+    wanted = _detector_display_name(declared, workflow_text)
+    matches = [j for j in siblings if str(j.get("name") or "") == wanted]
+    if not matches:
+        names = sorted(str(j.get("name") or "?") for j in siblings)
+        resolved = (
+            f"{declared!r}" if wanted == declared
+            else f"{declared!r} (job name {wanted!r})"
+        )
+        return None, "", (
+            f"its declared detector job {resolved} is not among the "
+            f"{len(siblings)} job(s) of this run ({', '.join(names[:4])}"
+            f"{', ...' if len(names) > 4 else ''}), so nothing establishes WHY "
+            "the work was skipped"
+        )
+    if len(matches) > 1:
+        return None, "", (
+            f"its declared detector job {wanted!r} matches {len(matches)} jobs "
+            "in this run, so which one gated the work is ambiguous"
+        )
+
+    detector = matches[0]
+    dsteps = [s for s in (detector.get("steps") or []) if isinstance(s, dict)]
+    if not dsteps:
+        return None, "", (
+            f"its declared detector job {wanted!r} was found but carries no "
+            "steps, so nothing establishes WHY the work was skipped"
+        )
+    return dsteps, f"its declared detector job {wanted!r}", ""
+
+
+def _detector_display_name(key: str, workflow_text: str | None) -> str:
+    """Map a workflow job KEY to the `name:` the jobs API will report.
+
+    Returns `key` unchanged when the workflow text is unavailable or the key
+    has no explicit `name:` -- both are correct fall-throughs, because GitHub
+    reports the key itself as the job name when no `name:` is set. A wrong
+    answer here does not fail open: the caller refuses when the resolved name
+    matches no sibling.
+
+    Parsed rather than YAML-loaded on purpose. This module has no yaml
+    dependency, the shape being read is two levels deep and fixed, and a
+    `name:` containing an unexpanded `${{ }}` expression (which several jobs in
+    this repo have) must survive verbatim -- it is what the jobs API reports.
+    """
+    if not workflow_text or not key:
+        return key
+    lines = workflow_text.splitlines()
+    try:
+        top = next(i for i, ln in enumerate(lines) if re.match(r"^jobs:\s*$", ln))
+    except StopIteration:
+        return key
+    want = re.compile(rf"^  {re.escape(key)}:\s*$")
+    for i in range(top + 1, len(lines)):
+        ln = lines[i]
+        if re.match(r"^[A-Za-z]", ln):
+            break                      # left the jobs: block entirely
+        if not want.match(ln):
+            continue
+        for j in range(i + 1, len(lines)):
+            nxt = lines[j]
+            if re.match(r"^  \S", nxt) or re.match(r"^[A-Za-z]", nxt):
+                break                  # next job, or out of the block
+            m = re.match(r"^    name:\s*(.+?)\s*$", nxt)
+            if m:
+                return m.group(1).strip("'\"")
+        break
+    return key
+
+
 def _declared_gate_ran(
-    row: dict, steps: list[dict],
+    row: dict, steps: list[dict], sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str, list[dict]]:
     """Did the declared change detector run and conclude success?
 
@@ -3905,6 +4114,25 @@ def _declared_gate_ran(
     what ran was a different step. `context_did_its_work` moved from `any` to
     `all` for exactly this reason; this parallel loop stayed behind, which was
     the one-side-of-a-symmetry defect again, inside the round that named it.
+
+    `sibling_jobs` and `workflow_text` carry the cross-job case (#4701); see
+    `_detector_steps`. Both default to empty, and a caller with no sibling list
+    gets the historical same-job behaviour for EVERY row -- including one that
+    declares a `detector_job`.
+
+    THAT IS A FALLBACK, NOT A REFUSAL, and an earlier revision of this very
+    docstring claimed the opposite ("REFUSES for a row that declares one --
+    never silently searches the wrong job"). It was the third site carrying
+    that false claim; the first two were swept by grepping the literal string
+    they shared, which this one does not use. A needle scan cannot find the
+    same claim reworded.
+
+    The fallback can ACCEPT as well as refuse, which is the part worth knowing:
+    `gate_step` is matched as a SUBSTRING, so a step in the GATED job whose
+    name merely contains the declared one will stand in for the declared
+    detector. The same row can therefore reach opposite verdicts depending only
+    on whether its caller threaded siblings. The green-at-merge branch does;
+    the PR-head branch deliberately does not.
     """
     gate_step = str(row.get("gate_step") or "")
     if not gate_step:
@@ -3912,10 +4140,13 @@ def _declared_gate_ran(
             f"the declared scope {row!r} is missing a `gate_step`, so nothing "
             "establishes WHY the work was skipped"
         ), []
-    detectors = [s for s in steps if gate_step in str(s.get("name") or "")]
+    search, where, why = _detector_steps(row, steps, sibling_jobs, workflow_text)
+    if search is None:
+        return False, why, []
+    detectors = [s for s in search if gate_step in str(s.get("name") or "")]
     if not detectors:
         return False, (
-            f"its declared gate step {gate_step!r} is ABSENT from this job - the "
+            f"its declared gate step {gate_step!r} is ABSENT from {where} - the "
             "declaration is stale, or this is not the job it describes"
         ), []
     off = [
@@ -4476,6 +4707,8 @@ def alternative_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str]:
     """Did this context skip its primary step and do the OTHER half of its work?
 
@@ -4541,7 +4774,8 @@ def alternative_accounted_for(
         return False, "no job record was read for it, so no alternative can be shown to have run"
     steps = [s for s in job["steps"] if isinstance(s, dict)]
 
-    gate_ok, gate_why, _ = _declared_gate_ran(row, steps)
+    gate_ok, gate_why, _ = _declared_gate_ran(
+        row, steps, sibling_jobs, workflow_text)
     if not gate_ok:
         return False, gate_why
     hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
@@ -4815,7 +5049,8 @@ def _renamed_at_merge(
     ran = [
         (j, context_is_accounted_for(
             item.name, j, merged_changed_files, policy, infra_ere=infra_ere,
-            declared_at=declared_at))
+            declared_at=declared_at, sibling_jobs=tuple(jobs),
+            workflow_text=item.workflow_text))
         for j in jobs
     ]
     usable = [
