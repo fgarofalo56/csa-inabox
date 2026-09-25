@@ -25,6 +25,55 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.108.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.107.1...csa-inabox-v0.108.0) (2026-09-25)
+
+
+### Features
+
+* **drain:** reach parked and declined from the CLI, so drained:true is attainable ([#4691](https://github.com/fgarofalo56/csa-inabox/issues/4691)) ([76377a8](https://github.com/fgarofalo56/csa-inabox/commit/76377a86e439c767be962884eb160452e7aa59a9))
+* **drain:** reverse a park or a decline, so a cleared blocker is not a one-way door ([#4702](https://github.com/fgarofalo56/csa-inabox/issues/4702)) ([556b93d](https://github.com/fgarofalo56/csa-inabox/commit/556b93dd165b300a0f0315360fedd48bd9321c98))
+* **gates:** add the 'provision' fix kind, with the guard that keeps it honest ([#4667](https://github.com/fgarofalo56/csa-inabox/issues/4667)) ([17ce0cc](https://github.com/fgarofalo56/csa-inabox/commit/17ce0cc5ec023ad0ca08d620cde46d4d4bb2e48b))
+
+
+### Bug Fixes
+
+* **ci:** adjudicate the vitest SHARD jobs in the roll gate, not the merge job ([#4682](https://github.com/fgarofalo56/csa-inabox/issues/4682)) ([d67d655](https://github.com/fgarofalo56/csa-inabox/commit/d67d655af0570c42036e331f572a53168d80d4f0))
+* **deploy:** discover Service Bus + Batch in the admin RG, not only the DLZ ([#4671](https://github.com/fgarofalo56/csa-inabox/issues/4671)) ([ce6cf19](https://github.com/fgarofalo56/csa-inabox/commit/ce6cf1903b022f7229aa7cb3317e935e2de568f2))
+* **directlake:** move to the arrow-59 stack so thrift leaves the dependency graph ([#4681](https://github.com/fgarofalo56/csa-inabox/issues/4681)) ([673d1ae](https://github.com/fgarofalo56/csa-inabox/commit/673d1aec845d72f47060945a50e2129ca8c9f41c)), closes [#3982](https://github.com/fgarofalo56/csa-inabox/issues/3982)
+* **drain:** a lane label outranks a title substring, and pin the harness items it would misroute ([#4695](https://github.com/fgarofalo56/csa-inabox/issues/4695)) ([0f5359c](https://github.com/fgarofalo56/csa-inabox/commit/0f5359c51877e80ca4aeeaaba2a94434d62ef1d4))
+* **drain:** address review — bound ready items leave the pool, and close the writer claim at all 9 sites ([d56e1e8](https://github.com/fgarofalo56/csa-inabox/commit/d56e1e8179168beb035cf287bc542aebc583b53e)), closes [#4489](https://github.com/fgarofalo56/csa-inabox/issues/4489)
+* **drain:** give a lane a way to report back — write Item.pr and leave in-flight ([d56e1e8](https://github.com/fgarofalo56/csa-inabox/commit/d56e1e8179168beb035cf287bc542aebc583b53e)), closes [#4489](https://github.com/fgarofalo56/csa-inabox/issues/4489)
+* **drain:** give a lane a way to report back — write Item.pr and leave in-flight ([#4675](https://github.com/fgarofalo56/csa-inabox/issues/4675)) ([d56e1e8](https://github.com/fgarofalo56/csa-inabox/commit/d56e1e8179168beb035cf287bc542aebc583b53e))
+* **drain:** let a verdict discharge a NAMED earlier block, so a finding outside the diff does not strand a PR forever ([#4707](https://github.com/fgarofalo56/csa-inabox/issues/4707)) ([7385110](https://github.com/fgarofalo56/csa-inabox/commit/73851105512be7f6f9c37fb2e4c67ec5669958bf))
+* **drain:** read the declared detector job, and resolve its key to the name the jobs API reports ([#4722](https://github.com/fgarofalo56/csa-inabox/issues/4722)) ([eb73a32](https://github.com/fgarofalo56/csa-inabox/commit/eb73a329dff8cc234fae9410c91109b6eaaed736))
+* **drain:** resolve the ci-green step declaration as of the measured sha, not at HEAD ([#4683](https://github.com/fgarofalo56/csa-inabox/issues/4683)) ([a5db87c](https://github.com/fgarofalo56/csa-inabox/commit/a5db87c983fed1e40d3973ab1770cf349f37a604))
+* **drain:** round 3 — sweep by the CLAIM, and stop the bind emptying the audit queue ([d56e1e8](https://github.com/fgarofalo56/csa-inabox/commit/d56e1e8179168beb035cf287bc542aebc583b53e)), closes [#4489](https://github.com/fgarofalo56/csa-inabox/issues/4489)
+* **drain:** shard the mutation matrix six ways with an adjudicating merge job, so the arm-population instrument reports again ([#4713](https://github.com/fgarofalo56/csa-inabox/issues/4713)) ([1b0f4d0](https://github.com/fgarofalo56/csa-inabox/commit/1b0f4d0de29c48a4d88c6db06d6f83491bc5a184)), closes [#4712](https://github.com/fgarofalo56/csa-inabox/issues/4712)
+* **iac:** revert the VM image offer — ARM forbids changing it on an existing VM ([#4673](https://github.com/fgarofalo56/csa-inabox/issues/4673)) ([2018829](https://github.com/fgarofalo56/csa-inabox/commit/2018829cef26075b3fcf78ae312578e74e79d80a))
+
+
+### Security
+
+* **items:** generic item-state writers accepted a caller-supplied provisioning record that other code derives scope from ([#4621](https://github.com/fgarofalo56/csa-inabox/issues/4621)) ([9097f0b](https://github.com/fgarofalo56/csa-inabox/commit/9097f0b07c1bfd65027c4c69041a8713efade511))
+
+
+### Documentation
+
+* **drain:** refresh the kickoff block — it named a merged PR as open work ([#4674](https://github.com/fgarofalo56/csa-inabox/issues/4674)) ([7016aa6](https://github.com/fgarofalo56/csa-inabox/commit/7016aa6f38a8bdd829e7c89fbf225def31e91fa2))
+* **drain:** state the mechanism, not its status, so the prose stops going stale ([d56e1e8](https://github.com/fgarofalo56/csa-inabox/commit/d56e1e8179168beb035cf287bc542aebc583b53e)), closes [#4489](https://github.com/fgarofalo56/csa-inabox/issues/4489)
+
+
+### Tests
+
+* **items:** pin the recycle-bin role x verb matrix so a one-verb widening cannot ship quietly ([#4678](https://github.com/fgarofalo56/csa-inabox/issues/4678)) ([26fd97a](https://github.com/fgarofalo56/csa-inabox/commit/26fd97a8e768f402dffe038ab7c7442f0e1efbad))
+* **mirrored-databricks:** witness both halves of the create-dialog submit guard ([#4693](https://github.com/fgarofalo56/csa-inabox/issues/4693)) ([ebb6b30](https://github.com/fgarofalo56/csa-inabox/commit/ebb6b30b3c7edb4e43342cbdcbee20c47d27d1bc)), closes [#4685](https://github.com/fgarofalo56/csa-inabox/issues/4685)
+
+
+### Continuous Integration
+
+* **release:** register the harden commit type so a security fix is not dropped ([8c74ad9](https://github.com/fgarofalo56/csa-inabox/commit/8c74ad911ce8ffe9b85bebbae2e3574fdd22ecfa))
+* **release:** register the harden commit type so a security fix is not dropped from the changelog ([#4717](https://github.com/fgarofalo56/csa-inabox/issues/4717)) ([8c74ad9](https://github.com/fgarofalo56/csa-inabox/commit/8c74ad911ce8ffe9b85bebbae2e3574fdd22ecfa))
+
 ## [0.107.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.107.0...csa-inabox-v0.107.1) (2026-09-22)
 
 
