@@ -52,8 +52,18 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 #: What an arm may MUTATE. Also the tree the run digests, so "tracked tree
 #: untouched" is asserted over exactly the files an arm could have written to.
+#:
+#: `README.md` JOINED THIS LIST IN #4702 AND HAD TO. `_published_surfaces()`
+#: now reads it, because the README carried the same false-universal claim
+#: class as the posted bodies and no instrument read it. A read of a file the
+#: sandbox does not carry raises `FileNotFoundError` in EVERY arm -- the
+#: tautological-kill shape `COPIED`'s own note records for
+#: `required_contexts.json`, which is how this was caught before it shipped.
+#: Being in SOURCES as well as COPIED is deliberate: it makes the README
+#: mutable (UP20 poisons it, which is the only thing that witnesses the new
+#: read) and puts it inside the untouched-tree digest.
 SOURCES = ["gates.py", "ledger.py", "tick.py", "merge_gate.py", "build_inventory.py",
-           "operating_point.py", "policy.json"]
+           "operating_point.py", "policy.json", "README.md"]
 
 #: What the sandbox COPIES, which is wider. This module is copied but NOT
 #: mutable: `__tests__/test_mutate_gates.py` imports it -- the runner is the one
@@ -3488,6 +3498,529 @@ ARMS: list[tuple[str, str, str, str]] = [
         "tick.py",
         "    led.save(if_unchanged=True)  # CAS - refuse a lost update, never overwrite\n",
         "    led.save()\n",
+    ),
+    # -- #4699: the way OUT of a terminal state ----------------------------
+    #
+    # APPENDED AT THE END rather than filed next to the DP arms, deliberately:
+    # `mutate_gates.py` is edited by several lanes at once and an insertion in
+    # the middle of the list conflicts with every one of them. Order carries no
+    # meaning here -- `_run_arms` walks the list and each arm is independent.
+    #
+    # EVERY ANCHOR BELOW IS IN CODE THIS CHANGE ADDED, which is the other half of
+    # the same discipline. The one arm that anchors on a pre-existing line (UP8,
+    # the reaper) uses a line no other arm touches; and the obvious spelling for
+    # UP4's anchor was NOT available, because `permitted, permit_note = ...` is
+    # verbatim arm DP5's needle in `_dispose` -- adding a second copy silently
+    # re-aims DP5 at whichever is higher in the file. Measured:
+    # `test_every_arm_anchor_is_present_and_unique_in_the_current_source` went
+    # red with `DP5 -> 2 matches in tick.py`, which is why `_reverse`'s locals
+    # are named `reversal_permitted` / `reversal_note`.
+    (
+        ("UP1 the reversal's REASON check is removed. STRONGER than DP1-DP3: "
+         "those three still end in a ledger refusal because `transition` has its "
+         "own bar, so deleting them only moves WHEN. `transition(n, READY, why)` "
+         "has NO `why` refusal at all, so this mutant lets a reasonless reversal "
+         "SUCCEED - and the park's blocker was published verbatim, so the public "
+         "record would carry a reversal with no stated grounds"),
+        "tick.py",
+        "    if not reason or not reason.strip():",
+        "    if False:",
+    ),
+    (
+        ("UP2 the STATE GUARD collapses, so `--unpark` reverses a DECLINED item "
+         "(or a live in-flight one on a typo'd number) and records "
+         "'reversed from parked' in the history of an item that was never "
+         "parked - a false line in the only audit trail there is (R7)"),
+        "tick.py",
+        "    wrong_state = item.state != from_state",
+        "    wrong_state = False",
+    ),
+    (
+        ("UP3 the CLOSED-ISSUE refusal is removed. #4699 names this one by "
+         "itself: a terminal item whose issue is closed has had something happen "
+         "the harness did not record, and re-queueing it papers over that"),
+        "tick.py",
+        '    if seen.state != "OPEN":',
+        "    if False:",
+    ),
+    (
+        ("UP4 the AUTHORITY bar is removed, so returning an item to the "
+         "SCHEDULABLE QUEUE happens with no entry in policy.json at all - the "
+         "emergent-behaviour shape `action_is_permitted` fails closed to "
+         "prevent, and the mirror of DP5 one verb later"),
+        "tick.py",
+        "    reversal_permitted, reversal_note = gates.action_is_permitted(action, policy)",
+        '    reversal_permitted, reversal_note = True, "not asked"',
+    ),
+    (
+        ("UP5 policy.json REVOKES `unpark-item` and the verb must stop working. "
+         "The arm that proves the NEW grant has a BLAST RADIUS rather than being "
+         "prose - the marker_any_of defect this file records finding in itself "
+         "twice, asked of the reversal grant the way DP6 asks it of the park"),
+        "policy.json",
+        '    "unpark-item",\n',
+        "",
+    ),
+    (
+        ("UP6 the READ-BACK COMPARISON collapses, so a mojibaked correction is "
+         "accepted and stands permanently on a public issue. `gh` has posted a "
+         "UTF-8 body as cp1252 mojibake AT EXIT 0 in this repo, and a reversal's "
+         "reason is published verbatim, so a correction whose text arrived "
+         "corrupted is worse than none - it reads as authoritative"),
+        "tick.py",
+        '    if landed.replace("\\r\\n", "\\n") != body.replace("\\r\\n", "\\n"):',
+        "    if False:",
+    ),
+    (
+        ("UP7 the STALE BLOCKER survives the reversal, so the ledger reads "
+         "`state=ready blocker='no in-VNet runner exists'` and a cold reader "
+         "cannot tell that from a live blocker on a schedulable item. Worse, "
+         "`transition`'s park bar is only that BOTH fields are truthy, so a "
+         "later `--park` with no `--blocker` would be accepted on the stale one. "
+         "The `L30` audit_reason defect, one field over"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        "",
+    ),
+    (
+        ("UP8 the REAPER is widened past `in-flight` - the obvious "
+         "generalisation - so `--reap` sweeps `parked`, `declined` AND "
+         "`in-review` back to `ready`, silently undoing every disposition and "
+         "every PR binding in one command that prints only a count. The new verb "
+         "must be the ONLY route out of a terminal state; this is the arm that "
+         "asks whether a SECOND one opened"),
+        "tick.py",
+        "        if item.state == IN_FLIGHT:",
+        "        if item.state != READY:",
+    ),
+    (
+        ("UP9 the history stops naming the PRIOR STATE, so the round trip is no "
+         "longer auditable: `state.json` carries a `ready` item with no record "
+         "that it was ever parked, and the public comment is then the only trace "
+         "of a disposition the ledger made"),
+        "tick.py",
+        'f"reversed from {from_state} ({REVERSAL_FLAGS[from_state]}): {reason}",',
+        'f"reversed: {reason}",',
+    ),
+    (
+        ("UP10 the PARK COMMENT BODY goes back to naming no mechanism - "
+         "'resolve the blocker and say so here', which was true when written and "
+         "became false the moment `--unpark` shipped. This is the arm for a "
+         "defect class the rest of the matrix cannot see: the mutant changes a "
+         "string that is PUBLISHED VERBATIM on a public issue and republished on "
+         "every park, so a stale sentence here is R7 on an unrevisable surface "
+         "rather than a stale comment. Its sibling defect - the park body citing "
+         "#2874 (a Gov bicep-drift ITEM) for a rule that is #4535 - is pinned by "
+         "the same test, and the DECLINE branch of the same function already "
+         "cited #4535, so the two adjacent branches disagreed.\n"
+         "         THE WHOLE BLOCK, NOT ITS FIRST LINE, and that is a correction "
+         "measured rather than reasoned. The first version of this arm replaced "
+         "only `\"TO UNPARK IT: resolve the blocker, then run \"` -- and Python "
+         "concatenates adjacent string literals, so the following six lines "
+         "survived and the mutant body STILL contained `--unpark <n>`. It scored "
+         "SURVIVED against a test that was working perfectly: a WEAK MUTATION, "
+         "not a blind suite, and the two are indistinguishable from the verdict "
+         "alone. Same lesson as arm M3 above, in a different syntax"),
+        "tick.py",
+        ('            "TO UNPARK IT: resolve the blocker, then run "\n'
+         '            "`tick.py --unpark <n> --reason \'<why the blocker no longer holds>\'`. "\n'
+         '            "That verb is the ONLY route out of `parked` - a refresh and "\n'
+         '            "`--reap` both leave a parked item alone, deliberately - and it posts "\n'
+         '            "its reason here, so this comment is corrected on the public record "\n'
+         '            "rather than only in the ledger (#4699). THAT CLAIM IS ABOUT `parked` "\n'
+         '            "AND NOT ABOUT TERMINAL STATES IN GENERAL: a DECLINE seen open is "\n'
+         '            "demoted to `needs-audit` by the next refresh, which is a second way "\n'
+         '            "out of a terminal state, and the decline\'s own comment says so. "\n'
+         '            "Neither body generalises over the other. The harness will not "\n'
+         '            "re-select this item until somebody runs it.\\n\\n"\n'),
+        ('            "TO UNPARK IT: resolve the blocker and say so here. The park is "\n'
+         '            "terminal, so the harness will not re-select this item on its own.\\n\\n"\n'),
+    ),
+    (
+        ("UP11 the DECLINE COMMENT BODY goes back to the sentence the reviewers "
+         "caught: a bare 'to reverse this decline, run --undecline' closed by "
+         "'An explicit verb is the ONLY route out of a terminal state'. That "
+         "claim is FALSE for the one state whose comment carried it -- "
+         "`declined` is in `REOPEN_DISPUTES`, `needs-audit` is not in "
+         "`TERMINAL`, and one `upsert` over an open issue moves it -- and the "
+         "SAME body says so three lines up. It was introduced by the fix for "
+         "three sentences of exactly this kind.\n"
+         "         WHAT IT ACTUALLY REDS, CORRECTED, because this description "
+         "used to say 'the test it reds checks the CLASS' and UP15's -- in "
+         "this same file -- states UP11's kill set correctly and differently. "
+         "Measured: UP11 does NOT touch the class test at all. Its replacement "
+         "is the genuine pre-#4699 text, which carries no `only route out of` "
+         "sentence in any form, so the class scan finds nothing to score and "
+         "stays green; what reds is "
+         "`..._names_the_undecline_window_and_both_refusals` and "
+         "`..._names_the_verb_that_reverses_it[declined]`. UP15 is the arm "
+         "that reinstates the false universal and reaches the class test from "
+         "the decline side. An arm's description naming a kill set it does not "
+         "have is the same defect class the arms themselves are about, one "
+         "level up, and a reviewer found it by running UP11 rather than "
+         "reading it.\n"
+         "         WHAT IT STILL IS: UP10'S MIRROR, and its absence was a real "
+         "gap -- UP10 mutates the park branch and reds `...[parked]` alone, so "
+         "the `[declined]` parameter of the verb-naming test had no arm at all "
+         "and its kill power was asserted rather than shown.\n"
+         "         ONE MORE THING ITS REPLACEMENT DEMONSTRATES, and it is a "
+         "limit on the class scan rather than on this arm: that pre-#4699 text "
+         "carries a false universal in a DIFFERENT PHRASING -- 'a demoted "
+         "decline has a legal way out and a park has none' -- which the "
+         "`only route out of <X>` scan cannot see. A sibling test catches it. "
+         "A clean class scan is evidence that ONE phrasing is absent, not that "
+         "the class is.\n"
+         "         THE NEEDLE IS THE WHOLE BLOCK AND THE REPLACEMENT IS THE "
+         "REAL PRE-#4699 TEXT, both measured rather than reasoned about. The "
+         "first version of this arm replaced only the block's FIRST THREE LINES "
+         "-- and Python concatenates adjacent string literals, so the three "
+         "cell bullets and the `--unpark` paragraph survived, the mutant body "
+         "still named the window AND `--undecline <n>`, and the arm scored "
+         "KILLED on the class test alone while saying NOTHING about the kill "
+         "power of the two other tests it claims to cover. Killed for one of "
+         "three reasons is a weak mutation wearing a green verdict, which is "
+         "arm M3's lesson and UP10's, twice over in one file"),
+        "tick.py",
+        ('        "That asymmetry is why `declined` and `parked` are treated differently "\n'
+         '        "by the REFRESH: a decline seen open is demoted and has a legal way out "\n'
+         '        "of that demotion, and a park is never demoted in the first place. "\n'
+         '        "NEITHER IS A DEAD END, and for a decline the route back depends on "\n'
+         '        "which of the two cells above you are standing in - the verb is not the "\n'
+         '        "answer in all of them:\\n"\n'
+         '        "- THIS ISSUE STILL OPEN AND THE LEDGER STILL `declined`, which is the "\n'
+         '        "window between this comment and the next refresh: run "\n'
+         '        "`tick.py --undecline <n> --reason \'<who reversed it, on what grounds>\'`. "\n'
+         '        "It posts its reason here, the way this comment did;\\n"\n'
+         '        "- ALREADY DEMOTED to `needs-audit` by a refresh: there is nothing to "\n'
+         '        "reverse. `needs-audit` is NOT a terminal state - the item is in the "\n'
+         '        "audit queue already, which is the whole point of the demotion - and "\n'
+         '        "the verb refuses it and says so;\\n"\n'
+         '        "- THIS ISSUE CLOSED, the disposal named above: the decline stands on "\n'
+         '        "the record and the verb REFUSES it. Re-open the issue first if the "\n'
+         '        "judgement is genuinely withdrawn, then reverse it. That refusal is "\n'
+         '        "not a ratchet and loosening it would not help: a reversal over a "\n'
+         '        "closed issue returns the item to `ready`, and the very next refresh "\n'
+         '        "finds it absent from the open set, flags it `departed` and demotes it "\n'
+         '        "again - measured. It would buy one cycle, not a route.\\n\\n"\n'
+         '        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "That escape is the whole reason `declined` and `parked` are treated "\n'
+         '        "differently: a demoted decline has a legal way out and a park has none.\\n\\n"\n'),
+    ),
+    (
+        ("UP12 the unreadable-issue refusal goes back to `.format()` over an "
+         "f-string chain. Adjacent literals concatenate BEFORE the method call, "
+         "so `.format()` runs over the already-interpolated `{exc}` -- which "
+         "carries `gh`'s stderr verbatim. Measured end to end through "
+         "`unpark_item`: stderr `HTTP 502: {\"message\":\"Bad gateway\"}` raises "
+         "`KeyError: '\"message\"'` and `HTTP 500: {}` raises `IndexError`, the "
+         "`ReversalRefusedError` is NEVER CONSTRUCTED, and `main()`'s reversal "
+         "branch catches only the four reversal exceptions so the builtin "
+         "escapes as a traceback. The covering test could not witness it: the "
+         "stub's failed-read stderr was hard-coded BRACE-FREE, which is the "
+         "'what result could this instrument not have produced' shape exactly"),
+        "tick.py",
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            f"nothing was written; the item is still {from_state}."\n'),
+        ('            "so it cannot proceed on an unread one either. Nothing was posted and "\n'
+         '            "nothing was written; the item is still {}.".format(from_state)\n'),
+    ),
+    (
+        ("UP13 `_reverse` VOIDS the receipt on the way back to `ready`, the "
+         "obvious symmetry with `upsert`'s reopen branch -- and the wrong one. "
+         "A reopen disputes the very claim the receipt closed on; a reversal "
+         "disputes the DISPOSITION and says nothing about evidence taken while "
+         "the item was still in the queue. `record_receipt_from_evidence` "
+         "refuses a terminal item, so any receipt a terminal item holds was "
+         "taken validly before it got there, and voiding destroys a run id that "
+         "can age out of retention. This arm exists because the choice was "
+         "INHERITED rather than made: nothing pinned it in either direction"),
+        "tick.py",
+        "        item.blocker, item.owner = None, None\n",
+        ("        item.blocker, item.owner = None, None\n"
+         "        item.receipt_kind = None\n"
+         "        item.receipt_ref = None\n"
+         "        item.receipt_taken_under = None\n"),
+    ),
+    (
+        ("UP14 `_reversal_comment`'s per-state correction collapses back into "
+         "ONE shared paragraph -- the exact text that shipped, in both halves: "
+         "*\"The `<state>` comment above this one says the harness will not "
+         "re-select this item on its own.\"* Measured: NEITHER disposition body "
+         "contains that sentence. The park's was rewritten to 'until somebody "
+         "runs it' by this very PR and the decline's never said anything of the "
+         "kind, so an `--undecline` attributed to the comment above it a "
+         "sentence that is not there -- R7 on an unrevisable surface, inside "
+         "the function whose whole job is correcting exactly that. It is the "
+         "shared-template hazard `_disposition_comment`'s own docstring argues "
+         "against, committed one function over.\n"
+         "         IT MUTATES THE JOIN, NOT THE DISPATCH, and that is a "
+         "correction. The first version prepended the shared paragraph and "
+         "neutered the `if` -- which left the `else` branch free to reassign "
+         "`corrects`, so BOTH states received the DECLINE text and only the "
+         "`[parked]` parameter went red. An arm that reds one half of a "
+         "parametrised pair it claims to cover is reporting on the half it "
+         "reached. Assigning AFTER the branch overwrites whatever either arm "
+         "computed, so both parameters now red"),
+        "tick.py",
+        ('    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+        ('    corrects = (\n'
+         '        f"WHAT THIS CORRECTS. The `{from_state}` comment above this one says "\n'
+         '        "the harness will not re-select this item on its own."\n'
+         '    )\n'
+         '    return (\n'
+         '        f"{head}\\n\\n"\n'
+         '        f"PRIOR STATE: {from_state}\\n"\n'),
+    ),
+    (
+        ("UP15 the DECLINE body's closing paragraph goes back to the sentence "
+         "the round-1 reviewers caught VERBATIM: *\"An explicit verb is the "
+         "only route out of a terminal state\"*. This is NOT a duplicate of "
+         "UP11. UP11 reverts the whole block to the genuine PRE-#4699 text, "
+         "which carries no such claim at all -- so it reds the window test and "
+         "the verb-naming test and says nothing about the class test's DECLINE "
+         "half. This arm reinstates the false universal on its own, which is "
+         "the only mutation that exercises "
+         "`test_no_published_surface_...` from the decline side. Two arms "
+         "because the two defects are different: one body said nothing, the "
+         "other said something false"),
+        "tick.py",
+        ('        "A park\'s mirror is `--unpark` (#4699), and it has no such window: a "\n'
+         '        "park is never demoted, and the harness never closes a park\'s issue, "\n'
+         '        "so that verb stays available for as long as the issue stays open - "\n'
+         '        "which is a park\'s expected condition. It is refused on a closed "\n'
+         '        "issue too, for the same reason this one is.\\n\\n"\n'),
+        ('        "An explicit verb is the only route out of a terminal state, and it "\n'
+         '        "posts its reason here.\\n\\n"\n'),
+    ),
+    (
+        ("UP16 the `--unpark` HELP LINE goes back to 'the ONLY route out of a "
+         "terminal state'. The help text is a PUBLISHED SURFACE too -- anyone "
+         "who types `--help` reads it -- and the round-1 sweep of this claim "
+         "swept the two posted bodies and missed it, because a surface is not "
+         "a file, it is every SITE within it.\n"
+         "         WHAT THIS ARM PROVES, NARROWED, because the claim it "
+         "carried was the strongest sentence in the section and was false. It "
+         "proves `_published_surfaces()` RENDERS THE `--unpark` HELP LINE. It "
+         "does NOT prove that helper enumerates `build_parser()`: when it was "
+         "written the helper iterated a literal `(\"unpark\", \"undecline\")` "
+         "tuple -- 2 of 18 flags -- and this arm poisons a flag that tuple "
+         "already names, so nothing in it varies the listing. A reviewer "
+         "demonstrated the gap at runtime with nothing mutated: RED on "
+         "`--unpark`, GREEN on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. UP19 is the arm that witnesses the enumeration; this one "
+         "keeps its own narrower witness"),
+        "tick.py",
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of `parked` -- a refresh and --reap both leave a "\n'),
+        ('        help="reverse a PARK and return the item to ready (needs --reason). The "\n'
+         '             "ONLY route out of a terminal state -- a refresh and --reap both leave a "\n'),
+    ),
+    (
+        ("UP17 the RECEIPT PARAGRAPH of the reversal body goes back to the "
+         "state-blind text that shipped at round 2, false clause and all: "
+         "*\"NONE IS VOIDED ... that is deliberately UNLIKE a reopen, which "
+         "voids the receipt because a reopen disputes the very claim that "
+         "receipt closed on\"*. `CLOSES_ON_GITHUB` is `(closed,)`, so a "
+         "DECLINE never shuts its issue -- for the state that sentence was "
+         "published on, nothing ever closed and the clause presupposes an "
+         "event that cannot have happened. THE THIRD INSTANCE of the "
+         "published-universal-falsified-by-the-sibling-state class on this "
+         "branch, committed inside the justification for the fix for the "
+         "second, and invisible to the round-2 class scan because that scan "
+         "reads `only route out of <X>` and this is a different phrasing.\n"
+         "         IT MUTATES THE INTERPOLATION, NOT THE BRANCH, so the "
+         "`if/else` above still computes `receipts` and the arm is not "
+         "confusable with UP18: this one restores the FALSE CLOSE CLAIM, "
+         "UP18 restores the STATE-BLINDNESS without it. Expected reds: "
+         "`..._asserts_a_close_that_never_happened[declined]` (the clause) and "
+         "`[parked]` (the strong claim goes missing), "
+         "`..._a_receipt_survives_a_reversal_and_the_body_says_so`, and "
+         "`..._two_routes_out_of_a_reopen_disputed_state_disagree...` on its "
+         "published half"),
+        "tick.py",
+        '        f"was wrong. {receipts}Closing this item "\n',
+        ('        "was wrong. NO RECEIPT IS RECORDED BY THIS, AND NONE IS VOIDED: a "\n'
+         '        "reversal disputes the DISPOSITION, not evidence taken while the item "\n'
+         '        "was still in the queue, so an item that held a valid receipt still "\n'
+         '        "holds it and may already satisfy R2. That is deliberately UNLIKE a "\n'
+         '        "reopen, which voids the receipt because a reopen disputes the very "\n'
+         '        "claim that receipt closed on. Closing this item "\n'),
+    ),
+    (
+        ("UP18 the receipt paragraph's PER-STATE BRANCH is neutered, so both "
+         "states receive the PARK text -- which is TRUE of `parked` and FALSE "
+         "of `declined`. No false close claim is reinstated; this arm isolates "
+         "the STATE-BLINDNESS on its own, which is the defect underneath both "
+         "of the two the round-2 fix already repaired: one body's true claim "
+         "republished verbatim on its sibling.\n"
+         "         WHY IT IS NOT A DUPLICATE OF UP17. UP17 restores a claim "
+         "that is false everywhere (nothing was ever closed, for either "
+         "state); this restores a claim that is TRUE for `parked` and false "
+         "only for `declined`, which is the shape a reviewer cannot catch by "
+         "reading one body. It reds `..._asserts_a_close_that_never_happened` "
+         "on `[declined]` only, at `strong not in body`, and leaves `[parked]` "
+         "GREEN -- an arm that reds both parameters would be reporting on "
+         "something other than the sibling-state asymmetry.\n"
+         "         THE BRANCH IS FALSIFIED RATHER THAN DELETED so the `else` "
+         "body stays exactly as shipped and the mutation is one token wide: an "
+         "arm that rewrites both branches is testing its own replacement text"),
+        "tick.py",
+        "    if from_state in REOPEN_DISPUTES:\n",
+        "    if False:  # UP18: both states now get the PARK (strong) text\n",
+    ),
+    (
+        ("UP19 the `--park` HELP LINE gains 'the only route out of a terminal "
+         "state'. THIS IS THE ARM UP16 WAS SAID TO BE and is not. "
+         "`_published_surfaces()` used to iterate a literal "
+         "`(\"unpark\", \"undecline\")` tuple while the PR describing it "
+         "claimed a sweep BY CLASS -- 2 of `build_parser()`'s 18 flags. A "
+         "reviewer wrapped `build_parser` at runtime, mutated nothing on disk, "
+         "and showed the scan RED on `--unpark` and GREEN with the identical "
+         "false universal on `--park`, `--decline`, `--record-receipt` and "
+         "`--reap`. A hand-maintained list cannot see its own gaps -- the "
+         "exact argument this package makes for enumerating the parser in "
+         "`test_every_value_flag_the_parser_knows_is_refused_without_its_verb`, "
+         "applied there and not here UNTIL THIS ARM FORCED IT. The sibling's "
+         "positive control on its own enumeration followed a round later, and "
+         "is now at the comprehension in `_published_surfaces()`.\n"
+         "         `--park` IS THE RIGHT TARGET because no list named it and "
+         "no other test reads its help text, so a surviving mutant here means "
+         "the enumeration is gone and nothing else would say so. Reds "
+         "`test_no_published_surface_claims_a_verb_is_the_only_route_out_of_a_"
+         "state_the_refresh_demotes` at the `in TERMINAL` clause, because "
+         "`a` is not a state"),
+        "tick.py",
+        '        help="record this item as PARKED - genuinely blocked (needs --blocker AND "\n',
+        ('        help="record this item as PARKED - the only route out of a terminal "\n'
+         '             "state. Genuinely blocked (needs --blocker AND "\n'),
+    ),
+    (
+        ("UP20 the README's `--unpark` paragraph swaps its correctly-scoped "
+         "claim for the false universal. `README.md` carries the same claim "
+         "class as the posted bodies -- the round-2 sweep fixed its text and "
+         "left NO instrument reading it, so the next edit that reintroduced "
+         "the sentence would ship green. It is now a surface "
+         "`_published_surfaces()` renders, and this is what witnesses that: "
+         "without it the README read is an unwitnessed claim and a helper that "
+         "silently dropped the file would report the same clean result.\n"
+         "         THE README JOINED `SOURCES` AND `COPIED` FOR THIS, and the "
+         "second was mandatory rather than incidental: a test reading a file "
+         "the sandbox does not carry raises `FileNotFoundError` on EVERY arm, "
+         "which scores 200+ tautological kills -- the shape `COPIED`'s own "
+         "note records for `required_contexts.json`. Caught before it shipped "
+         "by reading that note.\n"
+         "         NOT A `.py` FILE, deliberately. `policy.json` was already "
+         "in SOURCES, so prose-and-data mutation is an established shape here "
+         "and the digest handles bytes rather than syntax"),
+        "README.md",
+        "that verb is the only route out of `parked`, a claim about `parked` and *not*\n",
+        "that verb is the only route out of a terminal state, a claim about `parked` and *not*\n",
+    ),
+    (
+        ("UP21 the reversal stdout's `voided_elsewhere` clause is DELETED, so "
+         "the `declined` and `parked` outputs become byte-identical. THIS ARM "
+         "SURVIVED when it was first run by a reviewer -- 792 passed with the "
+         "whole branch replaced by `\"\"`. It was the one branching published "
+         "text in its round with neither an arm nor an assertion behind it: "
+         "the only stdout assertion in the file pins `THIS VERB VOIDED NONE`, "
+         "which is the SHARED prefix, so nothing could tell the two states "
+         "apart.\n"
+         "         THE DELETION IS THE RIGHT MUTATION rather than making the "
+         "clause unconditional, because deletion is the shape that actually "
+         "survived; the unconditional shape is covered by the OTHER half of "
+         "the same test's pair, which asserts the clause is ABSENT from the "
+         "`parked` output -- on that state the sentence would be false, since "
+         "`parked` is not in REOPEN_DISPUTES and has no second route to have "
+         "voided anything. Reds "
+         "`test_the_reversal_stdout_names_the_other_route_only_where_there_"
+         "is_one` on the `declined` assertion"),
+        "tick.py",
+        ('    voided_elsewhere = (\n'
+         '        f" The next refresh over this open issue WOULD have voided it "\n'
+         '        f"(`{from_state}` is in REOPEN_DISPUTES); this verb does not."\n'
+         '        if from_state in REOPEN_DISPUTES\n'
+         '        else ""\n'
+         '    )\n'),
+        '    voided_elsewhere = ""  # UP21: the per-state clause is gone\n',
+    ),
+    (
+        ("UP22 the NAMED HOLD is deleted from `_reverse`, so a held item "
+         "reverses. This is the arm for the whole interlock: with the call "
+         "gone, `--unpark 2874` walks the three-verb happy path, the item "
+         "reaches `ready` and becomes selectable -- and a green COMMERCIAL "
+         "roll is then one `--record-receipt` away from being published as "
+         "the verification of a GCC-HIGH item, which is the failure R2 "
+         "exists to prevent. The mutation is a DELETION rather than a "
+         "weakening because deletion is what an actor lifting a hold would "
+         "actually do, and because the call site is one line: anything "
+         "subtler would be testing the helper rather than its wiring.\n"
+         "         WHAT IT COULD NOT HAVE PRODUCED: a green run. Both the "
+         "`calls == []` assertion (the hold sits ABOVE the GitHub read) and "
+         "the state assertion fail on the mutant, so a SURVIVED here would "
+         "mean the tests never reach the hold at all. Reds "
+         "`test_a_reversal_refuses_a_held_item_before_any_github_call` on "
+         "both parameters and "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "    _refuse_if_held(number, from_state)\n",
+        "    # UP22: the named hold is gone\n",
+    ),
+    (
+        ("UP23 the hold's key NORMALISATION is replaced by a bare membership "
+         "test, which is the permissive version a reviewer would write. It "
+         "lifts a hold SILENTLY on three separate edits -- `{'#2874': ...}`, "
+         "`{'2874 ': ...}` and a key that is not an issue number at all -- "
+         "because a string key never equals an int `number`, so the lookup "
+         "matches nothing and the function returns as though nothing were "
+         "held. A hold an actor can switch off with a transcription slip is "
+         "not a control, and the silence is the whole defect: the shipped "
+         "code REFUSES on an unreadable key rather than skipping it, because "
+         "an unreadable hold set is not an empty one (R7).\n"
+         "         THE MUTANT STILL HOLDS THE INT KEYS, deliberately: a "
+         "mutation that lifted every hold would also red the two arms above "
+         "and could not distinguish 'the normalisation is gone' from 'the "
+         "hold is gone'. Reds "
+         "`test_the_hold_cannot_be_lifted_by_editing_one_field` on the three "
+         "string-key parameters and leaves the two blank-reason ones green, "
+         "which is the discriminating split"),
+        "tick.py",
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[int(str(key).strip().lstrip("#").strip())] = why\n'),
+        ('    normalised: dict[int, object] = {}\n'
+         '    for key, why in holds.items():\n'
+         '        try:\n'
+         '            normalised[key] = why  # UP23: no normalisation\n'),
+    ),
+    (
+        ("UP24 `REVERSAL_HOLDS` is EMPTIED, which is the edit an actor lifting "
+         "a hold without authority would make, and the arm that proves the "
+         "test module's autouse `_holds_lifted` fixture is not an OFF SWITCH. "
+         "That fixture patches the map empty for every test in the file -- it "
+         "has to, because the happy-path fixture number IS #2958 -- so without "
+         "an arm aimed at the SHIPPED constant, deleting both entries would "
+         "leave the whole suite green. Note the second-order blindness this "
+         "kills as well: `test_a_reversal_refuses_a_held_item_before_any_"
+         "github_call` is parametrised over `sorted(SHIPPED_HOLDS)`, so an "
+         "empty map does not RED it, it collects ZERO cases and the test "
+         "silently stops existing. The set-equality assertion in "
+         "`test_the_shipped_holds_still_name_both_items` is what turns that "
+         "disappearance into a failure, which is why it asserts the SET and "
+         "not a count.\n"
+         "         WHEN #4709 LANDS this arm is deleted with the entries; it "
+         "is not a permanent claim that a hold must exist. Reds "
+         "`test_the_shipped_holds_still_name_both_items` and errors "
+         "`test_the_hold_covers_undecline_too_so_an_item_cannot_walk_out_of_it`"),
+        "tick.py",
+        "REVERSAL_HOLDS = {\n",
+        "REVERSAL_HOLDS = {}\n_UP24_LIFTED = {\n",
     ),
     # -- verdict SUPERSESSION (#4704, measured on PR #4693) ------------------
     # The discharge that had to exist, and the seven ways it fails OPEN. Every

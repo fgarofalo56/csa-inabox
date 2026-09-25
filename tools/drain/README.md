@@ -112,8 +112,10 @@ anything genuinely blocked. `declined` is *in* that tuple by decision, not by
 inheritance: "will not do" leaves nothing to track, so its disposal is `gh issue
 close --reason not-planned`, and an item still open after a decline wants a
 look. That demotion has a legal escape — close the issue and the decline stands.
-A park has none: closing a blocked item's issue is how a backlog lies about
-itself (`deploy-integrity.md` R2).
+A park is never demoted at all, so it needs none: closing a blocked item's issue
+is how a backlog lies about itself (`deploy-integrity.md` R2). Neither state is
+a dead end any more — `--unpark` and `--undecline` are the explicit way out
+(#4699), documented below.
 
 **A ledger close now REACHES GitHub, which is the precondition that branch
 always assumed** (#4545). `tools/drain/` used to contain no `gh issue close` at
@@ -589,7 +591,174 @@ this affects as non-terminal rather than silently closable.
 python tools/drain/tick.py --park <ITEM> --blocker '<what blocks it>' --owner '<who clears it>'
 # will not do, on a recorded decision.
 python tools/drain/tick.py --decline <ITEM> --decision '<who decided, on what grounds>'
+# and the way BACK OUT of each (#4699). Refused, writing and posting NOTHING,
+# without --reason.
+python tools/drain/tick.py --unpark <ITEM> --reason '<why the blocker no longer holds>'
+python tools/drain/tick.py --undecline <ITEM> --reason '<who reversed it, on what grounds>'
 ```
+
+**A reversal is not symmetric with its disposition, and the asymmetry is
+measured rather than stylistic.** `--unpark` is available for as long as the
+park's issue stays open — which is a park's expected condition, since a park is
+never demoted by the refresh and the harness never closes a park's issue — so
+that verb is the only route out of `parked`, a claim about `parked` and *not*
+about terminal states in general. (It is refused on a closed issue like any
+reversal; a human closing a blocked item's issue is the case that wants a
+look.) `--undecline` has a window. A declined item whose issue is still OPEN is
+demoted to `needs-audit` by the next refresh (`REOPEN_DISPUTES` includes
+`declined`), and `needs-audit` is non-terminal, so there is then nothing to
+reverse — the item is in the audit queue already and the verb refuses it. A
+declined item whose issue has been CLOSED (the disposal a decline's own comment
+names) is refused too: re-open the issue first. Loosening that second guard
+would not buy a route — a reversal over a closed issue returns the item to
+`ready` and the very next `refresh_from_github` finds it absent from the open
+set, flags it `departed` and demotes it again.
+
+**A reversal records no receipt, and voids none on the route it takes — but on
+the decline side that is not the only route, and the other one voids.** A
+receipt survives a park or a decline, so an item that held a valid one comes
+back still holding it and may already satisfy R2. `parked` is not in
+`REOPEN_DISPUTES`, so no other route leaves that state at all — the refresh and
+`--reap` both leave a park alone. `declined` **is**, and the two routes out of
+it disagree: do nothing for one cycle and the next `refresh_from_github` over
+the still-open issue demotes the item to `needs-audit` *and voids the receipt*;
+type `--undecline` and it stays. Measured from one start state, `tmp_path`
+ledger, issue OPEN:
+
+| route out of `declined` | state | receipt | `receipt_ok()` |
+|---|---|---|---|
+| one refresh (do nothing) | `needs-audit` | voided | `False` |
+| `--undecline` | `ready` | kept | `True` |
+| *control:* park + one refresh | `parked` | kept | `True` |
+
+**One void is not a route out at all, and both bodies say so.** If a refresh
+sees an item's *receipt class* change — a lane label moving `lane:bicep` to
+`lane:console`, say — `upsert` voids the receipt and the item does not leave
+its state. Measured: a `parked` item holding `deploy-run`, one refresh with the
+lane relabelled, and the receipt is `None` with the item still `parked`. That
+is state-independent, so the disclosure is shared between the park and decline
+bodies deliberately — shared text is the defect when the two states differ and
+the right answer when they do not. The mechanism is `ledger.py`'s and
+pre-existing; this PR does not widen it and does not fix it. Tracked as
+**#4710**.
+
+The reason to keep is that a reversal disputes the **disposition**, not
+evidence taken while the item was still in the queue — and voiding here would
+be a *new* asymmetry rather than the removal of one, since `reap_stranded` and
+`upsert`'s departed-rescue both reach `ready` without voiding anything. What
+this paragraph deliberately no longer says is that a reopen *"disputes the very
+claim the receipt closed on"*: `CLOSES_ON_GITHUB` is `(closed,)`, a decline
+never shuts its issue, so for the state that sentence was published on nothing
+ever closed. The refresh's void fires on the issue being OPEN, which for a
+decline is its ordinary condition rather than a signal; reconciling the two
+belongs to `ledger.py` and is not settled by #4699.
+
+**No tool path produces a receipted park or decline.** `Ledger.record_receipt`
+is the only writer of `receipt_kind` and its only non-test caller pairs it with
+`transition(closed)` under a rollback. Census of the live ledger at blob `a8ec1fc5`: 416 items, 11
+hold a receipt, all 11 `closed`, 0 parked or declined. The population above is
+empty *by construction*; a hand-edited `state.json` — which this README
+documents — reaches it, and nothing in the tool does.
+
+**Two consequences of a reversal that nothing couples, noted rather than
+gated.** First: an item that comes back to `ready` holding a receipt is
+simultaneously selectable by `select_cycle()` and acceptable to
+`merge_gate.ledger_receipt_ready`, so it can be picked up for work and closed
+without work in the same tick. Latent, population zero (above), and
+pre-existing — `reap_stranded` reaches the same shape. Second: **#2874 and
+#2958 are the same shape, and the hazard is the OPPOSITE of the one an earlier
+draft of this paragraph published.** Both are `parked`, both
+`W1-deploy`/`lane:bicep`, both class `deploy-path` with required kind
+`deploy-run`.
+
+This paragraph used to say that *"neither has a producing run"* and that
+unparking either *"returns a selectable item whose receipt is unreachable until
+the receipt-class question lands (#4703)"*. **Both halves are RETRACTED. They
+are false, and false in the unsafe direction.** Measured on a copy of the live
+ledger at blob `a8ec1fc5`, driving the real `record_receipt_from_evidence` with
+the GitHub close replaced by a sentinel — so reaching the sentinel means every
+guard before it passed:
+
+| #2874 | evidence offered | outcome |
+|---|---|---|
+| `parked` (today) | green `loom-roll-and-validate` run `36053481220` | REFUSED at the TERMINAL guard |
+| after `--unpark` | the same run | **every guard passes** — would record `deploy-run` |
+| after `--unpark` | `loom-ui-verify` run `36037056251` | REFUSED: wrong workflow |
+| after `--unpark` | failed roll `35921787674` | REFUSED: concluded `failure` |
+
+#2958 passes the same chain on the same run. So the receipt is **reachable**,
+and what it would record is unbound twice over. `--from-run` carries no issue
+reference, which `record_receipt_from_evidence`'s own docstring says: nothing
+stops a green roll being recorded against a deploy-path item it never touched.
+And `receipt_producers` has **no boundary dimension at all** — three kinds,
+three workflow names, and zero occurrences of `gov`, `gcch`, `gcc`, `il5`,
+`boundary`, `commercial` or `cloud` anywhere in that map including its own note
+— while #2874 is **GCC-High** and `loom-roll-and-validate` says of itself that
+it is *"hard-wired to the Commercial estate … there is no Gov branch here to
+scope"*. A green Commercial roll would be accepted as the receipt for a
+GCC-High drift item. **That is #4709** — not #4703, which asks which *class* an
+item resolves to rather than what a class's *producer* is scoped to.
+
+**The terminal guard is presently the only thing preventing this, and this PR
+ships the verb that lifts it.** Unreachable *blocks* and asserts nothing;
+reachable-and-unbound *closes* the item and publishes a verification claim,
+which is the failure `deploy-integrity.md` R2 exists to prevent. So the order
+matters: the receipt question wants settling **before** either live unpark, not
+after.
+
+**So the hold is CODE, not this paragraph.** `tick.REVERSAL_HOLDS` names #2874
+and #2958 with the reason each is held and the issue that lifts it, and
+`tick._refuse_if_held` refuses a reversal of either — on `--unpark` and
+`--undecline` alike, before any `gh` call. The earlier draft of this section
+recorded the constraint as an operator intention and left the README as the only
+thing holding it. That does not survive its own argument: this PR adds
+`unpark-item` to `permitted_unattended`, where `dispatch-roll` and
+`close-on-receipt` already sit, so the whole chain — unpark, dispatch a
+Commercial roll, record it, close the issue with a public "verified" comment —
+is reachable by a lane with no human in it, and **nothing on that path reads
+this file**. A constraint whose violation publishes a false verification claim
+has to be a property.
+
+The hold is keyed on the ISSUE NUMBER and on nothing else, because the number is
+the one thing about an item a lane cannot move — `blocker`, `lane`,
+`receipt_class` and the title are all writable from inside a lane or movable by
+a label change, and this package measured a lane label moving an item's receipt
+class. An entry whose reason is blanked still holds: the hold is the entry, not
+its text. A key that cannot be read as an issue number refuses *every* reversal
+rather than being skipped, because an unreadable hold set is not an empty one.
+An empty map holds nothing, and is the expected end state.
+
+**It is an interlock, not the fix.** A hold names items; the repair is a
+boundary dimension in `receipt_producers`, and that is **#4709**. The two are
+not interchangeable: #2958 is *Commercial*, so a boundary-aware producer map
+would accept its roll — its exposure is the other half of the same gap, an
+unbound `--from-run` against an item that actually owes an `/admin/readiness`
+receipt for DuckLake and RisingWave. A boundary guard alone would cover one of
+the two items. There is also no boundary field on `Item` to read; #2874's
+GCC-High-ness is knowable only from its title text and its `drift-gov` label,
+and deriving that is #4709's design work. Delete both entries when it lands.
+None of this is a reason to withhold the verb, and none of it is a claim that
+the verb itself is unsafe.
+
+**A reversible park should be made more readily — and the public churn is
+real.** The bars did not move: a park still needs a blocker and an owner, a
+reversal still needs a reason, and neither verb is reachable from
+`refresh_from_github`, `reap_stranded` or `select_cycle`, so the harness cannot
+oscillate on its own. What changed is the cost of being wrong: permanent
+removal from the drain becomes N permanent public comments. #2958 already
+carries 13 comments, four of them the 2026-09-24 park and its corrections
+inside a 3.5-hour window; an `--unpark` makes it five. So a park is cheaper to
+*reverse* and no cheaper to *justify*, and the thread pays the difference. The
+failure on #2958 was not parking too readily — it was a blocker carried forward
+and published as a fact without re-measuring at head. Reversibility removes the
+reason to hesitate over the park; it does not touch the reason to measure
+first.
+
+**Both reversals are gated on the autonomy contract** as `unpark-item` and
+`undecline-item`, listed separately from `park-item`/`decline-item` on purpose:
+if an unpark rode on the authority to park, revoking that authority would
+silently strand every already-parked item — #4699's own ratchet, reintroduced
+by its fix.
 
 **Until #4677 these two states were unreachable by any program.** `Ledger` has
 defined five states since it was written and `drained()` — this program's
