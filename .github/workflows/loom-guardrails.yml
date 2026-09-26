@@ -1502,6 +1502,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci/check-merged-prs-had-check-runs.mjs
+      # A `run:` step carrying `${{ }}` above ~20,944 UTF-8 bytes makes GitHub
+      # refuse to LOAD the whole workflow. The only symptom is one run with ZERO
+      # jobs, so it looks like nothing happened — full-app-deploy-commercial.yml,
+      # the canonical from-scratch app deploy path, was frozen that way for
+      # twelve consecutive pushes from 2026-09-18 before anyone noticed (#4586).
+      # actionlint does not see it: the file is valid YAML and the limit is
+      # applied after parsing. This is the only control that watches it.
+      - name: workflow run-step size (a too-big step makes GitHub refuse the file — #4586)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-workflow-run-step-size.mjs
       # The scripts/ci self-tests. These existed but NOTHING RAN THEM: the
       # roll-gate suite is new (#2819) and the insecure-randomness suite has been
       # sitting in the tree with a "Run: node --test …" comment and no CI lane

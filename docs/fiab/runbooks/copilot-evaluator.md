@@ -1,6 +1,6 @@
-# Runbook — copilot-evaluator Function (Copilot quality eval harness, E2)
+# Runbook — copilot-evaluator (Copilot quality eval harness, E2)
 
-**Scope:** the `func-cpeval-*` Azure Function
+**Scope:** the `loom-copilot-evaluator` Container App Job
 (`azure-functions/copilot-evaluator`, deployed by
 `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`) —
 nightly + on-demand Copilot quality evals over the E1 golden sets
@@ -8,7 +8,20 @@ nightly + on-demand Copilot quality evals over the E1 golden sets
 the console's internal `POST /api/internal/copilot/eval-probe` route and
 written to Cosmos `loom-copilot-evals` (PK `/surface`).
 
-The same Function also runs two sibling deterministic modes on the nightly tick:
+> **The `func-cpeval-*` Function is RETIRED — do not drive this runbook through
+> it.** The evaluator migrated to the ACA job above on 2026-07-27
+> (`apps/fiab-console/lib/azure/copilot-evaluator-client.ts`, which records the
+> reason: Y1 Consumption is structurally broken on this estate, so there is no
+> host key and no public `*.azurewebsites.net` surface). Measured 2026-09-17
+> under #4495 OP-19: `AzureWebJobs.copilotEvaluatorTimer.Disabled=true` and
+> `AzureWebJobs.copilotEvaluatorHttp.Disabled=true` on `func-cpeval-*`, with
+> `az functionapp function show` reporting `isDisabled: true` for both. An
+> earlier revision of this page documented that timer and that HTTP trigger as
+> **normal operation**, so an operator following it POSTed a disabled endpoint
+> with a host key that no longer exists. Both the host and its standing check
+> are covered by `scripts/csa-loom/check-retired-function-timers.sh`.
+
+The same job also runs two sibling deterministic modes on the nightly tick:
 **SRCH1** federated-search relevance (`mode:"search"`) and **E6** tier-router
 decision evals (`mode:"tier"`). The tier mode runs the REAL `routeTurnTier`
 (the exact function the aoai-chat-client hot path consults) over the golden
@@ -20,12 +33,19 @@ reads it (accuracy, confusion heatmap, per-class accuracy, cost-per-quality).
 
 ## Normal operation
 
-- **Nightly:** `COPILOT_EVALUATOR_CRON` (default `0 0 7 * * *`, off-peak UTC) —
-  runs answer, search, AND tier modes.
-- **On demand:** `POST https://<func-host>/api/copilotEvaluatorHttp?code=<function-key>`
-  body `{"surfaces":["help"],"trigger":"manual"}` (answer), `{"mode":"search"}`
-  (SRCH1), or `{"mode":"tier"}` (E6) — fired by the E4 corpus-staging workflow
-  and the E5 admin "Run now" / "Run tier evals".
+- **Nightly:** the job's own `scheduleTriggerConfig.cronExpression` — default
+  `0 7 * * *` (`copilot-evaluator-job.bicep`, `param cronExpression`), surfaced
+  to the container as `COPILOT_EVALUATOR_CRON`. Runs answer, search, AND tier
+  modes. (The retired Function's NCRONTAB `0 0 7 * * *` was the same instant —
+  6-field with a leading seconds field — which is why running both would have
+  been a double execution.)
+- **On demand:** `az containerapp job start -n loom-copilot-evaluator -g $ADMIN_RG`,
+  or the E5 admin "Run now" / "Run tier evals" buttons, which POST
+  `/api/admin/copilot-quality/run` and start the same job through ARM with an
+  execution-template override carrying `{"surfaces":["help"],"trigger":"manual"}`
+  (answer), `{"mode":"search"}` (SRCH1) or `{"mode":"tier"}` (E6). Auth is the
+  Console UAMI's Azure RBAC on that one job resource — there is no function key.
+  `.github/workflows/copilot-quality-evals.yml` starts the same job the same way.
 - **Healthy log line:**
   `[copilot-evaluator] run help: 20 Q, hit-rate 0.9, grounding 4.3 (judged=… deferred=… auto-fail=…)`
   and `[copilot-evaluator/tier] run: 64 rows, tier-accuracy 1, task-class-accuracy 1`.
@@ -43,21 +63,38 @@ reads it (accuracy, confusion heatmap, per-class accuracy, cost-per-quality).
 
 | Symptom | Cause / fix |
 | --- | --- |
-| `honest-gate: not configured` every tick | Set `LOOM_COSMOS_ENDPOINT`, `LOOM_EVAL_PROBE_URL`, `LOOM_INTERNAL_TOKEN` on the Function app (bicep wires them on a push-button deploy). |
-| `eval-probe 401` | The Function's `LOOM_INTERNAL_TOKEN` ≠ the console's (both derive from the same bicep guid — redeploy admin-plane or copy the console's value). |
+| `honest-gate: not configured` every tick | Set `LOOM_COSMOS_ENDPOINT`, `LOOM_EVAL_PROBE_URL`, `LOOM_INTERNAL_TOKEN` on the `loom-copilot-evaluator` job (bicep wires all three on a push-button deploy — `copilot-evaluator-job.bicep`). |
+| `eval-probe 401` | The job's `LOOM_INTERNAL_TOKEN` secretRef ≠ the console's value (both derive from the same bicep guid — redeploy admin-plane or copy the console's value). |
 | `eval-probe 503 no_aoai` | The console has no AOAI deployment — resolve the `svc-aoai` gate first. |
-| `AOAI judge 401/403` | The Function MI lacks *Cognitive Services OpenAI User* on the AOAI account (module grants it when `aoaiAccountName` was passed; BYO/cross-RG accounts need a manual grant). |
-| Cosmos writes fail 403 | Same-RG hub account: module grants the data-plane role. DLZ-hosted (cross-RG) account: grant *Cosmos DB Built-in Data Contributor* to the Function `principalId` output via `grant-navigator-rbac.sh`. |
+| `AOAI judge 401/403` | The identity the job runs as (`uami-loom-console`, user-assigned — see `identity` in the job module) lacks *Cognitive Services OpenAI User* on the AOAI account (module grants it when `aoaiAccountName` was passed; BYO/cross-RG accounts need a manual grant). |
+| Cosmos writes fail 403 | Same-RG hub account: module grants the data-plane role. DLZ-hosted (cross-RG) account: grant *Cosmos DB Built-in Data Contributor* to the `uami-loom-console` principalId via `grant-navigator-rbac.sh`. |
+| "Run now" 403s while the nightly tick works | The Console UAMI has no *Contributor* on the job resource — `consoleUamiPrincipalId` was empty at deploy, which the module documents as skipping that grant. Redeploy admin-plane with it set. |
 | Every judge score `deferred` | Cap reached (raise `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP`) or no judge deployment resolves (`LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT` → strong → mini → default all unset). |
-| Kill switch | `LOOM_COPILOT_EVAL_ENABLED=false` on the Function app (seconds; honest no-op ticks). |
+| Kill switch | `LOOM_COPILOT_EVAL_ENABLED=false` on the `loom-copilot-evaluator` job (seconds; honest no-op ticks). |
 
-Rollback: see the **Rollback** section of
-`azure-functions/copilot-evaluator/README.md` (last-known-good publish +
-`az functionapp` redeploy + the `bicep-rollback` DR scenario).
+Rollback: re-run `.github/workflows/deploy-copilot-evaluator.yml` against a
+last-known-good image tag — it reads the live job's env and image with
+`az containerapp job show` and applies them through `az containerapp job update`,
+so a roll-back is a roll to an earlier tag. The `bicep-rollback` DR scenario
+still applies to the module itself. The **Rollback** section of
+`azure-functions/copilot-evaluator/README.md` describes the pre-2026-07-27
+Function publish path and is retained as history, not as a current procedure.
 
 ## Threat model (STRIDE — round-3 Q6, partial I9 pulled forward)
 
-Identity posture: system-assigned MI; **identity-based host storage**
+> **This section describes the RETIRED `func-cpeval-*` Function deployment**
+> (Consumption plan, `authLevel: 'function'` HTTP trigger, platform-managed
+> host key, identity-based host storage) and is kept as the record of what was
+> assessed and why. It is **not** the posture of the `loom-copilot-evaluator`
+> Container App Job that replaced it on 2026-07-27: the job has no HTTP trigger,
+> no host key and no public `*.azurewebsites.net` surface at all, and it runs as
+> the user-assigned `uami-loom-console` rather than a system-assigned MI — so
+> the Spoofing and Denial-of-service rows below name a key-gated public endpoint
+> that no longer exists. Re-deriving the job's model is tracked separately
+> rather than guessed at here; do not read the rows below as current mitigations.
+
+Identity posture **of the retired Function**: system-assigned MI;
+**identity-based host storage**
 (`AzureWebJobsStorage__credential=managedidentity`, `allowSharedKeyAccess=false`
 — NO storage key anywhere); AAD-only Cosmos + AOAI data-plane; the ONLY shared
 secret is the VNet-internal trust token (bicep-derived deterministic guid,

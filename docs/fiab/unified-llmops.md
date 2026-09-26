@@ -37,8 +37,11 @@ publishVersion(promptId, {template, bump})
   └─ triggerEvaluatorRun({surfaces:[prompt.surface], trigger:'manual'})
         ↑ lib/azure/copilot-evaluator-client.ts — the SAME client E5's
           "Run now" button and .github/workflows/copilot-quality-evals.yml use
-          to POST /api/copilotEvaluatorHttp on the E2 Function.
-        └─ the Function writes an ordinary `eval-run` doc to loom-copilot-evals
+          to start the loom-copilot-evaluator Container App Job through ARM.
+          (It POSTed /api/copilotEvaluatorHttp on the E2 Function until the
+          2026-07-27 migration recorded in that client's header; that trigger
+          is disabled and the host is on the OP-19 delete list.)
+        └─ the job writes an ordinary `eval-run` doc to loom-copilot-evals
              ├─ attachLatestEvalScore() stamps that REAL run onto the version,
              │  with the floor verdict from floorStatusFor() + eval-floors.json
              │  (the SAME function + SAME file E3/E5 use — one source of truth)

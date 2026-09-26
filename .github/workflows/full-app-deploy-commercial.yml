@@ -1226,16 +1226,48 @@ jobs:
 
   # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
   # eval run so EVERY roll re-baselines quality against the freshly-staged
-  # corpus. Fire-and-forget + report: one short POST per surface (the HTTP
-  # response has a ~230s ALB ceiling and a full run far exceeds it; the
-  # Function keeps executing after the client disconnects, one surface per
-  # invocation stays inside the Y1 execution window). Scores land in Cosmos
-  # `loom-copilot-evals` (gating + sticky comments live in
-  # copilot-quality-evals.yml; browse on /admin/copilot-quality once E5 lands).
-  # Token spend is bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP. Never
-  # fails the deploy (continue-on-error).
+  # corpus. Scores land in Cosmos `loom-copilot-evals` (gating + sticky comments
+  # live in copilot-quality-evals.yml; browse on /admin/copilot-quality once E5
+  # lands). Token spend is bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP.
+  # Never fails the deploy (continue-on-error).
+  #
+  # OP-19 (2026-09-17): this step used to resolve `func-cpeval-*` and POST once
+  # per surface to its `copilotEvaluatorHttp` trigger. That Function was retired
+  # by B-FN — copilot-evaluator-function.bicep is DELETED and the runtime is the
+  # in-VNet Container App Job `loom-copilot-evaluator`
+  # (modules/admin-plane/copilot-evaluator-job.bicep) — but the reference here
+  # was never repointed, so the step has been BROKEN since. Measured on the last
+  # successful run of this workflow (31251849951, 2026-08-08, job 93093352285):
+  # the app WAS found, so the "not found -> exit 0" arm never fired; the step
+  # then died on `az functionapp keys list` with
+  #     ERROR: Operation returned an invalid status 'Bad Request'
+  #     ##[error]Process completed with exit code 1.
+  # and `continue-on-error: true` hid that failure behind a green run. The host
+  # is not merely unkeyable, it executes nothing: FunctionExecutionCount over
+  # 2026-08-17..2026-09-17 (P1D, Total) is 0 across 31/31 datapoints each
+  # carrying an explicit 0.0, against a live control of 73 on
+  # func-csa-inabox-copilot-fg measured the same way.
+  #
+  # The per-surface fan-out is gone with it, and deliberately: it existed ONLY
+  # because the HTTP response had a ~230s ALB ceiling and a full run exceeds it.
+  # A job execution has no ingress and no such ceiling, so one start with
+  # COPILOT_EVAL_SURFACES empty ("all surfaces") does what the loop did. The
+  # override contract is the one the Console uses for "Run now"
+  # (lib/azure/copilot-evaluator-client.ts): a start REPLACES the whole
+  # execution template, so the job's CURRENT containers are read first and the
+  # four COPILOT_EVAL_* knobs merged on top — never a hand-built template, which
+  # would drop the image, the resources and the secretRef env.
+  #
+  # deploy-integrity.md R6/R7: no `2>/dev/null`, no `|| true`, and no fabricated
+  # "dispatched" notice. A start that did not happen because something could not
+  # be READ exits non-zero and says so; the ONE path that did not start and still
+  # exits 0 is a job proven ABSENT by a successful listing, which is a
+  # configuration state rather than a failure. `continue-on-error` keeps a
+  # non-zero step visible without failing the deploy — which is exactly why
+  # failing closed here costs nothing and buys a red step instead of a warning
+  # nobody reads.
   post-deploy-evals:
-    name: Post-deploy Copilot quality evals (fire-and-forget)
+    name: Post-deploy Copilot quality evals (ACA job start)
     needs: [resolve, redeploy-with-apps]
     if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
     runs-on: ubuntu-latest
@@ -1252,33 +1284,20 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Dispatch per-surface eval runs on the copilot-evaluator Function
-        run: |
-          set -uo pipefail
-          RG='${{ needs.resolve.outputs.rg }}'
-          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-cpeval-')].name | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
-          if [ -z "$FUNC" ]; then
-            echo "::warning::copilot-evaluator Function (func-cpeval-*) not found in $RG — svc-copilot-evaluator gate unresolved; post-deploy eval re-baseline skipped."
-            exit 0
-          fi
-          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
-          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default || masterKey" -o tsv | tr -d '\r')
-          if [ -z "$KEY" ]; then echo "::warning::no function key readable for $FUNC — eval dispatch skipped."; exit 0; fi
-          echo "::add-mask::$KEY"
-          DISPATCHED=""
-          for F in content/evals/*.jsonl; do
-            S=$(basename "$F" .jsonl)
-            case "$S" in _*) continue ;; esac
-            # fire-and-forget: a 15s client timeout only abandons the RESPONSE;
-            # the invocation continues server-side to completion.
-            curl -sS --max-time 15 -o /dev/null \
-              -X POST "https://$HOST/api/copilotEvaluatorHttp?code=$KEY" \
-              -H 'content-type: application/json' \
-              -d "{\"surfaces\":[\"$S\"],\"trigger\":\"corpus\"}" || true
-            DISPATCHED="$DISPATCHED $S"
-          done
-          echo "::notice::post-deploy eval runs dispatched for:$DISPATCHED — scores land in Cosmos loom-copilot-evals (runId trigger=corpus); the copilot-quality-evals workflow + /admin/copilot-quality read them."
-
+      - name: Start a corpus re-baseline execution of the copilot-evaluator job
+        # The script this calls used to be a 633-line inline `run:` block of
+        # 38,355 UTF-8 bytes. GitHub refuses to LOAD a workflow whose single
+        # `run:` script carries `${{ }}` and exceeds ~20,944 bytes, so this
+        # ENTIRE FILE stopped loading: every push produced one `failure` run
+        # with ZERO jobs and no other signal, twelve times from 2026-09-18
+        # (#4586). Actions expressions do NOT expand inside a called script,
+        # so the two the block interpolated are passed in through `env:`.
+        # scripts/ci/check-workflow-run-step-size.mjs now fails the build
+        # before this can recur.
+        env:
+          LOOM_EVAL_RG: ${{ needs.resolve.outputs.rg }}
+          LOOM_EVAL_SUB: ${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}
+        run: bash scripts/csa-loom/start-copilot-evaluator-rebaseline.sh
   notify:
     name: Notify final state
     needs: [resolve, build, close-acr, redeploy-with-apps]

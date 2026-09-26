@@ -21,7 +21,7 @@
  *   fired once.
  *
  * Do NOT re-derive this from `function list` alone — it does not generalise.
- * func-secexp-… and func-cpeval-… hold indexed, ENABLED timers, and
+ * func-secexp-… and func-cpeval-… still INDEX their timer definitions, and
  * func-loom-prpt-renderer-…'s list call fails with `Bad Request` (unknown, not
  * empty). Only the execution metric covers all seven. No root cause is claimed:
  * two hosts index fine under the same Azure Policy regime, so any
@@ -29,6 +29,13 @@
  * variance. The in-VNet ACA-job pattern (lineage-extractor-job.bicep /
  * secret-expiry-monitor-job.bicep) is the estate standard. Managed identity
  * only — no keys, no host storage.
+ *
+ * OP-19 2026-09-17 (#4495): re-measured ZERO for all seven on a WIDER window
+ * with a LIVE control — FunctionExecutionCount 2026-08-17→2026-09-17 (P1D,
+ * Total) = 0, 31/31 datapoints each with an explicit 0.0, absent=0, against
+ * func-csa-inabox-copilot-fg at 73 on the same metric/window/code path. The
+ * func-secexp/func-cpeval timers are now DISABLED on the estate
+ * (isDisabled: true), retiring the double-execution hazard.
  *
  * Exit code: 0 on a completed pass INCLUDING an honest config gate (an unset
  * Cosmos endpoint or an undeployed delivery Logic App is a configuration state,

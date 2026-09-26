@@ -348,15 +348,36 @@ dissolved; what dissolved is the idea that a role grant addresses it.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
-**(a) is already done — do not perform it. See `DECISIONS.md` § "OP-19 (a)".**
-All three function definitions are disabled on the live estate, measured
-2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
-`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
-`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
-with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
-setting**, not the work of #4564, which is open and unmerged — so the mitigation
-holds but nothing in IaC re-asserts it. The ask text is kept below because the
-answer is only legible beside what was asked.
+> **ANSWERED 2026-09-17 — approved, and re-measured at head. Decision recorded in
+> `DECISIONS.md` (this directory) § "OP-19 (a)" and § "OP-19 (b)"; evidence in
+> `docs/fiab/deployment/functions-to-aca-jobs.md` §8.**
+>
+> **(a) is already done — do not perform it.** All three function definitions
+> are disabled on the live estate, measured 2026-09-17 and re-measured
+> 2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
+> with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
+> setting**: neither host has had a bicep declaration since #2556, so no bicep
+> change could have done it, and nothing in IaC re-asserts it.
+> `scripts/csa-loom/check-retired-function-timers.sh` (run weekly by the
+> `op19-retired-timers` job in `loom-drift-check.yml`) is what would notice a
+> re-enable.
+>
+> **(b) re-measured ZERO on a wider window with a live control** —
+> `FunctionExecutionCount` 2026-08-17→2026-09-17 (P1D, Total) = 0 for all seven,
+> 31/31 explicit datapoints, against a control of 73. Three apps are unblocked
+> for the operator to delete, two are KEPT (still the intended runtime, no
+> replacement), two are deferred (superseded, but their removal is a Console +
+> orchestrator change).
+>
+> **Carried by #4564, which is OPEN and UNMERGED** — so the
+> `full-app-deploy-commercial.yml` reference to `func-cpeval-*`, which has been
+> failing since the Function was retired, is repointed at the live ACA job **on
+> that branch only**. Merged is not deployed (`deploy-integrity.md` R2); nothing
+> here is live until that PR lands and the estate rolls.
+>
+> **The text below is the original ask, left unedited.**
 
 **(a) Cheap mitigation, needn't wait for the removal PR.** Disable the two
 enabled function definitions on `func-secexp` (timer `0 0 6 * * *`) and

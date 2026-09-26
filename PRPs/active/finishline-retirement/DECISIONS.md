@@ -185,6 +185,175 @@ check it — all three of which this block carries because the decision was
 actually made. Recorded here, on the row, rather than in a process note, because
 this is where someone relying on the decision will be standing.
 
+### OP-19 (a) · the duplicate timers — ALREADY disabled, and nothing recorded it
+
+**The premise is stale.** OP-19 (a) asserts both function definitions are
+*enabled*, making the work run twice if either host recovers. Measured
+2026-09-17 on two independent reads, all three definitions on the two hosts are
+**disabled**:
+
+```
+func-secexp/secretExpiryMonitor    AzureWebJobs.secretExpiryMonitor.Disabled=true    isDisabled=true
+func-cpeval/copilotEvaluatorTimer  AzureWebJobs.copilotEvaluatorTimer.Disabled=true  isDisabled=true
+func-cpeval/copilotEvaluatorHttp   AzureWebJobs.copilotEvaluatorHttp.Disabled=true   isDisabled=true
+```
+
+The crons the hazard rests on are confirmed identical: NCRONTAB `0 0 6 * * *` is
+06:00 UTC and job `loom-secret-expiry-monitor` is `0 6 * * *` = 06:00 UTC; the
+same for `0 0 7 * * *` / `loom-copilot-evaluator` `0 7 * * *`. So the hazard was
+real; it is simply already mitigated.
+
+**Chosen: record it and guard it, do not re-perform it.** The disable was done
+**out of band** — no bicep, script, workflow, issue or PR in this repo sets those
+settings, and the two hosts have had no bicep declaration since #2556 deleted
+`copilot-evaluator-function.bicep` and `secret-expiry-monitor-function.bicep`.
+There is therefore **no bicep change that could have disabled them**; it is an
+estate action, and the estate has already taken it. Re-running it would change
+nothing and would prove nothing.
+
+What was missing was any record, so a re-enable would have been silent. Added:
+
+* `scripts/csa-loom/check-retired-function-timers.sh` — read-only by default,
+  `--apply` re-disables, Commercial-boundary guard, fail-closed. It distinguishes
+  three states that an earlier revision collapsed (`deploy-integrity.md` R7):
+  a host **absent from a successful listing** is `GONE` and the hazard is retired
+  by teardown (rc 0); a host that **exists** but whose settings or definition
+  cannot be read is `UNKNOWN` (verdict refused); a readable definition that
+  is not disabled is `ENABLED` (rc 1). `ENABLED` outranks `UNKNOWN` because a
+  confirmed live hazard is more actionable than an unmeasured one.
+  A post-write re-read that FAILS is `UNKNOWN` too, not `ENABLED` — it is the
+  same unreadable-definition failure, so it gets the same classification, and
+  the run says the re-read could not be performed rather than ruling out a
+  host-restart lag it never measured (fixed in the 2026-09-21 review round).
+  rc 2 is the "could not certify the requested outcome" class and has three
+  members: at least one `UNKNOWN` target, a `--apply` write that was DENIED, or
+  a boundary that could not be read at all.
+  Without the `GONE` arm the script would have broken on its OWN remediation:
+  part (b) deletes both hosts, after which every read fails.
+  Proved to have teeth against a sandbox copy, all arms run (`temp/timers-probe.sh`,
+  a stub `az` on `PATH`; the pre-fix script extracted to a sandbox copy and run
+  against the identical stub for the counterfactual):
+  all-hosts-deleted 1 → 0, partial-unreadable 1 → 2, genuine `ENABLED` 1 → 1
+  (unchanged), failed listing → 2 and never `GONE`, all-disabled 0 → 0.
+  Measured, not predicted: the pre-fix script did not reach its own rc=2 refusal
+  once the hosts were gone — its app-settings read was unguarded, so `set -e`
+  killed it at the first target with rc=1, the same code as a live hazard.
+
+  **Correction (round 3, 2026-09-17).** An earlier revision of this bullet said
+  *"Both reads are guarded now."* That was **false by a count**, and it is
+  recorded here rather than quietly edited because the way it was false is the
+  point. There were never two `az` reads in that file — there were **five `az`
+  invocations**, and the fix had guarded three. The two it missed were the
+  **boundary read** (`CLOUD="$(az account show …)"`, a bare assignment that died
+  at rc=1 — the ENABLED code — with no verdict, no tally and no refusal: bit for
+  bit the pre-fix behaviour the paragraph above claims was caught) and the
+  **`--apply` write** (a bare `az … appsettings set`, which on a 403 died
+  mid-loop naming no role, violating R6). Both are now guarded and both are
+  measured.
+
+  The reason the round-2 receipt could not have caught either: **all seven of
+  its rows held `az account show` at success and none exercised `--apply`**, so
+  the table was SILENT at exactly the two sites, not clean. Asking what result
+  an instrument could not have produced is the check that would have found it;
+  asking whether the rows passed is not.
+
+  The file now carries a **counted, whole-file audit** of the class in its
+  header (5 command substitutions in code, 1 guarded bare `az`, 0 unguarded, 8
+  arithmetic expansions measured not to carry a command status against a
+  negative control that did abort) rather than an impression of it, and the
+  receipt varies the boundary read and the `--apply` write across twelve arms
+  including the two that discriminate the new design: a `--apply` write denied
+  on a host that is `GONE` must still tally `applyfail=0` (proving the write is
+  genuinely skipped, not merely un-403'd), and a denied write on a genuinely
+  `ENABLED` timer must still exit **1**, not 2, preserving the documented
+  precedence.
+* The four in-tree comments asserting "ENABLED timers" corrected at their sites,
+  not just in the doc: `admin-plane/main.bicep`, `report-subscriptions-job.bicep`,
+  `scripts/csa-loom/deploy-report-subscriptions-job.sh`,
+  `azure-functions/report-subscriptions/src/main.ts`.
+* `full-app-deploy-commercial.yml` `post-deploy-evals` — **the same
+  absence-vs-unreadability conflation this change removes from the script was
+  present in the workflow one file over, introduced by this very PR.** Measured
+  by rendering the `run:` block out of the YAML by position and executing it
+  against a stubbed `az rest`: a 404, a 429 and a 403 all produced the SAME
+  green warning and exit 0. A 403 therefore meant the re-baseline silently never
+  ran, deploy after deploy — the `deploy-integrity.md` R3 invisibility shape.
+  Fixed with the discriminator the script already uses: resolve absence against
+  a **listing**, never against a failed GET. A list that fails is unreadability
+  (`::error::`, exit 1, after a bounded retry that fails CLOSED per R6); a list
+  that succeeds *without* the job is genuine absence (warning, exit 0); and once
+  the job IS in the listing, a failed GET on it can only be unreadability,
+  because absence has already been excluded. A 200 whose body is not a job
+  collection is also an error, since a parse that yields nothing is not an
+  absence either. Eleven arms measured; the only exit-0-without-a-start path is
+  the proven-absent one.
+
+  Two consequences recorded at their sites: the warning's cause list is now
+  **narrower** (the read-failure cause was routed to the error path, so only the
+  three configuration causes survive), and the sentence *"The nightly schedule
+  is unaffected"* is gone — R7, since three of the four causes it sat behind
+  mean the job does not exist and so there is no schedule to be unaffected.
+
+  **Correction (round 4, 2026-09-18).** The round-3 fix resolved absence from a
+  **single ARM page**, which is not a listing. `az rest --method get` is a raw
+  HTTP passthrough and does **not** follow `nextLink`, so `.value` was one page
+  and `MATCH == 0` meant "not on page 1". Measured on the rendered block against
+  a stubbed `az`: a page 1 that lacks the job while carrying a `nextLink`
+  produced **rc=0 and the green absence warning** — the job was on page 2 the
+  whole time. Same false green when page 1 was `value:[]` with a `nextLink` and
+  page 2 then **403'd**. That is the identical `deploy-integrity.md` R3
+  invisibility the round-3 fix removes from the failed-GET path, re-entering
+  through the pagination door, and it is the one input the eleven-arm receipt
+  never varied — the table was SILENT there, not clean.
+
+  Not a hypothetical wire shape: this repo measured it live on ARM and recorded
+  it at `scripts/ci/check-file-size.mjs:255` (#4432) — `Accounts_List` is
+  RBAC-filtered per page, and page 1 answered HTTP 200 `value:[]` with a
+  `nextLink` while the subscription held three accounts.
+
+  Fixed by walking the WHOLE collection before any absence can be asserted, with
+  the bounds and the origin check already in the tree at
+  `apps/fiab-console/lib/azure/foundry-cs-client.ts` `armListAll()`. That helper
+  is TypeScript behind the console's `@/` aliases and its own `armFetch`/token
+  minting, so a `run:` block cannot call it; the shell walk therefore says in
+  its own comment that it is a SECOND implementation of the rule rather than a
+  silent one, borrows both bounds by name (`MAX_ARM_PAGES` 50,
+  `MAX_ARM_PAGING_MS` 60s), and **diverges only in the strict direction**:
+  `armListAll()` `break`s on a cap, deadline, cycle or off-origin hop and
+  returns a partial list because its consumer is a picker that degrades; this
+  consumer asserts ABSENCE, which a partial collection cannot support, so each
+  of those is `::error::` + exit 1 and never an absence.
+
+  One regression was caught by the arms rather than by review: the first draft
+  counted matches with a typed `select((type == "object") and …)`, which turned
+  a `.value` of non-objects into "two jobs, neither matching" — a false ABSENCE,
+  fail-OPEN, and strictly worse than the bare rc=5 it replaced. The element-type
+  check is now an `error()` arm, and that is arm P7.
+
+  Also in this round: the workflow's `start` POST — the only `az` in the block
+  that mutates anything — was the one call with no guard and no R6 remediation,
+  so a 403 exited 1 carrying only `az`'s own text. It now names
+  `Microsoft.App/jobs/start/action` and the two built-in roles that carry it
+  (**Container Apps Jobs Operator**, **Container Apps Jobs Contributor** — from
+  Microsoft Learn, not from memory) at the job's full scope. Round 3 gave the
+  script's write exactly this treatment and did not carry it across: closing a
+  finding at its LABEL rather than at every SITE.
+
+  And a header claim corrected in `check-retired-function-timers.sh`: the audit
+  said the `$([[ … ]] && echo apply || echo verify)` substitution was safe
+  because the `||` "makes it total". It does not —
+  `{ [[ 1 -eq 1 ]] && echo apply || echo verify; } >&-` returns 1, since with
+  the descriptor closed both arms fail. The conclusion holds for a stronger
+  reason the audit did not give: the substitution sits in an ARGUMENT of `echo`,
+  and a command substitution in argument position never carries its status to
+  errexit. The claim was labelled "measured"; it was not.
+
+**Obliges:** run the check before any claim that the hazard is retired; if the
+Console ever grows an estate-drift surface, this belongs on it. After part (b)
+lands the check keeps passing — it reports `RETIRED`, not a refusal.
+
+---
+
 ### OP-19 (b) · Function App teardown — approved
 
 > **Decision:** teardown approved **2026-09-17**, confirmed **2026-09-18**.
