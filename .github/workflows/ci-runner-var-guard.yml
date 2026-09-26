@@ -60,31 +60,60 @@ name: CI_RUNNER is a well-formed runner label set
 # absent exactly when it is needed.
 #
 # ---------------------------------------------------------------------------
-# WHAT THIS GUARD DOES NOT CHECK: THE BOUNDARY
+# THE VARIABLE HAS A SCOPE, AND UNTIL 2026-09-26 THIS GUARD READ ONE OF THEM
 # ---------------------------------------------------------------------------
-# Everything above judges the variable's SHAPE. It cannot judge its SCOPE,
-# because the variable has none: `vars.CI_RUNNER` is a single repository-wide
-# value with no boundary dimension, and .github/actionlint.yaml declares
-# exactly one self-hosted label — `loom-aca`, the Commercial fleet in the DMLZ
-# subscription's cae-csa-loom-centralus, under the Commercial identity
-# uami-loom-ci. There is no Gov / GCC-High / IL5 fleet.
+# This block used to say the variable "has no scope" — that `vars.CI_RUNNER` is
+# "a single repository-wide value with no boundary dimension". That was FALSE,
+# and it was false in the reassuring direction. GitHub resolves `vars.*` with
+# ENVIRONMENT PRECEDENCE inside a job that declares an `environment:`, and
+# converted jobs do. Re-measured 2026-09-26 at efda6b114 by the PyYAML walk
+# below (each job's `runs-on` VALUE, never the file's raw text):
 #
-# Measured 2026-09-25 at PR #4492's head, by a PyYAML walk that classifies a
-# workflow as boundary-touching only when it TAKES a sovereign action
-# (`az cloud set --name AzureUSGovernment`, a secrets.AZURE_GOV_*/AZURE_GCC_*
-# reference, a .usgovcloudapi endpoint, or a gov-* filename):
+#   converted jobs (runs-on VALUE)                171
+#   ... that declare an `environment:`             19  in 10 files
+#         naming a LITERAL environment              5
+#         naming an EXPRESSION                     14
 #
-#   converted jobs, all workflows        171
-#   in Gov-touching workflows             54  in 36 files
-#   mentions a boundary token only        13  in  6 files (NOT counted)
+# The five literals include, verbatim:
 #
-# So a value this guard passes as WELL-FORMED still routes all 54 sovereign
-# jobs onto the Commercial fleet — a GCC-High or IL5 deploy would run its
-# `az cloud set` and its sovereign credentials on a host inside the Commercial
-# hub VNet. That is DECLARED, per cloud-parity.md, not fixed: no value of a
-# single variable can express a correct per-boundary configuration. See the
-# "SOVEREIGN BOUNDARY EXPOSURE" block in
+#   deploy-fiab-gcch.yml  deploy-validate  ->  environment: gcc-high-deploy
+#   deploy-fiab-il5.yml   deploy-validate  ->  environment: il5-deploy
+#
+# So setting CI_RUNNER on the `il5-deploy` environment routed an IL5 deploy into
+# the Commercial hub VNet, under the Commercial identity uami-loom-ci, and this
+# guard stayed GREEN — no value could turn it red, because the guard's own job
+# declares no `environment:` and therefore reads REPOSITORY SCOPE ONLY. An
+# independent reviewer on PR #4492 could construct no failing value for that
+# case, which is the definition of a control that watches nothing.
+#
+# It is now checked. scripts/ci/check-ci-runner-scopes.sh enumerates EVERY
+# environment from the API and applies the same shape validation to each, plus
+# a boundary arm: at environment scope a `self-hosted` value is red outright,
+# because every label in .github/actionlint.yaml is Commercial (`loom-aca`, the
+# DMLZ fleet in cae-csa-loom-centralus under uami-loom-ci — there is no Gov /
+# GCC-High / IL5 fleet), and because 14 of the 19 take their environment from an
+# EXPRESSION — `deploy-gov.yml`'s two converted jobs among them — so a Gov
+# deploy can land on any environment name a dispatcher types. The script's
+# header records why the API read is used rather than declaring the
+# environments on this job: `gcc-high-deploy`, `il5-deploy` and `prod` carry
+# `required_reviewers`, so a job declaring them QUEUES for approval instead of
+# running, and the control would be absent exactly where it is needed.
+#
+# WHAT IS STILL DECLARED AND NOT FIXED. Repository scope remains boundary-blind
+# by construction: one well-formed value still routes every sovereign job onto
+# the Commercial fleet, because no value of a single variable can express a
+# per-boundary configuration. The guard now makes the ENVIRONMENT-scoped form of
+# that misroute loud; the repository-scoped form stays a declared exposure, per
+# cloud-parity.md. See the "SOVEREIGN BOUNDARY EXPOSURE" block in
 # platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep.
+#
+# The sovereign job census quoted in that block and in .github/actionlint.yaml —
+# "54 in 36 files" — reproduces at efda6b114 only under the FILE-scope reading
+# of its stated method (classify a WORKFLOW as boundary-touching, then count the
+# converted jobs in it): 54 jobs in 36 files. Applying the same needles to each
+# job's own subtree instead gives 43 jobs in the same 36 files. The file count
+# is identical either way; the job count is not, and the figure does not say
+# which scope it used. Tracked, not silently re-stated.
 
 on:
   pull_request:
@@ -92,8 +121,12 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Hourly. The variable is written out of band, so this is the only trigger
-    # that bounds how long a bad value can route jobs unobserved.
+    # Hourly, and it is the only TIME-BOUNDED trigger: the variable is written
+    # out of band, so the other three fire only when somebody opens a PR,
+    # merges, or dispatches. What that bounds changed on 2026-09-26 — before
+    # then this guard read repository scope alone, so for the 19 converted jobs
+    # that declare an `environment:` it bounded nothing at all. It now covers
+    # repository scope and every environment scope.
     - cron: '17 * * * *'
 
 permissions:
@@ -101,100 +134,41 @@ permissions:
 
 jobs:
   check:
-    name: CI_RUNNER is unset or a JSON array naming a real fleet
+    # NO `environment:` HERE, DELIBERATELY. Declaring one would make GitHub
+    # resolve `vars.CI_RUNNER` at that environment and hide repository scope;
+    # it would also subject this guard to that environment's protection rules,
+    # and three of the nine carry `required_reviewers`. The environment scopes
+    # are read through the API instead — see the script's header.
+    name: CI_RUNNER is unset or a JSON array naming a real fleet, at every scope
     runs-on: ubuntu-latest   # NOT vars.CI_RUNNER — see the header.
     timeout-minutes: 5
     steps:
-      # Needed only for .github/actionlint.yaml, which is the source of the
-      # declared-fleet-label list the narrowing arm checks against. Lifting the
-      # list at run time rather than transcribing it means a typo cannot make
-      # this guard disagree with the config it is enforcing.
+      # Needed for .github/actionlint.yaml (the declared-fleet-label list the
+      # narrowing arm checks against) and for the checker script itself.
+      # Lifting the list at run time rather than transcribing it means a typo
+      # cannot make this guard disagree with the config it is enforcing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-      - name: Validate the variable's shape
+      # PROVE THE CHECKER CAN FAIL BEFORE TRUSTING ITS VERDICT. 28 arms against
+      # a stubbed variables API in a scratch directory — every red value and a
+      # neighbouring green one, including the case this guard was rebuilt for
+      # (["self-hosted","loom-aca"] on il5-deploy, which no earlier revision
+      # could turn red). It runs FIRST so a checker that has silently become
+      # unkillable is caught here rather than reported as a clean estate.
+      - name: The checker can fail — 28 arms, both directions
+        run: bash scripts/ci/check-ci-runner-scopes.selftest.sh
+      - name: Validate the variable's shape at every scope it can resolve from
         env:
           # Read RAW, never through fromJSON — the point is to judge the text
-          # before anything parses it into a shape that hides the defect.
-          CI_RUNNER_RAW: ${{ vars.CI_RUNNER }}
-        run: |
-          raw="${CI_RUNNER_RAW:-}"
-          if [ -z "$raw" ]; then
-            echo "CI_RUNNER is unset — every job falls back to ubuntu-latest. That is a"
-            echo "valid state (it is the rollback), so this passes."
-            exit 0
-          fi
-          echo "CI_RUNNER = $raw"
-
-          # THE SAME PREDICATE THE `runs-on` EXPRESSION USES, asserted here so
-          # the two cannot diverge. The expression tests startsWith(…, '[') on
-          # the RAW text; a value that parses as an array but does not start
-          # with '[' (leading whitespace) would be accepted by every jq check
-          # below and SILENTLY downgraded to ubuntu-latest at routing time.
-          # This arm is what makes that state loud instead of quiet.
-          # What value would make it fail: ' ["self-hosted","loom-aca"]'.
-          case "$raw" in
-            '['*) : ;;
-            *)
-              echo "::error::CI_RUNNER does not START with '['. The runs-on expression tests"
-              echo "::error::startsWith(vars.CI_RUNNER, '[') on the raw text, so this value would"
-              echo "::error::NOT be parsed as a label set — every job would silently fall back to"
-              echo "::error::ubuntu-latest while appearing to be configured for the fleet."
-              echo "::error::Remove any leading whitespace/quoting: [\"self-hosted\",\"loom-aca\"]"
-              exit 1
-              ;;
-          esac
-
-          # jq -e exits non-zero when the filter yields false/null.
-          if ! printf '%s' "$raw" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "::error::CI_RUNNER is not a JSON ARRAY. A scalar makes fromJSON return a"
-            echo "::error::string, runs-on accepts it, and the job routes to ANY self-hosted"
-            echo "::error::runner with no label narrowing. Set it to e.g. [\"self-hosted\",\"loom-aca\"]"
-            exit 1
-          fi
-          if ! printf '%s' "$raw" | jq -e 'length > 0' >/dev/null 2>&1; then
-            echo "::error::CI_RUNNER is an EMPTY array — no runner can satisfy it and every"
-            echo "::error::job will queue forever. Unset it instead to fall back to ubuntu-latest."
-            exit 1
-          fi
-          if ! printf '%s' "$raw" | jq -e 'all(type == "string")' >/dev/null 2>&1; then
-            echo "::error::CI_RUNNER contains a non-string element; labels must be strings."
-            exit 1
-          fi
-          # A self-hosted set must NARROW, and `length > 1` is NOT enough to
-          # establish that. An independent reviewer on PR #4492 measured
-          # `["self-hosted",""]` passing the old arm: two elements, so the
-          # length test was satisfied, while the set names no fleet at all.
-          # `["self-hosted","x64"]` had the same hole. What the routing actually
-          # needs is a DECLARED fleet label, so that is what is asserted —
-          # lifted from .github/actionlint.yaml at run time, never transcribed.
-          #
-          # WHAT VALUE WOULD MAKE THIS FAIL: ["self-hosted",""],
-          # ["self-hosted","x64"], ["self-hosted"] — all three are red here and
-          # the first two were green before.
-          if printf '%s' "$raw" | jq -e 'index("self-hosted")' >/dev/null 2>&1; then
-            declared="$(awk '
-              /^self-hosted-runner:/            { in_sh = 1; next }
-              /^[^[:space:]#]/                  { in_sh = 0 }
-              in_sh && /^[[:space:]]+labels:/   { in_l = 1; next }
-              in_sh && in_l && /^[[:space:]]+-[[:space:]]*/ {
-                sub(/^[[:space:]]+-[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; next }
-              in_sh && in_l && /^[[:space:]]+[A-Za-z_]+:/ { in_l = 0 }
-            ' .github/actionlint.yaml | jq -R . | jq -s -c .)"
-            if [ "$(printf '%s' "$declared" | jq -r 'length')" -eq 0 ]; then
-              echo "::error::Could not read any self-hosted label from .github/actionlint.yaml."
-              echo "::error::Not treating that as 'the value is fine': the narrowing check has no"
-              echo "::error::list to check against, so it cannot establish anything (R7)."
-              exit 1
-            fi
-            echo "declared fleet labels: $(printf '%s' "$declared" | jq -c .)"
-            if ! printf '%s' "$raw" | jq -e --argjson d "$declared" \
-                 'map(select(. != "self-hosted" and (. | length) > 0)) | any(. as $l | $d | index($l))' \
-                 >/dev/null 2>&1; then
-              echo "::error::CI_RUNNER names 'self-hosted' but no DECLARED fleet label. Length alone"
-              echo "::error::is not narrowing: [\"self-hosted\",\"\"] and [\"self-hosted\",\"x64\"] are two"
-              echo "::error::elements and still route to ANY self-hosted runner, or to none at all."
-              echo "::error::Use a label declared in .github/actionlint.yaml, e.g."
-              echo "::error::[\"self-hosted\",\"loom-aca\"]."
-              exit 1
-            fi
-          fi
-          echo "ok — CI_RUNNER is a non-empty JSON array of strings$(printf '%s' "$raw" | jq -r 'if index("self-hosted") then " naming a narrowed self-hosted fleet" else "" end')."
+          # before anything parses it into a shape that hides the defect. This
+          # job declares no `environment:`, so this IS the repository-scope
+          # value; the environment scopes are read from the API by the script.
+          CI_RUNNER_REPO_RAW: ${{ vars.CI_RUNNER }}
+          TARGET_REPO: ${{ github.repository }}
+          # CI_RUNNER_AUDIT_TOKEN is a fine-grained PAT carrying the repository
+          # "Environments: read" + "Variables: read" permissions. There is no
+          # `variables` key in a workflow `permissions:` block, so GITHUB_TOKEN
+          # may not be able to read environment variables. If it cannot, the
+          # script exits NON-ZERO naming the refused read — it never reports an
+          # unread scope as clean (deploy-integrity.md R7).
+          GH_TOKEN: ${{ secrets.CI_RUNNER_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/check-ci-runner-scopes.sh

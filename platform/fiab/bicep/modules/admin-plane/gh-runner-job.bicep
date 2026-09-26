@@ -40,8 +40,19 @@
 // managed identity in a Commercial tenant, on a VNet peered to the Commercial
 // DLZ. There is no Gov, GCC, GCC-High, IL5 or DoD instance of it.
 //
-// `vars.CI_RUNNER` is a SINGLE repository-wide variable with NO BOUNDARY
-// DIMENSION. Every converted job reads the same value:
+// `vars.CI_RUNNER` has NO BOUNDARY DIMENSION -- there is no value of it that
+// says "sovereign jobs go elsewhere". It DOES have a SCOPE dimension, and an
+// earlier revision of this block denied that by calling it "a SINGLE
+// repository-wide variable": GitHub resolves `vars.*` with ENVIRONMENT
+// PRECEDENCE inside a job that declares an `environment:`, and 19 converted
+// jobs do -- `deploy-fiab-il5.yml:deploy-validate` on `il5-deploy`,
+// `deploy-fiab-gcch.yml:deploy-validate` on `gcc-high-deploy`. A value set on
+// one of those environments routes that boundary's deploy onto this Commercial
+// fleet while repository scope stays empty and any repository-scope-only guard
+// stays green. That form is checked, at all nine environments, by
+// .github/workflows/ci-runner-var-guard.yml (scripts/ci/check-ci-runner-scopes.sh,
+// whose 28-arm selftest pins the il5-deploy case). Every converted job that
+// declares no environment reads the repository value:
 //
 //     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[')
 //                  && vars.CI_RUNNER || '["ubuntu-latest"]') }}
@@ -51,15 +62,25 @@
 // route "CI" to "a runner"; it routes EVERY converted job, in every boundary,
 // to THIS Commercial fleet.
 //
-// MEASURED 2026-09-25 at the PR head, by a PyYAML walk over
-// .github/workflows that classifies a workflow as boundary-touching only when
-// it TAKES a sovereign action (`az cloud set --name AzureUSGovernment`, a
+// MEASURED 2026-09-25, re-measured 2026-09-26 at efda6b114, by a PyYAML walk
+// over .github/workflows that classifies a workflow as boundary-touching only
+// when it TAKES a sovereign action (`az cloud set --name AzureUSGovernment`, a
 // secrets.AZURE_GOV_*/AZURE_GCC_* reference, a .usgovcloudapi endpoint, or a
 // gov-* filename) -- not merely because it mentions "IL5" somewhere:
 //
-//     converted jobs, all workflows        171
-//     in Gov-touching workflows             54  in 36 files
-//     mentions a boundary token only        13  in  6 files (NOT counted)
+//     converted jobs, all workflows        171   re-derived at efda6b114
+//     in Gov-touching workflows             54   re-derived at efda6b114
+//                                                 in 36 files
+//     mentions a boundary token only        13   NOT re-derived -- the
+//                                                 mention-needle set was never
+//                                                 written down, so this row is
+//                                                 carried, not confirmed
+//
+// QUOTE THE SCOPE WITH THE 54. It is the count when the needles classify the
+// WORKFLOW -- the wording above -- and the converted jobs inside it are then
+// counted. Applying the same needles to each JOB's own subtree gives 43 jobs in
+// the SAME 36 files. The file count reproduces either way; the job count does
+// not, and the figure did not previously say which reading produced it.
 //
 // The 54 include deploy-gov (4), deploy-fiab-gcch (3), deploy-fiab-il5 (2),
 // deploy-fiab-gcc (2), dr-drill (7), loom-roll-and-validate (4),
