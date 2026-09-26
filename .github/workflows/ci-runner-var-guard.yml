@@ -35,8 +35,24 @@ name: CI_RUNNER is a well-formed runner label set
 # BAND, on no trigger at all, and on a pull_request this job runs CONCURRENTLY
 # with the jobs it judges. The `schedule` below exists so that drift is bounded
 # by an interval rather than by "whenever someone next opens a PR" -- of the
-# converted workflows, 26 are schedule-triggered and 93 dispatch-triggered, and
-# neither class would otherwise ever run this guard.
+# 102 converted workflows, 26 are schedule-triggered and 92 dispatch-triggered
+# (26 are both), and neither class would otherwise ever run this guard.
+#
+# That dispatch figure READ 93 UNTIL 2026-09-26, and the extra one was THIS
+# FILE. A raw-text census matches the expression quoted in the comment at the
+# top of this header, so the guard counted itself as converted -- a control
+# derived from its own subject -- while the schedule figure beside it excluded
+# the guard and was right. Re-derived at 5cfe3aaa6 by a PyYAML walk that reads
+# each job's `runs-on` VALUE rather than the file's text, with a control
+# asserting the two populations differ by exactly this file:
+#
+#   workflow files scanned                        130
+#   raw-text hits (counts this header's comment)  103
+#   converted workflows (runs-on VALUE)           102
+#     schedule-triggered                           26
+#     workflow_dispatch-triggered                  92
+#     both                                         26
+#     neither                                      10
 #
 # THIS WORKFLOW PINS `ubuntu-latest` ON PURPOSE. It must not route through the
 # variable it exists to check: a malformed value would otherwise take the guard
