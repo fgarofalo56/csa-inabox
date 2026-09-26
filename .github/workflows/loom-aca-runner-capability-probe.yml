@@ -27,6 +27,16 @@ name: loom-aca runner capability probe
 # than no probe. Each probe captures its own rc explicitly rather than
 # discarding it, so a non-zero result is PRINTED, not swallowed.
 #
+# THAT SENTENCE WAS NOT TRUE OF THREE LINES UNTIL 2026-09-26, and it is recorded
+# rather than quietly corrected. The egress-IP line piped curl into `head`, so
+# the status came from `head` and a connect failure was printed into the slot
+# where an IP goes; the two `getent` lines reported every non-zero status as
+# "does not resolve", so a resolver that was DOWN read as a name that does not
+# EXIST; and `az account show ... || true` printed nothing at all when it
+# failed. All three now capture their own status and say which outcome they
+# saw. The same class was the blocking finding on the sibling hygiene probe's
+# on-disk arm, where it was load-bearing rather than cosmetic.
+#
 # WHY THERE IS NO `push:` TRIGGER, AND NO `|| ubuntu-latest` FALLBACK.
 #
 # Both were considered and both are wrong here, for the same reason: this probe
@@ -170,13 +180,41 @@ jobs:
           reach "proxy.golang.org"            https://proxy.golang.org
           echo ""
           echo "  egress IP (if reachable):"
+          # `curl ... 2>&1 | head -1` discarded curl's status (the pipeline's is
+          # `head`'s, and head succeeds on anything), so a connect failure was
+          # printed into the slot where an IP goes, unlabelled. Small, but it is
+          # the same shape this file's header claims it does not have. Status
+          # captured, like reach() above.
           set +e
-          curl -sS -m 12 https://api.ipify.org 2>&1 | head -1
+          ip="$(curl -sS -m 12 https://api.ipify.org 2>/tmp/ipify.err)"
+          rc=$?
           set -e
+          if [ "$rc" -eq 0 ]; then
+            printf '    %s\n' "$(printf '%s' "$ip" | head -1)"
+          else
+            printf '    NOT REACHABLE rc=%s  %s\n' "$rc" "$(head -c 140 /tmp/ipify.err | tr '\n' ' ')"
+          fi
           echo ""
           echo "  DNS:"
-          getent hosts registry.npmjs.org || echo "    registry.npmjs.org does not resolve"
-          getent hosts management.azure.com || echo "    management.azure.com does not resolve"
+          # getent: 0 found, 2 key NOT found, anything else is an ERROR (bad
+          # args, enumeration unsupported, resolver failure). `|| echo "does not
+          # resolve"` reported all three as NXDOMAIN -- a resolver that was down
+          # read as a name that does not exist. Stated separately now, because
+          # the two have opposite meanings for the migration.
+          for h in registry.npmjs.org management.azure.com; do
+            set +e
+            out="$(getent hosts "$h" 2>&1)"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf '    %s\n' "$out"
+            elif [ "$rc" -eq 2 ]; then
+              printf '    %-24s does not resolve (NXDOMAIN)\n' "$h"
+            else
+              printf '    %-24s LOOKUP ERROR rc=%s -- NOT the same as "does not resolve"  %s\n' \
+                "$h" "$rc" "$(printf '%s' "$out" | head -c 140 | tr '\n' ' ')"
+            fi
+          done
 
       - name: Does the managed identity work from here
         run: |
@@ -187,7 +225,17 @@ jobs:
           set -e
           if [ $rc -eq 0 ]; then
             echo "  az login --identity: OK"
-            az account show --query "{name:name, id:id, tenant:tenantId}" -o json || true
+            set +e
+            az account show --query "{name:name, id:id, tenant:tenantId}" -o json 2>/tmp/acct.err
+            show_rc=$?
+            set -e
+            if [ $show_rc -ne 0 ]; then
+              # `|| true` here reported nothing at all, so a login that
+              # succeeded followed by a read that failed looked like a clean
+              # pass with an empty body.
+              echo "  az account show: FAILED rc=$show_rc (the login above still succeeded)"
+              head -c 400 /tmp/acct.err
+            fi
           else
             echo "  az login --identity: FAILED rc=$rc"
             head -c 400 /tmp/az.err
