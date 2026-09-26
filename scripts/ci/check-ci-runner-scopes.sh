@@ -55,13 +55,26 @@
 #
 # WHAT THIS SCRIPT CANNOT DO, AND WHAT IT DOES INSTEAD
 # ----------------------------------------------------
-# Reading another environment's variables needs a token carrying the
-# repository "Variables: read" fine-grained permission. There is no `variables`
-# key in a workflow `permissions:` block. If the read is refused this script
-# exits NON-ZERO and says it could not read — it never reports an unread scope
-# as clean. Per deploy-integrity.md R7, "I could not read il5-deploy" and
-# "il5-deploy carries no CI_RUNNER" are different statements and only one of
-# them is established by a 403.
+# MEASURED IN CI on 2026-09-26 (run 36255512416, head c8f780131), with the
+# default GITHUB_TOKEN under `permissions: contents: read`:
+#
+#   GET /repos/:r/environments?per_page=100                    -> 200, all 9
+#   GET /repos/:r/environments/<any>/variables?per_page=100    -> 403
+#        {"message":"Resource not accessible by integration", ...}
+#
+# All nine were refused, including il5-deploy and gcc-high-deploy. There is no
+# `variables` key in a workflow `permissions:` block, so no permissions change
+# reaches this endpoint; it needs a token carrying the repository "Variables:
+# read" fine-grained permission. The script therefore exits NON-ZERO and names
+# the refusal — it never reports an unread scope as clean. Per
+# deploy-integrity.md R7, "I could not read il5-deploy" and "il5-deploy carries
+# no CI_RUNNER" are different statements and only one of them is established by
+# a 403. Supply `secrets.CI_RUNNER_AUDIT_TOKEN` to close it.
+#
+# Because the repository-scope check needs none of that, the workflow runs it as
+# a SEPARATE job (`AUDIT_SCOPES=repo`). That job's green claims repository scope
+# and says so in its name; the environment audit's red stands on its own. A
+# single combined verdict would have made a working control look broken.
 #
 # Inputs (all via environment):
 #   CI_RUNNER_REPO_RAW  repository-scope value, passed as `${{ vars.CI_RUNNER }}`
@@ -70,9 +83,9 @@
 #   TARGET_REPO             owner/repo. Defaults to $GITHUB_REPOSITORY.
 #   GH_TOKEN            token used by `gh api`.
 #   ACTIONLINT_CONFIG   defaults to .github/actionlint.yaml.
-#   SKIP_ENV_SCOPES     set to 1 ONLY by the sandbox harness's repo-scope arms,
-#                       so a repo-scope class can be exercised without a stub
-#                       API. Never set in CI; the workflow does not pass it.
+#   AUDIT_SCOPES        `all` (default) audits repository scope and every
+#                       environment scope. `repo` audits repository scope only
+#                       and says so — it makes NO claim about environments.
 
 set -u
 
@@ -223,9 +236,9 @@ validate_env_boundary() {
 # mechanism, at the same scope, the routed jobs use when they declare none.
 validate_shape "repository scope" "${CI_RUNNER_REPO_RAW:-}" || rc=1
 
-if [ "${SKIP_ENV_SCOPES:-0}" = "1" ]; then
-  echo "SKIP_ENV_SCOPES=1 — environment scopes NOT audited. This is the sandbox"
-  echo "harness's repo-scope-only mode and is never set in CI."
+if [ "${AUDIT_SCOPES:-all}" = "repo" ]; then
+  echo "AUDIT_SCOPES=repo — repository scope only. This run makes NO claim about"
+  echo "environment-scoped CI_RUNNER; the audit job does that separately."
   exit "$rc"
 fi
 
@@ -262,16 +275,33 @@ if [ "${#env_names[@]}" -ne "$env_total" ]; then
 fi
 echo "environments to audit ($env_total): ${env_names[*]}"
 
+audited=0
 for e in "${env_names[@]}"; do
   enc="$(jq -rn --arg s "$e" '$s|@uri' | nocr)"
   vars_raw="$(gh api "repos/$REPO/environments/$enc/variables?per_page=100" 2>&1)"
   if [ $? -ne 0 ] || ! printf '%s' "$vars_raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    # STOP AT THE FIRST REFUSAL rather than repeating an identical message nine
+    # times. The remediation is the same for all of them, and a wall of
+    # duplicate errors is how a red workflow gets muted instead of fixed. What
+    # is reported stays TRUE either way: the environments after this one were
+    # not attempted, and that is said rather than implied (R7).
     err "Could not READ the variables of environment '$e'. Nothing about its"
     err "CI_RUNNER was established — a refused read is not an absent variable (R7)."
-    err "The API said: $(printf '%s' "$vars_raw" | head -c 400)"
-    rc=1
-    continue
+    err "$((env_total - audited)) of $env_total environments were NOT audited: the"
+    err "remaining ones after '$e' were not attempted once this read was refused."
+    err "The API said: $(printf '%s' "$vars_raw" | head -c 300)"
+    err "MEASURED 2026-09-26 on this repository: GITHUB_TOKEN can LIST the nine"
+    err "environments (that read succeeded above) and is refused 403 'Resource not"
+    err "accessible by integration' on EVERY one of their variable lists. There is"
+    err "no 'variables' key in a workflow permissions: block, so no permissions:"
+    err "change fixes this. REMEDIATION: add a repository secret named"
+    err "CI_RUNNER_AUDIT_TOKEN holding a fine-grained PAT scoped to this repository"
+    err "with Repository permissions -> Environments: Read and Variables: Read."
+    err "Until it exists this audit fails closed. The repository-scope check is a"
+    err "separate job and is unaffected."
+    exit 1
   fi
+  audited=$((audited + 1))
   v_total="$(printf '%s' "$vars_raw" | jq -r '.total_count // 0' | nocr)"
   v_got="$(printf '%s' "$vars_raw" | jq -r '.variables | length' | nocr)"
   if [ "$v_got" -ne "$v_total" ]; then

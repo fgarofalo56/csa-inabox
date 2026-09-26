@@ -133,13 +133,18 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # TWO JOBS, TWO VERDICTS, DELIBERATELY. The repository-scope check needs no
+  # token and works today; the environment-scope audit needs a permission
+  # GITHUB_TOKEN does not have (measured — see the script header) and fails
+  # closed until CI_RUNNER_AUDIT_TOKEN exists. Folding them into one verdict
+  # would either report green over an unread scope or make a working control
+  # look broken. Each job's NAME states exactly what its green covers.
+  shape-repo:
     # NO `environment:` HERE, DELIBERATELY. Declaring one would make GitHub
     # resolve `vars.CI_RUNNER` at that environment and hide repository scope;
     # it would also subject this guard to that environment's protection rules,
-    # and three of the nine carry `required_reviewers`. The environment scopes
-    # are read through the API instead — see the script's header.
-    name: CI_RUNNER is unset or a JSON array naming a real fleet, at every scope
+    # and three of the nine carry `required_reviewers`.
+    name: CI_RUNNER at REPOSITORY scope is unset or a JSON array naming a real fleet
     runs-on: ubuntu-latest   # NOT vars.CI_RUNNER — see the header.
     timeout-minutes: 5
     steps:
@@ -148,27 +153,43 @@ jobs:
       # Lifting the list at run time rather than transcribing it means a typo
       # cannot make this guard disagree with the config it is enforcing.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-      # PROVE THE CHECKER CAN FAIL BEFORE TRUSTING ITS VERDICT. 28 arms against
+      # PROVE THE CHECKER CAN FAIL BEFORE TRUSTING ITS VERDICT. 32 arms against
       # a stubbed variables API in a scratch directory — every red value and a
       # neighbouring green one, including the case this guard was rebuilt for
       # (["self-hosted","loom-aca"] on il5-deploy, which no earlier revision
       # could turn red). It runs FIRST so a checker that has silently become
       # unkillable is caught here rather than reported as a clean estate.
-      - name: The checker can fail — 28 arms, both directions
+      - name: The checker can fail — 32 arms, both directions
         run: bash scripts/ci/check-ci-runner-scopes.selftest.sh
-      - name: Validate the variable's shape at every scope it can resolve from
+      - name: Validate the variable's shape at repository scope
         env:
           # Read RAW, never through fromJSON — the point is to judge the text
           # before anything parses it into a shape that hides the defect. This
           # job declares no `environment:`, so this IS the repository-scope
-          # value; the environment scopes are read from the API by the script.
+          # value.
+          CI_RUNNER_REPO_RAW: ${{ vars.CI_RUNNER }}
+          AUDIT_SCOPES: repo
+        run: bash scripts/ci/check-ci-runner-scopes.sh
+
+  scope-audit:
+    # Independent of shape-repo on purpose: this job's red must not suppress
+    # that job's verdict, and its green must not be read as covering it.
+    name: No environment-scoped CI_RUNNER shadows repository scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - name: Audit every environment scope
+        env:
           CI_RUNNER_REPO_RAW: ${{ vars.CI_RUNNER }}
           TARGET_REPO: ${{ github.repository }}
+          AUDIT_SCOPES: all
           # CI_RUNNER_AUDIT_TOKEN is a fine-grained PAT carrying the repository
-          # "Environments: read" + "Variables: read" permissions. There is no
-          # `variables` key in a workflow `permissions:` block, so GITHUB_TOKEN
-          # may not be able to read environment variables. If it cannot, the
-          # script exits NON-ZERO naming the refused read — it never reports an
-          # unread scope as clean (deploy-integrity.md R7).
+          # "Environments: read" + "Variables: read" permissions. GITHUB_TOKEN
+          # is refused 403 on the environment variables endpoint — measured in
+          # run 36255512416, all nine environments — and no `permissions:` key
+          # reaches it. Until the secret exists this job fails closed, naming
+          # the refusal rather than reporting an unread scope as clean
+          # (deploy-integrity.md R7).
           GH_TOKEN: ${{ secrets.CI_RUNNER_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/check-ci-runner-scopes.sh

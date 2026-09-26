@@ -51,7 +51,7 @@
 // fleet while repository scope stays empty and any repository-scope-only guard
 // stays green. That form is checked, at all nine environments, by
 // .github/workflows/ci-runner-var-guard.yml (scripts/ci/check-ci-runner-scopes.sh,
-// whose 28-arm selftest pins the il5-deploy case). Every converted job that
+// whose 32-arm selftest pins the il5-deploy case). Every converted job that
 // declares no environment reads the repository value:
 //
 //     runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[')

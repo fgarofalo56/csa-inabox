@@ -146,6 +146,16 @@ echo "=== READ INTEGRITY: an unread scope is never reported as clean ==="
 mk_clean
 arm 'RED  the environments list is refused' 1 \
     'Could not LIST the environments' CI_RUNNER_REPO_RAW= GH_FAIL_MODE=403
+# The refusal that actually happens here: the LIST succeeds and the per-
+# environment variables read is refused. One error, naming the remediation,
+# not nine copies of it. WHAT WOULD MAKE THIS FAIL: a checker that swallowed
+# the 403 and carried on to report the remaining environments clean.
+mk_clean; rm -f "$FIX"/env-*.json
+arm 'RED  every variables read refused -> ONE error + remediation' 1 \
+    'CI_RUNNER_AUDIT_TOKEN' CI_RUNNER_REPO_RAW=
+mk_clean; rm -f "$FIX"/env-*.json
+arm 'RED  ...and it says how many it did NOT audit' 1 \
+    'of 9 environments were NOT audited' CI_RUNNER_REPO_RAW=
 mk_clean; rm -f "$FIX/env-il5-deploy.json"
 arm 'RED  one environment read is refused' 1 \
     "Could not READ the variables of environment 'il5-deploy'" CI_RUNNER_REPO_RAW=
@@ -167,5 +177,33 @@ arm 'green  ...and green again with the list restored' 0 \
     'narrowed self-hosted fleet' 'CI_RUNNER_REPO_RAW=["self-hosted","loom-aca"]'
 
 echo
+echo "=== AUDIT_SCOPES=repo claims repository scope and NOTHING more ==="
+# The repository-scope job runs in this mode. Its green must not be readable as
+# covering environments, and it must not touch the API at all -- so it stays
+# green even when EVERY variables read would be refused. That is the whole
+# reason the two verdicts are separate jobs.
+# WHAT WOULD MAKE THIS FAIL: a mode that silently audited environments anyway
+# (it would go red here), or one that claimed all scopes in its output.
+mk_clean; rm -f "$FIX"/env-*.json
+arm 'green  repo mode is unaffected by a refused variables read' 0 \
+    'NO claim about' CI_RUNNER_REPO_RAW= AUDIT_SCOPES=repo GH_FAIL_MODE=403
+arm 'RED   repo mode still judges the value it CAN see' 1 \
+    'no DECLARED fleet label' 'CI_RUNNER_REPO_RAW=["self-hosted","x64"]' AUDIT_SCOPES=repo
+
+echo
 printf 'ARMS: %s passed, %s failed\n' "$pass" "$fail"
+# THE ARM COUNT IS PUBLISHED IN THREE STATIC PLACES -- this workflow's step
+# name, .github/workflows/ci-runner-var-guard.yml's comment, and the bicep
+# exposure block. A published number that nothing re-derives rots, so this
+# re-derives it: add or remove an arm and this line goes red until the figure
+# is corrected everywhere.
+# WHAT VALUE WOULD MAKE THIS FAIL: any edit that changes the number of arms.
+EXPECTED_ARMS=32
+if [ $((pass + fail)) -ne "$EXPECTED_ARMS" ]; then
+  echo "::error::arm count changed: ran $((pass + fail)), expected $EXPECTED_ARMS."
+  echo "::error::Update EXPECTED_ARMS here AND the '32 arms' claims in"
+  echo "::error::.github/workflows/ci-runner-var-guard.yml and"
+  echo "::error::platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep."
+  exit 1
+fi
 [ "$fail" -eq 0 ]
