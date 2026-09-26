@@ -75,13 +75,36 @@ name: loom-brain-scan
 #
 # `[self-hosted, loom-aca]` is the scale-to-zero ACA Job runner
 # (`platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep`), which is
-# INSIDE the hub VNet and — this is the part that matters twice — runs AS THE
-# CONSOLE UAMI (`identity: consoleUamiId`). That identity already holds the
-# Cosmos built-in Data Contributor role via `cosmosDataRole` in both modules, so
-# this lane needs NO new `sqlRoleAssignment` and no new object id in a public
-# repository. `LOOM_UAMI_CLIENT_ID` selects it explicitly in the credential
-# chain; when it is absent the managed-identity leg is not added at all, so there
-# is no failed IMDS probe before the fallback.
+# INSIDE the hub VNet.
+#
+# !! IT NO LONGER RUNS AS THE CONSOLE UAMI, AND THIS LANE DEPENDS ON THAT. !!
+#
+# Until PR #4492 the job carried `identity: consoleUamiId`, which holds the
+# Cosmos built-in Data Contributor role, so this lane needed NO new
+# `sqlRoleAssignment` and no new object id in a public repository. That PR
+# detaches the console identity -- deliberately, because Container Apps lets any
+# job step assume an attached identity and that one also holds Contributor at
+# SUBSCRIPTION scope -- and attaches `uami-loom-ci`, which holds AcrPull and
+# nothing else.
+#
+# CONSEQUENCE, stated rather than left to be discovered at 04:11 UTC: once this
+# lane actually runs on that fleet, `LOOM_UAMI_CLIENT_ID` names an identity the
+# runner does not carry, no token for it can be minted, and
+# `lib/brain/run/azure/scan-credential.ts` REFUSES the service-principal
+# fallback by design (`assertTokenIdentity` compares the token's appid against
+# the expected client id and throws on a mismatch). It fails CLOSED and loud --
+# `arm-probe.ts` propagates `ScanIdentityError` rather than classifying it as a
+# network fault, and the job exits 1 -- so this is a lane that goes RED, not one
+# that reports green over nothing. That is the good version of this bug, and it
+# is still a broken lane.
+#
+# Commercial has no fallback to fall back TO: `loom-console-cosmos.bicep` grants
+# the deploy service principal a data-plane role only when
+# `isAzureUSGovernment`, and its comment says why -- it assumed this runner
+# carries the console UAMI. Re-enabling this lane on the fleet needs a
+# deliberate least-privilege grant to `uami-loom-ci`, recorded at
+# `gh-runner-job.bicep` `runnerUamiId`, not a re-attachment of the console
+# identity.
 #
 # ── AND THE CREDENTIAL CHAIN HAS TO BE ALLOWED TO REACH IT (review of #4014) ─
 # The paragraph above was true about intent and FALSE about behaviour, and the
@@ -122,9 +145,13 @@ name: loom-brain-scan
 # The fix above is identical in both jobs, because the defect was. What is NOT
 # identical is what the chain can then reach:
 #
-#   Commercial  `[self-hosted, loom-aca]` HAS a managed identity (the console
-#               UAMI), so unshadowing the chain makes the lane run as it. The
-#               assertion below proves that per run rather than assuming it.
+#   Commercial  `[self-hosted, loom-aca]` USED TO HAVE a managed identity that
+#               reached Cosmos (the console UAMI). PR #4492 detaches it and
+#               attaches `uami-loom-ci` (AcrPull only), so unshadowing the chain
+#               now reaches an identity that cannot be minted for
+#               LOOM_UAMI_CLIENT_ID. The assertion below still proves the
+#               identity per run rather than assuming it -- which is why this
+#               surfaces as a named refusal instead of a 403.
 #   Gov         `ubuntu-latest` has NO managed identity at all, so no chain
 #               order can reach one. The chain falls through to
 #               AzureCliCredential — the service principal, via the `az login`
@@ -133,6 +160,17 @@ name: loom-brain-scan
 #               alongside the network gap below, and the scan now names it with
 #               the exact `az cosmosdb sql role assignment create` command
 #               instead of failing with a 403 stack trace.
+#
+# THE GOV JOB IS NO LONGER PINNED TO `ubuntu-latest`. PR #4492 converts it to
+# `${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || …) }}`, so
+# the sentence above holds only while `vars.CI_RUNNER` is unset. If it is ever
+# set to the loom-aca fleet, the Gov lane moves onto a runner that DOES have a
+# managed identity — `uami-loom-ci` — and `loom-console-cosmos.bicep`'s
+# Gov-only service-principal grant becomes unreachable for the same
+# chain-order reason that breaks Commercial above. That is the mirror of the
+# Commercial finding, in the boundary that currently has the working fallback,
+# and it is why the fleet must not be switched on for this lane in either
+# boundary until `uami-loom-ci` carries its own grant.
 #
 # Per `cloud-parity.md` that lag is stated, owned and dated rather than implied
 # fixed: a change that repaired Commercial and left Gov looking repaired would be
@@ -207,7 +245,7 @@ jobs:
   # and its transient-failure control with `gh`/`jq`/`sleep` stubbed.
   queue-watchdog:
     name: Queue watchdog
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7.0.1
@@ -364,11 +402,19 @@ jobs:
           echo "::add-mask::$ENDPOINT"
           echo "LOOM_COSMOS_ENDPOINT=$ENDPOINT" >> "$GITHUB_ENV"
 
-          # The console UAMI's client id. This runner runs AS that identity
-          # (gh-runner-job.bicep `identity: consoleUamiId`), and that identity
-          # already holds Cosmos Data Contributor on the account — which is why
-          # this lane needs no new role assignment. Naming it explicitly makes
-          # the credential chain select it rather than guessing.
+          # The console UAMI's client id, read off the console app so the
+          # credential chain selects it explicitly rather than guessing.
+          #
+          # THIS RUNNER NO LONGER RUNS AS THAT IDENTITY. The comment here used
+          # to say it did — "(gh-runner-job.bicep `identity: consoleUamiId`),
+          # and that identity already holds Cosmos Data Contributor on the
+          # account, which is why this lane needs no new role assignment" — and
+          # PR #4492 detaches the console identity in favour of `uami-loom-ci`
+          # (AcrPull only). The value below is still the right thing to READ:
+          # it is what the console runs as, and it is what the scan's identity
+          # assertion compares against. What changed is that this runner can no
+          # longer obtain a token for it, so on the fleet this lane fails the
+          # assertion and exits 1 by design. See the header.
           UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_UAMI_CLIENT_ID'].value | [0]" \
             -o tsv 2>../../temp/uami.err)
@@ -534,7 +580,7 @@ jobs:
     # red was not — it was an untracked one that also drowned the Commercial
     # signal, which is why the schedule trigger came off above. Making this
     # green would be a false claim; running it nightly was a costly one.
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(startsWith(vars.CI_RUNNER, '[') && vars.CI_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     outputs:
       verdict: ${{ steps.scan.outputs.verdict }}

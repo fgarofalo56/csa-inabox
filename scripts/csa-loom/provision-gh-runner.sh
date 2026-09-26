@@ -11,8 +11,14 @@
 #   The job runs in the console's VNet-integrated Container Apps environment
 #   (peered to the DLZ), so CI build/roll/UAT can reach PE-only resources (lake,
 #   Purview, ADF, Synapse, the private ACR/KV) that a cloud GitHub runner can't.
-#   It reuses the CONSOLE UAMI for ACR pull + `az login --identity`, so CI auth
-#   == the same identity the console runs as.
+#
+#   IT DOES NOT REUSE THE CONSOLE UAMI, and the header used to say it did:
+#   "It reuses the CONSOLE UAMI for ACR pull + az login, so CI auth == the same
+#   identity the console runs as." That WAS true and it was the vulnerability —
+#   see RUNNER_UAMI_ID below. The runner carries uami-loom-ci, which holds
+#   AcrPull and nothing else, so `az login --identity` in a job buys almost
+#   nothing. A job that genuinely needs a PE-only resource needs an explicit
+#   grant to THAT identity, recorded with the reason.
 #
 # NOTE: This does NOT reduce Anthropic API spend. It only moves GitHub Actions
 #   *compute* in-VNet (and to scale-to-zero ACA). LLM usage is unaffected.
@@ -59,7 +65,50 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 RUNNER_IMAGE="${ACR}/gh-aca-runner:${IMAGE_TAG}"
 
 # Console UAMI (reused for ACR pull + az login). Resource id + clientId.
-CONSOLE_UAMI_ID="${CONSOLE_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-console-centralus}"
+# The runner's OWN least-privilege identity. NOT the console's.
+#
+# THIS LINE USED TO SAY uami-loom-console-centralus, AND THAT WAS THE
+# VULNERABILITY. Container Apps injects IDENTITY_ENDPOINT/IDENTITY_HEADER into
+# the job, so whatever identity the job carries can be assumed by ANY job step.
+# The console identity holds 53 role assignments (measured 2026-09-13):
+# Contributor at SUBSCRIPTION scope, Role Based Access Control Administrator on
+# the admin RG, Key Vault Secrets Officer on kv-loom, Reader at the management
+# group. Contributor grants Microsoft.App/jobs/listSecrets/action - which hands
+# back this job's own github-pat secret - and RBAC Administrator grants exactly
+# the roleAssignments/write that Contributor's notActions deny.
+#
+# TENSE: this used to end "On a PUBLIC repo, where an approved fork PR runs
+# arbitrary code here", in the present tense, and that is not true today. The
+# repo IS public; what is not true is that PR code reaches this job, because
+# vars.CI_RUNNER is unset (measured 2026-09-25: 11 repository variables, none
+# named CI_RUNNER) and every converted job routes to ubuntu-latest. The
+# exposure is real WHEN that variable is set.
+#
+# uami-loom-ci holds ONE assignment: AcrPull on the Loom ACR. Add a grant only
+# when a specific job PROVES it needs one.
+#
+# Two independent reviewers found the old arrangement separately. Re-pointing
+# this variable at the console identity re-opens it.
+RUNNER_UAMI_ID="${RUNNER_UAMI_ID:-/subscriptions/${SUB}/resourceGroups/${ADMIN_RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-ci}"
+
+# REFUSE to provision with the console identity, however it was supplied. A
+# comment is not a control: without this, one stale env var or one copy-pasted
+# command silently restores subscription Contributor to CI.
+case "$RUNNER_UAMI_ID" in
+  *uami-loom-console*)
+    cat >&2 <<'IDERR'
+[provision-gh-runner][FATAL] RUNNER_UAMI_ID names the CONSOLE identity.
+
+  That identity holds Contributor at SUBSCRIPTION scope and RBAC Administrator
+  on the admin resource group, and Container Apps lets any job step assume it.
+  Giving it to the runner is the exact exposure removed on 2026-09-13.
+
+  Use uami-loom-ci (AcrPull only), or create a new least-privilege identity and
+  grant it precisely what the failing job proved it needs.
+IDERR
+    exit 1
+    ;;
+esac
 
 # GitHub target (repo scope).
 GH_OWNER="${GH_OWNER:-fgarofalo56}"
@@ -69,14 +118,40 @@ RUNNER_NAME_PREFIX="${RUNNER_NAME_PREFIX:-loom-aca}"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"   # GH Enterprise: set to your API URL
 
 # KEDA github-runner scaler knobs.
+#
+# THESE DEFAULTS ARE MEASURED, NOT CHOSEN, and the previous ones were the cause
+# of a real blocker: at CPU=1.0 / MEMORY=2.0Gi the console `next build` was
+# OOM-killed after ~4.5 minutes with no error message (fiab-console-ci.yml sets
+# NODE_OPTIONS=--max-old-space-size=6144, which alone exceeds a 2Gi container),
+# and at REPLICA_TIMEOUT=1800 ACA killed replicas mid-job so four REQUIRED
+# contexts reported CANCELLED - indistinguishable from a human cancel. 40 job
+# definitions declare timeout-minutes of 40-150.
+#
+# Keep these in step with platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep.
+# They diverged once, and a reviewer read the bicep and correctly measured a
+# fleet that no longer existed.
 SCALE_LABELS="${SCALE_LABELS:-loom-aca}"             # only count runs requesting these labels
 TARGET_QUEUE_LEN="${TARGET_QUEUE_LEN:-1}"            # 1 pending run -> 1 execution
-MAX_EXECUTIONS="${MAX_EXECUTIONS:-5}"
+MAX_EXECUTIONS="${MAX_EXECUTIONS:-8}"                # operator cap on concurrent executions
 MIN_EXECUTIONS="${MIN_EXECUTIONS:-0}"                # scale-to-zero
 POLLING_INTERVAL="${POLLING_INTERVAL:-30}"
-REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-1800}"
-CPU="${CPU:-1.0}"
-MEMORY="${MEMORY:-2.0Gi}"
+REPLICA_TIMEOUT="${REPLICA_TIMEOUT:-9600}"           # 160 min > the longest job cap (150)
+CPU="${CPU:-4.0}"                                    # matches ubuntu-latest
+MEMORY="${MEMORY:-16.0Gi}"                           # matches ubuntu-latest
+
+# LOAD-BEARING, and its absence was a real defect: without it `job create` lands
+# on the environment's default profile, and the Consumption profile's per-replica
+# ceiling is 4 vCPU / 8 GiB (Microsoft Learn, "Workload profiles overview"). The
+# 16 GiB above is OUTSIDE that range, so a from-scratch run of this script asked
+# for a replica the profile it landed on could not schedule. The bicep has
+# declared D8 all along (gh-runner-job.bicep workloadProfileName); this script
+# did not, which is exactly the bicep/script divergence the note above warns
+# about, committed in the file carrying the warning.
+#
+# Verified against the installed CLI rather than assumed: --workload-profile-name
+# is accepted by BOTH `az containerapp job create` AND `az containerapp job
+# update`, so it belongs in TUNABLE_ARGS and a re-run re-asserts it.
+WORKLOAD_PROFILE_NAME="${WORKLOAD_PROFILE_NAME:-D8}"
 
 # Runner image build pins (passed through to the Dockerfile ARGs).
 RUNNER_VERSION="${RUNNER_VERSION:-2.328.0}"
@@ -136,21 +211,67 @@ fi
 echo ""
 echo "[provision-gh-runner] 1/3 Acquiring the ACR firewall lease (opens the registry)..."
 bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
+LEASE_HELD=1
+
+# Temp files the later steps create. Declared HERE, empty, because the single
+# EXIT trap installed below is live from this point on and must be able to run
+# before they exist.
+SHOW_ERR=""
+IDENT_ERR=""
+
+# Release the lease if we still hold it. RETURNS a verdict; it does NOT exit.
+#
+# IT USED TO EXIT, AND THAT IS WHY THIS FUNCTION IS SHAPED THIS WAY. Step 2
+# calls it directly, so `exit "$rc"` there terminated the whole script at the
+# end of Step 2 — with `$?` taken from the preceding `echo`, i.e. 0. Measured on
+# real bash, not reasoned about: Step 3 never ran, so `reconcile_identity` and
+# `assert_identity_is_exactly_runner` were unreachable; the EXIT trap then fired
+# `release_acr_lease` a SECOND time; and a failed `az acr build` exited 0
+# instead of `$build_rc`, which is a deploy path reporting success having
+# produced nothing. That is the same "the guard is on a code path the
+# provisioner does not take" defect this file's Step 3 comment was written to
+# close, committed in the fix for it.
+#
+# Idempotent via LEASE_HELD, so the eager Step 2 call and the EXIT trap cannot
+# double-release.
 release_acr_lease() {
-  # Preserve the status the script was already exiting with, so a clean re-lock
-  # never masks a failed build (see deploy-loom-uat-job.sh for the measurement:
-  # a bare non-zero command in an EXIT trap does NOT set the script's status).
-  local rc=$?
+  [[ "$LEASE_HELD" -eq 1 ]] || return 0
   # C24 (#3088): NO `|| true`. `release` VERIFIES the registry reads back
   # publicNetworkAccess=Disabled + defaultAction=Deny; discarding that verdict
   # is a script exiting 0 over a publicly reachable registry.
   if ! bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"; then
+    # Do not leave it armed for the trap to retry: one verified-failed re-lock
+    # is the verdict, and a retry would report the same failure twice while
+    # changing nothing.
+    LEASE_HELD=0
     echo "[provision-gh-runner] ERROR: could NOT verify $ACR_NAME re-locked — it may be PUBLICLY REACHABLE. See the remediation above; the scheduled acr-firewall-sweeper will retry." >&2
-    exit 1
+    return 1
   fi
+  LEASE_HELD=0
+  return 0
+}
+
+# THE SINGLE EXIT TRAP. Traps are not additive: a later `trap ... EXIT` REPLACES
+# this one rather than adding to it, which is what a second `trap 'rm -f ...'
+# EXIT` further down used to do. Every EXIT-time obligation belongs here.
+#
+# Preserves the status the script was already exiting with, so a clean re-lock
+# never masks a failed build (see deploy-loom-uat-job.sh for the measurement: a
+# bare non-zero command in an EXIT trap does NOT set the script's status).
+on_exit() {
+  local rc=$? f
+  # Belt-and-braces: under the current linear flow Step 2 has always released
+  # by the time we get here, so this arm is an EQUIVALENT MUTANT on that path —
+  # disclosed rather than counted as coverage (assertion-design.md "done" #5).
+  # It is live for an exit BEFORE Step 2, which is what a SIGINT during the
+  # multi-minute `az acr build` produces.
+  if ! release_acr_lease; then rc=1; fi
+  for f in "$SHOW_ERR" "$IDENT_ERR"; do
+    [[ -n "$f" ]] && rm -f "$f"
+  done
   exit "$rc"
 }
-trap release_acr_lease EXIT
+trap on_exit EXIT
 
 echo "[provision-gh-runner] Building gh-aca-runner:${IMAGE_TAG} via ACR Tasks..."
 BUILD_ARGS=( "RUNNER_VERSION=${RUNNER_VERSION}" )
@@ -175,10 +296,16 @@ build_rc=0
 # Step 2 — Release the ACR firewall lease (ALWAYS, even on build failure).
 #   Released eagerly so the registry isn't held open through Step 3; the EXIT
 #   trap makes this idempotent.
+#
+#   The `if !` matters: release_acr_lease RETURNS its verdict and the decision
+#   to stop is taken HERE. When it exited on its own, that exit ended the
+#   script at the end of Step 2 and Step 3 never ran.
 # ---------------------------------------------------------------------------
 echo ""
 echo "[provision-gh-runner] 2/3 Releasing the ACR firewall lease..."
-release_acr_lease
+if ! release_acr_lease; then
+  exit 1
+fi
 
 if [[ $build_rc -ne 0 ]]; then
   echo "[provision-gh-runner][FATAL] az acr build failed (rc=$build_rc). Job not deployed." >&2
@@ -207,6 +334,7 @@ TUNABLE_ARGS=(
   --image "$RUNNER_IMAGE"
   --cpu "$CPU"
   --memory "$MEMORY"
+  --workload-profile-name "$WORKLOAD_PROFILE_NAME"
   --replica-timeout "$REPLICA_TIMEOUT"
   --replica-retry-limit 1
   --replica-completion-count 1
@@ -247,13 +375,159 @@ ENV_PAIRS=(
 #     create -> environment + trigger + registry + identity + secret + env
 #     update -> tunables + scale rule + --set-env-vars, with the PAT refreshed
 #               first via `job secret set` (handles PAT rotation on a re-run).
-if az containerapp job show "${ID_ARGS[@]}" -o none 2>/dev/null; then
-  echo "[provision-gh-runner] job exists -> update (refresh secret + tunables)"
+#
+#   WHAT THAT MEANT, AND WHY THERE IS NOW A RECONCILE STEP. Because `update`
+#   takes no identity flag, RUNNER_UAMI_ID was referenced ONLY on the create
+#   branch. `gh-aca-runner` already exists, so every real run of this script
+#   takes the UPDATE branch, where the variable is never read. The refusal
+#   guard near the top therefore inspected a variable while the resource kept
+#   whatever identity it already had: a job still carrying the console identity
+#   survived every re-run, and the script printed "deployed" and exited 0. A
+#   guard that reads an input the resource never consults cannot fail on the
+#   condition it exists for.
+#
+#   `az containerapp job identity assign|remove|show` DOES exist (verified
+#   against the installed CLI, not assumed), so the update path can reconcile
+#   the identity even though `update` cannot. It is followed by a READ-BACK
+#   that fails closed on BOTH paths -- see assert_identity_is_exactly_runner.
+
+# Lowercase an ARM resource id for comparison. Case varies between what a
+# caller supplies and what ARM returns (resourceGroups/resourcegroups), so a
+# literal string compare produces false mismatches.
+_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# Read back the identities ACTUALLY attached, and refuse to continue unless the
+# set is exactly { RUNNER_UAMI_ID }.
+#
+# WHAT VALUE WOULD MAKE THIS FAIL: any job carrying a second identity, or a
+# different one -- the console identity being the case this exists for -- and
+# also the empty set, which is what a silently-failed identity assign leaves
+# behind. It is NOT satisfiable by the script's own inputs: it compares against
+# what ARM returns, not against RUNNER_UAMI_ID's spelling.
+assert_identity_is_exactly_runner() {
+  local attached rc want got n
+  # `|| rc=$?` rather than a bare call + `rc=$?`: under `set -e` the bare form
+  # kills the script on failure, so the "could not READ BACK" arm below could
+  # never execute — the could-not-fail shape this file keeps finding.
+  rc=0
+  attached=$(az containerapp job show "${ID_ARGS[@]}" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR") || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not READ BACK the job's identity (az exit $rc)." >&2
+    echo "  This is not 'the identity is wrong' -- it is 'I could not establish what it is'," >&2
+    echo "  and the two must not be reported as the same thing. az stderr follows." >&2
+    cat "$IDENT_ERR" >&2
+    exit 1
+  fi
+
+  n=$(printf '%s\n' "$attached" | grep -c '[^[:space:]]')
+  want=$(_lc "$RUNNER_UAMI_ID")
+
+  if [[ "$n" -ne 1 ]]; then
+    echo "[provision-gh-runner][FATAL] the job carries $n user-assigned identities; it must carry exactly 1." >&2
+    echo "  Attached:" >&2
+    printf '    %s\n' $attached >&2
+    echo "  Every attached identity is reachable from arbitrary job code via" >&2
+    echo "  IDENTITY_ENDPOINT/IDENTITY_HEADER, so a second one is a second blast radius." >&2
+    exit 1
+  fi
+
+  got=$(_lc "$attached")
+  if [[ "$got" != "$want" ]]; then
+    echo "[provision-gh-runner][FATAL] the job carries the WRONG identity." >&2
+    echo "  attached: $attached" >&2
+    echo "  required: $RUNNER_UAMI_ID" >&2
+    case "$got" in
+      *uami-loom-console*)
+        echo "  That is the CONSOLE identity: Contributor at SUBSCRIPTION scope and RBAC" >&2
+        echo "  Administrator on the admin RG, assumable by any job step. This is the exact" >&2
+        echo "  exposure removed on 2026-09-13. Do not raise maxExecutions above 0 until it" >&2
+        echo "  is detached." >&2
+        ;;
+    esac
+    exit 1
+  fi
+
+  echo "[provision-gh-runner] identity verified: exactly one, $attached"
+}
+
+# Bring an EXISTING job's identity back to exactly RUNNER_UAMI_ID. Safe to
+# re-run: assign is idempotent, and remove is only called for identities that
+# are actually attached and are not the one we want.
+reconcile_identity() {
+  local attached rc id
+  # Same `|| rc=$?` shape as the read-back, and for the same reason: `set -e`
+  # would otherwise make every error arm in this function unreachable.
+  rc=0
+  attached=$(az containerapp job show "${ID_ARGS[@]}" \
+    --query "keys(identity.userAssignedIdentities || \`{}\`)" -o tsv 2>"$IDENT_ERR") || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not read the job's current identity (az exit $rc)." >&2
+    cat "$IDENT_ERR" >&2
+    exit 1
+  fi
+
+  echo "[provision-gh-runner] reconciling identity to $RUNNER_UAMI_ID"
+  rc=0
+  az containerapp job identity assign "${ID_ARGS[@]}" \
+    --user-assigned "$RUNNER_UAMI_ID" -o none || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[provision-gh-runner][FATAL] could not assign $RUNNER_UAMI_ID (az exit $rc)." >&2
+    exit 1
+  fi
+
+  for id in $attached; do
+    if [[ "$(_lc "$id")" != "$(_lc "$RUNNER_UAMI_ID")" ]]; then
+      echo "[provision-gh-runner] detaching non-runner identity: $id"
+      rc=0
+      az containerapp job identity remove "${ID_ARGS[@]}" --user-assigned "$id" -o none || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        echo "[provision-gh-runner][FATAL] could not detach $id (az exit $rc). Refusing to" >&2
+        echo "  report success while a privileged identity is still attached." >&2
+        exit 1
+      fi
+    fi
+  done
+}
+
+# `job show` is used here as an EXISTENCE test, so its failure mode matters: a
+# discarded stderr would turn "I could not reach ARM" into "the job does not
+# exist", send the run down the create branch, and report whatever that did.
+# Capture instead, and only treat a genuine not-found as not-found (R7).
+#
+# NO `trap ... EXIT` HERE. These files are cleaned by on_exit, which was
+# installed once at Step 1. A second `trap 'rm -f ...' EXIT` at this point
+# REPLACED the lease trap rather than adding to it — traps are not additive —
+# and once Step 3 became reachable that would have been a live lease leak.
+SHOW_ERR="$(mktemp)"
+IDENT_ERR="$(mktemp)"
+
+# `|| show_rc=$?` is load-bearing under `set -e`: a bare `az ...` followed by
+# `show_rc=$?` would terminate the script on the very failure the branches
+# below exist to classify, so the "could not determine" arm could never run.
+show_rc=0
+az containerapp job show "${ID_ARGS[@]}" -o none 2>"$SHOW_ERR" || show_rc=$?
+
+if [[ $show_rc -eq 0 ]]; then
+  job_exists=1
+elif grep -qiE 'was not found|ResourceNotFound|could not be found' "$SHOW_ERR"; then
+  job_exists=0
+else
+  echo "[provision-gh-runner][FATAL] could not determine whether '$JOB_NAME' exists (az exit $show_rc)." >&2
+  echo "  Not treating this as 'not found': creating over an existing job, or failing to" >&2
+  echo "  update one that is really there, are both worse than stopping here." >&2
+  cat "$SHOW_ERR" >&2
+  exit 1
+fi
+
+if [[ $job_exists -eq 1 ]]; then
+  echo "[provision-gh-runner] job exists -> update (refresh secret + tunables + identity)"
   az containerapp job secret set "${ID_ARGS[@]}" \
     --secrets "github-pat=${GITHUB_PAT}" -o none
   az containerapp job update "${ID_ARGS[@]}" \
     "${TUNABLE_ARGS[@]}" \
     --set-env-vars "${ENV_PAIRS[@]}" -o none
+  reconcile_identity
 else
   echo "[provision-gh-runner] job not found -> create"
   az containerapp job create "${ID_ARGS[@]}" \
@@ -263,10 +537,14 @@ else
     --secrets "github-pat=${GITHUB_PAT}" \
     --env-vars "${ENV_PAIRS[@]}" \
     --registry-server "$ACR" \
-    --registry-identity "$CONSOLE_UAMI_ID" \
-    --mi-user-assigned "$CONSOLE_UAMI_ID" \
+    --registry-identity "$RUNNER_UAMI_ID" \
+    --mi-user-assigned "$RUNNER_UAMI_ID" \
     -o none
 fi
+
+# BOTH paths, always. The create branch is not exempt: --mi-user-assigned can
+# succeed partially, and "the flag was passed" is not "the resource carries it".
+assert_identity_is_exactly_runner
 
 unset GITHUB_PAT
 
