@@ -969,6 +969,85 @@ def _jobs_by_name(repo: str, run_ids) -> dict[str, dict]:
     return out
 
 
+def _siblings_of(job: dict | None, by_name: dict[str, dict]) -> tuple[dict, ...]:
+    """The jobs of `job`'s run, AS SEEN THROUGH THE NAME-KEYED MAP.
+
+    #4701 needs a cross-job lookup: a context's declared change detector can
+    live in a sibling job, which is where `Detect console changes` has been
+    since #4682 sharded vitest.
+
+    **This is NOT every job of the run.** `by_name` is keyed by job NAME, so
+    duplicates have already collapsed before this filter runs -- measured at
+    #4713's merged sha, 57 jobs carry only 55 distinct names (`evaluate`
+    appears 3 times). One representative survives per name, chosen by
+    `_jobs_by_name`'s worst-first rule. The name is stated in the signature
+    because an earlier docstring called this "every job from the SAME workflow
+    run", which is false and would make `_declared_gate_ran`'s ambiguity
+    refusal look unreachable from here. It IS unreachable from here; it is
+    reachable from the rename branch, which passes an undeduped
+    `_jobs_of_run` result.
+
+    Grouped by `run_id` rather than by workflow path on purpose. The run is the
+    unit that actually executed together; two runs of the same path at the same
+    sha (a `push` and a `schedule`, say) must not lend each other detectors,
+    which is the same confusion `select_merged_run` exists to prevent.
+
+    Returns `()` when the job or its `run_id` is unreadable. An earlier
+    revision of this docstring claimed that a row declaring a `detector_job`
+    then REFUSES with "no sibling job list was read". **It does not, and that
+    string exists nowhere in the code.** `_detector_steps` falls back to the
+    gated job's own steps, which emits the older, misleading "the declaration
+    is stale" sentence instead. The empty tuple is therefore no-worse, not
+    fail-closed -- stated accurately here because the whole point of #4701 was
+    a message asserting a cause nobody had established.
+    """
+    if not isinstance(job, dict):
+        return ()
+    run_id = job.get("run_id")
+    if run_id is None:
+        return ()
+    return tuple(
+        j for j in by_name.values()
+        if isinstance(j, dict) and j.get("run_id") == run_id
+    )
+
+
+def _workflow_text(merged: str, path: str, cache: dict[str, str | None]) -> str | None:
+    """The workflow file's text AT THE MERGED SHA, cached per path.
+
+    `None` on any read failure, and that is deliberate rather than lazy: the
+    only consumer maps a job KEY to its display `name:` (#4701), and with no
+    text it falls back to the key, which is exactly what GitHub reports for a
+    job that sets no `name:`. A failed read therefore degrades to the
+    historical behaviour, never to a wrong match.
+
+    It does NOT follow that an unresolvable detector refuses -- an earlier
+    revision of this sentence said so, and this docstring's own subject is the
+    no-text path, which is where it is least true. A detector missing from a
+    SUPPLIED sibling list refuses; with no sibling list there is no refusal at
+    all, only the fallback to the gated job. See `_detector_steps`.
+
+    Caches the FAILURE too. `None` is a real answer here, so `path in cache` is
+    the membership test and `cache.get(path)` alone would silently re-shell on
+    every context sharing a broken path.
+    """
+    if path not in cache:
+        rc, out, _ = sh(["git", "show", f"{merged}:{path}"])
+        cache[path] = out if rc == 0 else None
+    return cache[path]
+
+
+def _workflow_trigger(merged: str, path: str, cache: dict[str, str | None]):
+    """The parsed `on.push` trigger of a workflow at the merged sha.
+
+    Shares `_workflow_text`'s cache so the file is read once per path rather
+    than once per consumer -- this and the detector-name mapping previously
+    each did their own `git show`.
+    """
+    text = _workflow_text(merged, path, cache)
+    return gates.parse_push_trigger(text) if text is not None else None
+
+
 def collect_ci_green_evidence(repo: str, number: int) -> dict:
     """Measure everything `gates.ci_green_receipt` decides on, for a MERGED PR.
 
@@ -1041,12 +1120,13 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
     required = required_contexts(repo)
     evidence = []
     jobs_cache: dict[int, tuple[dict, ...]] = {}
-    trigger_cache: dict[str, gates.PushTrigger | None] = {}
+    text_cache: dict[str, str | None] = {}
     for name in required:
         merged_check = merged_by_name.get(name)
         workflow_path = head_path_by_suite.get(suite_of_head_check.get(name))
         merged_run = None
         merged_jobs: tuple[dict, ...] = ()
+        workflow_text: str | None = None
         trigger = None
         if merged_check is None and workflow_path:
             # `gates.select_merged_run` -- the `push` run of this workflow AT
@@ -1061,12 +1141,22 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
                     jobs_cache[run_id] = _jobs_of_run(repo, run_id)
                 merged_jobs = jobs_cache[run_id]
             else:
-                if workflow_path not in trigger_cache:
-                    rc, out, _ = sh(["git", "show", f"{merged}:{workflow_path}"])
-                    trigger_cache[workflow_path] = (
-                        gates.parse_push_trigger(out) if rc == 0 else None
-                    )
-                trigger = trigger_cache[workflow_path]
+                trigger = _workflow_trigger(merged, workflow_path, text_cache)
+        else:
+            # GREEN-AT-MERGE, and this branch carries 14 of 15 contexts on a
+            # typical PR. `merged_jobs` used to be populated ONLY on the rename
+            # branch above, so a cross-job detector lookup here had an empty
+            # sibling list and could never resolve (#4701). The jobs are already
+            # fetched -- `merged_job_by_name` is built from every merged run --
+            # so grouping them by `run_id` costs no extra API call.
+            merged_jobs = _siblings_of(merged_job_by_name.get(name), merged_job_by_name)
+        if workflow_path:
+            # Read unconditionally. A declared `detector_job` holds a workflow
+            # job KEY while the jobs API reports the display `name:`, so the
+            # mapping needs the file itself. This is the same `git show` the
+            # trigger branch already performs, now cached once per path and
+            # shared rather than read on one branch and discarded on the other.
+            workflow_text = _workflow_text(merged, workflow_path, text_cache)
         evidence.append(
             gates.ContextEvidence(
                 name=name,
@@ -1078,6 +1168,7 @@ def collect_ci_green_evidence(repo: str, number: int) -> dict:
                 head_job=head_job_by_name.get(name),
                 merged_job=merged_job_by_name.get(name),
                 push_trigger=trigger,
+                workflow_text=workflow_text,
             )
         )
 

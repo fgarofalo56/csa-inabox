@@ -2635,10 +2635,14 @@ ARMS: list[tuple[str, str, str, str]] = [
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
          "            infra_ere=infra_ere, declared_at=declared_at,\n"
+         "            sibling_jobs=item.merged_workflow_jobs,\n"
+         "            workflow_text=item.workflow_text,\n"
          "        )\n        if not did_work:"),
         ("        did_work, evidence, route = context_is_accounted_for(\n"
          "            item.name, item.merged_job, merged_changed_files, policy,\n"
          "            infra_ere=infra_ere, declared_at=declared_at,\n"
+         "            sibling_jobs=item.merged_workflow_jobs,\n"
+         "            workflow_text=item.workflow_text,\n"
          "        )\n        if False:"),
     ),
     (
