@@ -106,7 +106,11 @@ def test_the_stub_argv_helper_finds_the_subcommand_under_any_global_option():
 #: the facts the pure `gates.verdict_transfers_across_base_update` cannot look
 #: up itself. The other eleven are byte-identical. `gates.py` stays pinned at
 #: ZERO, which is the machine-checked half of "gates.py runs no subprocess".
-_GIT_ARGV_LITERALS = {"merge_gate.py": 14, "tick.py": 0, "gates.py": 0}
+#: Re-measured 2026-09-23, not edited to match: #4676 added ONE git call,
+#: `resolve_declaration_as_of`'s `git show <sha>:tools/drain/policy.json`, which
+#: reads the `ci-green` declaration at the sha being measured. 14 -> 15. The
+#: assertion below routes it like every other: it goes through `sh()`.
+_GIT_ARGV_LITERALS = {"merge_gate.py": 15, "tick.py": 0, "gates.py": 0}
 
 
 def _git_call_census(module_path):
@@ -1002,6 +1006,40 @@ def test_negative_control_a_live_block_is_not_discharged_by_a_later_approve():
     assert result["verdict"] == "NO-GO"
     assert not _gate(result, "2+3")["ok"]
     assert "REQUEST-CHANGES" in _gate(result, "2+3")["detail"]
+
+
+def test_the_2_3_detail_names_the_carrier_of_a_discharge_not_only_its_target():
+    """WHO discharged WHAT, in the run's own output (#4704 consequence review).
+
+    `reduce_verdicts`' reason names the discharged TARGET. Without `supersedes`
+    in the printed tuple nothing says by which COMMENT, and nothing durable
+    records it either -- `before-*.json` holds only pr/head/open_issues, and the
+    squash body is untouched. The only permanent record would be the GitHub
+    comment itself, which a reader has to know to go looking for.
+
+    Breaks if: the tuple goes back to `(v.token, v.comment_id)` (arm SS17) --
+    `5820420955` still appears in the reason, but `(..., 2, (1,))` does not
+    appear anywhere, so the run says a block was discharged and never says by
+    whom. Asserted on the CARRIER's tuple for exactly that reason: an assertion
+    on the target alone would pass under the mutation.
+
+    Asserted on gate 2+3's OWN detail, with no stub of `review_requirement`:
+    the reviewer floor is a different control, and coupling this assertion to
+    it would make it pass for the other control's reason -- the note above
+    `test_negative_control_no_review_blocks` records that exact trap.
+    """
+    result = _run(comments=[
+        {"id": 1, "body": "## Independent review - REQUEST-CHANGES\n\nno.",
+         "created_at": "2026-09-11T11:00:00Z"},
+        {"id": 2, "body": "## Independent re-review - APPROVE\n\nfixed.\n\n"
+                          f"{merge_gate.gates.SUPERSESSION_MARKER} 1\n",
+         "created_at": "2026-09-11T12:00:00Z"},
+    ])
+    detail = _gate(result, "2+3")["detail"]
+    assert "('APPROVE', 2, (1,))" in detail, (
+        f"the carrier of the discharge is not named in the run output: {detail}"
+    )
+    assert "('REQUEST-CHANGES', 1, ())" in detail, detail
 
 
 def test_negative_control_a_guard_diff_needs_two_approvals():

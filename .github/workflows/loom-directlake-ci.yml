@@ -61,7 +61,7 @@ jobs:
           - features: engine-only
             flags: '--no-default-features --features engine'
           # The SHIPPED feature set — what the Dockerfile compiles and what the
-          # Container App runs. `azure` pulls delta-rs (deltalake 0.24) for the
+          # Container App runs. `azure` pulls delta-rs (deltalake 1.0) for the
           # abfss:// Delta path. If this one is red, the image cannot be built.
           - features: default (engine + azure)
             flags: ''

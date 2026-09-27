@@ -32,49 +32,50 @@ base64 = "0.23"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Columnar engine. These three move as ONE unit — deltalake 0.24 re-uses this
-# arrow and this datafusion, so the whole graph resolves to ONE arrow + ONE
+# Columnar engine. These three move as ONE unit — deltalake re-uses this arrow
+# and this datafusion, so the whole graph must resolve to ONE arrow + ONE
 # datafusion (no split). .github/dependabot.yml groups arrow*/parquet*/
 # datafusion*/deltalake* for the same reason.
 #
-# WHY THEY ARE STUCK HERE (#3982, measured with cargo 1.98.0 on 2026-09-18).
-# `thrift 0.17.0` enters this graph through `parquet` and carries an open
-# advisory (GHSA-2f9f-gq7v-9h6m, < 0.23.0). It cannot be removed from here:
-#   * arrow-rs dropped the thrift crate at parquet 59.0.0 — 53/57/58 all still
-#     depend on `thrift ^0.17`, 59.0.0 and 59.3.0 have no thrift at all.
-#   * but delta-rs has NOT followed. deltalake-core 0.32.4, the newest
-#     published, still pins `arrow ^58` / `parquet ^58` / `datafusion ^53.1.0`.
-#   * so with the `azure` feature on (the DEFAULT, and what the image ships)
-#     there is no published combination today whose graph is thrift-free.
-#     Resolving parquet 59 + datafusion 55 + deltalake 0.32 together does not
-#     error — it links arrow 58 AND 59, datafusion 53.1 AND 55.1, parquet 58
-#     AND 59, keeps thrift 0.17 via parquet 58, and breaks src/scan.rs because
-#     two datafusion majors mean two distinct `TableProvider` traits.
+# WHY THESE EXACT MAJORS (#3982, measured with cargo 1.98.1 on 2026-09-23).
+# `thrift 0.17.0` used to enter this graph through `parquet` and carried an open
+# advisory (GHSA-2f9f-gq7v-9h6m, < 0.23.0). The pins below are the FIRST
+# combination that removes it, and each one is load-bearing:
+#   * arrow-rs dropped the thrift crate at parquet 59.0.0. parquet 53/57/58 all
+#     still declare `thrift ^0.17`; 59.x and 60.x declare no thrift at all. So
+#     parquet must be >= 59.
+#   * deltalake-core 1.0.0 (published 2026-09-21) is the first delta-rs release
+#     on that arrow: it declares `arrow ^59`, `parquet ^59`, `datafusion ^55`.
+#     0.32.4 — the newest before it — was still on `arrow ^58`/`parquet ^58`/
+#     `datafusion ^53.1.0`, i.e. still thrift-bearing. So deltalake must be 1.0.
+#   * datafusion 55 is what deltalake-core 1.0 admits AND what resolves onto
+#     arrow 59. Mixing majors here is not merely untidy: it links TWO arrow
+#     crates and `arrow::datatypes::Schema` stops being the same type as
+#     `datafusion::arrow::datatypes::Schema`. That is exactly how the grouped
+#     dependabot PR #4630 (arrow 54 + datafusion 51 -> parquet 57) failed, with
+#     5x E0308 in this file.
 #
-# A PATCHED thrift is not a way out either, and it is worth writing down because
-# "just pin the fixed version" is the obvious first idea. thrift 0.23.0 and
-# 0.24.0 ARE published (2026-06-08 and 2026-07-11; 0.17.0 dates from 2022, so
-# the gap is four years). They are unreachable from here on semver: `parquet`
-# declares `thrift ^0.17`, which for a 0.x crate means `>=0.17.0, <0.18.0`, and
-# a `[patch.crates-io]` replacement must still SATISFY the original requirement
-# — cargo rejects a patch that does not. Using the fixed code would therefore
-# require a maintained 0.17.x fork with the advisory patch backported, published
-# or vendored, and carried until delta-rs moves. That is disproportionate to a
-# medium-severity advisory in a transitive decoder, so it is recorded as
-# considered-and-rejected rather than left to be rediscovered.
+# DO NOT bump one of these without the others, and do not accept a dependabot
+# group bump that lands a split graph — check `cargo tree -d` for a duplicated
+# arrow before believing it. Raising parquet to 60 requires a deltalake release
+# that admits arrow 60; there is none as of 2026-09-23.
 #
-# The unblocking event is a delta-rs release on arrow 59. Do not hand-edit the
-# lock to chase it; wait for the grouped dependabot PR and let CI compile it.
-arrow = "53"
-parquet = "53"
-datafusion = "44"
+# A PATCHED thrift was considered and rejected while this was blocked, and is
+# recorded so it is not rediscovered: thrift 0.23/0.24 are published but
+# unreachable on semver, because `parquet` declared `thrift ^0.17` (for a 0.x
+# crate that means `>=0.17.0, <0.18.0`) and a `[patch.crates-io]` replacement
+# must still SATISFY the original requirement. It would have needed a forked,
+# backported 0.17.x. Moot now that parquet 59 has no thrift at all.
+arrow = "59"
+parquet = "59"
+datafusion = "55"
 
 # delta-rs — reads the Delta log off ADLS the same way Direct Lake reads it off
 # OneLake. `datafusion` feature makes DeltaTable a TableProvider; `azure` pulls
 # object_store's Azure backend (Managed Identity via IMDS in-cluster). Optional
 # so the `engine`-only build (CI core-path test) stays lean.
 [dependencies.deltalake]
-version = "0.24"
+version = "1.0"
 features = ["datafusion", "azure"]
 optional = true
 

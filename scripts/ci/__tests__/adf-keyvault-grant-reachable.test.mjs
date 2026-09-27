@@ -323,7 +323,15 @@ test('the discovery script adopts the Data Factory — the other half of reachab
   // ONLY producer on the shipped deploy lanes is this script. Dropping the entry
   // would leave the grant permanently skipped while every gate stayed green.
   const src = readFileSync(DISCOVERY, 'utf8');
-  assert.match(src, /^add "adf"\s+"\$ADF"$/m, 'the plan must carry an `adf` entry');
+  // The trailing rg/sub arguments arrived with the #4665 admin-RG fallback, which
+  // gave `add()` a per-entry resource group. Tolerate them, but keep pinning the
+  // two things that matter: the entry exists, and it is fed from `$ADF`.
+  assert.match(src, /^add "adf"\s+"\$ADF"(?:\s.*)?$/m, 'the plan must carry an `adf` entry');
+  // …and that it is still sourced from the LANDING ZONE. #4665 widened only
+  // `servicebus` and `batch` to fall back to the admin resource group; adopting
+  // an admin-RG factory here would bind LOOM_ADF_* to the wrong tier.
+  assert.match(src, /^add "adf"\s+"\$ADF"\s+"\$DLZ_RG"\s+"\$DLZ_SUB"\s*$/m,
+    'the factory must be adopted from the DLZ rg/sub, never the admin RG fallback');
   assert.match(src, /Microsoft\.DataFactory\/factories/,
     'the factory must be READ from the DLZ resource group, never derived from a naming convention');
   // `az datafactory` is an EXTENSION; a runner without it would report a present

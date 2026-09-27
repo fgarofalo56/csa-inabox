@@ -216,6 +216,18 @@ VERDICT_TOKENS = ("REQUEST-CHANGES", "APPROVE", "CANNOT-ASSESS")
 BLOCKING_TOKENS = ("REQUEST-CHANGES", "CANNOT-ASSESS")
 MARKERS = ("Independent review", "Independent re-review")
 
+#: How a later verdict DISCHARGES a specific earlier block, by id:
+#:
+#:     Independent re-review of #4693 at eaeacfee4 - APPROVE
+#:     SUPERSEDES 5820420955
+#:
+#: Uppercase and at the start of its own line, exactly like the verdict tokens.
+#: Lowercase "supersedes the earlier finding" is ordinary English and appears in
+#: review prose constantly; it must never move a gate. Tests build their
+#: fixtures from THIS constant rather than transcribing the word, so a typo here
+#: cannot leave a probe agreeing with itself while disagreeing with the parser.
+SUPERSESSION_MARKER = "SUPERSEDES"
+
 # Which function implements each `merge_gate` key in policy.json. The mapping is
 # checked BOTH WAYS by `__tests__/test_policy.py`: a key with no implementation
 # is prose wearing a control's clothes, and an implementation with no key is a
@@ -246,6 +258,38 @@ VERDICT_PARSING_IMPLEMENTED_BY = {
     "must_postdate_head_commit": "gates.parse_verdicts (postdates)",
     "note": "prose, deliberately - it explains the three above",
 }
+
+# DECLARED NOWHERE YET, AND SAYING SO IS THE POINT (#4704). TRACKED IN #4708.
+#
+# `SUPERSESSION_MARKER` and the discharge rule in `_refuse_supersessions` are a
+# behaviour of `gates.reduce_verdicts` that `policy.json` does not yet name --
+# precisely the "implemented but not declared" shape `assert_policy_matches_code`
+# refuses one direction of. It is NOT added to the mapping above in this change
+# because adding it there without the matching authority key raises, and
+# `policy.json` is owned by another live lane (#4699/PR #4702) this round;
+# editing it here would collide with work in flight.
+#
+# `reduce_verdicts_by: "conjunction"` remains TRUE as written: the reduction is
+# still a conjunction, taken over the verdicts that survive an explicit,
+# self-identifying discharge. What is undeclared is the marker literal and the
+# five conditions under which a discharge is honoured. #4708 carries both keys
+# --- `verdict_parsing.supersession_marker` and
+# `merge_gate.supersession_must_name_a_live_block` --- to be added to the
+# mappings above once policy.json is free.
+#
+# #4708 ALSO PINS THE SAFETY PROPERTY THIS FEATURE RESTS ON, which the
+# consequence review measured and neither this module nor #4704 stated:
+# `worst_verdict_in_history` reads HISTORY, not `live`, and is untouched here --
+# so once anyone has blocked, `review_requirement` returns 2 permanently and
+# gate 3b demands two live approvals. A block plus ONE approve carrying a
+# discharge is still NO-GO. A discharge therefore does not lower the reviewer
+# bar; it takes two approvals PLUS an explicit named discharge per block, which
+# is strictly more than the same PR would have needed had nobody blocked.
+#
+# That coupling is undeclared and untested, and it is the hazard: making
+# `worst_verdict_in_history` "consistently" respect supersession is a plausible
+# tidy-up that would silently drop the floor to one comment with every test in
+# this change still green. #4708's second box names the value that turns it red.
 
 
 # The rest of the file. Everything here is either implemented or DECLARED as
@@ -702,11 +746,28 @@ def _unannounced_kind(prior_verdict: str) -> str:
 
 @dataclass
 class Verdict:
-    """One parsed review verdict, pinned to the head it measured."""
+    """One parsed review verdict, pinned to the head it measured.
+
+    `supersedes` names the earlier verdicts this one DISCHARGES, read off
+    `SUPERSEDES` lines in the same comment. It is deliberately a property of
+    the comment rather than of the reducer: on this repo every verdict is
+    posted through `gh` under ONE GitHub account, so the API attributes all of
+    them to the same author and the gate genuinely cannot tell two independent
+    reviewers apart. "Latest verdict per author" is therefore not available
+    here, and implementing it would let one reviewer's APPROVE silently
+    discharge another reviewer's block. An explicit, self-identifying marker is
+    the only discharge this data can support.
+
+    NEW FIELDS GO LAST AND CARRY DEFAULTS: the suite constructs `Verdict`
+    POSITIONALLY (`gates.Verdict("APPROVE", "t2", 2)`), so inserting a field
+    anywhere above would silently re-bind `comment_id` to a timestamp.
+    """
 
     token: str
     created_at: str
     comment_id: int
+    supersedes: tuple[int, ...] = ()
+    malformed_supersessions: tuple[str, ...] = ()
 
 
 @dataclass
@@ -880,6 +941,68 @@ def worst_verdict_in_history(comments: list[dict], window: int = 200) -> str | N
     return next((v.token for v in live), None)
 
 
+def _supersessions(body: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """(ids this comment discharges, malformed supersession lines).
+
+    WHOLE BODY, not `body[:window]`, and PROSE ONLY.
+
+    The window bounds where a verdict may be ANNOUNCED, because announcing is
+    the forgeable direction and `_marker_lines` answers it by position. A
+    supersession is different in kind: it is only ever read off a comment that
+    has ALREADY announced a live verdict under that strict rule, so the actor
+    who can write one is the actor who just granted the verdict. Bounding it at
+    200 characters would instead make a legitimate discharge silently
+    ineffective as a function of how long the reviewer's header happened to be
+    -- the silent-no-op shape this package keeps filing.
+
+    What DOES bound it is `classify_lines`: a quoted, lazily-continued, fenced,
+    indented, HTML-wrapped or HTML-commented `SUPERSEDES` line is a CITATION of
+    a previous round, not an act, and discharges nothing. Same asymmetry as the
+    rest of this module -- formatting may refuse to GRANT, and a discharge is a
+    grant. THIS IS THE ONLY PLACE THE PROSE FLAG GRANTS ANYTHING; its other two
+    callers only record. That is why `classify_lines` is fail-closed about
+    anything it cannot confidently call the author's own words, and why the
+    enumeration there was replaced by a rule.
+
+    A `SUPERSEDES` line whose remainder is not EXCLUSIVELY comment ids is
+    returned as MALFORMED rather than mined for digits, and `reduce_verdicts`
+    refuses on it. Both halves of that matter, and the second was measured by
+    this feature's own test on its first run: `SUPERSEDES the round-3 finding`
+    yielded `3` under a bare `\\d+` scan, so an English sentence silently
+    discharged whichever verdict happened to be comment 3. Ignoring the line
+    instead would be the mirror failure -- its author believes a block is
+    cleared while the gate silently disagrees. Failing open on a control's own
+    input is the defect this feature exists to avoid, not one to reproduce
+    inside it.
+
+    `#` and `,` are tolerated as separators (`SUPERSEDES #5820420955`,
+    `SUPERSEDES 1, 3`); anything else on the line makes it malformed.
+
+    `isascii()` IS LOAD-BEARING and fails BOTH ways without it. `str.isdigit()`
+    is True for digits in every script and for superscripts, while `int()`
+    accepts only the decimal ones -- so `SUPERSEDES <U+00B2>` raised
+    `ValueError` straight out of `parse_verdicts`, taking the merge gate down
+    with a traceback at both unguarded call sites, and `SUPERSEDES <U+0661>`
+    (Arabic-Indic one), `<U+FF11>` (fullwidth) and `<U+0967>` (Devanagari) were
+    silently HONOURED as id 1. The quiet half is the dangerous one: a non-ASCII
+    spelling performing a real discharge is the mined-digits defect above
+    wearing different glyphs.
+    """
+    ids: list[int] = []
+    malformed: list[str] = []
+    for line, prose in classify_lines(body):
+        bare = line.strip()
+        if not prose or not bare.startswith(SUPERSESSION_MARKER):
+            continue
+        rest = bare[len(SUPERSESSION_MARKER):].replace(",", " ").replace("#", " ")
+        parts = rest.split()
+        if parts and all(p.isascii() and p.isdigit() for p in parts):
+            ids.extend(int(p) for p in parts)
+        else:
+            malformed.append(bare[:120])
+    return tuple(ids), tuple(malformed)
+
+
 def parse_verdicts(
     comments: list[dict], head_date: str | None, window: int = 200
 ) -> tuple[list[Verdict], list[NearMiss]]:
@@ -912,6 +1035,7 @@ def parse_verdicts(
         postdates = bool(head_date) and when >= head_date
 
         token, saw_template = _token_of(head)
+        sup_ids, sup_bad = _supersessions(body)
         # `has_marker` is now "this comment ANNOUNCES a verdict in the window",
         # not "the word appears somewhere in the body". Scanning the whole body
         # let a quoted header from a previous round decide the gate.
@@ -1049,6 +1173,22 @@ def parse_verdicts(
                              f"begin with one of {MARKERS}",
                              NEAR_NO_MARKER, blocks=False)
                 )
+            elif sup_ids or sup_bad:
+                # A supersession is carried BY a verdict; it is not a verdict.
+                # Written on a comment that announces nothing it discharges
+                # nothing -- which is the SAFE direction, and exactly why it
+                # has to be said out loud. The author believes a block is
+                # cleared and the gate believes otherwise; that disagreement
+                # used to produce no output at all, because none of the
+                # branches above fire for a comment whose only unusual feature
+                # is this line.
+                near.append(
+                    NearMiss(cid, when,
+                             f"carries a {SUPERSESSION_MARKER} line but announces no verdict "
+                             "on its FIRST line - a supersession is carried BY a verdict, so "
+                             "this discharges nothing",
+                             NEAR_NO_MARKER, blocks=False)
+                )
             continue
         if not postdates:
             near.append(
@@ -1056,17 +1196,85 @@ def parse_verdicts(
                          NEAR_PREDATES_HEAD, blocks=False)
             )
             continue
-        live.append(Verdict(token=token, created_at=when, comment_id=cid))
+        live.append(Verdict(token=token, created_at=when, comment_id=cid,
+                            supersedes=sup_ids, malformed_supersessions=sup_bad))
 
     return live, near
 
 
 FENCES = ("```", "~~~")
 
+#: HTML5 VOID elements. They have no closing tag, so one at the start of a line
+#: opens NOTHING. Without this exemption a `<br>` or a badge `<img>` in an
+#: ordinary review body would latch every line below it as non-prose, and a
+#: legitimate discharge would stop working as a silent function of unrelated
+#: markup above it -- the silent-no-op shape this module keeps filing.
+VOID_HTML = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+#: A line that BEGINS an HTML tag. Anchored: a `<` further along the line is
+#: ordinary prose (`` `<sha>` ``, `a <details> block`), and treating those as
+#: openers latches on this repo's own way of writing about markup.
+_HTML_OPEN = re.compile(r"^<([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])")
+_HTML_CLOSE = re.compile(r"^</([A-Za-z][A-Za-z0-9-]*)\s*>")
+
+
+def _lines(text: str) -> list[str]:
+    """Split on the line endings GITHUB honours, which is not what Python does.
+
+    `str.splitlines()` also breaks on `\\v \\f \\x1c \\x1d \\x1e \\x85 \\u2028
+    \\u2029` -- eight characters CommonMark does not treat as line endings. Each
+    one therefore MANUFACTURES a line: `"> cited<U+2028>SUPERSEDES 1"` is one
+    quoted line on GitHub and two lines to `splitlines()`, the second of them
+    unquoted and, before this, prose. Measured against GitHub's own renderer
+    (`POST /markdown`, mode=gfm, 2026-09-24): all eight render inside the
+    blockquote. `\\r` alone IS a CommonMark line ending and is kept as one.
+
+    NOT a drop-in for `splitlines()`: a newline-terminated body yields one extra
+    trailing `""` here. Deliberately NOT trimmed -- no caller can observe it
+    (`_announces("")` is False and `""` is prose, so the empty line is dropped
+    by every one of the four consumers), and a branch no input can reach is a
+    branch no mutation can kill.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
 
 def _is_quoted(line: str) -> bool:
     """A Markdown blockquote. A quoted verdict is a CITATION, never a decision."""
     return line.lstrip().startswith(">")
+
+
+def _continues_paragraph(bare: str) -> bool:
+    """Would this line be LAZY CONTINUATION of the blockquote paragraph above?
+
+    CommonMark lets a paragraph inside a blockquote run onto the next line with
+    no `>` -- so this renders ENTIRELY inside the quote:
+
+        > the previous round said
+        SUPERSEDES 1
+
+    `_is_quoted` is a per-line test and called the second line prose. Measured
+    against GitHub's renderer: it is inside the `<blockquote>`. Pure ASCII, no
+    exotic input, and the most likely accidental relay shape there is.
+
+    Only PARAGRAPH text continues lazily; a line that STARTS A NEW BLOCK
+    interrupts the quote and is genuinely prose. Fences, HTML tags and further
+    `>` lines never reach here -- `classify_lines` has already branched on all
+    three -- so the only interrupters left to name are the ATX heading, the
+    setext underline, the thematic break and the list item. Naming exactly the
+    reachable ones is deliberate: a guard no input can reach is a guard no
+    mutation can kill, which is the tell this module keeps recording.
+    """
+    if not bare or bare[:1] in "#=":
+        return False                     # ATX heading, setext underline
+    if bare[:1] in "-*+_" and (len(bare) == 1 or bare[1:2] in " \t"
+                               or set(bare) <= set("-*_ ")):
+        return False                     # list bullet, thematic break
+    head, _, rest = bare.partition(" ")
+    return not (head[:-1].isdigit() and head[-1:] in ".)" and rest)
+
 
 
 def classify_lines(head: str) -> list[tuple[str, bool]]:
@@ -1079,26 +1287,59 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
 
     - **blockquote** (`>`, nested or indented) -- a coordinator comment reading
       "do NOT merge on this" scored GO because it quoted a previous round.
+    - **lazy continuation of a blockquote** -- the line AFTER a `>` line, with
+      no `>` and no blank line between, still renders inside the quote.
     - **fenced code** (``` / ~~~) -- relaying agent output in a fence is how
       this program moves verdicts around, and `KICKOFF.md` is itself a fenced
       paste-this block.
     - **indented code** (4+ spaces) -- and note the old strip set `"#*_> \\t"`
       removed the very spaces that MAKE it a code block, so it read as a header.
-    - **`<details>`** -- the standard way to collapse a superseded review. This
-      PR is carrying five.
+    - **any HTML element** -- `<details>` is the standard way to collapse a
+      superseded review, and it was the only tag this function knew. A fourth
+      review measured `<pre>`, `<blockquote>`, `<code>`, `<samp>`, `<kbd>` and
+      `<q>` all reading as prose while GitHub renders their content quoted or
+      literal. Enumerating those six would have been the same mistake one tag
+      deeper, so the rule is now positional-by-tag: a line BEGINNING an HTML
+      tag is not prose, and an unclosed element holds until its close.
     - **HTML comment** -- invisible when rendered; a verdict nobody can see.
+      Detected wherever `<!--` opens on the line, not only at its start,
+      because `see below <!--` hides everything after it just as completely.
 
     Each one produced a live APPROVE with zero blocking near-misses, which is
     exactly what the verdict gate needs to record GO.
+
+    THE HTML RULE IS DELIBERATELY WIDER THAN THE MEASURED QUOTING SET. GitHub
+    renders `<div>`, `<table>` and an unknown `<mytag>` with their content
+    VISIBLE, and sanitises `<script>`/`<style>`/`<textarea>` away entirely
+    (measured, `POST /markdown`, 2026-09-24) -- so calling those non-prose is
+    over-strict. Over-strict is the safe direction here: the only thing the
+    prose flag GRANTS is a supersession (`_supersessions`), and refusing one is
+    a visible NO-GO the author can fix, where granting one is a block nobody
+    withdrew. The two report-only callers just record more, never less.
+
+    AND THE ONE GAP THAT IS LEFT OPEN ON PURPOSE, because it is a trade and not
+    an oversight: `_HTML_OPEN` is ANCHORED, so `relaying <pre>` followed by a
+    pasted `SUPERSEDES` line still reads as prose and still grants. Un-anchoring
+    it was measured rather than argued -- run through this very classifier over
+    the 50 verdict comments on ten recent PRs, a mid-line scan newly demotes a
+    prose line in 28 of 50 bodies raw, and in 6 of 50 (12%) even after inline
+    code spans are stripped, because this program's reviewers quote shell output
+    full of `<file>`, `<path>`, `<sha>` and `<title>`. That trades one input
+    shape nobody writes for a silent non-grant in one verdict body in eight, and
+    a silent no-op is the failure this module keeps filing. Pinned by
+    `test_disclosed_gap_a_mid_line_html_opener_still_grants` so that closing it
+    later is a decision rather than a drift.
     """
     out: list[tuple[str, bool]] = []
     fence: str | None = None      # the OPENING delimiter, not a boolean
-    details = 0
+    html: list[str] = []          # open element names, innermost last
     in_comment = False
-    for line in head.splitlines():
+    quoted_para = False           # a blockquote paragraph is open above us
+    for line in _lines(head):
         bare = line.strip()
         lowered = bare.lower()
-        opens_comment = bare.startswith("<!--") and "-->" not in bare
+        # The LAST `<!--` decides: `a <!-- b --> c <!-- d` is still open.
+        opens_comment = "<!--" in bare and "-->" not in bare.rsplit("<!--", 1)[1]
 
         if fence is not None:
             # Only a run of the SAME character, at least as long and carrying no
@@ -1109,6 +1350,7 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
             char = fence[0]
             closes = bare and set(bare) == {char} and len(bare) >= len(fence)
             out.append((line, False))
+            quoted_para = False
             if closes:
                 fence = None
             continue
@@ -1116,19 +1358,31 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
         if opener:
             fence = bare[: len(bare) - len(bare.lstrip(opener[0]))]
             out.append((line, False))
+            quoted_para = False
             continue
 
-        if lowered.startswith("<details"):
-            # A ONE-LINE <details>...</details> is balanced. Counting only the
-            # opener left the depth at 1 for the rest of the window on a
-            # construct that renders perfectly on GitHub.
-            if "</details" not in lowered:
-                details += 1
+        closing = _HTML_CLOSE.match(bare)
+        if closing:
+            name = closing.group(1).lower()
+            if name in html:
+                while html and html.pop() != name:
+                    pass
             out.append((line, False))
+            quoted_para = False
             continue
-        if lowered.startswith("</details"):
-            details = max(0, details - 1)
+        opening = _HTML_OPEN.match(bare)
+        if opening:
+            name = opening.group(1).lower()
+            # A ONE-LINE `<details>...</details>` is balanced, and a void or
+            # self-closing tag opens nothing. Counting only the opener left the
+            # depth at 1 for the rest of the window on a construct that renders
+            # perfectly on GitHub.
+            if (name not in VOID_HTML
+                    and f"</{name}" not in lowered
+                    and not bare.endswith("/>")):
+                html.append(name)
             out.append((line, False))
+            quoted_para = False
             continue
 
         # INDENT IS MEASURED IN TABS TOO. `len(line) - len(line.lstrip(" "))`
@@ -1136,18 +1390,23 @@ def classify_lines(head: str) -> list[tuple[str, bool]]:
         # that MAKES a line a code block was removed by the matcher and never
         # seen by the classifier. Same citation, spelled the other way.
         indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip(" "))
+        quoted = _is_quoted(line)
+        lazy = quoted_para and indent < 4 and _continues_paragraph(bare)
         prose = (
             not in_comment
-            and details == 0
-            and not _is_quoted(line)
+            and not html
+            and not quoted
+            and not lazy
             and indent < 4
         )
         out.append((line, prose))
+        quoted_para = (quoted or lazy) and not in_comment
         if opens_comment:
             in_comment = True
         elif in_comment and "-->" in bare:
             in_comment = False
     return out
+
 
 
 def _announces(line: str) -> bool:
@@ -1255,6 +1514,60 @@ def _token_of(head: str) -> tuple[str | None, bool]:
     return None, saw_template
 
 
+def _refuse_supersessions(live: list[Verdict]) -> str:
+    """"" if every supersession present is well formed and addressed; else why not.
+
+    REFUSED, NEVER IGNORED. Every condition below is one where an implementation
+    that simply skipped the unrecognised id would fail OPEN -- the discharge
+    silently does nothing, or worse, silently does something else -- and failing
+    open on this control's own input is the defect it exists to prevent.
+
+    A supersession is honoured only when ALL of these hold:
+
+    - its carrier is a LIVE verdict at this head (enforced by construction:
+      `supersedes` is read off the comment that produced this `Verdict`);
+    - its carrier is NOT itself blocking. A block cannot discharge a block.
+      Without this, `[RC(a) SUPERSEDES b, RC(b) SUPERSEDES a, APPROVE(c)]`
+      mutually annihilates into GO -- two blocks cancelling each other with no
+      reviewer ever withdrawing either;
+    - it does not name its own carrier, which would be self-discharge;
+    - the id it names IS a live verdict here. A stale id, a near-miss id, or an
+      id from a comment that predates the head names nothing this reduction can
+      see, so honouring it would be honouring a guess;
+    - the verdict it names is BLOCKING. Discharging an APPROVE has no legitimate
+      use, and reading it as one would let a supersession remove the very
+      approval the gate requires.
+    """
+    by_id = {v.comment_id: v for v in live}
+    problems: list[str] = []
+    for v in live:
+        for bad in v.malformed_supersessions:
+            problems.append(f"#{v.comment_id} wrote {bad!r}, which names no comment id")
+        if not v.supersedes:
+            continue
+        if v.token in BLOCKING_TOKENS:
+            problems.append(
+                f"#{v.comment_id} is a {v.token} - a block cannot discharge a block"
+            )
+            continue
+        for target in v.supersedes:
+            if target == v.comment_id:
+                problems.append(f"#{v.comment_id} names ITSELF")
+            elif target not in by_id:
+                problems.append(
+                    f"#{v.comment_id} names {target}, which is not a live verdict at this head"
+                )
+            elif by_id[target].token not in BLOCKING_TOKENS:
+                problems.append(
+                    f"#{v.comment_id} names {target}, which is a {by_id[target].token} "
+                    "and not a block"
+                )
+    if not problems:
+        return ""
+    return (f"{SUPERSESSION_MARKER} refused ({len(problems)}): "
+            + "; ".join(problems[:3]))
+
+
 def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> tuple[bool, str]:
     """Decide GO/NO-GO from live verdicts by CONJUNCTION, not recency.
 
@@ -1266,18 +1579,64 @@ def reduce_verdicts(live: list[Verdict], near: list[NearMiss] | None = None) -> 
     PR; a reducer that only reads the parsed set returns GO for the PR they
     blocked. That is the exact 2026-09-11 incident, and reporting the near-miss
     to nobody did not fix it.
+
+    THE ONE DISCHARGE, AND WHY IT HAD TO EXIST (#4704, measured on PR #4693).
+    Normally a block is followed by a PUSH, and the push voids every sha-pinned
+    verdict, so no stale block survives. The gap is the case where the finding
+    is NOT IN THE DIFF -- on #4693 it was a squash body the coordinator authors
+    at merge time. Nothing can be pushed; the coordinator fixes it; the reviewer
+    re-adjudicates at the UNCHANGED head and approves. The reduction then saw
+    `[REQUEST-CHANGES, APPROVE, APPROVE]`, all live, all pinned to one sha, and
+    returned NO-GO forever. `update-branch` does not rescue it either: the gate
+    re-pins across a merge that authors no content, so the block is carried
+    forward with the approvals -- correctly.
+
+    So a verdict may discharge a NAMED block, and only one it names. The
+    conjunction is unchanged over what remains; recency still discharges
+    nothing; and an unnamed block still blocks. A malformed or unaddressed
+    supersession is REFUSED (see `_refuse_supersessions`), never skipped.
+
+    NO TEMPORAL ORDERING IS ENFORCED, and this used to say "an earlier block"
+    as though one were. A carrier may name a target created AFTER it -- both
+    reviewers measured it, and the prose is corrected here rather than the code,
+    deliberately. Reaching that shape means editing an already-posted comment,
+    which is an equally-trusted act (you could edit the block itself), so the
+    comparison buys nothing against any actor who is not already inside the
+    trust boundary. What it would cost is a new silent no-op: GitHub timestamps
+    have one-second resolution, so two comments posted in the same second tie,
+    and a tie under a strict `<` would make a legitimate discharge fail with no
+    diagnosis. A gate that refuses for a reason it cannot explain is the failure
+    this module keeps filing, and it is a worse trade than the gap.
     """
+    refusal = _refuse_supersessions(live)
+    # FIRST, ahead of every other reason. A malformed control input must not be
+    # masked by a NO-GO that happens to agree with it: `[APPROVE SUPERSEDES 999]`
+    # beside a blocking near-miss is NO-GO either way, and reporting only the
+    # near-miss would leave the broken supersession invisible until the round
+    # where it is the only thing standing between the PR and a merge.
+    if refusal:
+        return False, refusal
+
+    discharged = {
+        target
+        for v in live
+        if v.token not in BLOCKING_TOKENS
+        for target in v.supersedes
+    }
+    note = (f" | {SUPERSESSION_MARKER} discharged {sorted(discharged)}"
+            if discharged else "")
+
     blocking_near = [n for n in (near or []) if n.blocks]
     if blocking_near:
         reasons = "; ".join(f"#{n.comment_id} {n.reason}" for n in blocking_near[:3])
-        return False, f"unparseable review at head ({len(blocking_near)}): {reasons}"
-    if any(v.token == "REQUEST-CHANGES" for v in live):
-        return False, "live REQUEST-CHANGES"
-    if any(v.token == "CANNOT-ASSESS" for v in live):
-        return False, "live CANNOT-ASSESS"
+        return False, f"unparseable review at head ({len(blocking_near)}): {reasons}{note}"
+    if any(v.token == "REQUEST-CHANGES" and v.comment_id not in discharged for v in live):
+        return False, "live REQUEST-CHANGES" + note
+    if any(v.token == "CANNOT-ASSESS" and v.comment_id not in discharged for v in live):
+        return False, "live CANNOT-ASSESS" + note
     if not any(v.token == "APPROVE" for v in live):
-        return False, "no live APPROVE at head"
-    return True, "live APPROVE, zero live blocking verdicts"
+        return False, "no live APPROVE at head" + note
+    return True, "live APPROVE, zero live blocking verdicts" + note
 
 
 # ---------------------------------------------------------------------------
@@ -2283,6 +2642,171 @@ class ContextEvidence:
     #: conclusion is not evidence the check did its work.
     merged_job: dict | None = None
     push_trigger: PushTrigger | None = None
+    #: The workflow file's TEXT at the merged sha. Read by `merge_gate` from
+    #: `git show <merged>:<workflow_path>` -- the same read it already performs
+    #: to parse push triggers, just no longer discarded on the branch where a
+    #: merged run exists.
+    #:
+    #: Needed only to map a declared `detector_job` KEY to the display `name:`
+    #: the jobs API reports (#4701). Optional by construction: with no text the
+    #: key is used as the name, which is what GitHub does for a job that sets
+    #: no `name:`. A detector that cannot be found among a SUPPLIED sibling
+    #: list refuses; with no sibling list at all there is no refusal, only the
+    #: fallback to the gated job -- see `_detector_steps`.
+    workflow_text: str | None = None
+
+
+@dataclass(frozen=True)
+class DeclarationAsOf:
+    """`policy.json`'s `receipts.ci_green_rule` AS IT STOOD at a measured sha.
+
+    THE CODE IS HEAD'S; THE DECLARATION IS THE SHA'S. That split is the whole
+    of this type. `gates.py`'s predicates are today's -- every hole reviewers
+    found in rounds 5-16 is fixed at HEAD and must apply to every measurement.
+    But `receipts.ci_green_rule` is not a predicate, it is a DESCRIPTION of a
+    workflow: "the step that IS the check" for each context. A description of
+    the workflow at HEAD says nothing true about a workflow that ran a week
+    ago, and applying it there is #4676:
+
+        PR #4593 merged 2026-09-20T01:24:35Z. `vitest (node 20)`'s substantive
+        step was renamed from `Run vitest (with istanbul coverage floor)` to
+        `Merge shard reports and enforce the coverage floor` -- in the WORKFLOW
+        by `8d3dd9cbb` (#4657, 2026-09-21 21:25) and in `policy.json` by
+        `356290aa9` (#4662, 2026-09-22 00:38). TWO commits, 3h13m apart, with
+        three merges in between; `git show --stat 8d3dd9cbb` touches one file
+        and it is not `policy.json`. The receipt then asked a 2026-09-20 run
+        whether it had executed a step that would not exist until 2026-09-21,
+        found it absent, and printed "the declaration is stale" -- pointing the
+        reader at the one edit that would make the declaration wrong for
+        today's merges.
+
+        An earlier draft of this paragraph said the two moved "in one commit".
+        That was false, and it was not harmless prose: it is the premise that
+        makes the SECOND CLOCK below look like dead code, and deleting the
+        second clock is arm AS4 -- the arm whose survival lets a rename launder
+        a hollow job. A false rationale points at the one deletion this
+        mechanism exists to prevent.
+
+    THIS IS NOT AN ALIAS TABLE, and the distinction is the reason the README
+    refuses one for context spellings: an alias table is a second copy of the
+    rename, maintained by hand, one rename away from being silently wrong. This
+    carries no names at all. It reads the declaration out of the repo at the sha
+    that is being measured -- the same repo, the same file, the same drift guard
+    (`__tests__/test_ci_green_declared.py`) that enforced its agreement with the
+    workflow AT THAT SHA. The rename is resolved by the repo's own history, as
+    the context case is resolved by workflow identity.
+
+    Resolved by the CALLER and injected, exactly as `push_trigger` and
+    `infra_ere` are: `gates.py` runs no subprocess, so the decision function
+    stays pure and a test can drive the resolved case, the drifted case and the
+    unresolvable case. `merge_gate.resolve_declaration_as_of` is the producer.
+
+    Three states, and they are NOT interchangeable:
+
+    - `rule` is a dict  -- the declaration at `sha` was read. It GOVERNS.
+    - `rule is None` with `error` -- the attempt was made and FAILED. HEAD's
+      declaration is used, and any refusal that turns on a missing step says so
+      in different words, because the remedy is to obtain the sha, never to
+      edit `policy.json`.
+    - the whole object is `None` (the default everywhere) -- no as-of
+      resolution was attempted. Today's behaviour, today's message, unchanged;
+      this is what a direct unit call gets.
+    """
+
+    sha: str = ""
+    rule: dict | None = None
+    error: str = ""
+    #: WHY `rule` is None, as a value rather than a substring of `error`. The
+    #: FOUR causes below do not share a remedy, and a consumer that
+    #: discriminated them by grepping `error` would be a bare-substring signal
+    #: -- a measured misclassification shape in this repo. `DECL_PREDATES` in
+    #: particular is NOT fixable by fetching: the key genuinely did not exist at
+    #: that sha. `DECL_NO_SHA` is a caller error rather than a repo state, which
+    #: is why it shares a consumer sentence with `DECL_UNREADABLE` while still
+    #: being its own value -- four causes, three remedies.
+    reason: str = ""
+
+
+#: Why an as-of declaration could not be resolved. Opposite remedies, so they
+#: are values the consumer branches on, never text it matches.
+#:
+#:   DECL_UNREADABLE   the object is not in this store -> FETCH IT
+#:   DECL_PREDATES     the blob was read and carries no `receipts.ci_green_rule`
+#:                     at all. The key was introduced in `6e29f1012` (2026-09-15,
+#:                     #4491), so for every merge older than that there is no
+#:                     declaration to resolve and HEAD's is the only one that has
+#:                     ever described the context. NOTHING TO FETCH -- and for a
+#:                     backlog closing merges from before that date this is the
+#:                     COMMON case, not an edge, which is why it gets its own
+#:                     sentence. An independent reviewer measured the old message
+#:                     telling the reader to fetch a sha that was already present
+#:                     and readable.
+#:   DECL_UNPARSEABLE  the blob is not JSON -> a different question entirely
+#:   DECL_NO_SHA       no sha was supplied
+DECL_UNREADABLE = "unreadable"
+DECL_PREDATES = "predates-the-key"
+DECL_UNPARSEABLE = "unparseable"
+DECL_NO_SHA = "no-sha"
+
+
+#: The provenance of the declaration a refusal or an acceptance was decided on.
+#: Returned by `_declaration_as_of` so a message can name WHICH declaration it
+#: read without re-deriving it, and so the two refusals below cannot be folded
+#: into one sentence again -- which is #4676's actual damage. They have OPPOSITE
+#: remedies: `DECL_HEAD_UNVERIFIED` means go and fetch the sha, `DECL_AS_OF` and
+#: `DECL_HEAD` mean re-read the declaration off a green run.
+DECL_HEAD = "head"
+DECL_AS_OF = "as-of"
+DECL_HEAD_UNVERIFIED = "head-unverified"
+#: HEAD's declaration used because the sha's declaration carried NO ROW for this
+#: context -- the row is NEWER than the sha, which is a different fact from a
+#: rename and from an unreadable declaration. Reachable today: two rows were
+#: added to `substantive_steps` on 2026-09-18 in `0c2c4c974`, so every merge
+#: before that date hits this for those two contexts. It used to be labelled
+#: `DECL_HEAD` and a pass printed no provenance clause at all -- an undisclosed
+#: substitution, against this module's own "NAMED, NOT FOLDED IN" principle.
+DECL_HEAD_ROW_NEWER = "head-row-newer"
+
+
+def _declaration_as_of(
+    policy: dict, as_of: DeclarationAsOf | None
+) -> tuple[dict, str, str]:
+    """The policy whose `ci_green_rule` governs a job measured at `as_of.sha`.
+
+    Returns `(policy_to_use, provenance, sha)`. IDEMPOTENT by construction --
+    substituting the same rule twice yields the same dict -- and that property
+    is load-bearing because there are two resolution sites: `context_did_its_work`
+    resolves for itself (it must be able to name BOTH declarations, so it is
+    given the ORIGINAL policy), and `context_is_accounted_for` resolves once for
+    routes 2 and 3, which need only the governing rule. Two call sites over one
+    question is the shape this package keeps getting wrong; it is safe here only
+    because neither can produce an answer the other would not.
+
+    A SHALLOW COPY, two levels deep, never a mutation: `policy` is the caller's
+    loaded contract and is shared with every other context in the same receipt.
+    Writing into it would make the declaration used for context N+1 depend on
+    the sha resolved for context N -- an order-dependent gate, which is the
+    worst shape a gate can have because it is green on a re-run.
+    """
+    if as_of is None:
+        return policy, DECL_HEAD, ""
+    if not isinstance(as_of.rule, dict):
+        return policy, DECL_HEAD_UNVERIFIED, as_of.sha
+    receipts = dict(policy.get("receipts", {}))
+    receipts["ci_green_rule"] = as_of.rule
+    effective = dict(policy)
+    effective["receipts"] = receipts
+    return effective, DECL_AS_OF, as_of.sha
+
+
+def _declared_steps(name: str, policy: dict):
+    """`substantive_steps[name]` out of whichever policy is in hand."""
+    return (
+        policy.get("receipts", {})
+        .get("ci_green_rule", {})
+        .get("substantive_steps", {})
+        .get(name)
+    )
 
 
 @dataclass(frozen=True)
@@ -2326,6 +2850,7 @@ def ci_green_receipt(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> CiGreenReceipt:
     """The `ci-green` receipt, as a measurement that can actually be taken.
 
@@ -2350,6 +2875,11 @@ def ci_green_receipt(
     `merged_total_count` guards the whole receipt through `classify_missing`: if
     the merged sha carries ZERO check-runs, nothing ran at all and every
     "absence" above would be excused one by one into a vacuous pass.
+
+    `declared_at` carries `policy.json`'s `receipts.ci_green_rule` AS IT STOOD
+    at the merged sha (#4676). See `DeclarationAsOf`: the predicates are HEAD's,
+    the description of the workflow is the sha's, and without that split a step
+    rename retroactively makes every older PR's receipt unobtainable.
     """
     contexts: list[ContextResult] = []
     reasons: list[str] = []
@@ -2372,6 +2902,7 @@ def ci_green_receipt(
             trees_identical=trees_identical,
             policy=policy,
             infra_ere=infra_ere,
+            declared_at=declared_at,
         )
         contexts.append(result)
         if not result.ok:
@@ -2394,6 +2925,7 @@ def _one_context(
     trees_identical: bool,
     policy: dict,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     if item.merged_check is not None:
         verdict, status = _outcome(item.merged_check)
@@ -2442,7 +2974,9 @@ def _one_context(
         # SKIPPED behind a change-detection gate.
         did_work, evidence, route = context_is_accounted_for(
             item.name, item.merged_job, merged_changed_files, policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
+            sibling_jobs=item.merged_workflow_jobs,
+            workflow_text=item.workflow_text,
         )
         if not did_work:
             return ContextResult(
@@ -2483,7 +3017,7 @@ def _one_context(
         return _renamed_at_merge(
             item, merged_sha=merged_sha,
             merged_changed_files=merged_changed_files, policy=policy,
-            infra_ere=infra_ere,
+            infra_ere=infra_ere, declared_at=declared_at,
         )
 
     if item.push_trigger is None:
@@ -2533,9 +3067,42 @@ def _one_context(
     # deferrals, not all of them -- `dbt Compile (shared)` on the same run is
     # genuine, 0 of 9 steps skipped -- so the fix has to read the STEPS rather
     # than distrust deferral as a category.
+    # THE MERGED SHA'S DECLARATION, ON A JOB THAT RAN AT THE PR HEAD, and that
+    # is sound here for one reason only: this branch is unreachable unless
+    # `trees_identical` (the refusal ~35 lines above). An identical tree means
+    # `tools/drain/policy.json` is byte-identical at both shas, so "the
+    # declaration as of the merged sha" and "as of the PR head" are the same
+    # object. If that guard is ever relaxed, this call needs the HEAD sha's
+    # declaration resolved separately -- it does not inherit correctness from
+    # the merged one.
+    # NO `sibling_jobs` HERE, DELIBERATELY. This branch judges the PR-HEAD job,
+    # and `merged_workflow_jobs` is the MERGED run's job list -- a different run
+    # of the same workflow. Handing it over would let a detector that ran at the
+    # merged sha excuse a skip at the head sha, which is the wrong run answering
+    # for the wrong tree.
+    #
+    # The consequence is stated rather than hidden, and an earlier revision of
+    # this comment stated it WRONGLY. A row that declares a `detector_job`
+    # does NOT refuse here -- `_detector_steps` falls back to the gated job's
+    # own steps when no sibling list is supplied. What it then emits, measured
+    # live, is:
+    #
+    #   its declared gate step 'Detect console changes' is ABSENT from this
+    #   job - the declaration is stale, or this is not the job it describes
+    #
+    # which is verbatim the message #4701 was filed about, and both causes it
+    # names are false: the declaration is current, and this IS the job it
+    # describes. So this branch is no WORSE than before the fix, and no better.
+    # It is the one place the old misleading sentence survives.
+    #
+    # Making it resolve needs the HEAD run's jobs collected in `merge_gate` and
+    # carried on `ContextEvidence` -- a separate change, and not one #4701's
+    # acceptance test requires, since all three receipts it must clear come
+    # through the green-at-merge branch above.
     ran, evidence, route = context_is_accounted_for(
         item.name, item.head_job, merged_changed_files, policy,
         push_trigger=item.push_trigger, infra_ere=infra_ere,
+        declared_at=declared_at,
     )
     if not ran:
         return ContextResult(
@@ -2563,7 +3130,10 @@ def _one_context(
     )
 
 
-def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[bool, str]:
+def context_did_its_work(
+    name: str, job: dict | None, policy: dict,
+    declared_at: DeclarationAsOf | None = None,
+) -> tuple[bool, str]:
     """Did THIS context execute the step that IS the check?
 
     WHICH step, not how many, and the distinction is the whole control.
@@ -2591,13 +3161,62 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     spread across many steps (`guardrails` has 158) rather than concentrated in
     one. A LIST names the steps that must have executed, matched as substrings
     so a step's parenthetical detail can change without breaking the receipt.
+
+    `declared_at` (#4676) resolves WHICH declaration: the one at the sha this
+    job ran at, not the one at HEAD. See `DeclarationAsOf`. This function is
+    handed the ORIGINAL policy and resolves for itself, because it is the only
+    route that must be able to name BOTH declarations -- the sha's, which it
+    judged on, and HEAD's, which the reader is looking at. Passing it the
+    policy `context_is_accounted_for` had already substituted into made
+    `head_declared` read the as-of rule, the two compared equal, and the
+    provenance clause silently vanished from every real receipt while the unit
+    test went on passing. Measured on PR #4593: verdict correct, disclosure
+    absent.
+
+    TWO CLOCKS, IN PRECEDENCE ORDER, AND THE SECOND EXISTS BECAUSE THE RENAME
+    IS NOT ATOMIC. The workflow and the declaration that describes it are two
+    files, and #4657 changed one of them:
+
+        8d3dd9cbb  2026-09-21 21:25  .github/workflows/fiab-console-ci.yml
+        356290aa9  2026-09-22 00:38  tools/drain/policy.json
+
+    For 3h13m `policy.json` named `Run vitest (with istanbul coverage floor)`
+    while the job ran `Merge shard reports and enforce the coverage floor`, and
+    THREE merges landed in that window (#4652, #4654, #4658). Resolving strictly
+    as-of would refuse all three -- #4676 in mirror image, with the same wrong
+    remedy attached. So the declaration at the sha is tried FIRST, and when the
+    step it names is ABSENT ENTIRELY the other clock is tried, and which one
+    decided is printed.
+
+    ONLY ON `missing`, never on `hollow` or `ambiguous`. A declared step that is
+    PRESENT and SKIPPED is the check not doing its work -- the defect this whole
+    predicate exists for -- and falling through to a second declaration there
+    would let a rename launder a hollow job. Absence is the rename signature;
+    a skip is not.
     """
-    declared = (
-        policy.get("receipts", {})
-        .get("ci_green_rule", {})
-        .get("substantive_steps", {})
+    head_declared = _declared_steps(name, policy)
+    effective, provenance, as_of_sha = _declaration_as_of(policy, declared_at)
+    as_of_declared = (
+        _declared_steps(name, effective) if provenance == DECL_AS_OF else None
     )
-    if name not in declared:
+    #: (provenance, rule) in precedence order, deduplicated. A context the
+    #: as-of declaration has no row for falls through to HEAD's by the same
+    #: mechanism as a renamed step -- the row is simply newer than the sha.
+    candidates: list[tuple[str, object]] = []
+    if as_of_declared is not None:
+        candidates.append((DECL_AS_OF, as_of_declared))
+    if head_declared is not None and head_declared != as_of_declared:
+        if provenance == DECL_HEAD_UNVERIFIED:
+            head_which = DECL_HEAD_UNVERIFIED
+        elif provenance == DECL_AS_OF and as_of_declared is None:
+            # The sha's declaration WAS read and simply has no row for this
+            # context: the row is newer than the sha. Labelled distinctly so the
+            # pass discloses it rather than reading as an ordinary HEAD decision.
+            head_which = DECL_HEAD_ROW_NEWER
+        else:
+            head_which = DECL_HEAD
+        candidates.append((head_which, head_declared))
+    if not candidates:
         return False, (
             f"no substantive step is DECLARED for {name!r} in policy.json "
             "(receipts.ci_green_rule.substantive_steps) - an undeclared context "
@@ -2656,84 +3275,269 @@ def context_did_its_work(name: str, job: dict | None, policy: dict) -> tuple[boo
     def ran(step: dict) -> bool:
         return step_conclusion(step) != "skipped"
 
-    rule = declared[name]
-    if rule == "ALL":
-        skipped = [s for s in work if not ran(s)]
-        if skipped:
-            names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+    #: ONE DECLARATION OVER THIS JOB. Extracted so the two clocks are evaluated
+    #: by the SAME code -- a second copy of the matching rules, applied to the
+    #: fallback only, is how "fixed on one side only" gets written.
+    #:
+    #: Returns `(ok, kind, payload)`. `kind` is "" on success and otherwise one
+    #: of "all-skipped", "shape", "missing", "ambiguous", "hollow"; only
+    #: "missing" may fall through to the other clock.
+    def verdict(rule):
+        if rule == "ALL":
+            skipped = [s for s in work if not ran(s)]
+            if skipped:
+                names = ", ".join(str(s.get("name") or "?")[:40] for s in skipped[:3])
+                return False, "all-skipped", (
+                    f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
+                    f"are SKIPPED ({names})"
+                )
+            return True, "", f"declared ALL; every one of its {len(work)} work step(s) ran"
+
+        if not isinstance(rule, list) or not rule:
+            return False, "shape", (
+                f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
+                "non-empty list of step names"
+            )
+
+        missing, hollow, ambiguous = [], [], []
+        for wanted in rule:
+            # EVERY matching step, and EVERY one of them must have run. This used
+            # to be `any(ran(s) for s in matches)`, and an independent reviewer's
+            # mutation arm truncated the match list to `[:1]` and SURVIVED: with
+            # `any`, one running step satisfied a declaration no matter how many
+            # others matched and skipped, so narrowing the population was
+            # unobservable. A filter placed INSIDE the predicate beats a contract
+            # written about the predicate -- which is the whole lesson of the `N*`
+            # arms. `all` makes the size of the match set load-bearing, so a
+            # truncation changes an answer and a test can see it.
+            matches = [s for s in work if wanted in str(s.get("name") or "")]
+            if not matches:
+                missing.append(wanted)
+                continue
+            skipped = [s for s in matches if not ran(s)]
+            if len(skipped) == len(matches):
+                hollow.append(wanted)
+            elif skipped:
+                ambiguous.append(
+                    f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
+                    "are SKIPPED"
+                )
+        if missing:
+            return False, "missing", missing
+        if ambiguous:
+            # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched
+            # several steps with a MIXED outcome cannot say which one is the
+            # check, and round 5 answered a hollow primary with an alternative
+            # BEFORE reaching this refusal -- so a two-entry declaration with one
+            # hollow entry and one ambiguous entry returned a pass and this
+            # sentence was never printed. An independent reviewer demonstrated it
+            # synthetically; it was latent only because both rows that declare
+            # alternatives name exactly one primary step.
+            return False, "ambiguous", (
+                "a declaration matched several steps with a MIXED outcome, so which one "
+                f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
+                "the declaration name exactly one step"
+            )
+        if hollow:
+            # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
+            # blocker. Round 5 accepted "a declared alternative ran" as the
+            # context having done its work, inside this function -- which has no
+            # `changed_files` and cannot ask the only question that makes such an
+            # acceptance safe. `context_is_accounted_for` returned on `did` before
+            # the merged file list was ever consulted, so the `hits` refusal (a
+            # change detector that MISSED a change, the #3783 shape `policy.json`
+            # says must never be laundered) became unreachable whenever any
+            # alternative ran. Two reviewers found it independently, on different
+            # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
+            #
+            # So the alternative lives in `alternative_accounted_for`, which asks
+            # the scope question and this one as two halves of a single predicate.
+            # THE BARE LIST, exactly as `missing` returns one. It used to return
+            # a finished SENTENCE here, and the second-clock site wrapped it as
+            # if it were a list -- emitting "the declared step(s) its declared
+            # substantive step(s) [...] were SKIPPED - the check concluded green
+            # ... were SKIPPED", with the trailing clause printed twice. Two
+            # reviewers found it independently. A payload whose SHAPE depends on
+            # the kind is a payload every call site has to remember to special-
+            # case; rendering is `refusal_text`'s job, in one place.
+            return False, "hollow", hollow
+        return True, "", f"executed its declared substantive step(s) {list(rule)}"
+
+    def refusal_text(kind: str, payload) -> str:
+        """Render one refusal payload into a sentence. ONE renderer, both sites."""
+        if kind == "hollow":
+            return (
+                f"its declared substantive step(s) {payload} were SKIPPED - the check "
+                "concluded green having not done the thing it is required for"
+            )
+        if kind == "missing":
+            return f"the declared step(s) {payload} are ABSENT from this job"
+        return str(payload)
+
+    def cap(text: str) -> str:
+        """Capitalise WITHOUT lowercasing the rest -- `str.capitalize()` turns
+        "HEAD's declaration" into "Head's declaration"."""
+        return text[:1].upper() + text[1:]
+
+    def clock(which: str) -> str:
+        """How a message names one of the two declarations.
+
+        `DECL_HEAD` says "HEAD's declaration" whenever an as-of resolution was
+        ATTEMPTED, and the bare "the declaration" only when none was -- because
+        in the two-clock sentences the bare form sat next to "the declaration AS
+        OF the measured sha" and a reader could not tell which was which.
+        """
+        if which == DECL_AS_OF:
+            return f"the declaration AS OF the measured sha {as_of_sha[:12]}"
+        if which in (DECL_HEAD_UNVERIFIED, DECL_HEAD_ROW_NEWER):
+            return "HEAD's declaration"
+        return "HEAD's declaration" if declared_at is not None else "the declaration"
+
+    def provenance_note(which: str, rule) -> str:
+        """The clause that says WHICH declaration decided, whenever that is not
+        HEAD's current one VERIFIED against the measured sha.
+
+        NAMED, NOT FOLDED IN. A pass decided on a declaration HEAD has since
+        changed -- or on HEAD's because the sha's was silent, unreadable, or
+        predates the key -- is a different claim from a pass decided on today's,
+        and a reader counting states should not have to diff
+        `git show <sha>:tools/drain/policy.json` to find out which.
+
+        THE UNVERIFIED CASES WERE SILENT UNTIL AN INDEPENDENT REVIEWER PROBED
+        THEM. One fixture through four resolution states returned ONE byte-
+        identical sentence: as-of UNREADABLE, as-of PREDATES, no as-of at all,
+        and as-of RESOLVED-and-equal. Two of those four are the ground being
+        weaker, and both close things:
+
+        - on a SHALLOW CLONE (`actions/checkout` is depth 1 by default) every
+          sha is unreadable, the whole feature degrades to pre-PR behaviour, and
+          every pass still reads as verified;
+        - every merge older than 2026-09-15 predates `receipts.ci_green_rule`
+          entirely -- which this package calls the COMMON case for its backlog --
+          and closed on a description written afterwards, worded identically to
+          a verified as-of pass.
+
+        The refusal side said "could NOT be read"; the acceptance side, which is
+        the side that CLOSES things, said nothing. That is this package's own
+        failure shape one level down, so it is now said on both sides.
+        """
+        if which == DECL_AS_OF and head_declared != rule:
+            return (f" - {clock(which)}, which HEAD has since changed to "
+                    f"{head_declared!r}")
+        if which == DECL_HEAD_ROW_NEWER:
+            return (f" - HEAD's declaration, used because policy.json at the measured "
+                    f"sha {as_of_sha[:12]} carried NO ROW for this context: the row is "
+                    "NEWER than the sha, which is not a rename")
+        if which == DECL_HEAD_UNVERIFIED:
+            reason = declared_at.reason if declared_at else ""
+            where = (as_of_sha or "?")[:12]
+            if reason == DECL_PREDATES:
+                return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                        f"{where}: policy.json carried no `receipts.ci_green_rule` "
+                        "there, so HEAD's is the only declaration there has ever been")
+            detail = declared_at.error if declared_at else "no reason recorded"
+            return (f" - HEAD's declaration, NOT VERIFIED against the measured sha "
+                    f"{where}: the declaration there could NOT be read ({detail})")
+        return ""
+
+    first_which, first_rule = candidates[0]
+    ok, kind, payload = verdict(first_rule)
+    if ok:
+        return True, payload + provenance_note(first_which, first_rule)
+
+    # THE OTHER CLOCK, ON `missing` ONLY. A rename is not atomic: the workflow
+    # and the declaration describing it are two files, and #4657 moved them 3h13m
+    # apart with three merges in between. A step the sha's declaration names and
+    # the job does not carry is that window; a step the job carries and SKIPPED is
+    # a hollow check, and must never fall through to a second declaration.
+    other_kind, other_payload, other_which = "", None, ""
+    if kind == "missing" and len(candidates) > 1:
+        other_which, other_rule = candidates[1]
+        ok2, other_kind, other_payload = verdict(other_rule)
+        if ok2:
+            return True, (
+                f"{other_payload} - {clock(other_which)}"
+                + (
+                    f", reached because {clock(first_which)} named {list(first_rule)}, "
+                    "which this job does not carry: the workflow and policy.json were "
+                    "renamed in different commits"
+                    if first_which == DECL_AS_OF else ""
+                )
+            )
+
+    if kind != "missing":
+        return False, refusal_text(kind, payload)
+
+    # THE SECOND CLOCK'S OWN DIAGNOSIS, NOT THE FIRST'S SENTENCE REPEATED.
+    #
+    # An independent reviewer executed this branch: with the sha's clock
+    # `missing` and HEAD's clock `hollow`, the code discarded `kind2` and fell
+    # into the refusal below, which asserts "and so is every other declaration
+    # this repo carries for it" -- about a step that is PRESENT in the job and
+    # SKIPPED. That states as fact something the code did not establish
+    # (`deploy-integrity.md` R7) and prescribes "re-read it off a green run" for
+    # a state whose real diagnosis is a hollow check. It is one-sentence-for-
+    # two-states: the exact defect #4676 exists to end, reintroduced in the
+    # branch that ends it.
+    if other_kind and other_kind != "missing":
+        return False, (
+            f"the declared step(s) {payload} are ABSENT from this job - that is "
+            f"{clock(first_which)}. {cap(clock(other_which))} names a DIFFERENT "
+            "step, which this job DOES carry, and it does not account for the "
+            f"context either: {refusal_text(other_kind, other_payload)}. So this is "
+            "not a rename that the other clock resolves"
+        )
+
+    # TWO REFUSALS, NOT ONE SENTENCE, and this is what #4676 cost. Before the
+    # split there was one message -- "the declaration is stale, or this is not the
+    # job it describes; re-read it off a green run" -- and it was printed for a
+    # 2026-09-20 job that had been asked about a step created on 2026-09-21. The
+    # declaration was not stale; it was PERFECTLY current, and the sentence sent
+    # the reader to edit `policy.json`, the single edit that would have made the
+    # declaration wrong for every merge after the rename. The remedies are
+    # opposite, so the sentences have to be.
+    tried = " and ".join(
+        f"{clock(which)} named {list(rule) if isinstance(rule, list) else rule!r}"
+        for which, rule in candidates
+    )
+    if first_which == DECL_HEAD_UNVERIFIED:
+        why_unreadable = declared_at.error if declared_at else "no reason recorded"
+        reason = declared_at.reason if declared_at else ""
+        if reason == DECL_PREDATES:
+            # NOT "fetch the sha". The object is present and readable; the KEY
+            # did not exist yet (`substantive_steps` arrives in `6e29f1012`,
+            # 2026-09-15). Telling a reader to fetch a sha they already have is
+            # the same class of wrong-remedy message #4676 is about, and for a
+            # backlog closing merges older than that date it is the common case.
             return False, (
-                f"declared ALL, and {len(skipped)} of its {len(work)} work step(s) "
-                f"are SKIPPED ({names})"
+                f"the declared step(s) {payload} are ABSENT from this job, and that "
+                f"declaration is HEAD's: policy.json at the measured sha "
+                f"{(as_of_sha or '?')[:12]} carries no `receipts.ci_green_rule` AT ALL "
+                "- the key did not exist yet, so no declaration ever described this "
+                "job at that sha and HEAD's is the only one there has ever been. "
+                "There is nothing to fetch. Either this is not the job HEAD's "
+                "declaration describes, or that declaration needs re-reading off a "
+                "CURRENT green run - never off a pre-rename one, which would write "
+                "the old spelling back into policy.json and break every merge since"
             )
-        return True, f"declared ALL; every one of its {len(work)} work step(s) ran"
-
-    if not isinstance(rule, list) or not rule:
         return False, (
-            f"the declaration for {name!r} is {rule!r}, which is neither \"ALL\" nor a "
-            "non-empty list of step names"
+            f"the declared step(s) {payload} are ABSENT from this job, and that "
+            f"declaration is HEAD's: the one as of the measured sha "
+            f"{(as_of_sha or '?')[:12]} could NOT be read ({why_unreadable}), so "
+            "whether these steps existed there is UNKNOWN. Obtain that sha (`git "
+            "fetch origin <sha>`) and re-measure - do NOT edit policy.json, whose "
+            "declaration is correct for HEAD"
         )
-
-    missing, hollow, ambiguous = [], [], []
-    for wanted in rule:
-        # EVERY matching step, and EVERY one of them must have run. This used to
-        # be `any(ran(s) for s in matches)`, and an independent reviewer's
-        # mutation arm truncated the match list to `[:1]` and SURVIVED: with
-        # `any`, one running step satisfied a declaration no matter how many
-        # others matched and skipped, so narrowing the population was
-        # unobservable. A filter placed INSIDE the predicate beats a contract
-        # written about the predicate -- which is the whole lesson of the `N*`
-        # arms. `all` makes the size of the match set load-bearing, so a
-        # truncation changes an answer and a test can see it.
-        matches = [s for s in work if wanted in str(s.get("name") or "")]
-        if not matches:
-            missing.append(wanted)
-            continue
-        skipped = [s for s in matches if not ran(s)]
-        if len(skipped) == len(matches):
-            hollow.append(wanted)
-        elif skipped:
-            ambiguous.append(
-                f"{wanted!r} matches {len(matches)} steps and {len(skipped)} of them "
-                "are SKIPPED"
-            )
-    if missing:
+    if first_which == DECL_AS_OF:
         return False, (
-            f"the declared step(s) {missing} are ABSENT from this job - the declaration "
-            "is stale, or this is not the job it describes; re-read it off a green run"
+            f"the declared step(s) {payload} are ABSENT from this job, and so is every "
+            f"other declaration this repo carries for it ({tried}) - so it is stale at "
+            "that sha too, or this is not the job it describes; re-read it off a green run"
         )
-    if ambiguous:
-        # ASKED BEFORE `hollow` IS ACTED ON. A declaration that matched several
-        # steps with a MIXED outcome cannot say which one is the check, and
-        # round 5 answered a hollow primary with an alternative BEFORE reaching
-        # this refusal -- so a two-entry declaration with one hollow entry and
-        # one ambiguous entry returned a pass and this sentence was never
-        # printed. An independent reviewer demonstrated it synthetically; it was
-        # latent only because both rows that declare alternatives name exactly
-        # one primary step.
-        return False, (
-            "a declaration matched several steps with a MIXED outcome, so which one "
-            f"is the check cannot be decided from it: {'; '.join(ambiguous)} - make "
-            "the declaration name exactly one step"
-        )
-    if hollow:
-        # NO ALTERNATIVE IS CONSULTED HERE, and that is the fix for round 6's
-        # blocker. Round 5 accepted "a declared alternative ran" as the context
-        # having done its work, inside this function -- which has no
-        # `changed_files` and cannot ask the only question that makes such an
-        # acceptance safe. `context_is_accounted_for` returned on `did` before
-        # the merged file list was ever consulted, so the `hits` refusal (a
-        # change detector that MISSED a change, the #3783 shape `policy.json`
-        # says must never be laundered) became unreachable whenever any
-        # alternative ran. Two reviewers found it independently, on different
-        # rows, and the same input that round 4 REFUSED round 5 ACCEPTED.
-        #
-        # So the alternative lives in `alternative_accounted_for`, which asks
-        # the scope question and this one as two halves of a single predicate.
-        return False, (
-            f"its declared substantive step(s) {hollow} were SKIPPED - the check "
-            "concluded green having not done the thing it is required for"
-        )
-    return True, f"executed its declared substantive step(s) {list(rule)}"
+    return False, (
+        f"the declared step(s) {payload} are ABSENT from this job - the declaration "
+        "is stale, or this is not the job it describes; re-read it off a green run"
+    )
 
 
 #: A `scope_paths` output may declare its scope to BE the producing workflow's
@@ -2774,6 +3578,9 @@ def context_is_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    declared_at: DeclarationAsOf | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str, str]:
     """ONE question -- is this green check accounted for? -- asked in one place.
 
@@ -2921,17 +3728,59 @@ def context_is_accounted_for(
             "individual steps, its scope, or its alternatives say"
         ), ""
 
-    did, evidence = context_did_its_work(name, job, policy)
+    # THE DECLARATION IS SUBSTITUTED ONCE, HERE, FOR ROUTES 2 AND 3 (#4676).
+    #
+    # `substantive_steps`, `alternatives` and `scope_paths` are all descriptions
+    # of the SAME workflow, so all three move together when it is renamed --
+    # swapping only the first would fix route 1 and leave routes 2 and 3 asking
+    # a 2026-09-20 job about a 2026-09-21 step name. That is this file's own
+    # recurring defect ("fixed on one side only"), and arm `AS2` in
+    # `mutate_gates.py` is exactly that narrowing, so a test has to see it.
+    #
+    # ROUTE 1 IS ALSO HANDED THE ORIGINAL POLICY AND THE `DeclarationAsOf`, NOT
+    # THE SUBSTITUTED ONE, and that is not a style choice. It resolves for
+    # itself because it must be able to name BOTH declarations -- the sha's,
+    # which it judged on, and HEAD's, which the reader is looking at. Passing it
+    # `effective` made `head_declared` read the substituted rule, the two
+    # compared equal, and the provenance clause silently vanished from every
+    # real receipt while the unit test -- which called the predicate directly
+    # with HEAD's policy -- went on passing. Measured on PR #4593 before it was
+    # fixed: verdict correct, disclosure absent.
+    #
+    # ROUTES 2 AND 3 GET ONE CLOCK, DELIBERATELY, and an independent reviewer
+    # was right that the asymmetry needed stating rather than leaving to be
+    # rediscovered. Route 1's second clock is safe because it is reachable ONLY
+    # on `missing` -- a step name absent from the job entirely, which is the
+    # rename signature and nothing else. Routes 2 and 3 have no equivalent
+    # restriction: `scope_untouched_at_merge` and `alternative_accounted_for`
+    # refuse for reasons that are about the merged FILE LIST and the detector,
+    # not about a name being absent, so "try the other declaration when the
+    # first refuses" would let a scope refusal under one clock be overridden by
+    # an acceptance under the other. That is a weakening, and it is the shape
+    # `#3783` says must never be laundered.
+    #
+    # The cost is stated too: a lag-window job whose primary is skipped under
+    # HEAD's spelling and whose declared alternative ran is REFUSED here, where
+    # HEAD's declaration alone would have returned ACCOUNTED_ALTERNATIVE. That
+    # is fail-closed, it is not realised on any of the three real lag-window
+    # merges (#4652, #4654, #4658 all pass through route 1's fallthrough), and
+    # `test_routes_2_and_3_are_deliberately_single_clocked` pins it so a future
+    # change to it is a deliberate edit rather than a silent one.
+    effective, _provenance, _as_of_sha = _declaration_as_of(policy, declared_at)
+
+    did, evidence = context_did_its_work(name, job, policy, declared_at=declared_at)
     if did:
         return True, evidence, ACCOUNTED_DID_WORK
     excused, why = scope_untouched_at_merge(
-        name, job, changed_files, policy,
-        push_trigger=push_trigger, infra_ere=infra_ere)
+        name, job, changed_files, effective,
+        push_trigger=push_trigger, infra_ere=infra_ere,
+        sibling_jobs=sibling_jobs, workflow_text=workflow_text)
     if excused:
         return True, why, ACCOUNTED_SCOPE_SKIP
     alt_ok, alt_why = alternative_accounted_for(
-        name, job, changed_files, policy,
-        push_trigger=push_trigger, infra_ere=infra_ere)
+        name, job, changed_files, effective,
+        push_trigger=push_trigger, infra_ere=infra_ere,
+        sibling_jobs=sibling_jobs, workflow_text=workflow_text)
     if alt_ok:
         return True, alt_why, ACCOUNTED_ALTERNATIVE
     return False, (
@@ -2944,6 +3793,8 @@ def scope_untouched_at_merge(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str]:
     """Was the substantive step skipped because this context's SCOPE did not change?
 
@@ -3000,7 +3851,8 @@ def scope_untouched_at_merge(
         return False, "no job record was read for it, so its skip cannot be explained"
     steps = [s for s in job["steps"] if isinstance(s, dict)]
 
-    gate_ok, gate_why, detectors = _declared_gate_ran(row, steps)
+    gate_ok, gate_why, detectors = _declared_gate_ran(
+        row, steps, sibling_jobs, workflow_text)
     if not gate_ok:
         return False, gate_why
 
@@ -3077,8 +3929,172 @@ def _scope_row(name: str, policy: dict) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
+def _detector_steps(
+    row: dict, steps: list[dict], sibling_jobs: tuple[dict, ...],
+    workflow_text: str | None,
+) -> tuple[list[dict] | None, str, str]:
+    """Resolve the steps the declared `gate_step` should be looked for in.
+
+    Returns `(steps, where, why)`. `steps is None` means REFUSED and `why`
+    says what could not be established.
+
+    WITHOUT a `detector_job` the answer is the gated job's own steps, which is
+    what this module did for every row until #4701. That same-job path is
+    exercised by four of the five real rows (`next build (node 20)` and the
+    three `Python Tests (3.n)`) and is the free regression control for this
+    change: if it stops working, the change is wrong regardless of what the
+    cross-job path does.
+
+    WITH a `detector_job` there are TWO defects to get past, and #4701 as filed
+    named only the first:
+
+    1. NOBODY READ THE FIELD. `_declared_gate_ran` took `(row, steps)` and
+       searched the GATED job. Since #4682 sharded vitest, `Detect console
+       changes` has lived in a sibling job, so the search could not find it and
+       the refusal read "its declared gate step is ABSENT from this job - the
+       declaration is stale". The declaration was not stale; it was unread.
+
+    2. THE FIELD HOLDS A YAML KEY; THE JOBS API REPORTS A DISPLAY NAME. Measured
+       2026-09-25: `policy.json` says `detector_job: "vitest-detect"`, which is
+       the key at `.github/workflows/fiab-console-ci.yml:310`, while that job's
+       `name:` is `vitest — detect changes` (U+2014) and the jobs API reports
+       only the name. So a lookup keyed on the declared string finds nothing,
+       and fixing (1) alone would have swapped one red for another.
+
+       Nothing caught this because `test_ci_green_declared.py` resolves the key
+       against the WORKFLOW YAML, where it is correct. The validating control
+       reads the one source where the declaration is right; the consumer reads
+       the source where it is wrong. No input to that test can turn it red on
+       this, which is the `assertion-design.md` shape exactly.
+
+    So the key is mapped to its display name by reading the workflow at the
+    merged sha -- the same text `merge_gate` already reads for push triggers --
+    and the display name is what the sibling list is searched for. The key stays
+    in `policy.json` deliberately: display names are unstable by design (a
+    sibling in this very file is named `vitest shard ${{ matrix.shard }}/4`,
+    an unexpanded expression), while the key is the stable identifier and is
+    what the existing declaration test already validates.
+
+    EVERY unanswered question ABOUT A SUPPLIED SIBLING LIST fails closed: a
+    declared detector we cannot find among the jobs we were given is not an
+    excuse to accept a skip, and the message distinguishes "absent from this
+    run" from "stale declaration" because those have opposite remedies.
+
+    WITH NO SIBLING LIST THERE IS NO REFUSAL AT ALL -- see the fallback in the
+    body. An earlier revision of this paragraph said "EVERY unanswered question
+    fails closed" without that qualifier, which was the strongest of four sites
+    asserting a refusal this function does not perform, and it sat in the
+    summary of the very function whose body contradicts it ten lines down.
+    """
+    declared = str(row.get("detector_job") or "")
+    if not declared:
+        return steps, "this job", ""
+
+    siblings = [j for j in sibling_jobs if isinstance(j, dict)]
+    if not siblings:
+        # NO SIBLING LIST -> fall back to the gated job's own steps, which is
+        # what every caller did before #4701.
+        #
+        # This is deliberately NOT a refusal, and an earlier revision of this
+        # change had it as one. Refusing here buys nothing and discards a
+        # correct answer: if the gated job carries a step whose name CONTAINS
+        # the declared gate step, that step ran in that job and plausibly
+        # explains the skip -- the declaration merely names where the detector
+        # usually lives. Five existing tests encode exactly that shape and were
+        # right to.
+        #
+        # STATED AS "CONTAINS" AND "PLAUSIBLY" DELIBERATELY. The match is a
+        # SUBSTRING, so this branch can ACCEPT on a step that is not the
+        # declared detector at all -- the docstring above says so, and an
+        # earlier revision of this comment said "DOES carry the declared gate
+        # step", which asserts an identity the code never checks.
+        #
+        # The failure #4701 is about is narrower: the detector is in a sibling,
+        # the gate searched the gated job, found nothing, and reported the
+        # DECLARATION stale. For `vitest (node 20)` today that case is
+        # unchanged by this fallback -- no step in the gated job contains
+        # `Detect console changes`, so the search still finds nothing and still
+        # refuses, no worse than before. That is a fact about this row's
+        # workflow, NOT a property of the fallback: a row whose gated job
+        # happened to contain a matching substring would be accepted here and
+        # refused where siblings are threaded.
+        #
+        # What the fallback must never do is let a SUPPLIED sibling list be
+        # ignored, and it cannot: the branch below runs whenever one exists.
+        return steps, "this job", ""
+
+    wanted = _detector_display_name(declared, workflow_text)
+    matches = [j for j in siblings if str(j.get("name") or "") == wanted]
+    if not matches:
+        names = sorted(str(j.get("name") or "?") for j in siblings)
+        resolved = (
+            f"{declared!r}" if wanted == declared
+            else f"{declared!r} (job name {wanted!r})"
+        )
+        return None, "", (
+            f"its declared detector job {resolved} is not among the "
+            f"{len(siblings)} job(s) of this run ({', '.join(names[:4])}"
+            f"{', ...' if len(names) > 4 else ''}), so nothing establishes WHY "
+            "the work was skipped"
+        )
+    if len(matches) > 1:
+        return None, "", (
+            f"its declared detector job {wanted!r} matches {len(matches)} jobs "
+            "in this run, so which one gated the work is ambiguous"
+        )
+
+    detector = matches[0]
+    dsteps = [s for s in (detector.get("steps") or []) if isinstance(s, dict)]
+    if not dsteps:
+        return None, "", (
+            f"its declared detector job {wanted!r} was found but carries no "
+            "steps, so nothing establishes WHY the work was skipped"
+        )
+    return dsteps, f"its declared detector job {wanted!r}", ""
+
+
+def _detector_display_name(key: str, workflow_text: str | None) -> str:
+    """Map a workflow job KEY to the `name:` the jobs API will report.
+
+    Returns `key` unchanged when the workflow text is unavailable or the key
+    has no explicit `name:` -- both are correct fall-throughs, because GitHub
+    reports the key itself as the job name when no `name:` is set. A wrong
+    answer here does not fail open: the caller refuses when the resolved name
+    matches no sibling.
+
+    Parsed rather than YAML-loaded on purpose. This module has no yaml
+    dependency, the shape being read is two levels deep and fixed, and a
+    `name:` containing an unexpanded `${{ }}` expression (which several jobs in
+    this repo have) must survive verbatim -- it is what the jobs API reports.
+    """
+    if not workflow_text or not key:
+        return key
+    lines = workflow_text.splitlines()
+    try:
+        top = next(i for i, ln in enumerate(lines) if re.match(r"^jobs:\s*$", ln))
+    except StopIteration:
+        return key
+    want = re.compile(rf"^  {re.escape(key)}:\s*$")
+    for i in range(top + 1, len(lines)):
+        ln = lines[i]
+        if re.match(r"^[A-Za-z]", ln):
+            break                      # left the jobs: block entirely
+        if not want.match(ln):
+            continue
+        for j in range(i + 1, len(lines)):
+            nxt = lines[j]
+            if re.match(r"^  \S", nxt) or re.match(r"^[A-Za-z]", nxt):
+                break                  # next job, or out of the block
+            m = re.match(r"^    name:\s*(.+?)\s*$", nxt)
+            if m:
+                return m.group(1).strip("'\"")
+        break
+    return key
+
+
 def _declared_gate_ran(
-    row: dict, steps: list[dict],
+    row: dict, steps: list[dict], sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str, list[dict]]:
     """Did the declared change detector run and conclude success?
 
@@ -3098,6 +4114,25 @@ def _declared_gate_ran(
     what ran was a different step. `context_did_its_work` moved from `any` to
     `all` for exactly this reason; this parallel loop stayed behind, which was
     the one-side-of-a-symmetry defect again, inside the round that named it.
+
+    `sibling_jobs` and `workflow_text` carry the cross-job case (#4701); see
+    `_detector_steps`. Both default to empty, and a caller with no sibling list
+    gets the historical same-job behaviour for EVERY row -- including one that
+    declares a `detector_job`.
+
+    THAT IS A FALLBACK, NOT A REFUSAL, and an earlier revision of this very
+    docstring claimed the opposite ("REFUSES for a row that declares one --
+    never silently searches the wrong job"). It was the third site carrying
+    that false claim; the first two were swept by grepping the literal string
+    they shared, which this one does not use. A needle scan cannot find the
+    same claim reworded.
+
+    The fallback can ACCEPT as well as refuse, which is the part worth knowing:
+    `gate_step` is matched as a SUBSTRING, so a step in the GATED job whose
+    name merely contains the declared one will stand in for the declared
+    detector. The same row can therefore reach opposite verdicts depending only
+    on whether its caller threaded siblings. The green-at-merge branch does;
+    the PR-head branch deliberately does not.
     """
     gate_step = str(row.get("gate_step") or "")
     if not gate_step:
@@ -3105,10 +4140,13 @@ def _declared_gate_ran(
             f"the declared scope {row!r} is missing a `gate_step`, so nothing "
             "establishes WHY the work was skipped"
         ), []
-    detectors = [s for s in steps if gate_step in str(s.get("name") or "")]
+    search, where, why = _detector_steps(row, steps, sibling_jobs, workflow_text)
+    if search is None:
+        return False, why, []
+    detectors = [s for s in search if gate_step in str(s.get("name") or "")]
     if not detectors:
         return False, (
-            f"its declared gate step {gate_step!r} is ABSENT from this job - the "
+            f"its declared gate step {gate_step!r} is ABSENT from {where} - the "
             "declaration is stale, or this is not the job it describes"
         ), []
     off = [
@@ -3669,6 +4707,8 @@ def alternative_accounted_for(
     name: str, job: dict | None, changed_files, policy: dict,
     push_trigger: PushTrigger | None = None,
     infra_ere: str | None = None,
+    sibling_jobs: tuple[dict, ...] = (),
+    workflow_text: str | None = None,
 ) -> tuple[bool, str]:
     """Did this context skip its primary step and do the OTHER half of its work?
 
@@ -3734,7 +4774,8 @@ def alternative_accounted_for(
         return False, "no job record was read for it, so no alternative can be shown to have run"
     steps = [s for s in job["steps"] if isinstance(s, dict)]
 
-    gate_ok, gate_why, _ = _declared_gate_ran(row, steps)
+    gate_ok, gate_why, _ = _declared_gate_ran(
+        row, steps, sibling_jobs, workflow_text)
     if not gate_ok:
         return False, gate_why
     hollow_ok, hollow_why = _primary_steps_all_skipped(name, steps, policy)
@@ -3931,7 +4972,7 @@ def _is_bookkeeping_step(name: str) -> bool:
 
 def _renamed_at_merge(
     item: ContextEvidence, *, merged_sha: str, merged_changed_files, policy: dict,
-    infra_ere: str | None = None,
+    infra_ere: str | None = None, declared_at: DeclarationAsOf | None = None,
 ) -> ContextResult:
     """The per-event RENAME case, on evidence rather than on a green run.
 
@@ -4007,7 +5048,9 @@ def _renamed_at_merge(
         )
     ran = [
         (j, context_is_accounted_for(
-            item.name, j, merged_changed_files, policy, infra_ere=infra_ere))
+            item.name, j, merged_changed_files, policy, infra_ere=infra_ere,
+            declared_at=declared_at, sibling_jobs=tuple(jobs),
+            workflow_text=item.workflow_text))
         for j in jobs
     ]
     usable = [

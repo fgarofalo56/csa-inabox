@@ -65,6 +65,13 @@ vi.mock('@/app/api/items/_lib/item-crud', () => ({
   listAllOwnedItems: vi.fn(async (_tenant: string, ws: string) => (ws === SRC_WS ? [sourceItem] : [targetItem])),
   createOwnedItem: (...a: unknown[]) => createOwnedItem(...(a as [])),
   updateOwnedItem: (...a: unknown[]) => updateOwnedItem(...(a as [])),
+  // #4619 — IDENTITY, and provably so on THIS fixture rather than as a
+  // convenience: `carryServerDerivedScope` only ever copies or deletes
+  // `state.provisioning` / `state.storageAccount`, and neither `sourceItem` nor
+  // `targetItem` in this file carries either key, so the real function and this
+  // one agree on every input this suite produces. Its real behaviour is pinned
+  // directly in `app/api/items/_lib/__tests__/server-derived-scope-4619.test.ts`.
+  carryServerDerivedScope: (next: unknown) => next,
 }));
 
 /** The direct container write the receipt stamp uses (no version/event fan-out). */

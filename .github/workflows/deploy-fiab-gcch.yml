@@ -682,7 +682,9 @@ jobs:
           PLAN='{}'
           if [ -n "${DLZ_SUB:-}" ] && [ -n "${DLZ_RG:-}" ]; then
             PLAN="$(bash scripts/csa-loom/discover-dlz-adopt-plan.sh \
-                      --dlz-subscription "$DLZ_SUB" --dlz-rg "$DLZ_RG")"
+                      --dlz-subscription "$DLZ_SUB" --dlz-rg "$DLZ_RG" \
+                      --admin-subscription "$ADMIN_SUB" \
+                      --admin-rg "rg-csa-loom-admin-$REGION")"
           fi
 
           # An EXPLICIT plan always wins over a discovered one — the operator

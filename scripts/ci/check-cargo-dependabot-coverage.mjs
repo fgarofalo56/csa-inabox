@@ -18,10 +18,17 @@
  *
  * So the crate was watched for "you are vulnerable" and never for "a fix is
  * now available". For #3982 that second half was the load-bearing one: thrift
- * cannot leave the graph by anything done in this repo (deltalake-core 0.32.4
- * still pins parquet ^58, and parquet drops thrift only at 59.0.0), so the fix
- * arrives as an upstream delta-rs release — the exact event a version-update
+ * could not leave the graph by anything done in this repo, so the fix had to
+ * arrive as an upstream delta-rs release — the exact event a version-update
  * lane exists to notice, and the exact event nothing here was watching for.
+ *
+ * RESOLVED 2026-09-23 (PR #4681), and the resolution is the argument FOR this
+ * guard rather than against it. When the paragraph above was written
+ * (2026-09-18) deltalake-core 0.32.4 still pinned `parquet ^58` and parquet
+ * dropped thrift only at 59.0.0. `deltalake-core 1.0.0` was published
+ * 2026-09-21 on `arrow ^59` / `parquet ^59` / `datafusion ^55`; the crate moved
+ * onto it and thrift is now absent from `apps/loom-directlake/Cargo.lock`. The
+ * upstream release this lane existed to notice is precisely what arrived.
  *
  * An alert with no update lane is a control that can only ever tell you bad
  * news. It reads as coverage on the security tab while being structurally
