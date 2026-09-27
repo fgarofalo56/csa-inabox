@@ -12,7 +12,7 @@ import type {
   ServiceAvailability,
 } from '@/lib/admin/env-checks';
 
-export type FixitKind = 'env-picker' | 'resource-picker' | 'role-grant' | 'wizard';
+export type FixitKind = 'env-picker' | 'resource-picker' | 'role-grant' | 'wizard' | 'provision';
 
 /**
  * A REAL ARM options-loader for one env var of a gate: the resolve dialog
@@ -68,6 +68,52 @@ export interface GateFixit {
    * pre-filled fixScript/portalSteps from the self-audit check for these.
    */
   grantNote?: string;
+  /**
+   * For 'provision' ONLY: what a push-button deploy must turn on.
+   *
+   * WHY THIS KIND EXISTS. The other four fix kinds all assume the Azure
+   * service ALREADY EXISTS — `resource-picker` has nothing to pick and
+   * `env-picker` asks the operator to type the name of something that is not
+   * there. That is the dead end `auto-bind-by-default.md` forbids in as many
+   * words ("'No pipelines found' + a disabled Bind button"), and it is what a
+   * gate whose backing service was never deployed actually renders today.
+   *
+   * `provision` DEPLOYS it, through the boundary's own deploy workflow and the
+   * same per-service dispatch input the template already uses for
+   * `purview_enabled` / `azure_maps_enabled`. It is not a new deploy path: a
+   * second way to deploy this estate would be the R1 hazard, not the fix.
+   *
+   * EVERY FIELD IS REQUIRED because each one fails closed somewhere:
+   *  - `workflowInput` must be a REAL dispatch input on the boundary workflow.
+   *    A name that is not wired is accepted silently by `workflow_dispatch`
+   *    and the deploy runs with the flag at its DEFAULT — a provision that
+   *    reports success and provisions nothing.
+   *  - `bicepParam` is the parameter that input feeds, recorded so the chain
+   *    input -> guard -> `--parameters` can be audited without reading 1000
+   *    lines of YAML.
+   *  - `module` is the bicep module that actually declares the resource, so a
+   *    receipt can name what was created rather than asserting it.
+   */
+  provision?: GateProvision;
+}
+
+/** The deploy descriptor for a `provision` fix. See `GateFixit.provision`. */
+export interface GateProvision {
+  /** Key into `SERVICE_PARAM_MAP` (lib/setup/adopt-bag). */
+  service: string;
+  /** The `workflow_dispatch` input on the boundary deploy workflow. */
+  workflowInput: string;
+  /** The bicep parameter that input feeds, e.g. 'serviceBusEnabled'. */
+  bicepParam: string;
+  /** The module that declares the resource, for the provision receipt. */
+  module: string;
+  /**
+   * Stated cost consequence. `auto-bind-by-default.md` permits a
+   * cost-material opt-in only when it is "listed in the gate registry with
+   * that reason" — so a provision that bills the operator must say so on the
+   * button, not after they press it.
+   */
+  costNote: string;
 }
 
 export interface GateSurface {

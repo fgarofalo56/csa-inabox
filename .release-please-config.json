@@ -17,6 +17,7 @@
       "changelog-sections": [
         {"type": "feat", "section": "Features"},
         {"type": "fix", "section": "Bug Fixes"},
+        {"type": "harden", "section": "Security"},
         {"type": "refactor", "section": "Code Refactoring"},
         {"type": "docs", "section": "Documentation"},
         {"type": "test", "section": "Tests"},

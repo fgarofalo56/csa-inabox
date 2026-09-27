@@ -51,6 +51,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runRatchet, gitTouchedFiles } from './_ratchet-count.mjs';
+import { codeOnly } from './_code-only.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -280,19 +281,31 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-/** Drop comment lines so documentation of the deleted helper is not a hit. */
-const isComment = (l) => {
-  const t = l.trim();
-  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
-};
-
+/**
+ * Strip comments so documentation of the deleted helper is not a hit.
+ *
+ * SHARED with check-route-toolkit.mjs via ./_code-only.mjs (#4467). This used to
+ * be a local line-PREFIX filter (`trim().startsWith('//','*','/*')`), which is
+ * wrong in BOTH directions and this guard's arms are INCLUDE arms, so both
+ * directions land here:
+ *   - a TRAILING comment mentioning `assertOwner(` survived the filter and was
+ *     counted, inflating the ratchet on prose;
+ *   - a genuine code line beginning with `*` (a continuation such as
+ *     `  * factor;`) was DROPPED as if it were a comment, so a real hit on that
+ *     line could not be seen.
+ * The scanner preserves OFFSETS (comments become spaces, newlines kept), so the
+ * per-line loop below stays aligned with the file it is reporting on.
+ */
 const current = {};
 for (const abs of [...walk(path.join(APP_ROOT, 'app')), ...walk(path.join(APP_ROOT, 'lib'))]) {
   const rel = path.relative(REPO_ROOT, abs).replace(/\\/g, '/');
   if (rel === SELF) continue;
   const raw = fs.readFileSync(abs, 'utf8');
-  const lines = raw.split(/\r?\n/).filter((l) => !isComment(l));
-  const code = lines.join('\n');
+  const code = codeOnly(raw);
+  // `/\r?\n/`, not `'\n'`: codeOnly preserves offsets EXACTLY and does not
+  // normalise line endings, and this working tree is CRLF — splitting on '\n'
+  // alone would leave a trailing '\r' on every line.
+  const lines = code.split(/\r?\n/);
   const usesWorkspaces = /workspacesContainer\s*\(/.test(code);
   const comparesOwner = OWNER_CMP_RE.test(code);
   let n = 0;

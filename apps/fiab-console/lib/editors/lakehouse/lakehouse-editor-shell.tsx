@@ -550,14 +550,14 @@ export function LakehouseEditor({ item, id }: Props) {
     const targetPath = prefix ? `${trimTrailingSlashes(prefix)}/${name}` : name;
     setActionError(null); setActionStatus(null);
     try {
-      const qs = new URLSearchParams({ container: activeContainer, path: targetPath });
+      const qs = new URLSearchParams({ lakehouseId: id, container: activeContainer, path: targetPath });
       const r = await clientFetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'POST' });
       const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Create folder');
       if (!r.ok || j.ok === false) setActionError(j.error || `Mkdir failed (HTTP ${r.status})`);
       else setActionStatus(`Folder ${targetPath} created at ${new Date().toLocaleTimeString()}`);
     } catch (e: any) { setActionError(e?.message || String(e)); }
     finally { refreshActive(); }
-  }, [activeContainer, activePath, rootPrefix, refreshActive]);
+  }, [id, activeContainer, activePath, rootPrefix, refreshActive]);
 
   const onDelete = useCallback(async (entry: PathEntry) => {
     if (!activeContainer) return;
@@ -571,7 +571,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!ok) return;
     setActionError(null); setActionStatus(null);
     try {
-      const qs = new URLSearchParams({ container: activeContainer, path: entry.name, recursive: entry.isDirectory ? 'true' : 'false' });
+      const qs = new URLSearchParams({ lakehouseId: id, container: activeContainer, path: entry.name, recursive: entry.isDirectory ? 'true' : 'false' });
       const r = await clientFetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Delete');
       if (!r.ok || j.ok === false) setActionError(j.error || `Delete failed (HTTP ${r.status})`);
@@ -579,7 +579,7 @@ export function LakehouseEditor({ item, id }: Props) {
       if (activePath?.name === entry.name) setActivePath(null);
     } catch (e: any) { setActionError(e?.message || String(e)); }
     finally { refreshActive(); }
-  }, [activeContainer, activePath, refreshActive, confirm]);
+  }, [id, activeContainer, activePath, refreshActive, confirm]);
 
   const onDownload = useCallback(async (
     entry: PathEntry,

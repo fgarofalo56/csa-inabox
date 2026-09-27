@@ -29,6 +29,25 @@ import { autoBindOnCreate } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
+import {
+  ServerOwnedStateError,
+  stableStringify,
+  MAX_STATE_DEPTH,
+  SERVER_DERIVED_SCOPE_KEYS,
+  assertNoServerDerivedScopeChange,
+  carryServerDerivedScope,
+} from './server-derived-scope';
+
+// #4619 — RE-EXPORTED, deliberately. The guard moved to `server-derived-scope.ts`
+// (see that file's header for why), but every one of its seven call sites and
+// every `vi.mock` factory in the suite names THIS module, so the split is
+// invisible to them. Keep these here for as long as those importers exist.
+export {
+  ServerOwnedStateError,
+  SERVER_DERIVED_SCOPE_KEYS,
+  assertNoServerDerivedScopeChange,
+  carryServerDerivedScope,
+};
 
 /**
  * Soft-delete (Recycle bin) metadata stamped onto an item's `state._recycled`.
@@ -54,9 +73,20 @@ const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = 
  * SERVER-OWNED ITEM STATE — keys a REQUEST BODY may never introduce or change
  * (#3611).
  *
- * THE DEFECT THIS CLOSES. The generic item PATCH
+ * THE DEFECT THIS CLOSES — stated as HISTORY, because that is what it is. As
+ * measured in #3611, the generic item PATCH
  * (`app/api/items/[type]/[id]/route.ts`) and {@link updateOwnedItem} both
  * replaced `state` WHOLESALE from the request body, with no field validation.
+ *
+ * DO NOT READ THOSE TWO AS THE CURRENT COVERAGE. #4621 widened the rule to a
+ * THIRD caller (`app/api/cosmos-items/[type]/[id]/route.ts`) and these lines
+ * went on saying two until review measured it. So this docblock STOPS
+ * ENUMERATING rather than being corrected to a new number that the next
+ * widening will falsify in turn — the same "link, do not restate" conclusion
+ * the neighbouring #4619 rule reached after being wrong about ITS writer set
+ * twice. The live set is derivable, and a derivation cannot go stale:
+ *
+ *     git grep -n 'assertNoServerOwnedStateChange(' -- apps/ | grep -v __tests__
  * `state` is a free-form bag, but a handful of its keys are not user data at
  * all — they NAME a platform resource that a later request DESTROYS or READS
  * with the Console's own managed identity. Measured sinks on this tree:
@@ -124,25 +154,6 @@ const SERVER_OWNED_SET = new Set<string>(SERVER_OWNED_STATE_KEYS);
 /** Keys that poison a later object spread / Cosmos round-trip. Never valid state. */
 const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-/** Bounds recursion over caller-supplied JSON. */
-const MAX_STATE_DEPTH = 12;
-
-/** Thrown when a request body tries to write state the server owns. */
-export class ServerOwnedStateError extends Error {
-  status = 400;
-  constructor(public readonly key: string, detail: string) {
-    super(detail);
-    this.name = 'ServerOwnedStateError';
-  }
-}
-
-/** JSON with sorted keys, so key ORDER never reads as a value change. */
-function stableStringify(v: unknown, depth = 0): string {
-  if (depth > MAX_STATE_DEPTH || v === null || typeof v !== 'object') return JSON.stringify(v ?? null) ?? 'null';
-  if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x, depth + 1)).join(',')}]`;
-  const entries = Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${stableStringify(x, depth + 1)}`).join(',')}}`;
-}
 
 /**
  * Collect, by KEY NAME, the set of values a state tree carries for every
@@ -180,13 +191,28 @@ function collectServerOwned(node: unknown, out: Map<string, Set<string>>, depth 
   }
 }
 
+
 /**
  * Throw {@link ServerOwnedStateError} when `nextState` would INTRODUCE or CHANGE
  * a {@link SERVER_OWNED_STATE_KEYS} value that `currentState` does not already
- * carry. Omission is permitted (and fail-safe). See the block comment above.
+ * carry. Omission of a SERVER_OWNED key is permitted and is fail-safe — a
+ * dropped `secretRef` orphans a vault secret, it cannot delete one — and those
+ * keys are NOT carried forward.
+ *
+ * Also runs {@link assertNoServerDerivedScopeChange} (#4619), so the
+ * `items/[type]/[id]` PATCH and {@link updateOwnedItem} pick up the path-scoped
+ * rule for free. THAT IS ONLY HALF OF THAT RULE, and an earlier version of this
+ * sentence ("without a second call site of their own") read as if it were the
+ * whole of it. Omission of a SERVER_DERIVED key is fail-safe only because
+ * {@link carryServerDerivedScope} rebases it, and this function does NOT call
+ * that — every writer that replaces `state` wholesale needs its own carry call
+ * site. `items/[type]/[id]` shipped a revision with the assert from here and no
+ * carry, which left the omission bypass open on the route that serves
+ * `lakehouse`.
  */
 export function assertNoServerOwnedStateChange(nextState: unknown, currentState: unknown): void {
   if (!nextState || typeof nextState !== 'object') return;
+  assertNoServerDerivedScopeChange(nextState, currentState);
   const next = new Map<string, Set<string>>();
   collectServerOwned(nextState, next);
   if (next.size === 0) return;
@@ -926,11 +952,25 @@ export async function updateOwnedItem(
   // that do not catch it surface it as a 500, which is still a refusal — the
   // write does not happen either way.
   assertNoServerOwnedStateChange(patch.state, current.state);
+  // #4619 — the assert above permits OMISSION, and `state` is replaced
+  // wholesale below, so a body that simply LEAVES OUT a server-derived key
+  // DELETES it. That is the whole bypass: the same request that edits
+  // `state.database` also drops `state.provisioning`, and a resolver that
+  // prefers the receipt then has no receipt left to prefer. Rebase the
+  // server-derived keys back onto whatever this item already carries.
+  //
+  // ORDER IS LOAD-BEARING. Asserting FIRST keeps an attempted CHANGE a 400
+  // rather than a silent substitution, which `adx-item-scope.ts` forbids in as
+  // many words; carrying SECOND makes an OMISSION preserve instead of delete.
+  // Rebasing alone would turn every refused change into a quiet 200.
+  const patchedState = patch.state && typeof patch.state === 'object'
+    ? carryServerDerivedScope(patch.state as Record<string, unknown>, current.state)
+    : patch.state;
   const next: WorkspaceItem = {
     ...current,
     displayName: patch.displayName?.trim() || current.displayName,
     description: 'description' in patch ? (patch.description?.trim() || undefined) : current.description,
-    state: patch.state && typeof patch.state === 'object' ? patch.state : current.state,
+    state: patchedState && typeof patchedState === 'object' ? patchedState : current.state,
     updatedAt: new Date().toISOString(),
   };
   const items = await itemsContainer();

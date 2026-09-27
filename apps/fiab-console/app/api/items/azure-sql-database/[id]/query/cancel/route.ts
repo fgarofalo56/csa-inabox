@@ -15,9 +15,10 @@
  * execution begins.
  *
  * Scope note (#3400/#3399). `liveRequests` is in-process Node.js state on ONE
- * Container App replica, and `loom-console` runs `multiRevision: true` with
- * `minReplicas: 2` — so a cancel POST can land on a replica that never started
- * the query.
+ * Container App replica, and `loom-console` runs `minReplicas: 2` — it also ran
+ * `multiRevision: true` until 2026-09-20 — so a cancel POST can land on a
+ * replica that never started the query. THE REPLICA COUNT IS THE PROBLEM, and
+ * it did not change when the revision mode did.
  *
  * THE ANSWER IS NOT SESSION AFFINITY. This comment used to tell the reader to
  * set `ingress.stickySessions.affinity: 'sticky'` or run a single replica. ACA

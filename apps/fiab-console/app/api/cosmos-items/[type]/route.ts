@@ -18,6 +18,9 @@ import { resolveWorkspaceAccessByOid, ambientAccessOptsFor } from '@/lib/auth/wo
 import { withSession } from '@/lib/api/route-toolkit';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { autoBindOnCreate } from '@/lib/azure/auto-bind';
+import {
+  assertNoServerDerivedScopeChange, ServerOwnedStateError,
+} from '@/app/api/items/_lib/item-crud';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -66,6 +69,21 @@ export const POST = withSession<{ type: string }>(async (req: NextRequest, { ses
     if (!access || !access.canWrite) return err('Workspace not found', 404, 'not_found');
 
     const now = new Date().toISOString();
+    // #4619 — `state` is taken VERBATIM from the request body below with no
+    // schema validation. `state.provisioning` is the receipt the provisioning
+    // engine stamps after it has created this item's backing Azure object, and
+    // other code derives a security-relevant scope from it; on a CREATE no such
+    // work has happened yet, so a supplied value is an introduction and is
+    // refused. Covering the create path is load-bearing, not belt-and-braces:
+    // a rule that only bound the UPDATE routes would be satisfied by making a
+    // fresh item instead. The in-app caller (`lib/editors/new-item-gate.tsx:113`)
+    // sends `{ workspaceId, displayName }` and no `state` at all.
+    try {
+      assertNoServerDerivedScopeChange(body.state, undefined);
+    } catch (e: any) {
+      if (e instanceof ServerOwnedStateError) return err(e.message, 400, 'server_owned_state');
+      throw e;
+    }
     const item: WorkspaceItem = {
       id: crypto.randomUUID(),
       workspaceId,

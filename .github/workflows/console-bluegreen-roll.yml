@@ -134,9 +134,17 @@ jobs:
       # that hands back no remediation is a defect in itself, so the fix is not
       # only to clear the conflict but to SAY what was wrong when it can't.
       #
-      # affinity:'none' is now asserted in bicep for every multiRevision app
-      # (modules/admin-plane/app-deployments.bicep), so a deployed estate
-      # self-heals. This step covers the estate BETWEEN deploys, and per
+      # affinity:'none' is now asserted in bicep for every INGRESS app
+      # (modules/admin-plane/app-deployments.bicep) — widened 2026-09-20 from
+      # multiRevision-only, because loom-console moved to Single mode and was
+      # the only multiRevision app, so the scoped assertion would have left the
+      # template with the flag. NOTE FOR ANYONE RE-ENABLING THIS LANE: that
+      # widening CLEARS the ContainerAppInvalidIngressStickySessionRevisionMode
+      # failure this step died on 4 of 4 times, so the step would now SUCCEED
+      # and flip the app to Multiple while main.bicep declares Single and no
+      # revision-retirement step exists. This workflow is disabled_manually for
+      # that reason; see docs/fiab/deployment/bluegreen-rolls.md.
+      # This step covers the estate BETWEEN deploys, and per
       # auto-bind-by-default it performs the remediation rather than printing
       # it: clear affinity, retry once, fail CLOSED with the exact command if
       # that still doesn't take.

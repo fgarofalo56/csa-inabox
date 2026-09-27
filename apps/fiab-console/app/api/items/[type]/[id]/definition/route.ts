@@ -37,6 +37,11 @@ import {
   type LoomItemDefinition,
 } from '@/lib/workspace/item-definition';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import {
+  assertNoServerDerivedScopeChange,
+  carryServerDerivedScope,
+  ServerOwnedStateError,
+} from '@/app/api/items/_lib/item-crud';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,6 +111,51 @@ export const PUT = withSession<Params>(async (req: NextRequest, { session, param
   const applied = applyItemDefinition(current, incoming);
   if (!applied.ok) return apiError(applied.error, applied.status, { code: applied.code });
 
+  // #4619 — THE FIFTH WHOLESALE `state` WRITER. `applied.state` is written
+  // WHOLESALE at the replace() below, this is the same `[type]` catch-all that
+  // serves `lakehouse`, and `lib/openapi/spec.ts` publishes it as
+  // `updateItemDefinition` — so it is reachable with a `loom_pat_` token, not
+  // only from a browser. Review measured it at head `18b4a063`, where the
+  // record claimed no generic writer could move these keys.
+  //
+  // WHICH KEY EACH HALF PINS, because they are not the same here:
+  //   `provisioning`    — ALREADY carried, by `applyItemDefinition`'s own
+  //                       hand-pin (`item-definition.ts:199`,
+  //                       `if (provisioning !== undefined) merged.provisioning = provisioning`).
+  //                       That runs whether or not the incoming body carried
+  //                       it, so both the CHANGE and the OMISSION cases were
+  //                       already closed for this key. The assert below
+  //                       therefore CANNOT fire on `provisioning` — disclosed,
+  //                       not counted as coverage (`assertion-design.md` #5).
+  //   `storageAccount`  — pinned NOWHERE before this. `reattachScrubbed`
+  //                       restores only `SECRET_KEY_RE` keys
+  //                       (`workspace-export.ts:127`), which matches
+  //                       `accountkey`/`account_key` but NOT `storageAccount`,
+  //                       so the GET exported it verbatim and the PUT took it
+  //                       verbatim — into the coordinate
+  //                       `api/storage/_lib/authorize.ts:114-131` grants
+  //                       against. Both halves below are live for this key.
+  //
+  // The NARROW assert, not `assertNoServerOwnedStateChange`. This route's whole
+  // job is a scrub-on-export / reattach-on-import round trip that deliberately
+  // moves secret-shaped keys around, so applying the depth-blind rule here is a
+  // separate change with its own blast radius on a published operation. Not
+  // made, and not implied: see the note in `server-derived-scope.ts`.
+  //
+  // Assert FIRST (a CHANGE stays a 400, never a silent substitution), carry
+  // SECOND (an OMISSION preserves instead of deleting) — the same order as the
+  // three writers already guarded.
+  try {
+    assertNoServerDerivedScopeChange(applied.state, current.state);
+  } catch (e: any) {
+    if (e instanceof ServerOwnedStateError) return apiError(e.message, 400, { code: 'server_owned_state' });
+    throw e;
+  }
+  const carriedState = carryServerDerivedScope(
+    applied.state as Record<string, unknown>,
+    current.state,
+  );
+
   const now = new Date().toISOString();
   const next: WorkspaceItem & { schemaVersion: number } = {
     ...current,
@@ -117,7 +167,7 @@ export const PUT = withSession<Params>(async (req: NextRequest, { session, param
       typeof incoming.description === 'string'
         ? incoming.description.trim() || undefined
         : current.description,
-    state: applied.state,
+    state: carriedState,
     schemaVersion: applied.schemaVersion,
     updatedAt: now,
   };

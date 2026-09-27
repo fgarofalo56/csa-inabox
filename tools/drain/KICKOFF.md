@@ -10,7 +10,7 @@ note exists so the next reader does not trust a freshness the program does not
 provide. **Re-read the FIRST TASK section against `--status` before pasting** —
 it was stale once already, naming work that had since been done.
 
-Last hand-updated: 2026-09-15 (re-checked against live state: PR #4491 on round 16; #4492 PARKED as draft — the migration premise did not hold, see its thread). This line read "2026-09-13 … round 5" for eleven rounds, three lines below the warning that it goes stale — which is the warning demonstrating itself. A reviewer caught it. Prefer `--status` over this line; it is hand-maintained and will be wrong again.
+Last hand-updated: 2026-09-22 (re-checked against live state: PR #4491 has MERGED — this file described it as open at round 16 for a week, which is the staleness the warning above predicts; #4492 still OPEN as a draft; #4487 and #4468 both still OPEN). Prefer `--status` over this line; it is hand-maintained and will be wrong again.
 
 ---
 
@@ -78,8 +78,18 @@ Scope and autonomy are already decided — do not re-ask them:
     WRITTEN - THE ISSUE IS CLOSED UPSTREAM` with the exception type and says to
     re-run: the closer sees CLOSED and short-circuits, so there is no second
     close and no second comment.
-    It does NOT check the evidence is ABOUT the item — that binding
-    needs `Item.pr`, which still has no writer (#4489). Measure the operating
+    It DOES check the evidence is ABOUT the item: `_pr_references_item` reads
+    both `closingIssuesReferences` and a verb-agnostic body/commit scan. The
+    stronger binding — `Item.pr` — is written by `tick.py --bind-pr` (#4489),
+    so a lane that opens a PR should report it:
+
+        python tools/drain/tick.py --bind-pr <ITEM> --pr <PR>
+
+    That records the PR and moves the item to `in-review`, which is what stops
+    the next cycle reaping it as "lane never returned" and handing the same work
+    to a second lane. A bound item is neither reaped nor re-selected; note the
+    other edge of that, which is that an ABANDONED PR leaves its item parked in
+    `in-review` with no release verb yet. Measure the operating
     point with `python tools/drain/operating_point.py --merge-gate`.
     Run the gate from the PRIMARY checkout if you can; from a worktree it falls
     back to the primary's ledger via git's common dir, and if that fails it
@@ -91,19 +101,22 @@ Scope and autonomy are already decided — do not re-ask them:
 FIRST TASK, before draining anything else — check each against live state, because
 this list is hand-maintained and was stale once already:
 
-  1. #4487 (W0) — PR #4491 is OPEN and has reached its SIXTEENTH round of
-     independent review. Read the PR's own comments for the live state rather
-     than trusting a sha or a round number written here — this entry said
-     "FIFTH" for eleven rounds. Every round so far found its blocker
-     INSIDE the previous round's fix, which is the pattern to expect. Round 5's
-     were: a sibling gate step could answer for a skipped detector (`any()` over
-     a substring-matched population), and a job with TWO work-gating outputs was
-     reported as having "nothing to do" when its second half had actually run.
-     Until this lands, NO guard/test-only issue can reach a terminal state, so
-     it gates the whole drain.
-  2. #4468's remainder — port `unblock-git.py` and `preflight-casedrop.py` out of
-     `temp/` into `tools/drain` with tests, then close #4468 on its own checklist.
-  3. PR #4492 (CI runners) is PARKED as a draft — do not pick it up without
+  1. #4487 (W0) — PR #4491 has **MERGED**. Re-verify that yourself
+     (`gh pr view 4491 --json state`) rather than trusting this line; it
+     described the PR as open at round 16 for a week after it landed. The
+     consequence matters more than the status: while it was open, NO
+     guard/test-only issue could reach a terminal state, so it gated the whole
+     drain. **That gate is now open.** #4487 itself is still OPEN, which is
+     expected — issues close on a deployed receipt, not on a merge (R2). The
+     next action is therefore to record its receipt, not to keep reviewing a
+     merged PR:
+         python tools/drain/tick.py --record-receipt 4487 --from-pr 4491
+     That command VERIFIES before it writes and may refuse; a refusal writes
+     nothing and is a measurement, not a failure to route around.
+  2. #4468's remainder — still OPEN. Port `unblock-git.py` and
+     `preflight-casedrop.py` out of `temp/` into `tools/drain` with tests, then
+     close #4468 on its own checklist.
+  3. PR #4492 (CI runners) is still OPEN as a draft — do not pick it up without
      reading its thread. It moved CI onto in-VNet Azure Container Apps runners
      behind a `CI_RUNNER` repo variable, to remove a CI billing blocker. **There
      is no CI billing blocker**: this repo is PUBLIC, so GitHub-hosted runners
@@ -116,6 +129,27 @@ this list is hand-maintained and was stale once already:
      to reproduce the fleet). If an in-VNet driver appears later — CI needing
      private endpoints or Key Vault that GitHub-hosted runners cannot reach —
      that branch is the starting point and its thread is the fix list.
+
+STATE OF THE LEDGER AS OF 2026-09-22 — read `--status` yourself, this is context
+only. The ledger holds 397 items numbered 1483..4664. Issues opened SINCE the
+last inventory build (2026-09-11) are NOT in it — #4665, #4666, #4669, #4670 and
+#4672 are all absent. **Do not `--bootstrap` to pick them up.** It discards the
+ledger (a `.bak` is written first), which costs the park decision, the
+in-progress receipt/audit states and all per-item history, to add ~8 issues to a
+queue that already holds 380 `ready`. The queue is not the constraint — lane
+throughput is. Work those issues directly if they matter, or let the next
+natural reseed collect them.
+
+ALSO OPEN AND NOT IN THE LEDGER, from 2026-09-22:
+  - PR #4671 — adopt-plan discovery now searches the ADMIN rg, not only the DLZ
+    rg, which is why LOOM_SERVICEBUS_NAMESPACE / LOOM_BATCH_ACCOUNT rendered
+    empty on an estate that owned both resources. CI green, NOT merged.
+  - #4672 — three VMs must be RE-CREATED to leave the .NET 6 Marketplace offer;
+    a template edit cannot migrate them. Dated: greenfield deploys of those
+    modules break after 2027-01-11.
+  - #4665 — its own premise does not reproduce; see the correction comment
+    before acting on it.
+
 
 Both #4487 and #4468 are W0 — finish the gate before trusting it.
 ```

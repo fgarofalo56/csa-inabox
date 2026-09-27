@@ -1,3 +1,40 @@
+# EVERY ENTRY BELOW ENDS IN A CATCH-ALL GROUP, and the reason is review cost,
+# not tidiness. This repo's merge gate sets the reviewer requirement by PATH,
+# not by authorship or diff kind: `merge_gate.py` asked for 2 independent
+# APPROVEs on #4477 — an eslint 10.9.1 -> 10.10.0 devDependency bump — because
+# "the diff touches portal/ - a guard, deploy or console surface". It cannot
+# tell a lockfile version bump from a hand-written change to console auth, and
+# it should not be taught to: loosening the bar per-author is how a malicious
+# bump walks in. So the bar stays, and the number of OBJECTS carrying it drops.
+#
+# Measured 2026-09-20: 22 of 26 open PRs were Dependabot, each needing 2
+# reviews = 44 review runs. The saving is real; DO NOT PUT A NUMBER ON IT.
+# Two drafts tried: "~5" counted update ENTRIES and "~8" counted version-lane
+# GROUPS, and both made the same error — substituting config objects for PRs.
+# Dependabot opens a PR per GROUP PER MANIFEST DIRECTORY, and `pip /` alone
+# spans eleven directories, so the ceiling is far above either figure. The
+# floor is broken by the same evidence cited below: #4617/#4618 are one bump
+# in two directories in one week. The backlog was not CI-blocked either:
+# #4477 carried 38 check-runs, all COMPLETED.
+#
+# GROUPING IS PER MANIFEST DIRECTORY, which is the whole reason a count is
+# hard. #4617/#4618 are the SAME anyio bump in two of the eleven `pip /`
+# directories and stay two PRs after this change. Collapsing those needs
+# `directories:` (plural) plus `group-by: dependency-name`, not attempted here.
+#
+# TWO catch-alls per entry, not one. A group defaults to
+# `applies-to: version-updates`, so a security-updates group is NOT redundant —
+# without it the security lane keeps opening one PR per advisory and the whole
+# point is lost. Do not "simplify" these into a single group.
+#
+# ORDER IS LOAD-BEARING. Per the Dependabot options reference: "If a dependency
+# matches more than one rule, it's included in the first group that it matches."
+# The named groups above each catch-all exist for correctness reasons stated at
+# their sites; a catch-all placed BEFORE one silently swallows it and destroys
+# that reason. Keep every catch-all last in its entry. Enforced by
+# scripts/ci/check_dependabot_group_order.py (wired in loom-guardrails.yml),
+# which also treats a group with NO `patterns` key as a catch-all — GitHub does,
+# and a checker that only knows `["*"]` reports green while a group sits dead.
 version: 2
 updates:
   - package-ecosystem: "pip"
@@ -10,6 +47,12 @@ updates:
       azure-sdk:
         patterns:
           - "azure-*"
+      pip-root-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      pip-root-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   # apps/loom-duckdb/requirements.txt is the repo's ONLY direct pin of duckdb
   # and pyarrow, and the `/` entry above does not monitor it. Without this
@@ -22,6 +65,13 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "python"]
     open-pull-requests-limit: 5
+    groups:
+      duckdb-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      duckdb-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -43,6 +93,12 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+      actions-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: "npm"
     directory: "/portal/react-webapp"
@@ -50,6 +106,127 @@ updates:
       interval: "weekly"
     labels: ["dependencies", "javascript"]
     open-pull-requests-limit: 10
+    # The largest single cluster in the 2026-09-20 backlog: 10 of the 22 open
+    # Dependabot PRs were this one directory. An earlier draft wrote that range
+    # as "#4598-#4606", which silently included #4601 — a loom-duckdb uvicorn
+    # bump belonging to the pip entry above. A contiguous range is not a
+    # membership test; the members were enumerated individually after that.
+    #
+    # THE WEDGE HAZARD AND ITS REMEDY. A grouped PR is all-or-nothing: one
+    # breaking major holds the rest. `DO NOT CLOSE` below forbids the reflex
+    # without naming the alternative, so: use `@dependabot ignore <dep> <ver>`
+    # on the PR. That excludes the one offender and lets Dependabot reopen the
+    # group without it — unlike closing, which permanently suppresses the
+    # version for every package in the PR.
+    #
+    # NOT split by `dependency-type`. Measured on the 10 open portal PRs: 6 are
+    # `build(deps)` and 4 are `build(deps-dev)`, so a development-only
+    # catch-all yields 7 PRs where one catch-all yields 1, and leaves the six
+    # PRODUCTION packages — the ones that can actually break the portal — as
+    # costly as today. The eslint bump that motivated this is not
+    # representative of the directory.
+    groups:
+      portal-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      portal-security:
+        applies-to: security-updates
+        patterns: ["*"]
   # CSA-0048: portal/static-webapp was archived on 2026-04-15; its
   # dependabot entry was removed here so PRs aren't opened against a
   # non-existent directory.
+
+  # apps/loom-directlake is the repo's ONLY Rust crate, and until this entry it
+  # carried an OPEN security alert with no version-update lane at all
+  # (#3982: thrift < 0.23.0, GHSA-2f9f-gq7v-9h6m, dependabot alert #94).
+  #
+  # It is NOT the only manifest in that state — measured 2026-09-18, six npm
+  # manifest paths (apps/fiab-console, apps/loom-sdk, apps/loom-embed,
+  # apps/loom-cli, apps/fiab-label-propagation, azure-functions/secret-expiry-
+  # monitor) also carry open alerts and are absent here, since the only npm
+  # entry above is /portal/react-webapp. That is tracked separately; it is
+  # named here so this comment does not read as "coverage is now complete".
+  #
+  # Security ALERTS come from the dependency graph and fire without a
+  # dependabot.yml entry — which is why #94 was raised at all. Version-update
+  # PRs do NOT. So the crate was being watched for "you are vulnerable" and never
+  # for "a fix is now available", and that gap is the whole problem here:
+  #
+  # the fix had to arrive upstream, on delta-rs's schedule, in a release nobody
+  # here was watching for. This entry is that watch — and the watch paid out.
+  #
+  # RESOLVED 2026-09-23 (#3982, PR #4681). At the time this entry was written
+  # (2026-09-18, cargo 1.98.0) thrift could not leave the graph: arrow-rs had
+  # dropped the thrift crate at parquet 59.0.0, but the newest delta-rs
+  # (deltalake-core 0.32.4) still pinned `arrow ^58` / `parquet ^58` /
+  # `datafusion ^53.1.0`, and parquet 58 still depended on `thrift ^0.17`.
+  # `deltalake-core 1.0.0` was then published on 2026-09-21 declaring
+  # `arrow ^59` / `parquet ^59` / `datafusion ^55`, and the crate moved onto it.
+  # thrift is now absent from `apps/loom-directlake/Cargo.lock` entirely.
+  #
+  # The entry stays: the next such fix will arrive the same way.
+  - package-ecosystem: "cargo"
+    directory: "/apps/loom-directlake"
+    schedule:
+      interval: "weekly"
+    # `dependencies` only: there is no `rust` label in this repo (measured
+    # 2026-09-18 — `gh label list` returns `dependencies`, `javascript`,
+    # `security`, `sp:*`, `lane:*` and no `rust`), and naming one that does not
+    # exist is not a no-op worth shrugging at.
+    labels: ["dependencies"]
+    open-pull-requests-limit: 5
+    # The arrow stack is grouped so it arrives as ONE reviewable PR rather than
+    # four that each look reasonable alone.
+    #
+    # Be precise about what this buys, because the obvious reading is wrong:
+    # grouping does NOT make the upgrade atomic and does NOT prevent a broken
+    # stack from being proposed. A grouped bump to parquet 59 + datafusion 55 +
+    # deltalake 0.32 resolves, and resolves BADLY — measured with cargo 1.98.0:
+    #
+    #   arrow 58.4.0 AND 59.3.0 · datafusion 53.1.0 AND 55.1.0
+    #   parquet 58.4.0 AND 59.3.0 · thrift 0.17.0 still present via parquet 58
+    #
+    # Two datafusion majors in one graph means two distinct `TableProvider`
+    # traits, so `ctx.register_table(Arc::new(delta_table))` in src/scan.rs stops
+    # compiling. What actually STOPS that landing is `cargo build --locked` in
+    # .github/workflows/loom-directlake-ci.yml, which compiles both feature sets
+    # plus the release profile on every PR touching this crate. That lane is the
+    # backstop; this group only ensures the four crates are judged together
+    # instead of one at a time.
+    # DO NOT CLOSE the grouped arrow-stack PR. Closing a Dependabot PR without
+    # merging is a signal to Dependabot that the version is unwanted, and it
+    # will not raise that version again — so closing this one silently destroys
+    # the exact notification this entry exists to produce, and #3982 goes back
+    # to having no watcher at all. If the bump is not takeable yet (it will not
+    # be until delta-rs ships on arrow 59), LEAVE IT OPEN, or reopen it.
+    groups:
+      arrow-stack:
+        patterns:
+          - "arrow*"
+          - "parquet*"
+          - "datafusion*"
+          - "deltalake*"
+      # The catch-alls sit AFTER arrow-stack so the four crates above still
+      # arrive as their own PR on the version lane. On the SECURITY lane they
+      # do not: `applies-to` is matched per lane, so a security catch-all
+      # collects arrow crates too.
+      #
+      # STATE THE MECHANISM THE RIGHT WAY ROUND. A draft said this was
+      # "acceptable only because thrift cannot leave this graph", which has it
+      # backwards: Dependabot opens a SECURITY PR ONLY WHEN A FIX IS
+      # REACHABLE, so while thrift is unfixable it raises nothing here at all
+      # and the grouping is inert rather than excused. When it stops being
+      # inert, the bump is takeable by construction.
+      #
+      # THE RESIDUAL RISK — written down because it CAN be false — is an
+      # advisory against arrow/parquet/datafusion/deltalake THEMSELVES whose
+      # only fix is a version this crate cannot take. Then the security group
+      # would carry a takeable advisory wedged behind an un-takeable one.
+      # Remedy is `@dependabot ignore <crate> <version>`, never closing: the
+      # DO-NOT-CLOSE rule above applies to every Dependabot PR here.
+      cargo-version:
+        applies-to: version-updates
+        patterns: ["*"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]

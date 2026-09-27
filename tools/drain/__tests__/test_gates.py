@@ -21,8 +21,11 @@ Run:  python -m pytest tools/drain/__tests__/ -q
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -761,6 +764,20 @@ def _run(name, conclusion, status="COMPLETED"):
     return {"name": name, "conclusion": conclusion, "status": status}
 
 
+def _run_at(name, conclusion, started, status="COMPLETED"):
+    """A required-context run WITH a timestamp.
+
+    Exists because `_newest_from_groups` falls back to worst-wins the moment
+    ANY run in the list it is handed lacks `startedAt`. A fixture of unstamped
+    required runs therefore masks a population-widening mutation: the widened
+    list resolves to the worst conclusion anyway, so the mutant survives.
+    GitHub stamps every run it returns, so the unstamped fixture was the
+    artefact, not the realistic case.
+    """
+    return {"name": name, "conclusion": conclusion, "status": status,
+            "startedAt": started}
+
+
 def test_all_required_green_is_go():
     ok, reasons = gates.classify_checks(
         [_run(n, "SUCCESS") for n in REQUIRED] + [_run("Bicep Lint", "SKIPPED")], REQUIRED
@@ -853,6 +870,1272 @@ def test_negative_control_a_duplicated_context_is_judged_by_its_worst_run():
 
 
 # ---------------------------------------------------------------------------
+# Gate 4c -- the ADVISORY population (#4543)
+# ---------------------------------------------------------------------------
+#
+# The defect: gates 4, 4b and 5 all filter to `required` before any predicate
+# runs, so ~25 of the ~40 contexts a PR publishes were invisible to the merge
+# decision. Measured on PR #4540 head `7dd2fa3e279` -- forty check-runs, one
+# red, advisory, and `VERDICT: GO`. The merge landed and `main` went red.
+#
+# Each test below names the input that turns it red, because "this covers the
+# advisory case" is intent, and intent is what is wrong when the test and the
+# defect share an author (`.claude/rules/assertion-design.md`).
+
+
+def _adv(name, conclusion, status="COMPLETED", started=None):
+    run = {"name": name, "conclusion": conclusion, "status": status}
+    if started is not None:
+        run["startedAt"] = started
+    return run
+
+
+def test_a_rollup_with_no_advisory_red_is_go():
+    """The POSITIVE control. Without it every NO-GO below is satisfied by an
+    arm that simply blocks everything.
+
+    Breaks if: any of these three advisory conclusions starts counting as red
+    -- SUCCESS, SKIPPED (path-filtered, routine) or NEUTRAL."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Bicep Lint", "SKIPPED"),
+        _adv("CodeQL", "SUCCESS"),
+        _adv("PR Summary", "NEUTRAL"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "3 clean of 3 advisory" in why, why
+
+
+def test_negative_control_an_advisory_red_blocks_while_every_required_is_green():
+    """THE #4540 FIXTURE, in miniature: every required context green, exactly
+    one non-required check red. Today's code answers GO; this must answer
+    NO-GO.
+
+    Breaks if: the population is filtered to `required` again (the defect), or
+    the red is dropped by scanning only the first entries -- which is why the
+    red is deliberately LAST in the list."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("brain security graph — committed artifact matches the tree", "FAILURE"),
+    ]
+    assert gates.classify_checks(checks, REQUIRED)[0], "the required half must be GREEN"
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok
+    assert "ADV-RED 1" in why
+    assert "brain security graph" in why
+
+
+def test_every_red_conclusion_blocks_the_advisory_path_not_only_failure():
+    """EACH member of `RED_CONCLUSIONS` pinned SEPARATELY, on the advisory path.
+
+    ROUND 1'S BLOCKER, and the sharpest part of it is WHICH member was
+    unwitnessed. Before this test, `classify_advisory_checks`' red branch was
+    pinned only by FAILURE (and ERROR via the StatusContext shape). Review
+    measured two mutations SURVIVING the whole suite:
+
+        `... and verdict != "CANCELLED"`        -> rc=0, 531 passed
+        `if verdict in ("FAILURE", "ERROR")`    -> rc=0, 531 passed
+
+    and showed the mutant is behaviourally live: a lone CANCELLED advisory run
+    answers `ok=True, "1 clean of 1 advisory"`.
+
+    THE REASON IT MATTERS IS NOT COVERAGE ARITHMETIC. The reviewer re-ran
+    `advisory_verdict` against the live rollups of the last 40 PRs: exactly ONE
+    NO-GO, #4492, **and both of its reds are CANCELLED**. So the only production
+    behaviour this arm exhibits today is the one nothing witnessed, while the PR
+    body stated the CANCELLED-stays-red decision as an explicit commitment with
+    zero kill power behind it.
+
+    A CANCELLED required check is already recorded here as an ABSENCE rather
+    than a pass; the advisory side has to agree, or the same run reads red on
+    one path and clean on the other.
+
+    WHAT MAKES THIS FAIL, stated exactly: **narrowing the branch** to a literal
+    subset. Each conclusion is checked on its own so a single surviving member
+    cannot hide behind the others.
+
+    WHAT THIS DOES **NOT** CATCH, and must not claim to: removing a conclusion
+    from `RED_CONCLUSIONS` itself. The loop derives its expectations from the
+    frozenset under test, so a removal takes the assertion with it — vacuous by
+    construction. An earlier revision of this docstring claimed both, which is
+    the "a test that asserts on a MESSAGE while the mutation changes a COUNT"
+    error in `assertion-design.md`, applied to its own scope.
+
+    THE CORRECTION TO THAT CLAIM WAS ALSO WRONG, and that is the finding worth
+    keeping. It said the removal case "IS covered" by
+    `test_negative_control_a_cancelled_run_is_red_not_absent` and that "the
+    composition holds". Measured by removing each member in turn and running the
+    full suite — independently, by two reviewers and by me, with the same table:
+
+        FAILURE          KILLED    15 failed
+        CANCELLED        KILLED     1 failed
+        ERROR            KILLED     2 failed
+        TIMED_OUT        SURVIVED  rc=0
+        ACTION_REQUIRED  SURVIVED  rc=0
+        STARTUP_FAILURE  SURVIVED  rc=0
+        STALE            SURVIVED  rc=0
+
+    **4 of 7 were unwitnessed.** The cited test pins CANCELLED only, and only on
+    `classify_checks`. So the retraction asserted its own mirror — the same
+    could-not-fail defect, inside the paragraph correcting it, for the third
+    time on this PR.
+
+    `test_every_member_of_red_conclusions_is_witnessed_by_a_literal` below is
+    the actual fix: it iterates a LITERAL list, so removing a member from the
+    frozenset can no longer remove the assertion that would have caught it.
+    """
+    for conclusion in sorted(gates.RED_CONCLUSIONS):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("CodeQL", "SUCCESS"),
+            _adv(f"advisory-{conclusion.lower()}", conclusion),
+        ]
+        assert gates.classify_checks(checks, REQUIRED)[0], (
+            f"{conclusion}: the required half must be GREEN, or this arm is "
+            "measuring the wrong thing"
+        )
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion} did NOT block the advisory path. Every member of "
+            f"RED_CONCLUSIONS must, or a run reads red for a required context "
+            f"and clean for an advisory one. why={why!r}"
+        )
+        assert f"advisory-{conclusion.lower()}" in why, (
+            f"{conclusion} blocked but the message does not NAME the check "
+            f"(deploy-integrity R6: say which). why={why!r}"
+        )
+
+    # PAIRED POSITIVE, and not optional: "every conclusion blocks" is trivially
+    # satisfiable by a branch that blocks on everything. Pin that the buckets
+    # which must NOT block still do not.
+    for benign in ("SUCCESS", "SKIPPED", "NEUTRAL"):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{benign.lower()}", benign),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, (
+            f"{benign} must NOT block the advisory path — advisory checks skip "
+            f"routinely on path filters and a control that fires on everything "
+            f"teaches its reader to skim it. why={why!r}"
+        )
+
+
+# The seven members of RED_CONCLUSIONS, WRITTEN OUT rather than read from the
+# frozenset. The literal is the entire point: every other arm in this file
+# derives its expectations from `gates.RED_CONCLUSIONS`, so deleting a member
+# deletes the assertion that would have caught the deletion. Measured: 4 of the
+# 7 could be removed with the whole suite still at rc=0 before this existed.
+#
+# If you add a member to the frozenset, this list must be updated by hand and
+# that is deliberate — a new red conclusion should cost one conscious edit.
+RED_CONCLUSIONS_LITERAL = (
+    "FAILURE",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "STALE",
+    "ERROR",
+)
+
+
+def test_every_member_of_red_conclusions_is_witnessed_by_a_literal():
+    """The removal case, which every frozenset-derived arm is vacuous against.
+
+    WHAT MAKES THIS FAIL, three distinct mutations:
+
+    1. REMOVING any member from `gates.RED_CONCLUSIONS` — the set comparison
+       fails naming it, and the per-member loop below fails on both paths.
+       Before this arm, removing TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE or
+       STALE survived the entire suite at rc=0.
+    2. ADDING a member without updating this literal — also the set comparison.
+       That is intended, not friction: a new red conclusion is worth one edit.
+    3. NARROWING either of the TWO read sites this arm covers — the required
+       path and the advisory path — which are separate branches that have
+       drifted apart here before.
+
+    THERE ARE SIX READS OF `RED_CONCLUSIONS`, NOT TWO, and this arm covers two
+    of them. Saying "either read site" without that sentence reads as "all",
+    which is how four of the six stayed unwitnessed across four rounds. The
+    other four are covered by:
+      - `test_the_rerun_bucket_reads_every_red_conclusion_not_only_failure`
+        (the ADV-RERUN read)
+      - `test_a_run_that_measured_nothing_cannot_discharge_an_earlier_red`
+        (the supersession read)
+      - `test_every_member_of_red_conclusions_outranks_a_green_twin`
+        (`_check_rank`, which decides the REQUIRED gate)
+      - `test_every_red_conclusion_at_the_merged_sha_fails_the_receipt`
+        (`_one_context`, which decides whether an issue may CLOSE)
+    If a seventh read is added, it needs its own arm; none of these generalises.
+
+    The literal must NOT be derived from the frozenset, by any expression. That
+    is what made the arm it replaces unable to fail.
+    """
+    assert set(RED_CONCLUSIONS_LITERAL) == set(gates.RED_CONCLUSIONS), (
+        "RED_CONCLUSIONS changed without updating RED_CONCLUSIONS_LITERAL. "
+        f"only in the frozenset: {sorted(set(gates.RED_CONCLUSIONS) - set(RED_CONCLUSIONS_LITERAL))}; "
+        f"only in the literal: {sorted(set(RED_CONCLUSIONS_LITERAL) - set(gates.RED_CONCLUSIONS))}. "
+        "A member removed here stops being red for BOTH the required and the "
+        "advisory path, and every other arm in this file is blind to that."
+    )
+
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        # THE REQUIRED PATH. One required context carries the conclusion; the
+        # rest are green, so only this value can decide the verdict.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED[1:]] + [_run(REQUIRED[0], conclusion)]
+        ok, reasons = gates.classify_checks(checks, REQUIRED)
+        assert not ok, (
+            f"{conclusion} on the REQUIRED context {REQUIRED[0]!r} did not "
+            f"block. A required context in this state would merge. reasons={reasons!r}"
+        )
+
+        # THE ADVISORY PATH, a separate branch that has drifted from the above.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{conclusion.lower()}", conclusion),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion} did not block the ADVISORY path, though the required "
+            f"path treats it as red — the two read the same frozenset and must "
+            f"not disagree. why={why!r}"
+        )
+
+    # PAIRED POSITIVE: the three benign conclusions must still NOT block, or
+    # this arm is satisfied by a gate that refuses everything.
+    for benign in ("SUCCESS", "SKIPPED", "NEUTRAL"):
+        assert benign not in RED_CONCLUSIONS_LITERAL, (
+            f"{benign} must not be red: advisory checks skip routinely on path "
+            f"filters, and a gate that blocks on SKIPPED blocks every PR."
+        )
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(f"advisory-{benign.lower()}", benign),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, f"{benign} must not block the advisory path. why={why!r}"
+
+
+MEASURED_NOTHING_LITERAL = ("SKIPPED", "NEUTRAL")
+
+
+def test_every_red_conclusion_at_the_merged_sha_fails_the_receipt():
+    """The SIXTH read of `RED_CONCLUSIONS`, at `_one_context`, on the RECEIPT
+    path — the one that decides whether an issue may be CLOSED.
+
+    Found by the same reviewer, in the same pass as the fifth. Narrowed, a
+    merged-sha check concluding CANCELLED / TIMED_OUT / STALE / STARTUP_FAILURE
+    / ACTION_REQUIRED falls past every branch below it and is scored a GREEN
+    receipt — so an issue closes on a red the receipt called clean. That is the
+    `deploy-integrity.md` R2 failure in its purest form: not "merged is done",
+    but "red is done".
+
+    WHAT MAKES THIS FAIL: narrowing `verdict in RED_CONCLUSIONS` at
+    `_one_context` to any literal subset, or removing a member from the
+    frozenset.
+
+    STARTUP_FAILURE is the member worth naming here: a workflow that fails to
+    start publishes ZERO jobs and reports the FILE PATH as its name, so it is
+    the conclusion most likely to be mistaken for an absence rather than a red.
+    """
+    # THE POLICY IS DECLARED FOR THE NEGATIVE ARMS TOO, and this is the whole
+    # arm. The first version passed `policy={}`, so every arm failed the
+    # receipt on "no substantive step is DECLARED" — fail-closed, correct, and
+    # NOTHING TO DO WITH THE RED. Measured: narrowing the read to
+    # ("FAILURE","ERROR") SURVIVED, because the assertions were satisfied by a
+    # receipt that could not pass for an unrelated reason. With the step
+    # declared and green, the ONLY thing left that can fail the receipt is the
+    # conclusion under test.
+    declared = {
+        "receipts": {
+            "ci_green_rule": {
+                "substantive_steps": {"Python Tests (3.10)": ["Run pytest"]},
+            }
+        }
+    }
+    green_job = {"name": "Python Tests (3.10)", "conclusion": "success",
+                 "steps": [{"name": "Run pytest", "conclusion": "success"}]}
+
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        evidence = [
+            gates.ContextEvidence(
+                name="Python Tests (3.10)",
+                merged_check={
+                    "name": "Python Tests (3.10)",
+                    "conclusion": conclusion,
+                    "status": "COMPLETED",
+                },
+                merged_job=green_job,
+            )
+        ]
+        receipt = gates.ci_green_receipt(
+            evidence,
+            merged_changed_files=("tools/drain/gates.py",),
+            merged_branch="main",
+            merged_sha="deadbeef",
+            trees_identical=True,
+            policy=declared,
+            merged_total_count=1,
+        )
+        assert not receipt.ok, (
+            f"{conclusion} at the MERGED sha was scored a green receipt. A "
+            f"receipt is what lets an issue be closed, so this closes an issue "
+            f"over a red. reasons={receipt.reasons!r}"
+        )
+        # NAME THE BRANCH, not merely the conclusion. The conclusion string
+        # appears in the GREEN-at-merged-sha message too, so asserting only
+        # that it is mentioned cannot tell a red detection from a pass.
+        assert any("RED at the merged sha" in r for r in receipt.reasons), (
+            f"{conclusion} failed the receipt, but NOT as a red — some other "
+            f"branch refused it, so this arm would pass with the red check "
+            f"removed entirely. reasons={receipt.reasons!r}"
+        )
+
+    # PAIRED POSITIVE: a genuinely green merged check still yields a receipt,
+    # or this arm is satisfied by a receipt that never passes.
+    #
+    # The policy is REAL, not `{}`. An empty policy makes the receipt fail
+    # closed on "no substantive step is DECLARED" — correct behaviour, and it
+    # would have made this positive control unable to pass for a reason that
+    # has nothing to do with the red conclusions above.
+    green_policy = {
+        "receipts": {
+            "ci_green_rule": {
+                "substantive_steps": {"Python Tests (3.10)": ["Run pytest"]},
+            }
+        }
+    }
+    evidence = [
+        gates.ContextEvidence(
+            name="Python Tests (3.10)",
+            merged_check={
+                "name": "Python Tests (3.10)",
+                "conclusion": "SUCCESS",
+                "status": "COMPLETED",
+            },
+            merged_job={"name": "Python Tests (3.10)", "conclusion": "success",
+                        "steps": [{"name": "Run pytest", "conclusion": "success"}]},
+        )
+    ]
+    receipt = gates.ci_green_receipt(
+        evidence,
+        merged_changed_files=("tools/drain/gates.py",),
+        merged_branch="main",
+        merged_sha="deadbeef",
+        trees_identical=True,
+        policy=green_policy,
+        merged_total_count=1,
+    )
+    assert receipt.ok, (
+        f"a SUCCESS at the merged sha with its substantive step declared and "
+        f"green must still produce a receipt, or the negative arms above are "
+        f"satisfied by a receipt that cannot pass. reasons={receipt.reasons!r}"
+    )
+
+
+def test_every_member_of_red_conclusions_outranks_a_green_twin():
+    """The FIFTH read of `RED_CONCLUSIONS`, at `_check_rank`, and the worst of
+    the six — because it decides the REQUIRED gate, not the advisory one.
+
+    Found by an independent reviewer on round 5, after they answered "is there
+    a fifth read?" with "yes, and a sixth".
+
+    `_check_rank` de-duplicates a context published more than once by RANK. If
+    the red test there is narrowed, a red twin ties with SUCCESS at rank 1 and
+    first-wins hides it. Measured on `classify_checks` with a duplicated
+    required context `[SUCCESS, X]`: ACTION_REQUIRED, CANCELLED, STALE,
+    STARTUP_FAILURE and TIMED_OUT ALL flip NO-GO -> GO. Only FAILURE and ERROR
+    survived the narrowing, which is exactly the shape that has now recurred at
+    five separate sites in this file.
+
+    THIS IS NOT HYPOTHETICAL. `_check_rank`'s own docstring records that **9 of
+    25 recent PRs publish a duplicated context name**, and that on the PR it
+    was written for the duplicate was a REQUIRED one.
+
+    WHAT MAKES THIS FAIL: narrowing `verdict in RED_CONCLUSIONS` at
+    `_check_rank` to any literal subset, or removing a member from the
+    frozenset (the literal is asserted equal to it above).
+
+    ORDER IS VARIED DELIBERATELY. A green twin FIRST is the ordering that hides
+    the red under first-wins; a red twin first passes even a broken rank. A
+    fixture with one ordering cannot witness this — that is the recorded
+    round-2 finding on `_newest_from_groups`, reproduced here on purpose.
+    """
+    other = [n for n in REQUIRED if n != REQUIRED[0]]
+    for conclusion in RED_CONCLUSIONS_LITERAL:
+        for order in ((("SUCCESS", conclusion)), ((conclusion, "SUCCESS"))):
+            checks = [_run(n, "SUCCESS") for n in other] + [
+                _run(REQUIRED[0], order[0]),
+                _run(REQUIRED[0], order[1]),
+            ]
+            ok, reasons = gates.classify_checks(checks, REQUIRED)
+            assert not ok, (
+                f"{conclusion} published as a TWIN of SUCCESS on required "
+                f"context {REQUIRED[0]!r} (order {order}) was scored GREEN. A "
+                f"green twin must never hide a run that failed — and a "
+                f"duplicated required context is the common case, not the odd "
+                f"one. reasons={reasons!r}"
+            )
+
+    # PAIRED POSITIVE: twin SUCCESS runs must still pass, or this arm is
+    # satisfied by a gate that refuses every duplicated context.
+    checks = [_run(n, "SUCCESS") for n in other] + [
+        _run(REQUIRED[0], "SUCCESS"),
+        _run(REQUIRED[0], "SUCCESS"),
+    ]
+    ok, reasons = gates.classify_checks(checks, REQUIRED)
+    assert ok, f"two green twins must pass: {reasons!r}"
+
+
+def test_a_run_that_measured_nothing_cannot_discharge_an_earlier_red():
+    """The THIRD and FOURTH forms of the self-clearing block.
+
+    `rerun` closes the case where the re-run is still IN FLIGHT. But once that
+    re-run CONCLUDES `SKIPPED` or `NEUTRAL` it stops being incomplete, so
+    newest-wins dropped it into `clean` and the red disappeared:
+
+        FAILURE @10:00, SKIPPED @11:00  ->  (True, "no advisory context is red")
+
+    The FOURTH form was CREATED BY THE FIX FOR THE THIRD. The ADV-RERUN branch
+    still asked `_newest_concluded`, which counts a SKIPPED as an answer, so
+    adding an in-flight run re-opened the hole one line above where it closed:
+
+        FAILURE@10, SKIPPED@11                  -> NO-GO
+        FAILURE@10, SKIPPED@11, IN_PROGRESS@12  -> GO     (the regression)
+
+    Both branches now use `_newest_informative_concluded`.
+
+    Reachable by ordinary re-run semantics — an `if:` re-evaluating false, or a
+    `needs` upstream failing or being cancelled, both produce `skipped` — i.e.
+    by the gate's OWN remedy `rerun-ci`, which is in `permitted_unattended`.
+
+    THE PRIOR VERDICT IS PARAMETRISED OVER ALL SEVEN RED CONCLUSIONS, not just
+    FAILURE. The first version hard-coded FAILURE, which left the supersession
+    site as a FOURTH unwitnessed read of `RED_CONCLUSIONS` — narrowing it to
+    `("FAILURE","ERROR")` survived at rc=0. CANCELLED matters most in practice:
+    it is the red that actually fires here when a run is superseded.
+
+    WHAT MAKES THIS FAIL, each measured as a real mutant:
+      - narrowing `MEASURED_NOTHING` to `{"SKIPPED"}`, or EMPTYING it — caught
+        by the set equality below, which is why the literal exists;
+      - narrowing the supersession site's `in RED_CONCLUSIONS` to any subset;
+      - reverting either branch to a plain newest-CONCLUDED read (which counts a
+        skip as an answer) — that helper was deleted in round 6 once it was
+        orphaned, so arm A9d writes the reverting expression INLINE;
+      - dropping the `MEASURED_NOTHING` branch entirely.
+    """
+    assert set(MEASURED_NOTHING_LITERAL) == set(gates.MEASURED_NOTHING), (
+        "MEASURED_NOTHING changed without updating MEASURED_NOTHING_LITERAL. "
+        f"only in the frozenset: {sorted(set(gates.MEASURED_NOTHING) - set(MEASURED_NOTHING_LITERAL))}; "
+        f"only in the literal: {sorted(set(MEASURED_NOTHING_LITERAL) - set(gates.MEASURED_NOTHING))}. "
+        "Dropping a member — or emptying the set — lets a run of that conclusion "
+        "DISCHARGE an earlier red, which is the self-clearing block this closes."
+    )
+
+    for nothing in MEASURED_NOTHING_LITERAL:
+        for red in RED_CONCLUSIONS_LITERAL:
+            # TWO-RUN: the concluded supersession case.
+            checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+                _adv("advisory-superseded", red, started="2026-09-18T10:00:00Z"),
+                _adv("advisory-superseded", nothing, started="2026-09-18T11:00:00Z"),
+            ]
+            ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+            assert not ok, (
+                f"a {nothing} run superseding a {red} at the same head cleared "
+                f"the gate. {nothing} measured nothing, so it cannot answer a "
+                f"run that failed. why={why!r}"
+            )
+            assert "advisory-superseded" in why, (
+                f"{red}/{nothing} blocked without naming the check "
+                f"(deploy-integrity R6). why={why!r}"
+            )
+
+            # IN-FLIGHT over the skip: the FOURTH form. Adding a running re-run
+            # on top must not turn the block into an ADV-WAIT.
+            checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+                _adv("advisory-rerun-over-skip", red, started="2026-09-18T10:00:00Z"),
+                _adv("advisory-rerun-over-skip", nothing, started="2026-09-18T11:00:00Z"),
+                _adv("advisory-rerun-over-skip", None, status="IN_PROGRESS",
+                     started="2026-09-18T12:00:00Z"),
+            ]
+            ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+            assert not ok, (
+                f"{red} then {nothing} then a re-run IN FLIGHT cleared the gate. "
+                f"Dispatching `rerun-ci` must not discharge the block the moment "
+                f"it STARTS — that is the self-clearing block, re-opened. "
+                f"why={why!r}"
+            )
+
+        # THREE-RUN, TWO of them non-informative. A two-run fixture cannot
+        # witness this: with only one skip, excluding the newest leaves the red
+        # regardless of whether skips count as informative, so the
+        # `not in MEASURED_NOTHING` filter could be deleted and survive.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("advisory-twice-skipped", "FAILURE", started="2026-09-18T10:00:00Z"),
+            _adv("advisory-twice-skipped", nothing, started="2026-09-18T11:00:00Z"),
+            _adv("advisory-twice-skipped", nothing, started="2026-09-18T12:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"two consecutive {nothing} runs over a FAILURE cleared the gate — "
+            f"the filter that skips non-informative runs is not applied. why={why!r}"
+        )
+
+    # TWO ADVISORY NAMES, and this one is load-bearing for a reason a
+    # single-name fixture cannot express. Every other fixture here publishes
+    # exactly ONE advisory name, so `groups[name]` and `checks` are the SAME
+    # population and passing the whole `checks` list instead of the group
+    # SURVIVED the entire suite — an unrelated check's green discharging this
+    # check's red. Same shape as the module docstring's warning that a
+    # one-element fixture cannot witness a population-narrowing mutation, here
+    # in the other direction: a one-name fixture cannot witness a
+    # population-WIDENING one.
+    #
+    # EVERY RUN IS STAMPED, INCLUDING THE REQUIRED ONES, and that is the whole
+    # arm. `_newest_from_groups` falls back to worst-wins the moment ANY run in
+    # the list lacks `startedAt` — so with unstamped required runs the widened
+    # population still resolves to the FAILURE by worst-wins, and the mutation
+    # SURVIVED. Measured. GitHub stamps every run it returns; the unstamped
+    # fixture was the artefact, and it hid the defect.
+    stamped_required = [
+        _run_at(n, "SUCCESS", f"2026-09-18T09:{i:02d}:00Z")
+        for i, n in enumerate(REQUIRED)
+    ]
+    checks = [
+        *stamped_required,
+        _adv("adv-a", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("adv-a", "SKIPPED", started="2026-09-18T11:00:00Z"),
+        _adv("adv-b", "SUCCESS", started="2026-09-18T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, (
+        "a SUCCESS on a DIFFERENT advisory check discharged adv-a's red — the "
+        "supersession lookup is reading the whole published population instead "
+        f"of the runs of this name. why={why!r}"
+    )
+    assert "adv-a" in why, f"blocked without naming adv-a. why={why!r}"
+
+    # PAIRED POSITIVE 1: a skip with NO prior red is the ROUTINE case.
+    for nothing in MEASURED_NOTHING_LITERAL:
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("advisory-just-skipped", "SUCCESS", started="2026-09-18T10:00:00Z"),
+            _adv("advisory-just-skipped", nothing, started="2026-09-18T11:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, (
+            f"a {nothing} run over a previously GREEN check must NOT block — "
+            f"that is the path-filter case and it is the common one. why={why!r}"
+        )
+
+    # PAIRED POSITIVE 2: a SUCCESS re-run DOES discharge a red, even with a
+    # skip between them. Without this the fix is indistinguishable from "any
+    # red is permanent", which would strand every PR whose check was fixed.
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("advisory-fixed", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("advisory-fixed", "SKIPPED", started="2026-09-18T11:00:00Z"),
+        _adv("advisory-fixed", "SUCCESS", started="2026-09-18T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, (
+        f"a SUCCESS re-run measured something and passed, so it MUST discharge "
+        f"the earlier red even with a skip between them. why={why!r}"
+    )
+
+
+def test_the_rerun_bucket_reads_every_red_conclusion_not_only_failure():
+    """The SECOND read of `RED_CONCLUSIONS`, one line below the first.
+
+    `classify_advisory_checks` reads the frozenset TWICE: once for the newest
+    run's verdict, and once at `gates.py:1685` for `last_verdict` — the newest
+    CONCLUDED run, which decides ADV-RERUN. Round 2 pinned the first and left
+    the second unwitnessed. Narrowing `:1685` to `("FAILURE", "ERROR")` survived
+    the full drain suite at rc=0 — measured here as `580 passed, 1 deselected`
+    against round 2's test file, and rc=1 against this one.
+
+    THE FIGURE IS MINE, NOT INHERITED. An earlier revision of this docstring
+    cited "574 passed", which is not reproducible at any commit on this branch:
+    the collected counts along it are 524 / 531 / 532 / 580 / 581 / 582. It was
+    copied from the finding that prompted the round rather than re-measured —
+    quoting a number is an assertion, and `deploy-integrity.md` R7 does not
+    exempt one because someone else said it first.
+
+    THE SAME DEFECT AS ROUND 1's, ONE LINE BELOW ROUND 1's FIX — fixing the cell
+    rather than the class, in the commit that named closing findings at the SITE
+    as its own lesson.
+
+    NOT an equivalent mutant. On the #4492 shape — newest concluded run
+    CANCELLED, a re-run in flight — clean code answers ADV-RERUN / NO-GO and the
+    mutant answers GO. That reopens the SELF-CLEARING BLOCK this bucket exists to
+    close, and it reopens it for the ONLY conclusion that fires in production:
+    re-running `advisory_verdict` over the last 40 PR rollups gives one NO-GO,
+    #4492, whose reds are both CANCELLED. Both `rerun-ci` and `merge-on-gate-go`
+    are `permitted_unattended`, so this is a live path to an unattended merge
+    over a red.
+
+    WHAT MAKES THIS FAIL: narrowing the `last_verdict in RED_CONCLUSIONS` test at
+    the ADV-RERUN site to any literal subset that omits a member.
+
+    FIXTURE NOTE, because the first version of this arm did not reach the branch
+    at all. `_newest_from_groups` falls back to `_worst(runs)` when ANY run in a
+    group lacks `startedAt` — so two stampless entries resolve to the WORST
+    conclusion, not the newest, and the red one won. The arm failed loudly
+    rather than passing vacuously, which is the good direction, but it was
+    measuring ADV-RED while claiming to measure ADV-RERUN. Explicit stamps put
+    the in-flight re-run genuinely newest.
+    """
+    for conclusion in sorted(gates.RED_CONCLUSIONS):
+        name = f"advisory-rerun-{conclusion.lower()}"
+        # Newest run is IN PROGRESS (a re-run in flight); the newest CONCLUDED
+        # run of the same name was red. That is the ADV-RERUN shape, and the
+        # stamps are what make "newest" mean newest rather than worst.
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv(name, conclusion, started="2026-09-18T10:00:00Z"),
+            _adv(name, None, status="IN_PROGRESS", started="2026-09-18T11:00:00Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, (
+            f"{conclusion}: a re-run in flight over a newest-CONCLUDED "
+            f"{conclusion} must hold, not clear. Dispatching the gate's own "
+            f"remedy would otherwise clear the gate's own block the moment the "
+            f"re-run STARTED. why={why!r}"
+        )
+        assert "ADV-RERUN" in why, (
+            f"{conclusion} blocked, but not as ADV-RERUN — the remedy differs "
+            f"from ADV-RED and R7 applies to a gate's own message. why={why!r}"
+        )
+
+    # PAIRED POSITIVE: a re-run over a newest-CONCLUDED *green* run must NOT
+    # hold, or this arm blocks every PR with CI still running.
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("advisory-was-green", "SUCCESS", started="2026-09-18T10:00:00Z"),
+        _adv("advisory-was-green", None, status="IN_PROGRESS",
+             started="2026-09-18T11:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, f"a re-run over a previously GREEN check must wait, not block: {why!r}"
+
+
+def test_negative_control_an_in_progress_advisory_check_is_not_red():
+    """The recorded mistake from the first build of this split, for
+    `merge-eligible.py`: classifying `in_progress` as red cries wolf on every
+    PR with CI still running.
+
+    Breaks if: the INCOMPLETE branch routes to `red` instead of `wait`. The
+    wait names must ALSO appear in the GO line -- a report the reader has to
+    go looking for is a footnote under a VERDICT: GO."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Checkov", None, status="IN_PROGRESS"),
+        _adv("CodeQL", "SUCCESS"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "Checkov" in why
+
+
+def test_negative_control_every_not_yet_concluded_state_waits_rather_than_reds():
+    """`in_progress` is the one that was misclassified, but it is not the only
+    state that means "has not said anything yet" -- a check sits in QUEUED for
+    the whole runner backlog, and WAITING is the environment-approval park.
+    Fixing the one spelling and leaving the neighbours is the
+    one-side-of-a-symmetry defect this package keeps producing.
+
+    Breaks if: any of these four is scored red -- each would make the arm fire
+    on ordinary in-flight CI."""
+    for status in ("QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Checkov", None, status=status)
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert ok, f"{status} must not read as red: {why}"
+        assert "ADV-WAIT 1" in why
+
+
+def test_the_go_line_states_what_the_gate_cannot_see():
+    """A main-only or scheduled lane publishes NO check-run at a PR head, so it
+    is invisible here by construction (#4547's ACR Trivy reds: 0 present across
+    three measured PR heads). That is a LIMIT of the population, and a gate
+    that reports "no advisory context is red" without it invites the reader to
+    conclude more than was measured -- `deploy-integrity.md` R7.
+
+    Breaks if: the scope clause is dropped from the GO branch."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [_adv("CodeQL", "SUCCESS")]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ATTACHED TO THIS HEAD only" in why
+    # The CONDITION, not just the conclusion. An earlier version of this
+    # sentence said the ACR lane has no push trigger; it has one, scoped
+    # `branches: [main]` (`:80-82`). A disclosure that names the wrong
+    # condition cannot fire -- the reader who checks it finds a `push:` block
+    # and learns nothing about the real invariant.
+    assert "branches: [main]" in why
+
+
+def test_negative_control_a_stale_red_does_not_outrank_a_fresh_green_rerun():
+    """A re-run publishes a SECOND check-run under the same name, and list
+    order is the API's, not time's.
+
+    Breaks if: the de-duplication takes the last entry (here the OLD green) or
+    the worst entry. The red is the NEWER of the two, so both wrong rules give
+    the opposite answer to this one."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Repo Hygiene", "FAILURE", started="2026-09-17T12:00:00Z"),
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T10:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert not ok, why
+    assert "Repo Hygiene (FAILURE)" in why
+
+    # ...and the OTHER direction, which is the one worst-wins gets wrong: the
+    # green is newer, so the fixed check must stop blocking the drain.
+    checks[-2], checks[-1] = checks[-1], checks[-2]
+    checks[-1] = _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T14:00:00Z")
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+
+
+def test_negative_control_an_undated_group_falls_back_to_worst_wins():
+    """When a start time cannot be read, the group's order is UNKNOWN, and the
+    pessimistic answer is the only honest one -- an unreadable timestamp must
+    never let a red be discarded as superseded.
+
+    BOTH ORDERINGS, and the second one is the whole point. An independent
+    reviewer showed that `_worst(runs)` could be replaced by `return runs[0]`
+    with all 521 tests still green, because every fixture claiming to pin
+    worst-wins put the red FIRST -- where first-in-list and worst-by-rank are
+    indistinguishable. Reproduced before fixing: red-first `runs[0]` answers
+    NO-GO (identical); red-second `runs[0]` answers GO (killed).
+
+    Breaks if: the fallback picks by list position, in either direction."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Secret Scan", order[0]),
+            _adv("Secret Scan", order[1]),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+        assert "Secret Scan (FAILURE)" in why
+
+
+def test_negative_control_a_tie_at_the_newest_start_is_judged_by_its_worst_run():
+    """Matrix legs fire together and can publish one name at one instant.
+    "Newest" does not pick between them, so the worst of the tied set wins.
+
+    BOTH ORDERINGS, for the same reason as the undated case above: with the red
+    first, `return runs[0]` is indistinguishable from worst-wins.
+
+    Breaks if: a tie resolves by list position, in either direction."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("dbt Compile", order[0], started="2026-09-17T02:25:12Z"),
+            _adv("dbt Compile", order[1], started="2026-09-17T02:25:12Z"),
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+
+
+def test_negative_control_a_rerun_in_flight_does_not_clear_its_own_red():
+    """A SELF-CLEARING BLOCK, found by an independent reviewer. Newest-wins
+    alone answers ADV-WAIT here -- which does not block -- so dispatching the
+    gate's own remedy (`rerun-ci`) cleared the gate's own block the moment the
+    re-run STARTED, before it answered anything. Both `rerun-ci` and
+    `merge-on-gate-go` are in `permitted_unattended`, so that was a live path
+    to an unattended merge over a red.
+
+    Breaks if: the older completed RED stops being consulted and the name falls
+    back into `wait`. The ORDER is also asserted both ways, because the older
+    red is found by scanning the group, not by list position.
+
+    Separate from ADV-RED deliberately, and the message is asserted: the check
+    has not failed again, so "wait for it" is true and "fix it" would not be
+    (`deploy-integrity.md` R7)."""
+    red = _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z")
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in ((red, flight), (flight, red)):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + list(order)
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"a re-run in flight over a completed RED must block: {why}"
+        assert "ADV-RERUN 1" in why
+        assert "the newest run that MEASURED anything at this head was FAILURE" in why
+        assert "ADV-WAIT" not in why, "it must not ALSO be reported as merely waiting"
+
+
+def test_a_rerun_in_flight_over_a_green_run_is_still_only_waiting():
+    """The other side of the pair, so ADV-RERUN cannot be satisfied by routing
+    every in-flight check to it -- which would reinstate the cry-wolf defect
+    ADV-WAIT exists to avoid.
+
+    Breaks if: the `rerun` bucket stops requiring a RED newest-concluded run --
+    this fixture would then block on an ordinary re-run of a green check."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T10:00:00Z"),
+        _adv("Repo Hygiene", None, status="IN_PROGRESS", started="2026-09-17T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
+
+
+def test_negative_control_a_red_that_was_already_fixed_does_not_block_a_third_run():
+    """THE ROUND-3 BLOCKER, and it arrived IN the fix for the round-2 one.
+
+    The bucket asked "did ANY run of this name conclude RED", so a check that
+    went red, WAS FIXED, and is being re-run again held the merge -- the mirror
+    image of the hole the bucket was added to close. The newest CONCLUDED run
+    here is the SUCCESS at 11:00, so there is nothing outstanding to wait for.
+
+    Breaks if: the predicate goes back to any-red-in-the-group. The FAILURE is
+    deliberately still present and deliberately FIRST in the list, which is
+    exactly the input the old rule answered wrongly."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z"),
+        _adv("Repo Hygiene", "SUCCESS", started="2026-09-17T11:00:00Z"),
+        _adv("Repo Hygiene", None, status="IN_PROGRESS", started="2026-09-17T12:00:00Z"),
+    ]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, f"a red that was already fixed must not block a further re-run: {why}"
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
+
+
+def test_the_rerun_reason_names_the_newest_concluded_run_not_the_first_in_list():
+    """R7 ON THE GATE'S OWN MESSAGE: it must name a conclusion it established.
+
+    The first version reported `was_red[0]` -- whichever red sat first in the
+    list -- as "the last CONCLUDED run at this head". Measured by an
+    independent reviewer on these exact three runs: written in this order it
+    named CANCELLED, and REVERSED it named FAILURE. Same head, same runs, two
+    different claims, at most one of them true.
+
+    Breaks if: the selection goes back to list position. CANCELLED is older but
+    FIRST in the first ordering, so a first-in-list rule names it -- and the
+    assertion that CANCELLED is ABSENT is paired with the positive one naming
+    FAILURE, so deleting the sentence cannot satisfy this either."""
+    older = _adv("Repo Hygiene", "CANCELLED", started="2026-09-17T09:00:00Z")
+    newer = _adv("Repo Hygiene", "FAILURE", started="2026-09-17T10:00:00Z")
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in ((older, newer, flight), (flight, newer, older)):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + list(order)
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, why
+        assert "the newest run that MEASURED anything at this head was FAILURE" in why
+        assert "CANCELLED" not in why, (
+            "naming the older CANCELLED run is the order-dependent claim this "
+            f"test exists for: {why}"
+        )
+
+
+def test_negative_control_an_undated_group_with_a_red_blocks_as_adv_red_not_rerun():
+    """What ACTUALLY happens when a timestamp is unreadable, measured rather
+    than assumed -- and it is STRICTER than ADV-RERUN, not weaker.
+
+    Any unreadable stamp sends the WHOLE group to worst-wins, so the red
+    becomes the group's representative and lands in `red` directly. The
+    in-flight run never wins "newest" WHEN A RED IS PRESENT, which is why
+    `_newest_informative_concluded`'s undated fallback -- though it IS reached, and can
+    even choose between two undated concluded runs -- can never change the
+    gate's answer. Stated precisely at that function; the direct unit test
+    below is a real instrument, not an un-killable one.
+
+    BOTH ORDERINGS, per the A10 lesson.
+
+    Breaks if: the whole-group fallback stops firing when one run is undated --
+    the SUCCESS-first ordering would then answer GO."""
+    flight = _adv("Repo Hygiene", None, status="IN_PROGRESS",
+                  started="2026-09-17T12:00:00Z")
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+            _adv("Repo Hygiene", order[0]),
+            _adv("Repo Hygiene", order[1]),
+            flight,
+        ]
+        ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+        assert not ok, f"order {order} must be NO-GO: {why}"
+        assert "ADV-RED 1: Repo Hygiene (FAILURE)" in why
+
+
+def test_newest_informative_concluded_falls_back_to_worst_wins_on_a_bad_timestamp():
+    """`_newest_informative_concluded` DIRECTLY, on a branch the gate takes.
+
+    RETARGETED in round 6. This tested `_newest_concluded`, which round 5
+    orphaned when both callers moved to the informative variant, and which
+    round 6 deleted. The properties still matter for the LIVE function, so the
+    coverage is retargeted rather than dropped — deleting a test because its
+    subject moved is how a witness disappears quietly.
+
+    The function delegates its fallbacks to `_newest_from_groups`, and
+    delegation is a claim until a fixture shows it. Tested at the function
+    because the CLASSIFIER cannot distinguish the outcomes -- any red among
+    the concluded runs is routed to ADV-RED by the outer worst-wins first, so
+    every case that reaches this branch is non-red and lands in `wait`
+    whichever run wins. That is a limit on what the caller can observe, NOT on
+    whether this code runs: it runs, and this assertion kills arm A4's shape.
+
+    BOTH ORDERINGS -- with the red first, first-in-list and worst-by-rank give
+    the same answer, which is exactly how arm A10 survived a whole suite.
+
+    Breaks if: the concluded subset picks by list position when no timestamp is
+    readable -- the SUCCESS-first ordering would then return the SUCCESS."""
+    for order in (("FAILURE", "SUCCESS"), ("SUCCESS", "FAILURE")):
+        runs = [
+            {"name": "H", "conclusion": order[0], "status": "COMPLETED"},
+            {"name": "H", "conclusion": order[1], "status": "COMPLETED"},
+            {"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
+        ]
+        chosen = gates._newest_informative_concluded(runs)
+        assert chosen is not None
+        assert chosen["conclusion"] == "FAILURE", f"order {order} picked {chosen}"
+
+
+def test_newest_informative_concluded_is_none_when_nothing_has_concluded():
+    """The first-run-of-a-check case: every run is still in flight, so there is
+    no previous answer to carry. It must be ADV-WAIT, never ADV-RERUN.
+
+    Breaks if: an in-flight run is counted as concluded -- `_newest_informative_concluded`
+    would return it, and `_outcome` of an IN_PROGRESS run is not in
+    RED_CONCLUSIONS, so the bug would be silent here and show up as a wrong
+    NAME somewhere else. The classifier assertion below is the one with teeth."""
+    runs = [{"name": "H", "conclusion": None, "status": "IN_PROGRESS"},
+            {"name": "H", "conclusion": None, "status": "QUEUED"}]
+    assert gates._newest_informative_concluded(runs) is None
+
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + runs
+    ok, why = gates.advisory_verdict(checks, REQUIRED, True)
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+    assert "ADV-RERUN" not in why
+
+
+def test_negative_control_the_statuscontext_shape_is_read_on_the_advisory_side_too():
+    """`statusCheckRollup` returns TWO shapes. A StatusContext says ERROR where
+    a CheckRun says FAILURE and PENDING where it says IN_PROGRESS, and it
+    carries NO `status` key at all -- so a conclusion-only reader scores both
+    as clean.
+
+    Breaks if: the advisory split stops reading `(.context, .state)`. The
+    positive half of the pair is asserted first, so deleting the feature
+    outright cannot satisfy this."""
+    base = [_run(n, "SUCCESS") for n in REQUIRED]
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "SUCCESS"}], REQUIRED, True
+    )
+    assert ok, why
+    assert "1 clean of 1 advisory" in why
+
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "ERROR"}], REQUIRED, True
+    )
+    assert not ok
+    assert "external/build (ERROR)" in why
+
+    ok, why = gates.advisory_verdict(
+        [*base, {"context": "external/build", "state": "PENDING"}], REQUIRED, True
+    )
+    assert ok, why
+    assert "ADV-WAIT 1" in why
+
+
+#: The name the ACR-lane tripwire watches. A constant so the FAILURE message
+#: can name it: a renamed workflow must say which file it went looking for.
+ACR_LANE = "build-fiab-images-acr-tasks.yml"
+
+
+def _repo_root():
+    """The FULL checkout this package lives in, or None when out of tree.
+
+    DELIBERATELY the same marker pair as `test_ci_green_declared._repo_root`
+    (`.github/workflows` AND `scripts/ci`), whose docstring explicitly forbids
+    counting `parents[N]`: the mutation runner copies this package to a temp
+    dir outside the repo, and from there a fixed three-level index resolves to
+    `C:/Users/<user>/AppData/Local` -- a real directory, silently wrong.
+
+    Returning None is the ONLY signal that means "out of tree". It is what
+    separates the declared sandbox skip from a missing file in a real
+    checkout, which is a FAILURE.
+    """
+    import pathlib
+
+    for candidate in pathlib.Path(__file__).resolve().parents:
+        if (candidate / ".github" / "workflows").is_dir() and (
+                candidate / "scripts" / "ci").is_dir():
+            return candidate
+    return None
+
+
+def test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds():
+    """THE DISCLOSURE IS THE TRIPWIRE, so it is read from the workflow rather
+    than transcribed into prose.
+
+    The first version of the scope sentence said the ACR image lane triggers on
+    `workflow_dispatch` / `workflow_call` **only**. That was FALSE when it was
+    written -- there is a `push:` block at `:80`, restricted to
+    `branches: [main]`. The conclusion survived (a PR head is never on `main`,
+    so the lane still publishes nothing here) but the stated reason did not,
+    and a tripwire that names the wrong condition can never fire: the thing it
+    tells you to watch for has already happened.
+
+    So the real invariant is pinned mechanically, and lifted out of the source
+    with the repo's own parser (`gates.parse_push_trigger`, which knows that
+    `on:` is the YAML 1.1 boolean `True` -- a reader that only looks up the
+    string key finds nothing in any real workflow).
+
+    A MISSING WORKFLOW IS A FAILURE, NOT A SKIP. The first version of this test
+    keyed on the FILE's existence, so RENAMING the lane made it skip -- green,
+    blaming a mutation sandbox it was not in, and indistinguishable from the
+    declared sandbox skip with nothing auditing skips outside the sandbox. That
+    is the same class of defect this tripwire was built to close, arriving by a
+    different route: a control that goes quiet when its subject disappears.
+    The two states are now separated by `_repo_root()`, not by the file.
+
+    Breaks if: a `pull_request` trigger is added to that lane, `branches:` is
+    widened past `main`, the push trigger is deleted, or the workflow is
+    renamed or removed. The first two would start attaching #4547's Trivy reds
+    to PR heads, where this gate WOULD block on them.
+
+    SKIPS only when `_repo_root()` is None -- i.e. genuinely out of tree, which
+    in practice means the mutation sandbox. Declared in
+    `mutate_gates.EXPECTED_SANDBOX_SKIPS`, because a test that skips there
+    cannot kill an arm and must not be counted as if it could.
+    """
+    root = _repo_root()
+    if root is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file "
+                    "(the mutation sandbox copies only tools/drain)")
+    workflow = root / ".github" / "workflows" / ACR_LANE
+    assert workflow.is_file(), (
+        f"{ACR_LANE} is not in {root / '.github' / 'workflows'} - the lane was "
+        "renamed or removed, so the invariant gate 4c's scope sentence rests on "
+        "CANNOT BE CHECKED. That is a failure, not a pass: re-point this test at "
+        "the new name and re-read its triggers before trusting the sentence in "
+        "gates.advisory_verdict."
+    )
+    text = workflow.read_text(encoding="utf-8")
+
+    import yaml
+
+    # TWO PARSES of the same bytes: this one for the trigger KEYS, and
+    # `parse_push_trigger` below for the push block's shape. Deliberate and
+    # cosmetic -- the alternative is a production API change to hand a parsed
+    # doc in, for a test that runs once. BOTH fail closed on unparseable YAML:
+    # `safe_load` raises here, and `parse_push_trigger` returns None, which the
+    # assertion below refuses.
+    triggers = yaml.safe_load(text)
+    triggers = triggers.get("on", triggers.get(True))
+    # EXACT KEY, and that is a KNOWN GAP, filed as #4558 rather than papered
+    # over: `pull_request_target` would pass this line. It is deliberately NOT
+    # widened here, because whether such a run attaches a check-run to the PR
+    # head in this repo has not been established -- and asserting on an
+    # unestablished premise is the same error the sentence below was just
+    # corrected for. Measured 2026-09-17: ZERO workflows in this repo use
+    # `pull_request_target`, so nothing can silently satisfy this today.
+    assert "pull_request" not in triggers, (
+        "the ACR image lane now runs on pull_request, so its Trivy CRITICAL "
+        "failures (#4547) WILL attach to PR heads and gate 4c will block on "
+        "them. That is arguably correct under deploy-integrity.md R1, but the "
+        "scope sentence in gates.advisory_verdict now says something false and "
+        "must be revisited."
+    )
+    push = gates.parse_push_trigger(text)
+    assert push is not None, "the ACR lane's `on:` block no longer parses"
+    assert push.present, (
+        "this lane's push trigger vanished - the scope sentence describes a "
+        "`branches: [main]` filter that is no longer there"
+    )
+    assert push.branches == ("main",), (
+        f"push.branches is {push.branches}, not ('main',) - the branch filter IS "
+        "the invariant the scope sentence rests on"
+    )
+
+
+def _assert_tripwire_fails_loudly(run_tripwire):
+    """Drive a tripwire and insist it raised an ASSERTION, not a skip.
+
+    `pytest.raises(AssertionError)` CANNOT express this, and that is the whole
+    reason this helper exists. `pytest.skip` raises `Skipped`, which subclasses
+    **BaseException and not Exception** (measured: `BaseException=True
+    Exception=False`). Inside a `pytest.raises(AssertionError)` block it is not
+    caught -- it propagates, and pytest reports the ENCLOSING TEST AS SKIPPED.
+
+    So the previous version of the negative control below, whose docstring said
+    it would break if the tripwire reverted to `pytest.skip`, SURVIVED exactly
+    that mutation: rc=0, `528 passed, 3 skipped`, the extra skip being the
+    control itself. A control that is silent about the regression it names, in
+    the sentence that names it.
+
+    `BaseException` is caught deliberately and the TYPE is then asserted, so a
+    skip becomes a loud failure instead of a quiet abort.
+    """
+    try:
+        run_tripwire()
+    except BaseException as exc:
+        caught = exc
+    else:
+        caught = None
+    assert caught is not None, (
+        "the tripwire returned normally on a subject it could not read - it must "
+        "raise"
+    )
+    assert isinstance(caught, AssertionError), (
+        f"the tripwire raised {type(caught).__name__}, not AssertionError. A "
+        "pytest.skip raises Skipped, a BaseException, which ABORTS the caller AS "
+        "SKIPPED rather than failing it - the silent-skip regression this control "
+        "exists to catch."
+    )
+    assert "CANNOT BE CHECKED" in str(caught), caught
+
+
+def test_the_acr_lane_tripwire_fails_loudly_when_its_subject_is_missing(monkeypatch, tmp_path):
+    """THE NEGATIVE CONTROL FOR THE TRIPWIRE ITSELF -- a skip and a failure must
+    not be the same observation.
+
+    Drives the REAL test function with `_repo_root` pointed at a directory that
+    exists and does not contain the lane, which is exactly what a RENAME looks
+    like. The message is not transcribed: the real function runs, and the
+    helper asserts on what it actually raised.
+
+    Breaks if: the missing-file branch goes back to `pytest.skip` -- the helper
+    catches `BaseException` and asserts the TYPE, so a `Skipped` fails here
+    instead of quietly aborting. Also breaks if `_repo_root()` stops being
+    consulted at all.
+    """
+    monkeypatch.setitem(globals(), "_repo_root", lambda: tmp_path)
+    _assert_tripwire_fails_loudly(
+        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds
+    )
+
+
+def test_negative_control_the_tripwire_guard_itself_catches_a_reversion_to_skip():
+    """THE INSTRUMENT FOR THE INSTRUMENT, because the layer below it was wrong.
+
+    `ARMS` may only mutate the files in `mutate_gates.SOURCES` -- the production
+    modules -- so no mutation arm can be pointed at a test file, and the helper
+    above would otherwise have no standing instrument of any kind. This test is
+    that instrument: it hands `_assert_tripwire_fails_loudly` a callable that
+    does nothing but `pytest.skip`, i.e. the exact regression, and requires the
+    helper to convert it into a failure.
+
+    Written to be robust at ITS level too: a plain
+    `pytest.raises(AssertionError)` here would reproduce the very bug one layer
+    up, because a `Skipped` escaping the helper would abort THIS test as
+    skipped. The explicit `except BaseException` arm is what makes that case
+    red instead of green.
+
+    Breaks if: the helper reverts to `pytest.raises(AssertionError)` (the skip
+    escapes and the BaseException arm converts it to a failure), or if it stops
+    checking the exception type (the else-arm fires).
+    """
+    def reverted_tripwire():
+        pytest.skip("simulated regression: a missing subject treated as out-of-tree")
+
+    caught = None
+    try:
+        _assert_tripwire_fails_loudly(reverted_tripwire)
+    except AssertionError as exc:
+        caught = exc
+    except BaseException as exc:
+        raise AssertionError(
+            f"the helper let {type(exc).__name__} ESCAPE - a Skipped reaching this "
+            "frame aborts the test as skipped, which is the silent-skip defect one "
+            "layer up"
+        ) from exc
+    else:
+        raise AssertionError(
+            "the helper accepted a bare pytest.skip as a loud failure - the "
+            "silent-skip regression would ship unnoticed"
+        )
+    assert "not AssertionError" in str(caught), (
+        f"the helper failed, but not for the skip reason: {caught}"
+    )
+
+
+def test_the_acr_lane_tripwire_skips_only_when_genuinely_out_of_tree(monkeypatch):
+    """The OTHER side of that boundary, so the failure above cannot be achieved
+    by making the test raise unconditionally.
+
+    `_repo_root()` returning None is the only thing that may buy a skip, and
+    that is the sandbox's signature.
+
+    Breaks if: out-of-tree stops skipping (the mutation matrix would then score
+    every arm KILLED on this test regardless of the mutation -- the tautology
+    `EXPECTED_SANDBOX_SKIPS` exists to prevent)."""
+    monkeypatch.setitem(globals(), "_repo_root", lambda: None)
+    with pytest.raises(pytest.skip.Exception):
+        test_the_acr_lane_invariant_the_scope_sentence_rests_on_still_holds()
+
+
+
+def test_negative_control_an_empty_rollup_is_not_a_clean_advisory_answer():
+    """A clean answer over an EMPTY population is the green-over-zero-items
+    shape (#4451: `pass=0 fail=4` printed "UAT-verified roll").
+
+    Breaks if: the guard is removed -- the split over `[]` is empty, carries no
+    red, and would otherwise report GO."""
+    ok, why = gates.advisory_verdict([], REQUIRED, True)
+    assert not ok
+    assert "measured NOTHING" in why
+
+
+def test_negative_control_the_policy_flag_off_takes_the_arm_out_of_service():
+    """`advisory_red_is_a_no_go` is the authority, and it is NOT a switch: this
+    gate implements no permissive mode, so false means "cannot answer", which
+    is NO-GO. A key that could turn a control OFF would be a skip valve.
+
+    Breaks if: the flag becomes an if/else around the blocking branch -- then
+    false would return ok=True over this all-green fixture."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [_adv("CodeQL", "SUCCESS")]
+    assert gates.advisory_verdict(checks, REQUIRED, True)[0]
+    ok, why = gates.advisory_verdict(checks, REQUIRED, False)
+    assert not ok
+    assert "no such mode" in why
+
+
+def test_the_advisory_split_counts_the_whole_published_population():
+    """The counts are what let a reader tell "clean over 25" from "clean over
+    0" -- see the empty-rollup control above.
+
+    Breaks if: `total_checks` is derived from the advisory subset (it would
+    read 2, not 5) or `population` counts required contexts (it would read 5).
+
+    EVERY BUCKET IS NON-EMPTY HERE, ON PURPOSE. The previous fixture ended
+    `assert split.rerun == []`, which meant dropping `len(rerun)` from the
+    `population` sum at `gates.py` SURVIVED the whole suite at rc=0 — found by
+    an independent reviewer. A fixture that pins a term to zero cannot witness
+    that term's removal: zero is what the mutant computes too. The consequence
+    was confined to the gate's own printed counts, so a NO-GO naming an
+    ADV-RERUN would have reported `0 advisory of N published`, contradicting
+    `AdvisorySplit`'s contract — an R7 defect in a gate's own message.
+
+    So each of the four terms now contributes a DISTINCT non-zero count, and
+    `population` is asserted as their sum: dropping any one of the four changes
+    the total and fails here."""
+    checks = [_run(n, "SUCCESS") for n in REQUIRED] + [
+        _adv("CodeQL", "SUCCESS"),
+        _adv("Checkov", "FAILURE"),
+        # rerun: a red concluded run with a re-run still in flight
+        _adv("Trivy", "FAILURE", started="2026-09-18T10:00:00Z"),
+        _adv("Trivy", None, status="IN_PROGRESS", started="2026-09-18T11:00:00Z"),
+        # wait: running, with nothing red behind it
+        _adv("Bicep Lint", None, status="IN_PROGRESS"),
+    ]
+    split = gates.classify_advisory_checks(checks, REQUIRED)
+    assert split.total_checks == 8
+    assert split.red == ["Checkov (FAILURE)"]
+    assert split.clean == ["CodeQL"]
+    assert len(split.rerun) == 1
+    assert "Trivy" in split.rerun[0]
+    assert split.wait == ["Bicep Lint"]
+    # The SUM, term by term — this is the assertion that dies when any one of
+    # the four is dropped from the expression.
+    assert split.population == 4, (
+        f"population must count all four buckets: red={split.red} "
+        f"rerun={split.rerun} wait={split.wait} clean={split.clean}"
+    )
+    assert split.population == (
+        len(split.red) + len(split.rerun) + len(split.wait) + len(split.clean)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Gate 5 -- hollow check
 # ---------------------------------------------------------------------------
 
@@ -911,6 +2194,520 @@ def test_negative_control_an_unresolvable_sha_is_not_a_pass():
     ok, why = gates.base_is_current("main", "", "")
     assert not ok
     assert "unmeasurable" in why
+
+
+# ---------------------------------------------------------------------------
+# Gate 1's second arm (#4585) -- a base delta that no required context's
+# producing workflow declares an on.push filter ADMITTING
+#
+# An EMPTY INTERSECTION IS THE ANSWER THAT LETS A MERGE THROUGH, so the dominant
+# risk here is a query that returns empty because it is BLIND rather than
+# because the delta is inert. Every refusal below names the value that produces
+# it, and the positive control at the end of the section proves the query can
+# return non-empty at all -- taken over patterns LIFTED OUT OF A REAL WORKFLOW
+# FILE at run time, never transcribed, so a typo here cannot make the probe
+# agree with itself.
+# ---------------------------------------------------------------------------
+
+#: Two contexts, not one. A predicate that stops at the first scope, or that
+#: `any()`s where it should `all()`, is invisible to a one-element fixture --
+#: the population-narrowing shape this file's own docstring records.
+_SCOPE_A = gates.ContextScope(
+    "Alpha", ".github/workflows/alpha.yml", paths=("alpha/**", "shared.txt"))
+_SCOPE_B = gates.ContextScope(
+    "Beta", ".github/workflows/beta.yml", paths=("beta/**",))
+_BOTH = ["Alpha", "Beta"]
+
+
+def test_a_delta_outside_every_required_scope_is_inert():
+    """PASSES because neither `docs/x.md` nor `README.md` matches `alpha/**`,
+    `shared.txt` or `beta/**`. Swap either for `beta/y.txt` and it goes red."""
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md", "README.md"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert ok, why
+    # The brief on this arm: an empty intersection is only evidence if the
+    # reader can see what it was taken over. Both names, not a count.
+    assert "Alpha" in why, why
+    assert "Beta" in why, why
+    assert "docs/x.md" in why, why
+
+
+def test_negative_control_a_delta_the_second_contexts_filter_admits_still_blocks():
+    """`beta/y.txt` is outside Alpha's scope and inside Beta's. A loop that
+    returns on the first scope's clean result passes this; the correct one
+    refuses. Change the file to `docs/y.txt` and this test goes green-and-
+    wrong, which is why the file is named in the assertion."""
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md", "beta/y.txt"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "'Beta'" in why, why
+    assert "beta/y.txt" in why, why
+
+
+def test_negative_control_a_delta_the_first_contexts_filter_admits_still_blocks():
+    """The mirror. `shared.txt` is a LITERAL pattern, so this also pins that a
+    non-wildcard entry in a `paths:` list is honoured -- a translator that only
+    handled `**` would read `shared.txt` as matching nothing and excuse it."""
+    ok, why = gates.base_delta_is_inert(
+        ["shared.txt"], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "'Alpha'" in why, why
+    assert "shared.txt" in why, why
+
+
+def test_negative_control_a_context_with_no_path_filter_fails_closed():
+    """The case that governs this repo TODAY: 5 of the 17 required contexts are
+    produced by workflows whose `push:` carries no `paths:` at all. Such a
+    workflow ADMITS EVERY PATH on push, so no delta is inert for it -- and the
+    delta
+    here (`docs/x.md`) is one that every OTHER scope in this file excuses, so
+    the refusal can only be coming from the missing filter."""
+    unfiltered = gates.ContextScope("Gamma", ".github/workflows/gamma.yml")
+    ok, why = gates.base_delta_is_inert(
+        ["docs/x.md"], [_SCOPE_A, unfiltered], ["Alpha", "Gamma"])
+    assert not ok
+    assert "'Gamma'" in why, why
+    assert "ADMITS EVERY PATH" in why, why
+
+
+def test_negative_control_an_empty_paths_list_refuses_and_is_not_the_absent_one():
+    """The FOURTH state, and the one that was unwatched for a round.
+
+    `paths: []` in a workflow parses to `()`. `paths is None` is False, so it
+    sails past the no-filter branch above; then `any([])` is False for every
+    file, so every delta falls outside the filter and the context excuses the
+    whole thing -- "matches nothing is the answer that lets a merge through",
+    arriving through the one branch that looked like it had handled it.
+
+    THE TWO SPELLINGS ARE OPPOSITE FACTS AND THE MESSAGES MUST DIFFER.
+    `paths: []` admits NOTHING. `paths-ignore: []` ignores nothing and
+    therefore admits EVERYTHING. Round 2 gave both the "matches NOTHING"
+    sentence, which is inverted for the second -- and that half had already
+    been refused correctly (as a hit) before the branch existed, so a true
+    reason was replaced with a false one. The assertions below are what stops
+    that recurring: each pins the phrase that is true of ITS spelling, so
+    sharing one sentence again turns one of them red.
+
+    Delete the `paths == ()` branch and the first block goes red; delete the
+    `paths_ignore == ()` branch and the second does.
+    """
+    empty = gates.ContextScope("Iota", ".github/workflows/iota.yml", paths=())
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [empty], ["Iota"])
+    assert not ok, why
+    assert "'Iota'" in why, why
+    assert "ADMITS NOTHING" in why, why
+    assert "ADMITS EVERY PATH" not in why, (
+        "`paths: []` admits nothing; saying it admits everything is the "
+        f"inversion this assertion exists for: {why}"
+    )
+
+    empty_ignore = gates.ContextScope(
+        "Kappa", ".github/workflows/kappa.yml", paths_ignore=())
+    ok_ignore, why_ignore = gates.base_delta_is_inert(
+        ["docs/x.md"], [empty_ignore], ["Kappa"])
+    assert not ok_ignore, why_ignore
+    assert "'Kappa'" in why_ignore, why_ignore
+    assert "ADMITS EVERY PATH" in why_ignore, why_ignore
+    assert "ADMITS NOTHING" not in why_ignore, (
+        "`paths-ignore: []` ignores nothing, so it admits EVERY path - the "
+        f"round-2 inversion: {why_ignore}"
+    )
+
+
+def test_negative_control_an_unfiltered_context_refuses_even_an_empty_delta():
+    """Named separately because the empty-delta branch is a SECOND exit from
+    this function and could be reached before the scope loop. If it were, an
+    unfiltered context would be excused by a delta of zero files -- and zero
+    files is what an unreadable `git diff` would look like to a caller that
+    mapped failure to `[]`."""
+    unfiltered = gates.ContextScope("Gamma", ".github/workflows/gamma.yml")
+    ok, why = gates.base_delta_is_inert([], [_SCOPE_A, unfiltered], ["Alpha", "Gamma"])
+    assert not ok
+    assert "'Gamma'" in why, why
+
+
+def test_negative_control_an_unresolved_scope_is_not_an_empty_intersection():
+    """`unreadable` must REFUSE, never read as "matches nothing". This is the
+    field that exists so a traced-producer failure cannot be mistaken for a
+    clean result -- delete it and `paths=None` collapses into the branch above,
+    which is the same refusal for the wrong reason."""
+    broken = gates.ContextScope(
+        "Delta", ".github/workflows/delta.yml",
+        unreadable="the check-suite that published it owns no workflow run")
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [_SCOPE_A, broken], ["Alpha", "Delta"])
+    assert not ok
+    assert "'Delta'" in why, why
+    assert "owns no workflow run" in why, why
+
+
+def test_negative_control_a_required_context_with_no_scope_row_blocks():
+    """The population check. `required` is passed separately precisely so a
+    caller that silently drops the one context it could not scope cannot buy a
+    clean intersection over the remainder -- here `Beta` has no scope object at
+    all and the delta (`docs/x.md`) is inert for the one that does."""
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [_SCOPE_A], _BOTH)
+    assert not ok
+    assert "Beta" in why, why
+    assert "no scope at all" in why, why
+
+
+def test_negative_control_an_unreadable_delta_is_not_a_pass():
+    """`None` is "I could not read it". The same fixture with `[]` is a
+    measured empty delta and passes -- the two must not collapse, which is
+    what the pair of assertions below pins."""
+    ok, why = gates.base_delta_is_inert(None, [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert not ok
+    assert "could not be read" in why, why
+    ok_empty, _ = gates.base_delta_is_inert([], [_SCOPE_A, _SCOPE_B], _BOTH)
+    assert ok_empty
+
+
+def test_negative_control_an_empty_required_set_is_vacuous_not_inert():
+    """With no required contexts the intersection is empty by construction.
+    An empty required set is what a failed branch-protection read looks like."""
+    ok, why = gates.base_delta_is_inert(["beta/y.txt"], [_SCOPE_A, _SCOPE_B], [])
+    assert not ok
+    assert "EMPTY" in why, why
+
+
+def test_negative_control_an_unrepresentable_filter_pattern_refuses():
+    """`!` negates and `[...]` is a range; treating either as a literal
+    UNDER-matches, and under-matching is the excusing direction. `glob_matches`
+    already raises for these -- this pins that the raise becomes a REFUSAL here
+    rather than escaping as a traceback out of the program deciding merges."""
+    weird = gates.ContextScope("Eps", ".github/workflows/eps.yml", paths=("src/[0-9]*.py",))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [weird], ["Eps"])
+    assert not ok
+    assert "cannot represent" in why, why
+
+
+def test_negative_control_an_unrepresentable_pattern_after_a_match_still_refuses():
+    """Kills the SHORT-CIRCUIT, which only bites under `paths-ignore`.
+
+    `any()` over a generator stops at the first True. Under `paths-ignore` that
+    True means "this file is ignored", the function answers "not read", and the
+    unrepresentable pattern SITTING AFTER IT is never evaluated -- so a `!`
+    re-include (the one `_UNSUPPORTED_GLOB`'s own comment says "can excuse
+    outright") is skipped and the delta is called inert.
+
+    `docs/x.md` matches `docs/**`, which is pattern ONE. With a generator the
+    answer is INERT; with the list comprehension `src/[0-9]*.py` raises and the
+    answer is REFUSE. Nothing else in this file distinguishes the two, because
+    every other unsupported-pattern fixture has no matching pattern before it.
+    """
+    lurking = gates.ContextScope(
+        "Theta", ".github/workflows/theta.yml",
+        paths_ignore=("docs/**", "src/[0-9]*.py"))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [lurking], ["Theta"])
+    assert not ok, why
+    assert "cannot represent" in why, why
+
+
+def test_a_paths_ignore_filter_is_read_as_everything_except():
+    """`paths-ignore` inverts the test, and getting the polarity backwards is
+    the single most excusing error available: it would make the IGNORED paths
+    the only ones that block. Both directions are pinned on ONE scope."""
+    ignoring = gates.ContextScope(
+        "Zeta", ".github/workflows/zeta.yml", paths_ignore=("docs/**", "*.md"))
+    ok, why = gates.base_delta_is_inert(["docs/x.md", "README.md"], [ignoring], ["Zeta"])
+    assert ok, why
+    blocked, why_blocked = gates.base_delta_is_inert(
+        ["docs/x.md", "src/app.py"], [ignoring], ["Zeta"])
+    assert not blocked
+    assert "src/app.py" in why_blocked, why_blocked
+
+
+def test_negative_control_declaring_both_paths_and_paths_ignore_refuses():
+    """GitHub does not accept both on one event, so a workflow that appears to
+    carry both was misparsed. Guessing which wins is the unanswered question
+    this package refuses on principle."""
+    confused = gates.ContextScope(
+        "Eta", ".github/workflows/eta.yml", paths=("a/**",), paths_ignore=("b/**",))
+    ok, why = gates.base_delta_is_inert(["docs/x.md"], [confused], ["Eta"])
+    assert not ok
+    assert "BOTH" in why, why
+
+
+def test_doublestar_slash_under_paths_ignore_is_refused_not_translated():
+    """`**/` is safe under `paths:` and EXCUSING under `paths-ignore:`.
+
+    `_glob_to_regex` lets `**/` consume zero segments together with its slash,
+    so it matches MORE paths than a strict reading. Under `paths:` that admits
+    more, which makes a delta look live -- harmless. Under `paths-ignore:` it
+    ignores more, which makes the delta look INERT, and that is the direction
+    that decides a merge.
+
+    NARROW BY DESIGN: a bare trailing `**` has no zero-segment branch and is
+    still read as "everything under this prefix" -- see
+    `test_a_paths_ignore_filter_is_read_as_everything_except`, which keeps
+    passing and is the control for this test not being over-broad.
+
+    WHAT WOULD MAKE THIS FAIL: `filter_admits` translating `**/` under
+    `paths-ignore` again instead of raising, turning the first case back into
+    a silent `ok=True`.
+    """
+    permissive = gates.ContextScope(
+        "Theta", ".github/workflows/theta.yml", paths_ignore=("docs/**/*.md",))
+    ok, why = gates.base_delta_is_inert(["docs/a/b.md"], [permissive], ["Theta"])
+    assert not ok, why
+    assert "paths-ignore" in why, why
+
+    # POSITIVE PAIR -- without it, "refuse everything" would satisfy the above.
+    # A paths-ignore with no `**/` must still decide, and decide BOTH ways.
+    strict = gates.ContextScope(
+        "Iota", ".github/workflows/iota.yml", paths_ignore=("docs/x.md",))
+    ok_ignored, _ = gates.base_delta_is_inert(["docs/x.md"], [strict], ["Iota"])
+    assert ok_ignored, "a fully-ignored delta must still read as inert"
+    ok_live, why_live = gates.base_delta_is_inert(["src/app.py"], [strict], ["Iota"])
+    assert not ok_live, why_live
+
+
+def test_the_printed_counts_are_the_real_counts_not_the_truncated_ones():
+    """`_HITS_SHOWN`'s own comment asserts "The COUNT is always printed, so
+    truncation cannot make a large intersection look small". That is a stated
+    SAFETY PROPERTY, and until this test it had zero kill power -- falsifying
+    any of the three counts survived the whole suite.
+
+    All three are pinned here against a population deliberately larger than
+    `_HITS_SHOWN`, so truncation is actually exercised:
+
+      1. the refusal's `N file(s) are ADMITTED BY` count,
+      2. the GO path's `(N file(s))` delta count,
+      3. the GO path's `(+N more)` truncation suffix.
+
+    WHAT WOULD MAKE THIS FAIL: replacing any of those with a constant, with
+    `len(...[:_HITS_SHOWN])`, or dropping the suffix -- each makes a large
+    intersection or a large delta read as small next to a merge being let
+    through.
+
+    `_HITS_SHOWN` is LIFTED from the module, not transcribed, so a change to
+    it cannot make this probe disagree with the implementation.
+    """
+    shown = gates._HITS_SHOWN
+    n = shown + 4  # strictly larger, so the suffix must appear
+
+    # --- refusal branch: every file admitted -------------------------------
+    admitted = [f"src/f{i}.py" for i in range(n)]
+    admits_src = gates.ContextScope(
+        "Kappa", ".github/workflows/kappa.yml", paths=("src/**",))
+    ok, why = gates.base_delta_is_inert(admitted, [admits_src], ["Kappa"])
+    assert not ok, why
+    assert f"{n} file(s) in the base delta are ADMITTED BY" in why, why
+    # ...and it names only `shown` of them, which is what makes the count
+    # load-bearing rather than decorative.
+    assert why.count("src/f") == shown, why
+
+    # --- GO branch: nothing admitted, but the delta is still large ---------
+    unadmitted = [f"docs/d{i}.md" for i in range(n)]
+    ok, why = gates.base_delta_is_inert(unadmitted, [admits_src], ["Kappa"])
+    assert ok, why
+    assert f"({n} file(s))" in why, why
+    assert f"(+{n - shown} more)" in why, why
+    assert why.count("docs/d") == shown, why
+
+    # --- control: at or below the threshold there is NO suffix -------------
+    small = [f"docs/d{i}.md" for i in range(shown)]
+    ok, why = gates.base_delta_is_inert(small, [admits_src], ["Kappa"])
+    assert ok, why
+    assert "more)" not in why, f"suffix appeared for a delta of exactly {shown}: {why}"
+
+
+def _real_push_scope(workflow_path: str, name: str) -> gates.ContextScope:
+    """A `ContextScope` built from a REAL workflow file in this checkout.
+
+    The patterns are LIFTED with the same parser production uses
+    (`gates.parse_push_trigger`), never transcribed -- assertion-design.md's
+    "lift the pattern out of the source at runtime rather than transcribing it,
+    so a typo cannot make the probe disagree with the implementation".
+
+    A MISSING WORKFLOW IS A FAILURE, NOT A SKIP, for the reason
+    `test_the_acr_lane_invariant_...` records at length: the skip belongs to
+    `_repo_root()` being None (genuinely out of tree), and a file that has been
+    renamed out from under a control must turn it RED, not quiet.
+    """
+    root = _repo_root()
+    assert root is not None, "callers must skip on _repo_root() is None first"
+    workflow = root / workflow_path
+    assert workflow.is_file(), (
+        f"{workflow_path} is not in this checkout - it was renamed or removed, "
+        "so the scope gate 1's second arm rests on CANNOT BE CHECKED. Re-point "
+        "this test and re-read the new file's triggers."
+    )
+    trigger = gates.parse_push_trigger(workflow.read_text(encoding="utf-8"))
+    assert trigger is not None, (
+        f"{workflow_path} could not be parsed at all, so nothing below "
+        "measures what it claims to"
+    )
+    assert trigger.present, (
+        f"{workflow_path} has no on.push trigger, so nothing below "
+        "measures what it claims to"
+    )
+    return gates.ContextScope(name, workflow_path,
+                              paths=trigger.paths, paths_ignore=trigger.paths_ignore)
+
+
+def test_positive_control_the_intersection_query_can_return_non_empty():
+    """THE CONTROL THE WHOLE ARM RESTS ON (#4585, assertion-design.md).
+
+    An empty intersection is the answer that lets a merge through. A query that
+    can only EVER return empty -- a `_glob_to_regex` that emits `^$`, a loop
+    over the wrong list, a scope whose patterns were dropped on the way in --
+    is therefore the worst defect available here, and it is indistinguishable
+    from the good case by inspection of its output.
+
+    So: real patterns, lifted out of `.github/workflows/test.yml` at run time,
+    and LITERAL probe paths. The probes are deliberately NOT derived from
+    `scope.paths` -- a probe built out of the patterns under test agrees with
+    them by construction and witnesses nothing.
+
+    What makes each assertion fail:
+      - `tools/drain/gates.py` reading False   -> the query is blind (`tools/**`
+        and `**.py` both cover it; two patterns must BOTH stop matching).
+      - `README.md` reading True               -> the query matches everything,
+        which would make the refusals above pass for the wrong reason.
+
+    SKIPS only out of tree (the mutation sandbox copies `tools/drain` alone),
+    declared in `mutate_gates.EXPECTED_SANDBOX_SKIPS`. It therefore kills no
+    arm, which is said out loud rather than implied: the arms are killed by the
+    synthetic-fixture tests above, and this control is about the query being
+    pointed at something real.
+    """
+    if _repo_root() is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file")
+    scope = _real_push_scope(".github/workflows/test.yml", "Python Tests (3.10)")
+    # A workflow that LOST its filter would leave `paths=None`, every probe
+    # would refuse for the no-filter reason, and this control would certify a
+    # blind query as sighted. That is the circularity it exists to break.
+    assert scope.paths, (
+        ".github/workflows/test.yml declares no on.push `paths:` list, so this "
+        "control cannot tell a sighted query from a blind one"
+    )
+    inside, outside = "tools/drain/gates.py", "README.md"
+    assert gates.filter_admits(scope, inside) is True, (
+        f"{inside!r} is admitted by test.yml's declared push filter - a False "
+        "here is the blind-query defect this control exists to catch"
+    )
+    assert gates.filter_admits(scope, outside) is False, (
+        f"{outside!r} matches none of {list(scope.paths)} - a True here means "
+        "the translator matches everything"
+    )
+    # ...and the same two THROUGH the decision function gate 1 actually calls,
+    # because a control that only exercises the helper leaves the caller unpinned.
+    blocked, why_blocked = gates.base_delta_is_inert([inside], [scope], [scope.name])
+    assert not blocked
+    assert inside in why_blocked, why_blocked
+    inert, why_inert = gates.base_delta_is_inert([outside], [scope], [scope.name])
+    assert inert, why_inert
+
+
+#: How many of the 17 required contexts are published by the three workflows
+#: that declare NO `on.push` path filter. Those contexts refuse gate 1's
+#: second arm unconditionally, which is the only reason the `on.push`-as-proxy
+#: weakness is harmless today. MODULE level because ruff's N806 forbids an
+#: uppercase name inside a function, and lowercasing it would read as an
+#: incidental local rather than the pinned expectation it is.
+_UNFILTERED_REQUIRED = 5
+
+
+def test_positive_control_the_real_required_topology_is_measured_not_assumed():
+    """THE SAFETY INTERLOCK, not a frequency note -- the earlier wording here
+    framed this as "how often the arm fires", which points the remedy at the
+    wrong thing at exactly the moment it matters.
+
+    `gates.base_delta_is_inert` uses `on.push.paths` as a PROXY for what a
+    context reads, and that proxy's precondition -- the declared push scope is
+    a SUPERSET of what the context actually reads -- is unestablished, and is
+    known FALSE for at least three contexts (`PowerShell Lint` recurses the
+    whole tree, `Repo Hygiene` runs `find . -type f`, `Secret Scan` runs
+    gitleaks over the repo). The only reason that is harmless today is that
+    five of the 17 required contexts have NO push filter and therefore refuse
+    unconditionally, so no stale base reaches the GO path at all.
+
+    THIS TEST IS THE THING THAT NOTICES WHEN THAT STOPS BEING TRUE. If one of
+    the three unfiltered workflows gains a `paths:` list, the interlock is
+    gone, the arm begins deciding merges on a proxy that is wrong for at least
+    three contexts, and the correct response is NOT to update a note -- it is
+    to establish the superset relation per context, or to stop using the proxy.
+
+    Goes RED in BOTH directions: `validate.yml` or `test.yml` losing its
+    `paths:` list (then even the filtered side is unmeasurable), or any of the
+    three unfiltered workflows gaining one (then the interlock has opened).
+
+    SKIPS only out of tree; see the control above.
+    """
+    if _repo_root() is None:
+        pytest.skip("out of tree: no .github/workflows + scripts/ci above this file")
+    for path in (".github/workflows/test.yml", ".github/workflows/validate.yml"):
+        scope = _real_push_scope(path, path)
+        assert scope.paths, f"{path} lost its on.push paths filter"
+    for path in (".github/workflows/fiab-console-ci.yml",
+                 ".github/workflows/loom-guardrails.yml",
+                 ".github/workflows/commit-message-parses.yml"):
+        scope = _real_push_scope(path, path)
+        drifted = (
+            f"{path} now declares a push path filter. THE INTERLOCK HAS OPENED: "
+            "gate 1's second arm can now reach its GO path, on a proxy "
+            "(`on.push.paths` as a stand-in for what a context READS) whose "
+            "superset precondition is unestablished and is known false for "
+            "PowerShell Lint, Repo Hygiene and Secret Scan. Do NOT update the "
+            "note in policy.json and move on -- establish the superset "
+            "relation for every context this unblocks, or take the arm out of "
+            "service. See gates.base_delta_is_inert."
+        )
+        assert scope.paths is None, drifted
+        assert scope.paths_ignore is None, drifted
+
+    # ---- SECOND AXIS -------------------------------------------------------
+    # The loop above watches the workflow FILES. That is only half the
+    # interlock. The unconditional refusal exists because those workflows
+    # publish REQUIRED contexts; `merge_gate.required_contexts` reads branch
+    # protection LIVE (merge_gate.py:451-468), so a context LEAVING the
+    # required set removes exactly the same refusal without any workflow
+    # changing at all -- and nothing noticed until two independent reviews
+    # converged on it.
+    #
+    # NOT circular: the five names are derived from the workflow files, and
+    # the COUNT is the independent expectation. Intersecting and then
+    # asserting membership would be a tautology -- the count is what moves.
+    root = _repo_root()
+    unfiltered = (".github/workflows/fiab-console-ci.yml",
+                  ".github/workflows/loom-guardrails.yml",
+                  ".github/workflows/commit-message-parses.yml")
+    texts = {}
+    for path in unfiltered:
+        wf = root / path
+        assert wf.is_file(), f"{path} is not in this checkout"
+        body = wf.read_text(encoding="utf-8")
+        assert body.strip(), f"{path} read as empty - this probe went blind"
+        texts[path] = body
+
+    required = json.loads(
+        (root / "tools" / "drain" / "required_contexts.json").read_text(encoding="utf-8")
+    )["contexts"]
+    assert len(required) >= 10, (
+        f"only {len(required)} required contexts read - the snapshot was "
+        "truncated, so the count below means nothing"
+    )
+
+    published = sorted(
+        ctx for ctx in required
+        if any(ctx in body for body in texts.values())
+    )
+    assert len(published) == _UNFILTERED_REQUIRED, (
+        f"{len(published)} required context(s) are published by the three "
+        f"unfiltered workflows, expected {_UNFILTERED_REQUIRED}: {published}. "
+        "FEWER means branch protection dropped one (or a workflow was "
+        "renamed), so that context no longer forces gate 1's second arm to "
+        "refuse -- THE INTERLOCK IS WEAKENED ON THE AXIS THE LOOP ABOVE DOES "
+        "NOT WATCH. It is not necessarily GONE: the remaining unfiltered "
+        "contexts still refuse unconditionally, and the interlock only opens "
+        "when the count reaches zero. The remedy is the same either way -- "
+        "establish the superset relation per context, or take the arm out of "
+        "service. MORE means a new unfiltered required context appeared and "
+        "this floor needs re-measuring, not raising on sight. Note the "
+        "snapshot read here can lag live protection (#4629); this is the "
+        "offline half of the check, and it agreed with live when measured."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1024,3 +2821,827 @@ def test_every_receipt_class_is_reachable():
     assert set(classes) == {
         "guard-or-test-only", "deploy-path", "estate-behaviour", "ui-surface", "human-only"
     }
+
+
+# --- verdict_transfers_across_base_update -------------------------------
+#
+# THE CONTROL IN THIS BLOCK IS THE POINT, and it is the one that is easy to
+# write un-killably. A merge commit and its FIRST PARENT auto-merge to the SAME
+# tree, so a "negative" fixture built by swapping the head for its parent
+# passes for a reason that has nothing to do with the gate. Every refusing
+# fixture below therefore differs in CONTENT -- a different tree sha -- or in
+# SHAPE (parent count, membership, unresolvability).
+
+A = "a" * 40          # the approved head: what the reviewer measured
+B = "b" * 40          # the base tip it was merged with
+T_MERGE = "1" * 40    # tree of the clean auto-merge of A and B
+T_OTHER = "2" * 40    # a DIFFERENT tree -- content nobody reviewed
+
+
+def test_a_pure_base_update_transfers_the_verdict():
+    """The whole purpose: update-branch authored nothing, so the bytes the
+    reviewer measured are the bytes on offer.
+
+    Breaks if: the tree comparison is dropped, or parent membership stops
+    being required -- either would make this return False and the queue would
+    stay serialized.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, T_MERGE, T_MERGE)
+    assert ok, why
+    assert "auto-merge" in why
+
+
+def test_a_head_carrying_new_content_does_not_transfer():
+    """THE ARM THAT MUST FIRE. Same parents, same approved head -- only the
+    TREE differs, which is exactly the case where somebody pushed a fix on top
+    of the base update and no reviewer has seen it.
+
+    This fixture differs from the accepting one in CONTENT ALONE (T_OTHER vs
+    T_MERGE). That is deliberate: a fixture that instead swapped the head for
+    its first parent would auto-merge to the same tree and pass without
+    exercising anything.
+
+    Breaks if: `automerge_tree != head_tree` stops refusing.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, T_MERGE, T_OTHER)
+    assert not ok
+    assert "NOT reviewed" in why
+
+
+def test_a_conflicted_automerge_refuses_rather_than_comparing():
+    """`merge-tree` writes NO tree when the merge conflicts, so a head that
+    exists anyway was hand-resolved -- unreviewed content by definition.
+
+    Breaks if: an unresolvable tree is treated as "no difference". Note the
+    distinction being pinned: None must NOT take the equality path, where
+    `None != T_MERGE` would coincidentally also refuse but for the wrong
+    reason and with the wrong message.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, None, T_MERGE)
+    assert not ok
+    assert "conflict" in why
+    assert "NOT reviewed" not in why, (
+        "a conflict was reported as a content difference; the two are "
+        "different findings and the operator acts on them differently")
+
+
+def test_an_ordinary_commit_is_not_a_base_update():
+    """One parent means somebody authored something. A base update is always a
+    two-parent merge.
+
+    Breaks if: the parent-count check is removed -- which would let an ordinary
+    push inherit a verdict merely by having a matching tree.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "1 parent" in why
+
+
+def test_an_octopus_merge_refuses_rather_than_approximating():
+    """Three parents cannot be modelled by the two-arg merge-tree the caller
+    runs, so the answer is unknown, so it refuses.
+
+    Breaks if: the check becomes `len(parents) >= 2`.
+    """
+    ok, why = gates.verdict_transfers_across_base_update(
+        [A, B, "c" * 40], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "3 parent" in why
+
+
+def test_a_verdict_from_outside_the_parents_does_not_transfer():
+    """Reachability is NOT the question. A commit between the approved head and
+    this merge could have authored anything, and the tree equality would still
+    hold for the parents actually merged.
+
+    Breaks if: parent membership stops being required.
+    """
+    ok, why = gates.verdict_transfers_across_base_update(
+        [B, "c" * 40], A, T_MERGE, T_MERGE)
+    assert not ok
+    assert "not a parent" in why
+
+
+def test_an_unresolvable_head_tree_is_not_a_pass():
+    """Fails CLOSED on an unmeasurable input, like every other gate here.
+
+    Breaks if: an empty head tree compares equal to an empty automerge tree and
+    returns True -- the "two unknowns agree" shape.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([A, B], A, "", "")
+    assert not ok
+    assert "unmeasurable" in why
+
+
+def test_the_transfer_is_direction_agnostic_about_which_parent_is_approved():
+    """update-branch puts the PR head first; a merge made the other way round
+    puts it second. The rule is about CONTENT, so parent ORDER must not decide
+    it.
+
+    Breaks if: the check becomes `parents[0] == approved_head`, which passes
+    the common case and silently refuses the other one.
+    """
+    ok, why = gates.verdict_transfers_across_base_update([B, A], A, T_MERGE, T_MERGE)
+    assert ok, why
+
+
+# ---------------------------------------------------------------------------
+# Supersession -- the ONE explicit discharge (#4704, measured on PR #4693)
+# ---------------------------------------------------------------------------
+#
+# The configuration that stranded #4693: the finding was NOT IN THE DIFF (a
+# squash body the coordinator authors at merge time), so nothing could be
+# pushed to void the block; the coordinator fixed it; the same reviewer
+# re-adjudicated at the UNCHANGED head and approved. `[RC, APPROVE, APPROVE]`,
+# all live, all pinned to one sha, NO-GO forever.
+#
+# Every fixture below goes through `parse_verdicts` on REAL COMMENT TEXT rather
+# than constructing `Verdict(supersedes=(1,))` by hand. A test that sets the
+# field directly cannot witness `_supersessions` at all -- it would pass with
+# the marker parser deleted, which is the "could not fail" shape
+# `assertion-design.md` is about.
+
+#: LIFTED from the source, never transcribed. A typo here would otherwise make
+#: the probe agree with itself while disagreeing with the parser.
+SUP = gates.SUPERSESSION_MARKER
+
+LATER = "2026-09-11T11:00:00Z"
+
+
+def _review(cid, token, supersedes=None, pad="", wrap=None):
+    """A real review comment, optionally carrying a supersession line.
+
+    `wrap` CITES the supersession instead of stating it, in each of the idioms
+    `classify_lines` enumerates.
+    """
+    body = f"## Independent re-review - {token}\n\n{pad}Head `abc`."
+    if supersedes is not None:
+        line = f"{SUP} {supersedes}"
+        block = {
+            None: line,
+            "quote": f"> {line}",
+            "fence": f"```\n{line}\n```",
+            "indent": f"    {line}",
+            "details": f"<details>\n{line}\n</details>",
+            "comment": f"<!--\n{line}\n-->",
+        }[wrap]
+        body += f"\n\n{block}\n"
+    return _c(cid, body, LATER)
+
+
+def _reduce(comments):
+    live, near = gates.parse_verdicts(comments, HEAD)
+    return gates.reduce_verdicts(live, near)
+
+
+def test_an_approve_that_names_the_block_discharges_it():
+    """#4693's shape exactly, and the only thing this feature adds.
+
+    Breaks if: the `SUPERSEDES` line is not parsed at all (the state before
+    #4704 -- this returns NO-GO "live REQUEST-CHANGES"), or if the id is read
+    but not matched against the blocking verdict's comment id.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert ok, why
+    assert SUP in why, f"the discharge must be said out loud: {why}"
+    assert "1" in why, f"the discharge must NAME what it cleared: {why}"
+
+
+def test_negative_control_an_approve_with_no_supersession_still_blocks():
+    """THE PROPERTY BEING PRESERVED, and the arm most likely to be lost.
+
+    Conjunction, not recency: a later APPROVE that names nothing discharges
+    nothing. This is the same input as the test above minus the marker line.
+
+    Breaks if: the discharge is loosened to "any later APPROVE clears any
+    earlier block" -- i.e. if the id match is dropped, this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_discharging_one_block_does_not_discharge_another():
+    """`[RC(1), RC(3), APPROVE(2) SUPERSEDES 1]` -> still NO-GO.
+
+    Breaks if: the discharge is computed as "a supersession is present, so
+    clear the blocks" rather than as a set of NAMED ids -- then block 3, which
+    nobody addressed, vanishes and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+    assert "[1]" in why, f"the partial discharge is still reported: {why}"
+
+
+def test_a_supersession_may_name_several_blocks_on_one_line():
+    """Both ids, one line. Pairs with the test above: that one pins that an
+    UNNAMED block survives, this one pins that a NAMED one does not have to
+    survive just because it was listed second.
+
+    Breaks if: only the first integer on the line is read -- then block 3 is
+    undischarged and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1 3"),
+    ])
+    assert ok, why
+
+
+def test_negative_control_a_supersession_naming_a_missing_id_is_refused():
+    """REFUSED, not ignored -- failing open here would be the whole defect.
+
+    The fixture carries NO block, deliberately: with one, the reduction is
+    NO-GO either way and the assertion would have no kill power. Alone, an
+    implementation that skips an unrecognised id returns GO.
+
+    Breaks if: `discharged` is built by set union without checking that each id
+    is present -- then this returns GO on an APPROVE that discharged nothing.
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="999")])
+    assert not ok
+    assert SUP in why, why
+    assert "999" in why, f"the refusal must name the unresolvable id: {why}"
+
+
+def test_negative_control_a_supersession_naming_an_approve_is_refused():
+    """An id that IS a verdict but is NOT a block.
+
+    Breaks if: the target's token is never inspected -- then this returns GO,
+    and the same hole lets a supersession delete the only live APPROVE.
+    """
+    ok, why = _reduce([
+        _review(1, "APPROVE"),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "not a block" in why, why
+
+
+def test_negative_control_a_supersession_naming_a_near_miss_is_refused_not_ignored():
+    """A blocking NEAR-MISS is not a verdict, so it cannot be superseded.
+
+    PINS THE REASON, NOT THE VERDICT, and says so: the reduction is NO-GO
+    either way here (the near-miss blocks on its own), so `not ok` alone has no
+    kill power for this arm. What distinguishes refusal from silence is WHICH
+    reason is reported.
+
+    Breaks if: an id that is not in the live verdict set is skipped -- then the
+    reported reason is "unparseable review at head", the broken supersession is
+    invisible, and it stays invisible until the round where it is the only
+    thing between the PR and a merge.
+    """
+    ok, why = _reduce([
+        _c(1, "## Independent re-review - CHANGES REQUIRED\n\nHead `abc`.", LATER),
+        _review(2, "APPROVE", supersedes="1"),
+    ])
+    assert not ok
+    assert why.startswith(SUP), f"the refusal must outrank the near-miss: {why}"
+
+
+def test_negative_control_a_block_cannot_discharge_a_block():
+    """Mutual annihilation: `[RC(1) SUPERSEDES 2, RC(2) SUPERSEDES 1, APPROVE(3)]`.
+
+    Two blocks cancel each other and no reviewer ever withdrew either.
+
+    Breaks if: any live verdict may carry an honoured supersession, rather than
+    only a non-blocking one -- then both blocks are discharged, the APPROVE
+    satisfies the last condition, and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES", supersedes="2"),
+        _review(2, "REQUEST-CHANGES", supersedes="1"),
+        _review(3, "APPROVE"),
+    ])
+    assert not ok
+    assert SUP in why, why
+    assert "cannot discharge a block" in why, why
+
+
+def test_negative_control_a_supersession_cannot_name_itself():
+    """PINS THE REASON, NOT THE VERDICT, and says so: the block at 1 is
+    undischarged either way, so this is NO-GO with or without the self-check.
+
+    Breaks if: the `target == v.comment_id` arm is removed -- the reported
+    reason becomes "live REQUEST-CHANGES", and self-discharge becomes a legal
+    no-op that reads as an act.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="2"),
+    ])
+    assert not ok
+    assert "names ITSELF" in why
+
+
+@pytest.mark.parametrize("wrap", ["fence", "indent", "details", "comment", "quote"])
+def test_negative_control_a_cited_supersession_discharges_nothing(wrap):
+    """Formatting may refuse to GRANT, and a discharge IS a grant.
+
+    A `SUPERSEDES` line that is quoted, fenced, indented, collapsed or
+    HTML-commented is a CITATION of a previous round -- relaying a verdict
+    inside a fence is how this program moves them around -- not an act.
+
+    Breaks if: `_supersessions` iterates raw lines instead of `classify_lines`
+    prose -- then a cited line discharges a live block and this returns GO.
+
+    WHICH ARMS ACTUALLY KILL, disclosed rather than counted (assertion-design
+    §5): `fence`, `indent`, `details` and `comment` each kill that mutation,
+    because `line.strip()` leaves those lines starting with the marker. `quote`
+    does NOT -- `.strip()` never removes the `>`, so `startswith(SUP)` is False
+    either way and the arm survives it. It is kept as a second, independent
+    guard on the idiom that produced the original bypass, and it is NOT counted
+    as coverage of the `classify_lines` call. Measured: the first version of
+    this test used `quote` alone and the raw-lines mutant SURVIVED the suite.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="1", wrap=wrap),
+    ])
+    assert not ok
+    assert "REQUEST-CHANGES" in why
+
+
+def test_negative_control_a_supersedes_line_with_no_id_is_refused():
+    """`SUPERSEDES the round-3 finding` names nothing addressable.
+
+    THIS FIXTURE IS DELIBERATELY DIGIT-BEARING. Its first run caught the
+    parser mining `3` out of "round-3" under a bare `\\d+` scan, so an English
+    sentence discharged whichever verdict happened to be comment 3. The
+    remainder of the line must be ids and separators ONLY.
+
+    No block in the fixture, for the same reason as the missing-id test: with
+    one, both implementations return NO-GO and the arm is blind.
+
+    Breaks if: a non-id remainder is mined for digits (the reason becomes
+    "names 3, which is not a live verdict"), or is dropped rather than recorded
+    as malformed (this returns GO while its author believes they discharged
+    something).
+    """
+    ok, why = _reduce([_review(2, "APPROVE", supersedes="the round-3 finding")])
+    assert not ok
+    assert SUP in why, why
+    assert "no comment id" in why, why
+
+
+def test_a_supersession_tolerates_the_hash_and_comma_separators():
+    """`SUPERSEDES #1, 3` is the shape a human actually types. Pairs with the
+    test above: that one pins what is REFUSED, this one pins that the refusal
+    did not swallow the ordinary spelling.
+
+    Breaks if: `#` or `,` is not normalised to a separator -- the line becomes
+    malformed and this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _review(3, "REQUEST-CHANGES"),
+        _review(2, "APPROVE", supersedes="#1, 3"),
+    ])
+    assert ok, why
+
+
+def test_a_supersession_below_the_token_window_still_registers():
+    """DELIBERATE, and asserted so a later narrowing is a decision, not a drift.
+
+    `token_window_chars` bounds where a verdict may be ANNOUNCED, because
+    announcing is the forgeable direction. The supersession is read off a
+    comment that has already announced a live verdict under that strict rule,
+    so bounding it too would only make a legitimate discharge silently
+    ineffective as a function of header length.
+
+    The fixture asserts its own arithmetic rather than trusting the pad: the
+    marker must genuinely start past the window.
+
+    Breaks if: `_supersessions` is narrowed to `body[:window]` -- then the
+    block is undischarged and this returns NO-GO.
+    """
+    comment = _review(2, "APPROVE", supersedes="1", pad="filler. " * 40)
+    window = gates.load_policy(
+        os.path.join(os.path.dirname(__file__), "..", "policy.json")
+    )["verdict_parsing"]["token_window_chars"]
+    assert comment["body"].index(SUP) > window, (
+        "the pad must push the marker PAST the window, or this test witnesses "
+        f"nothing: index={comment['body'].index(SUP)} window={window}"
+    )
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), comment])
+    assert ok, why
+
+
+def test_a_supersession_on_a_comment_that_announces_no_verdict_is_reported():
+    """It discharges nothing -- the safe direction -- which is exactly why it
+    must not be silent. None of the other near-miss branches fire for a comment
+    whose only unusual feature is this line.
+
+    Breaks if: the branch is removed -- `near` comes back empty for comment 5
+    and the author's belief that a block was cleared meets no contradiction.
+    """
+    live, near = gates.parse_verdicts(
+        [_c(5, f"Fixed the squash body.\n\n{SUP} 1\n", LATER)], HEAD
+    )
+    assert live == []
+    assert [n.comment_id for n in near] == [5]
+    assert SUP in near[0].reason
+    assert not near[0].blocks, "an unannounced supersession is not a block"
+
+
+# ---------------------------------------------------------------------------
+# ROUND 2: the discharge is the FIRST place the prose flag GRANTS anything.
+#
+# Before #4704, `classify_lines` fed two report-only callers -- `_cited_marker_
+# lines` and `out_of_window` -- so a missed idiom merely UNDER-REPORTED a near
+# miss. `_supersessions` turned the same flag into a grant, which changes the
+# consequence of a gap from "a citation is logged" to "a citation discharges a
+# block nobody withdrew". An independent review measured `<pre>`, `<blockquote>`
+# and `<code>` all doing exactly that; probing the class rather than the three
+# tags found `<samp>`, `<kbd>`, `<q>`, a mid-line `<!--`, and -- with no HTML at
+# all -- the lazy continuation of an ordinary Markdown blockquote.
+#
+# WHERE THE "RENDERS QUOTED OR LITERAL" CLAIM COMES FROM: GitHub's own renderer,
+# `POST /markdown` with mode=gfm, on 2026-09-24. Not from reading CommonMark --
+# which would have been wrong twice, because GitHub SANITISES `<script>`,
+# `<style>` and `<textarea>` (their content renders as ordinary visible prose)
+# while CommonMark makes them the most literal block type there is.
+
+
+def _carrier(block, cid=2, token="APPROVE", target=1):
+    """An announcing verdict whose SUPERSEDES line sits inside `block`.
+
+    `block` carries a `{line}` placeholder so each fixture shows the wrapper and
+    nothing else. The marker itself is always LIFTED from the source (`SUP`),
+    never transcribed, so a rename cannot make these probes agree with
+    themselves while disagreeing with the parser.
+    """
+    body = (f"## Independent re-review - {token}\n\nHead `abc`.\n\n"
+            + block.format(line=f"{SUP} {target}") + "\n")
+    return _c(cid, body, LATER)
+
+
+#: Measured against GitHub's renderer. The first eight put the marker inside a
+#: quoting or literal container; the last three render it VISIBLY and are
+#: refused anyway -- see the test docstring.
+HTML_CITATIONS = {
+    "pre": "<pre>\n{line}\n</pre>",
+    "blockquote": "<blockquote>\n{line}\n</blockquote>",
+    "code": "<code>\n{line}\n</code>",
+    "samp": "<samp>\n{line}\n</samp>",
+    "kbd": "<kbd>\n{line}\n</kbd>",
+    "q": "<q>\n{line}\n</q>",
+    "pre-with-attrs": '<pre lang="text">\n{line}\n</pre>',
+    "PRE-uppercase": "<PRE>\n{line}\n</PRE>",
+    "div": "<div>\n{line}\n</div>",
+    "table-cell": "<table>\n<tr><td>\n{line}\n</td></tr>\n</table>",
+    "unknown-tag": "<mytag>\n{line}\n</mytag>",
+}
+
+
+@pytest.mark.parametrize("wrapper", sorted(HTML_CITATIONS))
+def test_negative_control_a_supersession_inside_an_html_block_discharges_nothing(wrapper):
+    """THE ROUND-2 BLOCKER, and the class it belongs to rather than its members.
+
+    `classify_lines` knew `<details>` and nothing else, so each of these read as
+    prose and performed a REAL discharge of a live block. Measured, all eleven,
+    before the fix: `GO=True | SUPERSEDES discharged [1]`.
+
+    Breaks if: the HTML rule is narrowed back to an enumeration (arm SS9 spells
+    exactly that -- `_HTML_OPEN`/`_HTML_CLOSE` matching only `details`), or if
+    the `not html` term leaves the prose expression (arm C3).
+
+    OVER-STRICT ON PURPOSE, AND SAID OUT LOUD: `div`, `table-cell` and
+    `unknown-tag` render their content VISIBLY on GitHub -- they are not
+    citations, and refusing to grant inside them is stricter than the rendered
+    artifact requires. They are pinned here because over-strict is the safe
+    direction for a GRANT (a refusal is a visible NO-GO the author can fix; a
+    grant is a block nobody withdrew), and pinning makes a later loosening a
+    decision rather than a drift.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier(HTML_CITATIONS[wrapper])])
+    assert not ok, f"{wrapper}: a cited supersession GRANTED a discharge -- {why}"
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_after_a_closed_html_block_still_discharges():
+    """THE POSITIVE HALF of the rule above, and the regression it could cause.
+
+    This program collapses superseded reviews in `<details>` constantly. If an
+    element opened and never closed -- or closed and never popped -- every line
+    below it would be non-prose for the rest of the body, and a legitimate
+    discharge would stop working as a silent function of markup above it. That
+    silent no-op is the failure this module keeps filing, so the close path is
+    pinned as hard as the open path.
+
+    Breaks if: `_HTML_CLOSE` stops popping the element stack (arm SS16) -- the
+    `</details>` is ignored, the marker below reads as collapsed, and this
+    returns NO-GO with no explanation of why the discharge did nothing.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("<details>\n<summary>round 2</summary>\ncited\n</details>\n\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+@pytest.mark.parametrize("void", ["<br>", "<hr>", '<img src="badge.svg">', "<div/>"])
+def test_a_supersession_after_a_void_html_element_still_discharges(void):
+    """A void or self-closing element has no content, so it OPENS NOTHING.
+
+    Without the exemptions, one `<br>` or one badge `<img>` at the start of a
+    line latches the rest of the comment as non-prose. Review bodies in this
+    repo carry both.
+
+    Breaks if: `VOID_HTML` is emptied (arm SS14) or the self-closing test is
+    dropped (arm SS18).
+
+    WHICH PARAM KILLS WHICH, disclosed rather than counted (assertion-design
+    §5), and MEASURED -- the first version of this param set could not witness
+    SS18 at all and the arm SURVIVED a green suite, which is the same
+    fixture-not-arm defect SS5 recorded one round earlier:
+
+      * SS14 is killed by `<br>`, `<hr>` and `<img …>`, and by none of them
+        alone would SS18 die -- with `VOID_HTML` empty the `/>` test still
+        catches every XHTML-spelled VOID tag, so `<br/>` witnesses neither
+        branch and was replaced;
+      * SS18 is killed only by `<div/>`, a self-closing NON-void tag, which is
+        the sole input for which `endswith("/>")` is load-bearing.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier(void + "\n{line}")])
+    assert ok, why
+
+
+def test_negative_control_a_lazily_continued_supersession_discharges_nothing():
+    """NO HTML, NO EXOTIC INPUT -- the line after a `>` line, in plain ASCII.
+
+    CommonMark lets a blockquote paragraph run onto the next line without a
+    `>`, so this renders ENTIRELY inside the quote (measured, GitHub's
+    renderer):
+
+        > the previous round said
+        SUPERSEDES 1
+
+    `_is_quoted` is a per-line test and called line 2 prose. Of every shape
+    probed this round it is the most likely accident: paste a quoted block from
+    an earlier round and forget the `>` on its last line.
+
+    Breaks if: `lazy` is dropped from the prose expression (arm SS10) -- the
+    quoted citation discharges the live block and this returns GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("> the previous round said\n{line}"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_after_a_blockquote_and_a_blank_line_still_discharges():
+    """THE POSITIVE HALF of lazy continuation, and the over-broad rule it rules out.
+
+    A blank line ends the quote, so this marker is genuinely the author's own
+    words and must still grant. Without this, "non-prose after any quoted line"
+    would pass the negative control above while silently killing every discharge
+    written below a quotation -- and quoting the finding you are discharging is
+    the natural way to write one.
+
+    Breaks if: `lazy` is widened to `quoted_para` alone, i.e. the blank-line
+    reset or `_continues_paragraph` is removed -- this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("> the finding I am withdrawing\n\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+def test_lazy_continuation_does_not_swallow_a_line_that_starts_a_new_block():
+    """Reads `classify_lines` directly, because the consequence is a REPORT.
+
+    A heading or a list item after a quoted line interrupts the quote; calling
+    them cited would misreport a near-miss rather than misgrant a discharge, so
+    no `reduce_verdicts` fixture can witness it. Asserted on the flag itself.
+
+    Breaks if: `_continues_paragraph` returns True for everything (arm SS15) --
+    the heading and the bullet below are reported as prose=False.
+    """
+    flags = dict(gates.classify_lines(
+        "> cited round 2\n"
+        "## Independent review - APPROVE\n"
+        "> cited again\n"
+        "- a list item\n"
+        "> cited a third time\n"
+        "ordinary continuation text\n"
+    ))
+    assert flags["## Independent review - APPROVE"] is True
+    assert flags["- a list item"] is True
+    assert flags["ordinary continuation text"] is False, (
+        "plain paragraph text after a quote IS lazy continuation -- if this "
+        "flips True the negative control above is witnessing nothing"
+    )
+
+
+def test_negative_control_a_supersession_in_a_mid_line_html_comment_discharges_nothing():
+    """`see below <!--` hides everything after it, and renders NOTHING.
+
+    Measured against GitHub's renderer: the marker is absent from the rendered
+    output entirely. An invisible grant is worse than a cited one -- a reader
+    auditing the thread cannot even see the act they are being asked to trust.
+    The comment scan is therefore not anchored to the start of the line, unlike
+    the element scan (see `classify_lines` for why those two differ).
+
+    Breaks if: `opens_comment` goes back to `bare.startswith("<!--")` (arm SS13)
+    -- this returns GO on a discharge nobody can read.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("see below <!--\n{line}\n-->"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+def test_a_supersession_below_a_balanced_inline_comment_still_discharges():
+    """THE POSITIVE HALF of the unanchored comment scan.
+
+    `a <!-- note --> here` opens nothing -- it is closed on its own line. A
+    scan that merely asked `"<!--" in bare` would latch here and silently kill
+    every discharge below any inline comment.
+
+    Breaks if: the `rsplit`/`-->` test is reduced to a containment check --
+    this returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("a <!-- note --> here\n{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+#: The eight characters `str.splitlines()` breaks on and CommonMark does not.
+#: Built from CODE POINTS, never pasted, so an editor or a transport that
+#: normalises one into the plain space it is pretending not to be cannot make
+#: the fixture agree with itself while witnessing nothing.
+OVER_SPLIT = {
+    "U+000B vertical tab": chr(0x0B),
+    "U+000C form feed": chr(0x0C),
+    "U+001C file separator": chr(0x1C),
+    "U+001D group separator": chr(0x1D),
+    "U+001E record separator": chr(0x1E),
+    "U+0085 next line": chr(0x85),
+    "U+2028 line separator": chr(0x2028),
+    "U+2029 paragraph separator": chr(0x2029),
+}
+
+
+@pytest.mark.parametrize("name", sorted(OVER_SPLIT))
+def test_negative_control_an_over_split_separator_cannot_manufacture_a_prose_line(name):
+    """`str.splitlines()` breaks on eight characters GitHub does not.
+
+    Each one therefore MANUFACTURES a line: `"    relayed<SEP>SUPERSEDES 1"` is
+    one indented code line on GitHub (measured: it renders inside
+    `<pre><code>`) and two lines to `splitlines()`, the second of them at
+    indent zero and, before this, prose.
+
+    The fixture is deliberately INDENTED rather than quoted. A quoted fixture
+    would be killed by lazy continuation as well, so it could not say which
+    closure was doing the work -- an arm invisible to its own fixture is the
+    SS5 lesson this feature is already carrying.
+
+    Breaks if: `_lines` goes back to `text.splitlines()` (arm SS12) -- the
+    separator splits, the second line reads as prose and this returns GO.
+    """
+    sep = OVER_SPLIT[name]
+    assert len(f"x{sep}y".splitlines()) == 2, (
+        f"{name} is not a splitlines() boundary, so this fixture witnesses "
+        "nothing -- the arm would survive it"
+    )
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("    relayed output" + sep + "{line}"),
+    ])
+    assert not ok, why
+    assert "REQUEST-CHANGES" in why, why
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r", "\r\n"])
+def test_a_real_line_ending_after_indented_code_still_discharges(ending):
+    """THE POSITIVE HALF: `\\n`, `\\r` and `\\r\\n` ARE CommonMark line endings.
+
+    An indented code block ends at the first non-indented line, so a marker
+    below one is the author's own words and must grant. This is what stops the
+    fix above from degenerating into "anything after an indented line is code".
+
+    Breaks if: `_lines` splits on `"\\n"` alone -- a lone `\\r` stops being a
+    line ending, `    relayed output\\rSUPERSEDES 1` becomes one indented line,
+    and the `\\r` case here returns NO-GO.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("    relayed output" + ending + "{line}"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+#: Every one satisfies `str.isdigit()`. Three are accepted by `int()` and three
+#: are not, and that split is the whole point -- see the test. Code points, not
+#: pasted glyphs, for the same reason as `OVER_SPLIT`.
+NON_ASCII_DIGITS = {
+    "U+00B2 superscript two": chr(0xB2),
+    "U+2081 subscript one": chr(0x2081),
+    "U+2460 circled one": chr(0x2460),
+    "U+0661 arabic-indic one": chr(0x661),
+    "U+FF11 fullwidth one": chr(0xFF11),
+    "U+0967 devanagari one": chr(0x967),
+}
+
+
+@pytest.mark.parametrize("name", sorted(NON_ASCII_DIGITS))
+def test_a_non_ascii_digit_is_refused_and_never_raises(name):
+    """ONE ROOT CAUSE, TWO OPPOSITE FAILURES, and the quiet one is the worse.
+
+    `str.isdigit()` is True for digits in every script and for superscripts;
+    `int()` accepts only the decimal ones. Measured before the fix:
+
+      * `SUPERSEDES <U+00B2>`, `<U+2081>` and `<U+2460>` raised `ValueError`
+        straight out of `parse_verdicts`, and BOTH call sites are unguarded --
+        `merge_gate.py:1444` and `gates.py:907` -- so one character in a
+        comment body took the merge gate down with a traceback;
+      * `SUPERSEDES <U+0661>`, `<U+FF11>` and `<U+0967>` were silently
+        HONOURED as id 1 and DISCHARGED the live block. `GO=True`.
+
+    A test covering only the crash leaves the discharge half unwitnessed, which
+    is why this is parametrised across both groups: three of these six return
+    GO under the defect and three raise, and the assertions below fail on
+    either.
+
+    Breaks if: `p.isascii()` is dropped from the id test (arm SS11) -- the
+    decimal three return GO, and the other three raise before `_reduce` returns
+    at all.
+    """
+    digit = NON_ASCII_DIGITS[name]
+    assert digit.isdigit(), f"{name} must satisfy isdigit() or the id test never sees it"
+    assert not digit.isascii(), (
+        f"{name} must be NON-ascii, or `isascii()` is not what refuses it and "
+        "this fixture witnesses nothing"
+    )
+    comments = [_review(1, "REQUEST-CHANGES"), _carrier("{line}", target=digit)]
+    live, near = gates.parse_verdicts(comments, HEAD)   # must not raise
+    ok, why = gates.reduce_verdicts(live, near)
+    assert not ok, f"{name} was HONOURED as a comment id -- {why}"
+    assert SUP in why, why
+    assert "no comment id" in why, why
+
+
+def test_an_ascii_digit_still_discharges_beside_the_refusal_above():
+    """The positive control for the id test: tightening it did not swallow the
+    one spelling that was ever legitimate.
+
+    Breaks if: the id test is tightened past ASCII decimals and a plain `1` is
+    rejected -- this returns NO-GO.
+    """
+    ok, why = _reduce([_review(1, "REQUEST-CHANGES"), _carrier("{line}")])
+    assert ok, why
+    assert "[1]" in why, why
+
+
+def test_disclosed_gap_a_mid_line_html_opener_still_grants():
+    """A KNOWN HOLE, PINNED SO CLOSING IT IS A DECISION -- not an endorsement.
+
+    `_HTML_OPEN` is anchored to the start of the line, so `relaying <pre>`
+    followed by a pasted marker still reads as prose and still discharges, even
+    though GitHub renders it inside the `<pre>`.
+
+    Un-anchoring it was MEASURED, not argued. Run through this very classifier
+    over the 50 verdict comments on ten recent PRs, a mid-line scan newly
+    demotes a prose line in 28 of 50 bodies raw, and in 6 of 50 (12%) even
+    after inline code spans are stripped -- because reviewers here quote shell
+    output full of `<file>`, `<path>`, `<sha>` and `<title>`. That trades one
+    input shape nobody writes for a silent non-grant in one verdict body in
+    eight, and a silent no-op is the failure this module keeps filing.
+
+    Breaks if: `_HTML_OPEN` loses its `^` anchor. When it does, DELETE this
+    test rather than adjust it, and record the new latch measurement -- its
+    only job is to make that change deliberate.
+    """
+    ok, why = _reduce([
+        _review(1, "REQUEST-CHANGES"),
+        _carrier("relaying <pre>\n{line}\n</pre>"),
+    ])
+    assert ok, why
+    assert "[1]" in why, why

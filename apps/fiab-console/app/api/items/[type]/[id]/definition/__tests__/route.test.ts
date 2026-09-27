@@ -42,7 +42,18 @@ const baseItem = () => ({
 let stored = baseItem();
 /** loadOwnedItem returns the item only for the owned id — else null (404 path). */
 const loadOwnedItemMock = vi.fn(async (id: string) => (id === 'item-1' ? stored : null));
-vi.mock('@/app/api/items/_lib/item-crud', () => ({
+// #4619 — `importOriginal`, NOT a hand-written stub. The route now also imports
+// `assertNoServerDerivedScopeChange`, `carryServerDerivedScope` and
+// `ServerOwnedStateError` from this module, and the only thing this file needs
+// to fake is `loadOwnedItem` (the Cosmos read). Stubbing the other three to
+// identity would make the guard INVISIBLE to every test here — including the
+// `re-attaches secrets & provisioning` arm below, whose whole subject is what
+// survives the round trip. That is the exact defect review found in the promote
+// specs one round earlier (a vi.mock factory stubbing `carryServerDerivedScope`
+// to identity, which left `promote.ts:236` with zero kill power). So the REAL
+// implementations run here.
+vi.mock('@/app/api/items/_lib/item-crud', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/app/api/items/_lib/item-crud')>()),
   loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...(a as [string])),
 }));
 

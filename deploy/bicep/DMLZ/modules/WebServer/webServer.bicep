@@ -63,7 +63,7 @@ param osDiskType string = 'Premium_LRS'
 @description('Windows Server image reference.')
 param imageReference object = {
   publisher: 'MicrosoftWindowsServer'
-  offer: 'WindowsServer'
+  offer: 'windowsserver2022'
   sku: '2022-datacenter-azure-edition'
   version: 'latest'
 }

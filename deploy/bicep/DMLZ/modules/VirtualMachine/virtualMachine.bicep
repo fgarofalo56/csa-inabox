@@ -35,7 +35,7 @@ param adminPassword string
 @description('Subnet ID for the VM NIC (private-only, no public IP).')
 param subnetId string
 
-@description('Windows Server image reference (ignored for Linux).')
+@description('Windows Server image reference (ignored for Linux). Offer reverted from `windowsserver2022` (#4658 → this fix): Azure refuses an imageReference change on an EXISTING VM (PropertyChangeNotAllowed), so on a VM that edit could never migrate anything — it only breaks redeploys. Migrating an existing VM off the .NET-6-bearing offer requires re-creating it before 2027-01-11; see #4672. Override this param on a GREENFIELD deployment to stand the VM up on `windowsserver2022` directly. VMSS modules keep the new offer, where a model image update IS accepted.')
 param windowsImageReference object = {
   publisher: 'MicrosoftWindowsServer'
   offer: 'WindowsServer'
