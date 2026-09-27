@@ -43,8 +43,9 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
       surfaces: value.summaries,
       overview: value.overview,
       floorsMeta: value.floorsMeta,
-      // Honest evaluator posture: the "Run now" button is live only when the
-      // Function URL is wired; the page still renders historical scores either way.
+      // Honest evaluator posture: the "Run now" button is live only when
+      // LOOM_COPILOT_EVALUATOR_JOB_ID is set (evaluatorRunGate); the page still
+      // renders historical scores either way.
       evaluatorConfigured: evaluatorRunGate() === null,
       cache: { stale: meta.stale, cachedAt: meta.cachedAt },
     });

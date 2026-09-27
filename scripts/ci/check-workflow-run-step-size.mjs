@@ -103,7 +103,7 @@
  *     same limit (`actions/github-script`'s `script:`) and are NOT measured.
  *     Latent, not live. METHOD (a figure without one is not falsifiable):
  *     `jobs.*.steps[].with` via THIS file's `parseWorkflow`, each value through
- *     `runStepBytes` — 163 block scalars in 90 of 127 files, largest 5,441 B.
+ *     `runStepBytes` — 167 block scalars in 91 of 127 files, largest 5,441 B.
  *   • Composite actions are NOT measured. There are ZERO tracked `action.yml` /
  *     `action.yaml` files in the repo today (`git ls-files`), so there is no
  *     gap right now — but adding one puts its `run:` steps outside this control.

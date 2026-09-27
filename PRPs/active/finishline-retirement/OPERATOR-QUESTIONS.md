@@ -392,16 +392,23 @@ pairs with proof in a reviewable commit.
 
 **Still live at head.** The C3 migration is real and partly landed —
 `report-subscriptions-job.bicep` is an in-VNet scheduled Container App Job
-running as the Console UAMI, and `main.bicep:8650` still carries the measurement
-that `func-secexp`/`func-cpeval` *"DO hold enabled timers."* Function Apps are
-still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`,
-`monitor-ops-agent.bicep`, `scc-labels-function.bicep`), and
-`full-app-deploy-commercial.yml:1259` still looks up `func-cpeval-*` at deploy
-time. Nothing has disabled the duplicate timers. *(That last sentence was true
-when written and is **false at head** — the timers are disabled, out of band; see
-the note at the top of this row. Everything before it still holds, and the bicep
-sentences being accurate is exactly why the state is fragile: nothing in IaC
-asserts the disable, so nothing would notice it being undone.)*
+running as the Console UAMI. Function Apps are still declared in bicep
+(`builtin-mcp.bicep`, `label-propagation-function.bicep`,
+`monitor-ops-agent.bicep`, `scc-labels-function.bicep`) — all four verified
+present at head with `git ls-files`. *(Three further sentences stood here and
+are **false at head**, all three made false by this PR rather than by drift:
+`main.bicep` no longer "still carries the measurement" that
+`func-secexp`/`func-cpeval` hold enabled timers — this PR deleted that comment,
+which sat at `main.bicep:8678` on the base `eb73a329d`;
+`full-app-deploy-commercial.yml` no longer "still looks up `func-cpeval-*` at
+deploy time" — the `az functionapp list` lookup filtering on
+`starts_with(name,'func-cpeval-')` at base `:1259` is gone, and the only
+remaining mention, at `:1234`, is explicitly past-tense; and "nothing has
+disabled the duplicate timers" was overtaken out of band, per the note at the
+top of this row. The state is still fragile for the original reason, which no
+longer depends on those sentences: nothing in IaC asserts the disable, so
+nothing would notice it being undone — `check-retired-function-timers.sh` is
+the only thing that would.)*
 
 ---
 
