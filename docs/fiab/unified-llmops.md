@@ -123,11 +123,11 @@ FLAG0 kill-switches (`lib/admin/runtime-flags.ts`, default ON):
 ## Per-cloud & sovereignty
 
 Identical in Commercial and GCC-High — pure Cosmos metadata plus the in-VNet
-evaluator Function both clouds deploy. No Fabric or Power BI dependency.
+evaluator job both clouds deploy. No Fabric or Power BI dependency.
 
 **IL5 note.** The registry, the eval scores it carries, the approval records, the
 budgets, and the usage ledger all live in the deployment's **own** Cosmos, and
-the scoring runs on the deployment's **own** evaluator Function inside the VNet.
+the scoring runs on the deployment's **own** evaluator job inside the VNet.
 There is **no external LLMOps SaaS** anywhere in this path — no Braintrust, no
 LangSmith, no Weights & Biases. That is exactly why Loom builds this natively: an
 IL5 enclave cannot ship prompts, completions, or eval scores to a commercial

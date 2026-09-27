@@ -1,7 +1,7 @@
 /**
  * POST /api/internal/copilot/eval-probe  (GET = corpus-manifest probe) — E2.
  *
- * The copilot-evaluator Function's window into the REAL Copilot path (wiring
+ * The copilot-evaluator job's window into the REAL Copilot path (wiring
  * (a) of the E2 spec): one call runs the exact `searchDocs()` retrieval the
  * docs Copilot uses AND one real Copilot turn through the unified
  * `aoai-chat-client` (tier routing included), returning

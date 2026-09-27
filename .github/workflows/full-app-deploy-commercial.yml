@@ -1277,6 +1277,9 @@ jobs:
   # therefore buys a red job an operator can see when they open the run; it does
   # NOT buy a red run, and nothing alerts on it. Reading the `post-deploy-evals`
   # JOB conclusion is the receipt for a re-baseline, never the run badge.
+  # That run-level blind spot is NOT closed here and is NOT incidental: it is
+  # tracked as #4726 (make the staleness watcher read job conclusions). Do not
+  # read the job's fail-closed step as closing it.
   post-deploy-evals:
     name: Post-deploy Copilot quality evals (ACA job start)
     needs: [resolve, redeploy-with-apps]
@@ -1299,17 +1302,24 @@ jobs:
         # The script this calls used to be a 633-line inline `run:` block of
         # 38,355 UTF-8 bytes. GitHub refuses to LOAD a workflow whose single
         # `run:` script carries `${{ }}` and exceeds ~20,944 bytes, so this
-        # ENTIRE FILE stopped loading ON `fix/4495-op19-function-apps`: every
-        # push to that branch produced one `failure` run with ZERO jobs and no
-        # other signal. 13 of them, `322a05130` (2026-09-18) through
-        # `db294349a` (2026-09-25) -- the COMPLETE run population for this
-        # workflow on that branch (runs API `total_count=13`, 13 rows, 13
-        # distinct head SHAs, every one `event=push` / `conclusion=failure` /
-        # jobs `total_count=0`). `main` was never affected: its copy is
-        # `workflow_dispatch`-only and its whole population is 90 runs, all
-        # `workflow_dispatch`, zero push runs (#4586). Actions expressions do
-        # NOT expand inside a called script, so the two the block interpolated
-        # are passed in through `env:`.
+        # ENTIRE FILE stopped loading on `fix/4495-op19-function-apps`.
+        # NOTE the trigger shape, because it is the discriminator: this file is
+        # `workflow_dispatch`-only and was throughout the window (verified at
+        # `322a05130`, `db294349a` and head). A file GitHub cannot LOAD still
+        # emits one 0-job `failure` run per push, INDEPENDENT of its triggers --
+        # that run is the load error, not the workflow. 13 of them, `322a05130`
+        # (2026-09-18T05:28:49Z) through `db294349a` (2026-09-25T17:13:33Z) --
+        # the COMPLETE run population for this workflow on that branch (runs API
+        # `total_count=13`, 13 rows, 13 distinct head SHAs, every one
+        # `event=push` / `conclusion=failure` / jobs `total_count=0`).
+        # The FIX is witnessed by the absence that follows: the 5 pushes after
+        # `db294349a` (`39439b988`, `f33388c40`, `0d9f6acaf`, `c73655c87`,
+        # `18ef9087e`) produced NO run at all and `total_count` is still 13 --
+        # the file loads again, so no load-error run is emitted. `main` was
+        # never affected because the oversized block never landed there; its
+        # population is 90 runs, all `workflow_dispatch`, zero push (#4586).
+        # Actions expressions do NOT expand inside a called script, so the two
+        # the block interpolated are passed in through `env:`.
         # scripts/ci/check-workflow-run-step-size.mjs now fails the build
         # before this can recur.
         env:

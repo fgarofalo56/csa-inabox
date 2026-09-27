@@ -1,7 +1,7 @@
 /**
  * BFF route tests for /api/internal/copilot/eval-probe (E2).
  *
- * Verifies the machine-to-machine contract the copilot-evaluator Function
+ * Verifies the machine-to-machine contract the copilot-evaluator job
  * depends on:
  *   - fail-closed internal-token auth (401 without/with a wrong token, and
  *     when LOOM_INTERNAL_TOKEN is unset);

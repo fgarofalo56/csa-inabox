@@ -11,7 +11,7 @@ users type into directly.
   where the demo seed has run. They are matched case-insensitively (substring,
   either direction) against each returned result's display name / qualified name
   / id.
-- Scored by the **copilot-evaluator Function**'s `searchRelevance` mode
+- Scored by the **copilot-evaluator job**'s `searchRelevance` mode
   (`azure-functions/copilot-evaluator`): **hit-rate@k / MRR / NDCG@k**
   (`scoreSearchRelevance`), against the REAL search results returned by
   `POST /api/internal/copilot/search-probe` (which runs `searchCatalog` as the

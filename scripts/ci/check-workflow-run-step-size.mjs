@@ -100,10 +100,10 @@
  * coverage of the GitHub-side size limit:
  *   • It walks `jobs.*.steps[].run` in `.github/workflows/*.y{a,}ml` ONLY.
  *   • `with:` inputs are templated the same way and plausibly fall under the
- *     same limit — `actions/github-script`'s `script:` being the obvious case —
- *     and are NOT measured. Latent, not live: the largest block-scalar `with:`
- *     input in the tree today is 6,755 bytes (`loom-drift-check.yml`, key
- *     `script`), across 166 such inputs in 127 files.
+ *     same limit (`actions/github-script`'s `script:`) and are NOT measured.
+ *     Latent, not live. METHOD (a figure without one is not falsifiable):
+ *     `jobs.*.steps[].with` via THIS file's `parseWorkflow`, each value through
+ *     `runStepBytes` — 163 block scalars in 90 of 127 files, largest 5,441 B.
  *   • Composite actions are NOT measured. There are ZERO tracked `action.yml` /
  *     `action.yaml` files in the repo today (`git ls-files`), so there is no
  *     gap right now — but adding one puts its `run:` steps outside this control.

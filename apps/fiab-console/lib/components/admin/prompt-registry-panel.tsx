@@ -211,7 +211,7 @@ export function PromptRegistryPanel() {
           title="No prompts registered yet"
           body={
             'Register a prompt to version it. Each publish mints the next semver and asks the copilot-evaluator ' +
-            'Function — the same harness the Answer quality tab scores — to grade it against that surface’s golden ' +
+            'job — the same harness the Answer quality tab scores — to grade it against that surface’s golden ' +
             'eval set. A version can only become active once a human approves it (audited), and never below the ' +
             'surface’s quality floor without an explicit, recorded override.'
           }

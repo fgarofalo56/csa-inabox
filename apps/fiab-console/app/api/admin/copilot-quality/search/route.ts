@@ -4,7 +4,7 @@
  * Per-domain federated-search relevance summaries for the E5 "Search relevance"
  * tab: the latest `search-run` rollup per domain (hit-rate@k / MRR / NDCG@k),
  * the trend, the composite grade, and the E3 searchFloors status. Reads the REAL
- * Cosmos `loom-copilot-evals` docs the copilot-evaluator Function's
+ * Cosmos `loom-copilot-evals` docs the copilot-evaluator job's
  * searchRelevance mode writes. Tenant-admin only; cached 5 min.
  *
  *   ?domain=<d>  → also return that domain's per-query drill-in (worst first).

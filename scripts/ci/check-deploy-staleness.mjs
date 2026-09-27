@@ -1695,7 +1695,7 @@ function probeRollWorkflows(workflows) {
   return probes;
 }
 
-/** Recent runs of `workflow`, ANY conclusion, newest first. */
+/** Recent runs of `workflow`, ANY conclusion, newest first. RUN-level only: a red JOB inside a green run is invisible here — tracked as #4726, deliberately not changed in this PR. */
 function recentRuns(workflow) {
   try {
     const out = gh([

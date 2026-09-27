@@ -4,7 +4,7 @@
  * Per-surface Copilot quality summaries for the admin scorecard: the latest
  * `eval-run` roll-up per surface (retrieval hit-rate/MRR, grounding, pass-rate),
  * the run-history trend, the composite grade, and the E3 floor status. Reads the
- * REAL Cosmos `loom-copilot-evals` docs the copilot-evaluator Function (E2)
+ * REAL Cosmos `loom-copilot-evals` docs the copilot-evaluator job (E2)
  * writes + the staged eval-floors.json — no mocks, no Fabric dependency.
  *
  * Tenant-admin only (route-toolkit withTenantAdmin). Cached 5 min with a
