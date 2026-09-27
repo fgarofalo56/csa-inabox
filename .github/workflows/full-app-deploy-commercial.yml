@@ -1262,10 +1262,21 @@ jobs:
   # "dispatched" notice. A start that did not happen because something could not
   # be READ exits non-zero and says so; the ONE path that did not start and still
   # exits 0 is a job proven ABSENT by a successful listing, which is a
-  # configuration state rather than a failure. `continue-on-error` keeps a
-  # non-zero step visible without failing the deploy — which is exactly why
-  # failing closed here costs nothing and buys a red step instead of a warning
-  # nobody reads.
+  # configuration state rather than a failure.
+  #
+  # WHAT THAT NON-ZERO EXIT IS ACTUALLY VISIBLE IN, stated precisely because an
+  # earlier draft of this comment overstated it. `continue-on-error: true` below
+  # is JOB-level, so a failing step here reds the STEP and the JOB, and the RUN
+  # still concludes `success`. Measured on this lane's last real dispatch,
+  # 31251849951 (2026-08-08): run `conclusion=success` while job "Post-deploy
+  # Copilot quality evals (fire-and-forget)" `conclusion=failure`. That matters
+  # because `scripts/ci/check-deploy-staleness.mjs` (`recentRuns`, ~:1699) reads
+  # `gh run list --json conclusion,status,createdAt` -- the RUN conclusion --
+  # so a red job here is INVISIBLE to the only automated watcher this lane has,
+  # and a green run still resets its staleness clock. The step failing closed
+  # therefore buys a red job an operator can see when they open the run; it does
+  # NOT buy a red run, and nothing alerts on it. Reading the `post-deploy-evals`
+  # JOB conclusion is the receipt for a re-baseline, never the run badge.
   post-deploy-evals:
     name: Post-deploy Copilot quality evals (ACA job start)
     needs: [resolve, redeploy-with-apps]
@@ -1288,10 +1299,17 @@ jobs:
         # The script this calls used to be a 633-line inline `run:` block of
         # 38,355 UTF-8 bytes. GitHub refuses to LOAD a workflow whose single
         # `run:` script carries `${{ }}` and exceeds ~20,944 bytes, so this
-        # ENTIRE FILE stopped loading: every push produced one `failure` run
-        # with ZERO jobs and no other signal, twelve times from 2026-09-18
-        # (#4586). Actions expressions do NOT expand inside a called script,
-        # so the two the block interpolated are passed in through `env:`.
+        # ENTIRE FILE stopped loading ON `fix/4495-op19-function-apps`: every
+        # push to that branch produced one `failure` run with ZERO jobs and no
+        # other signal. 13 of them, `322a05130` (2026-09-18) through
+        # `db294349a` (2026-09-25) -- the COMPLETE run population for this
+        # workflow on that branch (runs API `total_count=13`, 13 rows, 13
+        # distinct head SHAs, every one `event=push` / `conclusion=failure` /
+        # jobs `total_count=0`). `main` was never affected: its copy is
+        # `workflow_dispatch`-only and its whole population is 90 runs, all
+        # `workflow_dispatch`, zero push runs (#4586). Actions expressions do
+        # NOT expand inside a called script, so the two the block interpolated
+        # are passed in through `env:`.
         # scripts/ci/check-workflow-run-step-size.mjs now fails the build
         # before this can recur.
         env:

@@ -61,6 +61,38 @@ reads it (accuracy, confusion heatmap, per-class accuracy, cost-per-quality).
 
 ## Triage
 
+### A GREEN post-deploy run does NOT mean a re-baseline happened
+
+The post-deploy re-baseline lives in `full-app-deploy-commercial.yml`'s
+`post-deploy-evals` job, which calls
+`scripts/csa-loom/start-copilot-evaluator-rebaseline.sh`. It has **two
+independent paths that end green without starting an execution**, and neither
+raises an alert. Read the receipt, not the badge.
+
+1. **The job is absent.** `start-copilot-evaluator-rebaseline.sh` (the
+   `MATCH -eq 0` arm, ~:519) emits `::warning::… Post-deploy eval re-baseline
+   NOT started` and **exits 0**, because absence is a legitimate configuration
+   state — `copilotEvaluatorEnabled=false`, `containerPlatform != 'containerApps'`,
+   or `deployAppsEnabled=false` (`admin-plane/main.bicep:8735`). If any of those
+   holds, this step is green **on every deploy, forever**, and no re-baseline
+   ever runs.
+2. **The step failed and the run stayed green.** `post-deploy-evals` carries
+   **job-level** `continue-on-error: true`, so a non-zero step reds the STEP and
+   the JOB while the RUN still concludes `success`. Measured on this lane's last
+   real dispatch, run `31251849951` (2026-08-08): run `conclusion=success`, job
+   `Post-deploy Copilot quality evals (fire-and-forget)` `conclusion=failure`.
+   That is the shape that hid the 2026-08-08 `az functionapp keys list` breakage
+   for 48 days.
+
+**Why nothing catches it:** `scripts/ci/check-deploy-staleness.mjs`
+(`recentRuns`, ~:1699) reads `gh run list --json conclusion,status,createdAt` —
+the **RUN** conclusion. A red job inside a green run is invisible to it, and the
+green run still resets the 21-day staleness clock.
+
+**So the receipt for a re-baseline is:** the `post-deploy-evals` **job**
+conclusion (not the run badge), plus either a started execution id in that job's
+log or a fresh `eval-run` doc in Cosmos `loom-copilot-evals`.
+
 | Symptom | Cause / fix |
 | --- | --- |
 | `honest-gate: not configured` every tick | Set `LOOM_COSMOS_ENDPOINT`, `LOOM_EVAL_PROBE_URL`, `LOOM_INTERNAL_TOKEN` on the `loom-copilot-evaluator` job (bicep wires all three on a push-button deploy — `copilot-evaluator-job.bicep`). |

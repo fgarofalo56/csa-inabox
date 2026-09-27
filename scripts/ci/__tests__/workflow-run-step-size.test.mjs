@@ -6,8 +6,10 @@
  * The defect is invisible to every other tool: the file is valid YAML, has a
  * sound `needs` graph, and passes actionlint. GitHub simply refuses to LOAD it
  * and emits one 0-job `failure` run. So the ONLY thing standing between this
- * repo and a twelve-push silent freeze of its deploy path is that this guard
- * flips at the right byte, on the right steps, counting the right unit.
+ * repo and a 13-push silent freeze of its deploy path (the measured #4586
+ * population on `fix/4495-op19-function-apps`: `322a05130` 2026-09-18 through
+ * `db294349a` 2026-09-25) is that this guard flips at the right byte, on the
+ * right steps, counting the right unit.
  *
  * Each test below is built so that a specific, named mutation of the guard
  * turns it red — stated per test. Two of them exist because the naive version

@@ -227,7 +227,7 @@ export function CopilotQualityPanel() {
             disabled={summaries.isFetching}>Refresh</Button>
           <Tooltip
             content={data.evaluatorConfigured
-              ? 'Fire an on-demand evaluation across every surface (the E2 HTTP trigger).'
+              ? 'Fire an on-demand evaluation across every surface (starts an E2 evaluator job execution).'
               : 'Deploy the copilot-evaluator job (LOOM_COPILOT_EVALUATOR_JOB_ID) to enable on-demand runs.'}
             relationship="label">
             <Button appearance="primary" icon={runNow.isPending ? <Spinner size="tiny" /> : <Play20Regular />}

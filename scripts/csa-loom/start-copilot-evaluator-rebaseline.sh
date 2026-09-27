@@ -5,10 +5,13 @@
 # EXTRACTED (#4586) from the `post-deploy-evals` job of
 # `.github/workflows/full-app-deploy-commercial.yml`, where it was a 633-line
 # inline `run:` block of 38,355 UTF-8 bytes. GitHub refused to LOAD the whole
-# workflow because of that one step's size, which produced 12 consecutive
-# 0-job `failure` runs on the canonical from-scratch app path from 2026-09-18
-# onward — a P0 under `.claude/rules/deploy-integrity.md` R1. A file can also
-# be linted and unit-tested; a 633-line inline block can be neither.
+# workflow because of that one step's size, which produced 13 consecutive
+# 0-job `failure` runs on the canonical from-scratch app path --
+# `322a05130` (2026-09-18) through `db294349a` (2026-09-25) on
+# `fix/4495-op19-function-apps`, the complete run population for that workflow
+# on that branch -- a P0 under `.claude/rules/deploy-integrity.md` R1. `main`
+# was never affected. A file can also be linted and unit-tested; a 633-line
+# inline block can be neither.
 #
 # NOTE for future editors: no comment line here may BEGIN with the word
 # "shellcheck" after the `#`, because ShellCheck reads that as a directive and

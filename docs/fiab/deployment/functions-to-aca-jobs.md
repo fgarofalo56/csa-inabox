@@ -492,7 +492,7 @@ from-scratch deploy re-creates them and removal is purely an estate action.
 
 | app | declaration | live references | disposition |
 |---|---|---|---|
-| `func-cpeval-*` | **none** (deleted #2556) | `full-app-deploy-commercial.yml` post-deploy-evals — **fixed in this change** | estate delete, unblocked |
+| `func-cpeval-*` | **none** (deleted #2556) | `scripts/csa-loom/start-copilot-evaluator-rebaseline.sh`, called by `full-app-deploy-commercial.yml` post-deploy-evals (the code moved out of the workflow into that script in #4586) — **fixed in this change** | estate delete, unblocked |
 | `func-secexp-*` | **none** (deleted #2556) | none executable (`docs/fiab/runbooks/secret-rotation.md:539` is a runbook line) | estate delete |
 | `func-rptsub-*` | **none** (deleted #3068) | `scripts/csa-loom/grant-navigator-rbac.sh:240` — discovers it and grants Cosmos + Blob + Logic App Contributor to its identity. **No-ops cleanly when absent** (`else … skipping`), so deletion does not break the bootstrap | estate delete; the grant block then becomes dead and should go with it |
 | `func-loom-posture-refresh-*` | `azure-functions/posture-refresh/deploy/main.bicep` | `csa-loom-post-deploy-bootstrap.yml:2248`, `gov-provision-posture.yml:92` — both **deploy targets** | **KEEP.** §4.1: still the *intended* runtime for a live console surface, with no ACA replacement built. Deleting it removes a capability |

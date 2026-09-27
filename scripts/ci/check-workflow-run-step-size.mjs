@@ -11,10 +11,16 @@
  * looks like nothing: GitHub creates ONE run for the push, concludes it
  * `failure` with **zero jobs**, and names it by `.path` because it never got
  * as far as reading `name:`. The file is valid YAML, has no duplicate keys, a
- * sound `needs` graph, and passes actionlint. Twelve consecutive pushes from
- * 2026-09-18 onward each produced one of those 0-job failures against a deploy
- * path that `.claude/rules/deploy-integrity.md` R1 calls P0, and nothing in the
- * gate set watched it.
+ * sound `needs` graph, and passes actionlint. 13 consecutive pushes to that
+ * branch — `322a05130` (2026-09-18) through `db294349a` (2026-09-25) — each
+ * produced one of those 0-job failures against a deploy path that
+ * `.claude/rules/deploy-integrity.md` R1 calls P0, and nothing in the gate set
+ * watched it. That 13 is the COMPLETE run population for this workflow on this
+ * branch, not a `--limit` page: the runs API reports `total_count=13`, returns
+ * 13 rows with 13 distinct head SHAs, and every one is `event=push` /
+ * `conclusion=failure` with jobs `total_count=0`. `main` never carried the
+ * fault — its copy is `workflow_dispatch`-only and all 90 of its runs are
+ * `workflow_dispatch`, zero push runs.
  *
  * The cause is a size limit GitHub applies AFTER parsing, which no local tool
  * checks. A 24-probe bisect (issue #4586, comment 5837620548) pinned the
@@ -89,6 +95,19 @@
  * cannot model; a throw is reported as a finding, never skipped. A guard that
  * silently drops the one file it could not read is the defect class this repo
  * keeps finding in its own controls.
+ *
+ * WHAT THIS GUARD DOES **NOT** WATCH — stated so it is not read as full
+ * coverage of the GitHub-side size limit:
+ *   • It walks `jobs.*.steps[].run` in `.github/workflows/*.y{a,}ml` ONLY.
+ *   • `with:` inputs are templated the same way and plausibly fall under the
+ *     same limit — `actions/github-script`'s `script:` being the obvious case —
+ *     and are NOT measured. Latent, not live: the largest block-scalar `with:`
+ *     input in the tree today is 6,755 bytes (`loom-drift-check.yml`, key
+ *     `script`), across 166 such inputs in 127 files.
+ *   • Composite actions are NOT measured. There are ZERO tracked `action.yml` /
+ *     `action.yaml` files in the repo today (`git ls-files`), so there is no
+ *     gap right now — but adding one puts its `run:` steps outside this control.
+ * Widen the walk before relying on it for either.
  *
  * Usage:      node scripts/ci/check-workflow-run-step-size.mjs
  * Self-tests: node --test scripts/ci/__tests__/workflow-run-step-size.test.mjs

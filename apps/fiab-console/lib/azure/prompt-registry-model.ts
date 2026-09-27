@@ -238,7 +238,7 @@ export function approvalEligibility(
       allowed: false,
       reason: 'no-eval',
       detail:
-        'This version has no eval score yet. Publish it (which requests a run from the copilot-evaluator Function) and wait for the run to land, then approve.',
+        'This version has no eval score yet. Publish it (which requests a run from the copilot-evaluator job) and wait for the run to land, then approve.',
     };
   }
   if (score.belowFloor && !opts.overrideBelowFloor) {
