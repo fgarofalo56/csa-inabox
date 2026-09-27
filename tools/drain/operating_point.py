@@ -93,9 +93,8 @@ def merge_time(policy: dict, led: Ledger, pr: int | None = None
         # The first version said "exactly ... and nothing else" and was not: it
         # read `item.pr is not None` where the real test is `item.pr == pr`, so
         # an item bound to ANOTHER PR modelled as one-reviewer where the gate
-        # says two. Both reviewers found it. Latent (nothing writes `Item.pr`)
-        # and it arms on #4489 -- the same condition under which the wording
-        # fixes in `merge_gate` were made, applied one file over this time.
+        # says two. Both reviewers found it. `tick.py --bind-pr` writes
+        # `Item.pr` (#4489), so this row measures real bindings.
         #
         # `SCHEDULED_STATES` is imported for the same reason: the states were
         # hardcoded here, so a fourth one would diverge the model in silence.
@@ -146,8 +145,9 @@ def main() -> int:
               "cannot reach GO however many reviewers approve.")
         print("  A receipt is recorded by `tick.py --record-receipt <ITEM> "
               "--from-pr <PR>|--from-run <RUN>`, which VERIFIES the evidence "
-              "before writing. Binding the evidence to the item is still a "
-              "claim, not a check (#4489).")
+              "before writing. A PR is bound to the item by REFERENCE, and "
+              "by `Item.pr` when a lane has run `tick.py --bind-pr` (#4489); "
+              "a RUN is bound to neither.")
         return 0
 
     counts, by_reason, per_stream = brief_time(policy, led)

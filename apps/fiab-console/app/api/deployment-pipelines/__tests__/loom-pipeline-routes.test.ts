@@ -24,7 +24,15 @@ vi.mock('@azure/identity', () => {
 const listAllOwnedItems = vi.fn();
 const createOwnedItem = vi.fn();
 const updateOwnedItem = vi.fn();
-vi.mock('@/app/api/items/_lib/item-crud', () => ({ listAllOwnedItems, createOwnedItem, updateOwnedItem }));
+// `carryServerDerivedScope` is IDENTITY here, and provably so rather than as a
+// convenience: it only ever copies or deletes `state.provisioning` /
+// `state.storageAccount`, and no fixture in this file carries either key, so it
+// agrees with the real function on every input this suite produces. The real
+// behaviour is pinned in `app/api/items/_lib/__tests__/server-derived-scope-4619.test.ts`.
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  listAllOwnedItems, createOwnedItem, updateOwnedItem,
+  carryServerDerivedScope: (next: unknown) => next,
+}));
 
 // provisioning-engine — capture the patched target each provisioner receives.
 const semanticProvisioner = vi.fn(async (input: any) => ({ status: 'created', resourceId: input.cosmosItemId, secondaryIds: { backend: 'loom-native' } }));

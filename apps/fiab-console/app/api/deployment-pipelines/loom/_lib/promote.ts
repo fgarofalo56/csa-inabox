@@ -24,7 +24,7 @@
  * Cosmos + the Azure-native provisioner backends only — no Fabric / Power BI.
  */
 import crypto from 'node:crypto';
-import { listAllOwnedItems, createOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { listAllOwnedItems, createOwnedItem, updateOwnedItem, carryServerDerivedScope } from '@/app/api/items/_lib/item-crud';
 import { PROVISIONERS, resolveTarget } from '@/lib/install/provisioning-engine';
 import { applyStageRules } from '@/lib/install/pipeline-deploy';
 import { computePipelineDiff, pairKey } from '@/lib/install/pipeline-compare';
@@ -177,8 +177,13 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
     // Locate or create the paired item in the target workspace (carrying the rebound content).
     const existing = targetByKey.get(pairKey(src));
     let targetItemId: string;
+    // The TARGET's own state, needed by `carryServerDerivedScope` at step 3 — the
+    // patch below is built from the SOURCE item, so the target's server-derived
+    // scope has to be read from the target.
+    let targetState: Record<string, unknown> | undefined;
     if (existing) {
       targetItemId = existing.id;
+      targetState = existing.state as Record<string, unknown> | undefined;
     } else {
       const created = await createOwnedItem(s, src.itemType, {
         workspaceId: tgtWs,
@@ -192,6 +197,7 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
         continue;
       }
       targetItemId = created.item.id;
+      targetState = created.item.state as Record<string, unknown> | undefined;
       steps.push(`[${src.displayName}] created target item ${targetItemId} in ${targetStageId}.`);
     }
 
@@ -219,7 +225,18 @@ export async function runPromotion(input: PromotionInput): Promise<PromotionResu
       deployedFromStage: sourceStageId,
       deployedAt: new Date().toISOString(),
     };
-    await updateOwnedItem(targetItemId, src.itemType, tenantId, { state: promotedState });
+    await updateOwnedItem(targetItemId, src.itemType, tenantId, {
+      // #4619 — `promotedState` is built from the SOURCE item's state, so it
+      // carries the SOURCE's provisioning receipt. Writing that onto the target
+      // is what `assertNoServerDerivedScopeChange` refuses, and it is also wrong
+      // on the merits: a receipt describes the Azure object the SOURCE is backed
+      // by, while the target's own receipt is stamped at step 5 below. Rebase
+      // those keys onto whatever the target already carries. For a target that
+      // was just created three lines up this is a no-op (its state IS the
+      // source's), so the only behaviour that changes is a RE-promotion onto a
+      // target whose backing record had since moved on.
+      state: carryServerDerivedScope(promotedState, targetState),
+    });
 
     // 4) re-run the real provisioner against the patched (rule-applied) target with the rebound content.
     let result: ProvisionResult | undefined;

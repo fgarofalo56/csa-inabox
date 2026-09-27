@@ -182,6 +182,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runRatchet, gitTouchedFiles, loadBaseline } from './_ratchet-count.mjs';
+import { maskNonCode as maskNonCodeShared } from './_code-only.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCOPE = 'apps/fiab-console';
@@ -226,144 +227,15 @@ function blank(out, src, from, to) {
  * #3467 code itself contains — would otherwise be read as two divisions and a
  * dangling string.
  */
+/**
+ * The lexer now lives in ./_code-only.mjs so there is ONE implementation rather
+ * than two that can drift (#4467 round 2). It is re-exported here because this
+ * module's tests and callers import it by this name, and because this file is
+ * where #3468 established it. Behaviour is unchanged: the default masks string
+ * and regex BODIES, which is what this guard needs.
+ */
 export function maskNonCode(src) {
-  const s = String(src);
-  const out = s.split('');
-  let i = 0;
-  let prev = ''; // last significant (non-space, non-blanked) character
-  // Stack of open template literals; each entry counts the `{` depth inside a
-  // `${ … }` substitution so a nested template is handled correctly.
-  const tpl = [];
-
-  const canEndExpression = (c) => /[A-Za-z0-9_$)\]]/.test(c);
-
-  while (i < s.length) {
-    const c = s[i];
-    const c2 = s[i + 1];
-
-    // Inside a `${ … }` substitution the characters are CODE — fall through to
-    // the normal rules, but watch for the closing brace.
-    if (tpl.length && tpl[tpl.length - 1].inSub) {
-      const top = tpl[tpl.length - 1];
-      if (c === '{') top.depth++;
-      else if (c === '}') {
-        if (top.depth === 0) {
-          top.inSub = false;
-          prev = '}';
-          i++;
-          continue;
-        }
-        top.depth--;
-      }
-      // else: fall through to the generic handling below
-    } else if (tpl.length) {
-      // Inside a template's TEXT: blank until ` or ${
-      const top = tpl[tpl.length - 1];
-      if (c === '\\') {
-        blank(out, s, i, i + 2);
-        i += 2;
-        continue;
-      }
-      if (c === '`') {
-        tpl.pop();
-        prev = '`';
-        i++;
-        continue;
-      }
-      if (c === '$' && c2 === '{') {
-        top.inSub = true;
-        top.depth = 0;
-        prev = '{';
-        i += 2;
-        continue;
-      }
-      blank(out, s, i, i + 1);
-      i++;
-      continue;
-    }
-
-    // ── line comment. `://` is NOT one: a bare `https://…` in JSX text is not
-    // a comment, and truncating there deletes real code from the scan.
-    if (c === '/' && c2 === '/' && prev !== ':') {
-      let j = i;
-      while (j < s.length && s[j] !== '\n') j++;
-      blank(out, s, i, j);
-      i = j;
-      continue;
-    }
-
-    // ── block comment
-    if (c === '/' && c2 === '*') {
-      const end = s.indexOf('*/', i + 2);
-      const j = end === -1 ? s.length : end + 2;
-      blank(out, s, i, j);
-      i = j;
-      continue;
-    }
-
-    // ── string literal
-    if (c === "'" || c === '"') {
-      let j = i + 1;
-      while (j < s.length) {
-        if (s[j] === '\\') {
-          j += 2;
-          continue;
-        }
-        if (s[j] === c || s[j] === '\n') break;
-        j++;
-      }
-      blank(out, s, i + 1, j);
-      prev = c;
-      i = j < s.length && s[j] === c ? j + 1 : j;
-      continue;
-    }
-
-    // ── template literal
-    if (c === '`') {
-      tpl.push({ inSub: false, depth: 0 });
-      prev = '`';
-      i++;
-      continue;
-    }
-
-    // ── regex literal
-    if (c === '/' && !canEndExpression(prev)) {
-      let j = i + 1;
-      let cls = false;
-      let ok = false;
-      while (j < s.length) {
-        const d = s[j];
-        if (d === '\\') {
-          j += 2;
-          continue;
-        }
-        if (d === '\n') break;
-        if (d === '[') cls = true;
-        else if (d === ']') cls = false;
-        else if (d === '/' && !cls) {
-          ok = true;
-          break;
-        }
-        j++;
-      }
-      if (ok) {
-        blank(out, s, i + 1, j);
-        // flags
-        let k = j + 1;
-        while (k < s.length && /[a-z]/.test(s[k])) k++;
-        blank(out, s, j + 1, k);
-        prev = '/';
-        i = k;
-        continue;
-      }
-      // not a regex after all — treat as an operator
-    }
-
-    if (!/\s/.test(c)) prev = c;
-    i++;
-  }
-
-  return out.join('');
+  return maskNonCodeShared(src);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

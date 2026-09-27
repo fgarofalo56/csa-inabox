@@ -163,7 +163,7 @@ resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
       }
       storageProfile: {
         imageReference: {
-          offer: 'WindowsServer'
+          offer: 'windowsserver2022'
           publisher: 'MicrosoftWindowsServer'
           sku: '2022-datacenter-azure-edition'
           version: '20348.2340.240207'

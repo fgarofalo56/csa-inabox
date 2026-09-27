@@ -1,9 +1,19 @@
 /**
  * #3611 (review round 2) — the SECOND enforcement point.
  *
- * `assertNoServerOwnedStateChange` is called from TWO places:
+ * `assertNoServerOwnedStateChange` was called from TWO places when this file was
+ * written:
  *   1. the generic PATCH  — `app/api/items/[type]/[id]/route.ts`
  *   2. `updateOwnedItem`  — `app/api/items/_lib/item-crud.ts`
+ *
+ * THAT IS NO LONGER THE WHOLE SET — #4621 added the `cosmos-items/[type]/[id]`
+ * PATCH as a third caller, and this header said two until review measured it.
+ * It is left as the HISTORY the file was written against rather than restated
+ * as a new count that the next widening falsifies again; the live set is
+ *
+ *     git grep -n 'assertNoServerOwnedStateChange(' -- apps/ | grep -v __tests__
+ *
+ * and what THIS file pins is (2) specifically, which does not change.
  *
  * Only (1) had tests. Removing the call from (2) therefore left the whole suite
  * green at RC=0 — and (2) is the wider surface: it is the shared per-type save

@@ -250,6 +250,34 @@ pub async fn execute_scan(req: &ScanRequest) -> Result<ScanResult, ScanError> {
 
 // ── Delta (Azure) path — framing against the Delta log off ADLS ─────────────────
 
+/// Convert a Delta-log version to the wire type used by `ScanStats.delta_version`
+/// and `FrameResult.delta_version`.
+///
+/// delta-rs 1.0 returns `Option<Version>` where `Version = u64`
+/// (`deltalake-core::table::DeltaTable::version` → `buoyant_kernel::Version`);
+/// the wire contract is `Option<i64>` and is deliberately NOT widened, because
+/// it is serialized into JSON the Console BFF already consumes.
+///
+/// This is `i64::try_from`, NOT `as`, and the difference is observable: `as`
+/// truncates, so `u64::MAX as i64` is `-1` — a plausible-looking but wrong
+/// version number silently reported to the caller. Out-of-range yields `None`,
+/// which the field already models, rather than a fabricated value.
+///
+/// It is a named function purely so it can be tested; `open_delta` calls THIS,
+/// so a revert to `as` here is caught by
+/// `delta_version_out_of_i64_range_is_none_not_a_wrapped_negative`.
+///
+/// The `allow(dead_code)` is scoped to `not(feature = "azure")` and no wider.
+/// Its only caller is `open_delta`, which is `#[cfg(feature = "azure")]`, so the
+/// engine-only BIN build genuinely has no live use and warns — while the
+/// engine-only TEST target does use it, which is why `cargo test -F engine` is
+/// silent and does not witness this. Keeping the attribute narrow means a future
+/// dead `delta_version_to_wire` in the SHIPPED (azure) configuration still warns.
+#[cfg_attr(not(feature = "azure"), allow(dead_code))]
+fn delta_version_to_wire(version: Option<u64>) -> Option<i64> {
+    version.and_then(|v| i64::try_from(v).ok())
+}
+
 /// Storage options for delta-rs from the environment. Managed Identity is picked
 /// up by object_store's Azure backend from IMDS in-cluster; we only pass the
 /// account name (+ optional container hint). Returns an honest gate error when the
@@ -291,15 +319,42 @@ async fn open_delta(
     uri: &str,
 ) -> Result<(DataFrame, &'static str, Option<i64>), ScanError> {
     let opts = delta_storage_options()?;
-    let table = deltalake::open_table_with_storage_options(uri, opts)
+
+    // delta-rs 1.0 takes a parsed `Url`, not a `&str`. `ensure_table_uri` is the
+    // crate's OWN string→Url normalizer — the one `DeltaTableBuilder` uses — so
+    // an abfss:// URI is normalized exactly as the builder would normalize it,
+    // and we do not take a direct `url` dependency to do it by hand. Its
+    // create-the-directory-if-missing branch is for LOCAL paths only and is
+    // unreachable from here: `classify()` routes only abfss:// / abfs:// into
+    // this function, and a local path goes to `Source::Parquet` instead.
+    let url = deltalake::ensure_table_uri(uri).map_err(|e| {
+        ScanError::BadRequest(format!("'{uri}' is not a usable Delta table URI: {e}"))
+    })?;
+    let table = deltalake::open_table_with_storage_options(url, opts)
         .await
         .map_err(|e| ScanError::Engine(format!("failed to open Delta table {uri}: {e}")))?;
-    let version = table.version();
-    // DeltaTable is a DataFusion TableProvider (deltalake `datafusion` feature).
-    ctx.register_table("delta_t", Arc::new(table))
+
+    // `version()` became `Option<Version>` (u64) in 1.0 — `None` when no state is
+    // loaded. See `delta_version_to_wire`: the conversion is try_from, not `as`,
+    // and that distinction is pinned by a unit test.
+    let version: Option<i64> = delta_version_to_wire(table.version());
+
+    // delta-rs 1.0: `DeltaTable` is no longer itself a `TableProvider`, and the
+    // provider no longer carries its own object store. Register the table's store
+    // on the session FIRST — idempotent, per the crate's own doc on
+    // `update_datafusion_session` — or the scan resolves no store at execute time.
+    table.update_datafusion_session(&ctx.state()).map_err(|e| {
+        ScanError::Engine(format!("failed to register the Delta object store for {uri}: {e}"))
+    })?;
+    // `TableProviderBuilder: IntoFuture<Output = Result<Arc<dyn TableProvider>>>`,
+    // so awaiting it yields the Arc directly — no `Arc::new` wrapper.
+    let provider = table.table_provider().await.map_err(|e| {
+        ScanError::Engine(format!("failed to build a Delta table provider for {uri}: {e}"))
+    })?;
+    ctx.register_table("delta_t", provider)
         .map_err(|e| ScanError::Engine(e.to_string()))?;
     let df = ctx.table("delta_t").await?;
-    Ok((df, "delta", Some(version)))
+    Ok((df, "delta", version))
 }
 
 #[cfg(not(feature = "azure"))]
@@ -487,5 +542,91 @@ mod tests {
         let schema = b.schema();
         let bytes = to_ipc_stream(&schema, std::slice::from_ref(&b)).unwrap();
         assert_eq!(ipc_row_count(&bytes), 8);
+    }
+
+    /// Pins the `i64::try_from` in `delta_version_to_wire` against a revert to
+    /// `as`. Until this existed, nothing in the suite distinguished the two —
+    /// the delta-rs 1.0 migration changed `version()` from `i64` to
+    /// `Option<u64>`, and a cast is the obvious-looking way to bridge that.
+    ///
+    /// WHAT VALUE MAKES THIS FAIL: `u64::MAX`. Under `try_from` it is out of
+    /// range and yields `None`; under `as` it truncates to `-1` and the service
+    /// would report Delta version -1 as though it were real. `i64::MAX as u64 + 1`
+    /// is the exact boundary — one below it must still convert.
+    ///
+    /// Note these are the CONVERSION's inputs, not versions a real Delta log
+    /// would hold today. The point is that the function cannot fabricate a
+    /// number, not that ADLS will ever hand us one this large.
+    #[test]
+    fn delta_version_out_of_i64_range_is_none_not_a_wrapped_negative() {
+        // Ordinary values pass straight through.
+        assert_eq!(delta_version_to_wire(Some(0)), Some(0));
+        assert_eq!(delta_version_to_wire(Some(42)), Some(42));
+        assert_eq!(delta_version_to_wire(None), None);
+
+        // The last value that still fits.
+        let max = i64::MAX as u64;
+        assert_eq!(
+            delta_version_to_wire(Some(max)),
+            Some(i64::MAX),
+            "i64::MAX must still convert; a too-tight bound would drop real versions"
+        );
+
+        // One past the boundary, and the extreme. `as` would give -9223372036854775808
+        // and -1 respectively; try_from gives None.
+        for (input, would_be_under_as) in [(max + 1, i64::MIN), (u64::MAX, -1i64)] {
+            let got = delta_version_to_wire(Some(input));
+            assert_eq!(
+                got, None,
+                "u64 {input} is out of i64 range and must yield None; an `as` cast \
+                 would have reported {would_be_under_as} as a real Delta version"
+            );
+            // Positive pairing for the absence assertion above: whatever it
+            // returns, it must never be the wrapped negative.
+            assert_ne!(got, Some(would_be_under_as), "the `as` truncation value leaked through");
+        }
+    }
+
+    /// The `abfss://` Delta path needs real ADLS + Managed Identity, so NONE of
+    /// the tests above reach it. This one covers the single piece of that path
+    /// that is testable offline: the delta-rs 1.0 `&str` → `Url` conversion that
+    /// replaced passing the URI straight to `open_table_with_storage_options`.
+    ///
+    /// WHAT WOULD MAKE THIS FAIL: a future delta-rs whose `ensure_table_uri`
+    /// rejects the `abfss://`/`abfs://` scheme (→ `Err`, so the `expect` fires),
+    /// or one that rewrites the account/container/path. Either would break every
+    /// Delta scan in production, and no other test here would notice.
+    ///
+    /// The trailing slash is MEASURED, not assumed — `ensure_table_uri` appends
+    /// one, and an earlier draft of this test asserted the un-suffixed form and
+    /// was red against correct code.
+    #[cfg(feature = "azure")]
+    #[test]
+    fn delta_uri_normalization_preserves_scheme_account_and_path() {
+        let cases = [
+            (
+                "abfss://lake@acct.dfs.core.windows.net/bronze/sales",
+                "abfss://lake@acct.dfs.core.windows.net/bronze/sales/",
+            ),
+            // Already-suffixed input must be idempotent, not double-slashed.
+            (
+                "abfss://lake@acct.dfs.core.windows.net/bronze/sales/",
+                "abfss://lake@acct.dfs.core.windows.net/bronze/sales/",
+            ),
+            // classify() routes abfs:// here too, so it must survive as well.
+            (
+                "abfs://lake@acct.dfs.core.windows.net/bronze/sales",
+                "abfs://lake@acct.dfs.core.windows.net/bronze/sales/",
+            ),
+        ];
+        for (raw, expected) in cases {
+            let url = deltalake::ensure_table_uri(raw)
+                .unwrap_or_else(|e| panic!("delta-rs must accept '{raw}', got error: {e}"));
+            assert_eq!(
+                url.as_str(),
+                expected,
+                "delta-rs normalized '{raw}' to something this service does not expect"
+            );
+        }
     }
 }
