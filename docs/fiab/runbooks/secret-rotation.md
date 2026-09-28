@@ -531,18 +531,39 @@ half; the `/admin/health` section works regardless.
 
 ## 5. Verify the monitoring loop end-to-end (acceptance drill)
 
+> **Drive this against the `loom-secret-expiry-monitor` Container App Job, not
+> `func-secexp-*`.** An earlier revision of this drill set an app setting on the
+> Function host and then said "trigger a tick (or wait for the daily cron)".
+> That cron is `secretExpiryMonitor`, measured 2026-09-17 under #4495 OP-19 as
+> `AzureWebJobs.secretExpiryMonitor.Disabled=true` with
+> `az functionapp function show` reporting `isDisabled: true` — so the drill
+> could not complete as written, and the wait had no end. The live monitor is
+> the ACA job (`platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-job.bicep`),
+> whose schedule is its own `cronExpression`, default `0 6 * * *`.
+
 Seed a 5-day expiry and watch the alert fire:
 
 ```bash
 az keyvault secret set --vault-name "$KV" --name secret-expiry-drill \
   --value drill --expires "$(date -u -d '+5 days' +%Y-%m-%dT%H:%M:%SZ)" -o none
-az functionapp config appsettings set -n <func-secexp-*> -g "$RG" --settings \
+# The tracked-secrets list is job env, wired by the module as
+# LOOM_SECRET_EXPIRY_KV_SECRETS. READ THE JOB'S CURRENT ENV FIRST and pass it
+# back alongside the override — this repo's own job deployers do exactly that,
+# because a value left out of the update lands on the live job as the EMPTY
+# STRING rather than being left alone (.github/workflows/deploy-copilot-evaluator.yml
+# records that failure for the sibling job):
+#   az containerapp job show -n loom-secret-expiry-monitor -g "$ADMIN_RG" \
+#     --query "properties.template.containers[0].env" -o json
+az containerapp job update -n loom-secret-expiry-monitor -g "$ADMIN_RG" \
+  --set-env-vars \
   "LOOM_SECRET_EXPIRY_KV_SECRETS=loom-msal-client-secret,synthetic-login-secret,secret-expiry-drill" -o none
-# Trigger a tick (or wait for the daily cron), then:
+# Trigger a tick NOW rather than waiting for the 06:00 UTC schedule:
+az containerapp job start -n loom-secret-expiry-monitor -g "$ADMIN_RG"
+# Then:
 #  - the loom-default-alerts action group delivers (email / ARM-role receivers),
 #  - /admin/health shows the drill row RED (critical, 5d left),
 #  - a dedup GitHub issue "secret-expiry: Key Vault secret secret-expiry-drill — critical" opens.
-# Clean up: remove the drill secret + restore the app setting.
+# Clean up: remove the drill secret + restore the env var.
 ```
 
 ## Related

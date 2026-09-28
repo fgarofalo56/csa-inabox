@@ -4,7 +4,7 @@
  * Per-surface Copilot quality summaries for the admin scorecard: the latest
  * `eval-run` roll-up per surface (retrieval hit-rate/MRR, grounding, pass-rate),
  * the run-history trend, the composite grade, and the E3 floor status. Reads the
- * REAL Cosmos `loom-copilot-evals` docs the copilot-evaluator Function (E2)
+ * REAL Cosmos `loom-copilot-evals` docs the copilot-evaluator job (E2)
  * writes + the staged eval-floors.json — no mocks, no Fabric dependency.
  *
  * Tenant-admin only (route-toolkit withTenantAdmin). Cached 5 min with a
@@ -43,8 +43,9 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
       surfaces: value.summaries,
       overview: value.overview,
       floorsMeta: value.floorsMeta,
-      // Honest evaluator posture: the "Run now" button is live only when the
-      // Function URL is wired; the page still renders historical scores either way.
+      // Honest evaluator posture: the "Run now" button is live only when
+      // LOOM_COPILOT_EVALUATOR_JOB_ID is set (evaluatorRunGate); the page still
+      // renders historical scores either way.
       evaluatorConfigured: evaluatorRunGate() === null,
       cache: { stale: meta.stale, cachedAt: meta.cachedAt },
     });

@@ -1,7 +1,7 @@
 /**
  * POST /api/internal/copilot/search-probe — SRCH1.
  *
- * The copilot-evaluator Function's window into the REAL federated catalog search
+ * The copilot-evaluator job's window into the REAL federated catalog search
  * (the search users type into /catalog): one call runs the exact
  * `searchCatalog()` ranking (governance-catalog / AI-Search → Cosmos fallback)
  * the marketplace uses, scoped to the configured EVAL PRINCIPAL, and returns the

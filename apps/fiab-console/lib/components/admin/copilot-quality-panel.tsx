@@ -7,8 +7,9 @@
  * /api/admin/copilot-quality (Cosmos loom-copilot-evals, written by the E2
  * copilot-evaluator job): a headline overview, per-surface scorecards
  * (composite grade + retrieval hit-rate / grounding / pass-rate + floor status
- * + run-history sparkline), a "Run now" trigger (POST …/run → the E2 HTTP
- * trigger, honest-gated when the Function URL is unwired), and a per-surface
+ * + run-history sparkline), a "Run now" trigger (POST …/run → an ARM start of
+ * the E2 copilot-evaluator job, honest-gated when LOOM_COPILOT_EVALUATOR_JOB_ID
+ * is unset), and a per-surface
  * drill-in dialog (worst questions with expected-vs-retrieved chunks + the LLM
  * judge's own rationale).
  *
@@ -197,7 +198,7 @@ export function CopilotQualityPanel() {
       <MessageBar intent="info" layout="multiline"><MessageBarBody>
         <MessageBarTitle>Copilot quality page is turned off</MessageBarTitle>
         The <code>e5-copilot-quality-page</code> runtime flag is currently OFF. The copilot-evaluator
-        Function and its nightly/per-roll runs keep going; only this admin view is hidden.
+        job and its nightly/per-roll runs keep going; only this admin view is hidden.
         Re-enable it under <NextLink href="/admin/runtime-flags" legacyBehavior><FluentLink>Runtime flags</FluentLink></NextLink>.
       </MessageBarBody></MessageBar>
     );
@@ -208,7 +209,7 @@ export function CopilotQualityPanel() {
 
   return (
     <div className={styles.root}>
-      {/* Honest evaluator posture — Run-now needs the Function URL; scores still render. */}
+      {/* Honest evaluator posture — Run-now needs LOOM_COPILOT_EVALUATOR_JOB_ID; scores still render. */}
       {!data.evaluatorConfigured && (
         <HonestGate gateId="svc-copilot-evaluator" surface="Copilot quality — Run now"
           onResolved={() => summaries.refetch()} />
@@ -227,7 +228,7 @@ export function CopilotQualityPanel() {
             disabled={summaries.isFetching}>Refresh</Button>
           <Tooltip
             content={data.evaluatorConfigured
-              ? 'Fire an on-demand evaluation across every surface (the E2 HTTP trigger).'
+              ? 'Fire an on-demand evaluation across every surface (starts an E2 evaluator job execution).'
               : 'Deploy the copilot-evaluator job (LOOM_COPILOT_EVALUATOR_JOB_ID) to enable on-demand runs.'}
             relationship="label">
             <Button appearance="primary" icon={runNow.isPending ? <Spinner size="tiny" /> : <Play20Regular />}

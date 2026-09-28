@@ -9,13 +9,14 @@
  * carries (a REAL copilot-evaluator `eval-run` rollup — WS-E's harness, reused,
  * never re-implemented), and the audited approve / rollback controls.
  *
- * Publishing a version requests a run from the EXISTING E2 evaluator Function —
- * the same HTTP trigger the E5 "Run now" button and the E4 workflow use — so a
+ * Publishing a version requests a run from the EXISTING E2 evaluator job —
+ * started the same way the E5 "Run now" button and the E4 workflow start it —
+ * so a
  * prompt bump is graded by the EXISTING check-eval-regression floor gate. There
  * is NO second eval harness and NO second CI gate on this surface.
  *
  * States mirror the sibling tabs: Skeleton, guided EmptyState, HonestGate +
- * Fix-it when the evaluator Function is unwired, FLAG0 kill-switch notice
+ * Fix-it when the evaluator job id is unset, FLAG0 kill-switch notice
  * (n13-prompt-registry), clean first-open (nothing red before an action).
  * Fluent v9 + Loom tokens only; badge rows wrap (flexWrap + minWidth:0) so
  * nothing overlaps at narrow widths. Azure-native, no Fabric/Power BI.
@@ -210,7 +211,7 @@ export function PromptRegistryPanel() {
           title="No prompts registered yet"
           body={
             'Register a prompt to version it. Each publish mints the next semver and asks the copilot-evaluator ' +
-            'Function — the same harness the Answer quality tab scores — to grade it against that surface’s golden ' +
+            'job — the same harness the Answer quality tab scores — to grade it against that surface’s golden ' +
             'eval set. A version can only become active once a human approves it (audited), and never below the ' +
             'surface’s quality floor without an explicit, recorded override.'
           }
@@ -471,10 +472,10 @@ function PromptVersionsDialog({
               <div className={styles.card}>
                 <div className={styles.sectionHead}><Send20Regular /><Subtitle2>Publish a new version</Subtitle2></div>
                 <Caption1 className={styles.muted}>
-                  Publishing mints the next semver and asks the copilot-evaluator Function to grade it against the
+                  Publishing mints the next semver and asks the copilot-evaluator job to grade it against the
                   <strong> {summary.surface} </strong> golden set — the same harness and the same floors the Answer
                   quality tab reports. No separate pipeline is run.
-                  {!evaluatorConfigured && ' The evaluator Function is not wired in this deployment, so the version will publish unscored (and stay unapprovable) until a real run lands.'}
+                  {!evaluatorConfigured && ' The evaluator job is not wired in this deployment, so the version will publish unscored (and stay unapprovable) until a real run lands.'}
                 </Caption1>
                 <Field label="Prompt text">
                   <Textarea resize="vertical" rows={7} value={template} onChange={(_, d) => setTemplate(d.value)} />

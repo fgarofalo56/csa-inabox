@@ -38,7 +38,7 @@ MUST add the tag when they land:
 | # | Item | Resource (bicep module) | Status | Est. run-rate |
 |---|------|-------------------------|--------|---------------|
 | 1 | V1 synthetic journeys | `synthetic-monitor-job.bicep` ACA Schedule job (4x/hr) + Blob artifacts (30d lifecycle, `landing-zone/storage.bicep`) | **live, tagged** | ~$30–60/mo per cloud |
-| 2 | E2 Copilot LLM-judge | `copilot-evaluator-function.bicep` (Y1 ~$0 idle) + AOAI judge tokens, capped 500/day | **live, tagged** | token spend, day-capped |
+| 2 | E2 Copilot LLM-judge | `copilot-evaluator-job.bicep` ACA Schedule job (nightly, `cronExpression` default `0 7 * * *`) + AOAI judge tokens, capped 500/day | **live, tagged** | token spend, day-capped |
 | 3 | S1 secret-expiry monitor | `secret-expiry-monitor-function.bicep` (Y1) | **live, tagged** | ~$0 idle |
 | 4 | N1 `iceberg-catalog` | ACA always-on (future WS-N) | future — tag on land | ~$30–100/mo |
 | 5 | N2b `loom-duckdb` | ACA always-on (future WS-N) | future — tag on land | ~$30–100/mo |

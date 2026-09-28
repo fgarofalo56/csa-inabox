@@ -148,10 +148,10 @@ export function AiOperationsTabs() {
             learn={{
               title: 'Copilot quality — retrieval & grounding evals',
               content:
-                'Per-surface answer quality for the Loom Copilot: retrieval hit-rate / MRR against the golden eval sets, LLM-judge grounding/relevance/completeness, and the pass-rate that gates a corpus change. Every score is a REAL run of the copilot-evaluator Function against the same searchDocs + Azure OpenAI path production uses — scored, capped, and written to Cosmos. Compares each surface against its E3 floor and trends it across nightly + per-roll runs.',
+                'Per-surface answer quality for the Loom Copilot: retrieval hit-rate / MRR against the golden eval sets, LLM-judge grounding/relevance/completeness, and the pass-rate that gates a corpus change. Every score is a REAL run of the copilot-evaluator job against the same searchDocs + Azure OpenAI path production uses — scored, capped, and written to Cosmos. Compares each surface against its E3 floor and trends it across nightly + per-roll runs.',
               tips: [
                 'Retrieval hit-rate is deterministic and authoritative even when the LLM judge is deferred (daily cap).',
-                '"Run now" fires the same E2 HTTP trigger the nightly schedule + every roll use.',
+                '"Run now" starts the same E2 evaluator job execution the nightly schedule + every roll use.',
                 'A surface below its floor is the signal a corpus or prompt change regressed retrieval or grounding.',
                 'Drill in to see the exact expected-vs-retrieved chunks and the judge’s own rationale per failing question.',
               ],
@@ -161,7 +161,7 @@ export function AiOperationsTabs() {
           <TeachingBanner
             surfaceKey="admin-copilot-quality"
             title="Real Copilot answer-quality evals"
-            message="Scores come from the copilot-evaluator Function running the golden eval sets through the real retrieval + Azure OpenAI judge path and writing to Cosmos. Retrieval hit-rate/MRR is deterministic; grounding is LLM-judged (capped per day). Each surface is measured against its E3 floor. No synthetic numbers — an honest gate shows the exact remediation when the evaluator Function is unwired."
+            message="Scores come from the copilot-evaluator job running the golden eval sets through the real retrieval + Azure OpenAI judge path and writing to Cosmos. Retrieval hit-rate/MRR is deterministic; grounding is LLM-judged (capped per day). Each surface is measured against its E3 floor. No synthetic numbers — an honest gate shows the exact remediation when the evaluator job id is unset."
             icon={TargetArrow24Regular}
             accent="var(--loom-accent-blue)"
             learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai"

@@ -29,7 +29,7 @@ file + PR that shipped them.
 | # | Surface | Kind | Ingress | Identity model | Primary shipped controls | PR |
 |---|---------|------|---------|----------------|--------------------------|----|
 | S-1 | **L2 OpenLineage ingest** | Next.js BFF route (`POST /api/lineage/openlineage`) | in-VNet CAE only; public Front Door **403** | per-pool Entra JWKS bearer **or** per-workspace minted token → single workspace | `app/api/lineage/openlineage/route.ts`, `lib/azure/openlineage-auth.ts`, `lib/azure/openlineage-ingest.ts` | #2448 |
-| S-2 | **E2 copilot-evaluator** | Azure Function (HTTP `authLevel:function` + timer) | function-key HTTP + timer | Function managed identity (AAD Cosmos/AOAI, **no keys**) + VNet-internal token to console probe | `azure-functions/copilot-evaluator/src/**`, `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep` | #2418 |
+| S-2 | **E2 copilot-evaluator** | in-VNet ACA Job (`Microsoft.App/jobs`, Schedule trigger) | **no ingress**; scheduled, plus ARM job-start for on-demand runs | Console UAMI — Contributor scoped to **that one job resource** for the start call (AAD Cosmos/AOAI, **no keys**) + VNet-internal token to console probe | `azure-functions/copilot-evaluator/src/**`, `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep` | #2418, B-FN 2026-07-27 |
 | S-3 | **C3 cost-anomaly monitor** | in-VNet ACA Job → `POST /api/internal/cost-anomaly/run` | internal token, in-VNet | console UAMI (Cost Mgmt / Cosmos / action group) | `app/api/internal/cost-anomaly/run/route.ts`, `platform/fiab/bicep/modules/admin-plane/cost-anomaly-monitor-job.bicep`, `lib/auth/internal-token.ts` | #2471 |
 | S-4 | **L3 lineage-extractor** | in-VNet ACA Job (one-shot) | scheduled, no ingress | Job managed identity (ADF/Synapse read, Cosmos write) | `azure-functions/lineage-extractor/src/**`, `platform/fiab/bicep/modules/admin-plane/lineage-extractor-job.bicep` | #2467 |
 | S-5 | **S1 secret-expiry monitor** | Azure Function (timer) | timer only, no ingress | Function managed identity (Graph `Application.Read.All`, KV Secrets User, action group) | `azure-functions/secret-expiry-monitor/src/**`, `platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-function.bicep` | #2416, mirror #2457 |
@@ -98,20 +98,27 @@ no-storage-keys** posture.
 
 | STRIDE | Threat / abuse case | Shipped mitigation |
 |--------|---------------------|--------------------|
-| **S**poofing | Caller invokes a background trigger without authorization | E2 HTTP is `authLevel:'function'` (function key; no anonymous surface — `copilotEvaluatorHttp.ts` lines 8-11, 50-54). C3 `/api/internal/cost-anomaly/run` requires the **fail-closed** internal token (`isValidInternalToken`, `authed()` — `route.ts` lines 25-28, 50) and rejects a signed-in admin session. L3 & S1 are timer/one-shot with **no ingress** at all. |
+| **S**poofing | Caller invokes a background trigger without authorization | E2 has **no ingress at all** — since B-FN (2026-07-27) it is an ACA job with a Schedule trigger, so there is no HTTP surface and no function key to present (`azure-functions/copilot-evaluator/README.md`: "There is no HTTP trigger and no function key any more"; `git grep authLevel -- azure-functions/copilot-evaluator` returns nothing). An on-demand run is an **ARM control-plane** call — `GET {jobId}` then `POST {jobId}/start` (`lib/azure/copilot-evaluator-client.ts` lines 144, 162) — which Azure authorizes against Contributor **scoped to that single job resource**, granted to the Console UAMI in `copilot-evaluator-job.bicep` (line 236, role `b24988ac-…` at line 151). C3 `/api/internal/cost-anomaly/run` requires the **fail-closed** internal token (`isValidInternalToken`, `authed()` — `route.ts` lines 25-28, 50) and rejects a signed-in admin session. L3 & S1 are timer/one-shot with **no ingress** at all. |
 | **T**ampering | Malicious payload steers a write to an attacker partition | C3 writes are keyed by rule `/scope`; L3 edges use deterministic ids + a watermark (idempotent, no dup — `lineage-extractor/src/main.ts` lines 8-9, 76-82); S1 state is a single blob on the Function's own account. No user-supplied partition keys on these paths. |
 | **R**epudiation | Background action leaves no trace | All four log every REAL call + honest early-exit; C3/S1 escalations fire the shared action group and open a dedup GitHub issue (O1, `alert-dispatch.ts`, #2429). |
 | **I**nformation disclosure | Storage account keys leak → data-plane compromise | **F6: identity-based storage everywhere** — `AzureWebJobsStorage__accountName` (no connection string / no keys); Cosmos + AOAI + Graph + KV all via `DefaultAzureCredential` (`copilot-evaluator/src/azure-clients.ts` lines 21-38; `secret-expiry-monitor/src/azure-clients.ts` lines 1-15). Bicep grants are **scoped role assignments**, not keys. |
 | **D**enial-of-service | LLM-judge cost blow-up (E2) / re-paging (C3/S1) | E2 enforces a cross-replica daily judge-spend ledger (`LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP`) + result TTL 180d; C3 dedups on `lastFiredAt` (never re-pages same day — `route.ts` lines 16-20); S1 persists last-alerted band per credential so a daily cron alerts once per escalation, not once per day (`secretExpiryMonitor.ts` lines 110-166). |
 | **E**levation-of-privilege | A Function identity over-scoped can read/modify beyond its job | Least-privilege scoped roles: S1 = Graph `Application.Read.All` + KV Secrets User + Monitor action-group only; L3 = ADF/Synapse read + Cosmos write; C3 runs in the console process under the existing console UAMI (no new broad grant). Each grant is bicep-declared on the resource module. 403 from Graph is surfaced as an honest "run the one-time consent" log, not a silent failure (`secretExpiryMonitor.ts` lines 74-77). |
 
-### 3.2 Abuse case — leaked function key (E2)
+### 3.2 Abuse case — unauthorized run-start (E2)
 
-A leaked E2 function key lets an attacker trigger eval runs (cost, not data
-exfiltration — the evaluator reads the corpus + runs judge turns, writes only to
-`loom-copilot-evals`). Bounded by the daily judge-spend ledger; rotate the
-function key. The corpus probe itself rides the VNet-internal token to the
-console, so the key alone cannot reach the console's internal surface.
+Since B-FN (2026-07-27) there is **no function key to leak**: E2 is an ACA job
+with no ingress. The equivalent abuse is an actor who holds **Contributor on the
+`loom-copilot-evaluator` job resource** — in practice, compromise of the Console
+UAMI, which is the only principal bicep grants it — starting executions. The
+consequence is unchanged in kind (cost, not data exfiltration — the evaluator
+reads the corpus + runs judge turns, writes only to `loom-copilot-evals`) and it
+is bounded by the same daily judge-spend ledger. The blast radius is **narrower**
+than the retired key: the grant is scoped to that one job resource, it is an AAD
+identity that can be revoked rather than a bearer secret that must be rotated,
+and every start is an ARM control-plane operation recorded in the Azure activity
+log. The corpus probe itself rides the VNet-internal token to the console, so
+job access alone cannot reach the console's internal surface.
 
 ### 3.3 Residual risk
 
@@ -281,7 +288,7 @@ non-blocking. Status = `open` / `mitigated` / `accepted` / `fixed`.
 | F-2 | **MEDIUM** | V1 `svc-loom-synthetic` is CA-excluded → a stolen password has no MFA backstop; unexpected-use is not yet alerted | **mitigated** | Least-privilege account + KV-only + rotation + S1 expiry tracking in place. **Owner action (non-blocking):** add an Entra sign-in-log alert for this UPN outside the monitor's expected source (recommended, not yet wired). Blast radius = one ordinary user's console view. |
 | F-3 | **MEDIUM** | `identity.shadow` recon map confidentiality depends on the tenant-admin gate on audit surfaces staying intact | **mitigated** | Gate present (module header + I4 route). **Owner action (non-blocking):** add a regression assertion that the audit-log read path stays tenant-admin-gated. 90-day TTL bounds exposure window. |
 | F-4 | **MEDIUM** | Program internal token is a shared, deterministic secret; console/RG-output compromise exposes it | **accepted** | In-VNet-only reachability + per-service `preferEnv` isolation + `x-user-oid` validation are the compensating controls (`internal-token.ts`). Rotation = redeploy (new `guid`). Accepted for internal surfaces. |
-| F-5 | **LOW** | E2 leaked function key → attacker can trigger eval runs (cost, not data) | **mitigated** | Daily judge-spend ledger caps cost; key rotatable; the key alone cannot reach the console internal surface (that needs the VNet-internal token). |
+| F-5 | **LOW** | E2 unauthorized run-start → attacker can trigger eval runs (cost, not data). Since B-FN (2026-07-27) there is **no function key to leak** — the abuse requires Contributor on the `loom-copilot-evaluator` job resource, in practice compromise of the Console UAMI ([§3.2](#32-abuse-case--unauthorized-run-start-e2)) | **mitigated** | Daily judge-spend ledger caps cost; the grant is scoped to that one job resource and is a revocable AAD identity rather than a bearer secret needing rotation; every start is an ARM control-plane operation recorded in the Azure activity log; starting runs still cannot reach the console internal surface (that needs the VNet-internal token). |
 | F-6 | **LOW** | Enforce mode with an incomplete I2 grant matrix leaves a workspace not-yet-least-privilege (fails closed to shared UAMI) | **accepted** | Safe for availability; the I4 divergence gate ([§8](#8-i6-enforcement-precondition).3) is the operational control that prevents a premature flip. |
 
 **Rule:** *any HIGH finding blocks I6 until dispositioned.* At sign-off the sole

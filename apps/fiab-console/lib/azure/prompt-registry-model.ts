@@ -23,10 +23,10 @@
  * there is deliberately NO v1 migrator today.
  *
  * Per-cloud: identical Commercial / GCC-High (pure metadata in Cosmos; the eval
- * hook rides the same in-boundary evaluator Function both clouds deploy).
+ * hook rides the same in-boundary evaluator job both clouds deploy).
  * IL5/SOVEREIGN MOAT: the registry, the scores it carries, and the approval
  * records all live in the deployment's OWN Cosmos + the deployment's OWN
- * evaluator Function inside the VNet — there is NO external LLMOps SaaS
+ * evaluator job inside the VNet — there is NO external LLMOps SaaS
  * (no Braintrust, no LangSmith, no Weights & Biases) in the path. That is
  * precisely why Loom builds this natively: an IL5 enclave cannot ship prompts,
  * completions, or eval scores to a commercial multi-tenant SaaS, so prompt
@@ -238,7 +238,7 @@ export function approvalEligibility(
       allowed: false,
       reason: 'no-eval',
       detail:
-        'This version has no eval score yet. Publish it (which requests a run from the copilot-evaluator Function) and wait for the run to land, then approve.',
+        'This version has no eval score yet. Publish it (which requests a run from the copilot-evaluator job) and wait for the run to land, then approve.',
     };
   }
   if (score.belowFloor && !opts.overrideBelowFloor) {
