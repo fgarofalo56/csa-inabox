@@ -128,7 +128,7 @@ export interface SchemaRow {
   createdBy?: string; createdAt?: string;
 }
 
-// ---- Update all variables (Fabric Lakehouse ribbon parity, #3538) ----
+// ---- Check variables (a read-only Variable Library health check) ----
 /** One Variable Library item as `GET /api/items?type=variable-library` returns it. */
 export interface VariableLibraryRow {
   id: string;
@@ -136,12 +136,12 @@ export interface VariableLibraryRow {
   workspaceId?: string;
 }
 /**
- * One library's outcome from a re-resolve. `resolved` / `failed` are COUNTS of
+ * One library's outcome from a resolve check. `resolved` / `failed` are COUNTS of
  * rows the resolve route answered with; `error` is set only when the route did
  * not answer at all, so a caller can tell "0 variables resolved" apart from
  * "the call never landed" (deploy-integrity.md R7).
  */
-export interface VariableUpdateResult {
+export interface VariableCheckResult {
   id: string;
   name: string;
   valueSet?: string;

@@ -193,16 +193,21 @@ beforeEach(() => {
  * off a loaded run — PR #4693 §4). Same modifier, different warrant. "The same
  * jsdom reason" was overstated, and it is why the strict control below exists.
  *
- * Every PRESENCE assertion in this file stays strict — but be precise about
- * what that buys, and about the one exception. The presence assertions (the
- * `Fix it` / `Gate registry` / gate-title queries) do fail if a gate renders
- * only inside the accessibility tree's blind spot. The ABSENCE ones pass for
- * the wrong reason under exactly that state — the second direction the
- * `afterEach` docblock warns about. That is pre-existing, is not introduced
- * here, and is not closed by this change. The exception is deliberate and runs
- * the other way: probe 2's `queryAllByRole(…, { hidden: true }).length === 0`
- * is widened ON PURPOSE, because absence under the WIDEST query is strictly
- * stronger than absence under a narrow one.
+ * WHAT IS STRICT AND WHAT IS NOT, as of #4698. The `Fix it` PRESENCE queries
+ * are strict: they fail if a gate renders only inside the accessibility tree's
+ * blind spot. The `Gate registry` PRESENCE queries are NOT — both go through
+ * `findGateRegistryLinks()`, which is widened with `hidden: true` for the
+ * measured reason in its own docblock. The gate-title checks are
+ * `getAllByText`, which never had an accessibility filter.
+ *
+ * ABSENCE runs the other way: a STRICT absence query passes for the wrong
+ * reason when the thing is present but aria-hidden, which is the state the
+ * poll under findGateRegistryLinks measured. So the absence checks in the
+ * no-registry test are widened ON PURPOSE, as is probe 2's — absence under the
+ * WIDEST query is strictly stronger than absence under a narrow one. NOT
+ * widened, disclosed rather than hidden: the positive-control test's own
+ * `Fix it` absence check is still strict. It predates #4698 and is left for
+ * whoever next touches that test.
  */
 function findCreateMirrorButton() {
   return screen.findByRole('button', { name: /Create mirror/i, hidden: true }, { timeout: 5000 });
@@ -275,10 +280,11 @@ async function createMirror(user: ReturnType<typeof userEvent.setup>) {
  *   …stable through t=700, and a 5000ms strict `waitFor` still times out.
  *
  * So the link stays in the DOM and stays findable to a WIDENED query, while a
- * strict one never recovers — Fluent's modal bookkeeping has marked a HIGHER
- * ancestor (the dialog surface) aria-hidden, the same unwind
- * `findCreateMirrorButton` measures for the submit control, and it does not
- * unwind back. Waiting longer is therefore strictly worse, not better. The two
+ * strict one never recovers: some HIGHER ancestor is aria-hidden and stays
+ * that way. WHICH ancestor was not measured — the poll records only the
+ * link's own parent, which it shows clear — so this does not name one. It is
+ * consistent with the modal aria-hidden unwind `findCreateMirrorButton`
+ * measures for the submit control, and is not claimed to be it. Waiting longer is therefore strictly worse, not better. The two
  * call sites pass today only because the synchronous read lands BEFORE that
  * lands; a slower CI box is the input that loses the race, which is what #4698
  * recorded.
@@ -326,7 +332,8 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Fix it/i }).length).toBeGreaterThan(0));
     // The id RESOLVED in the registry — the unknown-id fallback bar is absent.
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect((await findGateRegistryLinks()).length).toBeGreaterThan(0);
+    // The helper asserts `length > 0` itself, inside its waitFor.
+    await findGateRegistryLinks();
     // …and it resolved to the gate the ROUTE named, by that gate's own title.
     expect(screen.getAllByText(/Azure Databricks \(notebooks \/ SQL \/ Warp\)/i).length).toBeGreaterThan(0);
     // The measured reason is still on screen…
@@ -370,7 +377,7 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
 
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Fix it/i }).length).toBeGreaterThan(0));
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect((await findGateRegistryLinks()).length).toBeGreaterThan(0);
+    await findGateRegistryLinks(); // asserts `length > 0` itself
     // The gate that rendered is the one the ROUTE named — `svc-synapse`'s own
     // registry title — and emphatically not the Databricks one.
     expect(screen.getAllByText(/Synapse \(warehouse \/ notebooks \/ pipelines\)/i).length).toBeGreaterThan(0);
@@ -393,12 +400,16 @@ describe('MirroredDatabricksEditor create dialog — failed-pairing Fix-it (#418
     await waitFor(() =>
       expect(screen.getByText(/Mirror created — endpoint not yet queryable/i)).toBeTruthy(),
     );
-    expect(screen.queryByRole('button', { name: /Fix it/i })).toBeNull();
+    // ABSENCE UNDER THE WIDEST QUERY (#4698). A strict role query returns 0
+    // for a control that IS present but sits under an aria-hidden ancestor —
+    // the state measured under findGateRegistryLinks — so the strict form of
+    // these two could not fail on the one input they exist to catch.
+    expect(screen.queryAllByRole('button', { name: /Fix it/i, hidden: true }).length).toBe(0);
     // The three assertions that kill the narrow mutation (see the docblock):
     // an unconditional HonestGate would mount its unknown-id bar here, which
     // carries neither the honest title above nor these tells.
     expect(screen.queryByText(/needs configuration/i)).toBeNull();
-    expect(screen.queryAllByRole('link', { name: /Gate registry/i }).length).toBe(0);
+    expect(screen.queryAllByRole('link', { name: /Gate registry/i, hidden: true }).length).toBe(0);
   });
 
   /**

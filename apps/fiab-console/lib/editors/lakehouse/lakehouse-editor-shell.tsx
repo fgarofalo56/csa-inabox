@@ -8,8 +8,10 @@
  *   panes/  — FilesPane, TablesPane, PreviewPane, SqlPane, HistoryPane,
  *             SchemasPane, ShortcutsPane
  *   dialogs/ — ContextMenu, LabelDialog, ReferencePickerDialog, PropertiesDialog,
- *              ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog, UpdateVariablesDialog,
- *              ShortcutWizardDialog, PermissionsDialog, SettingsDialog
+ *              ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog,
+ *              CheckVariablesDialog, ShortcutWizardDialog, PermissionsDialog,
+ *              SettingsDialog — the prop-less ones rendered together by
+ *              LakehouseContextDialogs (dialogs/lakehouse-dialogs.tsx)
  *   hooks/   — useLakehousePermissions, useLakehouseSettings,
  *              useLakehouseShortcuts, useLakehouseSecondary
  *
@@ -91,13 +93,8 @@ import { SchemasPane } from './panes/schemas-pane';
 import { ShortcutsPane } from './panes/shortcuts-pane';
 import { InteropPane } from './panes/interop-pane';
 // ── Dialogs ──────────────────────────────────────────────────────────────────
-import {
-  ContextMenu, LabelDialog, ReferencePickerDialog, PropertiesDialog,
-  ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog, UpdateVariablesDialog,
-} from './dialogs/small-dialogs';
-import { ShortcutWizardDialog } from './dialogs/shortcut-wizard-dialog';
-import { PermissionsDialog } from './dialogs/permissions-dialog';
-import { SettingsDialog } from './dialogs/settings-dialog';
+import { LakehouseContextDialogs } from './dialogs/lakehouse-dialogs';
+import { checkVariablesRibbonAction } from './dialogs/check-variables-dialog';
 
 interface Props { item: FabricItemType; id: string }
 
@@ -742,7 +739,10 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'New notebook', icon: <BookOpen20Regular />, onClick: () => router.push(notebookHref) },
         { label: 'Existing notebook', icon: <BookOpen20Regular />, onClick: () => router.push('/items/notebook/new') },
       ]}] },
-      { label: 'Data model', actions: [{ label: 'New semantic model', icon: <TableSimple20Regular />, onClick: () => setSemanticModelGateOpen(true), title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path' }, { label: 'Update all variables', icon: <ArrowSync20Regular />, onClick: () => { void sec.openUpdateVariables(); }, title: 'Re-resolve every Variable Library visible to this lakehouse, including secret-ref values held in Key Vault (Fabric ribbon parity, #3538)' }] },
+      { label: 'Data model', actions: [
+        { label: 'New semantic model', icon: <TableSimple20Regular />, onClick: () => setSemanticModelGateOpen(true), title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path' },
+        checkVariablesRibbonAction({ workspaceId: itemQ.data?.workspaceId, onOpen: () => { void sec.openCheckVariables(); } }),
+      ] },
       { label: 'Query', actions: [
         { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
         { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
@@ -765,8 +765,8 @@ export function LakehouseEditor({ item, id }: Props) {
     onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, sc_.openShortcutWizard, router,
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
-    sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess, sec.openUpdateVariables,
-    interopTabOn, connectTabOn,
+    sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess,
+    sec.openCheckVariables, itemQ.data?.workspaceId, interopTabOn, connectTabOn,
   ]);
 
   // ── Tree renderers ────────────────────────────────────────────────────────
@@ -1140,17 +1140,7 @@ export function LakehouseEditor({ item, id }: Props) {
             </div>
             {/* Dialogs */}
             {confirmDialog}
-            <ContextMenu />
-            <LabelDialog />
-            <PropertiesDialog />
-            <SemanticModelGateDialog /><UpdateVariablesDialog />
-            <ShareDialog />
-            <DataAgentDialog />
-            <MoveTableDialog />
-            <ShortcutWizardDialog />
-            <PermissionsDialog />
-            <SettingsDialog />
-            <ReferencePickerDialog />
+            <LakehouseContextDialogs />
             <DeltaMaintenanceDialog
               open={maintainOpen}
               onOpenChange={setMaintainOpen}
