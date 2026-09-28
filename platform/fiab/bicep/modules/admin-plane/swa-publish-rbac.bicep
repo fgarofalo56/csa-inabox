@@ -79,7 +79,7 @@ targetScope = 'resourceGroup'
 @description('Console UAMI principal ID — granted the SWA publish role at this RG scope. Empty skips the grant (the publish routes then surface their honest 403 gate naming this role).')
 param consolePrincipalId string
 
-@description('Cloud boundary — selects a role definition that exists in the target cloud. Website Contributor (used on Commercial / GCC) does not resolve in Azure Government, so GCC-High / IL5 use Contributor instead. Defaults to Commercial for backward compatibility.')
+@description('Cloud boundary — selects the role definition used where an assignment is actually emitted. Commercial / GCC use Website Contributor; GCC-High / IL5 use Contributor. NOTE the sovereign boundaries emit NO assignment at all (see `sovereignRedundant` below), so the selected id is computed and never used there. The reason for the sovereign skip is RoleAssignmentExists on the live usgovvirginia deploy of 2026-07-10 — the core RBAC grants already cover this permission in those boundaries. It is NOT that Website Contributor fails to resolve in Azure Government: that diagnosis was retracted (see the header — the same role id failed on Commercial too, because the id was a typo). Whether Gov could use Website Contributor instead of Contributor is unsettled and needs a real Gov deploy to answer.')
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string = 'Commercial'
 
@@ -90,14 +90,18 @@ param skipRoleGrants bool = false
 // See the header: the previous value (…808fbbe706ee) was a typo for this one and
 // resolved in no cloud, which is what failed the 2026-07-23 admin-plane deploy.
 var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe84772'
-// Contributor — the Azure Government fallback (Website Contributor is absent there;
-// see header). Broader than Website Contributor but the narrowest built-in that
-// exists in Gov and covers Microsoft.Web/staticSites write + listSecrets.
+// Contributor — the role selected in the sovereign boundaries. It is the
+// narrowest built-in KNOWN to exist in Gov that covers Microsoft.Web/staticSites
+// write + listSecrets. It is NOT selected because Website Contributor is absent
+// there: the header retracts that diagnosis (the id that failed in Gov was a
+// typo and failed on Commercial too), and whether Website Contributor resolves
+// in Gov has never been measured. The selection is moot in practice — see
+// `sovereignRedundant`, which skips the assignment in exactly those boundaries.
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 // GCC-High / IL5 are the sovereign (Azure Government) boundaries; GCC (moderate)
 // runs in commercial Azure and keeps the Commercial role.
 var effectiveSwaRoleId = (boundary == 'GCC-High' || boundary == 'IL5') ? contributorRoleId : websiteContributorRoleId
-// In Gov the fallback role IS Contributor — which the core RBAC grants already
+// In Gov the selected role IS Contributor — which the core RBAC grants already
 // assign to the Console UAMI at this RG scope, so creating it here duplicates
 // the (scope, principal, role) triple under a new name and ARM rejects it
 // (LIVE: RoleAssignmentExists, usgovvirginia 2026-07-10 round 2). Skip in the

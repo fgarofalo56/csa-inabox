@@ -523,6 +523,28 @@ var loomContainers = [
   // hotfix fallback for an account that predates this row; the deploy is the
   // primary path (auto-bind-by-default.md §5).
   { name: 'brain-findings',        partitionKey: '/estateId', ttl: -1 }
+  // #4406 — cross-replica SQL cancel intents (#3400). PK /requestId so the
+  // watcher's per-id existence check is a point read in its own partition.
+  //
+  // THE TTL IS WHY THIS ROW EXISTS. `createIfNotExists` settles on the READ when
+  // the container is already there, so its `defaultTtl` argument is applied at
+  // CREATION and never afterwards. With no ARM row the 120s self-eviction held
+  // only if the lazy path happened to win the race that created the container;
+  // any other creator (an operator, a script, a future template omitting the
+  // TTL) left the intents durable, and there is no sweeper to compensate. That
+  // is a silent, unbounded-growth failure mode — nothing errors. Declaring it
+  // here makes the guarantee independent of which path creates it.
+  //
+  // KEEP 120 IN STEP with `CANCEL_INTENT_TTL_SECONDS` in
+  // apps/fiab-console/lib/azure/azure-sql-cancel-intents.ts and with the sibling
+  // declaration in admin-plane/loom-console-cosmos.bicep. Three places now hold
+  // this number; a guard that fails on drift is the open half of #4406 and lives
+  // under apps/fiab-console (outside this lane's ownership).
+  //
+  // The lazy createIfNotExists STAYS — it is what makes a fresh estate work
+  // before this template has run (auto-bind-by-default.md §5: the deploy is the
+  // primary path, the lazy call is the idempotent fallback).
+  { name: 'sql-cancel-intents',    partitionKey: '/requestId', ttl: 120 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

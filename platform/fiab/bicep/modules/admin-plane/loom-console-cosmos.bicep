@@ -297,6 +297,46 @@ resource brainFindings 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/conta
   }
 }
 
+// ---------------------------------------------------------------------------
+// #4406 — cross-replica SQL cancel intents (#3400).
+//
+// Declared as its own resource rather than as a row in `loomContainers` for the
+// same reason `brainGraphVersions` and `brainFindings` above are: it needs a
+// `defaultTtl`, and the loop above emits none.
+//
+// THE TTL IS WHY THIS DECLARATION EXISTS. `createIfNotExists` settles on the
+// READ when the container is already there, so the `defaultTtl` it passes is
+// applied at CREATION and never afterwards. With no ARM row the 120s
+// self-eviction held only if the lazy path happened to be what created the
+// container; any other creator (an operator, a script, a future template that
+// lists it without the TTL) left the intents durable, and there is no sweeper
+// anywhere to compensate. Nothing errors — the store just grows. Declaring it
+// here makes the guarantee independent of which path wins.
+//
+// KEEP 120 IN STEP with `CANCEL_INTENT_TTL_SECONDS` in
+// apps/fiab-console/lib/azure/azure-sql-cancel-intents.ts and with the sibling
+// row in landing-zone/cosmos.bicep. Three places now hold this number; a guard
+// that fails on drift is the open half of #4406 and lives under
+// apps/fiab-console, outside this lane's ownership.
+//
+// PK /requestId matches the lazy call exactly, so the watcher's per-id existence
+// check stays a point read in its own partition. The lazy createIfNotExists
+// STAYS — it is what makes a fresh estate work before this template has run
+// (auto-bind-by-default.md §5: the deploy is the primary path, the lazy call is
+// the idempotent fallback, and the operator is asked for nothing either way).
+resource sqlCancelIntents 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = {
+  parent: loomDb
+  name: 'sql-cancel-intents'
+  properties: {
+    resource: {
+      id: 'sql-cancel-intents'
+      partitionKey: { paths: ['/requestId'], kind: 'Hash' }
+      defaultTtl: 120
+      indexingPolicy: { indexingMode: 'consistent', automatic: true }
+    }
+  }
+}
+
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${accountName}'
   location: location
