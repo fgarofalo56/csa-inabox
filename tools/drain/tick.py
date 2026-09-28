@@ -3060,8 +3060,7 @@ def boundary_of_issue(repo: str, number: int, policy: dict, kind: str) -> tuple[
             f"#{number} carries no boundary label and receipt kind {kind!r} has no "
             f"entry in policy.default_boundary (declared: {sorted(defaults) or 'none'}). "
             f"Label the issue -- {', '.join(sorted(mapping)) or 'no labels declared'} "
-            "are the labels that resolve -- rather than widening the default, because "
-            "16 of the 23 Gov-about unlabelled items are this kind."
+            "are the labels that resolve -- rather than widening the default."
         )
     return default, f"the policy default for {kind!r}, NOT from a label"
 
