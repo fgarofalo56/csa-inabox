@@ -241,14 +241,22 @@ condition. `--status` now refuses outright when no ledger file exists, because
 | `g1-browser` | any UI surface | Playwright walk on the live console: screenshot + an assertion **unreachable from an error path** |
 | `operator` | genuinely human | parked with an exact click-script |
 
-**A run-backed receipt is bound to the issue by NOTHING, and the comment it
-posts says so.** `verify_run_backed_receipt` matches the producer workflow,
-`status`, `conclusion` and every declared step — and compares the run to the
-item on no axis at all. `_run_evidence` does not request `createdAt`, and
+**A run-backed receipt is bound to the issue on ONE axis — its BOUNDARY — and
+on nothing else, and the comment it posts says so.**
+`verify_run_backed_receipt` matches the producer workflow, `status`,
+`conclusion` and every declared step, and since #4709 it also requires the
+run's boundary to be the producer declared for THIS ITEM's boundary
+(`tick.boundary_of_issue`, from the issue's labels, falling to
+`policy.default_boundary[kind]` when it carries none — and `deploy-run` and
+`estate` have no such entry, so those refuse instead). Everything else is still
+unbound: `_run_evidence` does not request `createdAt`, and
 `headSha` is read only to be interpolated into the ref. Measured: run
 `33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`) passes
-every check today, and **147 of the 351 issues open on 2026-09-18 were filed
-after it**. So the receipt establishes *the declared producer ran green*, not
+every check today **for an item whose boundary resolves to Commercial** — a
+`drift-gov` item refuses it — and **147 of the 351 issues open on 2026-09-18
+were filed
+after it**. So the receipt establishes *the declared producer ran green in this
+item's boundary*, not
 *the estate was observed carrying this change* — the comment no longer cites
 deploy-integrity R2 as **satisfied**, only as the reason the class takes a run
 rather than a merge, and it discloses the time and sha gap in terms. Binding it
@@ -682,15 +690,15 @@ guard before it passed:
 | #2874 | evidence offered | outcome |
 |---|---|---|
 | `parked` (today) | green `loom-roll-and-validate` run `36053481220` | REFUSED at the TERMINAL guard |
-| after `--unpark` | the same run | **every guard passes** — would record `deploy-run` |
+| after `--unpark` | the same run | **REFUSED since #4709** — `drift-gov` → GCC-High, which has no declared producer. Before #4709 every guard passed and it would have recorded `deploy-run`. |
 | after `--unpark` | `loom-ui-verify` run `36037056251` | REFUSED: wrong workflow |
 | after `--unpark` | failed roll `35921787674` | REFUSED: concluded `failure` |
 
-#2958 passes the same chain on the same run. So the receipt is **reachable**,
+#2958 passed the same chain on the same run. Since #4709 it refuses too, on a different arm: it carries no boundary label and `deploy-run` has no entry in `default_boundary`. What follows describes the state #4709 changed, and the binding half of it is STILL TRUE —
 and what it would record is unbound twice over. `--from-run` carries no issue
 reference, which `record_receipt_from_evidence`'s own docstring says: nothing
 stops a green roll being recorded against a deploy-path item it never touched.
-And `receipt_producers` has **no boundary dimension at all** — three kinds,
+And `receipt_producers` **had no boundary dimension at all** — three kinds,
 three workflow names, and zero occurrences of `gov`, `gcch`, `gcc`, `il5`,
 `boundary`, `commercial` or `cloud` anywhere in that map including its own note
 — while #2874 is **GCC-High** and `loom-roll-and-validate` says of itself that
@@ -699,8 +707,7 @@ scope"*. A green Commercial roll would be accepted as the receipt for a
 GCC-High drift item. **That is #4709** — not #4703, which asks which *class* an
 item resolves to rather than what a class's *producer* is scoped to.
 
-**The terminal guard is presently the only thing preventing this, and this PR
-ships the verb that lifts it.** Unreachable *blocks* and asserts nothing;
+**The terminal guard was the only thing preventing this until #4709 added the boundary check; the UNBOUNDEDNESS it describes is untouched by that change.** Unreachable *blocks* and asserts nothing;
 reachable-and-unbound *closes* the item and publishes a verification claim,
 which is the failure `deploy-integrity.md` R2 exists to prevent. So the order
 matters: the receipt question wants settling **before** either live unpark, not
@@ -730,13 +737,24 @@ An empty map holds nothing, and is the expected end state.
 
 **It is an interlock, not the fix.** A hold names items; the repair is a
 boundary dimension in `receipt_producers`, and that is **#4709**. The two are
-not interchangeable: #2958 is *Commercial*, so a boundary-aware producer map
-would accept its roll — its exposure is the other half of the same gap, an
+not interchangeable, though the boundary check turned out to cover **both**
+items rather than one: #2874 on its `drift-gov` label, and #2958 — which
+carries no boundary label — on `deploy-run` having no entry in
+`default_boundary`. An earlier revision of this paragraph said "#2958 is
+*Commercial*, so a boundary-aware producer map would accept its roll", which
+was true of the one-shared-default design and is false of the per-kind one that
+shipped. What the boundary check does **not** touch is #2958's real exposure:
+an
 unbound `--from-run` against an item that actually owes an `/admin/readiness`
-receipt for DuckLake and RisingWave. A boundary guard alone would cover one of
-the two items. There is also no boundary field on `Item` to read; #2874's
+receipt for DuckLake and RisingWave. There is also no boundary field on `Item`
+to read; #2874's
 GCC-High-ness is knowable only from its title text and its `drift-gov` label,
-and deriving that is #4709's design work. Delete both entries when it lands.
+and deriving that is #4709's design work. That design landed — from the
+**label**, never the title — and both entries are nevertheless **kept**, which
+deviates from "delete both entries when it lands". The reason is recorded at
+`REVERSAL_HOLDS` in `tick.py`: #2874's gap is closed and the hold is retained
+only because lifting one is a deliberate act, while #2958's hold stands on a
+gap #4709 does not touch.
 None of this is a reason to withhold the verb, and none of it is a claim that
 the verb itself is unsafe.
 

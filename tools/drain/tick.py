@@ -1287,8 +1287,10 @@ REVERSAL_FLAGS = {PARKED: "--unpark", DECLINED: "--undecline"}
 
 #: ITEMS HELD AGAINST REVERSAL, keyed by issue number, valued with the reason.
 #: Read by `_refuse_if_held`, which is called by `_reverse` before any `gh` call.
-#: EMPTY IS THE EXPECTED END STATE -- these two entries are lifted by #4709, by
-#: DELETING them.
+#: EMPTY IS THE EXPECTED END STATE. The recorded plan was for #4709 to lift
+#: these two entries by DELETING them; #4709 landed and BOTH ARE KEPT. The
+#: deviation and its reason are stated at `REVERSAL_HOLDS` below -- do not
+#: read this paragraph as the current state.
 #:
 #: WHY THIS EXISTS AS CODE AND NOT AS A PARAGRAPH IN THE README. This PR adds
 #: `unpark-item` to `permitted_unattended`, where `dispatch-roll` and
@@ -1348,25 +1350,53 @@ REVERSAL_FLAGS = {PARKED: "--unpark", DECLINED: "--undecline"}
 #: -- so a hold keyed on any of them could be cleared by editing a field the
 #: actor already owns. `state.json` is gitignored and lane-writable, for the same
 #: reason it is not the place for this either.
+#: BOTH ENTRIES ARE KEPT, WHICH DEVIATES FROM THE RECORDED DECISION, and the
+#: deviation is stated here rather than left for a reader to notice. SEVERAL
+#: places say #4709 lifts these holds BY DELETING THEM once it lands:
+#: `policy.json`'s `_reversal_holds`, this module's `_refuse_if_held` and the
+#: block above it, `README.md`, and `__tests__/test_reversals.py`. Two
+#: earlier revisions of this sentence published a COUNT -- "three places",
+#: then "four sites" -- and a reviewer falsified each in turn, the second
+#: because the number reproduces as 2, 5 or 6 depending on what a "site"
+#: is and the sentence never said. The list is the claim; the count is not.
+#: #4709 is landing and they are still here, because deleting a hold
+#: removes a guard and each entry's gap closed for a different reason:
+#:
+#: - #2874 carries `drift-gov`, resolves to GCC-High, and GCC-High has no
+#:   declared producer. Its stated gap IS closed. Kept only because lifting a
+#:   hold is a deliberate act and the receipt it would unblock has never been
+#:   taken; delete it in a change that does that on purpose.
+#: - #2958 carries no boundary label and is `deploy-run`, which has no entry in
+#:   `default_boundary`, so it now refuses too -- but its OTHER gap is
+#:   untouched by #4709 and is the reason the hold stands on its own merits.
+#:
+#: Both texts below were rewritten at this head. The previous revision left
+#: #2874's text asserting the pre-fix world three lines above #2958's text
+#: saying the opposite, so the dict contradicted itself.
 REVERSAL_HOLDS = {
     2874: (
-        "#4709 must land first. #2874 is GCC-High (`drift-gov`) and resolves to "
-        "`deploy-path` -> `deploy-run` -> `loom-roll-and-validate`, which says of "
-        "itself that it is hard-wired to the Commercial estate, and "
-        "`receipt_producers` carries no boundary dimension at all. Measured on a "
-        "copy of the live ledger at blob a8ec1fc5: parked, the receipt chain "
-        "refuses at the terminal guard; after an unpark, a green Commercial roll "
-        "passes every guard and would be recorded as the receipt for a GCC-High "
-        "item."
+        "#2874 is GCC-High (`drift-gov`) and resolves to `deploy-path` -> "
+        "`deploy-run`. SINCE #4709 a green Commercial `loom-roll-and-validate` "
+        "run is REFUSED for it: GCC-High has no declared producer, and per "
+        "cloud-parity.md an unexercised producer is declared rather than "
+        "implied. Verified read-only at head against run 36053481220. The hold "
+        "is kept rather than deleted because lifting it is a deliberate act -- "
+        "see the note above -- not because the gap is still open. What it was: "
+        "`receipt_producers` carried no boundary dimension at all, so after an "
+        "unpark a Commercial roll passed every guard and would have been "
+        "recorded as the receipt for a GCC-High item."
     ),
     2958: (
-        "#4709 must land first. #2958 is COMMERCIAL, so a boundary-aware producer "
-        "map would accept its roll -- this hold is the other half of the same gap. "
-        "`--from-run` carries no issue reference (`record_receipt_from_evidence`'s "
-        "own docstring), so nothing binds a green roll to the deploy-path item it "
-        "is recorded against, and what #2958 actually owes is an `/admin/readiness` "
-        "receipt for DuckLake and RisingWave that no roll establishes. Measured: "
-        "after an unpark it passes the same chain on the same run as #2874."
+        "#2958 carries no boundary label and is `deploy-path` -> `deploy-run`, "
+        "a kind with NO entry in `policy.default_boundary`, so since #4709 it "
+        "refuses on the boundary as well. That is not why this hold stands. It "
+        "stands because `--from-run` carries no issue reference at all "
+        "(`record_receipt_from_evidence`'s own docstring), so nothing binds a "
+        "green roll to the deploy-path item it is recorded against, and what "
+        "#2958 actually owes is an `/admin/readiness` receipt for DuckLake and "
+        "RisingWave that no roll establishes. #4709 does not touch either of "
+        "those. Measured: after an unpark it passes the same chain on the same "
+        "run as #2874 did before the boundary check existed."
     ),
 }
 
@@ -1375,16 +1405,20 @@ def _refuse_if_held(number: int, from_state: str, holds: dict | None = None) -> 
     """Refuse a reversal of an item that is NAMED in `REVERSAL_HOLDS`. Fails CLOSED.
 
     WHAT IT IS NOT. It is not the boundary fix. A hold names ITEMS; the repair is
-    a boundary dimension in `receipt_producers`, which is #4709, and which this
-    cannot substitute for -- #2958 is Commercial and a boundary-aware producer map
-    would accept its roll, so a boundary guard ALONE would cover one of the two
-    items held here. There is also no boundary field on `Item` to read: its fields
+    a boundary dimension in `receipt_producers`, which is #4709. That has now
+    landed, and it turned out to cover BOTH items rather than one: #2874 on its
+    `drift-gov` label, and #2958 -- which carries NO boundary label -- on
+    `deploy-run` having no entry in `default_boundary`. An earlier revision of
+    this paragraph said "#2958 is Commercial and a boundary-aware producer map
+    would accept its roll", which was true of the one-shared-default design and
+    is false of the per-kind one that shipped. There is also no boundary field
+    on `Item` to read: its fields
     are `number, title, stream, state, lane, size, pr, receipt_kind, receipt_ref,
     receipt_taken_under, receipt_class, audit_reason, blocker, owner, review_by,
     history`, and #2874's GCC-High-ness is knowable only from its title text and
-    its `drift-gov` label. Deriving that is #4709's design work. This is the
-    interlock that stands until it lands, because THIS PR is what removes the
-    barrier that stands today -- the terminal guard.
+    its `drift-gov` label. Deriving that is #4709's design work, and it derives
+    it from the LABEL. The holds are kept anyway -- see `REVERSAL_HOLDS` for why
+    that deviates from the recorded plan to delete them.
 
     TWO WAYS A PERMISSIVE VERSION FAILS OPEN, and each names the value:
 
@@ -1400,9 +1434,13 @@ def _refuse_if_held(number: int, from_state: str, holds: dict | None = None) -> 
        "one field the actor already owns" shape. The hold is the ENTRY; its text
        is documentation. A blank one still refuses and says so.
 
-    An EMPTY map means nothing is held, and is the expected end state once #4709
-    lands. That is the one thing (1) must not be read as forbidding, so it is a
-    distinct path and not an accident of truthiness.
+    An EMPTY map means nothing is held, and remains the expected end state --
+    but #4709 HAS landed and both entries are deliberately kept, for the
+    reasons recorded at `REVERSAL_HOLDS`. An earlier revision of this sentence
+    said "once #4709 lands" while the opening paragraph of this same docstring
+    already said it had; a reviewer found the two thirty lines apart. That is
+    the one thing (1) must not be read as forbidding, so it is a distinct path
+    and not an accident of truthiness.
 
     STATE-AGNOSTIC ON PURPOSE. Both held items are `parked` today, but the check
     sits in the shared `_reverse` and covers `--undecline` too, so an item cannot
@@ -2280,11 +2318,14 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
     deploy-integrity R2 (merged is not done) asks of this class" -- an assertion
     of SATISFACTION, and the code does not establish it. `_run_evidence` never
     requests `createdAt` and `verify_run_backed_receipt` never compares
-    `headSha` to anything, so the run is bound to this issue by nothing at all:
-    not by reference, not by time, not by sha. Measured rather than argued --
+    `headSha` to anything, so the run is bound to this issue on ONE axis only
+    -- its BOUNDARY, since #4709 -- and on nothing else: not by reference, not
+    by time, not by sha. Measured rather than argued --
     run `33238747458` (`loom-roll-and-validate`, 2026-08-29, headSha `70ca3d1`)
-    passes every check today, and 147 of the 351 currently-open issues were
-    filed AFTER it. An outside reader six months from now takes "what R2 asks of
+    passes every check today FOR A COMMERCIAL ITEM, and 147 of the 351 issues
+    open ON 2026-09-18 were
+    filed AFTER it -- 214 of 417 when re-measured on 2026-09-27, which is why
+    the figure now carries its date. An outside reader six months from now takes "what R2 asks of
     this class" to mean the estate was observed carrying this issue's change;
     R7 governs implication and the artifact is unrevisable. The asymmetry was
     the tell: the merge branch volunteers its own two gaps and the run branch --
@@ -2346,12 +2387,16 @@ def _receipt_comment(kind: str, issue_class: str, detail: str) -> str:
         f"deploy-integrity R2 (merged is not done) makes the {issue_class} class "
         "take a receipt of this shape rather than a CI-green one. "
         "DISCLOSED, and this is the part R2 would additionally need: nothing "
-        "here establishes the run carried THIS issue's change. The run is not "
-        "bound to the issue - a workflow run names no issue at all, and that "
-        "binding is #4489 - and it is bound to no TIME and no SHA either: no "
+        "here establishes the run carried THIS issue's change. Since #4709 the "
+        "run IS bound to the issue on one axis - its BOUNDARY, checked against "
+        "the producer declared for this item's cloud - and on nothing else. It "
+        "is not bound by reference: a workflow run names no issue at all, and "
+        "that "
+        "binding is #4489. It is bound to no TIME and no SHA either: no "
         "run date is fetched and no head sha is compared, so a run that "
         "PREDATES this issue is accepted exactly as one that postdates it "
-        "(#4578). Read this as 'the declared producer ran green', not as 'the "
+        "(#4578). Read this as 'the declared producer ran green in this item's "
+        "boundary', not as 'the "
         "estate was observed carrying this change'. "
         "Closing this issue on that evidence, and on nothing wider than it."
     )
@@ -2955,7 +3000,118 @@ def _run_evidence(repo: str, run_id: str) -> dict:
         raise ReceiptRefusedError(f"unparseable run {run_id}: {exc}") from exc
 
 
-def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
+def boundary_of_issue(repo: str, number: int, policy: dict, kind: str) -> tuple[str, str]:
+    """Which cloud boundary this item is about, from its LABELS, and HOW.
+
+    Returns `(boundary, source)`. The SOURCE is returned rather than discarded
+    because the caller writes it into a permanent public comment: "verified in
+    boundary Commercial" is an R7 violation when that value was a policy
+    default nobody asserted about this item. Measured at this head -- 159 of
+    the 233 unlabelled run-backed items would take the default, so for most
+    items the unqualified sentence would be the wrong one.
+
+    #4709. A receipt taken in the wrong boundary does not merely fail to prove
+    the item, it CLOSES the item and publishes a claim that it was verified.
+
+    LABELS, NOT THE TITLE, and the difference is measured rather than assumed.
+    A substantial minority of open issues name a boundary in their TITLE. No
+    count is published here, deliberately: two were, and a reviewer falsified
+    each in turn. The point needs no figure, because the title is prose: #4709 itself names both `Commercial` and
+    `GCC-High` because it is ABOUT boundaries, and #4644 and #4584 do the same.
+    A title needle would classify this very issue as a Gov item.
+
+    AN UNLABELLED ITEM FALLS TO `policy.default_boundary[kind]`, WHICH IS
+    PER-KIND AND IS A DECLARATION RATHER THAN A GUESS. Three shapes were tried
+    and the history matters, because the first two were each wrong in a way the
+    suite could not see:
+
+    - Return None and refuse. Measured on the live ledger: that refused 235 of
+      the 236 non-terminal items needing a run-backed receipt.
+    - One `Commercial` default for every kind. That covered 233 unlabelled
+      items, and 23 of them are Gov-about by their own titles -- #3449
+      `deploy-fiab-gcch is failing`, #4424 `gov-console-roll is failing`. It was
+      argued for on the claim that the detectors never apply `drift-*` labels,
+      which is FALSE: `loom-drift-check.yml:785` creates issues with
+      `drift-gov`, and #4072 carries both `deploy-validation` and `drift-gov`.
+    - PER-KIND, which is this. 16 of those 23 are `deploy-run`, so the exposure
+      concentrated in one kind. Defaulting `g1-browser` only removes 16 of the
+      23. It blocks 74 BY THE DEFAULT; 76 of the 236 cannot obtain a receipt
+      at all, because #4072 and #4073 are blocked by the PRODUCER MAP instead.
+      The return-None shape refused 235.
+
+    STILL EXPOSED, named rather than implied: 5 unlabelled `g1-browser` items
+    read Gov-about by title and would accept a Commercial `loom-ui-verify` run.
+    Labelling is the fix.
+
+    AMBIGUITY REFUSES. An issue carrying labels for two boundaries is not
+    resolved by preferring one -- it is a labelling error, and picking a winner
+    here would silently decide which cloud a verification claim is about.
+    """
+    # KEYS BEGINNING `_` ARE DOCUMENTATION, NOT LABEL NAMES. Without this
+    # filter an issue literally labelled `_` resolves to the prose in
+    # `boundary_labels._` and that string becomes the "boundary" a producer is
+    # looked up under. A reviewer's mutation removing this filter survived the
+    # suite on 2026-09-27; `test_a_documentation_key_is_not_a_label` is the
+    # arm that now kills it.
+    mapping = {
+        name: value
+        for name, value in (policy.get("boundary_labels") or {}).items()
+        if not name.startswith("_")
+    }
+    defaults = {
+        k: v
+        for k, v in (policy.get("default_boundary") or {}).items()
+        if not k.startswith("_")
+    }
+    default = defaults.get(kind)
+    rc, out, err = sh([
+        "gh", "issue", "view", str(number), "--repo", repo, "--json", "labels",
+    ])
+    if rc != 0:
+        raise ReceiptRefusedError(
+            f"could not read labels for #{number} to establish its boundary "
+            f"(rc={rc}): {err[:200]}. Refusing rather than assuming a boundary -- "
+            "per deploy-integrity R7 this does not know, so it says so."
+        )
+    try:
+        # `AttributeError` is in the tuple because a JSON ARRAY response
+        # (`[]`, which `gh` can emit) has no `.get`, and that raised THROUGH
+        # this handler rather than into it -- so an unparseable shape
+        # escaped as a traceback instead of the R7 refusal below.
+        labels = {lab["name"] for lab in json.loads(out).get("labels", [])}
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        # A RESPONSE THIS CANNOT PARSE IS NOT AN UNLABELLED ISSUE. Falling
+        # through to the default here would convert "gh returned something
+        # unexpected" into "this item is Commercial", which is R7's exact
+        # failure shape.
+        raise ReceiptRefusedError(
+            f"could not parse labels for #{number}: {exc}. Refusing rather than "
+            "reading an unparseable response as an absence of labels."
+        ) from exc
+
+    found = sorted({mapping[name] for name in labels if name in mapping})
+    if len(found) > 1:
+        raise ReceiptRefusedError(
+            f"#{number} carries labels for {len(found)} boundaries ({', '.join(found)}), "
+            "so which cloud a receipt would be about is ambiguous. Fix the labels; "
+            "this refuses rather than choosing one."
+        )
+    if found:
+        return found[0], f"its {sorted(n for n in labels if n in mapping)[0]} label"
+    if default is None:
+        raise ReceiptRefusedError(
+            f"#{number} carries no boundary label and receipt kind {kind!r} has no "
+            f"entry in policy.default_boundary (declared: {sorted(defaults) or 'none'}). "
+            f"Label the issue -- {', '.join(sorted(mapping)) or 'no labels declared'} "
+            "are the labels that resolve -- rather than widening the default, because "
+            "16 of the 23 Gov-about unlabelled items are this kind."
+        )
+    return default, f"the policy default for {kind!r}, NOT from a label"
+
+
+def verify_run_backed_receipt(
+    kind: str, run: dict, policy: dict, boundary: str | None,
+) -> str:
     """Refuse unless this RUN establishes a receipt of this KIND. Returns the ref.
 
     FAILS CLOSED AT EVERY STEP, because the whole value of a receipt is that it
@@ -2986,14 +3142,101 @@ def verify_run_backed_receipt(kind: str, run: dict, policy: dict) -> str:
        A kind with NO declared steps is REFUSED rather than waved through. An
        empty requirement would mean "any green run of this workflow will do",
        which is the run-level check this whole branch exists to replace.
+    5. **The producer declaration must BE a boundary map** -- neither a bare
+       string (the pre-#4709 shape) nor any other type, and not an empty dict.
+       These are three separate branches below and they were not three separate
+       tests: a reviewer deleted the non-string arm on 2026-09-27 and 936 of
+       936 stayed green.
+    6. **A boundary must have been PASSED.** `boundary_of_issue` now raises
+       rather than returning None, so this guard is reachable only by a direct
+       caller -- which is why it needs a test of its own and why the seam tests
+       cannot cover it. Replacing it with an assignment also left 936/936 green.
+    7. **That boundary must have a producer declared for it**, with no fallback
+       to another boundary's workflow. This is the #4709 defect itself.
+
+    `boundary` is the ONLY parameter here that is about the ITEM rather than
+    about the run, and it is passed rather than derived so that this function
+    stays callable without GitHub.
+
+    IT HAS NO DEFAULT, AND THAT IS THE FOURTH INSTANCE OF ONE DEFECT. The
+    signature carried `boundary: str | None = None` for one round. A reviewer
+    mutated only that token to `= "Commercial"` and **943 of 943 tests stayed
+    green** -- because every test passes the argument explicitly, so nothing
+    exercised the default. It is not an equivalent mutant: measured in the same
+    run, a three-argument call flipped from refusing to ACCEPTED. Requiring the
+    argument deletes the branch rather than testing it, which is the only fix
+    that cannot be defeated by the next reader adding a default back "for
+    convenience" -- and `test_the_signature_requires_a_boundary` is the arm
+    that notices if they do.
     """
     producers = policy.get("receipt_producers", {})
-    expected = producers.get(kind)
-    if not expected:
+    declared = producers.get(kind)
+    if not declared:
         raise ReceiptRefusedError(
             f"receipt kind {kind!r} has no declared producer in policy.receipt_producers, "
             "so it cannot be recorded from a run. Take it deliberately, or declare a "
             "producer in policy.json after taking one from that workflow by hand."
+        )
+
+    # #4709: THE PRODUCER IS KEYED BY BOUNDARY, and a bare string is no longer
+    # a valid declaration.
+    #
+    # It used to be `kind -> one workflow name`, with no boundary dimension
+    # anywhere in the map -- no occurrence of `gov`, `gcch`, `il5`, `boundary`,
+    # `commercial` or `cloud`. So a Commercial `loom-roll-and-validate` run was
+    # accepted as the receipt that closes a GCC-High drift item, and the close
+    # posts a public comment saying it was VERIFIED. `cloud-parity.md` names
+    # that in terms: "Commercial green proves nothing about Gov."
+    #
+    # That is worse than an unobtainable receipt. An unreachable receipt BLOCKS
+    # -- the item sits visibly and nothing false is asserted. A reachable-and-
+    # wrong receipt CLOSES the item and publishes a verification claim.
+    if isinstance(declared, str):
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} declares a bare producer {declared!r} with no "
+            "boundary. Since #4709 every producer must be keyed by boundary, because "
+            "a Commercial run is not evidence about a sovereign one. Declare it as "
+            f'{{"Commercial": {declared!r}}} in policy.json, naming the boundary the '
+            "receipt was actually taken from."
+        )
+    # `or not declared` USED TO BE HERE and was dead: `if not declared:`
+    # above already catches `{}`, since an empty dict is falsy. A reviewer
+    # measured it -- deleting the clause changed no behaviour -- while two
+    # sites claimed it was what caught the empty-map case. Removed rather
+    # than kept, because a clause that cannot fire reads as a guard.
+    if not isinstance(declared, dict):
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} declares {declared!r}, which is neither a boundary "
+            "map nor usable. Fix policy.receipt_producers."
+        )
+
+    if not boundary:
+        raise ReceiptRefusedError(
+            f"the item's BOUNDARY could not be established, so a {kind!r} receipt "
+            "cannot be matched to a producer. This REFUSES rather than assuming "
+            "Commercial HERE: `boundary_of_issue` applies `policy.default_boundary` "
+            "for an unlabelled item, so reaching this line means either that key is "
+            "absent from policy.json or a caller passed no boundary at all. Declare "
+            "`default_boundary`, or pass the boundary the run was taken in."
+        )
+
+    # `_` KEYS ARE DOCUMENTATION HERE TOO, matching `boundary_labels` and
+    # `default_boundary`. Without this a boundary literally named `_` would
+    # resolve to the prose. Unreachable today -- no boundary label maps to
+    # `_` -- and filtered anyway, because the other two maps taught that the
+    # unreachable case is the one nobody writes a test for.
+    expected = None if boundary.startswith("_") else declared.get(boundary)
+    if not expected:
+        raise ReceiptRefusedError(
+            f"receipt kind {kind!r} has no declared producer for boundary "
+            f"{boundary!r} (declared: {sorted(declared)}). Per cloud-parity.md an "
+            "unexercised boundary is DECLARED as such, never implied -- so this "
+            "refuses rather than falling back to another boundary's workflow. "
+            "DECLARING A PRODUCER IS NOT ENOUGH ON ITS OWN: "
+            f"`receipt_required_steps[{kind!r}]` names steps that exist today only "
+            "in the Commercial producer's workflow, so a newly-declared Gov "
+            "producer refuses at the step check instead. Take a real run in that "
+            "boundary, then declare both from what it actually ran."
         )
 
     actual = run.get("workflowName")
@@ -3267,8 +3510,20 @@ def record_receipt_from_evidence(
                 "established by a workflow run - pass --from-run"
             )
         run = _run_evidence(repo, from_run)
-        ref = verify_run_backed_receipt(kind, run, policy)
-        detail = f"{run.get('workflowName')} run {from_run} concluded success"
+        boundary, boundary_source = boundary_of_issue(repo, number, policy, kind)
+        ref = verify_run_backed_receipt(kind, run, policy, boundary)
+        # THE BOUNDARY IS NAMED IN THE PUBLIC COMMENT, AND SO IS WHERE IT CAME
+        # FROM. `cloud-parity.md` forbids a status claim that says a feature
+        # works without naming which clouds, and this comment is exactly such a
+        # claim: permanent, public, asserting the item was verified. R7 adds the
+        # second half -- for 159 of the 233 unlabelled run-backed items the
+        # boundary is a policy DEFAULT, and a comment that says "in boundary
+        # Commercial" without saying so asserts something nobody established
+        # about that item.
+        detail = (
+            f"{run.get('workflowName')} run {from_run} concluded success "
+            f"in boundary {boundary} ({boundary_source})"
+        )
 
     # THE GITHUB CLOSE RUNS FIRST, AND THE ORDER IS THE FIX (#4545).
     #
