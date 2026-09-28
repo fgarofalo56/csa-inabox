@@ -4322,6 +4322,67 @@ ARMS: list[tuple[str, str, str, str]] = [
         "    if dependency_bump and footprint_known:",
         "    if dependency_bump:",
     ),
+    #
+    # BMP13 to BMP17 exist because an independent reviewer measured all five
+    # as SURVIVORS at 944 passed against the round that added BMP1-BMP12 --
+    # re-derived here on a sandbox copy at this head, control rc=0, the
+    # anchor meta-test deselected exactly as `main()` deselects it.
+    #
+    # Two of them are the SAME defect BMP3 guards, weakened rather than
+    # deleted: the author check surviving as a SUBSTRING test. `some-human`
+    # -- the only impostor the suite carried -- is not a substring of either
+    # declared login, so nothing distinguished the correct predicate from the
+    # defect. `dependabot` is a real GitHub account, distinct from the
+    # declared `dependabot[bot]` and a proper substring of BOTH declared
+    # logins, so under either rewrite it takes the exemption.
+    (
+        ("BMP13 the author check degrades to a substring test against the "
+         "REPR of the author tuple, so any login that appears anywhere inside "
+         "`str(authors)` qualifies -- `dependabot`, a real account distinct "
+         "from the declared `dependabot[bot]`, takes the exemption"),
+        "gates.py",
+        "    if author not in authors:",
+        "    if author not in str(authors):",
+    ),
+    (
+        ("BMP14 the author check degrades to a per-entry substring test, so "
+         "any login that is a substring of ANY declared login qualifies. Same "
+         "escape as BMP13 by a different route, and the one a reviewer is "
+         "likeliest to write while 'simplifying' the comparison"),
+        "gates.py",
+        "    if author not in authors:",
+        "    if not any(author in a for a in authors):",
+    ),
+    #
+    # BMP15 to BMP17 are the three boundary directions BMP10 and BMP11 do NOT
+    # pin. The grammar has FIVE edges -- a directory entry has a left and a
+    # right boundary, a filename entry has a left boundary, a right boundary
+    # and a POSITION rule -- and the shipped arms restored one each.
+    (
+        ("BMP15 the DIRECTORY rule loses its RIGHT boundary, so `requirements/` "
+         "matches any top-level directory that merely STARTS with that name "
+         "and `requirementsfoo/evil.py` takes the exemption at zero reviewers"),
+        "gates.py",
+        '            if parts[0] == entry.rstrip("/"):',
+        '            if parts[0].startswith(entry.rstrip("/")):',
+    ),
+    (
+        ("BMP16 the FILENAME rule loses its LEFT boundary, so any file whose "
+         "name merely ENDS with a declared one qualifies -- `evil.go.mod` and "
+         "`x/my.package-lock.json` become lock files. The mirror of BMP11"),
+        "gates.py",
+        "        elif parts[-1] == entry:",
+        "        elif parts[-1].endswith(entry):",
+    ),
+    (
+        ("BMP17 the FILENAME rule loses its POSITION, matching any segment "
+         "instead of the last, so a DIRECTORY named `go.mod` or `Cargo.lock` "
+         "carries arbitrary source files in with it -- `go.mod/evil.py` at "
+         "zero reviewers"),
+        "gates.py",
+        "        elif parts[-1] == entry:",
+        "        elif entry in parts:",
+    ),
 ]
 
 

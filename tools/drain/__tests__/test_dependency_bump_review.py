@@ -154,11 +154,48 @@ def test_the_footprint_conjunct_is_load_bearing():
 def test_an_unknown_author_gets_no_exemption(bot):
     """FAIL-CLOSED ARM 1, tested on its own, for EVERY declared login.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: `author in authors` becoming a substring
-    or truthiness test, or the author check being skipped when the path list
-    already matches. A human PR touching only a lock file would then merge
-    with no review at all -- which is a strictly larger exemption than the one
-    the operator granted.
+    WHAT VALUE WOULD MAKE THIS FAIL: `author in authors` becoming a SUBSTRING
+    test in either of its two shapes -- `author not in str(authors)` (BMP13)
+    or `not any(author in a for a in authors)` (BMP14) -- a truthiness
+    rewrite, or the author check being skipped entirely when the path list
+    already matches (BMP3).
+
+    THE SUBSTRING ROWS BELOW ARE WHAT MAKES THAT SENTENCE TRUE, and an
+    earlier draft of this docstring named the substring rewrite while
+    carrying no input that distinguishes it. `some-human` is not a substring
+    of either declared login, so BOTH substring mutations SURVIVED the full
+    suite -- control and both arms at 944 passed, 8 skipped, 1 deselected,
+    measured on a sandbox copy of `8f66b718f` (the head before this round)
+    with the anchor meta-test deselected the way `mutate_gates.main` does it
+    -- while this docstring claimed they were covered. That is the exact
+    shape `assertion-design.md` forbids: reporting a suite as covering a
+    behaviour when no input distinguishes the correct code from the defect.
+
+    It is not bookkeeping. `dependabot` is a real GitHub account, DISTINCT
+    from the declared `dependabot[bot]`, and it is a proper substring of BOTH
+    declared logins. Under either substring rewrite it takes the exemption --
+    and this predicate is the only check standing between a human PR and a
+    halved reviewer count.
+
+    TWO NEAR-EQUIVALENT MUTANTS ARE DISCLOSED HERE RATHER THAN LEFT LOOKING
+    LIKE A GAP, per `assertion-design.md` "done" #5. Both SURVIVE the full
+    suite WITH the substring rows above present -- 950 passed, 8 skipped, 1
+    deselected on a sandbox copy of this round's tree -- and are deliberately
+    NOT arms:
+
+        author.lower() not in [a.lower() for a in authors]        SURVIVED
+        author.strip("[]") not in [a.strip("[]") for a in authors] SURVIVED
+
+    THEY ARE NOT STRICT EQUIVALENTS, and saying so plainly matters more than
+    claiming they are unkillable. Each HAS a distinguishing input --
+    `DEPENDABOT[BOT]` for the first, `dependabot[bot` (unterminated, so
+    `strip` makes both sides equal) for the second. Neither is PRODUCIBLE:
+    the author reaching this function comes from `gh pr view --json author`,
+    which returns GitHub's canonical casing, and a login truncated mid-
+    bracket is not a string GitHub emits. So they are evidence about the arm
+    rather than coverage this test lacks -- but the honest statement is "no
+    input the caller can supply reaches the difference", not "no input
+    exists".
     """
     ok, why = gates.is_dependency_bump(POLICY, "some-human", LOCKS)
     assert ok is False
@@ -167,6 +204,23 @@ def test_an_unknown_author_gets_no_exemption(bot):
     ok, why = gates.is_dependency_bump(POLICY, None, LOCKS)
     assert ok is False
     assert "could not be read" in why, why
+
+    # A PROPER SUBSTRING OF A DECLARED LOGIN -- the input the docstring above
+    # names. The fixture's shape is ASSERTED against the policy read at
+    # runtime rather than transcribed, so a future edit to
+    # `dependency_bump_authors` that makes these strings no longer substrings
+    # fails loudly here instead of quietly turning both rows into dead
+    # weight.
+    for impostor in ("dependabot", "pendabot"):
+        assert any(impostor in declared for declared in BOTS), (
+            f"{impostor!r} is no longer a substring of any declared login "
+            f"({BOTS}), so this row would witness nothing")
+        assert impostor not in BOTS, (
+            f"{impostor!r} is now a DECLARED login, so it can no longer stand "
+            "in for an impostor")
+        ok, why = gates.is_dependency_bump(POLICY, impostor, LOCKS)
+        assert ok is False, f"{impostor!r} took the bump exemption: {why}"
+        assert "not a declared bump author" in why, why
 
     # POSITIVE CONTROL: the real bot still qualifies, so this is not satisfied
     # by a predicate that refuses everyone. Parametrized because production's
@@ -327,24 +381,56 @@ def test_the_allowlist_admits_a_real_lock_by_directory_or_by_filename(path):
     "poetry.lock.sh",
 ])
 def test_the_allowlist_matches_whole_segments_not_substrings(path):
-    """Every one of these took the exemption at ZERO reviewers before the fix.
+    """EIGHT of these nine took the exemption at ZERO reviewers before the fix.
 
     Measured by an independent reviewer at `9d8952420` and re-derived at this
-    head: the first matcher asked `p.startswith(entry) or f"/{entry}" in p`,
-    which has no boundary at either end, so a shell script was being classified
-    as a lock file and any `requirements/` directory anywhere qualified.
+    head by driving that head's matcher -- `p.startswith(entry) or
+    f"/{entry}" in p`, lifted from `9d8952420:gates.py:5706-5708` rather than
+    transcribed -- over every row below. It has no boundary at either end, so
+    a shell script was being classified as a lock file and any `requirements`
+    directory at any depth qualified.
+
+    THE COUNT IS EIGHT, NOT NINE, and saying "every one" was wrong. Measured:
+    `notrequirements/evil.py` is REFUSED by that matcher, because
+    `"notrequirements/evil.py"` neither starts with `"requirements/"` nor
+    contains `"/requirements/"`. It is in this list for a different
+    degradation -- the bare-substring form `any(entry in p)`, which is the
+    only one of the four that admits it -- and the parametrize comment above
+    it says so. The universal claim swept it up anyway.
 
     Reach over the tracked tree was ZERO on the day it was measured, so this
     was latent rather than live -- and latent is the hazard: it goes live the
     day someone adds `csa_platform/requirements/`, silently, with no test
     change.
 
-    WHAT VALUE WOULD MAKE THIS FAIL: restoring either boundary-free form. A
-    prefix test readmits `notrequirements/evil.py` and `poetry.lock.sh`; an
-    embedded-segment test readmits `evil/requirements/x.py`. This is the
-    negative side the file previously lacked -- its only negative path was
-    `csa_platform/security/auth.py`, which is refused by ANY plausible matcher
-    and therefore had no kill power over the matching rule at all.
+    WHAT VALUE WOULD MAKE THIS FAIL, with each form's ADMITTED set measured
+    over THE NINE ROWS IN THIS LIST -- the population is stated because a
+    count without one is the defect this module is about:
+
+      * the bare-substring form `any(entry in p)` -- 9 of 9, the only form
+        that readmits `notrequirements/evil.py`;
+      * the prefix form `p.startswith(entry)` -- 5 of 9: `poetry.lock.sh`,
+        `package-lock.json.py`, `Cargo.lockdir/evil.rs`,
+        `Cargo.tomlfoo/build.rs`, `go.modules/evil.py`. It does NOT readmit
+        `notrequirements/evil.py`;
+      * the embedded-segment form `f"/{entry}" in p` -- 3 of 9:
+        `evil/requirements/x.py`, `csa_platform/requirements/backdoor.py`,
+        `x/go.modules/evil.py`.
+
+    Any one of the three turns at least one row red, so all three are genuine
+    breaking values for this test.
+
+    Arms BMP10 and BMP11 restore ONE boundary each -- the directory rule's
+    left edge and the filename rule's right edge. They are not the whole
+    grammar; the other three directions are pinned by
+    `test_the_allowlist_has_a_boundary_in_every_direction`, which exists
+    because all three SURVIVED the full suite while this file looked like it
+    covered the matcher.
+
+    This is the negative side the file previously lacked -- its only negative
+    path was `csa_platform/security/auth.py`, which is refused by ANY
+    plausible matcher and therefore had no kill power over the matching rule
+    at all.
     """
     ok, why = gates.is_dependency_bump(POLICY, BOT, [path])
     assert ok is False, f"{path} must not be on the bump allowlist: {why}"
@@ -353,4 +439,68 @@ def test_the_allowlist_matches_whole_segments_not_substrings(path):
     needed, _ = gates.review_requirement(
         POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
     assert needed >= 1, f"{path} reached zero reviewers"
+
+
+@pytest.mark.parametrize(("path", "arm"), [
+    # DIRECTORY rule, RIGHT edge. `requirements/` must match the segment
+    # `requirements` exactly, not merely start it. Killed by BMP15.
+    ("requirementsfoo/evil.py", "BMP15"),
+    ("requirements-dev/x.txt", "BMP15"),
+    # FILENAME rule, LEFT edge. `go.mod` must not admit a file whose name
+    # merely ENDS with it. Killed by BMP16.
+    ("evil.go.mod", "BMP16"),
+    ("x/my.package-lock.json", "BMP16"),
+    # FILENAME rule, POSITION. A declared file name must match the LAST
+    # segment, not any segment -- otherwise a DIRECTORY named `go.mod`
+    # carries arbitrary files in with it. Killed by BMP17.
+    ("go.mod/evil.py", "BMP17"),
+    ("Cargo.lock/evil.rs", "BMP17"),
+])
+def test_the_allowlist_has_a_boundary_in_every_direction(path, arm):
+    """The three directions BMP10 and BMP11 do NOT pin.
+
+    The grammar has FIVE edges, not two: a directory entry has a left and a
+    right boundary, and a filename entry has a left boundary, a right
+    boundary, and a POSITION rule (last segment only). The shipped arms
+    restore the directory-left edge (BMP10) and the filename-right edge
+    (BMP11). The remaining three widenings all SURVIVED the full suite --
+    control and each arm at 944 passed, 8 skipped, 1 deselected, measured on
+    a sandbox copy of `8f66b718f` (the head before this round) with the
+    anchor meta-test deselected the way `mutate_gates.main` does it -- so the
+    matcher looked covered and was not:
+
+        parts[0].startswith(entry.rstrip("/"))   SURVIVED  -> now BMP15
+        parts[-1].endswith(entry)                SURVIVED  -> now BMP16
+        entry in parts                           SURVIVED  -> now BMP17
+
+    WHAT VALUE WOULD MAKE THIS FAIL: each row above is the input that breaks
+    exactly one of those three, and the mapping is MEASURED rather than
+    reasoned -- all five matcher predicates (BMP10, BMP11, BMP15, BMP16,
+    BMP17) were driven over every negative row in this file, and each row
+    here is admitted by its named arm and by no OTHER matcher arm.
+
+    NOT A HISTORICAL REGRESSION LIST, unlike its sibling above, and the
+    difference is stated because conflating them is how a universal claim
+    goes wrong. Driving `9d8952420`'s matcher over these rows: only
+    `go.mod/evil.py` and `Cargo.lock/evil.rs` were admitted by it. The four
+    others were refused by the shipped defect and are refused now -- they
+    pin a boundary the grammar requires, not a hole that was once open.
+    """
+    ok, why = gates.is_dependency_bump(POLICY, BOT, [path])
+    assert ok is False, f"{path} must not be on the bump allowlist ({arm}): {why}"
+    assert "outside the allowlist" in why, why
+
+    needed, _ = gates.review_requirement(
+        POLICY, changed_paths=[path], stream_known=False, dependency_bump=ok)
+    assert needed >= 1, f"{path} reached zero reviewers"
+
+    # POSITIVE CONTROL, so these rows cannot be satisfied by a matcher that
+    # refuses everything: the un-degraded neighbour of each row is still
+    # admitted. `requirements/locks/x.txt` exercises the directory rule,
+    # `x/go.mod` the filename rule at depth -- which is the pair the three
+    # widenings above would each have left working, so a green here plus a
+    # red above is what localises the defect to a boundary.
+    for legitimate in ("requirements/locks/x.txt", "x/go.mod"):
+        ok, why = gates.is_dependency_bump(POLICY, BOT, [legitimate])
+        assert ok is True, f"{legitimate} must still qualify: {why}"
 
