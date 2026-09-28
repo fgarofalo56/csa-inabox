@@ -1,33 +1,55 @@
 /**
  * GET  /api/items/health-check/[id]/action-group
- *   → { ok, groups: ActionGroupSummary[], current: PersistedActionGroup | null }
+ *   → { ok, groups: ActionGroupSummary[], current: ActionGroupView | null }
  * PUT  /api/items/health-check/[id]/action-group
  *   body: { name, shortName?, emails?, sms?, webhooks?, functions?, logicApps? }
  *   → upsert a REAL Azure Monitor action group (Microsoft.Insights/actionGroups),
  *     persist the channel config on the item, and bind future check rules to it
- *     → { ok, id, current }
+ *     → { ok, id, current, bindings }
  * POST /api/items/health-check/[id]/action-group
  *   body: { actionGroupId?, alertType? }  (defaults to the persisted group)
  *   → sendActionGroupTestNotification (real createNotifications) → { ok, result }
  *
  * Azure-native default — no Microsoft Fabric. Honest 503 gate when Azure Monitor
  * / subscription env is unset (MonitorNotConfiguredError); 403 when the Console
- * UAMI lacks rights on the alert resource group. Azure Functions are delivered
- * as webhook receivers to their HTTP-trigger URL (the receiver kind the action
- * group client supports); Logic App callback URLs are resolved via ARM.
+ * UAMI lacks rights on the alert resource group.
+ *
+ * SECRET-BEARING URLS ARE RESOLVED HERE, AT SAVE, AND NEVER STORED OR RETURNED:
+ *   • Logic App  → the workflow's HTTP-request trigger is READ from its
+ *     definition (#4748 — never assumed to be `manual`), then ARM
+ *     listCallbackUrl on it.
+ *   • Azure Function → picked as Function App + function (#4740); the invoke
+ *     URL and function key come from ARM (`resolveFunctionTriggerUrl`). The
+ *     function is delivered as a webhook receiver to that URL, as before.
+ *   Pre-#4740 hand-typed function URLs stay delivering, are returned to the
+ *   browser with their query stripped, and are shown for re-binding
+ *   (`_lib/notification-receivers.ts`).
+ *
+ * Route-toolkit: withSession (the session prologue is the toolkit's; the owner
+ * check stays the explicit `loadOwnedItem` below).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import {
   upsertActionGroup,
   listActionGroups,
   sendActionGroupTestNotification,
-  getLogicAppCallbackUrl,
   MonitorNotConfiguredError,
   MonitorError,
 } from '@/lib/azure/monitor-client';
+import { resolveLogicAppCallback, type TriggerChoice } from '@/lib/azure/logic-app-trigger';
+import { resolveFunctionTriggerUrl } from '@/lib/azure/function-receiver';
+import {
+  functionReceiverView,
+  isLegacyFunctionReceiver,
+  parseFunctionRows,
+  parseLogicAppRows,
+  type FunctionReceiverView,
+  type LogicAppReceiverRow,
+  type PersistedFunctionReceiver,
+} from '../../_lib/notification-receivers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,10 +62,17 @@ interface PersistedActionGroup {
   emails: string[];
   sms: { countryCode: string; phoneNumber: string }[];
   webhooks: { name?: string; serviceUri: string; useCommonAlertSchema?: boolean }[];
-  functions: { name?: string; functionUrl: string; useCommonAlertSchema?: boolean }[];
-  logicApps: { name?: string; resourceId: string; useCommonAlertSchema?: boolean }[];
+  functions: PersistedFunctionReceiver[];
+  logicApps: LogicAppReceiverRow[];
 }
 
+/** What the browser is sent. `functions` never carries a URL or key. */
+type ActionGroupView = Omit<PersistedActionGroup, 'functions'> & { functions: FunctionReceiverView[] };
+
+function viewOf(ag: PersistedActionGroup | null): ActionGroupView | null {
+  if (!ag) return null;
+  return { ...ag, functions: (Array.isArray(ag.functions) ? ag.functions : []).map(functionReceiverView) };
+}
 
 function monitorGate(e: any): NextResponse | null {
   if (e instanceof MonitorNotConfiguredError) {
@@ -69,35 +98,63 @@ function monitorGate(e: any): NextResponse | null {
   return null;
 }
 
+function lastSegment(id: string): string {
+  const parts = id.replace(/\/+$/, '').split('/');
+  return decodeURIComponent(parts[parts.length - 1] || id);
+}
+
+/**
+ * A receiver that could not be resolved. Kept apart from `monitorGate` so a
+ * 403 on a Logic App or Function App is not reported as an action-group
+ * permission problem (`deploy-integrity.md` R7 — the message names what was
+ * actually refused).
+ */
+function receiverFailure(kind: 'logic-app' | 'function', label: string, e: unknown): NextResponse {
+  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
+    const role = kind === 'logic-app' ? 'Logic App Contributor' : 'Website Contributor';
+    const action = kind === 'logic-app'
+      ? 'read the workflow definition and call listCallbackUrl'
+      : 'read the function and call its listkeys action';
+    return NextResponse.json({
+      ok: false,
+      error: `Azure ${e.status}: not authorized to resolve ${kind === 'logic-app' ? 'Logic App' : 'Azure Function'} '${label}'.`,
+      gate: {
+        reason: `The Console UAMI must ${action} to bind this receiver.`,
+        remediation: `Grant the Console UAMI "${role}" on '${label}' (or its resource group).`,
+      },
+    }, { status: 403 });
+  }
+  if (e instanceof MonitorError && e.status >= 400 && e.status < 500) {
+    const what = kind === 'logic-app' ? 'Logic App receiver' : 'Azure Function receiver';
+    return NextResponse.json({ ok: false, error: `${what} '${label}': ${e.message}` }, { status: e.status === 404 ? 404 : 422 });
+  }
+  return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+}
+
 function currentOf(state: Record<string, unknown>): PersistedActionGroup | null {
   const ag = state.actionGroup as PersistedActionGroup | undefined;
   return ag && typeof ag === 'object' && ag.name ? ag : null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session: s, params: { id } }) => {
   if (!id || id === 'new') return NextResponse.json({ ok: true, groups: [], current: null });
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!hc) return apiError('health-check not found', 404);
-  const current = currentOf((hc.state || {}) as Record<string, unknown>);
+  const current = viewOf(currentOf((hc.state || {}) as Record<string, unknown>));
   try {
     const groups = await listActionGroups();
     return NextResponse.json({ ok: true, groups, current });
   } catch (e: any) {
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e), current }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
-  const { id } = await ctx.params;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session: s, params: { id } }) => {
   if (!id || id === 'new') return apiError('save the health check before configuring notifications (no id yet)', 400);
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!hc) return apiError('health-check not found', 404);
   const body = await req.json().catch(() => ({} as any));
+  const stored = currentOf((hc.state || {}) as Record<string, unknown>);
 
   const name = String(body?.name || '').trim();
   if (!name) return apiError('an action-group name is required', 400);
@@ -112,24 +169,45 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const webhooks = Array.isArray(body?.webhooks)
     ? body.webhooks.map((r: any) => ({ name: r?.name ? String(r.name) : undefined, serviceUri: String(r?.serviceUri || '').trim(), useCommonAlertSchema: r?.useCommonAlertSchema !== false })).filter((r: { serviceUri: string }) => /^https?:\/\//i.test(r.serviceUri))
     : [];
-  const functions = Array.isArray(body?.functions)
-    ? body.functions.map((r: any) => ({ name: r?.name ? String(r.name) : undefined, functionUrl: String(r?.functionUrl || '').trim(), useCommonAlertSchema: r?.useCommonAlertSchema !== false })).filter((r: { functionUrl: string }) => /^https?:\/\//i.test(r.functionUrl))
-    : [];
-  const logicAppsIn = Array.isArray(body?.logicApps)
-    ? body.logicApps.map((r: any) => ({ name: r?.name ? String(r.name) : undefined, resourceId: String(r?.resourceId || '').trim(), useCommonAlertSchema: r?.useCommonAlertSchema !== false })).filter((r: { resourceId: string }) => r.resourceId)
-    : [];
+  const parsedFunctions = parseFunctionRows(body?.functions, Array.isArray(stored?.functions) ? stored!.functions : []);
+  if (!parsedFunctions.ok) return apiError(parsedFunctions.error, 400);
+  const functions = parsedFunctions.rows;
+  const logicAppsIn = parseLogicAppRows(body?.logicApps);
+
+  // ── Resolve every secret-bearing receiver URL server-side. ──
+  const logicAppReceivers: { resourceId: string; callbackUrl: string; useCommonAlertSchema?: boolean }[] = [];
+  const logicAppBindings: { resourceId: string; workflowName: string; triggerName: string; chosenBy: TriggerChoice }[] = [];
+  for (const la of logicAppsIn) {
+    try {
+      const r = await resolveLogicAppCallback(la.resourceId, la.triggerName);
+      logicAppReceivers.push({ resourceId: la.resourceId, callbackUrl: r.callbackUrl, useCommonAlertSchema: la.useCommonAlertSchema });
+      logicAppBindings.push({ resourceId: la.resourceId, workflowName: r.workflowName, triggerName: r.triggerName, chosenBy: r.chosenBy });
+    } catch (e) {
+      return receiverFailure('logic-app', lastSegment(la.resourceId), e);
+    }
+  }
+  const functionWebhooks: { serviceUri: string; useCommonAlertSchema?: boolean }[] = [];
+  let legacyFunctionCount = 0;
+  for (const f of functions) {
+    if (isLegacyFunctionReceiver(f)) {
+      // Pre-#4740 row: keep delivering exactly as before until it is re-bound.
+      legacyFunctionCount += 1;
+      functionWebhooks.push({ serviceUri: f.functionUrl, useCommonAlertSchema: f.useCommonAlertSchema });
+      continue;
+    }
+    const label = `${f.functionAppResourceId ? lastSegment(f.functionAppResourceId) : '(no Function App)'}/${f.functionName || '(no function)'}`;
+    try {
+      const serviceUri = await resolveFunctionTriggerUrl(f.functionAppResourceId, f.functionName);
+      functionWebhooks.push({ serviceUri, useCommonAlertSchema: f.useCommonAlertSchema });
+    } catch (e) {
+      return receiverFailure('function', label, e);
+    }
+  }
 
   try {
-    // Resolve each Logic App's invocable callback URL (SAS) via ARM listCallbackUrl.
-    const logicAppReceivers: { resourceId: string; callbackUrl: string; useCommonAlertSchema?: boolean }[] = [];
-    for (const la of logicAppsIn) {
-      const callbackUrl = await getLogicAppCallbackUrl(la.resourceId);
-      logicAppReceivers.push({ resourceId: la.resourceId, callbackUrl, useCommonAlertSchema: la.useCommonAlertSchema });
-    }
-    // Azure Functions are delivered as webhook receivers to their HTTP-trigger URL.
     const webhookReceivers = [
       ...webhooks.map((w: { serviceUri: string; useCommonAlertSchema?: boolean }) => ({ serviceUri: w.serviceUri, useCommonAlertSchema: w.useCommonAlertSchema })),
-      ...functions.map((f: { functionUrl: string; useCommonAlertSchema?: boolean }) => ({ serviceUri: f.functionUrl, useCommonAlertSchema: f.useCommonAlertSchema })),
+      ...functionWebhooks,
     ];
 
     const agId = await upsertActionGroup({
@@ -144,16 +222,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const current: PersistedActionGroup = { name, id: agId, shortName, emails, sms, webhooks, functions, logicApps: logicAppsIn };
     const state = { ...((hc.state || {}) as Record<string, unknown>), actionGroup: current };
     await updateOwnedItem(id, ITEM_TYPE, s.claims.oid, { state });
-    return NextResponse.json({ ok: true, id: agId, current });
+    return NextResponse.json({
+      ok: true,
+      id: agId,
+      current: viewOf(current),
+      bindings: { logicApps: logicAppBindings, legacyFunctions: legacyFunctionCount },
+    });
   } catch (e: any) {
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params: { id } }) => {
   if (!id || id === 'new') return apiError('save the health check first', 400);
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!hc) return apiError('health-check not found', 404);
@@ -167,4 +247,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

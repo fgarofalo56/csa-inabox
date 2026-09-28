@@ -66,4 +66,75 @@ describe('getLogicAppCallbackUrl — trigger resolution (#4748)', () => {
     // Breaks if a `manual` POST is still attempted first (e.g. try-manual-then-fall-back).
     expect(calls.some((c) => c.url.includes('/triggers/manual/'))).toBe(false);
   });
+
+  it('a workflow with NO request trigger fails naming the workflow, the triggers found, and what is required — and never POSTs', async () => {
+    const calls = stubArm({ Recurrence: { type: 'Recurrence' } });
+    const { getLogicAppCallbackUrl } = await import('../monitor-client');
+    const err = await getLogicAppCallbackUrl(WF).catch((e) => e);
+    // Breaks if the message still names a trigger the user never chose, or drops any of the three facts.
+    expect(err?.status).toBe(422);
+    expect(err?.message).toContain("Logic App 'WeathForeCast'");
+    expect(err?.message).toContain("'Recurrence' (Recurrence)");
+    expect(err?.message).toMatch(/When a HTTP request is received/);
+    expect(err?.message).not.toContain("'manual'");
+    // Breaks if the resolver falls back to POSTing some default name anyway.
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  });
+
+  it('an explicit trigger name is honoured when it is a request trigger', async () => {
+    const calls = stubArm({ alpha: { type: 'Request' }, zulu: { type: 'Request' } });
+    const { getLogicAppCallbackUrl } = await import('../monitor-client');
+    // `zulu` is deliberately NOT the one the deterministic default would pick (`alpha`).
+    await getLogicAppCallbackUrl(WF, 'zulu');
+    expect(calls.find((c) => c.method === 'POST')?.url).toContain('/triggers/zulu/listCallbackUrl');
+  });
+
+  it('an explicit trigger name that is not a request trigger is refused with the real candidates', async () => {
+    stubArm({ Recurrence: { type: 'Recurrence' }, hook: { type: 'Request' } });
+    const { getLogicAppCallbackUrl } = await import('../monitor-client');
+    const err = await getLogicAppCallbackUrl(WF, 'Recurrence').catch((e) => e);
+    expect(err?.status).toBe(422);
+    expect(err?.message).toContain("no HTTP-request trigger named 'Recurrence'");
+    expect(err?.message).toContain("'hook'");
+  });
+});
+
+describe('chooseRequestTrigger — deterministic choice among several (#4748)', () => {
+  it('prefers the designer default `manual` when it is one of several request triggers', async () => {
+    const { chooseRequestTrigger } = await import('../logic-app-trigger');
+    // `a_first` sorts before `manual`, so an ordinal-first rule would pick it — breaks if the `manual` preference is dropped.
+    const r = chooseRequestTrigger('wf', [
+      { name: 'a_first', type: 'Request', callbackCapable: true },
+      { name: 'manual', type: 'Request', callbackCapable: true },
+    ]);
+    expect(r).toEqual({ triggerName: 'manual', chosenBy: 'designer-default' });
+  });
+
+  it('otherwise picks the ordinal-first name, independent of declaration order', async () => {
+    const { chooseRequestTrigger } = await import('../logic-app-trigger');
+    // Declared zulu-first: a "first declared" rule would return `zulu` — breaks if the sort is removed.
+    const r = chooseRequestTrigger('wf', [
+      { name: 'zulu', type: 'Request', callbackCapable: true },
+      { name: 'Recurrence', type: 'Recurrence', callbackCapable: false },
+      { name: 'bravo', type: 'Request', callbackCapable: true },
+    ]);
+    expect(r).toEqual({ triggerName: 'bravo', chosenBy: 'first-by-name' });
+  });
+
+  it('a lone request trigger among others is `only`, and the non-request trigger is never chosen', async () => {
+    const { chooseRequestTrigger } = await import('../logic-app-trigger');
+    // `Alpha` sorts first but is a Recurrence — breaks if callbackCapable is ignored.
+    const r = chooseRequestTrigger('wf', [
+      { name: 'Alpha', type: 'Recurrence', callbackCapable: false },
+      { name: 'renamed_http', type: 'Request', callbackCapable: true },
+    ]);
+    expect(r).toEqual({ triggerName: 'renamed_http', chosenBy: 'only' });
+  });
+
+  it('triggersOfDefinition marks only `Request` (any case) as callback-capable', async () => {
+    const { triggersOfDefinition } = await import('../logic-app-trigger');
+    const ts = triggersOfDefinition({ triggers: { a: { type: 'request', kind: 'Http' }, b: { type: 'ApiConnectionWebhook' }, c: { type: 'Recurrence' } } });
+    expect(ts.filter((t) => t.callbackCapable).map((t) => t.name)).toEqual(['a']);
+    expect(triggersOfDefinition(undefined)).toEqual([]);
+  });
 });

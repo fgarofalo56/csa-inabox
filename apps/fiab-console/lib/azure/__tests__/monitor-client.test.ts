@@ -837,11 +837,16 @@ describe('patchScheduledQueryRule', () => {
 
 describe('getLogicAppCallbackUrl', () => {
   it('POSTs listCallbackUrl and returns the URL', async () => {
-    const calls = captureFetch(() => ({ body: { value: 'https://prod-x.logic.azure.com/workflows/abc/triggers/manual/run?sig=xyz' } }));
+    // The GET returns the workflow definition the trigger is resolved from
+    // (#4748); trigger-name resolution itself is pinned in logic-app-trigger.test.ts
+    // with a NON-`manual` fixture — this `manual` case cannot distinguish them.
+    const calls = captureFetch((_url, init) => (String(init?.method || 'GET') === 'GET'
+      ? { body: { name: 'wf1', properties: { definition: { triggers: { manual: { type: 'Request', kind: 'Http' } } } } } }
+      : { body: { value: 'https://prod-x.logic.azure.com/workflows/abc/triggers/manual/run?sig=xyz' } }));
     const { getLogicAppCallbackUrl } = await import('../monitor-client');
     const url = await getLogicAppCallbackUrl('/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf1');
-    expect(calls[0].init?.method).toBe('POST');
-    expect(calls[0].url).toContain('/triggers/manual/listCallbackUrl?api-version=2016-06-01');
+    expect(calls[1].init?.method).toBe('POST');
+    expect(calls[1].url).toContain('/triggers/manual/listCallbackUrl?api-version=2016-06-01');
     expect(url).toContain('logic.azure.com');
   });
 

@@ -41,7 +41,8 @@ import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVar
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
-import { AzureBackedField } from '@/lib/components/azure/azure-backed-field';
+import { FunctionReceiverRow, LogicAppReceiverRowEditor } from './health-check-receivers';
+import type { FunctionReceiverView, LogicAppReceiverRow } from '@/app/api/items/health-check/_lib/notification-receivers';
 import {
   CHECK_TYPE_LIBRARY, CHECK_FAMILY_META, COMPARISON_OPERATORS, AGGREGATIONS,
   buildCheckQuery, type CheckTypeDef, type CheckFamily, type CheckField,
@@ -613,8 +614,8 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
 // POST test). New check rules created afterward bind to this action group.
 type AgSms = { countryCode: string; phoneNumber: string };
 type AgWebhook = { name?: string; serviceUri: string; useCommonAlertSchema?: boolean };
-type AgFunction = { name?: string; functionUrl: string; useCommonAlertSchema?: boolean };
-type AgLogicApp = { name?: string; resourceId: string; useCommonAlertSchema?: boolean };
+type AgFunction = FunctionReceiverView;
+type AgLogicApp = LogicAppReceiverRow;
 interface HcActionGroup {
   name: string; id?: string; shortName: string;
   emails: string[]; sms: AgSms[]; webhooks: AgWebhook[]; functions: AgFunction[]; logicApps: AgLogicApp[];
@@ -624,7 +625,8 @@ interface AgSummaryRow {
   emailCount: number; smsCount: number; webhookCount: number; logicAppCount: number;
 }
 
-function HealthCheckNotifications({ id, itemName }: { id: string; itemName: string }) {
+// Exported for the surface test (`__tests__/health-check-notifications.test.tsx`).
+export function HealthCheckNotifications({ id, itemName }: { id: string; itemName: string }) {
   const s = useStyles();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -685,7 +687,15 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
         return;
       }
       setSavedId(j.id);
-      setMsg({ intent: 'success', text: `Saved action group “${j.current?.name || name}”. New checks created from here on notify these channels.` });
+      // Say which trigger each Logic App was bound to — a choice made on the
+      // user's behalf is reported, never silent (#4748).
+      const la = Array.isArray(j.bindings?.logicApps) ? j.bindings.logicApps : [];
+      const laText = la.length
+        ? ` Logic App trigger${la.length === 1 ? '' : 's'}: ${la.map((b: any) => `${b.workflowName} → ${b.triggerName}`).join(', ')}.`
+        : '';
+      const legacy = Number(j.bindings?.legacyFunctions || 0);
+      const legacyText = legacy ? ` ${legacy} Azure Function receiver${legacy === 1 ? ' still uses' : 's still use'} a hand-typed URL — re-bind to stop storing its key.` : '';
+      setMsg({ intent: legacy ? 'warning' : 'success', text: `Saved action group “${j.current?.name || name}”. New checks created from here on notify these channels.${laText}${legacyText}` });
       void load();
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setSaving(false); }
@@ -778,44 +788,35 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setWebhooks((arr) => [...arr, { serviceUri: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add webhook</Button>
       </div>
 
-      {/* Azure Function */}
+      {/* Azure Function — #4740: picked as Function App + function; the
+          key-bearing trigger URL is resolved server-side at save and is
+          never typed, never stored on the item, never rendered here. */}
       <div>
         {chanHead(<Code20Regular />, 'Azure Function')}
-        <Caption1 className={s.hint}>Delivered as a webhook to the function's HTTPS trigger URL (include the function key).</Caption1>
+        <Caption1 className={s.hint}>Pick the Function App and its HTTP-triggered function. The trigger URL and function key are resolved from ARM on save — nothing secret is typed or stored.</Caption1>
         {functions.map((r, i) => (
-          <div key={i} style={rowStyle}>
-            <Field label={i === 0 ? 'Function HTTPS trigger URL' : ''} style={{ flex: 1, minWidth: 280 }}>
-              <Input value={r.functionUrl} onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, functionUrl: d.value } : x)))} placeholder="https://myfunc.azurewebsites.net/api/alert?code=..." />
-            </Field>
-            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
-            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setFunctions((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
-          </div>
+          <FunctionReceiverRow
+            key={i}
+            row={r}
+            onChange={(next) => setFunctions((arr) => arr.map((x, j) => (j === i ? next : x)))}
+            onRemove={() => setFunctions((arr) => arr.filter((_, j) => j !== i))}
+          />
         ))}
-        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setFunctions((arr) => [...arr, { functionUrl: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add function</Button>
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setFunctions((arr) => [...arr, { functionAppResourceId: '', functionName: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add function</Button>
       </div>
 
-      {/* Logic App */}
+      {/* Logic App — #3541 picker; #4748 the HTTP-request trigger is read
+          from the workflow definition, never assumed to be `manual`. */}
       <div>
         {chanHead(<Cloud20Regular />, 'Logic App')}
-        <Caption1 className={s.hint}>The workflow's callback URL is resolved from its resource id via ARM listCallbackUrl on save.</Caption1>
+        <Caption1 className={s.hint}>The workflow's HTTP-request trigger is read from its definition when you pick it; its callback URL is resolved via ARM listCallbackUrl on save.</Caption1>
         {logicApps.map((r, i) => (
-          <div key={i} style={rowStyle}>
-            <div style={{ flex: 1, minWidth: 320 }}>
-              {/* #3541 — the resource id is DISCOVERED (Resource Graph over
-                  Microsoft.Logic/workflows), never hand-typed. Same picker and
-                  same `logic-app` kind the activator action uses, so the two
-                  surfaces cannot store differently shaped values. */}
-              <AzureBackedField
-                kind="logic-app"
-                value={r.resourceId}
-                label="Logic App"
-                surface="Health check notification"
-                onChange={(v) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, resourceId: v || '' } : x)))}
-              />
-            </div>
-            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
-            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setLogicApps((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
-          </div>
+          <LogicAppReceiverRowEditor
+            key={i}
+            row={r}
+            onChange={(next) => setLogicApps((arr) => arr.map((x, j) => (j === i ? next : x)))}
+            onRemove={() => setLogicApps((arr) => arr.filter((_, j) => j !== i))}
+          />
         ))}
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setLogicApps((arr) => [...arr, { resourceId: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add Logic App</Button>
       </div>
