@@ -76,6 +76,7 @@ This file is maintained automatically by
 
 ### Continuous Integration
 
+* **measurement-guard:** fix the measurement-guard scratch-path remediation, and dispose five lane:ci issues by measurement ([#4749](https://github.com/fgarofalo56/csa-inabox/issues/4749)) ([eb1ecef](https://github.com/fgarofalo56/csa-inabox/commit/eb1ecefeef8630782287a00a313bcfafb4816fdb))
 * **release:** declare build as a hidden changelog type, restoring upstream's canonical row ([#4750](https://github.com/fgarofalo56/csa-inabox/issues/4750)) ([e82be17](https://github.com/fgarofalo56/csa-inabox/commit/e82be17860fabb4731a77e50ba366caee0137ac4))
 * **release:** register the harden commit type so a security fix is not dropped ([8c74ad9](https://github.com/fgarofalo56/csa-inabox/commit/8c74ad911ce8ffe9b85bebbae2e3574fdd22ecfa))
 * **release:** register the harden commit type so a security fix is not dropped from the changelog ([#4717](https://github.com/fgarofalo56/csa-inabox/issues/4717)) ([8c74ad9](https://github.com/fgarofalo56/csa-inabox/commit/8c74ad911ce8ffe9b85bebbae2e3574fdd22ecfa))
