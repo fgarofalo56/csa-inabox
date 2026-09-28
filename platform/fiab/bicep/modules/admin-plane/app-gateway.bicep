@@ -43,11 +43,12 @@ param complianceTags object
 //
 // WHY THIS IS NOT CLOSED BY #4373. That PR pinned `originResponseTimeoutSeconds
 // = 120` on front-door.bicep. This module is a DIFFERENT edge and is not
-// instantiated by that one; see front-door.bicep's "RESIDUAL GAP #2" note,
-// which discloses this exact line. Four shipped params files stand this gateway
-// up (commercial-full, gcc-high, il5, tenant-dmlz), and on IL5 it is the ONLY
-// edge — il5.bicepparam sets frontDoorEnabled=false because Front Door is not
-// IL5-certified — so on IL5 nothing else was going to raise it.
+// instantiated by that one; front-door.bicep's "RESIDUAL GAP #2" note recorded
+// this exact gap, and is CORRECTED in the same PR as this change so it does not
+// keep asserting a hardcode that no longer exists. Four shipped params files
+// stand this gateway up (commercial-full, gcc-high, il5, tenant-dmlz), and on
+// IL5 it is the ONLY edge — il5.bicepparam sets frontDoorEnabled=false because
+// Front Door is not IL5-certified — so on IL5 nothing else was going to raise it.
 //
 // WHY THE CEILING IS 86400 AND NOT 240. Azure documents TWO ranges for
 // backendHttpSettings.requestTimeout: 1–86,400s for a PRIVATE backend and
