@@ -281,7 +281,11 @@ function stripHeredocBodies(s) {
   return out.join('\n');
 }
 
-const RULES = [
+// EXPORTED so the suite can census EVERY rule's remediation text rather than
+// the three ids it happens to know about. A needle over known ids is a
+// regression guard; iterating the real array is what lets a NEW rule with a
+// repo-root scratch path (#4587) be caught the day it is added.
+export const RULES = [
   {
     id: 'rc-after-pipe',
     // `... | ... ; RC=$?`  or a pipeline line followed by a line capturing $?
@@ -310,8 +314,11 @@ const RULES = [
       `a \`$?\` capture follows a pipeline here — where \`$?\` is the LAST element's status.\n` +
       `  offending: ${hit}\n` +
       `  FIX: capture on the line immediately after the SUBJECT, with no pipe:\n` +
-      `       az ... > out.json 2>err.txt\n` +
+      `       az ... > temp/out.json 2>temp/err.txt\n` +
       `       RC=$?\n` +
+      `       (temp/ is gitignored. A bare \`out.json\` lands in whatever the cwd\n` +
+      `        is — for an agent in this repo, the REPO ROOT, against the standing\n` +
+      `        temp-file rule. Six such files were found at the root on 2026-09-26.)\n` +
       `  STATED CAREFULLY: this rule sees a pipeline and a \`$?\` capture in the\n` +
       `  same command. It does NOT establish that the capture is READ, nor that\n` +
       `  the pipeline is a measurement — they may merely co-occur, e.g. both sit\n` +
@@ -383,7 +390,10 @@ const RULES = [
     message: (hit) =>
       `stderr is being discarded on a segment that also carries az/gh/kubectl.\n` +
       `  offending: ${hit}\n` +
-      `  FIX: send stderr to a file and read it on failure:  cmd > out 2>err ; RC=$?\n` +
+      `  FIX: send stderr to a file under the gitignored scratch dir and read it\n` +
+      `       on failure:  cmd > temp/out 2>temp/err ; RC=$?\n` +
+      `       (A bare \`out\`/\`err\` lands in the cwd — for an agent in this repo,\n` +
+      `        the REPO ROOT, against the standing temp-file rule.)\n` +
       `  STATED CAREFULLY: this rule sees a stderr-discarding redirect and a\n` +
       `  measurement binary in the same segment. It does NOT establish that the\n` +
       `  redirect belongs to that binary, nor that the command runs at all — both\n` +
