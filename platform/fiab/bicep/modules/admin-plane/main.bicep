@@ -7022,27 +7022,33 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
 //    artifact persistence works.
 // 2. It is NOT proven safe on an estate that already holds the tuple.
 //    data-plane/transform-runner-lake-rbac.bicep's note above its
-//    `lakeWriteRole` resource claims its deterministic guid "also collapses
-//    onto an equivalent grant already made for this pair elsewhere rather than
-//    erroring on a duplicate". This repo's own measured history says the
-//    opposite three times over. Cited by SYMBOL, not by line — the first
-//    revision of this very block cited a line number for the third one and its
-//    own diff pushed that note further down the file, so no number here is
-//    trustworthy for longer than one merge:
+//    `lakeWriteRole` resource USED to claim its deterministic guid "also
+//    collapses onto an equivalent grant already made for this pair elsewhere
+//    rather than erroring on a duplicate". That claim was RETRACTED at its own
+//    site on 2026-09-28 (#4387) — the two files no longer disagree, and the
+//    surviving text is the one below. Cited by SYMBOL, not by line, because the
+//    first revision of this very block cited a line number for the third one and
+//    its own diff pushed that note further down the file:
 //      * main.bicep's `adminAppResourcesRbac` gating note — the app-resources
 //        leaf "failed RoleAssignmentExists on EVERY deploy in BOTH topologies;
 //        it only ever 'worked' because the grant was created imperatively";
 //      * main.bicep's monitoring-reader-rbac `digestPrincipalId: ''` note;
 //      * this file's own note on the REMOVED `reportSubscriptionsPrincipalId`
-//        output, below.
+//        output, below;
+//      * admin-plane/swa-publish-rbac.bicep's header — the closest receipt to
+//        the experiment #4387 asked for: an imperative `az role assignment
+//        create` (random name, 2026-07-07) occupied the triple and that module's
+//        deterministic guid() name could never be created beside it. COMMERCIAL
+//        centralus 2026-08-07, runs 31194622139 / 31196922481; the same file's
+//        `sovereignRedundant` note carries the Gov half (usgovvirginia
+//        2026-07-10 round 2).
 //    A second assignment for the same principal+role+scope under a different
 //    guid() salt FAILS the deployment. guid() idempotency needs the NAME to
 //    match, and an out-of-band `az role assignment create` names its assignment
-//    randomly. Which of the two comments is right has not been re-measured
-//    against live ARM here, so this one asserts only what the repo has
-//    observed; the contradiction is tracked in #4387. Cross-sub estates do not
-//    hit it (loomStorageGrantable is false there); a same-sub estate carrying
-//    an out-of-band Console-UAMI grant on the lake would.
+//    randomly. Cross-sub estates do not hit it (loomStorageGrantable is false
+//    there); a same-sub estate carrying an out-of-band Console-UAMI grant on the
+//    lake would. Still NOT established, and #4387 stays open for it: the
+//    isolated scratch-RG experiment against THIS role and THIS scope.
 module transformRunnerLakeRbac '../data-plane/transform-runner-lake-rbac.bicep' = if (transformRunnerActive && !skipRoleGrants && loomStorageGrantable) {
   name: 'loom-transform-runner-lake-rbac'
   scope: resourceGroup(loomDlzRg)

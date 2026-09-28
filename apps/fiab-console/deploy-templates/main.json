@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "820118383775352530"
+      "templateHash": "11851031211363118471"
     }
   },
   "definitions": {
@@ -2601,7 +2601,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11438451882383123011"
+              "templateHash": "17308527060480889603"
             }
           },
           "definitions": {
@@ -8513,7 +8513,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3595561718712891919"
+                      "templateHash": "6844117894241623595"
                     }
                   },
                   "parameters": {
@@ -8802,6 +8802,30 @@
                             "kind": "Hash"
                           },
                           "defaultTtl": -1,
+                          "indexingPolicy": {
+                            "indexingMode": "consistent",
+                            "automatic": true
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', parameters('accountName'), variables('loomDatabase'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+                      "apiVersion": "2024-12-01-preview",
+                      "name": "[format('{0}/{1}/{2}', parameters('accountName'), variables('loomDatabase'), 'sql-cancel-intents')]",
+                      "properties": {
+                        "resource": {
+                          "id": "sql-cancel-intents",
+                          "partitionKey": {
+                            "paths": [
+                              "/requestId"
+                            ],
+                            "kind": "Hash"
+                          },
+                          "defaultTtl": 120,
                           "indexingPolicy": {
                             "indexingMode": "consistent",
                             "automatic": true
@@ -16167,7 +16191,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10802398757556530067"
+                      "templateHash": "6802203573122629432"
                     }
                   },
                   "parameters": {
@@ -16187,7 +16211,7 @@
                         "IL5"
                       ],
                       "metadata": {
-                        "description": "Cloud boundary — selects a role definition that exists in the target cloud. Website Contributor (used on Commercial / GCC) does not resolve in Azure Government, so GCC-High / IL5 use Contributor instead. Defaults to Commercial for backward compatibility."
+                        "description": "Cloud boundary — selects the role definition used where an assignment is actually emitted. Commercial / GCC use Website Contributor; GCC-High / IL5 use Contributor. NOTE the sovereign boundaries emit NO assignment at all (see `sovereignRedundant` below), so the selected id is computed and never used there. The reason for the sovereign skip is RoleAssignmentExists on the live usgovvirginia deploy of 2026-07-10 — the core RBAC grants already cover this permission in those boundaries. It is NOT that Website Contributor fails to resolve in Azure Government: that diagnosis was retracted (see the header — the same role id failed on Commercial too, because the id was a typo). Whether Gov could use Website Contributor instead of Contributor is unsettled and needs a real Gov deploy to answer."
                       }
                     },
                     "skipRoleGrants": {
@@ -30966,7 +30990,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13218374108594904405"
+              "templateHash": "4374726465065143471"
             }
           },
           "functions": [
@@ -36783,7 +36807,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "4466812176697765943"
+                      "templateHash": "6225619290637947769"
                     }
                   },
                   "parameters": {
@@ -37174,6 +37198,11 @@
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
                         "ttl": -1
+                      },
+                      {
+                        "name": "sql-cancel-intents",
+                        "partitionKey": "/requestId",
+                        "ttl": 120
                       }
                     ],
                     "containerExcludedPaths": {
@@ -40831,7 +40860,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13218374108594904405"
+              "templateHash": "4374726465065143471"
             }
           },
           "functions": [
@@ -46648,7 +46677,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "4466812176697765943"
+                      "templateHash": "6225619290637947769"
                     }
                   },
                   "parameters": {
@@ -47039,6 +47068,11 @@
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
                         "ttl": -1
+                      },
+                      {
+                        "name": "sql-cancel-intents",
+                        "partitionKey": "/requestId",
+                        "ttl": 120
                       }
                     ],
                     "containerExcludedPaths": {
@@ -50861,7 +50895,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13218374108594904405"
+              "templateHash": "4374726465065143471"
             }
           },
           "functions": [
@@ -56678,7 +56712,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "4466812176697765943"
+                      "templateHash": "6225619290637947769"
                     }
                   },
                   "parameters": {
@@ -57069,6 +57103,11 @@
                         "name": "brain-findings",
                         "partitionKey": "/estateId",
                         "ttl": -1
+                      },
+                      {
+                        "name": "sql-cancel-intents",
+                        "partitionKey": "/requestId",
+                        "ttl": 120
                       }
                     ],
                     "containerExcludedPaths": {
