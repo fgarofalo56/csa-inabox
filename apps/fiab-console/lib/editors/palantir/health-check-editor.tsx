@@ -809,7 +809,7 @@ export function HealthCheckNotifications({ id, itemName }: { id: string; itemNam
           from the workflow definition, never assumed to be `manual`. */}
       <div>
         {chanHead(<Cloud20Regular />, 'Logic App')}
-        <Caption1 className={s.hint}>The workflow's HTTP-request trigger is read from its definition when you pick it; its callback URL is resolved via ARM listCallbackUrl on save.</Caption1>
+        <Caption1 className={s.hint}>The workflow&apos;s HTTP-request trigger is read from its definition when you pick it; its callback URL is resolved via ARM listCallbackUrl on save.</Caption1>
         {logicApps.map((r, i) => (
           <LogicAppReceiverRowEditor
             key={i}
