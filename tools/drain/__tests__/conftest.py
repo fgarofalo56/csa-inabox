@@ -28,18 +28,13 @@ def _default_boundary(monkeypatch, request):
     #4709 made `record_receipt_from_evidence` ask GitHub for the item's labels.
     Without this, a test exercising that path shells out to `gh` -- against a
     repo that does not exist under a test's fake `repo` -- and then REFUSES.
-    Most record-path tests use `ci-green`, which returns before the boundary
-    call, so the tests that need the stub are a small subset rather than the
-    whole suite.
 
     THE RISK THIS FIXTURE CREATES, STATED SO IT IS NOT FORGOTTEN: an autouse
     stub means the boundary check is invisible to every test that does not opt
     out. A mutation applied at the production call site
     `boundary = boundary_of_issue(...)`, and two further mutations of the
     guards inside `verify_run_backed_receipt`, are all hidden from a test that
-    takes the stub. Those are arms `BND1`, `BND10` and `BND11` in
-    `tools/drain/mutate_gates.py`; `python tools/drain/mutate_gates.py` shows
-    which test kills each.
+    takes the stub.
 
     So the tests that witness it opt OUT via `@pytest.mark.real_boundary`, they
     live in `test_boundary_scoped_receipts.py`, and the SEAM tests there drive

@@ -4265,7 +4265,7 @@ ARMS: list[tuple[str, str, str, str]] = [
         '    default = defaults.get(kind, "Commercial")',
     ),
     (
-        ("BND8 every kind shares ONE default again, which re-exposes the 16 "
+        ("BND8 every kind shares ONE default again, which re-exposes the "
          "unlabelled Gov-about `deploy-run` items - #3449 `deploy-fiab-gcch is "
          "failing` and #4424 `gov-console-roll is failing` among them - to "
          "closure on a green Commercial roll"),
@@ -4322,8 +4322,7 @@ ARMS: list[tuple[str, str, str, str]] = [
     (
         ("BND13 the boundary SOURCE stops reaching the public comment, so a "
          "permanent `verified in boundary Commercial` lands on an item whose "
-         "boundary was a policy default nobody asserted about it - R7, and for "
-         "159 of the 233 unlabelled run-backed items it is the wrong sentence"),
+         "boundary was a policy default nobody asserted about it - R7"),
         "tick.py",
         '    return default, f"the policy default for {kind!r}, NOT from a label"',
         '    return default, "its label"',

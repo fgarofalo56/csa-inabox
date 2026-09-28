@@ -338,7 +338,7 @@ OTHER_IMPLEMENTED_BY = {
     # namespace above it, and declared here precisely so that widening which
     # kinds assume a boundary is an edit two files can see rather than a
     # constant in `boundary_of_issue`. `deploy-run` and `estate` are absent on
-    # purpose: 16 of the 23 unlabelled Gov-about items are `deploy-run`.
+    # purpose.
     "default_boundary.g1-browser": "tick.boundary_of_issue",
     "receipt_required_steps": "tick.verify_run_backed_receipt",
     "receipt_required_steps.g1-browser": "tick.verify_run_backed_receipt",

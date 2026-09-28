@@ -1382,11 +1382,7 @@ def _refuse_if_held(number: int, from_state: str, holds: dict | None = None) -> 
 
     WHAT IT IS NOT. It is not the boundary fix. A hold names ITEMS; the repair is
     a boundary dimension in `receipt_producers`, which is #4709, and the two are
-    not interchangeable. There is no boundary field on `Item` to read: its fields
-    are `number, title, stream, state, lane, size, pr, receipt_kind, receipt_ref,
-    receipt_taken_under, receipt_class, audit_reason, blocker, owner, review_by,
-    history`, so #2874's GCC-High-ness is knowable only from its `drift-gov`
-    LABEL, which is what `boundary_of_issue` reads. Each hold states in its own
+    not interchangeable. Each hold states in its own
     value why it stands.
 
     TWO WAYS A PERMISSIVE VERSION FAILS OPEN, and each names the value:

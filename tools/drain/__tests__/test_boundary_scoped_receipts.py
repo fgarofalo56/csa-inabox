@@ -17,9 +17,7 @@ INSIDE `verify_run_backed_receipt` is not the same edit as the same assignment
 at `record_receipt_from_evidence`'s call site, which computes the wrong value
 before the callee ever sees it. Both are covered -- the `seam` tests below
 drive the real `record_receipt_from_evidence`, the rest call the resolver and
-the verifier directly. The mutations are arms `BND1`-`BND13` in
-`tools/drain/mutate_gates.py`; run `python tools/drain/mutate_gates.py` to
-re-derive which test kills each.
+the verifier directly.
 
 The defect: `receipt_producers` mapped a kind to ONE workflow with no boundary
 dimension, so a Commercial `loom-roll-and-validate` run was accepted as the

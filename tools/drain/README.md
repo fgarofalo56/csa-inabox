@@ -743,10 +743,7 @@ now refuse on the boundary as well — #2874 on its `drift-gov` label, and #2958
 check does **not** touch is #2958's real exposure:
 an
 unbound `--from-run` against an item that actually owes an `/admin/readiness`
-receipt for DuckLake and RisingWave. There is also no boundary field on `Item`
-to read; #2874's
-GCC-High-ness is knowable only from its `drift-gov` **label**, never its title,
-and that label is what `boundary_of_issue` reads. Both entries are **kept**:
+receipt for DuckLake and RisingWave. Both entries are **kept**:
 #2874's stated gap is closed and the hold is retained
 only because lifting one is a deliberate act, while #2958's hold stands on a
 gap #4709 does not touch.
