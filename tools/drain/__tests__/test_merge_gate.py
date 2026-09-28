@@ -269,6 +269,15 @@ def _data(**over) -> dict:
                 {"name": n, "status": "COMPLETED", "conclusion": "SUCCESS"} for n in REQUIRED
             ],
             "closingIssuesReferences": [],
+            # A HUMAN author, and it is not decoration. Gate 3b's
+            # dependency-bump exemption reads `pr["author"]["login"]`; with no
+            # `author` key at all the expression evaluated to `None` in every
+            # test in this file, so the exemption's real input was never
+            # exercised with a value and a mutation that hard-codes the author
+            # to a bot survived the whole suite. The default is a human so the
+            # ordinary fixtures keep their ordinary requirement; the bump tests
+            # below pass their own.
+            "author": {"login": "fgarofalo56"},
         },
         "head": HEAD,
         "head_date": HEAD_DATE,
@@ -289,7 +298,7 @@ def _data(**over) -> dict:
     }
     for key, value in over.items():
         if key in ("body", "commits", "statusCheckRollup", "mergeable", "mergeStateStatus",
-                   "closingIssuesReferences"):
+                   "closingIssuesReferences", "author"):
             data["pr"][key] = value
         else:
             data[key] = value
@@ -1068,6 +1077,103 @@ def test_negative_control_an_empty_changed_file_list_fails_closed():
     result = _run(changed_files=[])
     assert result["verdict"] == "NO-GO"
     assert "not known" in _gate(result, "3b")["detail"]
+
+
+# ---------------------------------------------------------------------------
+# The dependency-bump exemption, driven through the REAL gate.
+#
+# These live here rather than beside the rest of the exemption's tests because
+# the thing they pin is the CALLER. The exemption's first guard against a
+# broken caller was `test_the_merge_gate_actually_passes_the_flag`, which
+# greps `merge_gate.py` for two literal strings -- and an independent reviewer
+# defeated it by inserting ONE line above the call, binding `author` to the
+# literal `"app/dependabot"` so the real expression's value never reaches
+# `gates.is_dependency_bump`. Both needles stay verbatim, every PR is then
+# attributed to dependabot, and the suite stayed fully green at 934 passed.
+# That mutation hands the bot's
+# exemption to any human PR touching only lock paths. It survived because
+# `_data()` carried no `author` key at all, so the author expression was never
+# exercised with a value -- the fixture never reached the rule, which is the
+# `assertion-design.md` failure mode exactly.
+# ---------------------------------------------------------------------------
+
+#: The login `gh pr view --json author` actually returns for dependabot on
+#: this repo -- index 1, not the `dependabot[bot]` form at index 0. Production
+#: depends on this entry, so the end-to-end test uses it rather than the one
+#: that happens to be first.
+BUMP_BOT = POLICY["review"]["dependency_bump_authors"][1]
+BUMP_LOCK = "requirements/locks/base/requirements.txt"
+
+
+def test_the_bump_exemption_reads_the_real_author_not_a_constant():
+    """Same files, two authors, two different reviewer COUNTS.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: any constant substituted for the author
+    expression in `merge_gate.run_gates` -- the reviewer's one-line insertion
+    above, a hard-coded bot login, or a hard-coded human one. Under the bot
+    constant the human row reads `of 0 required`; under a human constant the
+    bot row reads `of 1 required`. Asserted on the COUNT in gate 3b's detail
+    rather than on `ok`, because with one APPROVE present both rows are `ok`
+    and an assertion on `ok` would have no kill power here.
+    """
+    human = _run(author={"login": "fgarofalo56"}, changed_files=[BUMP_LOCK])
+    assert "of 1 required" in _gate(human, "3b")["detail"], _gate(human, "3b")["detail"]
+    assert "is not a declared bump author" in _gate(human, "3b")["detail"]
+
+    bot = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK])
+    assert "of 0 required" in _gate(bot, "3b")["detail"], _gate(bot, "3b")["detail"]
+
+
+def test_a_bot_bump_still_needs_one_approve_from_gate_2_3():
+    """THE SCOPE OF THIS EXEMPTION, pinned so the claim cannot drift.
+
+    The operator decision this serves says bumps merge on CI-green alone. This
+    implements PART of it: gate 3b's count drops to zero, and `reduce_verdicts`
+    (gate 2+3) still refuses on `no live APPROVE at head`. So the bar moves
+    from two reviewers to ONE, not to zero, and the run below says so out loud.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: extending the exemption into
+    `reduce_verdicts` -- which is a strictly larger loosening than the one
+    granted, and would turn this from a NO-GO into a GO with no review at all.
+    It also fails if gate 3b stops reaching zero, which is the other direction.
+    """
+    result = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK], comments=[])
+    three_b = _gate(result, "3b")
+    assert three_b["ok"] is True, three_b["detail"]
+    assert "0 live APPROVE of 0 required" in three_b["detail"], three_b["detail"]
+
+    assert result["verdict"] == "NO-GO", result["findings"]
+    assert "no live APPROVE at head" in _gate(result, "2+3")["detail"]
+    # THE SOLE blocker, not merely one of them. That is the measurement that
+    # distinguishes "gate 3b was waived" from "nothing was waived": every other
+    # gate on a zero-reviewer bump is already GO, and review is the one thing
+    # left standing.
+    assert [f["gate"] for f in result["blocking"]] == [
+        "2+3 verdicts (conjunction, pinned to head)"
+    ], result["blocking"]
+
+    # AND IT GOES when a single reviewer posts. Without this the assertion
+    # above is satisfied by a gate that can never pass at all.
+    approved = _run(author={"login": BUMP_BOT}, changed_files=[BUMP_LOCK])
+    assert approved["verdict"] == "GO", approved["blocking"]
+
+
+def test_a_bot_pr_outside_the_allowlist_gets_the_ordinary_requirement():
+    """The caller composes the matcher with the escalation loop, end to end.
+
+    WHAT VALUE WOULD MAKE THIS FAIL: a matcher with no right boundary --
+    `evil/requirements/x.py` matched the first version of this allowlist by
+    embedded substring and took the exemption at zero reviewers. It also fails
+    if the exemption is hoisted above the escalation-path loop, which is what
+    lets the workflow row below still demand two.
+    """
+    smuggled = _run(author={"login": BUMP_BOT}, changed_files=["evil/requirements/x.py"])
+    assert "of 1 required" in _gate(smuggled, "3b")["detail"], _gate(smuggled, "3b")["detail"]
+    assert "outside the allowlist" in _gate(smuggled, "3b")["detail"]
+
+    workflow = _run(author={"login": BUMP_BOT},
+                    changed_files=[".github/workflows/copilot-evals.yml"])
+    assert "of 2 required" in _gate(workflow, "3b")["detail"], _gate(workflow, "3b")["detail"]
 
 
 def test_the_approval_gate_does_not_claim_to_measure_independence():
