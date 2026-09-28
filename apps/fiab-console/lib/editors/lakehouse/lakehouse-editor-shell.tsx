@@ -8,7 +8,7 @@
  *   panes/  — FilesPane, TablesPane, PreviewPane, SqlPane, HistoryPane,
  *             SchemasPane, ShortcutsPane
  *   dialogs/ — ContextMenu, LabelDialog, ReferencePickerDialog, PropertiesDialog,
- *              ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog,
+ *              ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog, UpdateVariablesDialog,
  *              ShortcutWizardDialog, PermissionsDialog, SettingsDialog
  *   hooks/   — useLakehousePermissions, useLakehouseSettings,
  *              useLakehouseShortcuts, useLakehouseSecondary
@@ -93,7 +93,7 @@ import { InteropPane } from './panes/interop-pane';
 // ── Dialogs ──────────────────────────────────────────────────────────────────
 import {
   ContextMenu, LabelDialog, ReferencePickerDialog, PropertiesDialog,
-  ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog,
+  ShareDialog, DataAgentDialog, MoveTableDialog, SemanticModelGateDialog, UpdateVariablesDialog,
 } from './dialogs/small-dialogs';
 import { ShortcutWizardDialog } from './dialogs/shortcut-wizard-dialog';
 import { PermissionsDialog } from './dialogs/permissions-dialog';
@@ -742,7 +742,7 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'New notebook', icon: <BookOpen20Regular />, onClick: () => router.push(notebookHref) },
         { label: 'Existing notebook', icon: <BookOpen20Regular />, onClick: () => router.push('/items/notebook/new') },
       ]}] },
-      { label: 'Data model', actions: [{ label: 'New semantic model', icon: <TableSimple20Regular />, onClick: () => setSemanticModelGateOpen(true), title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path' }] },
+      { label: 'Data model', actions: [{ label: 'New semantic model', icon: <TableSimple20Regular />, onClick: () => setSemanticModelGateOpen(true), title: 'DirectLake semantic model requires Power BI / Fabric capacity — see the dialog for the Azure-native path' }, { label: 'Update all variables', icon: <ArrowSync20Regular />, onClick: () => { void sec.openUpdateVariables(); }, title: 'Re-resolve every Variable Library visible to this lakehouse, including secret-ref values held in Key Vault (Fabric ribbon parity, #3538)' }] },
       { label: 'Query', actions: [
         { label: 'Preview', icon: <Eye20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
         { label: 'Query this file', icon: <Play20Regular />, onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
@@ -765,7 +765,7 @@ export function LakehouseEditor({ item, id }: Props) {
     onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, sc_.openShortcutWizard, router,
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
-    sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess,
+    sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess, sec.openUpdateVariables,
     interopTabOn, connectTabOn,
   ]);
 
@@ -1143,7 +1143,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <ContextMenu />
             <LabelDialog />
             <PropertiesDialog />
-            <SemanticModelGateDialog />
+            <SemanticModelGateDialog /><UpdateVariablesDialog />
             <ShareDialog />
             <DataAgentDialog />
             <MoveTableDialog />

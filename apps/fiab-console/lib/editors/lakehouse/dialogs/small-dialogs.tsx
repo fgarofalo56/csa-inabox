@@ -378,6 +378,111 @@ export function DataAgentDialog() {
   );
 }
 
+// ── Update all variables (#3538 — Fabric Lakehouse ribbon parity) ─────────────
+/**
+ * Fabric's Lakehouse ribbon carries `Update all variables`; Loom's did not
+ * (measured 2026-08-15 against a live capacity). This is the same command over
+ * Loom's own Variable Library items — two real routes, no Fabric workspace, no
+ * binding step for the operator.
+ *
+ * The three outcomes the hook keeps apart are rendered apart: the LIST failing,
+ * a library's RESOLVE failing, and variables inside a resolved library failing.
+ * A bounded list says so rather than implying it covered the estate.
+ */
+export function UpdateVariablesDialog() {
+  const ctx = useLakehouseCtx();
+  const {
+    uvOpen, setUvOpen, uvLibraries, uvLoadError, uvTruncatedHint,
+    uvBusy, uvResults, updateAllVariables, id, itemQ,
+  } = ctx;
+  const router = useRouter();
+  const failedCalls = (uvResults || []).filter((r) => !!r.error).length;
+  const failedVars = (uvResults || []).reduce((n, r) => n + r.failed, 0);
+
+  return (
+    <Dialog open={uvOpen} onOpenChange={(_, d) => setUvOpen(d.open)}>
+      <DialogSurface style={{ maxWidth: 560 }}>
+        <DialogBody>
+          <DialogTitle>Update all variables</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Body1>
+                Re-read every Variable Library visible to{' '}
+                <strong>{itemQ.data?.displayName || `lakehouse-${id}`}</strong> so notebooks,
+                pipelines and Spark jobs bound to this lakehouse pick up values changed since
+                this workspace was opened. Secret-typed variables are dereferenced from Key
+                Vault on the server; their values never reach this browser.
+              </Body1>
+              {uvLoadError && (
+                <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not list variable libraries</MessageBarTitle>{uvLoadError}</MessageBarBody></MessageBar>
+              )}
+              {uvTruncatedHint && (
+                <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Partial list</MessageBarTitle>{uvTruncatedHint}</MessageBarBody></MessageBar>
+              )}
+              {uvLibraries === null && !uvLoadError && <Spinner size="tiny" label="Loading variable libraries…" labelPosition="after" />}
+              {uvLibraries !== null && uvLibraries.length === 0 && (
+                <MessageBar intent="info"><MessageBarBody>No variable libraries in this workspace yet. Create one to parameterise the items bound to this lakehouse.</MessageBarBody></MessageBar>
+              )}
+              {uvLibraries !== null && uvLibraries.length > 0 && !uvResults && (
+                <Caption1>{uvLibraries.length} librar{uvLibraries.length === 1 ? 'y' : 'ies'} will be refreshed: {uvLibraries.map((l) => l.displayName).join(', ')}</Caption1>
+              )}
+              {uvResults && (
+                <>
+                  <MessageBar intent={failedCalls > 0 ? 'error' : failedVars > 0 ? 'warning' : 'success'}>
+                    <MessageBarBody>
+                      {failedCalls > 0
+                        ? `${failedCalls} of ${uvResults.length} librar${uvResults.length === 1 ? 'y' : 'ies'} could not be reached.`
+                        : failedVars > 0
+                          ? `${uvResults.length} librar${uvResults.length === 1 ? 'y' : 'ies'} refreshed; ${failedVars} variable(s) did not resolve.`
+                          : `${uvResults.length} librar${uvResults.length === 1 ? 'y' : 'ies'} refreshed.`}
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Table size="extra-small" aria-label="Variable library refresh results">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>Library</TableHeaderCell>
+                        <TableHeaderCell>Value set</TableHeaderCell>
+                        <TableHeaderCell>Result</TableHeaderCell>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {uvResults.map((r) => (
+                        <TableRow key={r.id}>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell>{r.valueSet || '—'}</TableCell>
+                          <TableCell>
+                            {r.error
+                              ? <Badge color="danger" appearance="tint">Not reached: {r.error}</Badge>
+                              : r.failed > 0
+                                ? <Badge color="warning" appearance="tint">{r.resolved} resolved, {r.failed} failed — {r.firstError}</Badge>
+                                : <Badge color="success" appearance="tint">{r.resolved} resolved</Badge>}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" icon={<Add20Regular />} onClick={() => router.push('/items/variable-library/new')}>New variable library</Button>
+            <Button appearance="subtle" onClick={() => setUvOpen(false)}>Close</Button>
+            <Button
+              appearance="primary"
+              disabled={uvBusy || !uvLibraries || uvLibraries.length === 0}
+              icon={uvBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />}
+              onClick={() => void updateAllVariables()}
+            >
+              Update all
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 // ── Move Table to Schema ──────────────────────────────────────────────────────
 export function MoveTableDialog() {
   const ctx = useLakehouseCtx();
