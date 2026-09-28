@@ -287,6 +287,75 @@ export default defineConfig({
       },
     },
     {
+      // G1 receipt for the health-check Logic App notification picker (#3541).
+      // The CODE fix landed in #4314; what kept the issue open is that no
+      // producer in this repo could take its second acceptance criterion — the
+      // `target_route` receipt (scripts/csa-loom/e2e-receipt.mjs) is goto +
+      // screenshot with NO click, and the picker is not mounted until "Add
+      // Logic App" is clicked (health-check-editor.tsx:642/820). This project
+      // is that producer. Creates a real health-check item + upserts a real
+      // Azure Monitor action group, so retry to keep an intermittent timeout
+      // under the shared-console sweep from reading as a regression.
+      //
+      // LENIENT: an estate that legitimately gates (no ARM read, zero Logic
+      // Apps, monitor gate) records `skip` and the run stays green. Use the
+      // `-receipt` sibling below when you are dispatching FOR the receipt.
+      name: 'health-check-logic-app-picker',
+      testDir: './e2e',
+      testMatch: /health-check-logic-app-picker\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // STRICT sibling of the project above — same spec, same testMatch. The
+      // spec reads `testInfo.project.name` and FAILS the walk when the outcome
+      // is anything but `wired`.
+      //
+      // WHY A PROJECT AND NOT AN ENV VAR: this started as `HC_REQUIRE_RECEIPT=1`,
+      // which could never fire through a dispatch. `loom-ui-verify.yml` has
+      // seven workflow_dispatch inputs (none of them `require_receipt`) and its
+      // extra-projects step forwards a fixed six-entry `env:` list, so nothing
+      // carried the variable into the process — the mitigation was documented
+      // as active while being structurally unable to fire. A project name
+      // arms through `extra_projects`, an input the workflow ALREADY has, and
+      // needs no change to a deploy-path workflow:
+      //
+      //   gh workflow run loom-ui-verify.yml --ref main \
+      //     -f extra_projects="health-check-logic-app-picker-receipt"
+      //
+      // `retries` is deliberately the SAME as the lenient project: the strict
+      // check fails the TEST (not an afterAll hook), so Playwright's own retry
+      // machinery applies — a `wired` retry after a flaky first attempt is
+      // flaky-but-green, while every attempt failing is a red run.
+      name: 'health-check-logic-app-picker-receipt',
+      testDir: './e2e',
+      testMatch: /health-check-logic-app-picker\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // The locator proof behind the #3541 walk. Renders the real
+      // azure-resource-picker composition to static HTML and queries it with
+      // the SAME locator module the walk imports, so the proof cannot drift
+      // from what it claims to prove. No estate, no session, no network —
+      // `page.setContent()` only, so it is safe to run anywhere Chromium is
+      // installed and needs no `mint` dependency.
+      name: 'logic-app-locator-proof',
+      testDir: './e2e/fixtures/logic-app-picker',
+      testMatch: /locator-proof\.spec\.ts/,
+      use: { viewport: { width: 1600, height: 1000 } },
+    },
+    {
       // G1 receipt for the U7/U8/U13 Help Center guides (#2573). Walkthroughs
       // are client-bundled (no backend) — a missing/empty guide is a real fail.
       name: 'help-center-guides',
