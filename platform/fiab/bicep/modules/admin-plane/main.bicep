@@ -621,6 +621,16 @@ param vpnGatewayEnabled bool = true
 @description('Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
 
+// #4431 — threaded, not defaulted. The top-level platform/fiab/bicep/main.bicep
+// always passes this, so a default here would be a dead literal; the single
+// live default (120) is declared there. Bounds are restated on this hop and
+// again on app-gateway.bicep so no caller can reach ARM with a value ARM will
+// reject at deploy time.
+@description('Seconds the Application Gateway waits on the Console origin before giving up (app-gateway.bicep backendHttpSettings.requestTimeout). Was hardcoded 30. Private-backend range 1-86400. Only read when appGatewayEnabled is true; on IL5 the App Gateway is the only edge. See #4431.')
+@minValue(1)
+@maxValue(86400)
+param appGatewayRequestTimeoutSeconds int
+
 @description('Front Door Premium with a Private Link tunnel to the ACA env (global edge, managed cert, WAF). ~5 min provisioning, ~$330/mo. PE approval required after first deploy. Default off.')
 param frontDoorEnabled bool = false
 
@@ -8837,6 +8847,7 @@ module appGateway 'app-gateway.bicep' = if (appGatewayEnabled && containerPlatfo
     appGatewaySubnetId: network.outputs.appGatewaySubnetId
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
     consoleBackendIp: containerPlatformModule.outputs.caeStaticIp
+    consoleRequestTimeoutSeconds: appGatewayRequestTimeoutSeconds
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }

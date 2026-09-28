@@ -1063,7 +1063,7 @@ jobs:
         # run, so there is nothing to upload and `if-no-files-found: warn` would
         # otherwise print a warning about an absence that is expected (#4233).
         if: steps.adx_preflight.outputs.estate_paused != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: gov-verify-receipt-gcch-${{ github.run_id }}
           path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt

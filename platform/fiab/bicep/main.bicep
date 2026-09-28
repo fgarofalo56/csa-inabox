@@ -1003,6 +1003,30 @@ param vpnGatewayEnabled bool = true
 @description('Deploy Application Gateway v2 + WAF in front of the Console. ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
 
+// #4431 — THE single live default for the App Gateway's origin timeout. The two
+// hops below it (admin-plane/main.bicep, app-gateway.bicep) declare the param
+// REQUIRED precisely so this is the only 120 in the chain and cannot drift.
+//
+// 120 matches front-door.bicep's originResponseTimeoutSeconds pin, so a console
+// request does not get a different edge budget depending on which boundary it
+// landed in. Before this, app-gateway.bicep hardcoded 30 with no override path
+// — below what 64 of the console's 81 maxDuration-declaring API routes allow
+// themselves (re-measured at this head; #4431 says "54 of 71" from 2026-09-09,
+// before the 60s bucket grew from 21 to 31). Four shipped params files stand
+// the gateway up (commercial-full, gcc-high, il5, tenant-dmlz); on IL5 it is
+// the ONLY edge, because Front Door is not IL5-certified
+// (il5.bicepparam frontDoorEnabled=false).
+//
+// The bounds are HERE and not only on the modules because this is where a
+// .bicepparam literal binds: `param appGatewayRequestTimeoutSeconds = 99999` in
+// il5.bicepparam fails `bicep build-params` at COMPILE time because of the
+// @maxValue on this line. Declared on the modules alone it would compile and be
+// rejected by ARM mid-deploy instead.
+@description('Seconds the Application Gateway waits on the Console origin before giving up. Default 120, matching the Front Door pin. Range 1-86400 (the private-backend range — the ACA env behind this gateway is internal). Only read when appGatewayEnabled is true. See #4431.')
+@minValue(1)
+@maxValue(86400)
+param appGatewayRequestTimeoutSeconds int = 120
+
 @description('Deploy Front Door Premium with Private Link to the ACA env. ~5 min provisioning + manual PE approval, ~$330/mo. Default off.')
 param frontDoorEnabled bool = false
 
@@ -1558,6 +1582,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     amlWorkspaceRg: !empty(adoptName(adopt, 'aml')) ? adoptRg(adopt, 'aml') : ((useSingleDlz && provisionAml) ? singleDlzRg.name : '')
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
+    appGatewayRequestTimeoutSeconds: appGatewayRequestTimeoutSeconds
     frontDoorEnabled: frontDoorEnabled
     loomVanityDomain: loomVanityDomain
     loomVanityCustomDomainName: loomVanityCustomDomainName
