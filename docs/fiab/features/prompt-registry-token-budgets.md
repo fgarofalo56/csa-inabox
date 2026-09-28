@@ -1,9 +1,9 @@
 # Prompt registry and token budgets
 
 > **Surface:** `/admin/ai-operations?tab=quality&sub=prompts` and `…&sub=budgets` (the legacy `/admin/copilot-quality` deep link redirects here)
-> **Backend:** the `loom-prompt-registry` and `loom-token-budgets` Cosmos containers; the existing Copilot-evaluator Function supplies the scores
+> **Backend:** the `loom-prompt-registry` and `loom-token-budgets` Cosmos containers; the existing Copilot-evaluator job supplies the scores
 > **Kill-switch flags:** `n13-prompt-registry` (default ON, gates the authoring tab) and `n13-token-budgets` (default ON, gates enforcement *and* attribution)
-> **Honest gate:** `LOOM_COPILOT_EVALUATOR_URL` unset — publish records an honest gate instead of a fabricated "run started"
+> **Honest gate:** `LOOM_COPILOT_EVALUATOR_JOB_ID` unset — publish records an honest gate instead of a fabricated "run started"
 
 Two LLMOps controls that sit on top of the evaluation machinery Loom already
 runs:
@@ -30,8 +30,9 @@ order.
 1. Go to **Admin → AI operations → Copilot quality → Prompts**.
 2. **Create a version** of a prompt for a surface. Versions are semver'd.
 3. **Publish it.** Publishing requests a run from the *existing* Copilot-evaluator
-   Function — the exact HTTP trigger the nightly quality workflow posts to. No
-   second evaluator, no second harness.
+   job — the exact ARM job start the nightly quality workflow uses
+   (`.github/workflows/copilot-quality-evals.yml`, `az containerapp job start`).
+   No second evaluator, no second harness.
 4. The evaluator writes its run documents to the eval store; the registry then
    **stamps that real run onto the version**, with its floor verdict computed by
    the same floor logic and the same `eval-floors.json` the CI gate uses.
@@ -83,7 +84,7 @@ refuses.
 | Control | Backend |
 |---|---|
 | Prompt versions | `loom-prompt-registry` Cosmos container |
-| Publish -> evaluate | POST to the Copilot-evaluator Function (`LOOM_COPILOT_EVALUATOR_URL`) |
+| Publish -> evaluate | ARM start of the Copilot-evaluator Container App Job (`LOOM_COPILOT_EVALUATOR_JOB_ID`) |
 | Score + floor verdict | The existing eval-run documents plus `content/evals/eval-floors.json` |
 | Approve / rollback audit | `_auditLog` (`llmops.prompt.approve`, …) plus SIEM fan-out |
 | Budget definitions + usage ledger | `loom-token-budgets` Cosmos container |
@@ -94,7 +95,7 @@ enters the ledger.
 
 ## Honest gates
 
-- **Evaluator not wired.** With `LOOM_COPILOT_EVALUATOR_URL` unset, publish
+- **Evaluator not wired.** With `LOOM_COPILOT_EVALUATOR_JOB_ID` unset, publish
   records an honest gate on the version rather than claiming a run started. The
   version still exists and can still be approved with an explicit override.
 - **No budget set.** Not a gate — the intended default. The Budgets tab shows a

@@ -37,8 +37,11 @@ publishVersion(promptId, {template, bump})
   └─ triggerEvaluatorRun({surfaces:[prompt.surface], trigger:'manual'})
         ↑ lib/azure/copilot-evaluator-client.ts — the SAME client E5's
           "Run now" button and .github/workflows/copilot-quality-evals.yml use
-          to POST /api/copilotEvaluatorHttp on the E2 Function.
-        └─ the Function writes an ordinary `eval-run` doc to loom-copilot-evals
+          to start the loom-copilot-evaluator Container App Job through ARM.
+          (It POSTed /api/copilotEvaluatorHttp on the E2 Function until the
+          2026-07-27 migration recorded in that client's header; that trigger
+          is disabled and the host is on the OP-19 delete list.)
+        └─ the job writes an ordinary `eval-run` doc to loom-copilot-evals
              ├─ attachLatestEvalScore() stamps that REAL run onto the version,
              │  with the floor verdict from floorStatusFor() + eval-floors.json
              │  (the SAME function + SAME file E3/E5 use — one source of truth)
@@ -120,11 +123,11 @@ FLAG0 kill-switches (`lib/admin/runtime-flags.ts`, default ON):
 ## Per-cloud & sovereignty
 
 Identical in Commercial and GCC-High — pure Cosmos metadata plus the in-VNet
-evaluator Function both clouds deploy. No Fabric or Power BI dependency.
+evaluator job both clouds deploy. No Fabric or Power BI dependency.
 
 **IL5 note.** The registry, the eval scores it carries, the approval records, the
 budgets, and the usage ledger all live in the deployment's **own** Cosmos, and
-the scoring runs on the deployment's **own** evaluator Function inside the VNet.
+the scoring runs on the deployment's **own** evaluator job inside the VNet.
 There is **no external LLMOps SaaS** anywhere in this path — no Braintrust, no
 LangSmith, no Weights & Biases. That is exactly why Loom builds this natively: an
 IL5 enclave cannot ship prompts, completions, or eval scores to a commercial

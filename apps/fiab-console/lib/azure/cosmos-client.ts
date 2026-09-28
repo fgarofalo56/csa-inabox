@@ -303,7 +303,7 @@ let _a2aTasks: Container | null = null;
 // so per-ontology progress reads are single-partition. Azure-native; no Fabric.
 let _objectSyncJobs: Container | null = null;
 // E2 (loom-next-level) — Copilot quality eval store (loom-copilot-evals). Two
-// doc kinds written by the copilot-evaluator Function: `docType:'eval-run'`
+// doc kinds written by the copilot-evaluator job: `docType:'eval-run'`
 // (per-surface run rollup — retained indefinitely) and `docType:'eval-result'`
 // (one per judged question, `ttl` 180d self-evicting), plus the daily
 // judge-spend ledger (`docType:'judge-ledger'`, ttl 7d) enforcing

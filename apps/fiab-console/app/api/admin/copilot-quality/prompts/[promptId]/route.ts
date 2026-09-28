@@ -6,8 +6,9 @@
  *   POST → one of four actions, all real Cosmos mutations, all audited:
  *            { action:'publish',  template, bump?|version?, notes? }
  *              — creates the next semver AND requests a run from the EXISTING
- *                E2 copilot-evaluator Function (the same HTTP trigger E5's
- *                "Run now" and the E4 workflow use). NO second harness, NO
+ *                E2 copilot-evaluator Container App Job (started the same way
+ *                E5's "Run now" and the E4 workflow start it: an ARM start of
+ *                `loom-copilot-evaluator`). NO second harness, NO
  *                second CI gate: the run lands as an ordinary `eval-run` doc
  *                that the EXISTING check-eval-regression.mjs floor gate grades.
  *            { action:'refresh-score' , version }
@@ -74,7 +75,7 @@ export const POST = withTenantAdmin(async (req: NextRequest, { params, session }
         evalRequested: result.evalRequested,
         evalGate: result.evalGate,
         note: result.evalRequested
-          ? 'Version published. An eval run was requested from the copilot-evaluator Function — refresh the score in a minute, then approve.'
+          ? 'Version published. An eval run was requested from the copilot-evaluator job — refresh the score in a minute, then approve.'
           : 'Version published. No eval run was requested (see evalGate); it cannot be approved until a real score lands.',
       });
     }
