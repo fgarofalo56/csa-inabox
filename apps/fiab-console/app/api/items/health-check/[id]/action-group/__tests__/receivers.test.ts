@@ -16,17 +16,25 @@
  *     Azure (it must keep working until re-bound), absent from GET/PUT bodies.
  *   • The Logic App fixture's request trigger is `When_a_HTTP_request_is_received`
  *     and ARM 404s `manual` — a route that still defaults to `manual` fails.
+ *   • Every privileged ARM call carries the CALLER's token (`USER-ARM-7z`), not
+ *     the platform token (`UAMI-tk`); the auth header is captured and asserted.
+ *     With no caller token the route must gate and mint nothing.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('@azure/identity', () => {
-  class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
+  class Cred { async getToken() { return { token: 'UAMI-tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
 
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-1' } } as any));
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+
+// The caller's ARM token. When it is null the route must gate (S2); when present
+// every privileged ARM call must carry THIS bearer, not the UAMI one.
+const getUserArmTokenMock = vi.fn(async () => 'USER-ARM-7z' as string | null);
+vi.mock('@/lib/azure/user-token-store', () => ({ getUserArmToken: (...a: any[]) => getUserArmTokenMock(...(a as [string])) }));
 
 let storedItem: any = null;
 const updateOwnedItemMock = vi.fn(async (_id: string, _t: string, _o: string, patch: any) => {
@@ -57,11 +65,16 @@ const WF = '/subscriptions/sub-1/resourceGroups/rg-airportsecurity-dev/providers
 const LEGACY_URL = 'https://old-fn.azurewebsites.net/api/alert?code=LEGACYKEY-55';
 const CTX = { params: Promise.resolve({ id: 'hc-1' }) };
 
-function stubArm() {
+const authHeaders: string[] = [];
+function stubArm(opts: { functionGetStatus?: number } = {}) {
+  authHeaders.length = 0;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url); const m = String(init?.method || 'GET');
+    const auth = (init?.headers as any)?.authorization || '';
+    if (/\/listkeys|\/listCallbackUrl/.test(u)) authHeaders.push(String(auth));
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     if (m === 'GET' && u.includes('/sites/alerts-fn/functions/OnAlert?')) {
+      if (opts.functionGetStatus && opts.functionGetStatus >= 400) return json({ error: { code: 'AuthorizationFailed', message: 'not authorized' } }, opts.functionGetStatus);
       return json({ name: 'alerts-fn/OnAlert', properties: { config: { bindings: [{ type: 'httpTrigger', authLevel: 'function' }] }, invoke_url_template: 'https://alerts-fn.azurewebsites.net/api/onalert', isDisabled: false } });
     }
     if (m === 'POST' && u.includes('/sites/alerts-fn/functions/OnAlert/listkeys')) return json({ properties: { default: 'FNKEY-7f3a' } });
@@ -85,6 +98,7 @@ beforeEach(() => {
   storedItem = { id: 'hc-1', state: {} };
   updateOwnedItemMock.mockClear();
   upsertMock.mockClear();
+  getUserArmTokenMock.mockClear().mockResolvedValue('USER-ARM-7z');
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-1' } } as any);
   stubArm();
 });
@@ -105,6 +119,9 @@ describe('health-check action-group — Azure Function receiver (#4740)', () => 
     expect(updateOwnedItemMock.mock.calls[0][3].state.actionGroup.functions).toEqual([
       { functionAppResourceId: SITE, functionName: 'OnAlert', useCommonAlertSchema: true },
     ]);
+    // S2: the privileged listkeys ran under the CALLER's ARM token, not the UAMI.
+    // Passing `undefined` (UAMI fallback) would make this Bearer UAMI-tk → RED.
+    expect(authHeaders).toEqual(['Bearer USER-ARM-7z']);
   });
 
   it('refuses a NEW hand-typed trigger URL (the key-in-a-field shape) with 400 and upserts nothing', async () => {
@@ -148,6 +165,49 @@ describe('health-check action-group — Azure Function receiver (#4740)', () => 
     expect(res.status).toBe(200);
     expect(JSON.stringify(updateOwnedItemMock.mock.calls[0][3])).not.toContain('LEGACYKEY-55');
     expect(upsertMock.mock.calls[0][0].webhookReceivers.map((w: any) => w.serviceUri)).toEqual(['https://alerts-fn.azurewebsites.net/api/onalert?code=FNKEY-7f3a']);
+  });
+});
+
+describe('health-check action-group — caller authorization (GHSA-66f6-7xvq-8qxw / S2)', () => {
+  it('gates with 401 and mints NOTHING when the caller has no Azure token', async () => {
+    getUserArmTokenMock.mockResolvedValue(null);
+    const res = await PUT(put({ name: 'hc-ag', functions: [{ functionAppResourceId: SITE, functionName: 'OnAlert' }] }), CTX);
+    expect(res.status).toBe(401);
+    // No ARM secret call, no action group, no persisted change.
+    expect(authHeaders).toEqual([]);
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(updateOwnedItemMock).not.toHaveBeenCalled();
+  });
+
+  it('when the caller cannot READ the resource, refuses BEFORE any listkeys and returns 403', async () => {
+    stubArm({ functionGetStatus: 403 });
+    const res = await PUT(put({ name: 'hc-ag', functions: [{ functionAppResourceId: SITE, functionName: 'OnAlert' }] }), CTX);
+    expect(res.status).toBe(403);
+    // Authorization is the function GET; a listkeys must never be attempted after it fails.
+    expect(authHeaders).toEqual([]);
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('the Logic App callback is resolved under the caller token too', async () => {
+    await PUT(put({ name: 'hc-ag', logicApps: [{ resourceId: WF }] }), CTX);
+    expect(authHeaders).toEqual(['Bearer USER-ARM-7z']);
+  });
+
+  it('redacts a secret query value from an ARM error returned to the browser (S4)', async () => {
+    // ARM 422s the function GET with a message that echoes a `code=` secret.
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url); const m = String(init?.method || 'GET');
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (m === 'GET' && u.includes('/sites/alerts-fn/functions/OnAlert?')) {
+        return json({ error: { code: 'BadRequest', message: 'bad callback https://x.azurewebsites.net/api/a?code=SECRET-echo-1' } }, 422);
+      }
+      return json({ error: { code: 'NotFound', message: 'x' } }, 404);
+    }));
+    const res = await PUT(put({ name: 'hc-ag', functions: [{ functionAppResourceId: SITE, functionName: 'OnAlert' }] }), CTX);
+    const body = await res.json();
+    // Breaks if the raw ARM message (with the secret) is forwarded verbatim.
+    expect(JSON.stringify(body)).not.toContain('SECRET-echo-1');
+    expect(JSON.stringify(body)).toContain('code=REDACTED');
   });
 });
 

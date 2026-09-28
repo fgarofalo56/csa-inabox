@@ -9,10 +9,9 @@
  *     assertion.
  *   • an `admin`-level function must never reach `listkeys` — a resolver that
  *     fetched keys first and checked later fails the POST-count assertion.
- *   • the id guards are exercised with ids the PRE-#4748 loose regex
- *     (`/\/providers\/Microsoft\.Logic\/workflows\//i`, a substring test)
- *     ACCEPTED: a `?x=` smuggle and a `..` segment. Reverting to a contains
- *     test turns those rows green-for-the-wrong-reason → RED here.
+ *   • the id validators accept only a canonical Microsoft.Web/sites (or
+ *     Microsoft.Logic/workflows) id: each non-canonical fixture is asserted
+ *     inline to be non-canonical, and a validator that accepted it would go RED.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
@@ -127,32 +126,68 @@ describe('listFunctionTriggers (#4740)', () => {
   });
 });
 
-describe('ARM id guards — the id becomes a path the UAMI token is sent to', () => {
-  it('assertFunctionAppId accepts a real site id and rejects traversal / smuggling', async () => {
+describe('ARM id validation — only a canonical Microsoft.Web/sites id is accepted', () => {
+  // The guard has two layers: a strict per-segment allowlist, and acceptance
+  // only of an id already in canonical form. Each malformed fixture below is
+  // asserted INLINE to be non-canonical (it does not parse back to itself), so
+  // the round-trip layer is the one that must reject it — a value that parsed to
+  // itself but carried a disallowed character would be caught by the allowlist
+  // instead, and would not exercise this layer.
+  const nonCanonical = [
+    `${SITE}/../../../providers/Microsoft.KeyVault/vaults/kv`,
+    `/subscriptions/sub-1/resourceGroups/../providers/Microsoft.Web/sites/x`,
+  ];
+  const wrongShape = [
+    `${SITE}?x=1`,                                                             // trailing query
+    `${SITE}//functions`,                                                      // extra empty segment / child
+    '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf', // wrong provider
+    '/subscriptions/sub 1/resourceGroups/rg/providers/Microsoft.Web/sites/x',  // space is not an allowed char
+  ];
+  // Ids whose segments carry a character that a URL path leaves untouched, so
+  // they ARE in canonical form and only the strict per-segment allowlist can
+  // reject them. Each is asserted inline to round-trip, so this witnesses the
+  // allowlist specifically — the canonical-form layer cannot see these.
+  const allowlistOnlySite = [
+    '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Web/sites/a;b',
+    '/subscriptions/sub-1/resourceGroups/r@g/providers/Microsoft.Web/sites/x',
+  ];
+  const allowlistOnlyWf = [
+    '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Logic/workflows/a;b',
+    '/subscriptions/s/resourceGroups/r@g/providers/Microsoft.Logic/workflows/x',
+  ];
+
+  it('assertFunctionAppId accepts a canonical id (trailing slash trimmed) and rejects the rest', async () => {
     const { assertFunctionAppId } = await import('../function-receiver');
     expect(assertFunctionAppId(`${SITE}/`)).toBe('alerts-fn');
-    for (const bad of [
-      `${SITE}/../../../providers/Microsoft.KeyVault/vaults/kv`,
-      `/subscriptions/sub-1/resourceGroups/../providers/Microsoft.Web/sites/x`,
-      `${SITE}?x=1`,
-      '/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Logic/workflows/wf',
-    ]) {
+    for (const bad of nonCanonical) {
+      // Inline proof the fixture reaches the canonical-form layer.
+      expect(new URL(`https://h${bad}`).pathname, `fixture must be non-canonical: ${bad}`).not.toBe(bad);
+      expect(() => assertFunctionAppId(bad), bad).toThrow(/Function App|valid Azure resource id/);
+    }
+    for (const bad of wrongShape) {
+      expect(() => assertFunctionAppId(bad), bad).toThrow(/Function App|valid Azure resource id/);
+    }
+    for (const bad of allowlistOnlySite) {
+      // Inline proof this is canonical — only the allowlist rejects it.
+      expect(new URL(`https://h${bad}`).pathname, `fixture must be canonical: ${bad}`).toBe(bad);
       expect(() => assertFunctionAppId(bad), bad).toThrow(/Function App/);
     }
   });
 
-  it('assertLogicAppId rejects ids the old substring test accepted', async () => {
+  it('assertLogicAppId accepts a canonical id (case-insensitive) and rejects non-canonical / wrong-shape ids', async () => {
     const { assertLogicAppId } = await import('../logic-app-trigger');
-    const OLD_LOOSE = /\/providers\/Microsoft\.Logic\/workflows\//i;
-    const smuggled = [
-      '/subscriptions/s/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/v/secrets/s?x=/providers/Microsoft.Logic/workflows/a',
-      '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Logic/workflows/..',
-    ];
-    for (const id of smuggled) {
-      // The fixture must be one the pre-fix guard let through, or this row proves nothing.
-      expect(OLD_LOOSE.test(id), `fixture must satisfy the old guard: ${id}`).toBe(true);
-      expect(() => assertLogicAppId(id), id).toThrow(/Logic App/);
-    }
     expect(assertLogicAppId('/subscriptions/s/resourcegroups/rg/providers/microsoft.logic/workflows/WeathForeCast')).toBe('WeathForeCast');
+    const bads = [
+      '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Logic/workflows/..',
+      '/subscriptions/s/resourceGroups/../providers/Microsoft.Logic/workflows/a',
+      '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/a',   // wrong provider
+    ];
+    for (const id of bads) {
+      expect(() => assertLogicAppId(id), id).toThrow(/Logic App|valid Azure resource id/);
+    }
+    for (const bad of allowlistOnlyWf) {
+      expect(new URL(`https://h${bad}`).pathname, `fixture must be canonical: ${bad}`).toBe(bad);
+      expect(() => assertLogicAppId(bad), bad).toThrow(/Logic App/);
+    }
   });
 });

@@ -44,7 +44,8 @@ export interface MonitorActionState {
   phone: string;
   /** Logic App (Microsoft.Logic/workflows) ARM resource id. */
   logicAppResourceId: string;
-  /** Logic App trigger name whose callback URL is invoked (default 'manual'). */
+  /** Logic App trigger name whose callback URL is invoked. Empty ⇒ the server
+   *  resolves the workflow's HTTP-request trigger from its definition (#4748). */
   logicAppTrigger: string;
   /** Resolved listCallbackUrl SAS URL (fetched from ARM or pasted). */
   logicAppCallbackUrl: string;
@@ -59,7 +60,7 @@ export const DEFAULT_MONITOR_ACTION: MonitorActionState = {
   countryCode: '1',
   phone: '',
   logicAppResourceId: '',
-  logicAppTrigger: 'manual',
+  logicAppTrigger: '',
   logicAppCallbackUrl: '',
 };
 

@@ -147,8 +147,8 @@ export async function token(scope: string): Promise<string> {
  */
 const ARM_TOKEN_LABEL = 'the ARM token';
 
-export async function armGet(path: string, timeoutMs?: number): Promise<any> {
-  const tk = await token(ARM_SCOPE);
+export async function armGet(path: string, timeoutMs?: number, authToken?: string): Promise<any> {
+  const tk = authToken || await token(ARM_SCOPE);
   const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
@@ -169,13 +169,18 @@ export async function armGet(path: string, timeoutMs?: number): Promise<any> {
  * PAGES only — N pages x the 30s per-request ceiling is minutes of unbounded
  * await on a request path. A deadline inside a page fetch truncates (rows kept)
  * instead of throwing a `MonitorError` a caller would show as "no data".
+ *
+ * `authToken` (optional) runs the walk under a caller-supplied bearer instead of
+ * the Loom UAMI — used where the resource is caller-chosen and must be read with
+ * the caller's own RBAC.
  */
 export async function armPagedList<T = any>(
   label: string,
   firstPath: string,
   maxPages: number,
+  authToken?: string,
 ): Promise<T[]> {
-  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs), {
+  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs, authToken), {
     maxPages,
     // Stop the walk on a `nextLink` that is not ARM, BEFORE armGet mints a
     // token for it. armGet refuses it too — this is the outer of the two.
@@ -201,8 +206,8 @@ export async function armPut(path: string, body: unknown): Promise<any> {
   return json;
 }
 
-export async function armPost(path: string, body: unknown, timeoutMs?: number): Promise<{ status: number; json: any; operationLocation?: string }> {
-  const tk = await token(ARM_SCOPE);
+export async function armPost(path: string, body: unknown, timeoutMs?: number, authToken?: string): Promise<{ status: number; json: any; operationLocation?: string }> {
+  const tk = authToken || await token(ARM_SCOPE);
   const url = resolveSameOriginUrl(path, ARM, ARM_TOKEN_LABEL);
   const res = await fetchWithTimeout(url, {
     method: 'POST',

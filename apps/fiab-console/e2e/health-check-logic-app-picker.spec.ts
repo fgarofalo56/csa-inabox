@@ -296,6 +296,25 @@ async function probeLogicApps(page: Page): Promise<Probe> {
   };
 }
 
+/**
+ * The first discovered workflow that CAN back a receiver — i.e. the
+ * trigger-inspector (`/api/monitor/logic-app-triggers`) reports a resolvable
+ * HTTP-request trigger and no `problem` (#4748). Picking the combobox's first
+ * option is not enough: a workflow with no HTTP trigger would fail the save even
+ * with the wiring correct, so the receipt must select a callable one or record a
+ * NO MEASUREMENT skip. Returns null when none of the discovered workflows is
+ * callable (or the caller lacks Azure rights to inspect them).
+ */
+async function firstCallableWorkflow(page: Page, ids: string[]): Promise<{ id: string; triggerName: string } | null> {
+  for (const id of ids) {
+    const r = await page.request.get(`${BASE}/api/monitor/logic-app-triggers?workflowResourceId=${encodeURIComponent(id)}`).catch(() => null);
+    if (!r) continue;
+    const j = await r.json().catch(() => ({} as any));
+    if (j?.ok && j?.triggerName && !j?.problem) return { id, triggerName: String(j.triggerName) };
+  }
+  return null;
+}
+
 test.describe.serial('health-check Logic App notification picker (#3541 G1)', () => {
   const createdWorkspaces: string[] = [];
   let scratch: { id: string; workspaceId: string } | null = null;
@@ -507,10 +526,33 @@ test.describe.serial('health-check Logic App notification picker (#3541 G1)', ()
         return { outcome: 'no-workflows', optionCount };
       }
 
-      // 5) Pick the first real workflow with a REAL click.
-      const firstOption = options.first();
-      const optionLabel = (await firstOption.textContent())?.trim() || '';
-      await firstOption.click();
+      // 5) Pick a CALLABLE workflow — one whose HTTP-request trigger resolves
+      //    (#4748). The first discovered option may have no HTTP trigger and
+      //    would fail the save even with the wiring correct, so ask the
+      //    trigger-inspector which workflows are callable and select one of
+      //    those. If none is callable, record a NO MEASUREMENT skip — never a
+      //    green over a save that could not complete for a data reason.
+      const callable = await firstCallableWorkflow(page, probe?.ids ?? []);
+      if (!callable) {
+        await page.keyboard.press('Escape').catch(() => {});
+        recordVerdict({
+          surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
+          notes: `NO MEASUREMENT: no-callable-workflow — ${optionCount} option(s) discovered but none has a resolvable HTTP-request trigger (or the account cannot inspect them); nothing was wired`,
+        });
+        return { outcome: 'no-callable-workflow', optionCount };
+      }
+      const wantName = callable.id.split('/').pop() || '';
+      const callableOption = options.filter({ hasText: wantName }).first();
+      if ((await callableOption.count()) === 0) {
+        await page.keyboard.press('Escape').catch(() => {});
+        recordVerdict({
+          surface: `editor:${ITEM_TYPE}`, feature: 'logic-app-picker:clickwalk', verdict: 'A', status: 'skip',
+          notes: `NO MEASUREMENT: label-mismatch — a callable workflow "${wantName}" was found via the trigger inspector but no combobox option matched its name; nothing was wired`,
+        });
+        return { outcome: 'label-mismatch', optionCount };
+      }
+      const optionLabel = (await callableOption.textContent())?.trim() || wantName;
+      await callableOption.click();
       await page.keyboard.press('Escape').catch(() => { /* may already be closed */ });
 
       // PAIRED assertions (assertion-design.md #4). The absence check is NOT

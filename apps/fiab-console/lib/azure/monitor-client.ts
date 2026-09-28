@@ -1562,10 +1562,11 @@ export async function listActionGroups(): Promise<ActionGroupSummary[]> {
  *   POST .../workflows/{wf}/triggers/{trigger}/listCallbackUrl?api-version=2016-06-01
  * The trigger is RESOLVED from the workflow definition (the request trigger,
  * whatever it is named), never assumed to be `manual` — #4748. A named
- * `triggerName` is validated against the definition the same way.
+ * `triggerName` is validated against the definition the same way. `authToken`
+ * (the caller's ARM bearer) runs the privileged call under the caller's RBAC.
  */
-export async function getLogicAppCallbackUrl(workflowResourceId: string, triggerName?: string): Promise<string> {
-  return (await resolveLogicAppCallback(workflowResourceId, triggerName)).callbackUrl;
+export async function getLogicAppCallbackUrl(workflowResourceId: string, triggerName?: string, authToken?: string): Promise<string> {
+  return (await resolveLogicAppCallback(workflowResourceId, triggerName, authToken)).callbackUrl;
 }
 
 export interface TestNotificationResult {

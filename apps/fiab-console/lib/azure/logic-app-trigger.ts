@@ -57,34 +57,56 @@ export interface ResolvedLogicAppTrigger {
 }
 
 /**
- * ANCHORED, whole-id match. The id arrives from the browser and becomes an ARM
- * path the Console UAMI's token is sent to, so a loose "contains
- * /Microsoft.Logic/workflows/" test would let `…/vaults/v/secrets/s?x=/providers/Microsoft.Logic/workflows/a`
- * or a `..` segment steer that token at some other resource. Segments exclude
- * `/ ? # %` and may not be dot-only.
+ * ANCHORED, whole-id match with a STRICT allowlist. The id arrives from the
+ * browser and becomes an ARM path a management-plane token is sent to, so each
+ * segment admits ONLY the characters an ARM resource name can carry — a strict
+ * allowlist, not a denylist. `armIdPath` adds a second gate that accepts a path
+ * only when it is already in canonical form. GHSA-66f6-7xvq-8qxw.
  */
-const SEG = '(?!\\.{1,2}(?:/|$))[^/?#%]+';
-const WORKFLOW_ID_RE = new RegExp(`^/subscriptions/${SEG}/resourceGroups/${SEG}/providers/Microsoft\\.Logic/workflows/(${SEG})$`, 'i');
+const SEG = "[A-Za-z0-9._()-]+";
+const WORKFLOW_ID_RE = new RegExp(`^/subscriptions/(${SEG})/resourceGroups/(${SEG})/providers/Microsoft\\.Logic/workflows/(${SEG})$`, 'i');
 
 export function assertLogicAppId(workflowResourceId: string): string {
   const m = WORKFLOW_ID_RE.exec(armIdPath(workflowResourceId));
   if (!m) throw new MonitorError('A Logic App (Microsoft.Logic/workflows) resource id is required', 400);
-  return m[1];
+  return m[3];
 }
 
-/** The ARM path for a validated id: trimmed, trailing slashes removed. */
+/**
+ * The ARM path for a validated id: trimmed, trailing slashes removed, and
+ * accepted only when the value is already the canonical path — i.e. it parses to
+ * exactly itself, with no query and no fragment. Anything that would resolve to a
+ * different path is rejected here rather than used to build a request.
+ * GHSA-66f6-7xvq-8qxw.
+ */
 export function armIdPath(id: string): string {
-  return (id || '').trim().replace(/\/+$/, '');
+  const trimmed = (id || '').trim().replace(/\/+$/, '');
+  if (!trimmed.startsWith('/')) throw new MonitorError('A valid Azure resource id is required', 400);
+  let u: URL;
+  try { u = new URL(`https://arm.invalid${trimmed}`); } catch { throw new MonitorError('A valid Azure resource id is required', 400); }
+  if (u.pathname !== trimmed || u.search || u.hash) {
+    throw new MonitorError('A valid Azure resource id is required', 400);
+  }
+  return trimmed;
 }
 
-/** The triggers a workflow definition declares. Pure. */
+/**
+ * The triggers a workflow definition declares. Pure.
+ *
+ * A trigger is callback-capable only when it is a `Request` trigger whose HTTP
+ * method is unset or POST: Azure Monitor invokes the receiver with a POST, so a
+ * Request trigger restricted to another method (e.g. GET) would bind and then
+ * reject the alert.
+ */
 export function triggersOfDefinition(definition: unknown): LogicAppTriggerInfo[] {
   const t = (definition as { triggers?: unknown } | null | undefined)?.triggers;
   if (!t || typeof t !== 'object' || Array.isArray(t)) return [];
   return Object.entries(t as Record<string, any>).map(([name, v]) => {
     const type = typeof v?.type === 'string' ? v.type : '';
     const kind = typeof v?.kind === 'string' ? v.kind : undefined;
-    return { name, type, kind, callbackCapable: type.toLowerCase() === 'request' };
+    const method = typeof v?.inputs?.method === 'string' ? v.inputs.method.toUpperCase() : '';
+    const callbackCapable = type.toLowerCase() === 'request' && (method === '' || method === 'POST');
+    return { name, type, kind, callbackCapable };
   });
 }
 
@@ -134,13 +156,17 @@ export function chooseRequestTrigger(
   return { triggerName: first.name, chosenBy: 'first-by-name' };
 }
 
-/** GET the workflow and resolve its request trigger (see the module header). */
+/**
+ * GET the workflow and resolve its request trigger (see the module header).
+ * `authToken` (optional) runs the read under the caller's own ARM RBAC.
+ */
 export async function resolveLogicAppTrigger(
   workflowResourceId: string,
   preferred?: string,
+  authToken?: string,
 ): Promise<ResolvedLogicAppTrigger> {
   const workflowName = assertLogicAppId(workflowResourceId);
-  const wf = await armGet(`${armIdPath(workflowResourceId)}?api-version=${LOGIC_API}`);
+  const wf = await armGet(`${armIdPath(workflowResourceId)}?api-version=${LOGIC_API}`, undefined, authToken);
   const triggers = triggersOfDefinition(wf?.properties?.definition);
   const { triggerName, chosenBy } = chooseRequestTrigger(wf?.name || workflowName, triggers, preferred);
   return { workflowName: wf?.name || workflowName, triggerName, chosenBy, triggers };
@@ -150,16 +176,18 @@ export async function resolveLogicAppTrigger(
  * Resolve the request trigger, then ARM `listCallbackUrl` on it:
  *   POST …/workflows/{wf}/triggers/{trigger}/listCallbackUrl?api-version=2016-06-01
  * `callbackUrl` IS A SECRET (it carries the SAS `sig`) — hand it to ARM, never
- * persist or echo it. The rest of the result is safe to show.
+ * persist or echo it. The rest of the result is safe to show. `authToken`
+ * (required in practice) runs the privileged call under the caller's RBAC.
  */
 export async function resolveLogicAppCallback(
   workflowResourceId: string,
   preferred?: string,
+  authToken?: string,
 ): Promise<ResolvedLogicAppTrigger & { callbackUrl: string }> {
-  const resolved = await resolveLogicAppTrigger(workflowResourceId, preferred);
+  const resolved = await resolveLogicAppTrigger(workflowResourceId, preferred, authToken);
   const path =
     `${armIdPath(workflowResourceId)}/triggers/${encodeURIComponent(resolved.triggerName)}/listCallbackUrl?api-version=${LOGIC_API}`;
-  const { json } = await armPost(path, {});
+  const { json } = await armPost(path, {}, undefined, authToken);
   const callbackUrl = json?.value || json?.basePath;
   if (!callbackUrl) throw new MonitorError('Logic App trigger callback URL not returned by ARM', 502, json);
   return { ...resolved, callbackUrl };

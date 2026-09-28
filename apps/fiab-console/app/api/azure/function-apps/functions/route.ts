@@ -17,11 +17,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { MonitorError } from '@/lib/azure/monitor-arm';
 import { assertFunctionAppId, listFunctionTriggers } from '@/lib/azure/function-receiver';
+import { callerArmToken, userArmGateBody } from '@/lib/azure/caller-arm-token';
+import { redactUrlSecrets } from '@/lib/azure/redact-url-secrets';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const GET = withSession(async (req: NextRequest) => {
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const siteId = (req.nextUrl.searchParams.get('siteId') || '').trim();
   let appName: string;
   try {
@@ -29,20 +31,23 @@ export const GET = withSession(async (req: NextRequest) => {
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 400 });
   }
+  // The Function App is caller-chosen: read it under the caller's own ARM RBAC.
+  const authz = await callerArmToken(session.claims.oid);
+  if (authz.gate) return NextResponse.json(userArmGateBody(appName), { status: 401 });
   try {
-    const functions = await listFunctionTriggers(siteId);
+    const functions = await listFunctionTriggers(siteId, authz.token);
     return NextResponse.json({ ok: true, functions });
   } catch (e) {
     if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
       return NextResponse.json({
         ok: false,
-        error: `Azure ${e.status}: not authorized to list the functions of '${appName}'.`,
+        error: `Azure ${e.status}: your account is not authorized to list the functions of '${appName}'.`,
         gate: {
-          reason: 'The Console UAMI needs read on the Function App to list its functions.',
-          remediation: `Grant the Console UAMI "Website Contributor" on Function App '${appName}' (it also covers the listkeys action the save needs).`,
+          reason: 'Your Azure account needs read on the Function App to list its functions.',
+          remediation: `Ask an owner to grant you "Website Contributor" on Function App '${appName}' (it also covers the listkeys action the save needs).`,
         },
       }, { status: 403 });
     }
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: e instanceof MonitorError ? e.status : 502 });
+    return NextResponse.json({ ok: false, error: redactUrlSecrets((e as Error).message) }, { status: e instanceof MonitorError ? e.status : 502 });
   }
 });

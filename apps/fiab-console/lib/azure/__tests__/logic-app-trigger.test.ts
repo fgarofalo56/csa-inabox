@@ -137,4 +137,15 @@ describe('chooseRequestTrigger — deterministic choice among several (#4748)', 
     expect(ts.filter((t) => t.callbackCapable).map((t) => t.name)).toEqual(['a']);
     expect(triggersOfDefinition(undefined)).toEqual([]);
   });
+
+  it('a Request trigger restricted to a non-POST method is NOT callback-capable (C4)', async () => {
+    const { triggersOfDefinition } = await import('../logic-app-trigger');
+    // Azure Monitor invokes with POST; a GET-only Request trigger would bind then reject.
+    const ts = triggersOfDefinition({ triggers: {
+      getOnly: { type: 'Request', inputs: { method: 'GET' } },
+      postOnly: { type: 'Request', inputs: { method: 'post' } },
+      anyMethod: { type: 'Request', inputs: {} },
+    } });
+    expect(ts.filter((t) => t.callbackCapable).map((t) => t.name)).toEqual(['postOnly', 'anyMethod']);
+  });
 });

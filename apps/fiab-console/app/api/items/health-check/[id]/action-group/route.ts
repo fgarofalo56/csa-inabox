@@ -40,6 +40,8 @@ import {
   MonitorError,
 } from '@/lib/azure/monitor-client';
 import { resolveLogicAppCallback, type TriggerChoice } from '@/lib/azure/logic-app-trigger';
+import { callerArmToken, userArmGateBody } from '@/lib/azure/caller-arm-token';
+import { redactUrlSecrets } from '@/lib/azure/redact-url-secrets';
 import { resolveFunctionTriggerUrl } from '@/lib/azure/function-receiver';
 import {
   functionReceiverView,
@@ -117,18 +119,19 @@ function receiverFailure(kind: 'logic-app' | 'function', label: string, e: unkno
       : 'read the function and call its listkeys action';
     return NextResponse.json({
       ok: false,
-      error: `Azure ${e.status}: not authorized to resolve ${kind === 'logic-app' ? 'Logic App' : 'Azure Function'} '${label}'.`,
+      error: `Azure ${e.status}: your account is not authorized to resolve ${kind === 'logic-app' ? 'Logic App' : 'Azure Function'} '${label}'.`,
       gate: {
-        reason: `The Console UAMI must ${action} to bind this receiver.`,
-        remediation: `Grant the Console UAMI "${role}" on '${label}' (or its resource group).`,
+        reason: `Your Azure account must be able to ${action} to bind this receiver.`,
+        remediation: `Ask an owner to grant you "${role}" on '${label}' (or its resource group), then retry.`,
       },
     }, { status: 403 });
   }
   if (e instanceof MonitorError && e.status >= 400 && e.status < 500) {
     const what = kind === 'logic-app' ? 'Logic App receiver' : 'Azure Function receiver';
-    return NextResponse.json({ ok: false, error: `${what} '${label}': ${e.message}` }, { status: e.status === 404 ? 404 : 422 });
+    // Redact any `code=`/`sig=` an ARM error might echo before it reaches the browser (S4).
+    return NextResponse.json({ ok: false, error: redactUrlSecrets(`${what} '${label}': ${e.message}`) }, { status: e.status === 404 ? 404 : 422 });
   }
-  return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+  return monitorGate(e) || NextResponse.json({ ok: false, error: redactUrlSecrets((e as Error)?.message || String(e)) }, { status: 502 });
 }
 
 function currentOf(state: Record<string, unknown>): PersistedActionGroup | null {
@@ -145,7 +148,7 @@ export const GET = withSession<{ id: string }>(async (_req: NextRequest, { sessi
     const groups = await listActionGroups();
     return NextResponse.json({ ok: true, groups, current });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e), current }, { status: 502 });
+    return monitorGate(e) || NextResponse.json({ ok: false, error: redactUrlSecrets(e?.message || String(e)), current }, { status: 502 });
   }
 });
 
@@ -174,12 +177,21 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
   const functions = parsedFunctions.rows;
   const logicAppsIn = parseLogicAppRows(body?.logicApps);
 
+  // Resolving a Logic App SAS callback or a Function key is a PRIVILEGED ARM
+  // call on a CALLER-CHOSEN resource, so it runs under the caller's own ARM
+  // RBAC — never the platform identity (GHSA-66f6-7xvq-8qxw / S2). Only needed
+  // when there is at least one such receiver to resolve.
+  const needsArm = logicAppsIn.length > 0 || functions.some((f) => !isLegacyFunctionReceiver(f));
+  const authz = needsArm ? await callerArmToken(s.claims.oid) : { gate: false, token: undefined };
+  if (needsArm && authz.gate) return NextResponse.json(userArmGateBody('the selected receiver'), { status: 401 });
+  const armToken = authz.token;
+
   // ── Resolve every secret-bearing receiver URL server-side. ──
   const logicAppReceivers: { resourceId: string; callbackUrl: string; useCommonAlertSchema?: boolean }[] = [];
   const logicAppBindings: { resourceId: string; workflowName: string; triggerName: string; chosenBy: TriggerChoice }[] = [];
   for (const la of logicAppsIn) {
     try {
-      const r = await resolveLogicAppCallback(la.resourceId, la.triggerName);
+      const r = await resolveLogicAppCallback(la.resourceId, la.triggerName, armToken);
       logicAppReceivers.push({ resourceId: la.resourceId, callbackUrl: r.callbackUrl, useCommonAlertSchema: la.useCommonAlertSchema });
       logicAppBindings.push({ resourceId: la.resourceId, workflowName: r.workflowName, triggerName: r.triggerName, chosenBy: r.chosenBy });
     } catch (e) {
@@ -197,7 +209,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
     }
     const label = `${f.functionAppResourceId ? lastSegment(f.functionAppResourceId) : '(no Function App)'}/${f.functionName || '(no function)'}`;
     try {
-      const serviceUri = await resolveFunctionTriggerUrl(f.functionAppResourceId, f.functionName);
+      const serviceUri = await resolveFunctionTriggerUrl(f.functionAppResourceId, f.functionName, armToken);
       functionWebhooks.push({ serviceUri, useCommonAlertSchema: f.useCommonAlertSchema });
     } catch (e) {
       return receiverFailure('function', label, e);
@@ -229,7 +241,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
       bindings: { logicApps: logicAppBindings, legacyFunctions: legacyFunctionCount },
     });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e) || NextResponse.json({ ok: false, error: redactUrlSecrets(e?.message || String(e)) }, { status: 502 });
   }
 });
 
@@ -245,6 +257,6 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     const result = await sendActionGroupTestNotification(actionGroupId, typeof body?.alertType === 'string' ? body.alertType : undefined);
     return NextResponse.json({ ok: true, result });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e) || NextResponse.json({ ok: false, error: redactUrlSecrets(e?.message || String(e)) }, { status: 502 });
   }
 });

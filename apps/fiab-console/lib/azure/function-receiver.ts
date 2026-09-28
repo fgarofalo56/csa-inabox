@@ -40,17 +40,19 @@ import { armIdPath } from './logic-app-trigger';
 
 export const WEB_API = '2024-04-01';
 
-// Anchored whole-id match — the id comes from the browser and becomes an ARM
-// path the UAMI token is sent to (see `logic-app-trigger.ts` WORKFLOW_ID_RE).
-const SEG = '(?!\\.{1,2}(?:/|$))[^/?#%]+';
-const SITE_ID_RE = new RegExp(`^/subscriptions/${SEG}/resourceGroups/${SEG}/providers/Microsoft\\.Web/sites/(${SEG})$`, 'i');
-/** A function name is a single path segment; nothing that could re-shape the ARM path. */
-const FUNCTION_NAME_RE = /^(?!\.{1,2}$)[^/?#%\\]+$/;
+// Anchored whole-id match with a STRICT allowlist — the id comes from the
+// browser and becomes an ARM path a management-plane token is sent to (shared
+// reasoning and the canonical-path gate live in `logic-app-trigger.ts`).
+// GHSA-66f6-7xvq-8qxw.
+const SEG = '[A-Za-z0-9._()-]+';
+const SITE_ID_RE = new RegExp(`^/subscriptions/(${SEG})/resourceGroups/(${SEG})/providers/Microsoft\\.Web/sites/(${SEG})$`, 'i');
+/** A function name is a single ARM child segment: the same strict allowlist. */
+const FUNCTION_NAME_RE = /^[A-Za-z0-9._()-]+$/;
 
 export function assertFunctionAppId(siteId: string): string {
   const m = SITE_ID_RE.exec(armIdPath(siteId));
   if (!m) throw new MonitorError('A Function App (Microsoft.Web/sites) resource id is required', 400);
-  return m[1];
+  return m[3];
 }
 
 export interface FunctionTriggerInfo {
@@ -97,11 +99,12 @@ export function describeFunctionEnvelope(env: any): FunctionTriggerInfo & { invo
   };
 }
 
-/** List a Function App's functions with receiver-suitability. No secrets. */
-export async function listFunctionTriggers(siteId: string): Promise<FunctionTriggerInfo[]> {
+/** List a Function App's functions with receiver-suitability. No secrets.
+ *  `authToken` (the caller's ARM bearer) runs the read under the caller's RBAC. */
+export async function listFunctionTriggers(siteId: string, authToken?: string): Promise<FunctionTriggerInfo[]> {
   assertFunctionAppId(siteId);
   // FunctionEnvelopeCollection carries a `nextLink`; walk it under the shared budget.
-  const envs = await armPagedList<any>('listFunctions', `${armIdPath(siteId)}/functions?api-version=${WEB_API}`, 10);
+  const envs = await armPagedList<any>('listFunctions', `${armIdPath(siteId)}/functions?api-version=${WEB_API}`, 10, authToken);
   return envs.map((env: any) => {
     // `invokeUrlTemplate` is not secret, but the picker has no use for it.
     const { invokeUrlTemplate: _omit, ...info } = describeFunctionEnvelope(env);
@@ -121,14 +124,16 @@ function pickKey(dict: unknown): string {
 /**
  * The function's invocable URL, key included when its auth level needs one.
  * THE RETURN VALUE IS A SECRET — hand it to ARM, never persist or echo it.
+ * `authToken` (the caller's ARM bearer) runs every ARM call — including the
+ * privileged `listkeys` — under the caller's own RBAC.
  */
-export async function resolveFunctionTriggerUrl(siteId: string, functionName: string): Promise<string> {
+export async function resolveFunctionTriggerUrl(siteId: string, functionName: string, authToken?: string): Promise<string> {
   const appName = assertFunctionAppId(siteId);
   const fn = (functionName || '').trim();
   if (!fn) throw new MonitorError(`Pick the function inside Function App '${appName}' that receives the alert.`, 400);
   if (!FUNCTION_NAME_RE.test(fn)) throw new MonitorError(`'${fn}' is not a valid function name.`, 400);
   const base = armIdPath(siteId);
-  const env = await armGet(`${base}/functions/${encodeURIComponent(fn)}?api-version=${WEB_API}`);
+  const env = await armGet(`${base}/functions/${encodeURIComponent(fn)}?api-version=${WEB_API}`, undefined, authToken);
   const info = describeFunctionEnvelope(env);
   if (!info.usable) {
     throw new MonitorError(
@@ -139,11 +144,11 @@ export async function resolveFunctionTriggerUrl(siteId: string, functionName: st
   }
   if (info.authLevel === 'anonymous') return info.invokeUrlTemplate;
 
-  const fnKeys = await armPost(`${base}/functions/${encodeURIComponent(fn)}/listkeys?api-version=${WEB_API}`, {});
+  const fnKeys = await armPost(`${base}/functions/${encodeURIComponent(fn)}/listkeys?api-version=${WEB_API}`, {}, undefined, authToken);
   // StringDictionary puts the keys under `properties`; accept a flat body too.
   let key = pickKey(fnKeys.json?.properties ?? fnKeys.json);
   if (!key) {
-    const host = await armPost(`${base}/host/default/listkeys?api-version=${WEB_API}`, {});
+    const host = await armPost(`${base}/host/default/listkeys?api-version=${WEB_API}`, {}, undefined, authToken);
     key = pickKey(host.json?.functionKeys);
   }
   if (!key) {
