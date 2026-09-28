@@ -1,7 +1,7 @@
 /**
  * E5 — server-only reads for /admin/copilot-quality.
  *
- * The copilot-evaluator Function (E2) WRITES `eval-run` / `eval-result` docs to
+ * The copilot-evaluator job (E2) WRITES `eval-run` / `eval-result` docs to
  * Cosmos `loom-copilot-evals` (PK /surface); this module READS them for the
  * admin quality page through `copilotEvalsContainer()` (which wraps the
  * container in the MIG1 migrate-on-read chain). The E3 per-surface floors

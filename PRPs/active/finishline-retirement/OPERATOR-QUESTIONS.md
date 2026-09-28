@@ -348,15 +348,36 @@ dissolved; what dissolved is the idea that a role grant addresses it.
 
 ### OP-19 · task `C3` · Function Apps — two asks
 
-**(a) is already done — do not perform it. See `DECISIONS.md` § "OP-19 (a)".**
-All three function definitions are disabled on the live estate, measured
-2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
-`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
-`func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
-with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
-setting**, not the work of #4564, which is open and unmerged — so the mitigation
-holds but nothing in IaC re-asserts it. The ask text is kept below because the
-answer is only legible beside what was asked.
+> **ANSWERED 2026-09-17 — approved, and re-measured at head. Decision recorded in
+> `DECISIONS.md` (this directory) § "OP-19 (a)" and § "OP-19 (b)"; evidence in
+> `docs/fiab/deployment/functions-to-aca-jobs.md` §8.**
+>
+> **(a) is already done — do not perform it.** All three function definitions
+> are disabled on the live estate, measured 2026-09-17 and re-measured
+> 2026-09-18: `func-secexp-k6mvh5sm6z7do/secretExpiryMonitor`,
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorTimer` and
+> `func-cpeval-k6mvh5sm6z7do/copilotEvaluatorHttp` all report `isDisabled=true`
+> with `AzureWebJobs.<fn>.Disabled=true`. The disabling is an **out-of-band app
+> setting**: neither host has had a bicep declaration since #2556, so no bicep
+> change could have done it, and nothing in IaC re-asserts it.
+> `scripts/csa-loom/check-retired-function-timers.sh` (run weekly by the
+> `op19-retired-timers` job in `loom-drift-check.yml`) is what would notice a
+> re-enable.
+>
+> **(b) re-measured ZERO on a wider window with a live control** —
+> `FunctionExecutionCount` 2026-08-17→2026-09-17 (P1D, Total) = 0 for all seven,
+> 31/31 explicit datapoints, against a control of 73. Three apps are unblocked
+> for the operator to delete, two are KEPT (still the intended runtime, no
+> replacement), two are deferred (superseded, but their removal is a Console +
+> orchestrator change).
+>
+> **Carried by #4564, which is OPEN and UNMERGED** — so the
+> `full-app-deploy-commercial.yml` reference to `func-cpeval-*`, which has been
+> failing since the Function was retired, is repointed at the live ACA job **on
+> that branch only**. Merged is not deployed (`deploy-integrity.md` R2); nothing
+> here is live until that PR lands and the estate rolls.
+>
+> **The text below is the original ask, left unedited.**
 
 **(a) Cheap mitigation, needn't wait for the removal PR.** Disable the two
 enabled function definitions on `func-secexp` (timer `0 0 6 * * *`) and
@@ -371,16 +392,23 @@ pairs with proof in a reviewable commit.
 
 **Still live at head.** The C3 migration is real and partly landed —
 `report-subscriptions-job.bicep` is an in-VNet scheduled Container App Job
-running as the Console UAMI, and `main.bicep:8650` still carries the measurement
-that `func-secexp`/`func-cpeval` *"DO hold enabled timers."* Function Apps are
-still declared in bicep (`builtin-mcp.bicep`, `label-propagation-function.bicep`,
-`monitor-ops-agent.bicep`, `scc-labels-function.bicep`), and
-`full-app-deploy-commercial.yml:1259` still looks up `func-cpeval-*` at deploy
-time. Nothing has disabled the duplicate timers. *(That last sentence was true
-when written and is **false at head** — the timers are disabled, out of band; see
-the note at the top of this row. Everything before it still holds, and the bicep
-sentences being accurate is exactly why the state is fragile: nothing in IaC
-asserts the disable, so nothing would notice it being undone.)*
+running as the Console UAMI. Function Apps are still declared in bicep
+(`builtin-mcp.bicep`, `label-propagation-function.bicep`,
+`monitor-ops-agent.bicep`, `scc-labels-function.bicep`) — all four verified
+present at head with `git ls-files`. *(Three further sentences stood here and
+are **false at head**, all three made false by this PR rather than by drift:
+`main.bicep` no longer "still carries the measurement" that
+`func-secexp`/`func-cpeval` hold enabled timers — this PR deleted that comment,
+which sat at `main.bicep:8678` on the base `eb73a329d`;
+`full-app-deploy-commercial.yml` no longer "still looks up `func-cpeval-*` at
+deploy time" — the `az functionapp list` lookup filtering on
+`starts_with(name,'func-cpeval-')` at base `:1259` is gone, and the only
+remaining mention, at `:1234`, is explicitly past-tense; and "nothing has
+disabled the duplicate timers" was overtaken out of band, per the note at the
+top of this row. The state is still fragile for the original reason, which no
+longer depends on those sentences: nothing in IaC asserts the disable, so
+nothing would notice it being undone — `check-retired-function-timers.sh` is
+the only thing that would.)*
 
 ---
 

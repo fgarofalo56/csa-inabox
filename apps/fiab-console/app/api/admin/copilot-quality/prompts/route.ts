@@ -9,7 +9,7 @@
  *   POST → register a new prompt (audited).
  *
  * Real Cosmos reads/writes against `loom-prompt-registry` — no mocks. Publishing
- * a version hands scoring to the EXISTING E2 evaluator Function (see the
+ * a version hands scoring to the EXISTING E2 evaluator job (see the
  * [promptId] route); this route adds NO second eval harness and NO second CI
  * gate. Tenant-admin only. Azure-native, no Fabric dependency.
  */
@@ -31,7 +31,7 @@ export const GET = withTenantAdmin(async () => {
       flagEnabled,
       prompts,
       // Honest posture: publishing only requests a REAL eval run when the
-      // evaluator Function is wired; the registry itself works either way.
+      // evaluator job is wired; the registry itself works either way.
       evaluatorConfigured: evaluatorRunGate() === null,
     });
   } catch (e) {

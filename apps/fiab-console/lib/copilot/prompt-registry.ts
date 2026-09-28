@@ -16,10 +16,12 @@
  * EXISTING machinery:
  *
  *   publishVersion(…)
- *     └─► triggerEvaluatorRun({ surfaces:[prompt.surface] })      ← E2's Function,
- *         the EXACT HTTP trigger .github/workflows/copilot-quality-evals.yml
- *         POSTs. No second evaluator, no second harness.
- *           └─► the Function writes `eval-run` docs to loom-copilot-evals
+ *     └─► triggerEvaluatorRun({ surfaces:[prompt.surface] })      ← E2's
+ *         evaluator, started the EXACT same way .github/workflows/
+ *         copilot-quality-evals.yml starts it: an ARM start of the in-VNet
+ *         `loom-copilot-evaluator` Container App Job. No second evaluator, no
+ *         second harness.
+ *           └─► the job writes `eval-run` docs to loom-copilot-evals
  *                 └─► attachLatestEvalScore(…) stamps that REAL run onto the
  *                     version, with its floor verdict computed by the SAME
  *                     floorStatusFor() + eval-floors.json the E3/E5 path uses
@@ -33,13 +35,13 @@
  * ({kind:'llmops.prompt.approve'}, …) via the shared `auditLogContainer()`.
  *
  * No-vaporware: every read/write here is a REAL Cosmos call against
- * `loom-prompt-registry`; the eval hook is a REAL POST to the evaluator Function
- * and degrades to an HONEST recorded gate (never a fabricated "run started")
- * when LOOM_COPILOT_EVALUATOR_JOB_ID is unwired.
+ * `loom-prompt-registry`; the eval hook is a REAL ARM start of the evaluator
+ * Container App Job and degrades to an HONEST recorded gate (never a fabricated
+ * "run started") when LOOM_COPILOT_EVALUATOR_JOB_ID is unwired.
  *
  * Per-cloud: identical Commercial / GCC-High. IL5 / SOVEREIGN MOAT: the
  * registry, the eval scores it carries, and the approval records never leave the
- * deployment's VNet — Cosmos + the in-VNet evaluator Function only. There is NO
+ * deployment's VNet — Cosmos + the in-VNet evaluator job only. There is NO
  * external LLMOps SaaS (Braintrust / LangSmith / W&B) anywhere in this path,
  * which is exactly why Loom builds prompt governance natively: an IL5 enclave
  * cannot ship prompts, completions, or scores to a commercial multi-tenant
@@ -338,7 +340,7 @@ export interface PublishVersionResult {
   version: PromptVersionDoc;
   /** True when the E2 evaluator accepted the run request. */
   evalRequested: boolean;
-  /** The honest gate when the evaluator Function is unwired (never a fake run). */
+  /** The honest gate when the evaluator job id is unset (never a fake run). */
   evalGate: PromptVersionDoc['evalGate'];
   /** The evaluator's own response body, verbatim, when it answered. */
   evaluatorResponse?: unknown;
@@ -349,15 +351,18 @@ export interface PublishVersionResult {
  * evaluator for scoring.
  *
  * The eval hook is deliberately a call to {@link triggerEvaluatorRun} — the very
- * same client the E5 "Run now" button and the E4 workflow use to POST
- * `/api/copilotEvaluatorHttp`. A prompt bump therefore produces an ordinary E2
+ * same client the E5 "Run now" button and the E4 workflow use to start the
+ * in-VNet `loom-copilot-evaluator` Container App Job (an ARM GET of the job's
+ * execution template, then an ARM POST to its `/start` operation). A prompt
+ * bump therefore produces an ordinary E2
  * `eval-run` doc for the prompt's surface, which the EXISTING E3 gate
  * (`check-eval-regression.mjs`, artifact or `--cosmos` mode) already grades
  * against `content/evals/eval-floors.json` in the EXISTING
  * `copilot-quality-evals.yml` workflow. N13 adds NO second CI gate, NO second
  * floors file, and NO second harness.
  *
- * When the evaluator Function is not wired, the honest gate is RECORDED on the
+ * When the evaluator job id (`LOOM_COPILOT_EVALUATOR_JOB_ID`) is unset, the
+ * honest gate is RECORDED on the
  * version (`evalGate`) instead of a fabricated run — the version simply cannot
  * be approved until a real score lands (see {@link approveVersion}).
  */
@@ -404,7 +409,7 @@ export async function publishVersion(
           gateId: 'svc-copilot-evaluator',
           missing: [],
           remediation:
-            `The copilot-evaluator Function did not accept the run (HTTP ${result.status}${result.error ? `: ${result.error}` : ''}). ` +
+            `The copilot-evaluator job did not accept the run (HTTP ${result.status}${result.error ? `: ${result.error}` : ''}). ` +
             'Re-run it from Admin → Copilot quality → "Run now", then refresh this version\'s score.',
         };
       }

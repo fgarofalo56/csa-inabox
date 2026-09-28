@@ -14,11 +14,19 @@
 #   exit 0), so this timer had never fired once.
 #
 #   Do NOT re-derive this from `function list`: func-secexp-* and func-cpeval-*
-#   hold indexed, ENABLED timers, and func-loom-prpt-renderer-*'s list call
-#   fails with "Bad Request" (unknown, not empty). Only the metric covers all
-#   seven. No root cause is asserted — two hosts index fine under the same
+#   still INDEX their timer definitions, and func-loom-prpt-renderer-*'s list
+#   call fails with "Bad Request" (unknown, not empty). Only the metric covers
+#   all seven. No root cause is asserted — two hosts index fine under the same
 #   Azure Policy regime, so a "sealed storage data-plane" story would not
 #   explain its own variance.
+#
+#   OP-19 2026-09-17 (#4495): re-measured ZERO for all seven on a WIDER window
+#   with a LIVE control — FunctionExecutionCount 2026-08-17→2026-09-17 (P1D,
+#   Total) = 0, 31/31 datapoints each carrying an explicit 0.0, absent=0,
+#   against func-csa-inabox-copilot-fg at 73 on the same metric/window/code
+#   path. The func-secexp/func-cpeval timers are now DISABLED on the estate
+#   (isDisabled: true), retiring the double-execution hazard; verify with
+#   scripts/csa-loom/check-retired-function-timers.sh.
 #
 #   The in-VNet ACA-job pattern (this script mirrors deploy-secret-expiry-job.sh)
 #   reuses the console UAMI — already AcrPull + Cosmos Built-in Data Contributor
