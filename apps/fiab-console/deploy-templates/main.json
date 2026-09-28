@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "11851031211363118471"
+      "templateHash": "1239552512060229079"
     }
   },
   "definitions": {
@@ -1733,6 +1733,15 @@
         "description": "Deploy Application Gateway v2 + WAF in front of the Console. ~15 min provisioning, ~$250/mo. Default off."
       }
     },
+    "appGatewayRequestTimeoutSeconds": {
+      "type": "int",
+      "defaultValue": 120,
+      "minValue": 1,
+      "maxValue": 86400,
+      "metadata": {
+        "description": "Seconds the Application Gateway waits on the Console origin before giving up. Default 120, matching the Front Door pin. Range 1-86400 (the private-backend range — the ACA env behind this gateway is internal). Only read when appGatewayEnabled is true. See #4431."
+      }
+    },
     "frontDoorEnabled": {
       "type": "bool",
       "defaultValue": false,
@@ -2390,6 +2399,9 @@
           "appGatewayEnabled": {
             "value": "[parameters('appGatewayEnabled')]"
           },
+          "appGatewayRequestTimeoutSeconds": {
+            "value": "[parameters('appGatewayRequestTimeoutSeconds')]"
+          },
           "frontDoorEnabled": {
             "value": "[parameters('frontDoorEnabled')]"
           },
@@ -2601,7 +2613,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "17308527060480889603"
+              "templateHash": "14684162125188879"
             }
           },
           "definitions": {
@@ -3642,6 +3654,14 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off."
+              }
+            },
+            "appGatewayRequestTimeoutSeconds": {
+              "type": "int",
+              "minValue": 1,
+              "maxValue": 86400,
+              "metadata": {
+                "description": "Seconds the Application Gateway waits on the Console origin before giving up (app-gateway.bicep backendHttpSettings.requestTimeout). Was hardcoded 30. Private-backend range 1-86400. Only read when appGatewayEnabled is true; on IL5 the App Gateway is the only edge. See #4431."
               }
             },
             "frontDoorEnabled": {
@@ -28847,6 +28867,9 @@
                   "consoleBackendIp": {
                     "value": "[reference('containerPlatformModule').outputs.caeStaticIp.value]"
                   },
+                  "consoleRequestTimeoutSeconds": {
+                    "value": "[parameters('appGatewayRequestTimeoutSeconds')]"
+                  },
                   "workspaceId": {
                     "value": "[reference('monitoring').outputs.lawId.value]"
                   },
@@ -28861,7 +28884,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8116228111252391099"
+                      "templateHash": "404399983341232405"
                     }
                   },
                   "parameters": {
@@ -28899,6 +28922,14 @@
                       "type": "object",
                       "metadata": {
                         "description": "Compliance tags"
+                      }
+                    },
+                    "consoleRequestTimeoutSeconds": {
+                      "type": "int",
+                      "minValue": 1,
+                      "maxValue": 86400,
+                      "metadata": {
+                        "description": "Seconds the Application Gateway waits on the Console origin before giving up. ARM default is 20; this template used to hardcode 30. Supported range for a PRIVATE backend (which this is — the ACA env is internal) is 1-86400; an EXTERNAL backend would cap at 240. The deployment default of 120 matches the Front Door pin in front-door.bicep. On IL5 this is the only edge (frontDoorEnabled=false), see #4431."
                       }
                     }
                   },
@@ -29031,7 +29062,7 @@
                               "cookieBasedAffinity": "Disabled",
                               "pickHostNameFromBackendAddress": false,
                               "hostName": "[parameters('consoleFqdn')]",
-                              "requestTimeout": 30,
+                              "requestTimeout": "[parameters('consoleRequestTimeoutSeconds')]",
                               "probe": {
                                 "id": "[resourceId('Microsoft.Network/applicationGateways/probes', format('agw-loom-{0}', parameters('location')), 'console-probe')]"
                               }

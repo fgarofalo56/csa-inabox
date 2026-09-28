@@ -137,24 +137,34 @@ param forceUpdateTag string = utcNow()
 // receipt of its own either — `gh run list --workflow deploy-fiab-il5.yml`
 // returns ZERO runs.
 //
-// RESIDUAL GAP #2 — the APPLICATION GATEWAY edge is not moved by this change,
-// and that is FOUR param files, not just IL5. In
-// modules/admin-plane/app-gateway.bicep, `:122` hardcodes `requestTimeout: 30`
-// with no param to override it (the only occurrence in the bicep tree) — below
-// 54 of the 71 route declarations, never mind the 30 above 60. Its gate at
-// admin-plane/main.bicep:8705 is the same shape as this module's, and
-// `appGatewayEnabled = true` in commercial-full:347, gcc-high:406, il5:418 AND
-// tenant-dmlz:308 (it is unset, hence false, in commercial, gcc and
-// dlz-attach). Both modules are handed the
-// SAME origin — `loom-console.${caeDefaultDomain}`, main.bicep:8710 and :8723 —
-// so wherever both flags and `deployAppsEnabled` are true the console has two
-// public edges and this pin moves only one of them. IL5 is the boundary where
-// the App Gateway is the ONLY edge, not the only one where it is capped at 30s.
-// Tracked as #4431 (filed IL5-scoped, widened after this measurement) and
-// deliberately NOT fixed here: a different module's edge belongs in its own
-// lane. So what this pin closes is the FRONT DOOR path's edge-timeout gap, on
-// the boundaries enumerated above and with the exercise caveats stated there —
-// it must not be read as closing the App Gateway path's gap on ANY boundary.
+// RESIDUAL GAP #2 — CLOSED by #4431, 2026-09-28. This note previously said the
+// App Gateway edge "hardcodes `requestTimeout: 30` with no param to override it
+// (the only occurrence in the bicep tree) — below 54 of the 71 route
+// declarations". All four of those particulars are now false, so the text is
+// corrected here rather than left as a signpost to a falsehood:
+//   * app-gateway.bicep no longer hardcodes the value. It reads
+//     `param consoleRequestTimeoutSeconds`, threaded from
+//     platform/fiab/bicep/main.bicep `appGatewayRequestTimeoutSeconds`
+//     (default 120, matching THIS module's pin) via admin-plane/main.bicep.
+//   * An override path therefore exists, settable per boundary in a
+//     .bicepparam.
+//   * `requestTimeout` is no longer a bare literal anywhere in the tree.
+//   * The route counts were re-measured at 2026-09-28: 81 routes declare
+//     `maxDuration`, 64 of them above 30s and 12 at 300s — not 54 of 71. The
+//     60s bucket grew from 21 to 31 between the two measurements, which is why
+//     a transcribed count goes stale; re-run
+//     `git grep -h "export const maxDuration" -- 'apps/fiab-console/app/api/**/*.ts'`
+//     rather than quoting either figure.
+// What has NOT changed: the App Gateway is still a SEPARATE edge from this
+// module, gated alongside it in admin-plane/main.bicep (`module appGateway` /
+// `module frontDoor`, same three-way condition), and still stood up by four
+// params files — commercial-full, gcc-high, il5 and tenant-dmlz. Both edges are
+// handed the SAME origin, `loom-console.${caeDefaultDomain}`, so wherever both
+// flags and `deployAppsEnabled` are true the console has two public edges and
+// THIS pin still moves only one of them. IL5 remains the boundary where the App
+// Gateway is the only edge (`frontDoorEnabled = false`). So this pin closes the
+// FRONT DOOR path's edge-timeout gap, with the exercise caveats stated above;
+// #4431 closed the App Gateway path's.
 @description('Seconds Front Door waits on the origin before giving up. AFD defaults to 60 when unset; 30 of the console\'s API routes declare a maxDuration above that. Portal range is 16-240. Front Door is not deployed on IL5 (frontDoorEnabled=false) — that boundary\'s edge is App Gateway, see #4431.')
 @minValue(16)
 // BOTH ENDS OF THE RANGE, NOT ONE (#4373 review §5). The description and the
