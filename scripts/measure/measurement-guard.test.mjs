@@ -19,7 +19,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, denyBody } from '../../.claude/hooks/measurement-guard.mjs';
+import { evaluate, denyBody, RULES } from '../../.claude/hooks/measurement-guard.mjs';
 
 const has = (cmd, id) => evaluate(cmd).some((f) => f.id === id);
 
@@ -864,4 +864,78 @@ test('CONTROL: the evaluator returns findings at all (not vacuously empty)', () 
   const f = evaluate(`R=$(az x | tr -d '\\r')\nRC=$?`);
   assert.ok(f.length > 0, 'if this is empty the whole suite proves nothing');
   assert.ok(/FIX:/.test(f[0].message), 'every finding must name the fix, not just the problem');
+});
+
+// ------------------------------------------------- remediation scratch paths
+//
+// #4587. Every rule's remediation is advice an agent then FOLLOWS. Two of them
+// named bare `out.json` / `err.txt` / `out` / `err`, which carry no directory
+// and so land in the cwd -- for an agent working in this repo, the REPO ROOT,
+// against the standing temp-file rule. Six such files were found at the root on
+// 2026-09-26 (`err.txt`, `err2.txt`, `err3.txt`, `out.txt`, `out2.txt`,
+// `out_err.txt`). The guard was instructing the violation, at one message per
+// trip, across every concurrent lane.
+//
+// The census iterates the REAL `RULES` array and lifts redirect targets out of
+// the rendered message, rather than grepping for the strings that were wrong.
+// A needle over known-bad spellings cannot see a NEW rule that names `out.txt`;
+// this can.
+const REDIRECT_TARGET = /(?<!-)(\d*)>>?\s*([^\s;&|'"`]+)/g;
+
+const remediationTargets = () => {
+  const out = [];
+  for (const rule of RULES) {
+    // A literal sentinel hit: it carries no `>` of its own, so anything the
+    // census reports came from the rule's own remediation text.
+    for (const m of rule.message('SENTINEL_HIT').matchAll(REDIRECT_TARGET)) {
+      out.push({ id: rule.id, target: m[2] });
+    }
+  }
+  return out;
+};
+
+test('#4587: every remediation writes scratch under temp/, never the repo root', () => {
+  const targets = remediationTargets();
+
+  // POSITIVE CONTROL, and it is load-bearing. Without it a regex that matched
+  // nothing -- or a refactor that stopped rendering the FIX lines -- would make
+  // the assertion below pass over an empty list and report clean. Measured at
+  // this head: 6 targets across 3 of the 4 rules (msys-arm-id names none).
+  assert.ok(
+    targets.length >= 4,
+    `the census found ${targets.length} redirect targets; it must see the FIX ` +
+      `lines or it proves nothing. Targets: ${JSON.stringify(targets)}`,
+  );
+
+  // `/dev/null` is allowed here ONLY because python-dash-repl quotes it while
+  // DESCRIBING rule 3's trigger, not as advice to run.
+  const offenders = targets.filter(
+    ({ target }) => !(target.startsWith('temp/') || target === '/dev/null'),
+  );
+
+  // WHAT MAKES THIS FAIL: restoring either pre-#4587 spelling --
+  //   rc-after-pipe     `az ... > out.json 2>err.txt`
+  //   discarded-stderr  `cmd > out 2>err ; RC=$?`
+  // -- puts `out.json`/`err.txt`/`out`/`err` in this list. Verified RED against
+  // both, applied to a sandbox copy of the hook (the tracked tree untouched).
+  assert.deepEqual(
+    offenders,
+    [],
+    `these remediations send scratch outside temp/: ${JSON.stringify(offenders)}`,
+  );
+});
+
+test('#4587: the discarded-stderr FIX still names a real stderr redirect', () => {
+  // Pairs with the test above, which on its own is satisfied by DELETING the
+  // advice. WHAT MAKES THIS FAIL: dropping the `2>temp/err` from that rule's
+  // message, or narrowing it to stdout only.
+  const msg = RULES.find((r) => r.id === 'discarded-stderr').message('SENTINEL_HIT');
+  const stderrTargets = [...msg.matchAll(REDIRECT_TARGET)]
+    .filter((m) => m[1] === '2')
+    .map((m) => m[2]);
+  assert.deepEqual(
+    stderrTargets,
+    ['temp/err'],
+    `the rule must still tell the reader where to send stderr; got ${JSON.stringify(stderrTargets)}`,
+  );
 });
