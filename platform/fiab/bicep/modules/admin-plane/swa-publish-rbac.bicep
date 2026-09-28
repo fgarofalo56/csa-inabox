@@ -101,7 +101,7 @@ var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 // GCC-High / IL5 are the sovereign (Azure Government) boundaries; GCC (moderate)
 // runs in commercial Azure and keeps the Commercial role.
 var effectiveSwaRoleId = (boundary == 'GCC-High' || boundary == 'IL5') ? contributorRoleId : websiteContributorRoleId
-// In Gov the fallback role IS Contributor — which the core RBAC grants already
+// In Gov the selected role IS Contributor — which the core RBAC grants already
 // assign to the Console UAMI at this RG scope, so creating it here duplicates
 // the (scope, principal, role) triple under a new name and ARM rejects it
 // (LIVE: RoleAssignmentExists, usgovvirginia 2026-07-10 round 2). Skip in the

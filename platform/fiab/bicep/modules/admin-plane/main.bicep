@@ -4135,8 +4135,8 @@ module swaPublishRbac 'swa-publish-rbac.bicep' = if (!skipRoleGrants) {
   scope: resourceGroup(effectiveSwaRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
-    // Selects Website Contributor (Commercial / GCC) vs Contributor (Gov, where
-    // Website Contributor does not resolve — see swa-publish-rbac.bicep header).
+    // Selects Website Contributor (Commercial / GCC) vs Contributor (GCC-High /
+    // IL5); see the `boundary` @description in swa-publish-rbac.bicep.
     boundary: boundary
     skipRoleGrants: skipRoleGrants
   }
