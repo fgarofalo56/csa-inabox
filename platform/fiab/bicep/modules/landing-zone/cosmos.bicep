@@ -237,7 +237,7 @@ var loomContainers = [
   // point-read. createIfNotExists in ensure() remains the hotfix fallback.
   { name: 'app-install-jobs',  partitionKey: '/tenantId' }
   // E2 (loom-next-level) — Copilot quality eval runs/results written by the
-  // copilot-evaluator Function, read by /admin/copilot-quality. PK /surface →
+  // copilot-evaluator job, read by /admin/copilot-quality. PK /surface →
   // per-surface trend reads are single-partition. ttl -1 = TTL enabled with no
   // default expiry (eval-result docs carry ttl 180d; run rollups are retained).
   // createIfNotExists in cosmos-client.ts ensure() + the Function's client is

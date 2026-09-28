@@ -2,7 +2,7 @@
  * E5 (loom-next-level ws-copilot-cost.md) — /admin/copilot-quality pure layer.
  *
  * The Copilot quality admin page reads the REAL eval-run / eval-result docs the
- * copilot-evaluator Function (E2, azure-functions/copilot-evaluator) writes to
+ * copilot-evaluator job (E2, azure-functions/copilot-evaluator) writes to
  * Cosmos `loom-copilot-evals`, plus the E3 per-surface floors
  * (content/evals/eval-floors.json). This module owns every PURE piece the route
  * + client share: per-surface roll-up, trend series, letter grades, floor

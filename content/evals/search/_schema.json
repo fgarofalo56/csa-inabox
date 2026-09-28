@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "csa-loom://content/evals/search/_schema.json",
   "title": "CSA Loom federated-search golden query row (SRCH1)",
-  "description": "One JSON object per JSONL line in content/evals/search/<domain>.jsonl. Scored by the copilot-evaluator Function's searchRelevance mode (hit-rate@k / MRR / NDCG@k) against the REAL /catalog federated search (lib/azure/catalog-search.ts searchCatalog) via the /api/internal/copilot/search-probe route. expectedResults are matched case-insensitively (substring, either direction) against each returned result's qualified name / display name / id, so they target the demo-seed showcase items (scripts/csa-loom/demo-seed.mjs). Azure-native, no Fabric/Power BI dependency.",
+  "description": "One JSON object per JSONL line in content/evals/search/<domain>.jsonl. Scored by the copilot-evaluator job's searchRelevance mode (hit-rate@k / MRR / NDCG@k) against the REAL /catalog federated search (lib/azure/catalog-search.ts searchCatalog) via the /api/internal/copilot/search-probe route. expectedResults are matched case-insensitively (substring, either direction) against each returned result's qualified name / display name / id, so they target the demo-seed showcase items (scripts/csa-loom/demo-seed.mjs). Azure-native, no Fabric/Power BI dependency.",
   "type": "object",
   "required": ["id", "query", "expectedResults"],
   "additionalProperties": false,

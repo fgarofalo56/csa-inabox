@@ -179,7 +179,7 @@ describe('prompt-registry — register + publish', () => {
     expect(audit.rows.map((r) => r.kind)).toContain('llmops.prompt.publish');
   });
 
-  it('records an HONEST gate (never a fake run) when the evaluator Function is unwired', async () => {
+  it('records an HONEST gate (never a fake run) when the evaluator job id is unset', async () => {
     await seedPrompt();
     vi.mocked(evaluatorRunGate).mockReturnValue({
       gated: true, gateId: 'svc-copilot-evaluator', missing: ['LOOM_COPILOT_EVALUATOR_JOB_ID'], remediation: 'Deploy it.',

@@ -1,7 +1,7 @@
 /**
  * loom-copilot-evals — doc shapes + MIG1 versioned-migration registration (E2).
  *
- * The copilot-evaluator Function (azure-functions/copilot-evaluator) WRITES
+ * The copilot-evaluator job (azure-functions/copilot-evaluator) WRITES
  * these docs; the console (E5 /admin/copilot-quality) READS them through
  * `copilotEvalsContainer()` (cosmos-client), which wraps the container in
  * `withMigrations('loom-copilot-evals', …)` so every materialized doc passes

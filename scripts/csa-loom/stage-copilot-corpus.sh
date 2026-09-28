@@ -140,7 +140,7 @@ rm -f "$NEW" "$OLD"
 
 # ── 5. stage golden eval sets (E1): content/evals → copilot-corpus/evals ──
 # Small tree (10 JSONL + schema + README) — full copy each run, with removal of
-# staged files whose source is gone, so the E2 evaluator Function reads the
+# staged files whose source is gone, so the E2 evaluator job reads the
 # sets from the same in-image FS the corpus uses.
 EVAL_SRC="$ROOT/content/evals"
 EVAL_DEST="$DEST/evals"

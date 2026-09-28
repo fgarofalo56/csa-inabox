@@ -24,13 +24,22 @@
 //     fired even once.
 //
 // The estate is NOT uniform, and `function list` alone would MISLEAD anyone who
-// re-ran it: func-secexp-… and func-cpeval-… hold indexed, ENABLED functions
+// re-ran it: func-secexp-… and func-cpeval-… still INDEX their functions
 // (timers `0 0 6 * * *` and `0 0 7 * * *`), and func-loom-prpt-renderer-…'s
 // list call FAILS outright — exit 1, `Operation returned an invalid status
 // 'Bad Request'` (ServiceUnavailable from the host runtime), which is UNKNOWN,
 // not empty. Only the execution metric covers all seven. Note the 400 is also
 // the control that validates the empties: an unreachable host errors rather
 // than returning `[]`.
+//
+// OP-19 2026-09-17 (#4495): re-measured ZERO for all seven over a WIDER window
+// with a LIVE control — FunctionExecutionCount 2026-08-17→2026-09-17 (P1D,
+// Total) = 0, 31/31 datapoints each with an explicit 0.0, absent=0, against
+// func-csa-inabox-copilot-fg at 73 on the same metric/window/code path. The two
+// timer definitions are now DISABLED on the estate (isDisabled: true +
+// `AzureWebJobs.<fn>.Disabled=true`), so the double-execution-on-recovery
+// hazard this module's siblings warn about is retired — see
+// admin-plane/main.bicep and scripts/csa-loom/check-retired-function-timers.sh.
 //
 // NO ROOT CAUSE IS ASSERTED HERE. Two hosts index fine under the same Azure
 // Policy regime, so a "policy seals the storage data-plane, therefore the host

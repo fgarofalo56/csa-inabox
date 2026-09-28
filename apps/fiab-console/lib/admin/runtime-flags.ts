@@ -146,7 +146,7 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     id: 'e5-copilot-quality-page',
     label: 'Copilot quality admin page',
     description:
-      'The /admin/copilot-quality surface: per-surface Copilot eval scorecards (retrieval hit-rate / grounding / pass-rate), run-history trends, floor status, and "Run now". OFF hides the page body (a guided notice replaces it) without a roll — the kill-switch for a rendering regression on this new admin surface. The copilot-evaluator Function, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only admin view is gated.',
+      'The /admin/copilot-quality surface: per-surface Copilot eval scorecards (retrieval hit-rate / grounding / pass-rate), run-history trends, floor status, and "Run now". OFF hides the page body (a guided notice replaces it) without a roll — the kill-switch for a rendering regression on this new admin surface. The copilot-evaluator job, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only admin view is gated.',
     ownerItem: 'E5',
     surface: '/admin/ai-operations?tab=quality',
   },
