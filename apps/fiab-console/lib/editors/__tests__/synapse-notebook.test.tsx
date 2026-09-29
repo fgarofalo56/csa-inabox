@@ -79,7 +79,7 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
     expect(input!.getAttribute('accept')).toContain('.ipynb');
   });
 
-  it('#4619: an empty Create publishes the item-bound name WITH the item id, and Save sends ?itemId=', async () => {
+  it('#4619: an empty Create publishes the item-bound name WITH the item id, and Save and Delete send ?itemId=', async () => {
     // The write routes accept a non-admin only for a name bound to the item
     // they name. Breaks if: Create stays disabled with an empty input (no POST
     // is ever made), Create omits `itemId` or sends a name other than the bound
@@ -112,5 +112,15 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
     await waitFor(() => expect(log.calls.some((c) => c.init?.method === 'PUT')).toBe(true));
     const putCall = log.calls.find((c) => c.init?.method === 'PUT')!;
     expect(putCall.url).toBe(`/api/synapse/notebooks/${BOUND}?itemId=${encodeURIComponent(ID)}`);
+
+    // Delete of the open notebook carries the item id too. Breaks if Delete
+    // drops `?itemId=` from the DELETE URL (the route then answers a
+    // non-admin with admin_only).
+    const deleteBtn = screen.getAllByRole('button', { name: 'Delete' }).find((el) => !(el as HTMLButtonElement).disabled);
+    expect(deleteBtn).toBeTruthy();
+    fireEvent.click(deleteBtn!);
+    await waitFor(() => expect(log.calls.some((c) => c.init?.method === 'DELETE')).toBe(true));
+    const delCall = log.calls.find((c) => c.init?.method === 'DELETE')!;
+    expect(delCall.url).toBe(`/api/synapse/notebooks/${BOUND}?itemId=${encodeURIComponent(ID)}`);
   });
 });

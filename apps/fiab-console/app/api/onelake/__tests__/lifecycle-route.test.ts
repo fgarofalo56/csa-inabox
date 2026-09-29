@@ -136,6 +136,35 @@ describe('PUT /api/onelake/lifecycle — dedicated account: the workspace owner 
   });
 });
 
+describe('PUT /api/onelake/lifecycle — rule-name shape', () => {
+  const putNamed = (name: string) =>
+    PUT(putReq({ workspaceId: 'ws-1', rules: [{ ...RULE, name }] }), {} as any);
+
+  // Each name starts with a VALID prefix, so only the pattern's end anchor
+  // (or its 63-char bound) refuses it: drop the `$` and 'ok_bad' matches on
+  // 'ok' and the 64-char name matches on its first 63.
+  it.each([
+    ['a valid prefix then an underscore', 'ok_bad'],
+    ['a valid prefix then a space', 'ok bad'],
+    ['64 characters', 'a'.repeat(64)],
+  ])('422 invalid_rule for %s, before any workspace lookup or ARM write', async (_label, name) => {
+    (getSession as any).mockReturnValue(user);
+    const res = await putNamed(name);
+    expect(res.status).toBe(422);
+    expect((await res.json()).code).toBe('invalid_rule');
+    expect(readMock).not.toHaveBeenCalled();
+    expect(setLifecyclePolicy).not.toHaveBeenCalled();
+  });
+
+  it('a 63-character name is accepted (positive pair for the length bound)', async () => {
+    // Breaks if the bound were tightened below 63, or if every name were refused.
+    (getSession as any).mockReturnValue(user);
+    const res = await putNamed('a'.repeat(63));
+    expect(res.status).toBe(200);
+    expect((setLifecyclePolicy as any).mock.calls[0][0][0].name).toBe('a'.repeat(63));
+  });
+});
+
 describe('PUT /api/onelake/lifecycle — shared account: tenant admin only', () => {
   it('403 for a non-admin owner whose workspace binds no account (the shared default)', async () => {
     // Breaks if an unbound workspace were treated as dedicated: the policy
