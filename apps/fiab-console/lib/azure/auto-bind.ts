@@ -84,7 +84,7 @@
  * component.
  */
 import type { WorkspaceItem } from '@/lib/types/workspace';
-import { LAKEHOUSE_SERVER_OWNED_STATE_KEYS } from './backing-name';
+import { withoutLakehouseCreateState } from './backing-name';
 
 /** The item facts a provider needs. Deliberately not the whole `WorkspaceItem`. */
 export interface AutoBindContext {
@@ -831,25 +831,35 @@ export async function persistAutoBindPatch(
 }
 
 /**
- * On a lakehouse CREATE, drop the storage-location keys
- * (`LAKEHOUSE_SERVER_OWNED_STATE_KEYS`) and any `state.autoBind` record the
- * create body carried. Those keys are recorded by the server once a root is
- * bound; a brand-new item has none yet, and several create paths copy `state`
- * from a request body or from another item (`createOwnedItem`, promotion,
- * bundle installs). Clearing them makes the bind that follows start from the
- * item itself.
+ * A new lakehouse's `state` without the keys that say where an item's files are
+ * (`LAKEHOUSE_CREATE_CLEARED_STATE_KEYS`: the location keys, the installer
+ * receipt `provisioning`, `storageAccount`) and without a `state.autoBind`
+ * record. Several create paths copy `state` from a request body or from another
+ * item (`createOwnedItem` callers such as promotion, branch-out and the Copilot
+ * orchestrator, and the bundle import), so those keys describe the SOURCE's
+ * location, not the new item's. Pure: returns a new object.
+ */
+export function stripLakehouseCreateState(state: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  return withoutLakehouseCreateState(state, [AUTO_BIND_STATE_KEY]).state;
+}
+
+/**
+ * On a lakehouse CREATE, drop the keys {@link stripLakehouseCreateState} drops.
+ * `createOwnedItem` already strips them before the document is written; this
+ * hook covers the create routes that write the document themselves and then
+ * call `autoBindOnCreate`. Clearing them makes the bind that follows start from
+ * the item itself.
  *
  * Mutates `item.state` in memory (the caller returns that object) and, only
  * when something was removed, persists the removal. Never throws.
  */
 export async function clearServerOwnedLakehouseKeysOnCreate(item: WorkspaceItem): Promise<boolean> {
   if (item?.itemType !== 'lakehouse' || !item.state || typeof item.state !== 'object') return false;
-  const state = item.state as Record<string, unknown>;
-  const keys = [...LAKEHOUSE_SERVER_OWNED_STATE_KEYS, AUTO_BIND_STATE_KEY].filter((k) =>
-    Object.prototype.hasOwnProperty.call(state, k));
+  const { state: next, removed: keys } = withoutLakehouseCreateState(
+    item.state as Record<string, unknown>,
+    [AUTO_BIND_STATE_KEY],
+  );
   if (keys.length === 0) return false;
-  const next: Record<string, unknown> = { ...state };
-  for (const k of keys) delete next[k];
   item.state = next;
   try {
     const { itemsContainer } = await import('@/lib/azure/cosmos-client');

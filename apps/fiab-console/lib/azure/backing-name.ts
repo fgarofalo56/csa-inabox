@@ -388,6 +388,42 @@ export function lakehouseRootsOverlap(a: LakehouseRootLocation, b: LakehouseRoot
 export const LAKEHOUSE_SERVER_OWNED_STATE_KEYS = ['lakehouseRoot', 'adlsContainer', 'ownedContainers'] as const;
 
 /**
+ * The lakehouse `state` keys a NEW item never takes from the state it was
+ * created with: the storage location keys above, plus the installer's receipt
+ * (`provisioning`, whose `secondaryIds` name a container and root) and an
+ * explicit account (`storageAccount`). Every one of them says where an item's
+ * files are, so when a create copies state from somewhere else (a template, a
+ * bundle, a promoted or branched item) they describe the SOURCE item's location,
+ * not the new one's. The new item gets its own root from auto-bind or the
+ * installer instead. Stripped by `createOwnedItem`, by the auto-bind create hook
+ * and by the bundle import's create arm.
+ */
+export const LAKEHOUSE_CREATE_CLEARED_STATE_KEYS = [
+  ...LAKEHOUSE_SERVER_OWNED_STATE_KEYS,
+  'provisioning',
+  'storageAccount',
+] as const;
+
+/**
+ * `state` without {@link LAKEHOUSE_CREATE_CLEARED_STATE_KEYS} (and any `extra`
+ * keys), plus the names that were present and removed. Pure; never mutates.
+ */
+export function withoutLakehouseCreateState(
+  state: Record<string, unknown> | null | undefined,
+  extra: readonly string[] = [],
+): { state: Record<string, unknown>; removed: string[] } {
+  const next: Record<string, unknown> = { ...(state && typeof state === 'object' ? state : {}) };
+  const removed: string[] = [];
+  for (const k of [...LAKEHOUSE_CREATE_CLEARED_STATE_KEYS, ...extra]) {
+    if (Object.prototype.hasOwnProperty.call(next, k)) {
+      delete next[k];
+      removed.push(k);
+    }
+  }
+  return { state: next, removed };
+}
+
+/**
  * The containers a NEW lakehouse root prefers, in order: `landing` (the raw
  * zone, a new lakehouse's natural home — the installer provisioner at
  * `lib/install/provisioners/lakehouse.ts` makes the same choice), then
