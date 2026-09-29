@@ -15,8 +15,8 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 | --- | ---: |
 | Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 644 |
-| Owner-scoped | 680 |
+| Session-only | 643 |
+| Owner-scoped | 681 |
 | Admin | 311 |
 | Unknown (generator fails) | 0 |
 | Gated (backend config) | 499 |
@@ -1883,7 +1883,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `lakehouse/shortcuts/test/route.ts` | POST | session-only | ● | ADLS, ARM, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Key Vault, Managed Identity, Microsoft Graph, Synapse SQL |
 | `lakehouse/table-stats/route.ts` | GET | session-only | ● | ADLS, Azure Storage, Synapse |
 | `lakehouse/tables/route.ts` | GET | owner-scoped |  | ADLS, ARM, Azure SQL, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse SQL |
-| `lakehouse/transform-preview/route.ts` | GET POST | session-only | ● | ADLS, Azure Storage, Synapse |
+| `lakehouse/transform-preview/route.ts` | GET POST | owner-scoped | ● | ADLS, ARM, Azure Storage, Cosmos, Managed Identity, Microsoft Graph, Synapse |
 | `lakehouse/upload/route.ts` | POST | session-only |  | ADLS, ARM, Azure Storage, Managed Identity |
 
 ## landing-zones
@@ -2533,7 +2533,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-462 module(s) ORIGINATE a backend label — the derivation read an
+463 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2844,6 +2844,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/app/api/items/sql-database/route.ts` | Azure SQL, PostgreSQL |
 | `apps/fiab-console/app/api/items/stream-analytics-job/[name]/test/route.ts` | Stream Analytics |
 | `apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts` | Fabric |
+| `apps/fiab-console/app/api/lakehouse/_lib/container-role-assignment.ts` | Azure RBAC |
 | `apps/fiab-console/app/api/lakehouse/history/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/settings/route.ts` | ADLS |
 | `apps/fiab-console/app/api/lakehouse/table-stats/route.ts` | ADLS |

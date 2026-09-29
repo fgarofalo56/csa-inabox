@@ -14769,6 +14769,33 @@
           }
         },
         {
+          "id": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#DELETE",
+          "kind": "authorizer",
+          "provenance": "declared",
+          "label": "DELETE /api/lakehouse/permissions",
+          "facet": {
+            "kind": "authorizer",
+            "fnName": "DELETE /api/lakehouse/permissions",
+            "params": [],
+            "resourceScoped": false,
+            "callerNamedResourceInputs": [],
+            "allowPaths": [
+              {
+                "id": "delete:admin-claim",
+                "conditionPredicates": [
+                  "isTenantAdmin"
+                ],
+                "scopeLiterals": [],
+                "mentionsVerdict": false,
+                "impliedByOwnsVerdict": false,
+                "ownsResolver": null
+              }
+            ],
+            "reachesPrivilegedSink": false,
+            "privilegedSinkKinds": []
+          }
+        },
+        {
           "id": "sec:verdict-call:apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts#POST:enforceCapability:3",
           "kind": "verdict-call",
           "provenance": "declared",
@@ -48694,6 +48721,11 @@
           "deployedAs": "loom-console"
         },
         {
+          "nodeId": "sec:authorizer:apps/fiab-console/app/api/lakehouse/permissions/route.ts#DELETE",
+          "codeModuleId": "code:apps/fiab-console/app/api/lakehouse/permissions/route.ts",
+          "deployedAs": "loom-console"
+        },
+        {
           "nodeId": "sec:verdict-call:apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts#POST:enforceCapability:3",
           "codeModuleId": "code:apps/fiab-console/app/api/landing-zones/[id]/attach/preflight/route.ts",
           "deployedAs": "loom-console"
@@ -50209,15 +50241,15 @@
     },
     "meta": {
       "generatorVersion": 1,
-      "generatedAt": "2026-09-29T15:06:07.409Z",
-      "commit": "e08c6adff1db6cb6295df80ebfec56c8ced73129",
-      "inputsDigest": "47c42d38c52ccc64",
+      "generatedAt": "2026-09-29T17:18:46.981Z",
+      "commit": "bb3a011279bf3799a80e8107c70e1407fcff7d35",
+      "inputsDigest": "7c97c3830109e04d",
       "filesScanned": 2123,
       "scanScopes": [
         {
           "scope": "app/**/route.ts (console BFF routes)",
           "filesMatched": 1700,
-          "nodesEmitted": 707
+          "nodesEmitted": 708
         },
         {
           "scope": ".github/**, scripts/** (CI publication surfaces)",
