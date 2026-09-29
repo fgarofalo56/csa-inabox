@@ -4,8 +4,9 @@ name: gov-provision-posture
 # for a Function App: discover the Loom Cosmos account, deploy
 # azure-functions/posture-refresh/deploy/main.bicep into the admin RG, publish
 # the Python code (func Core Tools), store the host key in Key Vault (private-KV
-# single-IP firewall window), then set LOOM_POSTURE_FUNCTION_URL (+ the
-# LOOM_POSTURE_FUNCTION_KEY secretRef) on the console. The Govern tab already
+# single-IP firewall window), then set LOOM_POSTURE_FUNCTION_URL on the console.
+# It does NOT bind the LOOM_POSTURE_FUNCTION_KEY secretRef: only the bicep deploy
+# does, behind admin-plane postureFunctionKeyBound (#4770, #4781). The Govern tab already
 # computes posture LIVE from Cosmos — this is the on-open pre-warm, never a hard
 # dependency. Idempotent. apply=false = discovery + bicep what-if only.
 on:

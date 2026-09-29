@@ -342,7 +342,6 @@
     "apps/fiab-console/app/api/governance/govern/embed/route.ts": 1,
     "apps/fiab-console/app/api/governance/govern/owner/route.ts": 1,
     "apps/fiab-console/app/api/governance/govern/posture/route.ts": 1,
-    "apps/fiab-console/app/api/governance/govern/refresh/route.ts": 1,
     "apps/fiab-console/app/api/governance/govern/trigger-scan/route.ts": 1,
     "apps/fiab-console/app/api/governance/insights/route.ts": 1,
     "apps/fiab-console/app/api/governance/irm/route.ts": 1,
