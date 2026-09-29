@@ -233,3 +233,100 @@ describe('health-check action-group — Logic App receiver (#4748)', () => {
     expect(JSON.stringify(updateOwnedItemMock.mock.calls[0][3])).not.toContain('LASIG-3');
   });
 });
+
+/**
+ * #4748 at the SAVE call site: the persisted `triggerName` must reach
+ * `listCallbackUrl`, and a workflow the product cannot notify must be refused
+ * before anything is written.
+ *
+ * WHAT MAKES THESE FAIL:
+ *   • `Multi` has TWO request triggers, `manual` and `secondary`. The row asks
+ *     for `secondary`. A route that stops passing `la.triggerName` into
+ *     `resolveLogicAppCallback` falls back to the designer default `manual`,
+ *     which EXISTS here — so the mutant saves successfully to the WRONG trigger
+ *     and only the POSTed-path / SAS / `chosenBy` pins can see it. That is why
+ *     the fixture contains `manual`: without it the mutant would 422 instead.
+ *   • `Nightly` has only a Recurrence: the save must be a 422 that names the
+ *     workflow and its triggers, mint no SAS, write no action group and persist
+ *     nothing. Mapping that 4xx to a 502, or saving the other receivers anyway,
+ *     fails.
+ *   • ARM 500 on the workflow read must not be reported as a permission gate.
+ */
+describe('health-check action-group — Logic App trigger at the save call site (#4748)', () => {
+  const MULTI = '/subscriptions/sub-1/resourceGroups/rg-la/providers/Microsoft.Logic/workflows/Multi';
+  const NIGHTLY = '/subscriptions/sub-1/resourceGroups/rg-la/providers/Microsoft.Logic/workflows/Nightly';
+  const posts: string[] = [];
+  function stubWorkflows(opts: { workflowStatus?: number } = {}) {
+    posts.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url); const m = String(init?.method || 'GET');
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (m === 'POST') posts.push(u);
+      if (m === 'GET' && opts.workflowStatus) return json({ error: { code: 'X', message: 'workflow read failed' } }, opts.workflowStatus);
+      if (m === 'GET' && u.includes('/workflows/Multi?')) {
+        return json({ name: 'Multi', properties: { definition: { triggers: { manual: { type: 'Request', kind: 'Http' }, secondary: { type: 'Request', kind: 'Http' } } } } });
+      }
+      if (m === 'GET' && u.includes('/workflows/Nightly?')) {
+        return json({ name: 'Nightly', properties: { definition: { triggers: { Recurrence: { type: 'Recurrence' } } } } });
+      }
+      const cb = /\/triggers\/([^/]+)\/listCallbackUrl/.exec(u);
+      if (m === 'POST' && cb) return json({ value: `https://prod-1.westus.logic.azure.com/wf/triggers/${cb[1]}/paths/invoke?sig=SIG-${cb[1]}` });
+      return json({ error: { code: 'NotFound', message: `unexpected ${m} ${u}` } }, 404);
+    }));
+  }
+
+  it('SEVERAL request triggers: the persisted pick is the trigger whose callback is minted, and it stays persisted', async () => {
+    stubWorkflows();
+    const res = await PUT(put({ name: 'hc-ag', logicApps: [{ resourceId: MULTI, triggerName: 'secondary' }] }), CTX);
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(posts).toEqual([expect.stringContaining('/workflows/Multi/triggers/secondary/listCallbackUrl')]);
+    expect(upsertMock.mock.calls[0][0].logicAppReceivers.map((r: any) => r.callbackUrl)).toEqual([
+      'https://prod-1.westus.logic.azure.com/wf/triggers/secondary/paths/invoke?sig=SIG-secondary',
+    ]);
+    expect(body.bindings.logicApps).toEqual([{ resourceId: MULTI, workflowName: 'Multi', triggerName: 'secondary', chosenBy: 'explicit' }]);
+    expect(updateOwnedItemMock.mock.calls[0][3].state.actionGroup.logicApps).toEqual([
+      { resourceId: MULTI, triggerName: 'secondary', useCommonAlertSchema: true },
+    ]);
+  });
+
+  it('SEVERAL with no pick: the designer default is used, and the choice is reported rather than silent', async () => {
+    stubWorkflows();
+    const body = await (await PUT(put({ name: 'hc-ag', logicApps: [{ resourceId: MULTI }] }), CTX)).json();
+    expect(posts).toEqual([expect.stringContaining('/triggers/manual/listCallbackUrl')]);
+    expect(body.bindings.logicApps[0]).toMatchObject({ triggerName: 'manual', chosenBy: 'designer-default' });
+    // Nothing was picked, so nothing is pinned: a renamed trigger re-resolves next save.
+    expect(updateOwnedItemMock.mock.calls[0][3].state.actionGroup.logicApps[0].triggerName).toBeUndefined();
+  });
+
+  it('NONE: a workflow with no HTTP-request trigger is refused 422 naming what it has, and nothing is written', async () => {
+    stubWorkflows();
+    const res = await PUT(put({ name: 'hc-ag', emails: ['ops@contoso.com'], logicApps: [{ resourceId: NIGHTLY }] }), CTX);
+    const body = await res.json();
+    expect(res.status).toBe(422);
+    expect(body.error).toContain("Logic App 'Nightly' cannot be notified by Azure Monitor: it has no HTTP-request trigger");
+    expect(body.error).toContain("Triggers found: 'Recurrence' (Recurrence)");
+    expect(posts).toEqual([]);
+    expect(upsertMock).not.toHaveBeenCalled();
+    expect(updateOwnedItemMock).not.toHaveBeenCalled();
+  });
+
+  it('ARM 500 on the workflow read: a 502 with no permission gate, and nothing is written', async () => {
+    stubWorkflows({ workflowStatus: 500 });
+    const res = await PUT(put({ name: 'hc-ag', logicApps: [{ resourceId: MULTI }] }), CTX);
+    const body = await res.json();
+    expect(res.status).toBe(502);
+    expect(body.gate).toBeUndefined();
+    expect(body.error).toContain('workflow read failed');
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+
+  it('ARM 403 on the workflow read: a 403 naming Logic App Contributor on that workflow', async () => {
+    stubWorkflows({ workflowStatus: 403 });
+    const res = await PUT(put({ name: 'hc-ag', logicApps: [{ resourceId: MULTI }] }), CTX);
+    const body = await res.json();
+    expect(res.status).toBe(403);
+    expect(body.gate.remediation).toContain('"Logic App Contributor" on \'Multi\'');
+    expect(upsertMock).not.toHaveBeenCalled();
+  });
+});
