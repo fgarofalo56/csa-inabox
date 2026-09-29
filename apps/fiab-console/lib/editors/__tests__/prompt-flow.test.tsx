@@ -26,6 +26,33 @@ function connectionCalls(calls: Array<{ url: string }>) {
   return calls.map((c) => c.url).filter((u) => u.includes('/api/foundry/connections'));
 }
 
+/**
+ * A fetch mock whose FIRST (memoized) connections read stays unanswered until
+ * the test calls `release()` — the slow-CI-runner window, made deterministic.
+ *
+ * WHY THIS EXISTS: `useApi` sets `loading: true` before it calls `fetch`, and
+ * the "Refresh connections" button is `disabled={conn.loading}`. So "the
+ * request was ISSUED" is not "the button is clickable": a click that lands
+ * between the two is dropped (React does not dispatch onClick on a disabled
+ * button), no `?refresh=1` read is ever made, and the spec times out. That is
+ * the failure that froze the roll on main at 0f520d262 (CI run 36501961405).
+ * Every other URL, and the `?refresh=1` read itself, answers immediately.
+ */
+function installSlowFirstConnectionsMock() {
+  const calls: Array<{ url: string }> = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.spyOn(global, 'fetch').mockImplementation((async (url: unknown) => {
+    const u = String(url);
+    calls.push({ url: u });
+    const isConnections = u.includes('/api/foundry/connections');
+    if (isConnections && !u.includes('refresh=1')) await gate;
+    const body = isConnections ? { ok: true, connections: [] } : { ok: true };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch);
+  return { calls, release };
+}
+
 describe('PromptFlowEditor', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
@@ -59,8 +86,38 @@ describe('PromptFlowEditor', () => {
     render(<PromptFlowEditor item={item} id="new" />);
     await waitFor(() => expect(connectionCalls(calls).length).toBeGreaterThan(0), { timeout: 5000 });
 
-    fireEvent.click(screen.getByTestId('refresh-connections'));
+    // The first read being ISSUED does not make the button clickable — it is
+    // disabled until that read is ANSWERED (see installSlowFirstConnectionsMock).
+    // Clicking inside that window is a silent no-op, so wait it out first.
+    const refresh = screen.getByTestId('refresh-connections');
+    await waitFor(() => expect(refresh).not.toBeDisabled(), { timeout: 5000 });
+    fireEvent.click(refresh);
 
+    // Breaks if refreshConnections stops appending `?refresh=1` (the #2584 memo bust).
+    await waitFor(
+      () => expect(connectionCalls(calls).some((u) => u.includes('refresh=1'))).toBe(true),
+      { timeout: 5000 },
+    );
+  });
+
+  it('"Refresh connections" still busts the memo when the first read is SLOW', async () => {
+    const { calls, release } = installSlowFirstConnectionsMock();
+    render(<PromptFlowEditor item={item} id="new" />);
+    await waitFor(() => expect(connectionCalls(calls).length).toBeGreaterThan(0), { timeout: 5000 });
+
+    // FIXTURE PRECONDITION, not coverage: the read is issued and unanswered, and
+    // the button is disabled for it — the exact window the CI flake clicked in.
+    // Fails if the fixture stops holding the read, or the component stops gating
+    // the button on it; either way this spec would no longer exercise the race.
+    const refresh = screen.getByTestId('refresh-connections');
+    expect(refresh).toBeDisabled();
+    expect(connectionCalls(calls).some((u) => u.includes('refresh=1'))).toBe(false);
+
+    release();
+    await waitFor(() => expect(refresh).not.toBeDisabled(), { timeout: 5000 });
+    fireEvent.click(refresh);
+
+    // Breaks if refreshConnections stops appending `?refresh=1`.
     await waitFor(
       () => expect(connectionCalls(calls).some((u) => u.includes('refresh=1'))).toBe(true),
       { timeout: 5000 },
