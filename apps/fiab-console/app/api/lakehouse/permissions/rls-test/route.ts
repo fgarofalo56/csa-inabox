@@ -9,10 +9,14 @@
  * USER_NAME()/SUSER_SNAME() bind to the supplied `testIdentity` (defaults to
  * the signed-in admin's UPN). Azure-native — NO Fabric dependency.
  *
+ * Tenant admin only, like the RLS policy writes on /api/lakehouse/permissions:
+ * the preview returns live pool rows as the identity the caller names.
+ *
  * POST { objectId:number, filterColumnId:number, whereClause:string, testIdentity?:string, sampleRows?:number }
  *   200 { ok:true, schema, table, filterColumn, testIdentity, columns, rows, rowCount, executionMs, truncated }
  *   400 { ok:false, error, code:'invalid_where_clause' }
  *   401 { ok:false, error:'unauthenticated' }
+ *   403 { ok:false, error:'forbidden', code:'admin_only' }
  *   503 { ok:false, gate:true, missing, hint }
  *   502 { ok:false, error }   (live SQL parse/bind error — e.g. unknown column)
  */
@@ -20,6 +24,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { dedicatedTarget, testRlsPredicate, type SynapseTarget } from '@/lib/azure/synapse-permissions-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,6 +49,8 @@ function resolveDedicated(): { target: SynapseTarget } | { gate: NextResponse } 
 }
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
+  const denied = requireTenantAdmin(session);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const objectId = Number(body?.objectId);
