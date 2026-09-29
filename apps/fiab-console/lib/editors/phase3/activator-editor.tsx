@@ -235,7 +235,9 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [actPhone, setActPhone] = useState('');
   const [actLogicAppResourceId, setActLogicAppResourceId] = useState('');
   const [actLogicAppCallbackUrl, setActLogicAppCallbackUrl] = useState('');
-  const [actLogicAppTrigger, setActLogicAppTrigger] = useState('manual');
+  // Empty trigger ⇒ the server resolves the workflow's HTTP-request trigger
+  // from its definition rather than assuming `manual` (#4748).
+  const [actLogicAppTrigger, setActLogicAppTrigger] = useState('');
   const [fetchingCallback, setFetchingCallback] = useState(false);
   const [callbackErr, setCallbackErr] = useState<string | null>(null);
   // Pick-existing action group flow.

@@ -313,8 +313,12 @@ export default defineConfig({
     },
     {
       // STRICT sibling of the project above — same spec, same testMatch. The
-      // spec reads `testInfo.project.name` and FAILS the walk when the outcome
-      // is anything but `wired`.
+      // spec reads `testInfo.project.name` and is strict on DISCOVERY ONLY: it
+      // FAILS when discovery fails or lists zero Logic Apps, and is green once
+      // the picker lists at least one. Operator decision (#3541): the WIRING
+      // half is an operator receipt — the unattended session holds no
+      // delegated Azure token by design, and binding resolves its secret under
+      // the signed-in user's own permissions, never the platform identity.
       //
       // WHY A PROJECT AND NOT AN ENV VAR: this started as `HC_REQUIRE_RECEIPT=1`,
       // which could never fire through a dispatch. `loom-ui-verify.yml` has

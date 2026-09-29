@@ -13,9 +13,9 @@ verdict is DERIVED, not name-matched — see "How the owner column is decided".
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1692 |
+| Total routes | 1694 |
 | Public (no session) | 59 |
-| Session-only | 645 |
+| Session-only | 647 |
 | Owner-scoped | 678 |
 | Admin | 310 |
 | Unknown (generator fails) | 0 |
@@ -555,6 +555,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `azure/connectables/route.ts` | GET | session-only |  | ARM, Azure SQL, Cosmos, Event Hubs / Service Bus, Key Vault, Resource Graph, Synapse SQL |
+| `azure/function-apps/functions/route.ts` | GET | session-only |  | AAS, ARM, App Service, Azure SQL, Azure Storage, Power BI |
 | `azure/function-apps/route.ts` | GET | session-only | ● | ARM, App Service |
 | `azure/iothub/policies/route.ts` | GET | session-only |  | ARM, Cosmos, IoT Hub |
 | `azure/resources/route.ts` | GET | session-only |  | ADF, ARM, App Service, Azure Networking, Cosmos, Cost Management, Management Groups, Resource Graph |
@@ -1485,7 +1486,7 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `items/graphql-api/[id]/publish/route.ts` | POST | owner-scoped |  | APIM, ARM, Cosmos, Microsoft Graph |
 | `items/graphql-api/[id]/query/route.ts` | POST | owner-scoped |  | APIM, ARM, Cosmos, Microsoft Graph |
 | `items/graphql-api/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | AI Search, Cosmos, Microsoft Graph, Purview |
-| `items/health-check/[id]/action-group/route.ts` | GET POST PUT | owner-scoped | ● | AI Search, ARM, Azure Monitor, Cosmos, Logic Apps, Microsoft Graph |
+| `items/health-check/[id]/action-group/route.ts` | GET POST PUT | owner-scoped | ● | AAS, AI Search, ARM, App Service, Azure Monitor, Azure SQL, Azure Storage, Cosmos, Logic Apps, Microsoft Graph, Power BI |
 | `items/health-check/[id]/history/route.ts` | GET | owner-scoped | ● | ARM, Azure Monitor, Cosmos, Microsoft Graph |
 | `items/health-check/[id]/route.ts` | — | public |  | — |
 | `items/health-check/[id]/rule/[ruleId]/route.ts` | PATCH DELETE | owner-scoped | ● | AI Search, ARM, Azure Monitor, Cosmos, Microsoft Graph |
@@ -2017,7 +2018,8 @@ dispatch is invisible to it. Full limits: `scripts/ci/_route-backends.mjs`.
 | `monitor/diagnostics/route.ts` | GET POST | session-only |  | ARM, Azure Cache for Redis, Cosmos |
 | `monitor/health/route.ts` | GET | session-only |  | ARM, Azure Cache for Redis, Cosmos, Resource Graph, Resource Health |
 | `monitor/inventory/route.ts` | GET | session-only |  | ARM, Azure Cache for Redis, Cosmos |
-| `monitor/logic-app-callback/route.ts` | POST | session-only |  | ARM, Logic Apps |
+| `monitor/logic-app-callback/route.ts` | POST | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Logic Apps, Power BI |
+| `monitor/logic-app-triggers/route.ts` | GET | session-only |  | AAS, ARM, Azure SQL, Azure Storage, Logic Apps, Power BI |
 | `monitor/logs/route.ts` | GET POST | session-only |  | Log Analytics |
 | `monitor/metrics/route.ts` | POST | session-only |  | ARM, Azure Cache for Redis, Cosmos |
 | `monitor/spark/route.ts` | GET | session-only |  | Log Analytics, Synapse |
@@ -2530,7 +2532,7 @@ silently downgrading the route.
 
 ## Backend signals (derived)
 
-460 module(s) ORIGINATE a backend label — the derivation read an
+462 module(s) ORIGINATE a backend label — the derivation read an
 Azure identifier out of them. Every other route/module below inherits through the
 call graph. Nothing in this section is a Loom module name someone typed: the
 modules are derived, and only the Microsoft-owned identifier vocabulary is seeded.
@@ -2963,6 +2965,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/foundry-compute-gate.ts` | AML |
 | `apps/fiab-console/lib/azure/foundry-connections-client.ts` | AML |
 | `apps/fiab-console/lib/azure/foundry-cs-client.ts` | Azure AI Services, Azure Monitor, Azure RBAC |
+| `apps/fiab-console/lib/azure/function-receiver.ts` | App Service |
 | `apps/fiab-console/lib/azure/gremlin-client.ts` | Cosmos |
 | `apps/fiab-console/lib/azure/help-copilot-orchestrator.ts` | Cosmos |
 | `apps/fiab-console/lib/azure/index-my-data-plan.ts` | Azure Storage |
@@ -2973,6 +2976,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/kusto-client.ts` | ADX, Azure Monitor |
 | `apps/fiab-console/lib/azure/lakebase-databricks-client.ts` | Databricks |
 | `apps/fiab-console/lib/azure/load-to-table-codegen.ts` | ADLS |
+| `apps/fiab-console/lib/azure/logic-app-trigger.ts` | Logic Apps |
 | `apps/fiab-console/lib/azure/loom-apps-client.ts` | ACR, Container Apps |
 | `apps/fiab-console/lib/azure/loom-apps-runtime-templates.ts` | AI Search, AML, Azure AI Services, PostgreSQL |
 | `apps/fiab-console/lib/azure/loom-data-products-search.ts` | AI Search |
@@ -2984,7 +2988,7 @@ caps the NUMBER of cuts at three; it does not bound what one cut can hide.
 | `apps/fiab-console/lib/azure/mcp-obo-token-store.ts` | AI Foundry, ARM, Azure SQL, Microsoft Graph, Power BI |
 | `apps/fiab-console/lib/azure/memory-vector-index.ts` | AI Search |
 | `apps/fiab-console/lib/azure/mlflow-client.ts` | AML |
-| `apps/fiab-console/lib/azure/monitor-client.ts` | Azure Monitor, Logic Apps, Resource Graph, Resource Health |
+| `apps/fiab-console/lib/azure/monitor-client.ts` | Azure Monitor, Resource Graph, Resource Health |
 | `apps/fiab-console/lib/azure/network-discovery.ts` | Azure Networking, Compute, Power Platform, Resource Graph |
 | `apps/fiab-console/lib/azure/network-topology-graph.ts` | Resource Graph |
 | `apps/fiab-console/lib/azure/object-dataset-sync.ts` | AI Search |

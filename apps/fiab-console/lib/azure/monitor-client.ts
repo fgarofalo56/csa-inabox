@@ -29,6 +29,7 @@ import { armBase, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-en
 import { PagingBudget, PAGE_DEADLINE, walkPagedListResult, isContinuationAllowed, type PagingTruncation } from './paging-budget';
 import { ACTION_GROUP_RECEIVER_KINDS, emptyReceiverMap, type ActionGroupReceiverKind, type ActionGroupReceiverRead } from './action-group-receivers';
 import { composeActionGroupBody, type ActionGroupInput } from './action-group-body';
+import { resolveLogicAppCallback } from './logic-app-trigger';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -1559,17 +1560,13 @@ export async function listActionGroups(): Promise<ActionGroupSummary[]> {
  * ARM listCallbackUrl. This is what a logicAppReceiver.callbackUrl must hold so
  * Azure Monitor can invoke the workflow when the alert fires.
  *   POST .../workflows/{wf}/triggers/{trigger}/listCallbackUrl?api-version=2016-06-01
+ * The trigger is RESOLVED from the workflow definition (the request trigger,
+ * whatever it is named), never assumed to be `manual` — #4748. A named
+ * `triggerName` is validated against the definition the same way. `authToken`
+ * (the caller's ARM bearer) runs the privileged call under the caller's RBAC.
  */
-export async function getLogicAppCallbackUrl(workflowResourceId: string, triggerName = 'manual'): Promise<string> {
-  if (!workflowResourceId || !/\/providers\/Microsoft\.Logic\/workflows\//i.test(workflowResourceId)) {
-    throw new MonitorError('A Logic App (Microsoft.Logic/workflows) resource id is required', 400);
-  }
-  const path =
-    `${workflowResourceId.replace(/\/+$/, '')}/triggers/${encodeURIComponent(triggerName)}/listCallbackUrl?api-version=2016-06-01`;
-  const { json } = await armPost(path, {});
-  const callbackUrl = json?.value || json?.basePath;
-  if (!callbackUrl) throw new MonitorError('Logic App trigger callback URL not returned by ARM', 502, json);
-  return callbackUrl;
+export async function getLogicAppCallbackUrl(workflowResourceId: string, triggerName?: string, authToken?: string): Promise<string> {
+  return (await resolveLogicAppCallback(workflowResourceId, triggerName, authToken)).callbackUrl;
 }
 
 export interface TestNotificationResult {
