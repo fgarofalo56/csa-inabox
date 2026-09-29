@@ -193,6 +193,7 @@ export async function getDomainChargeback(opts: {
   const subscriptionErrors: { subscription: string; error: string }[] = [];
   let anySucceeded = false;
   let firstAuthError: MonitorError | null = null;
+  let firstOtherError: MonitorError | null = null;
 
   await Promise.all(
     subs.map(async (sub) => {
@@ -202,14 +203,20 @@ export async function getDomainChargeback(opts: {
         anySucceeded = true;
       } catch (e) {
         const err = e instanceof MonitorError ? e : new MonitorError(String(e), 500);
-        if ((err.status === 401 || err.status === 403 || err.status === 404) && !firstAuthError) firstAuthError = err;
+        if (err.status === 401 || err.status === 403 || err.status === 404) {
+          if (!firstAuthError) firstAuthError = err;
+        } else if (!firstOtherError) {
+          firstOtherError = err;
+        }
         subscriptionErrors.push({ subscription: sub, error: err.message });
       }
     }),
   );
 
-  // Every subscription denied access → propagate the honest gate.
-  if (!anySucceeded) throw firstAuthError || new MonitorError('Cost Management query failed for all subscriptions', 403);
+  // Every subscription failed. An access denial propagates the honest RBAC
+  // gate; any other failure (throttled, unrecognised response, 5xx) is thrown
+  // with its OWN status so the route does not mislabel it as a missing role.
+  if (!anySucceeded) throw firstAuthError || firstOtherError || new MonitorError('Cost Management query failed for all subscriptions', 500);
 
   const { rows, untaggedCost, totalCost } = foldDomainCostRows(raw, opts.domainNames || {});
   return {

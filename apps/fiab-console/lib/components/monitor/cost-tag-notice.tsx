@@ -7,7 +7,7 @@
 import { MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { tagLoadState, type TagQueryError } from './cost-tag-state';
 
-const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
+export const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 const listErrors = (errors: TagQueryError[]) =>
   errors.map((s) => `${shortSub(s.subscription)}: ${s.error || 'no error text returned'}`).join(' · ');
 

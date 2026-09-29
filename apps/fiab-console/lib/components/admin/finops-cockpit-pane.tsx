@@ -34,6 +34,7 @@ import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
+import { CostTagNotice } from '@/lib/components/monitor/cost-tag-notice';
 import {
   makeStyles, tokens, Card, Title3, Subtitle2, Body1, Caption1, Badge, Spinner,
   Dropdown, Option, Button, Input, Field, Switch, Dialog, DialogSurface, DialogTitle,
@@ -231,6 +232,9 @@ export function FinopsCockpitPane() {
   const feed = anomaliesQ.data?.feed || [];
   const rules: CostAnomalyRuleDoc[] = anomaliesQ.data?.rules || [];
   const breakdownTotal = Number(breakdownQ.data?.total || 0);
+  // The tag dimension's rows ARE the tag breakdown, so the Monitor tab's notice
+  // tells a failed or partial tag query apart from "no tags found".
+  const tagSummary = { byTag: breakdownQ.data?.rows ?? [], tagQueryErrors: breakdownQ.data?.tagQueryErrors ?? [], tagKey: breakdownQ.data?.tagKey };
   const currency = forecast?.currency || breakdownQ.data?.currency || budgetsQ.data?.currency || 'USD';
 
   const tiles: FinopsTile[] = useMemo(() => assembleFinopsTiles({
@@ -370,10 +374,16 @@ export function FinopsCockpitPane() {
             readState(breakdownQ).isError ? null :
             breakdownQ.data?.gate ? <GateBar gate={breakdownQ.data.gate} /> :
             (breakdownQ.data?.rows || []).length ? (
-              <LoomChart type="bar" height={300}
-                rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
-                title={`Spend by ${dimension} (${currency})`} />
-            ) : <Body1>No breakdown data.</Body1>}
+              <>
+                {dimension === 'tag' && <CostTagNotice summary={tagSummary} />}
+                <LoomChart type="bar" height={300}
+                  rows={(breakdownQ.data.rows as Array<{ key: string; cost: number }>).slice(0, 15).map((r) => ({ key: r.key, cost: Math.round(r.cost * 100) / 100 }))}
+                  title={`Spend by ${dimension} (${currency})`} />
+              </>
+            ) : dimension === 'tag' ? <CostTagNotice summary={tagSummary} /> : (
+              <EmptyState icon={<Money24Regular />} title="No breakdown data"
+                body={`The cost summary has no ${dimension} rows for this timeframe.`} />
+            )}
         </div>
 
         {/* B-N19e - FOCUS cost-per-query / per-dashboard attribution */}

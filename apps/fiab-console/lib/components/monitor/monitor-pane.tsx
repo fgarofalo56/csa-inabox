@@ -51,7 +51,7 @@ import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
-import { CostTagNotice } from '@/lib/components/monitor/cost-tag-notice';
+import { CostTagNotice, shortSub } from '@/lib/components/monitor/cost-tag-notice';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
@@ -1498,7 +1498,6 @@ const COST_TIMEFRAMES: { value: string; label: string }[] = [
   { value: 'Last7Days', label: 'Last 7 days' },
 ];
 
-const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 
 /** Dimensions the unified "Cost breakdown" table can group + sort + filter by. */
 type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'resourceType' | 'location' | 'tag';
@@ -1798,6 +1797,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           </div>
         }
       >
+        {groupDim === 'tag' && activeGroup.rows.length > 0 && <CostTagNotice summary={data} />}
         {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
           <CostTagNotice summary={data} />
         ) : (
